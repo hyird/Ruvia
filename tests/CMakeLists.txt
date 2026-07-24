@@ -24,24 +24,76 @@ function(ruvia_apply_test_warnings name)
     endif()
 endfunction()
 
-# One registration helper for every standalone test executable. It links the
-# requested library (ruvia::web by default), puts this directory on the include
-# path so a test can pull in support/test_harness.h from any subdirectory,
-# applies the MSVC large-object flags uniformly, registers the ctest, and sets
-# the optional TIMEOUT / WILL_FAIL / RUN_SERIAL / LABELS properties. Aggregated
-# suites and the few multi-registration probes below stay explicit.
+function(ruvia_apply_test_support_includes name lib)
+    target_include_directories(${name} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    if("${lib}" STREQUAL "ruvia::http")
+        target_include_directories(${name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
+    elseif("${lib}" STREQUAL "ruvia::web")
+        target_include_directories(${name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/http/support
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
+    elseif("${lib}" STREQUAL "ruvia::edge")
+        target_include_directories(${name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
+    elseif(NOT "${lib}" STREQUAL "ruvia::core")
+        message(FATAL_ERROR "unknown Ruvia test library for ${name}: ${lib}")
+    endif()
+endfunction()
+
+function(ruvia_expected_test_source_prefix out lib)
+    if("${lib}" STREQUAL "ruvia::core")
+        set(_prefix "core/")
+    elseif("${lib}" STREQUAL "ruvia::http")
+        set(_prefix "http/")
+    elseif("${lib}" STREQUAL "ruvia::web")
+        set(_prefix "web/")
+    elseif("${lib}" STREQUAL "ruvia::edge")
+        set(_prefix "edge/")
+    else()
+        message(FATAL_ERROR "unknown Ruvia test library: ${lib}")
+    endif()
+    set(${out} "${_prefix}" PARENT_SCOPE)
+endfunction()
+
+function(ruvia_validate_test_sources name lib)
+    ruvia_expected_test_source_prefix(_expected_prefix ${lib})
+    foreach(_source IN LISTS ARGN)
+        if(IS_ABSOLUTE "${_source}")
+            set(_absolute_source "${_source}")
+        else()
+            get_filename_component(_absolute_source "${_source}" ABSOLUTE
+                BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        endif()
+        file(RELATIVE_PATH _relative_source
+            "${CMAKE_CURRENT_SOURCE_DIR}" "${_absolute_source}")
+        if("${_relative_source}" STREQUAL "support/test_main.cpp")
+            continue()
+        endif()
+        if(NOT _relative_source MATCHES "^${_expected_prefix}")
+            message(FATAL_ERROR
+                "test target ${name} links ${lib} but uses source "
+                "${_relative_source}; expected tests/${_expected_prefix}**")
+        endif()
+    endforeach()
+endfunction()
+
+# One registration helper for every standalone test executable. It requires an
+# explicit target library, exposes only the shared support and target-allowed
+# support include directories, applies the MSVC large-object flags uniformly,
+# registers the ctest, and sets the optional TIMEOUT / WILL_FAIL / RUN_SERIAL /
+# LABELS properties. Aggregated suites and the few multi-registration probes
+# below stay explicit.
 function(ruvia_add_test name source)
     cmake_parse_arguments(T "WILL_FAIL;SERIAL" "LIB;TIMEOUT;LABELS" "" ${ARGN})
     if(NOT DEFINED T_LIB)
-        set(T_LIB ruvia::web)
+        message(FATAL_ERROR "test executable ${name} requires explicit LIB")
     endif()
+    ruvia_validate_test_sources(${name} ${T_LIB} ${source})
     add_executable(${name} ${source})
     target_link_libraries(${name} PRIVATE ${T_LIB})
-    target_include_directories(${name} PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/support
-        ${CMAKE_CURRENT_SOURCE_DIR}/http/support
-        ${CMAKE_CURRENT_SOURCE_DIR}/web/support
-        ${CMAKE_CURRENT_SOURCE_DIR}/edge/support)
+    ruvia_apply_test_support_includes(${name} ${T_LIB})
     ruvia_apply_test_warnings(${name})
     add_test(NAME ${name} COMMAND ${name})
     set(_props "")
@@ -62,6 +114,26 @@ function(ruvia_add_test name source)
     endif()
 endfunction()
 
+function(ruvia_add_unit_suite name lib)
+    ruvia_validate_test_sources(${name} ${lib} ${ARGN})
+    add_executable(${name} ${ARGN})
+    target_link_libraries(${name} PRIVATE ${lib})
+    ruvia_apply_test_support_includes(${name} ${lib})
+    ruvia_apply_test_warnings(${name})
+    add_test(NAME ${name} COMMAND ${name})
+    set_tests_properties(${name} PROPERTIES TIMEOUT 180)
+endfunction()
+
+function(ruvia_add_unit_sources name lib)
+    cmake_parse_arguments(S "" "" "PRIVATE" ${ARGN})
+    if(S_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR
+            "ruvia_add_unit_sources(${name}) only supports PRIVATE sources")
+    endif()
+    ruvia_validate_test_sources(${name} ${lib} ${S_PRIVATE})
+    target_sources(${name} PRIVATE ${S_PRIVATE})
+endfunction()
+
 # Cross-target: it covers whatever this configuration installs, so it lives with
 # the shared support rather than under one target's guards.
 configure_file(
@@ -71,6 +143,26 @@ configure_file(
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_header_definitions.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/verify_header_definitions.cmake
+    @ONLY)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_package_components.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/verify_package_components.cmake
+    @ONLY)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_package_install_consumer.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/verify_package_install_consumer.cmake
+    @ONLY)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_test_layering.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/verify_test_layering.cmake
+    @ONLY)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_product_layering.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/verify_product_layering.cmake
+    @ONLY)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_repo_layout.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/verify_repo_layout.cmake
     @ONLY)
 add_test(
     NAME ruvia_guard_header_definitions
@@ -82,11 +174,46 @@ add_test(
     COMMAND ${CMAKE_COMMAND}
         -P ${CMAKE_CURRENT_BINARY_DIR}/verify_install_closure.cmake)
 
-if(RUVIA_BUILD_WEB)
-add_executable(ruvia_unit_tests
+add_test(
+    NAME ruvia_guard_package_components
+    COMMAND ${CMAKE_COMMAND}
+        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_package_components.cmake)
+
+add_test(
+    NAME ruvia_guard_package_install_consumer
+    COMMAND ${CMAKE_COMMAND}
+        -DRUVIA_TEST_CONFIG=$<CONFIG>
+        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_package_install_consumer.cmake)
+set_tests_properties(ruvia_guard_package_install_consumer PROPERTIES TIMEOUT 180)
+
+add_test(
+    NAME ruvia_guard_test_layering
+    COMMAND ${CMAKE_COMMAND}
+        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_test_layering.cmake)
+
+add_test(
+    NAME ruvia_guard_product_layering
+    COMMAND ${CMAKE_COMMAND}
+        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_product_layering.cmake)
+
+add_test(
+    NAME ruvia_guard_repo_layout
+    COMMAND ${CMAKE_COMMAND}
+        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_repo_layout.cmake)
+
+if(RUVIA_BUILD_CORE)
+ruvia_add_unit_suite(ruvia_core_unit_tests ruvia::core
     # core
+    core/base64.cpp
     core/pool_waiter_queue.cpp
 
+    # support
+    support/test_main.cpp
+)
+endif()
+
+if(RUVIA_BUILD_HTTP)
+ruvia_add_unit_suite(ruvia_http_unit_tests ruvia::http
     # http/client
     http/client/origin.cpp
     http/client/redirect.cpp
@@ -99,7 +226,6 @@ add_executable(ruvia_unit_tests
     # http/coding
     http/coding/content_codec.cpp
     http/coding/content_negotiation.cpp
-    http/coding/response_compression.cpp
     http/coding/response_content_semantics.cpp
 
     # http/cookie
@@ -122,7 +248,6 @@ add_executable(ruvia_unit_tests
     http/field/value_primitives.cpp
 
     # http/http1
-    http/http1/buffered_response_write.cpp
     http/http1/chunk_decoder.cpp
     http/http1/chunk_framing.cpp
     http/http1/chunk_size.cpp
@@ -131,12 +256,9 @@ add_executable(ruvia_unit_tests
     http/http1/interim_response.cpp
     http/http1/multipart.cpp
     http/http1/multipart_quoting.cpp
-    http/http1/multipart_reader.cpp
     http/http1/parser.cpp
     http/http1/request_body_decoding.cpp
-    http/http1/request_body_loader.cpp
     http/http1/request_target.cpp
-    http/http1/stream_body_reader.cpp
     http/http1/transfer_coding_decoding.cpp
 
     # http/http2/connection
@@ -150,7 +272,6 @@ add_executable(ruvia_unit_tests
     # http/http2/flow
     http/http2/flow/control.cpp
     http/http2/flow/ready_queue.cpp
-    http/http2/flow/server_flow_control.cpp
     http/http2/flow/stream_flow.cpp
 
     # http/http2/frame
@@ -176,13 +297,6 @@ add_executable(ruvia_unit_tests
     http/http2/message/response_headers.cpp
     http/http2/message/websocket_handshake.cpp
 
-    # http/http2/session
-    http/http2/session/sansio_driver_body.cpp
-    http/http2/session/sansio_driver_session.cpp
-    http/http2/session/sansio_driver_websocket.cpp
-    http/http2/session/sansio_stream_runtime.cpp
-    http/http2/session/sansio_tls.cpp
-
     # http/http2/settings
     http/http2/settings/local_settings.cpp
     http/http2/settings/peer_settings.cpp
@@ -203,12 +317,10 @@ add_executable(ruvia_unit_tests
 
     # http/request
     http/request/access.cpp
-    http/request/connection_read_buffer.cpp
 
     # http/response
     http/response/body.cpp
     http/response/computed_response_headers.cpp
-    http/response/error_response.cpp
     http/response/final_response_control.cpp
     http/response/head_buffer.cpp
     http/response/head_emit.cpp
@@ -222,7 +334,7 @@ add_executable(ruvia_unit_tests
     http/response/vary_headers.cpp
 
     # http/util
-    http/util/byte_encoding.cpp
+    http/util/base64.cpp
     http/util/number_format.cpp
     http/util/pmr_string.cpp
     http/util/url_encoding.cpp
@@ -232,14 +344,19 @@ add_executable(ruvia_unit_tests
     http/websocket/accept.cpp
     http/websocket/assembler.cpp
     http/websocket/close.cpp
-    http/websocket/connection.cpp
     http/websocket/deflate.cpp
     http/websocket/frame.cpp
-    http/websocket/handshake.cpp
     http/websocket/utils.cpp
     http/websocket/validation.cpp
     http/websocket/ws_connection.cpp
 
+    # support
+    support/test_main.cpp
+)
+endif()
+
+if(RUVIA_BUILD_WEB)
+ruvia_add_unit_suite(ruvia_web_unit_tests ruvia::web
     # support
     support/test_main.cpp
 
@@ -261,8 +378,13 @@ add_executable(ruvia_unit_tests
     web/http/context_request_lookups.cpp
     web/http/cors.cpp
     web/http/csrf.cpp
+    web/http/error.cpp
+    web/http/error_response.cpp
     web/http/health.cpp
+    web/http/multipart_reader.cpp
     web/http/request_body_limits.cpp
+    web/http/request_body_loader.cpp
+    web/http/response_compression.cpp
     web/http/response_stream.cpp
     web/http/scoped_operation_lifetime.cpp
     web/http/security_headers.cpp
@@ -272,9 +394,17 @@ add_executable(ruvia_unit_tests
     web/http/static_file_serving.cpp
     web/http/static_files.cpp
     web/http/static_path_normalization.cpp
+    web/http/stream_body_reader.cpp
 
     # web/http2
     web/http2/buffered_response_write.cpp
+    web/http2/cleartext_upgrade.cpp
+    web/http2/sansio_driver_body.cpp
+    web/http2/sansio_driver_session.cpp
+    web/http2/sansio_driver_websocket.cpp
+    web/http2/sansio_stream_runtime.cpp
+    web/http2/sansio_tls.cpp
+    web/http2/server_flow_control.cpp
 
     # web/json
     web/json/escape.cpp
@@ -310,22 +440,28 @@ add_executable(ruvia_unit_tests
 
     # web/server
     web/server/access_log.cpp
+    web/server/buffered_response_write.cpp
+    web/server/connection_read_buffer.cpp
     web/server/http_server_request_state.cpp
     web/server/http_server_worker_completion.cpp
+    web/server/response_state.cpp
 
     # web/websocket
+    web/websocket/connection.cpp
+    web/websocket/handshake.cpp
     web/websocket/heartbeat.cpp
 )
 
 # The JWT suite links jwtSign/jwtVerify, which only exist when the optional JWT
 # module is compiled in, so gate it on the same flag.
 if(RUVIA_ENABLE_JWT)
-    target_sources(ruvia_unit_tests PRIVATE web/auth/jwt.cpp)
+    ruvia_add_unit_sources(ruvia_web_unit_tests ruvia::web PRIVATE
+        web/auth/jwt.cpp)
 endif()
 
 # The Redis RESP-protocol suite links appendRespCommand, gated the same way.
 if(RUVIA_ENABLE_REDIS)
-    target_sources(ruvia_unit_tests PRIVATE
+    ruvia_add_unit_sources(ruvia_web_unit_tests ruvia::web PRIVATE
         web/redis/api_surface.cpp
         web/redis/protocol.cpp
     )
@@ -333,34 +469,29 @@ endif()
 
 # The backend-neutral API suite is present for either database driver.
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
-    target_sources(ruvia_unit_tests PRIVATE web/db/api_surface.cpp)
+    ruvia_add_unit_sources(ruvia_web_unit_tests ruvia::web PRIVATE
+        web/db/api_surface.cpp)
 endif()
 
 # Driver-specific parameter encoding is tested against the same library that
 # performs it; neither suite pulls the other backend into a single-driver build.
 if(RUVIA_ENABLE_MARIADB)
-    target_sources(ruvia_unit_tests PRIVATE web/db/sql.cpp)
+    ruvia_add_unit_sources(ruvia_web_unit_tests ruvia::web PRIVATE
+        web/db/sql.cpp)
 endif()
 if(RUVIA_ENABLE_POSTGRESQL)
-    target_sources(ruvia_unit_tests PRIVATE web/db/postgresql.cpp)
+    ruvia_add_unit_sources(ruvia_web_unit_tests ruvia::web PRIVATE
+        web/db/postgresql.cpp)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS)
     ruvia_add_test(ruvia_postgresql_integration web/server/postgresql_integration.cpp
-        TIMEOUT 60 SERIAL LABELS "database;postgresql;integration")
+        LIB ruvia::web TIMEOUT 60 SERIAL LABELS "database;postgresql;integration")
 endif()
 
-target_link_libraries(ruvia_unit_tests PRIVATE ruvia::web)
-target_include_directories(ruvia_unit_tests PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/support
-    ${CMAKE_CURRENT_SOURCE_DIR}/http/support
-    ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
-ruvia_apply_test_warnings(ruvia_unit_tests)
-
-add_test(NAME ruvia_unit_tests COMMAND ruvia_unit_tests)
-set_tests_properties(ruvia_unit_tests PROPERTIES TIMEOUT 180)
-
 if(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS)
+    ruvia_validate_test_sources(ruvia_http2_conformance_server ruvia::web
+        web/server/http2_conformance_server.cpp)
     add_executable(ruvia_http2_conformance_server web/server/http2_conformance_server.cpp)
     target_link_libraries(ruvia_http2_conformance_server PRIVATE ruvia::web)
     ruvia_apply_test_warnings(ruvia_http2_conformance_server)
@@ -381,6 +512,8 @@ endif()
 endif()
 
 if(RUVIA_BUILD_CORE)
+    ruvia_validate_test_sources(ruvia_smoke_core_target ruvia::core
+        core/smoke_core_target.cpp)
     add_executable(ruvia_smoke_core_target core/smoke_core_target.cpp)
     target_link_libraries(ruvia_smoke_core_target PRIVATE ruvia::core)
     target_compile_definitions(ruvia_smoke_core_target PRIVATE
@@ -397,6 +530,8 @@ if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_task_scope core/task_scope.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_task_completion core/task_completion.cpp LIB ruvia::core)
 
+    ruvia_validate_test_sources(ruvia_task_lifetime_violation ruvia::core
+        core/task_lifetime_violation.cpp)
     add_executable(ruvia_task_lifetime_violation core/task_lifetime_violation.cpp)
     target_link_libraries(ruvia_task_lifetime_violation PRIVATE ruvia::core)
     add_test(NAME ruvia_task_lifetime_violation
@@ -407,17 +542,14 @@ if(RUVIA_BUILD_CORE)
     set_tests_properties(
         ruvia_task_lifetime_violation_value PROPERTIES WILL_FAIL TRUE)
 
-    if(RUVIA_BUILD_WEB)
-        ruvia_add_test(ruvia_scoped_operation_lifetime_violation
-            core/scoped_operation_lifetime_violation.cpp WILL_FAIL)
-    endif()
-
     ruvia_add_test(ruvia_blocking_pool core/blocking_pool.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_channel core/channel.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_one_shot core/one_shot.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_worker_timer core/worker_timer.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_worker_dispatch_failure core/worker_dispatch_failure.cpp LIB ruvia::core)
 
+    ruvia_validate_test_sources(ruvia_worker_signal_violation ruvia::core
+        core/worker_signal_violation.cpp)
     add_executable(ruvia_worker_signal_violation core/worker_signal_violation.cpp)
     target_link_libraries(ruvia_worker_signal_violation PRIVATE ruvia::core)
     foreach(_probe IN ITEMS waiter notify dispatch)
@@ -465,34 +597,62 @@ if(RUVIA_BUILD_HTTP)
 endif()
 
 if(RUVIA_BUILD_WEB)
-    ruvia_add_test(ruvia_guard_web_api_surface web/guards/api_surface_guard.cpp)
-    ruvia_add_test(ruvia_guard_middleware_next web/guards/middleware_next_guard.cpp)
-    ruvia_add_test(ruvia_guard_context_response_state web/guards/context_response_state_guard.cpp)
-    ruvia_add_test(ruvia_guard_context_request_header web/guards/context_request_header_guard.cpp)
-    ruvia_add_test(ruvia_guard_cookie_api web/guards/cookie_api_guard.cpp)
-    ruvia_add_test(ruvia_guard_app_lifecycle web/guards/app_lifecycle_guard.cpp)
-    ruvia_add_test(ruvia_guard_http2_session_lifecycle web/guards/http2_session_lifecycle_guard.cpp)
+    ruvia_add_test(ruvia_guard_web_api_surface
+        web/guards/api_surface_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_middleware_next
+        web/guards/middleware_next_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_context_response_state
+        web/guards/context_response_state_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_context_request_header
+        web/guards/context_request_header_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_cookie_api
+        web/guards/cookie_api_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_app_lifecycle
+        web/guards/app_lifecycle_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_http2_session_lifecycle
+        web/guards/http2_session_lifecycle_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_scoped_operation_lifetime_violation
+        web/http/scoped_operation_lifetime_violation.cpp LIB ruvia::web WILL_FAIL)
 
-    ruvia_add_test(ruvia_server_blocking_pool web/server/blocking_pool.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_immediate_shutdown web/server/immediate_shutdown.cpp TIMEOUT 30)
-    ruvia_add_test(ruvia_server_max_connections web/server/max_connections.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_notfound_keepalive web/server/notfound_keepalive.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_http2_document_root web/server/http2_document_root.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_head_document_root web/server/head_document_root.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_head_stream_route web/server/head_stream_route.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_connection_failure web/server/connection_failure.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_worker_state web/server/worker_state.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_http2_head_stream_route web/server/http2_head_stream_route.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_http2_connection_failure web/server/http2_connection_failure.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_pipeline_request_views web/server/pipeline_request_views.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_tls_keepalive_deadline web/server/tls_keepalive_deadline.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_keepalive_idle_timeout web/server/keepalive_idle_timeout.cpp TIMEOUT 60)
-    ruvia_add_test(ruvia_server_write_timeout web/server/write_timeout.cpp TIMEOUT 60)
+    ruvia_add_test(ruvia_server_blocking_pool
+        web/server/blocking_pool.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_immediate_shutdown
+        web/server/immediate_shutdown.cpp LIB ruvia::web TIMEOUT 30)
+    ruvia_add_test(ruvia_server_max_connections
+        web/server/max_connections.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_notfound_keepalive
+        web/server/notfound_keepalive.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_http2_document_root
+        web/server/http2_document_root.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_head_document_root
+        web/server/head_document_root.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_head_stream_route
+        web/server/head_stream_route.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_connection_failure
+        web/server/connection_failure.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_worker_state
+        web/server/worker_state.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_http2_head_stream_route
+        web/server/http2_head_stream_route.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_http2_connection_failure
+        web/server/http2_connection_failure.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_pipeline_request_views
+        web/server/pipeline_request_views.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_tls_keepalive_deadline
+        web/server/tls_keepalive_deadline.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_keepalive_idle_timeout
+        web/server/keepalive_idle_timeout.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_write_timeout
+        web/server/write_timeout.cpp LIB ruvia::web TIMEOUT 60)
 
-    ruvia_add_test(ruvia_web_worker web/server/worker.cpp TIMEOUT 30)
-    ruvia_add_test(ruvia_data_access web/server/data_access.cpp TIMEOUT 30)
-    ruvia_add_test(ruvia_app_web_worker web/server/app_web_worker.cpp TIMEOUT 30)
-    ruvia_add_test(ruvia_app_startup_retry web/server/app_startup_retry.cpp TIMEOUT 30)
+    ruvia_add_test(ruvia_web_worker
+        web/server/worker.cpp LIB ruvia::web TIMEOUT 30)
+    ruvia_add_test(ruvia_data_access
+        web/server/data_access.cpp LIB ruvia::web TIMEOUT 30)
+    ruvia_add_test(ruvia_app_web_worker
+        web/server/app_web_worker.cpp LIB ruvia::web TIMEOUT 30)
+    ruvia_add_test(ruvia_app_startup_retry
+        web/server/app_startup_retry.cpp LIB ruvia::web TIMEOUT 30)
 endif()
 
 # Edge tests only need ruvia::edge; keep them outside the web gate so a

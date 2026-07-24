@@ -1,20 +1,12 @@
 #include "test_harness.h"
 
 #include <cstdint>
-#include <limits>
-#include <memory_resource>
-#include <optional>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include "ruvia/core/detail/util/Base64.h"
 #include "ruvia/core/detail/util/Base64Url.h"
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
-#include "ruvia/http/UrlEncoding.h"
-#include "ruvia/http/detail/util/Hex.h"
 
 namespace {
 
@@ -28,15 +20,9 @@ std::string b64(std::string_view in) {
 
 }  // namespace
 
-// --- Base64 (RFC 4648 test vectors) --------------------------------------
-
-// --- Hex nibble ----------------------------------------------------------
-
-// --- URL decoding --------------------------------------------------------
-
-// --- Number formatting ---------------------------------------------------
-
-// base64, base64url and hex: the byte encodings the framework carries.
+// Core owns the framework-wide standard Base64 helpers. Protocol-specific
+// encoders such as HTTP WebSocket accept hashing are tested with their owning
+// target instead of importing core tests into tests/http.
 
 RUVIA_TEST(base64_rfc4648_vectors) {
     RUVIA_CHECK_EQ(b64(""), std::string(""));
@@ -80,18 +66,4 @@ RUVIA_TEST(base64url_alphabet_values) {
     RUVIA_CHECK_EQ(decodeBase64UrlChar('+'), -1);
     RUVIA_CHECK_EQ(decodeBase64UrlChar('/'), -1);
     RUVIA_CHECK_EQ(decodeBase64UrlChar('='), -1);
-}
-
-RUVIA_TEST(hex_nibble) {
-    using ruvia::detail::decodeHexNibble;
-    RUVIA_CHECK_EQ(decodeHexNibble('0'), 0);
-    RUVIA_CHECK_EQ(decodeHexNibble('9'), 9);
-    RUVIA_CHECK_EQ(decodeHexNibble('a'), 10);
-    RUVIA_CHECK_EQ(decodeHexNibble('f'), 15);
-    RUVIA_CHECK_EQ(decodeHexNibble('A'), 10);
-    RUVIA_CHECK_EQ(decodeHexNibble('F'), 15);
-    RUVIA_CHECK_EQ(decodeHexNibble('g'), -1);
-    RUVIA_CHECK_EQ(decodeHexNibble('G'), -1);
-    RUVIA_CHECK_EQ(decodeHexNibble('/'), -1);
-    RUVIA_CHECK_EQ(decodeHexNibble(':'), -1);
 }

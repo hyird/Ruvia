@@ -4,9 +4,12 @@
 #include "ruvia/http/detail/server/HttpDateCache.h"
 #include "ruvia/http/detail/field/HttpImfFixdate.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <ctime>
 #include <memory_resource>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -17,23 +20,6 @@ std::string formatDate(std::time_t time) {
 
 }  // namespace
 
-
-#include <cstdint>
-#include <ctime>
-#include <filesystem>
-#include <limits>
-#include <memory_resource>
-#include <optional>
-#include <string>
-#include <string_view>
-
-#include "ruvia/http/detail/field/HttpDate.h"
-#include "ruvia/http/detail/field/HttpEntityTag.h"
-#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
-
-namespace {
-
-}  // namespace
 
 // Reading an HTTP date: IMF-fixdate and the two obsolete formats a recipient must still accept.
 

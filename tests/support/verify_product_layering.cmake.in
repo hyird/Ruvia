@@ -1,0 +1,147 @@
+set(_ruvia_source_root "@CMAKE_SOURCE_DIR@")
+
+# Product target include boundaries. CMake already prevents a target from
+# compiling another target's source or adding another target's private include
+# directory; this guard catches source-level includes that would bypass the
+# declared product dependency graph.
+
+function(_ruvia_assert_matches _label _pattern _probe)
+    string(REGEX MATCH "${_pattern}" _match "${_probe}")
+    if(NOT _match)
+        message(FATAL_ERROR
+            "ruvia_guard_product_layering self-test failed, pattern lost probe "
+            "${_label}: ${_pattern}")
+    endif()
+endfunction()
+
+function(_ruvia_assert_ignores _label _pattern _probe)
+    string(REGEX MATCH "${_pattern}" _match "${_probe}")
+    if(_match)
+        message(FATAL_ERROR
+            "ruvia_guard_product_layering self-test failed, pattern matched benign "
+            "${_label}: ${_match}")
+    endif()
+endfunction()
+
+function(_ruvia_scan_forbidden_product_includes _label)
+    cmake_parse_arguments(C "" "" "ROOTS;PATTERNS" ${ARGN})
+    set(_source_files)
+    foreach(_source_root IN LISTS C_ROOTS)
+        file(GLOB_RECURSE _root_files LIST_DIRECTORIES FALSE
+            "${_source_root}/*.h"
+            "${_source_root}/*.h.in"
+            "${_source_root}/*.cpp"
+            "${_source_root}/*.inl")
+        list(APPEND _source_files ${_root_files})
+    endforeach()
+
+    foreach(_source_file IN LISTS _source_files)
+        file(READ "${_source_file}" _source_text)
+        foreach(_pattern IN LISTS C_PATTERNS)
+            string(REGEX MATCH "${_pattern}" _match "${_source_text}")
+            if(_match)
+                file(RELATIVE_PATH _relative_source
+                    "${_ruvia_source_root}" "${_source_file}")
+                string(REPLACE "\n" "\\n" _printable_match "${_match}")
+                message(FATAL_ERROR
+                    "forbidden product-layer include in ${_label}: "
+                    "${_relative_source}: ${_printable_match}")
+            endif()
+        endforeach()
+    endforeach()
+endfunction()
+
+set(_core_product_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(http|web|edge)/]=])
+set(_http_product_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(core|web|edge)/]=])
+set(_web_product_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/edge/]=])
+set(_edge_product_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/web/]=])
+
+set(_core_local_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(ruvia-http|ruvia-web|ruvia-edge)/]=])
+set(_http_local_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(ruvia-core|ruvia-web|ruvia-edge)/]=])
+set(_web_local_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?ruvia-edge/]=])
+set(_edge_local_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?ruvia-web/]=])
+
+_ruvia_assert_matches(
+    core_product
+    "${_core_product_include_pattern}"
+    "#include <ruvia/http/HttpResponse.h>")
+_ruvia_assert_matches(
+    http_product
+    "${_http_product_include_pattern}"
+    "#include \"ruvia/core/Task.h\"")
+_ruvia_assert_matches(
+    web_product
+    "${_web_product_include_pattern}"
+    "#include <ruvia/edge/EdgeServer.h>")
+_ruvia_assert_matches(
+    edge_product
+    "${_edge_product_include_pattern}"
+    "#include <ruvia/web/App.h>")
+_ruvia_assert_matches(
+    http_local
+    "${_http_local_include_pattern}"
+    "#include \"../ruvia-core/include/ruvia/core/Task.h\"")
+_ruvia_assert_matches(
+    core_local
+    "${_core_local_include_pattern}"
+    "#include \"../ruvia-web/src/server/HttpServer.h\"")
+_ruvia_assert_matches(
+    web_local
+    "${_web_local_include_pattern}"
+    "#include \"../ruvia-edge/include/ruvia/edge/EdgeServer.h\"")
+_ruvia_assert_matches(
+    edge_local
+    "${_edge_local_include_pattern}"
+    "#include \"../ruvia-web/include/ruvia/web/App.h\"")
+
+_ruvia_assert_ignores(
+    commented_include
+    "${_http_product_include_pattern}"
+    "// #include \"ruvia/web/Context.h\"")
+_ruvia_assert_ignores(
+    similarly_named_directory
+    "${_web_local_include_pattern}"
+    "#include \"edge_cache/fixture.h\"")
+
+_ruvia_scan_forbidden_product_includes(core-product
+    ROOTS
+        "${_ruvia_source_root}/ruvia-core/include"
+        "${_ruvia_source_root}/ruvia-core/src"
+    PATTERNS
+        "${_core_product_include_pattern}"
+        "${_core_local_include_pattern}")
+
+_ruvia_scan_forbidden_product_includes(http-product
+    ROOTS
+        "${_ruvia_source_root}/ruvia-http/include"
+        "${_ruvia_source_root}/ruvia-http/src"
+    PATTERNS
+        "${_http_product_include_pattern}"
+        "${_http_local_include_pattern}")
+
+_ruvia_scan_forbidden_product_includes(web-product
+    ROOTS
+        "${_ruvia_source_root}/ruvia-web/include"
+        "${_ruvia_source_root}/ruvia-web/src"
+    PATTERNS
+        "${_web_product_include_pattern}"
+        "${_web_local_include_pattern}")
+
+_ruvia_scan_forbidden_product_includes(edge-product
+    ROOTS
+        "${_ruvia_source_root}/ruvia-edge/include"
+        "${_ruvia_source_root}/ruvia-edge/src"
+    PATTERNS
+        "${_edge_product_include_pattern}"
+        "${_edge_local_include_pattern}")
+
+message(STATUS
+    "ruvia_guard_product_layering: core,http,web,edge product include boundaries hold")

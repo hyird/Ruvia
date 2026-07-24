@@ -21,6 +21,15 @@ std::string_view guess(const char* name) {
     return guessStaticFileContentType(std::filesystem::path(name));
 }
 
+std::string fileEtag(
+    std::uint64_t size,
+    std::uint64_t modifiedToken,
+    ruvia::detail::ResponseFileIdentity identity) {
+    const auto out = ruvia::detail::makeStaticFileSnapshotEtag(
+        std::pmr::get_default_resource(), size, modifiedToken, identity);
+    return std::string(out.data(), out.size());
+}
+
 }  // namespace
 
 // Deriving a static file's content type from its extension.
@@ -60,4 +69,36 @@ RUVIA_TEST(http_extension_equals_is_case_insensitive) {
     RUVIA_CHECK(staticFileExtensionEquals(std::string_view(""), ""));
     RUVIA_CHECK(!staticFileExtensionEquals(std::string_view("htm"), "html"));
     RUVIA_CHECK(!staticFileExtensionEquals(std::string_view("jpeg"), "json"));
+}
+
+RUVIA_TEST(static_file_append_unsigned_decimal) {
+    using ruvia::detail::appendStaticFileUnsigned;
+    std::pmr::string output(std::pmr::get_default_resource());
+    appendStaticFileUnsigned(output, 0);
+    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("0"));
+    output.clear();
+    appendStaticFileUnsigned(output, 12345);
+    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("12345"));
+    // Appends onto existing content rather than replacing it.
+    appendStaticFileUnsigned(output, 67);
+    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("1234567"));
+    // The 64-bit maximum.
+    output.clear();
+    appendStaticFileUnsigned(output, (std::numeric_limits<std::uint64_t>::max)());
+    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("18446744073709551615"));
+}
+
+RUVIA_TEST(static_file_etag_deterministic_and_sensitive) {
+    const auto identity = ruvia::detail::ResponseFileIdentity::checked(
+        {1, 2, 3, 4});
+    const auto replacement = ruvia::detail::ResponseFileIdentity::checked(
+        {1, 2, 3, 5});
+    const auto base = fileEtag(100, 123456, identity);
+    // The strong validator binds framing metadata and the exact indexed file.
+    RUVIA_CHECK_EQ(base, std::string("\"100-123456-1-2-3-4\""));
+    RUVIA_CHECK_EQ(base, fileEtag(100, 123456, identity));
+    RUVIA_CHECK(base != fileEtag(101, 123456, identity));
+    RUVIA_CHECK(base != fileEtag(100, 123457, identity));
+    RUVIA_CHECK(base != fileEtag(100, 123456, replacement));
+    RUVIA_CHECK(base.size() >= 2 && base.front() == '"' && base.back() == '"');  // quoted-string
 }
