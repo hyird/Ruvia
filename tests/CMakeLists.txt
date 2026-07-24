@@ -16,6 +16,9 @@
 function(ruvia_apply_test_warnings name)
     if(MSVC)
         target_compile_options(${name} PRIVATE /W4 /permissive- /bigobj /FS)
+        # std::getenv and friends are standard C++; MSVC's C4996 "unsafe" notice
+        # on them is the same curated-out noise as -Wextra, not a real finding.
+        target_compile_definitions(${name} PRIVATE _CRT_SECURE_NO_WARNINGS)
     else()
         target_compile_options(${name} PRIVATE -Wall)
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")

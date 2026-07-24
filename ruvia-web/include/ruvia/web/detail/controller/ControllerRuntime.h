@@ -38,15 +38,17 @@ class ControllerRegistrationAccess final {
     [[nodiscard]] static constexpr std::string_view groupPrefix() noexcept {
         if constexpr (requires { ControllerT::ruviaControllerGroupPrefix(); }) {
             return ControllerT::ruviaControllerGroupPrefix();
+        } else {
+            return {};
         }
-        return {};
     }
 
     [[nodiscard]] static MiddlewareList groupMiddlewares() {
         if constexpr (requires { ControllerT::ruviaControllerGroupMiddlewares(); }) {
             return ControllerT::ruviaControllerGroupMiddlewares();
+        } else {
+            return makeMiddlewares<>();
         }
-        return makeMiddlewares<>();
     }
 
     [[nodiscard]] static ControllerRouteBuilder createRouteGroup(
