@@ -1,4 +1,4 @@
-#include "field_parsing_fixture.h"
+#include "model_field_fixture.h"
 
 // Binding a model from repeated fields: the last occurrence wins, and an invalid duplicate does not change that.
 

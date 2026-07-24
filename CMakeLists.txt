@@ -55,7 +55,7 @@ set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
-# Shared build/install helpers used by every Ruvia component (core/http/web).
+# Shared build/install helpers used by every Ruvia component.
 # The root lists no per-target build logic of its own; it only includes this
 # module before add_subdirectory() so each component's CMakeLists can configure,
 # install, and export itself. Functions capture CMAKE_CURRENT_SOURCE_DIR at call

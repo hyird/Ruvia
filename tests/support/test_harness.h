@@ -49,7 +49,7 @@ inline void reportFailure(TestContext& ctx, const char* file, int line, std::str
 #define RUVIA_TEST(name)                                                            \
     static void name(ruvia::testing::TestContext&);                                 \
     static const ruvia::testing::Registrar ruvia_reg_##name{#name, &name};          \
-    static void name(ruvia::testing::TestContext& ruvia_ctx)
+    static void name([[maybe_unused]] ruvia::testing::TestContext& ruvia_ctx)
 
 #define RUVIA_CHECK(cond)                                                           \
     do {                                                                            \

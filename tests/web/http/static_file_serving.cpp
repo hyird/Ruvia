@@ -38,13 +38,6 @@ namespace {
 
 using ruvia::HttpKnownMethod;
 using ruvia::HttpResponse;
-using ruvia::detail::setResponseAllowHeader;
-using ruvia::detail::setResponseContentRange;
-using ruvia::detail::setResponseContentRangeUnsatisfied;
-
-constexpr std::uint32_t methodBit(HttpKnownMethod method) {
-    return std::uint32_t{1} << static_cast<std::uint32_t>(method);
-}
 
 }  // namespace
 

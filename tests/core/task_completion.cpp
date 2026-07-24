@@ -103,8 +103,9 @@ bool hasFailureMessage(
         std::rethrow_exception(failure.exception());
     } catch (const std::runtime_error& error) {
         return error.what() == expected;
+    } catch (...) {
+        return false;
     }
-    return false;
 }
 
 }  // namespace

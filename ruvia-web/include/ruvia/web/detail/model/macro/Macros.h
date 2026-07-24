@@ -86,6 +86,13 @@ private:                                                                     \
             ruviaValid = ::ruvia::detail::visitModelInputFormFields(         \
                 ruviaInput, [this, &ruviaInput, ruviaResource](              \
                     ::std::string_view key, ::std::string_view value) {      \
+                    /* A model whose every field is a nested model or array  \
+                     * has no form-field branch, so RUVIA_MODEL_PARSE_FORM_  \
+                     * FIELD discards its whole body via if constexpr and     \
+                     * leaves these captures used only in discarded code --   \
+                     * which trips Clang's -Wunused-lambda-capture. */        \
+                    (void)ruviaInput;                                        \
+                    (void)ruviaResource;                                     \
                     RUVIA_MODEL_FOR_EACH(                                    \
                         RUVIA_MODEL_PARSE_FORM_FIELD, T, __VA_ARGS__)        \
                 });                                                          \

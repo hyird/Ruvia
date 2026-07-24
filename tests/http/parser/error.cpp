@@ -6,16 +6,12 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
-#include <utility>
 
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/web/Error.h"
 
 namespace {
 
-using ruvia::defaultErrorCode;
-using ruvia::HttpError;
 using ruvia::HttpParseError;
 using ruvia::httpParseProtocolError;
 using ruvia::HttpProtocolError;
@@ -26,36 +22,6 @@ inline constexpr auto kOkStatusToken =
 
 }  // namespace
 
-template <typename T>
-concept ExposesRvalueHttpErrorInfo = requires {
-    std::declval<const T&&>().info();
-};
-
-template <typename String>
-concept AcceptsAnyRvalueHttpErrorInfoText =
-    requires(String&& value) {
-        ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, std::forward<String>(value));
-    } ||
-    requires(String&& value) {
-        ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, std::forward<String>(value));
-    } ||
-    requires(String&& value) {
-        ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, {}, std::forward<String>(value));
-    } ||
-    requires(String&& value) {
-        ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, {}, {}, std::forward<String>(value));
-    };
-
-template <typename String>
-concept AcceptsLvalueHttpErrorInfoText = requires(String& value) {
-    ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, value, value, value, value);
-};
-
-static_assert(!ExposesRvalueHttpErrorInfo<ruvia::HttpError>);
-static_assert(!AcceptsAnyRvalueHttpErrorInfoText<std::string>);
-static_assert(!AcceptsAnyRvalueHttpErrorInfoText<const std::string>);
-static_assert(!AcceptsAnyRvalueHttpErrorInfoText<std::pmr::string>);
-static_assert(AcceptsLvalueHttpErrorInfoText<std::string>);
 static_assert(std::is_trivially_copyable_v<ruvia::HttpStatusCode>);
 static_assert(sizeof(ruvia::HttpStatusCode) == sizeof(std::uint16_t));
 static_assert(!std::is_constructible_v<ruvia::HttpStatusCode, std::uint16_t>);
@@ -135,21 +101,6 @@ RUVIA_TEST(http_reason_phrase_does_not_mislabel_extension_statuses) {
         httpReasonPhrase(ruvia::HttpStatusCode::fromValue(599)).empty());
 }
 
-RUVIA_TEST(default_error_code_mapping) {
-    RUVIA_CHECK_EQ(
-        defaultErrorCode(ruvia::http_status::kBadRequest),
-        std::string_view("bad_request"));
-    RUVIA_CHECK_EQ(
-        defaultErrorCode(ruvia::http_status::kNotFound),
-        std::string_view("not_found"));
-    RUVIA_CHECK_EQ(
-        defaultErrorCode(ruvia::http_status::kMethodNotAllowed),
-        std::string_view("method_not_allowed"));
-    RUVIA_CHECK_EQ(
-        defaultErrorCode(ruvia::http_status::kContentTooLarge),
-        std::string_view("content_too_large"));
-}
-
 RUVIA_TEST(http_protocol_error_owns_bounded_diagnostic_without_allocation) {
     std::string source(200, 'x');
     const HttpProtocolError error(ruvia::http_status::kContentTooLarge, source);
@@ -159,17 +110,6 @@ RUVIA_TEST(http_protocol_error_owns_bounded_diagnostic_without_allocation) {
     const auto diagnostic = std::string_view(error.what());
     RUVIA_CHECK_EQ(diagnostic.size(), std::size_t{127});
     RUVIA_CHECK(diagnostic.find_first_not_of('x') == std::string_view::npos);
-}
-
-RUVIA_TEST(http_error_info_round_trips) {
-    const HttpError error(
-        ruvia::http_status::kUnprocessableContent,
-        "unprocessable",
-        "bad fields");
-    const auto info = error.info();
-    RUVIA_CHECK_EQ(info.status(), ruvia::http_status::kUnprocessableContent);
-    RUVIA_CHECK_EQ(info.code(), std::string_view("unprocessable"));
-    RUVIA_CHECK_EQ(info.message(), std::string_view("bad fields"));
 }
 
 RUVIA_TEST(parse_error_status_mapping) {
