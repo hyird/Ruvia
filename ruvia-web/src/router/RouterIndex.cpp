@@ -67,36 +67,6 @@ std::size_t detail::RouteTable::nextPowerOfTwo(std::size_t value) noexcept {
     return std::bit_ceil(value);
 }
 
-std::size_t detail::RouteTable::commonPrefixLength(std::string_view left, std::string_view right) noexcept {
-    const auto length = std::min(left.size(), right.size());
-    std::size_t index = 0;
-    while (index < length && left[index] == right[index]) {
-        ++index;
-    }
-    return index;
-}
-
-const detail::RouteEntry* detail::RouteTable::findRadixNode(const RadixNode& root, std::string_view path) noexcept {
-    const auto* node = &root;
-    while (!path.empty()) {
-        const RadixNode* next = nullptr;
-        for (const auto& child : node->children) {
-            if (path.starts_with(child.label)) {
-                next = &child;
-                path.remove_prefix(child.label.size());
-                break;
-            }
-        }
-
-        if (next == nullptr) {
-            return nullptr;
-        }
-        node = next;
-    }
-
-    return node->route;
-}
-
 const detail::RouteEntry* detail::RouteTable::findStaticRoute(HttpKnownMethod method, std::string_view path) const noexcept {
     if (!isRoutableMethod(method)) {
         return nullptr;
@@ -105,17 +75,9 @@ const detail::RouteEntry* detail::RouteTable::findStaticRoute(HttpKnownMethod me
         return nullptr;
     }
 
-    if (const auto* route = findPerfect(method, path); route != nullptr) {
-        return route;
-    }
-    if (!exactSlots_.empty()) {
-        return nullptr;
-    }
-    if (const auto* route = findRadix(method, path); route != nullptr) {
-        return route;
-    }
-
-    return nullptr;
+    // buildPerfectHash covers every static route or fails the build outright, so
+    // a miss here is a miss: there is no second static index to consult.
+    return findPerfect(method, path);
 }
 
 const detail::RouteEntry* detail::RouteTable::findPerfect(HttpKnownMethod method, std::string_view path) const noexcept {
@@ -130,10 +92,6 @@ const detail::RouteEntry* detail::RouteTable::findPerfect(HttpKnownMethod method
     }
 
     return nullptr;
-}
-
-const detail::RouteEntry* detail::RouteTable::findRadix(HttpKnownMethod method, std::string_view path) const noexcept {
-    return findRadixNode(radixRoots_[methodIndex(method)], path);
 }
 
 std::uint32_t detail::RouteTable::allowedMethods(std::string_view path, HttpKnownMethod requestedMethod) const noexcept {

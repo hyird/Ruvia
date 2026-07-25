@@ -60,18 +60,12 @@ void detail::RouteTable::buildPerfectHash() {
 
         slotCount <<= 1U;
     }
-}
 
-void detail::RouteTable::buildRadix() {
-    for (auto& root : radixRoots_) {
-        root = RadixNode(resource_);
-    }
-    for (const auto& route : routes_) {
-        if (route.dynamic()) {
-            continue;
-        }
-        insertRadix(radixRoots_[methodIndex(route.method())], route.path(), route);
-    }
+    // The static index has no fallback, so an unbuildable table must fail the
+    // build rather than leave every static route silently unroutable. Reaching
+    // here needs 16 doublings (a table 32768x the route count) to have collided
+    // under all 4096 seeds, which no real route set can do.
+    throw std::logic_error("failed to build the static route index");
 }
 
 void detail::RouteTable::buildAllowedMethodMask() noexcept {
@@ -87,55 +81,6 @@ void detail::RouteTable::buildAllowedMethodMask() noexcept {
         }
     }
     allowedMethodMask_ |= 1U << methodIndex(HttpKnownMethod::kOptions);
-}
-
-void detail::RouteTable::insertRadix(RadixNode& node, std::string_view path, const RouteEntry& route) {
-    if (path.empty()) {
-        node.route = &route;
-        return;
-    }
-
-    for (auto& child : node.children) {
-        const auto prefixLength = commonPrefixLength(child.label, path);
-        if (prefixLength == 0) {
-            continue;
-        }
-
-        if (prefixLength == child.label.size()) {
-            insertRadix(child, path.substr(prefixLength), route);
-            return;
-        }
-
-        auto oldLabel = std::move(child.label);
-        auto oldChildren = std::move(child.children);
-        auto* oldRoute = child.route;
-        auto* const resource = node.children.get_allocator().resource();
-
-        RadixNode suffix(resource);
-        suffix.label.assign(oldLabel.data() + prefixLength, oldLabel.size() - prefixLength);
-        suffix.children = std::move(oldChildren);
-        suffix.route = oldRoute;
-
-        child.label.assign(oldLabel.data(), prefixLength);
-        child.children.clear();
-        child.children.push_back(std::move(suffix));
-        child.route = nullptr;
-
-        if (prefixLength == path.size()) {
-            child.route = &route;
-        } else {
-            RadixNode branch(resource);
-            branch.label.assign(path.data() + prefixLength, path.size() - prefixLength);
-            branch.route = &route;
-            child.children.push_back(std::move(branch));
-        }
-        return;
-    }
-
-    RadixNode child(node.children.get_allocator().resource());
-    child.label.assign(path.data(), path.size());
-    child.route = &route;
-    node.children.push_back(std::move(child));
 }
 
 }  // namespace ruvia

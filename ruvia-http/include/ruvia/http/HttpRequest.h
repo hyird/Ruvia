@@ -79,4 +79,13 @@ private:
     std::pmr::memory_resource* resource_{nullptr};
 };
 
+// Every member is trivially copyable, so a move of HttpRequest is a full
+// memcpy, and construction value-initializes both fixed arrays. That cost is
+// paid once per HTTP/1 request and once per in-flight HTTP/2 stream, whose
+// coroutine frame carries the request for the stream's whole lifetime -- a
+// frame above kTaskFrameCacheMaxBlockBytes skips the frame cache entirely.
+// The bulk is headers_ (kMaxHttpHeaderFields * sizeof(HttpHeaderView)) plus
+// cachedHeaders_. Weigh that before adding a field or raising either bound.
+static_assert(sizeof(HttpRequest) <= 2624);
+
 }  // namespace ruvia

@@ -62,7 +62,6 @@ detail::RouteTable::RouteTable(std::pmr::memory_resource* resource)
       routes_(resource_),
       middlewareFrames_(resource_),
       exactSlots_(resource_),
-      radixRoots_{RadixNode(detail::ResolvedPmrResourceTag{}, resource_), RadixNode(detail::ResolvedPmrResourceTag{}, resource_), RadixNode(detail::ResolvedPmrResourceTag{}, resource_), RadixNode(detail::ResolvedPmrResourceTag{}, resource_), RadixNode(detail::ResolvedPmrResourceTag{}, resource_), RadixNode(detail::ResolvedPmrResourceTag{}, resource_), RadixNode(detail::ResolvedPmrResourceTag{}, resource_)},
       dynamicRoots_{DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_)},
       dynamicNodeArena_(resource_),
       dynamicParamNames_(resource_) {}
@@ -160,9 +159,6 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
 
     table.buildAllowedMethodMask();
     table.buildPerfectHash();
-    if (table.exactSlots_.empty()) {
-        table.buildRadix();
-    }
     table.buildDynamicRoutes();
 }
 

@@ -217,22 +217,6 @@ private:
         const RouteEntry* route{nullptr};
     };
 
-    struct RadixNode {
-        RadixNode()
-            : RadixNode(nullptr) {}
-
-        explicit RadixNode(std::pmr::memory_resource* resource)
-            : RadixNode(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
-
-        RadixNode(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
-            : label(resource),
-              children(resource) {}
-
-        std::pmr::string label;
-        std::pmr::vector<RadixNode> children;
-        const RouteEntry* route{nullptr};
-    };
-
     struct DynamicNode;
 
     struct DynamicStaticChild {
@@ -257,7 +241,6 @@ private:
     };
 
     void buildPerfectHash();
-    void buildRadix();
     void buildDynamicRoutes();
     void buildAllowedMethodMask() noexcept;
 
@@ -266,9 +249,6 @@ private:
     [[nodiscard]] static bool isDynamicPath(std::string_view path) noexcept;
     [[nodiscard]] static std::uint64_t routeHash(HttpKnownMethod method, std::string_view path, std::uint64_t seed) noexcept;
     [[nodiscard]] static std::size_t nextPowerOfTwo(std::size_t value) noexcept;
-    [[nodiscard]] static std::size_t commonPrefixLength(std::string_view left, std::string_view right) noexcept;
-    static void insertRadix(RadixNode& node, std::string_view path, const RouteEntry& route);
-    [[nodiscard]] static const RouteEntry* findRadixNode(const RadixNode& root, std::string_view path) noexcept;
     [[nodiscard]] static std::size_t dynamicNodeUpperBound(std::string_view path) noexcept;
     [[nodiscard]] static std::size_t dynamicParamNameUpperBound(std::string_view path) noexcept;
     void insertDynamic(DynamicNode& root, RouteEntry& route);
@@ -283,7 +263,6 @@ private:
     [[nodiscard]] const RouteEntry* findStaticRoute(HttpKnownMethod method, std::string_view path) const noexcept;
     [[nodiscard]] const RouteEntry* findDynamicRoute(HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept;
     [[nodiscard]] const RouteEntry* findPerfect(HttpKnownMethod method, std::string_view path) const noexcept;
-    [[nodiscard]] const RouteEntry* findRadix(HttpKnownMethod method, std::string_view path) const noexcept;
     [[nodiscard]] const RouteEntry* findDynamic(HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethods(std::string_view path, HttpKnownMethod requestedMethod) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethodsForServer() const noexcept;
@@ -317,7 +296,6 @@ private:
     std::pmr::vector<RouteEntry> routes_;
     std::pmr::vector<RouteMiddleware> middlewareFrames_;
     std::pmr::vector<PerfectSlot> exactSlots_;
-    std::array<RadixNode, kRoutableMethodCount> radixRoots_{};
     std::array<DynamicNode, kRoutableMethodCount> dynamicRoots_{};
     std::pmr::vector<DynamicNode> dynamicNodeArena_;
     std::pmr::vector<std::string_view> dynamicParamNames_;
