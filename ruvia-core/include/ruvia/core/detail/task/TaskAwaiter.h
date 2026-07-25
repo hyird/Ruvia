@@ -18,6 +18,14 @@ inline Task<void> TaskPromise<void>::get_return_object() noexcept {
     return Task<void>{std::coroutine_handle<TaskPromise<void>>::from_promise(*this)};
 }
 
+// Serves Task<T> and Task<void> alike: TaskPromise<void>::result() returns void,
+// so `return promise.result();` below is well-formed for it too. Keeping one
+// awaiter keeps the empty-task check and the suspend sequence stated once.
+//
+// await_resume carries no [[nodiscard]]: the compiler calls it as part of the
+// co_await expansion rather than callers, and the attribute is not portable on
+// a void return type. Task itself is [[nodiscard]], which is the check that
+// catches a dropped task.
 template <typename T>
 class TaskAwaiter final {
 public:
@@ -38,40 +46,12 @@ public:
         return task_.handle_;
     }
 
-    [[nodiscard]] T await_resume() {
+    T await_resume() {
         return task_.handle_.promise().result();
     }
 
 private:
     Task<T> task_;
-};
-
-template <>
-class TaskAwaiter<void> final {
-public:
-    explicit TaskAwaiter(Task<void>&& task)
-        : task_(std::move(task)) {
-        if (task_.handle_ == nullptr) {
-            throw std::logic_error("cannot await an empty ruvia::Task");
-        }
-    }
-
-    [[nodiscard]] bool await_ready() const noexcept {
-        return task_.handle_.done();
-    }
-
-    [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) noexcept {
-        task_.handle_.promise().setContinuation(continuation);
-        task_.handle_.promise().markStarted();
-        return task_.handle_;
-    }
-
-    void await_resume() {
-        task_.handle_.promise().result();
-    }
-
-private:
-    Task<void> task_;
 };
 
 }  // namespace ruvia::detail
@@ -81,10 +61,6 @@ namespace ruvia {
 template <typename T>
 [[nodiscard]] detail::TaskAwaiter<T> Task<T>::operator co_await() && {
     return detail::TaskAwaiter<T>{std::move(*this)};
-}
-
-inline detail::TaskAwaiter<void> Task<void>::operator co_await() && {
-    return detail::TaskAwaiter<void>{std::move(*this)};
 }
 
 }  // namespace ruvia
