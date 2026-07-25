@@ -26,7 +26,9 @@ struct Http1RequestParseResultAccess final {
         return Http1RequestParseResult(Http1RequestNeedMore(requiredTotalBytes));
     }
 
-    [[nodiscard]] static Http1RequestParseResult parsed(HttpRequest request, Http1RequestBodyPlan bodyPlan, std::string_view wireBody, std::size_t consumedBytes) noexcept {
+    // HttpRequest is ~2.5KB of trivially copyable views, so a move of it is a
+    // full memcpy. Take it by rvalue reference to keep this hop off the count.
+    [[nodiscard]] static Http1RequestParseResult parsed(HttpRequest&& request, Http1RequestBodyPlan bodyPlan, std::string_view wireBody, std::size_t consumedBytes) noexcept {
         return Http1RequestParseResult(Http1ParsedRequest(std::move(request), bodyPlan, wireBody, consumedBytes));
     }
 

@@ -75,35 +75,37 @@ private:
 
 }  // namespace ruvia::detail
 
-#define RUVIA_CONTROLLER_GROUP(prefix, ...)                                                                                 \
-private:                                                                                                                    \
-    [[nodiscard]] static constexpr ::std::string_view ruviaControllerGroupPrefix() noexcept {                               \
-        static_assert(!::ruvia::detail::HttpTemporaryOwningCharString<decltype((prefix))>,                                  \
-                      "controller group prefixes must outlive route registration");                                       \
-        return ::ruvia::detail::httpBorrowedView(prefix);                                                                    \
-    }                                                                                                                       \
-    [[nodiscard]] static auto ruviaControllerGroupMiddlewares() {                                                           \
-        return ::ruvia::detail::ControllerRegistrationAccess<RuviaControllerType>::template makeMiddlewares<__VA_ARGS__>(); \
+#define RUVIA_CONTROLLER_GROUP(prefix, ...)                                                                                                              \
+private:                                                                                                                                                 \
+    [[nodiscard]] static constexpr ::std::string_view ruviaControllerGroupPrefix() noexcept {                                                            \
+        static_assert(!::ruvia::detail::HttpTemporaryOwningCharString<decltype((prefix))>, "controller group prefixes must outlive route registration"); \
+        return ::ruvia::detail::httpBorrowedView(prefix);                                                                                                \
+    }                                                                                                                                                    \
+    [[nodiscard]] static auto ruviaControllerGroupMiddlewares() {                                                                                        \
+        return ::ruvia::detail::ControllerRegistrationAccess<RuviaControllerType>::template makeMiddlewares<__VA_ARGS__>();                              \
     }
 
 #define RUVIA_ROUTES_BEGIN                                                                                                                                            \
 private:                                                                                                                                                              \
     using RuviaControllerAccess = ::ruvia::detail::ControllerRegistrationAccess<RuviaControllerType>;                                                                 \
     friend class ::ruvia::detail::ControllerRegistrationAccess<RuviaControllerType>;                                                                                  \
-    void registerRoutes(::ruvia::detail::Router& router) {                                                                                                                    \
+    void registerRoutes(::ruvia::detail::Router& router) {                                                                                                            \
         auto ruviaControllerGroup = RuviaControllerAccess::createRouteGroup(router, RuviaControllerAccess::groupPrefix(), RuviaControllerAccess::groupMiddlewares()); \
         [[maybe_unused]] auto& ruviaRouteScope = ruviaControllerGroup;
 
 #if defined(_MSC_VER)
-#define RUVIA_DETAIL_CONTROLLER_RETAIN __declspec(selectany)
+// selectany is invalid when a controller has internal linkage (for example in
+// an anonymous namespace). MSVC already retains dynamic inline-variable
+// initialization, so no additional declaration attribute is needed here.
+#define RUVIA_DETAIL_CONTROLLER_RETAIN
 #elif defined(__GNUC__) || defined(__clang__)
 #define RUVIA_DETAIL_CONTROLLER_RETAIN __attribute__((used))
 #else
 #define RUVIA_DETAIL_CONTROLLER_RETAIN
 #endif
 
-#define RUVIA_ROUTES_END                                                                                                   \
-    }                                                                                                                      \
+#define RUVIA_ROUTES_END \
+    }                    \
     RUVIA_DETAIL_CONTROLLER_RETAIN inline static const bool ruviaControllerRegistered_ = ::ruvia::detail::registerController<RuviaControllerType>();
 
 #define RUVIA_GET(path, handler, ...) RuviaControllerAccess::addRoute(ruviaRouteScope, ::ruvia::HttpKnownMethod::kGet, path, RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), ::ruvia::detail::RequestBodyMode::kBuffered, RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
@@ -145,8 +147,8 @@ private:                                                                        
 
 #define RUVIA_PATCH_STREAM(path, handler, ...) RuviaControllerAccess::addRoute(ruviaRouteScope, ::ruvia::HttpKnownMethod::kPatch, path, RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), ::ruvia::detail::RequestBodyMode::kStream, RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
-#define RUVIA_GROUP_BEGIN(prefix, ...)                                                                                                                           \
-    {                                                                                                                                                            \
+#define RUVIA_GROUP_BEGIN(prefix, ...)                                                                                                                                                              \
+    {                                                                                                                                                                                               \
         auto ruviaRouteGroup = RuviaControllerAccess::createRouteGroup(ruviaRouteScope, ::ruvia::detail::httpBorrowedView(prefix), RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>()); \
         auto& ruviaRouteScope = ruviaRouteGroup;
 

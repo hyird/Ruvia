@@ -472,14 +472,17 @@ void App::stop() {
     }
     AppRuntimeBorrow runtimeBorrow(state, runtime);
 
-    if (runStopHooks) {
-        invokeStopHooks(state);
-    }
-
     if (auto* borrowed = runtimeBorrow.get(); borrowed != nullptr) {
         for (const auto& worker : borrowed->workers) {
             worker->stop();
         }
+    }
+
+    // Close every worker before application stop hooks run. WebWorkerDispatch::close()
+    // requests the worker StopToken synchronously, which lets hooks join tasks that
+    // are waiting in cancellable operations such as Redis XREADGROUP BLOCK 0.
+    if (runStopHooks) {
+        invokeStopHooks(state);
     }
 }
 
