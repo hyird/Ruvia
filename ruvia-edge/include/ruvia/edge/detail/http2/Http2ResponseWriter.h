@@ -41,7 +41,7 @@ struct Http2SessionShared final {
 // terminal END_STREAM -- parking on the stream's flow-control window between
 // chunks so a slow client never forces unbounded buffering. This writer only
 // submits frames and pokes the session's writer coroutine, which owns all I/O.
-class Http2ResponseWriter final : public ResponseWriter {
+class Http2ResponseWriter final {
 public:
     Http2ResponseWriter(Http2SessionShared& shared, std::uint32_t streamId, HttpKnownMethod method, std::pmr::memory_resource* resource)
         : shared_(shared),
@@ -50,19 +50,19 @@ public:
           resource_(resource),
           drainTimer_(shared.writeWake.get_executor()) {}
 
-    asio::awaitable<bool> respond(std::uint16_t status, const Headers& headers, std::string_view body, std::string_view cacheResult, std::optional<std::uint64_t> age, bool omitBody, bool keepAlive) override;
+    asio::awaitable<bool> respond(std::uint16_t status, const Headers& headers, std::string_view body, std::string_view cacheResult, std::optional<std::uint64_t> age, ResponseReusePolicy reusePolicy);
 
-    asio::awaitable<bool> respondHead(std::uint16_t status, const Headers& headers, std::string_view cacheResult, bool hasBody, std::optional<std::size_t> contentLength, bool keepAlive) override;
+    asio::awaitable<bool> respondHead(std::uint16_t status, const Headers& headers, std::string_view cacheResult, std::optional<std::size_t> contentLength, ResponseReusePolicy reusePolicy);
 
-    asio::awaitable<bool> respondChunk(std::string_view chunk) override;
+    asio::awaitable<bool> respondChunk(std::string_view chunk);
 
-    asio::awaitable<bool> respondEnd() override;
+    asio::awaitable<bool> respondEnd();
 
-    [[nodiscard]] std::size_t bytesWritten() const override {
+    [[nodiscard]] std::size_t bytesWritten() const noexcept {
         return bytes_;
     }
 
-    [[nodiscard]] bool connectionReusable() const noexcept override {
+    [[nodiscard]] bool connectionReusable() const noexcept {
         return true;
     }
 
@@ -80,7 +80,7 @@ private:
     // stream can no longer be written.
     asio::awaitable<bool> waitForWindow();
 
-    void submitBuffered(std::uint16_t status, const Headers& headers, std::string_view body, std::string_view cacheResult, std::optional<std::uint64_t> age, bool omitBody);
+    [[nodiscard]] bool submitBuffered(std::uint16_t status, const Headers& headers, std::string_view body, std::string_view cacheResult, std::optional<std::uint64_t> age);
 
     Http2SessionShared& shared_;
     std::uint32_t streamId_;

@@ -38,6 +38,24 @@ private:
     constexpr Http1ChunkedResponseStreamHead() noexcept = default;
 };
 
+// A streamed response with an exact representation length. The runtime writes
+// chunks incrementally, while the HTTP plan owns the one canonical
+// Content-Length field and permits connection reuse on HTTP/1.0 and HTTP/1.1.
+class Http1KnownLengthResponseStreamHead final {
+public:
+    [[nodiscard]] constexpr std::uint64_t contentLength() const noexcept {
+        return contentLength_;
+    }
+
+private:
+    friend class Http1ResponseHeadPlan;
+
+    explicit constexpr Http1KnownLengthResponseStreamHead(std::uint64_t contentLength) noexcept
+        : contentLength_(contentLength) {}
+
+    std::uint64_t contentLength_{0};
+};
+
 // The response has no declared message-body length. When content is allowed, the
 // runtime closes the connection to delimit it; application Content-Length and
 // Transfer-Encoding fields therefore cannot survive into the wire head.
@@ -64,6 +82,11 @@ public:
     }
     [[nodiscard]] constexpr const Http1ChunkedResponseStreamHead* chunkedStream() const&& = delete;
 
+    [[nodiscard]] constexpr const Http1KnownLengthResponseStreamHead* knownLengthStream() const& noexcept {
+        return std::get_if<Http1KnownLengthResponseStreamHead>(&framing_);
+    }
+    [[nodiscard]] constexpr const Http1KnownLengthResponseStreamHead* knownLengthStream() const&& = delete;
+
     [[nodiscard]] constexpr const Http1CloseDelimitedResponseStreamHead* closeDelimitedStream() const& noexcept {
         return std::get_if<Http1CloseDelimitedResponseStreamHead>(&framing_);
     }
@@ -79,10 +102,11 @@ public:
 
 private:
     friend Http1BufferedResponsePlan http1BufferedResponsePlan(HttpBufferedResponseWritePlan, Http1ServerConnectionPlan) noexcept;
+    friend constexpr Http1ResponseHeadPlan http1KnownLengthResponseStreamHeadPlan(HttpResponseBodyPlan, Http1ServerConnectionPlan, std::uint64_t) noexcept;
     friend constexpr Http1ResponseHeadPlan http1ChunkedResponseStreamHeadPlan(HttpResponseBodyPlan, Http1ServerConnectionPlan) noexcept;
     friend constexpr Http1ResponseHeadPlan http1CloseDelimitedResponseStreamHeadPlan(HttpResponseBodyPlan, Http1ServerConnectionPlan) noexcept;
 
-    using Framing = std::variant<Http1BufferedResponseHead, Http1ChunkedResponseStreamHead, Http1CloseDelimitedResponseStreamHead>;
+    using Framing = std::variant<Http1BufferedResponseHead, Http1KnownLengthResponseStreamHead, Http1ChunkedResponseStreamHead, Http1CloseDelimitedResponseStreamHead>;
 
     [[nodiscard]] static constexpr Framing bufferedFraming(std::uint64_t contentLength) noexcept {
         return Framing(Http1BufferedResponseHead(contentLength));
@@ -90,6 +114,10 @@ private:
 
     [[nodiscard]] static constexpr Framing chunkedStreamFraming() noexcept {
         return Framing(Http1ChunkedResponseStreamHead());
+    }
+
+    [[nodiscard]] static constexpr Framing knownLengthStreamFraming(std::uint64_t contentLength) noexcept {
+        return Framing(Http1KnownLengthResponseStreamHead(contentLength));
     }
 
     [[nodiscard]] static constexpr Framing closeDelimitedStreamFraming() noexcept {
@@ -105,6 +133,10 @@ private:
     HttpProtocolVersion protocolVersion_;
     Framing framing_;
 };
+
+[[nodiscard]] constexpr Http1ResponseHeadPlan http1KnownLengthResponseStreamHeadPlan(HttpResponseBodyPlan bodyPlan, Http1ServerConnectionPlan connectionPlan, std::uint64_t contentLength) noexcept {
+    return Http1ResponseHeadPlan(bodyPlan, connectionPlan.protocolVersion(), Http1ResponseHeadPlan::knownLengthStreamFraming(contentLength));
+}
 
 [[nodiscard]] constexpr Http1ResponseHeadPlan http1ChunkedResponseStreamHeadPlan(HttpResponseBodyPlan bodyPlan, Http1ServerConnectionPlan connectionPlan) noexcept {
     return Http1ResponseHeadPlan(bodyPlan, connectionPlan.protocolVersion(), Http1ResponseHeadPlan::chunkedStreamFraming());

@@ -5,12 +5,8 @@ namespace ruvia::edge {
 std::pmr::vector<HttpHeaderView> buildForwardHeaders(std::span<const HttpHeaderView> requestHeaders, std::string_view clientAddress, std::string_view host, bool tlsEnabled, const CachedResponse* staleEntry, ForwardMode mode, std::pmr::memory_resource* resource) {
     std::pmr::vector<HttpHeaderView> forwardHeaders(resource);
     for (const auto& field : requestHeaders) {
-        std::pmr::string lower(resource);
-        lower.reserve(field.name().size());
-        for (const char c : field.name()) {
-            lower.push_back(toLowerAscii(c));
-        }
-        if (isConnectionOrFramingField(lower) || connectionNominates(requestHeaders, field.name()) || lower == "host" || (mode == ForwardMode::kCache && isConditionalOrRangeField(lower)) || lower == "via" || lower == "forwarded" || lower.starts_with("x-forwarded-")) {
+        const auto name = field.name();
+        if (isConnectionOrFramingField(name) || connectionNominates(requestHeaders, name) || iequals(name, "host") || (mode == ForwardMode::kCache && isConditionalOrRangeField(name)) || iequals(name, "via") || iequals(name, "forwarded") || istartsWith(name, "x-forwarded-")) {
             continue;
         }
         forwardHeaders.push_back(field);

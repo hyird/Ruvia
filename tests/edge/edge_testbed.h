@@ -192,6 +192,25 @@ private:
                 "ETag: \"v1\"\r\n"
                 "Cache-Control: max-age=60\r\n"
                 "\r\n";
+        } else if (request.find("HEAD /head-metadata ") != std::string::npos) {
+            // HEAD has no message content, while Content-Length describes the
+            // selected GET representation and must survive proxy planning.
+            hits_.fetch_add(1);
+            response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Length: 7\r\n"
+                "Cache-Control: no-store\r\n"
+                "\r\n";
+        } else if (request.find("GET /no-content ") != std::string::npos) {
+            // Deliberately carries an illegal origin Content-Length. The edge's
+            // shared response body policy must remove it from the client-facing
+            // 204 instead of forwarding origin framing verbatim.
+            hits_.fetch_add(1);
+            response =
+                "HTTP/1.1 204 No Content\r\n"
+                "Content-Length: 5\r\n"
+                "Cache-Control: no-store\r\n"
+                "\r\n";
         } else if (request.find("GET /chunked ") != std::string::npos || request.find("GET /chunked10 ") != std::string::npos) {
             // An unknown-length (chunked) origin response.
             hits_.fetch_add(1);

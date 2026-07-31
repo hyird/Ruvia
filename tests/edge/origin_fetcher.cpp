@@ -53,23 +53,25 @@ struct AccumulatingSink final {
     OriginResponseHead head;
     std::string body;
 
+    [[nodiscard]] asio::awaitable<bool> operator()(const OriginResponseHead& value) {
+        head = value;
+        co_return true;
+    }
+
+    [[nodiscard]] asio::awaitable<bool> operator()(std::string_view chunk) {
+        body.append(chunk);
+        co_return true;
+    }
+
     [[nodiscard]] ResponseSink make() {
-        ResponseSink sink;
-        sink.onHead = [this](const OriginResponseHead& h) -> asio::awaitable<bool> {
-            head = h;
-            co_return true;
-        };
-        sink.onBody = [this](std::string_view chunk) -> asio::awaitable<bool> {
-            body.append(chunk);
-            co_return true;
-        };
-        return sink;
+        return ResponseSink(*this, *this);
     }
 };
 
 struct CaseResult final {
     OriginFetchOutcome outcome{OriginFetchOutcome::kConnectFailed};
     std::uint16_t status{0};
+    std::optional<std::size_t> contentLength;
     std::string body;
     std::vector<std::pair<std::string, std::string>> headers;
     std::string requestSeenByOrigin;
@@ -78,7 +80,7 @@ struct CaseResult final {
 // Run one fetch against a loopback origin. When `silent`, the origin accepts and
 // reads the request but never replies, holding the connection open so the fetch
 // hits its read deadline.
-CaseResult runCase(std::string responseBytes, bool silent = false, OriginFetcher::Limits limits = {}) {
+CaseResult runCase(std::string responseBytes, bool silent = false, OriginFetcher::Limits limits = {}, std::string_view method = "GET") {
     asio::io_context io;
     tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
@@ -123,7 +125,7 @@ CaseResult runCase(std::string responseBytes, bool silent = false, OriginFetcher
             OriginFetcher fetcher(limits);
             const HttpHeaderView headers[] = {HttpHeaderView("accept", "*/*")};
             OriginRequest request;
-            request.method = "GET";
+            request.method = method;
             request.target = "/thing";
             request.headers = std::span<const HttpHeaderView>(headers);
             AccumulatingSink acc;
@@ -131,6 +133,7 @@ CaseResult runCase(std::string responseBytes, bool silent = false, OriginFetcher
             auto result = co_await fetcher.fetch(io.get_executor(), "127.0.0.1", port, false, request, sink);
             out.outcome = result.outcome;
             out.status = acc.head.status;
+            out.contentLength = acc.head.contentLength;
             out.body = std::move(acc.body);
             out.headers = std::move(acc.head.headers);
             io.stop();  // done measuring; do not wait on a held-open origin
@@ -172,6 +175,21 @@ int main() {
         check(r.requestSeenByOrigin.find("accept: */*") != std::string::npos, "forwarded request header reached the origin");
     }
 
+    // HEAD carries no payload, but a valid Content-Length remains useful
+    // representation metadata for the downstream response plan.
+    {
+        const auto r = runCase(
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 7\r\n"
+            "\r\n",
+            false,
+            {},
+            "HEAD");
+        check(r.outcome == OriginFetchOutcome::kOk, "HEAD metadata fetch succeeds");
+        check(r.contentLength == std::optional<std::size_t>{7}, "HEAD representation length is retained");
+        check(r.body.empty(), "HEAD metadata fetch delivers no body");
+    }
+
     // Chunked transfer-coding is de-chunked into a contiguous body.
     {
         const auto r = runCase(
@@ -206,6 +224,55 @@ int main() {
         check(r.outcome == OriginFetchOutcome::kOk, "no-content fetch succeeds");
         check(r.status == 204, "no-content status is 204");
         check(r.body.empty(), "no-content body is empty");
+    }
+
+    // The configured ceiling applies to decoded representation bytes for every
+    // response framing. Exact-boundary bodies succeed; oversized known-length
+    // responses are rejected before their head reaches the sink, while
+    // unknown-length streams stop as soon as the limit can be proven exceeded.
+    {
+        OriginFetcher::Limits limits;
+        limits.maxResponseBytes = 5;
+
+        const auto boundary = runCase(
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 5\r\n"
+            "\r\n"
+            "hello",
+            false,
+            limits);
+        check(boundary.outcome == OriginFetchOutcome::kOk && boundary.body == "hello", "response size boundary is accepted");
+
+        const auto known = runCase(
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 6\r\n"
+            "\r\n"
+            "excess",
+            false,
+            limits);
+        check(known.outcome == OriginFetchOutcome::kTooLarge, "oversized known-length response is rejected");
+        check(known.status == 0 && known.body.empty(), "known oversize is rejected before sink head delivery");
+
+        const auto chunked = runCase(
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "\r\n"
+            "6\r\nexcess\r\n"
+            "0\r\n\r\n",
+            false,
+            limits);
+        check(chunked.outcome == OriginFetchOutcome::kTooLarge, "oversized chunked response is rejected");
+        check(chunked.body.empty(), "oversized declared chunk is not delivered");
+
+        const auto closeDelimited = runCase(
+            "HTTP/1.1 200 OK\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "excess",
+            false,
+            limits);
+        check(closeDelimited.outcome == OriginFetchOutcome::kTooLarge, "oversized close-delimited response is rejected");
+        check(closeDelimited.body.empty(), "oversized close-delimited bytes are not delivered");
     }
 
     // An origin that accepts but never replies trips the read deadline.

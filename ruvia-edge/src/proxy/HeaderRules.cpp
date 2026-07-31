@@ -6,24 +6,12 @@
 
 namespace ruvia::edge {
 
-namespace {
-
-[[nodiscard]] std::string lowerCopy(std::string_view value) {
-    std::string lower(value);
-    for (auto& c : lower) {
-        c = toLowerAscii(c);
-    }
-    return lower;
+bool isConnectionOrFramingField(std::string_view name) noexcept {
+    return iequals(name, "connection") || iequals(name, "keep-alive") || iequals(name, "proxy-authenticate") || iequals(name, "proxy-authorization") || iequals(name, "te") || iequals(name, "trailer") || iequals(name, "transfer-encoding") || iequals(name, "upgrade") || iequals(name, "content-length");
 }
 
-}  // namespace
-
-bool isConnectionOrFramingField(std::string_view lowerName) noexcept {
-    return lowerName == "connection" || lowerName == "keep-alive" || lowerName == "proxy-authenticate" || lowerName == "proxy-authorization" || lowerName == "te" || lowerName == "trailer" || lowerName == "transfer-encoding" || lowerName == "upgrade" || lowerName == "content-length";
-}
-
-bool isConditionalOrRangeField(std::string_view lowerName) noexcept {
-    return lowerName == "range" || lowerName == "if-range" || lowerName == "if-match" || lowerName == "if-none-match" || lowerName == "if-modified-since" || lowerName == "if-unmodified-since";
+bool isConditionalOrRangeField(std::string_view name) noexcept {
+    return iequals(name, "range") || iequals(name, "if-range") || iequals(name, "if-match") || iequals(name, "if-none-match") || iequals(name, "if-modified-since") || iequals(name, "if-unmodified-since");
 }
 
 bool connectionNominates(std::span<const HttpHeaderView> headers, std::string_view fieldName) noexcept {
@@ -60,8 +48,7 @@ Headers endToEndResponseHeaders(const Headers& headers) {
     Headers result;
     result.reserve(headers.size());
     for (const auto& field : headers) {
-        const std::string lower = lowerCopy(field.first);
-        const bool standardHopByHop = isConnectionOrFramingField(lower) && lower != "content-length";
+        const bool standardHopByHop = isConnectionOrFramingField(field.first) && !iequals(field.first, "content-length");
         if (standardHopByHop || connectionNominates(headers, field.first)) {
             continue;
         }
@@ -74,7 +61,7 @@ Headers mergeStoredHeaders(const Headers& stored, const Headers& updates) {
     Headers merged = endToEndResponseHeaders(stored);
     const Headers sanitizedUpdates = endToEndResponseHeaders(updates);
     for (const auto& [name, value] : sanitizedUpdates) {
-        if (isConnectionOrFramingField(lowerCopy(name))) {
+        if (isConnectionOrFramingField(name)) {
             continue;
         }
         std::erase_if(merged, [&](const auto& field) { return iequals(field.first, name); });

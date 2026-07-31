@@ -78,9 +78,10 @@ EdgeServer::Impl::Impl(EdgeEndpoint endpoint, EdgeServerOptions options)
       config_(memory_.resource()),
       cache_(options.cache, memory_.resource()),
       disk_(options.cacheDirectory, options.maxDiskCacheBytes, [this](std::exception_ptr exception) { reportFailure(EdgeTaskKind::kDiskCache, std::move(exception)); }),
-      fetcher_(options.fetch),
+      fetcher_(options.fetch, memory_.resource()),
       maxCacheableBytes_(options.maxCacheableBytes),
       maxConnections_(options.maxConnections),
+      inFlight_(memory_.resource()),
       accessLog_(std::move(options.accessLog)),
       taskFailure_(std::move(options.taskFailure)) {
     const auto bound = acceptor_.local_endpoint();
@@ -158,12 +159,11 @@ void EdgeServer::Impl::requestStopOnWorker() noexcept {
     asio::error_code ignore;
     acceptor_.close(ignore);
     shutdownSignal_.cancel(ignore);
-    // Moving the registry is allocation-free. Completion callbacks erase from
-    // the now-empty live registry, so even inline cancellation cannot invalidate
-    // this traversal; each callback itself retains its signal until completion.
-    auto operations = std::move(activeOperations_);
-    for (const auto& operation : operations) {
-        operation->emit(asio::cancellation_type::terminal);
+    // Advance before emission so a completion that runs inline may erase its
+    // own stable list node without invalidating the traversal.
+    for (auto operation = activeOperations_.begin(); operation != activeOperations_.end();) {
+        auto current = operation++;
+        current->emit(asio::cancellation_type::terminal);
     }
     // Do not call io_context::stop(): it abandons ready completions and keeps
     // their coroutine frames until io_context destruction, after several Impl
@@ -323,23 +323,22 @@ void EdgeServer::Impl::reportFailure(EdgeTaskKind kind, std::exception_ptr excep
 }
 
 void EdgeServer::Impl::spawnTracked(asio::awaitable<void> operation, EdgeTaskKind kind) {
-    auto cancellation = std::make_shared<asio::cancellation_signal>();
-    activeOperations_.push_back(cancellation);
+    const auto tracked = activeOperations_.emplace(activeOperations_.end());
     try {
-        asio::co_spawn(ioContext_, std::move(operation), asio::bind_cancellation_slot(cancellation->slot(), [this, cancellation, kind](std::exception_ptr exception) noexcept {
+        asio::co_spawn(ioContext_, std::move(operation), asio::bind_cancellation_slot(tracked->slot(), [this, tracked, kind](std::exception_ptr exception) noexcept {
             // A detached coroutine has no caller to rethrow into: this
             // completion is the only place its failure can surface.
             // Everything except a shutdown unwind is a failure.
             if (exception != nullptr && !(shutdownRequestedOnWorker_ && isCancellationUnwind(exception))) {
                 reportFailure(kind, std::move(exception));
             }
-            std::erase(activeOperations_, cancellation);
+            activeOperations_.erase(tracked);
         }));
         if (shutdownRequestedOnWorker_) {
-            cancellation->emit(asio::cancellation_type::terminal);
+            tracked->emit(asio::cancellation_type::terminal);
         }
     } catch (...) {
-        std::erase(activeOperations_, cancellation);
+        activeOperations_.erase(tracked);
         throw;
     }
 }
@@ -458,7 +457,7 @@ void EdgeServer::Impl::recordRequest(const AccessLogEntry& entry) noexcept {
     }
 }
 
-void EdgeServer::Impl::wakeInFlight(const std::string& key) {
+void EdgeServer::Impl::wakeInFlight(std::string_view key) {
     const auto it = inFlight_.find(key);
     if (it == inFlight_.end()) {
         return;

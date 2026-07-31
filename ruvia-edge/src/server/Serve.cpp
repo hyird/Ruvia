@@ -3,6 +3,8 @@
 #include "ruvia/edge/detail/proxy/ForwardHeaders.h"
 #include "ruvia/edge/detail/proxy/RangeResponse.h"
 #include "ruvia/edge/detail/proxy/RequestDirectives.h"
+#include "ruvia/edge/detail/http1/Http1ResponseWriter.h"
+#include "ruvia/edge/detail/http2/Http2ResponseWriter.h"
 
 #include <chrono>
 #include <cstdint>
@@ -15,6 +17,8 @@
 #include <vector>
 
 #include <asio/as_tuple.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/ssl.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/this_coro.hpp>
 #include <asio/use_awaitable.hpp>
@@ -22,8 +26,10 @@
 #include "ruvia/edge/detail/proxy/HeaderRules.h"
 namespace ruvia::edge {
 
-asio::awaitable<bool> EdgeServer::Impl::servePassThrough(const EdgeRequest& request, ResponseWriter& writer, const OriginLease& origin, RequestOutcome& outcome) {
+template <typename Writer>
+asio::awaitable<bool> EdgeServer::Impl::servePassThrough(const EdgeRequest& request, Writer& writer, const OriginLease& origin, RequestOutcome& outcome) {
     const bool keepAlive = request.keepAlive;
+    const auto reusePolicy = responseReusePolicy(keepAlive);
 
     // The header vector must outlive passRequest: its `headers` is a span.
     const auto passHeaders = buildForwardHeaders(request.headers, request.clientAddress, request.host, tlsEnabled_, nullptr, ForwardMode::kPassThrough, memory_.resource());
@@ -39,24 +45,24 @@ asio::awaitable<bool> EdgeServer::Impl::servePassThrough(const EdgeRequest& requ
     std::uint16_t passStatus = 0;
     bool passHeadSent = false;
     bool passAborted = false;
-    ResponseSink passSink;
-    passSink.onHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
+    auto passHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
         passStatus = head.status;
         const Headers responseHeaders = endToEndResponseHeaders(head.headers);
-        if (!co_await writer.respondHead(head.status, responseHeaders, "BYPASS", head.hasBody, head.contentLength, keepAlive)) {
+        if (!co_await writer.respondHead(head.status, responseHeaders, "BYPASS", head.contentLength, reusePolicy)) {
             passAborted = true;
             co_return false;
         }
         passHeadSent = true;
         co_return true;
     };
-    passSink.onBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
+    auto passBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
         if (!co_await writer.respondChunk(chunk)) {
             passAborted = true;
             co_return false;
         }
         co_return true;
     };
+    ResponseSink passSink(passHead, passBody);
 
     auto passStream = co_await fetcher_.fetch(ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort, origin->https, passRequest, passSink);
     if (passAborted) {
@@ -68,7 +74,7 @@ asio::awaitable<bool> EdgeServer::Impl::servePassThrough(const EdgeRequest& requ
         }
         const std::uint16_t gatewayStatus = passStream.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
         outcome.status = gatewayStatus;
-        co_await respondStatusOnly(writer, gatewayStatus, "ERROR", false);
+        co_await respondStatusOnly(writer, gatewayStatus, "ERROR", ResponseReusePolicy::kClose);
         co_return false;
     }
     if (!co_await writer.respondEnd()) {
@@ -86,7 +92,8 @@ asio::awaitable<bool> EdgeServer::Impl::servePassThrough(const EdgeRequest& requ
     co_return keepAlive;
 }
 
-asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request, ResponseWriter& writer) {
+template <typename Writer>
+asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request, Writer& writer) {
     // Per-request accounting: defaults to an error result; success paths set the
     // label/status below, and the byte count comes from the writer.
     RequestOutcome outcome;
@@ -99,11 +106,12 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
     const std::string_view frontHost = hostWithoutPort(request.host);
     const std::string_view target = request.target;
     const bool keepAlive = request.keepAlive;
+    const auto reusePolicy = responseReusePolicy(keepAlive);
 
     struct RequestRecord final {
         Impl* self;
         const EdgeRequest* request;
-        const ResponseWriter* writer;
+        const Writer* writer;
         const RequestOutcome* outcome;
         ~RequestRecord() noexcept {
             self->recordRequest(AccessLogEntry{request->clientAddress, request->method, request->host, request->target, outcome->status, outcome->label, writer->bytesWritten()});
@@ -117,7 +125,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
     // is suspended in origin I/O.
     auto origin = config_.findOrigin(frontHost);
     if (!origin) {
-        co_await respondStatusOnly(writer, 502, "ERROR", false);
+        co_await respondStatusOnly(writer, 502, "ERROR", ResponseReusePolicy::kClose);
         co_return false;
     }
 
@@ -130,7 +138,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
     if (requestCacheControl.onlyIfCached && cannotUseStoredResponse) {
         outcome.status = 504;
         outcome.label = "MISS";
-        co_return co_await respondStatusOnly(writer, 504, "MISS", keepAlive) && keepAlive;
+        co_return co_await respondStatusOnly(writer, 504, "MISS", reusePolicy) && keepAlive;
     }
     if (cannotUseStoredResponse || (requestCacheControl.noStore && !requestCacheControl.onlyIfCached)) {
         co_return co_await servePassThrough(request, writer, origin, outcome);
@@ -150,12 +158,12 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
             if (const auto rangeHeader = findRequestHeader(request.headers, "range")) {
                 if (auto ranged = cachedRangeResponse(entry, *rangeHeader)) {
                     outcome.status = ranged->status;
-                    co_return co_await writer.respond(ranged->status, ranged->headers, ranged->body, "HIT", ranged->withAge ? std::optional<std::uint64_t>(age) : std::nullopt, false, keepAlive) && keepAlive;
+                    co_return co_await writer.respond(ranged->status, ranged->headers, ranged->body, "HIT", ranged->withAge ? std::optional<std::uint64_t>(age) : std::nullopt, reusePolicy) && keepAlive;
                 }
             }
         }
         outcome.status = entry.status;
-        co_return co_await writer.respond(entry.status, entry.headers, entry.body, "HIT", age, isHead, keepAlive) && keepAlive;
+        co_return co_await writer.respond(entry.status, entry.headers, entry.body, "HIT", age, reusePolicy) && keepAlive;
     };
 
     // 4. Serve a fresh cache hit without touching the origin.
@@ -179,7 +187,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
     // refreshes it, so the client never waits on the origin.
     if (isGet && staleEntry && staleEntry->staleWhileRevalidate > 0 && now <= staleEntry->expiresAt + static_cast<std::time_t>(staleEntry->staleWhileRevalidate)) {
         if (inFlight_.find(key) == inFlight_.end()) {
-            inFlight_.try_emplace(key);  // one refresh per key
+            inFlight_.try_emplace(std::pmr::string(key, memory_.resource()), memory_.resource());  // one refresh per key
             // The entry claims this key for a refresh that is only started
             // below. If starting it throws, nothing would ever wake the
             // followers that later coalesce on the claim, so release it here
@@ -194,7 +202,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
         const auto age = cachedResponseAge(*staleEntry, now);
         outcome.label = "STALE";
         outcome.status = staleEntry->status;
-        co_return co_await writer.respond(staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age, isHead, keepAlive) && keepAlive;
+        co_return co_await writer.respond(staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age, reusePolicy) && keepAlive;
     }
 
     // only-if-cached forbids contacting the origin. A fresh hit or an
@@ -203,7 +211,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
     if (requestCacheControl.onlyIfCached) {
         outcome.status = 504;
         outcome.label = "MISS";
-        co_return co_await respondStatusOnly(writer, 504, "MISS", keepAlive) && keepAlive;
+        co_return co_await respondStatusOnly(writer, 504, "MISS", reusePolicy) && keepAlive;
     }
 
     // Request coalescing (GET only): if a fetch for this key is already in
@@ -214,7 +222,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
     if (isGet) {
         for (;;) {
             if (inFlight_.find(key) == inFlight_.end()) {
-                inFlight_.try_emplace(key);
+                inFlight_.try_emplace(std::pmr::string(key, memory_.resource()), memory_.resource());
                 becameLeader = true;
                 break;
             }
@@ -222,12 +230,13 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
             // session teardown; stop coalescing rather than wait for a leader
             // that can no longer serve this dead connection. No-op for HTTP/1,
             // whose handler carries no cancellation slot.
-            if ((co_await asio::this_coro::cancellation_state).cancelled() != asio::cancellation_type::none) {
+            const auto cancellationBeforeWait = co_await asio::this_coro::cancellation_state;
+            if (cancellationBeforeWait.cancelled() != asio::cancellation_type::none) {
                 co_return false;
             }
             asio::steady_timer waitTimer(ioContext_);
             waitTimer.expires_at((std::chrono::steady_clock::time_point::max)());
-            inFlight_[key].waiters.push_back(&waitTimer);
+            inFlight_.find(key)->second.waiters.push_back(&waitTimer);
             co_await waitTimer.async_wait(asio::as_tuple(asio::use_awaitable));
             // Drop our waiter before it can dangle. The leader's wakeInFlight()
             // erases the whole entry when it finishes, so remove ours only if
@@ -236,7 +245,8 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
             if (const auto entry = inFlight_.find(key); entry != inFlight_.end()) {
                 std::erase(entry->second.waiters, &waitTimer);
             }
-            if ((co_await asio::this_coro::cancellation_state).cancelled() != asio::cancellation_type::none) {
+            const auto cancellationAfterWait = co_await asio::this_coro::cancellation_state;
+            if (cancellationAfterWait.cancelled() != asio::cancellation_type::none) {
                 co_return false;
             }
             now = std::time(nullptr);
@@ -272,7 +282,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
     const auto serveStaleOnError = [&]() -> bool { return staleEntry && staleEntry->staleIfError > 0 && now <= staleEntry->expiresAt + static_cast<std::time_t>(staleEntry->staleIfError); };
     const auto writeStale = [&]() -> asio::awaitable<bool> {
         const auto age = cachedResponseAge(*staleEntry, now);
-        co_return co_await writer.respond(staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age, isHead, keepAlive);
+        co_return co_await writer.respond(staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age, reusePolicy);
     };
 
     // Streaming sink: writes the client head then each body chunk as the
@@ -288,8 +298,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
     FreshnessDecision cacheDecision;
     const std::time_t originRequestTime = std::time(nullptr);
 
-    ResponseSink sink;
-    sink.onHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
+    auto receiveHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
         now = std::time(nullptr);
         respStatus = head.status;
         respHeaders = endToEndResponseHeaders(head.headers);
@@ -299,7 +308,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
         if (head.status >= 500 && serveStaleOnError()) {
             co_return false;  // stale-if-error: serve the stored body below
         }
-        if (!co_await writer.respondHead(head.status, respHeaders, "MISS", head.hasBody, head.contentLength, keepAlive)) {
+        if (!co_await writer.respondHead(head.status, respHeaders, "MISS", head.contentLength, reusePolicy)) {
             clientAborted = true;
             co_return false;
         }
@@ -310,7 +319,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
         }
         co_return true;
     };
-    sink.onBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
+    auto receiveBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
         if (caching) {
             if (cacheBuffer.size() + chunk.size() > maxCacheableBytes_) {
                 caching = false;  // too big to cache; keep streaming
@@ -326,6 +335,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
         }
         co_return true;
     };
+    ResponseSink sink(receiveHead, receiveBody);
 
     auto fetchResult = co_await fetcher_.fetch(ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort, origin->https, originRequest, sink);
 
@@ -344,7 +354,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
         }
         const std::uint16_t gatewayStatus = fetchResult.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
         outcome.status = gatewayStatus;
-        co_await respondStatusOnly(writer, gatewayStatus, "ERROR", false);
+        co_await respondStatusOnly(writer, gatewayStatus, "ERROR", ResponseReusePolicy::kClose);
         co_return false;
     }
 
@@ -373,7 +383,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(const EdgeRequest& request,
             }
             outcome.label = "REVALIDATED";
             outcome.status = refreshed.status;
-            co_return co_await writer.respond(refreshed.status, refreshed.headers, refreshed.body, "REVALIDATED", refreshed.initialAge, isHead, keepAlive) && keepAlive;
+            co_return co_await writer.respond(refreshed.status, refreshed.headers, refreshed.body, "REVALIDATED", refreshed.initialAge, reusePolicy) && keepAlive;
         }
         outcome.label = "STALE";  // 5xx covered by stale-if-error
         outcome.status = staleEntry->status;
@@ -446,8 +456,7 @@ asio::awaitable<void> EdgeServer::Impl::backgroundRefresh(RefreshJob job) {
     std::time_t now = std::time(nullptr);
     const std::time_t originRequestTime = now;
 
-    ResponseSink sink;
-    sink.onHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
+    auto receiveHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
         now = std::time(nullptr);
         status = head.status;
         respHeaders = endToEndResponseHeaders(head.headers);
@@ -458,7 +467,7 @@ asio::awaitable<void> EdgeServer::Impl::backgroundRefresh(RefreshJob job) {
         caching = decision.cacheable && cacheableUnderVary(respHeaders);
         co_return caching;  // only download a body we intend to cache
     };
-    sink.onBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
+    auto receiveBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
         if (body.size() + chunk.size() > maxCacheableBytes_) {
             caching = false;
             co_return false;  // too big to cache: abandon the refresh
@@ -466,6 +475,7 @@ asio::awaitable<void> EdgeServer::Impl::backgroundRefresh(RefreshJob job) {
         body.append(chunk);
         co_return true;
     };
+    ResponseSink sink(receiveHead, receiveBody);
 
     auto result = co_await fetcher_.fetch(ioContext_.get_executor(), job.host, job.port, job.https, request, sink);
     if (result.outcome != OriginFetchOutcome::kOk) {
@@ -511,5 +521,15 @@ asio::awaitable<void> EdgeServer::Impl::backgroundRefresh(RefreshJob job) {
         disk_.purge(job.key);
     }
 }
+
+template asio::awaitable<bool> EdgeServer::Impl::serveRequest(
+    const EdgeRequest&,
+    Http1ResponseWriter<asio::ip::tcp::socket>&);
+template asio::awaitable<bool> EdgeServer::Impl::serveRequest(
+    const EdgeRequest&,
+    Http1ResponseWriter<asio::ssl::stream<asio::ip::tcp::socket>>&);
+template asio::awaitable<bool> EdgeServer::Impl::serveRequest(
+    const EdgeRequest&,
+    Http2ResponseWriter&);
 
 }  // namespace ruvia::edge

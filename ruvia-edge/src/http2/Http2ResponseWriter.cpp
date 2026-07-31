@@ -1,8 +1,10 @@
 #include "ruvia/edge/detail/http2/Http2ResponseWriter.h"
 
+#include <array>
+#include <charconv>
 #include <chrono>
 #include <span>
-#include <string>
+#include <system_error>
 
 #include <asio/as_tuple.hpp>
 #include <asio/use_awaitable.hpp>
@@ -17,38 +19,34 @@
 
 namespace ruvia::edge {
 
-asio::awaitable<bool> Http2ResponseWriter::respond(std::uint16_t status, const Headers& headers, std::string_view body, std::string_view cacheResult, std::optional<std::uint64_t> age, bool omitBody, bool) {
-    submitBuffered(status, headers, body, cacheResult, age, omitBody);
+asio::awaitable<bool> Http2ResponseWriter::respond(std::uint16_t status, const Headers& headers, std::string_view body, std::string_view cacheResult, std::optional<std::uint64_t> age, ResponseReusePolicy) {
+    const bool submitted = submitBuffered(status, headers, body, cacheResult, age);
     poke();
     ended_ = true;
-    co_return true;
+    co_return submitted;
 }
 
-asio::awaitable<bool> Http2ResponseWriter::respondHead(std::uint16_t status, const Headers& headers, std::string_view cacheResult, bool hasBody, std::optional<std::size_t>, bool) {
-    HttpResponse response(resource_);
-    response.status(HttpStatusCode::tryFromValue(status).value_or(http_status::kInternalServerError));
-    for (const auto& [name, value] : headers) {
-        std::string lower(name);
-        for (auto& c : lower) {
-            c = toLowerAscii(c);
+asio::awaitable<bool> Http2ResponseWriter::respondHead(std::uint16_t status, const Headers& headers, std::string_view cacheResult, std::optional<std::size_t> contentLength, ResponseReusePolicy) {
+    auto response = makeEdgeResponse(resource_, status, headers, cacheResult, std::nullopt);
+    if (contentLength.has_value()) {
+        std::array<char, 20> digits;
+        const auto [end, ec] = std::to_chars(digits.data(), digits.data() + digits.size(), *contentLength);
+        if (ec != std::errc{}) {
+            ended_ = true;
+            co_return false;
         }
-        if (isConnectionOrFramingField(lower) || connectionNominates(headers, name)) {
-            continue;  // HTTP/2 frames the body itself; drop length/framing fields
-        }
-        response.header(name, value);
+        response.header("Content-Length", std::string_view(digits.data(), static_cast<std::size_t>(end - digits.data())));
     }
-    response.header("X-Cache", cacheResult);
-    // No body and no Content-Length on the head: the body streams as DATA and
-    // the length is unknown (this path serves chunked/close-delimited origins).
     const auto result = shared_.connection.submitStreamingResponseHead(streamId_, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ruvia::detail::ResponseTrailerIntent::kNone);
     poke();
-    if (result.submitted() == nullptr) {
+    const auto* plan = result.submitted();
+    if (plan == nullptr) {
         (void)shared_.connection.submitReset(streamId_, ruvia::detail::Http2ErrorCode::kInternalError);
         ended_ = true;
         co_return false;
     }
-    bodyOpen_ = hasBody;
-    if (!hasBody) {
+    bodyOpen_ = plan->headDisposition() == ruvia::detail::ResponseStreamHeadDisposition::kBodyOpen;
+    if (!bodyOpen_) {
         ended_ = true;  // the head carried END_STREAM
     }
     co_return true;
@@ -134,44 +132,27 @@ asio::awaitable<bool> Http2ResponseWriter::waitForWindow() {
     co_return streamState != nullptr && !streamState->isAborted();
 }
 
-void Http2ResponseWriter::submitBuffered(std::uint16_t status, const Headers& headers, std::string_view body, std::string_view cacheResult, std::optional<std::uint64_t> age, bool omitBody) {
-    HttpResponse response(resource_);
-    response.status(HttpStatusCode::tryFromValue(status).value_or(http_status::kInternalServerError));
-    for (const auto& [name, value] : headers) {
-        std::string lower(name);
-        for (auto& c : lower) {
-            c = toLowerAscii(c);
-        }
-        const bool nominated = connectionNominates(headers, name);
-        if (isConnectionOrFramingField(lower) || nominated) {
-            if (nominated || !(omitBody && lower == "content-length")) {
-                continue;
-            }
-        }
-        if (age && lower == "age") {
-            continue;
-        }
-        response.header(name, value);
-    }
-    response.header("X-Cache", cacheResult);
-    std::string ageText;  // must outlive submitResponseHead
-    if (age) {
-        ageText = std::to_string(*age);
-        response.header("Age", ageText);
-    }
-    if (!omitBody) {
-        response.body(body);
-    }
+bool Http2ResponseWriter::submitBuffered(std::uint16_t status, const Headers& headers, std::string_view body, std::string_view cacheResult, std::optional<std::uint64_t> age) {
+    auto response = makeEdgeResponse(resource_, status, headers, cacheResult, age);
+    response.body(body);
     const auto plan = ruvia::detail::httpBufferedResponseWritePlan(method_, response);
     const auto submitted = shared_.connection.submitResponseHead(streamId_, response, plan);
     if (submitted.submitted() == nullptr) {
         (void)shared_.connection.submitReset(streamId_, ruvia::detail::Http2ErrorCode::kInternalError);
-        return;
+        return false;
+    }
+    if (!plan.sendBody()) {
+        return true;
     }
     // A body larger than the flow-control window is accepted whole here: the
     // core copies the unsent suffix and dribbles it out as windows reopen.
-    (void)shared_.connection.submitData(streamId_, omitBody ? std::string_view{} : body, ruvia::detail::Http2EndStream::kEndStream);
-    bytes_ += omitBody ? 0 : body.size();
+    const auto statusResult = shared_.connection.submitData(streamId_, body, ruvia::detail::Http2EndStream::kEndStream);
+    if (statusResult != ruvia::detail::Http2DataSubmitStatus::kAccepted && statusResult != ruvia::detail::Http2DataSubmitStatus::kQueued) {
+        (void)shared_.connection.submitReset(streamId_, ruvia::detail::Http2ErrorCode::kInternalError);
+        return false;
+    }
+    bytes_ += body.size();
+    return true;
 }
 
 }  // namespace ruvia::edge

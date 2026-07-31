@@ -2,8 +2,8 @@ set(_source_root "@CMAKE_SOURCE_DIR@")
 
 # Stable repository layout rules from AGENTS.md. This guard intentionally checks
 # structural invariants that are cheap to prove from the source tree: target
-# directory shape, public include roots, shallow src layout, and the flat
-# core/edge test directories. It does not try to encode every naming convention.
+# directory shape, public include roots, shallow src layout, and target test
+# categories. It does not try to encode every naming convention.
 
 function(_ruvia_layout_fail _message)
     message(FATAL_ERROR "ruvia_guard_repo_layout: ${_message}")
@@ -87,6 +87,28 @@ function(_ruvia_check_flat_test_dir _test_dir)
     endforeach()
 endfunction()
 
+function(_ruvia_check_test_categories _test_dir)
+    set(_allowed_categories ${ARGN})
+    file(GLOB _entries LIST_DIRECTORIES TRUE
+        "${_source_root}/${_test_dir}/*")
+    foreach(_entry IN LISTS _entries)
+        file(RELATIVE_PATH _relative "${_source_root}" "${_entry}")
+        if(NOT IS_DIRECTORY "${_entry}")
+            _ruvia_layout_fail(
+                "${_test_dir} test sources must be categorized, found: ${_relative}")
+        endif()
+
+        get_filename_component(_category "${_entry}" NAME)
+        list(FIND _allowed_categories "${_category}" _category_index)
+        if(_category_index EQUAL -1)
+            string(JOIN ", " _allowed_text ${_allowed_categories})
+            _ruvia_layout_fail(
+                "${_test_dir} has unsupported category '${_category}'; "
+                "allowed categories: ${_allowed_text}")
+        endif()
+    endforeach()
+endfunction()
+
 function(_ruvia_assert_matches _label _pattern _probe)
     string(REGEX MATCH "${_pattern}" _match "${_probe}")
     if(NOT _match)
@@ -122,7 +144,13 @@ _ruvia_check_src_depth("ruvia-edge" "one-level")
 
 _ruvia_check_flat_test_dir("tests/core")
 _ruvia_check_flat_test_dir("tests/edge")
+_ruvia_check_test_categories(
+    "tests/http"
+    unit http1 http2 websocket guards support conformance benchmarks)
+_ruvia_check_test_categories(
+    "tests/web"
+    unit server guards)
 
 message(STATUS
-    "ruvia_guard_repo_layout: target include roots, src depth, and flat core/edge "
-    "test directories hold")
+    "ruvia_guard_repo_layout: target include roots, src depth, and target test "
+    "directory rules hold")
