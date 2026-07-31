@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -17,7 +18,6 @@
 #include <asio/ssl.hpp>
 
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/core/MoveOnlyFunction.h"
 #include "ruvia/edge/EdgeTypes.h"
 
 namespace ruvia::edge {
@@ -45,14 +45,15 @@ enum class OriginFetchOutcome : std::uint8_t {
     kProtocolError,  // the origin's response was malformed
     kTooLarge,       // the response exceeded the configured byte ceiling
     kTimeout,        // the connect or an I/O step exceeded its deadline
-    kUnsupported,    // a framing the MVP does not handle (upgrade / CONNECT / TLS origin)
+    kUnsupported,    // a framing the MVP does not handle (upgrade / CONNECT)
     kCircuitOpen,    // the origin's breaker is open: not dialed at all
 };
 
 // The head of an origin response, delivered to a sink before the body streams.
-// contentLength is set only for an exact-length body; a chunked or
-// close-delimited body reports std::nullopt (unknown total). hasBody is false
-// for responses that carry none (HEAD, 204, 304).
+// contentLength is set for an exact-length body and for valid representation
+// metadata on a bodyless response such as HEAD/304. A chunked or close-delimited
+// body reports std::nullopt (unknown total). hasBody is false for responses that
+// carry none (HEAD, 204, 304).
 struct OriginResponseHead final {
     std::uint16_t status{0};
     std::vector<std::pair<std::string, std::string>> headers;
@@ -60,14 +61,39 @@ struct OriginResponseHead final {
     std::optional<std::size_t> contentLength{};
 };
 
-// A destination for a streamed origin response. onHead is invoked once with the
-// parsed head; onBody is invoked for each decoded body chunk in order. Both are
-// asynchronous, so the origin read is backpressured by the client write, and both
-// return false to abort the fetch (for example, the client disconnected). The
-// sink is type-erased so the fetcher stays independent of the client stream type.
-struct ResponseSink final {
-    MoveOnlyFunction<asio::awaitable<bool>(const OriginResponseHead&)> onHead;
-    MoveOnlyFunction<asio::awaitable<bool>(std::string_view)> onBody;
+// A non-owning destination for a streamed origin response. The concrete
+// callbacks live in the calling coroutine frame, so binding performs no heap
+// allocation and destruction needs no erased cleanup. Both callbacks are
+// asynchronous, preserving origin-to-client backpressure.
+class ResponseSink final {
+public:
+    template <typename HeadCallback, typename BodyCallback>
+    ResponseSink(HeadCallback& head, BodyCallback& body) noexcept
+        : headTarget_(&head),
+          bodyTarget_(&body),
+          headInvoke_([](void* target, const OriginResponseHead& value) -> asio::awaitable<bool> {
+              return (*static_cast<HeadCallback*>(target))(value);
+          }),
+          bodyInvoke_([](void* target, std::string_view value) -> asio::awaitable<bool> {
+              return (*static_cast<BodyCallback*>(target))(value);
+          }) {}
+
+    [[nodiscard]] asio::awaitable<bool> writeHead(const OriginResponseHead& head) const {
+        return headInvoke_(headTarget_, head);
+    }
+
+    [[nodiscard]] asio::awaitable<bool> writeBody(std::string_view body) const {
+        return bodyInvoke_(bodyTarget_, body);
+    }
+
+private:
+    using HeadInvoke = asio::awaitable<bool> (*)(void*, const OriginResponseHead&);
+    using BodyInvoke = asio::awaitable<bool> (*)(void*, std::string_view);
+
+    void* headTarget_;
+    void* bodyTarget_;
+    HeadInvoke headInvoke_;
+    BodyInvoke bodyInvoke_;
 };
 
 // The outcome of a streaming fetch. A sink that aborts (returns false) is not an
@@ -77,15 +103,16 @@ struct StreamOutcome final {
     OriginFetchOutcome outcome{OriginFetchOutcome::kConnectFailed};
 };
 
-// Fetches a response from an origin over plaintext HTTP/1.1, driving ruvia-http's
-// sans-I/O request writer and response parser with asio socket I/O on the
-// caller's executor. Keep-alive origin connections are pooled and reused: a fetch
+// Fetches a response from an origin over HTTP/1.1, driving ruvia-http's sans-I/O
+// request writer and response parser with asio socket/TLS I/O on the caller's
+// executor. Keep-alive plaintext connections are pooled and reused: a fetch
 // takes an idle connection to the same host:port when one is available and
 // returns it afterward if the response allows reuse, so back-to-back requests to
 // an origin avoid a fresh TCP handshake. A reused connection the origin has since
 // closed is detected and the request is retried once on a fresh connection.
 // Handles the four response body framings (no-content, exact length, chunked,
-// close-delimited); protocol upgrades, CONNECT and TLS origins are unsupported.
+// close-delimited); protocol upgrades and CONNECT are unsupported. TLS origins
+// are supported but are not retained in the idle connection pool.
 //
 // Every network step is bounded by a deadline: resolve+connect share the connect
 // timeout, and each read/write resets an inactivity timeout, so a slow or hung
@@ -97,8 +124,11 @@ class OriginFetcher final {
 public:
     using Limits = OriginFetchLimits;
 
-    explicit OriginFetcher(Limits limits)
-        : limits_(limits),
+    explicit OriginFetcher(Limits limits, std::pmr::memory_resource* resource = nullptr)
+        : resource_(resource != nullptr ? resource : std::pmr::get_default_resource()),
+          limits_(limits),
+          idlePool_(resource_),
+          circuits_(resource_),
           originTlsContext_(asio::ssl::context::tls_client) {
         if (limits_.verifyOriginCertificate) {
             originTlsContext_.set_verify_mode(asio::ssl::verify_peer);
@@ -144,17 +174,35 @@ private:
 
     // Whether this request may dial the origin, and if so whether it is the
     // single probe that reopens a tripped breaker.
-    [[nodiscard]] bool admitToOrigin(const std::string& key) noexcept;
+    [[nodiscard]] bool admitToOrigin(std::string_view key) noexcept;
     // Feeds one completed attempt back into the breaker.
-    void recordOriginOutcome(const std::string& key, OriginFetchOutcome outcome) noexcept;
+    void recordOriginOutcome(std::string_view key, OriginFetchOutcome outcome) noexcept;
 
     // The dial-and-exchange path, with the breaker already consulted.
-    [[nodiscard]] asio::awaitable<StreamOutcome> fetchFromOrigin(asio::any_io_executor executor, std::string_view host, std::uint16_t port, bool https, const OriginRequest& request, ResponseSink& sink, const std::string& key);
+    [[nodiscard]] asio::awaitable<StreamOutcome> fetchFromOrigin(asio::any_io_executor executor, std::string_view host, std::uint16_t port, bool https, const OriginRequest& request, ResponseSink& sink, std::string_view key);
 
+    struct TransparentHash final {
+        using is_transparent = void;
+        [[nodiscard]] std::size_t operator()(std::string_view value) const noexcept {
+            return std::hash<std::string_view>{}(value);
+        }
+    };
+    struct TransparentEqual final {
+        using is_transparent = void;
+        template <typename Left, typename Right>
+        [[nodiscard]] bool operator()(const Left& left, const Right& right) const noexcept {
+            return std::string_view(left) == std::string_view(right);
+        }
+    };
+    using IdleBucket = std::pmr::vector<PooledConnection>;
+    using IdlePool = std::pmr::unordered_map<std::pmr::string, IdleBucket, TransparentHash, TransparentEqual>;
+    using Circuits = std::pmr::unordered_map<std::pmr::string, Circuit, TransparentHash, TransparentEqual>;
+
+    std::pmr::memory_resource* resource_;
     Limits limits_;
+    IdlePool idlePool_;
+    Circuits circuits_;
     asio::ssl::context originTlsContext_;
-    std::unordered_map<std::string, std::vector<PooledConnection>> idlePool_;
-    std::unordered_map<std::string, Circuit> circuits_;
     std::atomic<std::size_t> circuitRejections_{0};
 };
 

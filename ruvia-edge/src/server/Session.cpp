@@ -22,7 +22,6 @@
 
 #include <openssl/ssl.h>  // negotiated ALPN read-back
 #include "ruvia/edge/detail/http1/Http1ResponseWriter.h"
-#include "ruvia/edge/detail/http1/Http1Wire.h"
 #include "ruvia/edge/detail/http2/Http2Session.h"
 #include "ruvia/edge/detail/server/SessionLimits.h"
 #include "ruvia/http/HttpRequest.h"
@@ -139,7 +138,6 @@ asio::awaitable<void> EdgeServer::Impl::handleSession(Stream stream, [[maybe_unu
     }
 
     const auto tuple = asio::as_tuple(asio::use_awaitable);
-    const auto writeStatus = [&stream, tuple](std::string wire) -> asio::awaitable<void> { co_await asio::async_write(stream, asio::buffer(wire.data(), wire.size()), tuple); };
 
     std::string inbound;
     std::array<char, 8192> buffer;
@@ -156,7 +154,7 @@ asio::awaitable<void> EdgeServer::Impl::handleSession(Stream stream, [[maybe_unu
             auto parseState = parser.parseMessage(inbound);
             if (const auto* failure = parseState.failure()) {
                 const auto protocolError = failure->protocolError();
-                co_await writeStatus(encodeStatusResponse(protocolError.status().value(), parseState.connectionPlan.protocolVersion()));
+                co_await writeHttp1StatusResponse(stream, parseState.connectionPlan, memory_.resource(), protocolError.status().value());
                 keepGoing = false;
                 break;
             }
@@ -168,7 +166,7 @@ asio::awaitable<void> EdgeServer::Impl::handleSession(Stream stream, [[maybe_unu
                 // parser metadata before waiting for or dispatching the body.
                 // Checking only inbound.size() after messageReady lets the read
                 // that completes an oversized request jump over the limit.
-                co_await writeStatus(encodeStatusResponse(413, parseState.connectionPlan.protocolVersion()));
+                co_await writeHttp1StatusResponse(stream, parseState.connectionPlan, memory_.resource(), 413);
                 keepGoing = false;
                 break;
             }
@@ -180,7 +178,7 @@ asio::awaitable<void> EdgeServer::Impl::handleSession(Stream stream, [[maybe_unu
                 break;
             }
             if (inbound.size() > kMaxRequestBytes) {
-                co_await writeStatus(encodeStatusResponse(413, parseState.connectionPlan.protocolVersion()));
+                co_await writeHttp1StatusResponse(stream, parseState.connectionPlan, memory_.resource(), 413);
                 keepGoing = false;
                 break;
             }
@@ -215,7 +213,7 @@ asio::awaitable<void> EdgeServer::Impl::handleSession(Stream stream, [[maybe_unu
 template <typename Stream>
 asio::awaitable<bool> EdgeServer::Impl::handleFramedRequest(Stream& stream, const detail::Http1ServerRequestParseState& parsed, std::string_view wireBody, std::string_view clientAddress) {
     const auto& request = parsed.request;
-    Http1ResponseWriter<Stream> writer(stream, parsed.connectionPlan);
+    Http1ResponseWriter<Stream> writer(stream, parsed, memory_.resource());
 
     EdgeRequest edgeRequest;
     edgeRequest.method = request.method();
@@ -255,7 +253,7 @@ asio::awaitable<bool> EdgeServer::Impl::handleFramedRequest(Stream& stream, cons
                 break;
             }
             if (!decodeOk) {
-                co_await respondStatusOnly(writer, 400, "ERROR", false);
+                co_await respondStatusOnly(writer, 400, "ERROR", ResponseReusePolicy::kClose);
                 co_return false;
             }
             edgeRequest.body = decodedBody;

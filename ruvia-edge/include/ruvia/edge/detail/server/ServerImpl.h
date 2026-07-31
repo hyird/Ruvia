@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <exception>
 #include <functional>
+#include <list>
 #include <memory>
 #include <memory_resource>
 #include <mutex>
@@ -140,16 +141,18 @@ private:
         std::uint16_t status{0};
     };
 
-    asio::awaitable<bool> serveRequest(const EdgeRequest& request, ResponseWriter& writer);
+    template <typename Writer>
+    asio::awaitable<bool> serveRequest(const EdgeRequest& request, Writer& writer);
     // The uncacheable path: unsafe methods, conditional or authenticated
     // retrievals, and no-store. Nothing here consults or fills the cache.
-    asio::awaitable<bool> servePassThrough(const EdgeRequest& request, ResponseWriter& writer, const OriginLease& origin, RequestOutcome& outcome);
+    template <typename Writer>
+    asio::awaitable<bool> servePassThrough(const EdgeRequest& request, Writer& writer, const OriginLease& origin, RequestOutcome& outcome);
     template <typename Stream>
     asio::awaitable<bool> handleFramedRequest(Stream& stream, const ruvia::detail::Http1ServerRequestParseState& parsed, std::string_view wireBody, std::string_view clientAddress);
     template <typename Stream>
     asio::awaitable<void> handleHttp2Session(Stream stream, std::string clientAddress);
 
-    void wakeInFlight(const std::string& key);
+    void wakeInFlight(std::string_view key);
     void recordRequest(const AccessLogEntry& entry) noexcept;
     // The one place a caught exception may end: it reaches the application's
     // taskFailure callback, or stderr when there is none. Never discards.
@@ -187,12 +190,29 @@ private:
     // Every detached coroutine that captures Impl is registered here. Shutdown
     // cancels them and lets io_context drain their completion handlers before
     // the worker exits, so no frame can outlive the members it references.
-    std::pmr::vector<std::shared_ptr<asio::cancellation_signal>> activeOperations_;
+    std::pmr::list<asio::cancellation_signal> activeOperations_;
     TlsContextPtr tlsContext_;
 
     struct InFlightFetch final {
-        std::vector<asio::steady_timer*> waiters;
+        explicit InFlightFetch(std::pmr::memory_resource* resource)
+            : waiters(resource) {}
+
+        std::pmr::vector<asio::steady_timer*> waiters;
     };
+    struct TransparentHash final {
+        using is_transparent = void;
+        [[nodiscard]] std::size_t operator()(std::string_view value) const noexcept {
+            return std::hash<std::string_view>{}(value);
+        }
+    };
+    struct TransparentEqual final {
+        using is_transparent = void;
+        template <typename Left, typename Right>
+        [[nodiscard]] bool operator()(const Left& left, const Right& right) const noexcept {
+            return std::string_view(left) == std::string_view(right);
+        }
+    };
+    using InFlightMap = std::pmr::unordered_map<std::pmr::string, InFlightFetch, TransparentHash, TransparentEqual>;
 
     EdgeConfig config_;
     EdgeCache cache_;
@@ -208,7 +228,7 @@ private:
     std::atomic<std::size_t> connectionsRefused_{0};
     // One counter per EdgeTaskKind, indexed by its value.
     std::array<std::atomic<std::size_t>, kEdgeTaskKindCount> failureCounts_{};
-    std::unordered_map<std::string, InFlightFetch> inFlight_;
+    InFlightMap inFlight_;
     std::function<void(const AccessLogEntry&)> accessLog_;
     std::function<void(const EdgeTaskFailure&)> taskFailure_;
     mutable std::mutex failureMutex_;  // the disk thread reports too

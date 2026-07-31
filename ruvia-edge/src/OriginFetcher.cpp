@@ -25,7 +25,9 @@
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 
 namespace ruvia::edge {
 
@@ -35,10 +37,6 @@ using namespace asio::experimental::awaitable_operators;
 
 constexpr std::size_t kHeadBufferBytes = 16u * 1024u;
 constexpr std::size_t kReadChunkBytes = 64u * 1024u;
-
-// The maximum decoded body a chunked stream may accumulate before delivery is
-// bounded by this; the client-facing streaming has no total-size cap.
-constexpr std::size_t kChunkDecodeCeiling = 1u * 1024u * 1024u * 1024u;
 
 // How the response body is delimited, decided from the parsed response plan.
 enum class BodyFraming : std::uint8_t { kNone, kKnownLength, kChunked, kCloseDelimited };
@@ -54,7 +52,7 @@ struct ExchangeOutcome final {
 // bounded by the inactivity deadline. Works over any async stream (plain TCP or
 // TLS). Does not close the stream; the caller decides pooling.
 template <typename Stream>
-asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1ClientRequest& prepared, const OriginFetcher::Limits& limits, ResponseSink& sink) {
+asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1ClientRequest& prepared, const OriginFetcher::Limits& limits, ResponseSink& sink, std::pmr::memory_resource* resource) {
     const auto tuple = asio::as_tuple(asio::use_awaitable);
     asio::steady_timer deadline(stream.get_executor());
 
@@ -90,12 +88,30 @@ asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1
         }
     }
 
-    std::string inbound;
+    std::pmr::string inbound(resource);
+    std::size_t inboundOffset = 0;
     std::array<char, kReadChunkBytes> readBuffer;
     bool timedOut = false;
     bool readError = false;
     bool eof = false;
+    const auto available = [&]() noexcept {
+        return std::string_view(inbound).substr(inboundOffset);
+    };
+    const auto consume = [&](std::size_t bytes) noexcept {
+        inboundOffset += bytes;
+        if (inboundOffset == inbound.size()) {
+            inbound.clear();
+            inboundOffset = 0;
+        }
+    };
     const auto readOnce = [&]() -> asio::awaitable<void> {
+        // Compact at most once per socket read. Chunk decoding may consume many
+        // small frames from one read without repeatedly moving the remaining
+        // suffix to the front.
+        if (inboundOffset != 0) {
+            inbound.erase(0, inboundOffset);
+            inboundOffset = 0;
+        }
         deadline.expires_after(limits.ioTimeout);
         auto raced = co_await (stream.async_read_some(asio::buffer(readBuffer), tuple) || deadline.async_wait(tuple));
         if (raced.index() == 1) {
@@ -116,14 +132,14 @@ asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1
     // Read and parse the response head, past any informational (1xx) responses.
     // Failures here happen before any valid response, so a reused connection can
     // be retried.
-    Http1ClientResponseParser parser(prepared);
+    Http1ClientResponseParser parser(prepared, resource);
     OriginResponseHead head;
     BodyFraming framing = BodyFraming::kNone;
     std::size_t knownLength = 0;
     bool persistenceReuse = false;
 
     for (;;) {
-        auto parseResult = parser.parse(inbound);
+        auto parseResult = parser.parse(available());
         if (parseResult.failure() != nullptr) {
             fail(OriginFetchOutcome::kProtocolError, false);
             co_return out;
@@ -131,12 +147,18 @@ asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1
         if (auto* parsed = parseResult.parsed(); parsed != nullptr) {
             const auto& plan = parsed->plan();
             if (plan.informational() != nullptr) {
-                inbound.erase(0, parsed->consumedBytes());
+                consume(parsed->consumedBytes());
                 continue;
             }
             head.status = parsed->head().status().value();
+            ruvia::detail::HttpContentLengthState representationLength;
+            bool representationLengthValid = true;
             for (const auto& field : parsed->head().headers()) {
                 head.headers.emplace_back(std::string(field.name()), std::string(field.value()));
+                if (ruvia::detail::httpAsciiEqualsIgnoreCase(field.name(), "content-length")
+                    && representationLength.parseField(field.value()) != ruvia::detail::HttpContentLengthParseStatus::kOk) {
+                    representationLengthValid = false;
+                }
             }
             const std::size_t consumed = parsed->consumedBytes();
             using Persistence = Http1ClientResponsePersistence;
@@ -158,7 +180,10 @@ asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1
                 fail(OriginFetchOutcome::kUnsupported, false);
                 co_return out;
             }
-            inbound.erase(0, consumed);
+            if (framing == BodyFraming::kNone && representationLengthValid) {
+                head.contentLength = representationLength.value();
+            }
+            consume(consumed);
             break;
         }
 
@@ -176,11 +201,15 @@ asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1
     head.hasBody = framing != BodyFraming::kNone && !(framing == BodyFraming::kKnownLength && knownLength == 0);
     if (framing == BodyFraming::kKnownLength) {
         head.contentLength = knownLength;
+        if (knownLength > limits.maxResponseBytes) {
+            fail(OriginFetchOutcome::kTooLarge, false);
+            co_return out;
+        }
     }
 
     // Deliver the head. A sink that declines (returns false) stops the exchange;
     // the connection stays reusable only if there is no body left to read.
-    const bool wantBody = co_await sink.onHead(head);
+    const bool wantBody = co_await sink.writeHead(head);
     if (!wantBody || !head.hasBody) {
         out.outcome = OriginFetchOutcome::kOk;
         const bool fullyConsumed = !head.hasBody;
@@ -190,6 +219,10 @@ asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1
 
     // Stream the body according to its framing, handing each chunk to the sink.
     bool bodyComplete = false;
+    std::size_t deliveredBytes = 0;
+    const auto exceedsLimit = [&](std::size_t bytes) noexcept {
+        return bytes > limits.maxResponseBytes - deliveredBytes;
+    };
     switch (framing) {
         case BodyFraming::kNone:
             bodyComplete = true;
@@ -198,7 +231,7 @@ asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1
         case BodyFraming::kKnownLength: {
             std::size_t remaining = knownLength;
             while (remaining > 0) {
-                if (inbound.empty()) {
+                if (available().empty()) {
                     co_await readOnce();
                     if (timedOut) {
                         fail(OriginFetchOutcome::kTimeout, false);
@@ -209,11 +242,17 @@ asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1
                         co_return out;
                     }
                 }
-                const std::size_t take = remaining < inbound.size() ? remaining : inbound.size();
-                if (!co_await sink.onBody(std::string_view(inbound.data(), take))) {
+                const auto bytes = available();
+                const std::size_t take = remaining < bytes.size() ? remaining : bytes.size();
+                if (exceedsLimit(take)) {
+                    fail(OriginFetchOutcome::kTooLarge, false);
+                    co_return out;
+                }
+                if (!co_await sink.writeBody(bytes.substr(0, take))) {
                     co_return ExchangeOutcome{OriginFetchOutcome::kOk, false, false};  // sink aborted
                 }
-                inbound.erase(0, take);
+                deliveredBytes += take;
+                consume(take);
                 remaining -= take;
             }
             bodyComplete = true;
@@ -221,11 +260,17 @@ asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1
         }
 
         case BodyFraming::kCloseDelimited: {
-            if (!inbound.empty()) {
-                if (!co_await sink.onBody(inbound)) {
+            if (!available().empty()) {
+                const auto bytes = available();
+                if (exceedsLimit(bytes.size())) {
+                    fail(OriginFetchOutcome::kTooLarge, false);
+                    co_return out;
+                }
+                if (!co_await sink.writeBody(bytes)) {
                     co_return ExchangeOutcome{OriginFetchOutcome::kOk, false, false};
                 }
-                inbound.clear();
+                deliveredBytes += bytes.size();
+                consume(bytes.size());
             }
             for (;;) {
                 co_await readOnce();
@@ -233,11 +278,17 @@ asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1
                     fail(OriginFetchOutcome::kTimeout, false);
                     co_return out;
                 }
-                if (!inbound.empty()) {
-                    if (!co_await sink.onBody(inbound)) {
+                if (!available().empty()) {
+                    const auto bytes = available();
+                    if (exceedsLimit(bytes.size())) {
+                        fail(OriginFetchOutcome::kTooLarge, false);
+                        co_return out;
+                    }
+                    if (!co_await sink.writeBody(bytes)) {
                         co_return ExchangeOutcome{OriginFetchOutcome::kOk, false, false};
                     }
-                    inbound.clear();
+                    deliveredBytes += bytes.size();
+                    consume(bytes.size());
                 }
                 if (eof) {
                     break;  // EOF terminates a close-delimited message
@@ -252,24 +303,31 @@ asio::awaitable<ExchangeOutcome> runExchange(Stream& stream, const PreparedHttp1
         }
 
         case BodyFraming::kChunked: {
-            ruvia::detail::Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(kChunkDecodeCeiling));
+            const auto byteLimit = limits.maxResponseBytes == 0 ? ProtocolByteLimit::unlimited() : ProtocolByteLimit::limited(limits.maxResponseBytes);
+            ruvia::detail::Http1ChunkedBodyDecoder decoder(byteLimit);
             for (;;) {
-                const auto decoded = decoder.decode(inbound);
-                if (decoded.failure() != nullptr) {
-                    fail(OriginFetchOutcome::kProtocolError, false);
+                const auto decoded = decoder.decode(available());
+                if (const auto* failure = decoded.failure()) {
+                    const auto outcome = failure->protocolError().status() == http_status::kContentTooLarge ? OriginFetchOutcome::kTooLarge : OriginFetchOutcome::kProtocolError;
+                    fail(outcome, false);
                     co_return out;
                 }
                 if (const auto* chunk = decoded.bodyChunk()) {
-                    if (!co_await sink.onBody(chunk->bytes())) {
+                    if (exceedsLimit(chunk->bytes().size())) {
+                        fail(OriginFetchOutcome::kTooLarge, false);
+                        co_return out;
+                    }
+                    if (!co_await sink.writeBody(chunk->bytes())) {
                         co_return ExchangeOutcome{OriginFetchOutcome::kOk, false, false};
                     }
-                    inbound.erase(0, decoded.consumedBytes());
+                    deliveredBytes += chunk->bytes().size();
+                    consume(decoded.consumedBytes());
                     continue;
                 }
                 if (decoded.complete() != nullptr) {
                     break;
                 }
-                inbound.erase(0, decoded.consumedBytes());
+                consume(decoded.consumedBytes());
                 co_await readOnce();
                 if (timedOut) {
                     fail(OriginFetchOutcome::kTimeout, false);
@@ -300,7 +358,7 @@ std::size_t OriginFetcher::idleConnectionCount() const noexcept {
     return total;
 }
 
-bool OriginFetcher::admitToOrigin(const std::string& key) noexcept {
+bool OriginFetcher::admitToOrigin(std::string_view key) noexcept {
     if (limits_.circuitFailureThreshold == 0) {
         return true;  // breaker disabled
     }
@@ -319,7 +377,7 @@ bool OriginFetcher::admitToOrigin(const std::string& key) noexcept {
     return true;
 }
 
-void OriginFetcher::recordOriginOutcome(const std::string& key, OriginFetchOutcome outcome) noexcept {
+void OriginFetcher::recordOriginOutcome(std::string_view key, OriginFetchOutcome outcome) noexcept {
     if (limits_.circuitFailureThreshold == 0) {
         return;
     }
@@ -337,7 +395,7 @@ void OriginFetcher::recordOriginOutcome(const std::string& key, OriginFetchOutco
 
     // A failure may arrive for a key with no entry yet; try_emplace covers both
     // that and the probe that just failed.
-    Circuit& circuit = circuits_.try_emplace(key).first->second;
+    Circuit& circuit = circuits_.try_emplace(std::pmr::string(key, resource_)).first->second;
     circuit.probing = false;
     if (circuit.failures < limits_.circuitFailureThreshold) {
         ++circuit.failures;
@@ -349,7 +407,9 @@ void OriginFetcher::recordOriginOutcome(const std::string& key, OriginFetchOutco
 }
 
 asio::awaitable<StreamOutcome> OriginFetcher::fetch(asio::any_io_executor executor, std::string_view host, std::uint16_t port, bool https, const OriginRequest& request, ResponseSink& sink) {
-    std::string key(host);
+    std::pmr::string key(resource_);
+    key.append(https ? "https://" : "http://");
+    key.append(host);
     key.push_back(':');
     {
         std::array<char, 8> portText;
@@ -374,10 +434,10 @@ asio::awaitable<StreamOutcome> OriginFetcher::fetch(asio::any_io_executor execut
     co_return result;
 }
 
-asio::awaitable<StreamOutcome> OriginFetcher::fetchFromOrigin(asio::any_io_executor executor, std::string_view host, std::uint16_t port, bool https, const OriginRequest& request, ResponseSink& sink, const std::string& key) {
+asio::awaitable<StreamOutcome> OriginFetcher::fetchFromOrigin(asio::any_io_executor executor, std::string_view host, std::uint16_t port, bool https, const OriginRequest& request, ResponseSink& sink, std::string_view key) {
     // Prepare the request head once. kAllowReuse omits Connection: close so the
     // origin may keep the connection open for pooling.
-    const HttpOrigin origin = HttpOrigin::http(host, port);
+    const HttpOrigin origin = https ? HttpOrigin::https(host, port) : HttpOrigin::http(host, port);
     HttpClientRequest clientRequest;
     clientRequest.method = request.method;
     clientRequest.target = request.target;
@@ -393,7 +453,12 @@ asio::awaitable<StreamOutcome> OriginFetcher::fetchFromOrigin(asio::any_io_execu
     }
 
     const auto tuple = asio::as_tuple(asio::use_awaitable);
-    const std::string_view portView = std::string_view(key).substr(host.size() + 1);
+    std::array<char, 8> portText;
+    const auto [portEnd, portError] = std::to_chars(portText.data(), portText.data() + portText.size(), port);
+    if (portError != std::errc{}) {
+        co_return StreamOutcome{OriginFetchOutcome::kConnectFailed};
+    }
+    const std::string_view portView(portText.data(), static_cast<std::size_t>(portEnd - portText.data()));
 
     // TLS origin: resolve, connect, TLS-handshake with SNI, then run the exchange
     // over the encrypted stream. TLS origin connections are not pooled.
@@ -436,7 +501,7 @@ asio::awaitable<StreamOutcome> OriginFetcher::fetchFromOrigin(asio::any_io_execu
             co_return StreamOutcome{OriginFetchOutcome::kConnectFailed};
         }
 
-        auto exchange = co_await runExchange(tls, *prepared, limits_, sink);
+        auto exchange = co_await runExchange(tls, *prepared, limits_, sink, resource_);
         co_return StreamOutcome{exchange.outcome};
     }
 
@@ -483,7 +548,7 @@ asio::awaitable<StreamOutcome> OriginFetcher::fetchFromOrigin(asio::any_io_execu
             }
         }
 
-        auto exchange = co_await runExchange(socket, *prepared, limits_, sink);
+        auto exchange = co_await runExchange(socket, *prepared, limits_, sink, resource_);
 
         // A reused pooled connection the origin had closed: retry once fresh, but
         // only if the sink has not yet consumed any of the response.
@@ -494,7 +559,9 @@ asio::awaitable<StreamOutcome> OriginFetcher::fetchFromOrigin(asio::any_io_execu
         }
 
         if (exchange.outcome == OriginFetchOutcome::kOk && exchange.reusable) {
-            auto& bucket = idlePool_[key];
+            auto [bucketEntry, inserted] = idlePool_.try_emplace(std::pmr::string(key, resource_));
+            (void)inserted;
+            auto& bucket = bucketEntry->second;
             if (bucket.size() < limits_.maxIdlePerHost) {
                 bucket.push_back(PooledConnection{std::move(socket), std::chrono::steady_clock::now()});
             } else {

@@ -36,7 +36,7 @@ function(ruvia_apply_test_support_includes name lib)
     elseif("${lib}" STREQUAL "ruvia::web")
         target_include_directories(${name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/http/support
-            ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/unit/support)
     elseif("${lib}" STREQUAL "ruvia::edge")
         target_include_directories(${name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
@@ -217,38 +217,38 @@ endif()
 
 if(RUVIA_BUILD_HTTP)
 ruvia_add_unit_suite(ruvia_http_unit_tests ruvia::http
-    # http/client
-    http/client/origin.cpp
-    http/client/redirect.cpp
-    http/client/request.cpp
-    http/client/response_coding.cpp
-    http/client/response_exchange.cpp
-    http/client/response_framing.cpp
-    http/client/response_parser.cpp
+    # http/unit/client
+    http/unit/client/origin.cpp
+    http/unit/client/redirect.cpp
+    http/unit/client/request.cpp
+    http/unit/client/response_coding.cpp
+    http/unit/client/response_exchange.cpp
+    http/unit/client/response_framing.cpp
+    http/unit/client/response_parser.cpp
 
-    # http/coding
-    http/coding/content_codec.cpp
-    http/coding/content_negotiation.cpp
-    http/coding/response_content_semantics.cpp
+    # http/unit/coding
+    http/unit/coding/content_codec.cpp
+    http/unit/coding/content_negotiation.cpp
+    http/unit/coding/response_content_semantics.cpp
 
-    # http/cookie
-    http/cookie/validation.cpp
+    # http/unit/cookie
+    http/unit/cookie/validation.cpp
 
-    # http/field
-    http/field/accept_media_type.cpp
-    http/field/byte_range.cpp
-    http/field/cache.cpp
-    http/field/conditional_request.cpp
-    http/field/connection_fields.cpp
-    http/field/date_cache.cpp
-    http/field/date_parsing.cpp
-    http/field/expectations.cpp
-    http/field/header_tokens.cpp
-    http/field/method.cpp
-    http/field/quoted_field_values.cpp
-    http/field/semicolon_parameters.cpp
-    http/field/syntax.cpp
-    http/field/value_primitives.cpp
+    # http/unit/field
+    http/unit/field/accept_media_type.cpp
+    http/unit/field/byte_range.cpp
+    http/unit/field/cache.cpp
+    http/unit/field/conditional_request.cpp
+    http/unit/field/connection_fields.cpp
+    http/unit/field/date_cache.cpp
+    http/unit/field/date_parsing.cpp
+    http/unit/field/expectations.cpp
+    http/unit/field/header_tokens.cpp
+    http/unit/field/method.cpp
+    http/unit/field/quoted_field_values.cpp
+    http/unit/field/semicolon_parameters.cpp
+    http/unit/field/syntax.cpp
+    http/unit/field/value_primitives.cpp
 
     # http/http1
     http/http1/chunk_decoder.cpp
@@ -312,36 +312,36 @@ ruvia_add_unit_suite(ruvia_http_unit_tests ruvia::http
     http/http2/stream/request_data.cpp
     http/http2/stream/table.cpp
 
-    # http/parser
-    http/parser/char_syntax.cpp
-    http/parser/error.cpp
-    http/parser/header_block_parser.cpp
-    http/parser/header_classification.cpp
+    # http/unit/parser
+    http/unit/parser/char_syntax.cpp
+    http/unit/parser/error.cpp
+    http/unit/parser/header_block_parser.cpp
+    http/unit/parser/header_classification.cpp
 
-    # http/request
-    http/request/access.cpp
+    # http/unit/request
+    http/unit/request/access.cpp
 
-    # http/response
-    http/response/body.cpp
-    http/response/computed_response_headers.cpp
-    http/response/final_response_control.cpp
-    http/response/head_buffer.cpp
-    http/response/head_emit.cpp
-    http/response/head_policy.cpp
-    http/response/header_access.cpp
-    http/response/header_classification.cpp
-    http/response/header_index_cache.cpp
-    http/response/response.cpp
-    http/response/static_response_headers.cpp
-    http/response/trailers.cpp
-    http/response/vary_headers.cpp
+    # http/unit/response
+    http/unit/response/body.cpp
+    http/unit/response/computed_response_headers.cpp
+    http/unit/response/final_response_control.cpp
+    http/unit/response/head_buffer.cpp
+    http/unit/response/head_emit.cpp
+    http/unit/response/head_policy.cpp
+    http/unit/response/header_access.cpp
+    http/unit/response/header_classification.cpp
+    http/unit/response/header_index_cache.cpp
+    http/unit/response/response.cpp
+    http/unit/response/static_response_headers.cpp
+    http/unit/response/trailers.cpp
+    http/unit/response/vary_headers.cpp
 
-    # http/util
-    http/util/base64.cpp
-    http/util/number_format.cpp
-    http/util/pmr_string.cpp
-    http/util/url_encoding.cpp
-    http/util/url_encoding_detect.cpp
+    # http/unit/util
+    http/unit/util/base64.cpp
+    http/unit/util/number_format.cpp
+    http/unit/util/pmr_string.cpp
+    http/unit/util/url_encoding.cpp
+    http/unit/util/url_encoding_detect.cpp
 
     # http/websocket
     http/websocket/accept.cpp
@@ -363,83 +363,83 @@ ruvia_add_unit_suite(ruvia_web_unit_tests ruvia::web
     # support
     support/test_main.cpp
 
-    # web/app
-    web/app/config_validation.cpp
-    web/app/dotenv_parser.cpp
-    web/app/server_options_validation.cpp
-    web/app/testing_facade.cpp
+    # web/unit/app
+    web/unit/app/config_validation.cpp
+    web/unit/app/dotenv_parser.cpp
+    web/unit/app/server_options_validation.cpp
+    web/unit/app/testing_facade.cpp
 
-    # web/auth
-    web/auth/cookie_signature.cpp
+    # web/unit/auth
+    web/unit/auth/cookie_signature.cpp
 
-    # web/http
-    web/http/conn_info.cpp
-    web/http/context_capabilities.cpp
-    web/http/context_cookie.cpp
-    web/http/context_parse_body.cpp
-    web/http/context_redirect.cpp
-    web/http/context_request_lookups.cpp
-    web/http/cors.cpp
-    web/http/csrf.cpp
-    web/http/error.cpp
-    web/http/error_response.cpp
-    web/http/health.cpp
-    web/http/multipart_reader.cpp
-    web/http/request_body_limits.cpp
-    web/http/request_body_loader.cpp
-    web/http/response_compression.cpp
-    web/http/response_stream.cpp
-    web/http/scoped_operation_lifetime.cpp
-    web/http/security_headers.cpp
-    web/http/session.cpp
-    web/http/sse_writer.cpp
-    web/http/static_file_metadata.cpp
-    web/http/static_file_serving.cpp
-    web/http/static_files.cpp
-    web/http/static_path_normalization.cpp
-    web/http/stream_body_reader.cpp
+    # web/unit/http
+    web/unit/http/conn_info.cpp
+    web/unit/http/context_capabilities.cpp
+    web/unit/http/context_cookie.cpp
+    web/unit/http/context_parse_body.cpp
+    web/unit/http/context_redirect.cpp
+    web/unit/http/context_request_lookups.cpp
+    web/unit/http/cors.cpp
+    web/unit/http/csrf.cpp
+    web/unit/http/error.cpp
+    web/unit/http/error_response.cpp
+    web/unit/http/health.cpp
+    web/unit/http/multipart_reader.cpp
+    web/unit/http/request_body_limits.cpp
+    web/unit/http/request_body_loader.cpp
+    web/unit/http/response_compression.cpp
+    web/unit/http/response_stream.cpp
+    web/unit/http/scoped_operation_lifetime.cpp
+    web/unit/http/security_headers.cpp
+    web/unit/http/session.cpp
+    web/unit/http/sse_writer.cpp
+    web/unit/http/static_file_metadata.cpp
+    web/unit/http/static_file_serving.cpp
+    web/unit/http/static_files.cpp
+    web/unit/http/static_path_normalization.cpp
+    web/unit/http/stream_body_reader.cpp
 
-    # web/http2
-    web/http2/buffered_response_write.cpp
-    web/http2/cleartext_upgrade.cpp
-    web/http2/sansio_driver_body.cpp
-    web/http2/sansio_driver_session.cpp
-    web/http2/sansio_driver_websocket.cpp
-    web/http2/sansio_stream_runtime.cpp
-    web/http2/sansio_tls.cpp
-    web/http2/server_flow_control.cpp
+    # web/unit/http2
+    web/unit/http2/buffered_response_write.cpp
+    web/unit/http2/cleartext_upgrade.cpp
+    web/unit/http2/sansio_driver_body.cpp
+    web/unit/http2/sansio_driver_session.cpp
+    web/unit/http2/sansio_driver_websocket.cpp
+    web/unit/http2/sansio_stream_runtime.cpp
+    web/unit/http2/sansio_tls.cpp
+    web/unit/http2/server_flow_control.cpp
 
-    # web/json
-    web/json/escape.cpp
-    web/json/json.cpp
-    web/json/lex.cpp
-    web/json/object_fields.cpp
-    web/json/size_hint.cpp
+    # web/unit/json
+    web/unit/json/escape.cpp
+    web/unit/json/json.cpp
+    web/unit/json/lex.cpp
+    web/unit/json/object_fields.cpp
+    web/unit/json/size_hint.cpp
 
-    # web/model
-    web/model/content_type_match.cpp
-    web/model/email_like.cpp
-    web/model/form_parser.cpp
-    web/model/json_writer.cpp
-    web/model/last_match.cpp
-    web/model/list.cpp
-    web/model/pattern_compiler.cpp
-    web/model/pattern_matcher.cpp
-    web/model/pattern_types.cpp
-    web/model/regex_matcher.cpp
-    web/model/string.cpp
-    web/model/validator.cpp
+    # web/unit/model
+    web/unit/model/content_type_match.cpp
+    web/unit/model/email_like.cpp
+    web/unit/model/form_parser.cpp
+    web/unit/model/json_writer.cpp
+    web/unit/model/last_match.cpp
+    web/unit/model/list.cpp
+    web/unit/model/pattern_compiler.cpp
+    web/unit/model/pattern_matcher.cpp
+    web/unit/model/pattern_types.cpp
+    web/unit/model/regex_matcher.cpp
+    web/unit/model/string.cpp
+    web/unit/model/validator.cpp
 
-    # web/ratelimit
-    web/ratelimit/rate_limit_decision.cpp
-    web/ratelimit/rate_limiter.cpp
+    # web/unit/ratelimit
+    web/unit/ratelimit/rate_limit_decision.cpp
+    web/unit/ratelimit/rate_limiter.cpp
 
-    # web/router
-    web/router/response_stream_dispatch.cpp
-    web/router/route_resolution.cpp
-    web/router/routing_dispatch.cpp
-    web/router/routing_matching.cpp
-    web/router/routing_middleware.cpp
+    # web/unit/router
+    web/unit/router/response_stream_dispatch.cpp
+    web/unit/router/route_resolution.cpp
+    web/unit/router/routing_dispatch.cpp
+    web/unit/router/routing_matching.cpp
+    web/unit/router/routing_middleware.cpp
 
     # web/server
     web/server/access_log.cpp
@@ -449,42 +449,42 @@ ruvia_add_unit_suite(ruvia_web_unit_tests ruvia::web
     web/server/http_server_worker_completion.cpp
     web/server/response_state.cpp
 
-    # web/websocket
-    web/websocket/connection.cpp
-    web/websocket/handshake.cpp
-    web/websocket/heartbeat.cpp
+    # web/unit/websocket
+    web/unit/websocket/connection.cpp
+    web/unit/websocket/handshake.cpp
+    web/unit/websocket/heartbeat.cpp
 )
 
 # The JWT suite links jwtSign/jwtVerify, which only exist when the optional JWT
 # module is compiled in, so gate it on the same flag.
 if(RUVIA_ENABLE_JWT)
     ruvia_add_unit_sources(ruvia_web_unit_tests ruvia::web PRIVATE
-        web/auth/jwt.cpp)
+        web/unit/auth/jwt.cpp)
 endif()
 
 # The Redis RESP-protocol suite links appendRespCommand, gated the same way.
 if(RUVIA_ENABLE_REDIS)
     ruvia_add_unit_sources(ruvia_web_unit_tests ruvia::web PRIVATE
-        web/redis/api_surface.cpp
-        web/redis/protocol.cpp
+        web/unit/redis/api_surface.cpp
+        web/unit/redis/protocol.cpp
     )
 endif()
 
 # The backend-neutral API suite is present for either database driver.
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_add_unit_sources(ruvia_web_unit_tests ruvia::web PRIVATE
-        web/db/api_surface.cpp)
+        web/unit/db/api_surface.cpp)
 endif()
 
 # Driver-specific parameter encoding is tested against the same library that
 # performs it; neither suite pulls the other backend into a single-driver build.
 if(RUVIA_ENABLE_MARIADB)
     ruvia_add_unit_sources(ruvia_web_unit_tests ruvia::web PRIVATE
-        web/db/sql.cpp)
+        web/unit/db/sql.cpp)
 endif()
 if(RUVIA_ENABLE_POSTGRESQL)
     ruvia_add_unit_sources(ruvia_web_unit_tests ruvia::web PRIVATE
-        web/db/postgresql.cpp)
+        web/unit/db/postgresql.cpp)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL)
@@ -582,7 +582,7 @@ if(RUVIA_BUILD_HTTP)
         COMMAND ${CMAKE_COMMAND}
             -P ${CMAKE_CURRENT_BINARY_DIR}/verify_http_sansio.cmake)
 
-    ruvia_add_test(ruvia_smoke_http_target http/smoke_http_target.cpp LIB ruvia::http)
+    ruvia_add_test(ruvia_smoke_http_target http/unit/smoke.cpp LIB ruvia::http)
 
     # Compile the exhaustive public/detail HTTP contract once in the normal build.
     if(MSVC)
@@ -614,7 +614,7 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_test(ruvia_guard_http2_session_lifecycle
         web/guards/http2_session_lifecycle_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_scoped_operation_lifetime_violation
-        web/http/scoped_operation_lifetime_violation.cpp LIB ruvia::web WILL_FAIL)
+        web/unit/http/scoped_operation_lifetime_violation.cpp LIB ruvia::web WILL_FAIL)
 
     ruvia_add_test(ruvia_server_blocking_pool
         web/server/blocking_pool.cpp LIB ruvia::web TIMEOUT 60)

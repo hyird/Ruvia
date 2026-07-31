@@ -144,13 +144,14 @@ void appendResponseHead(const HttpResponse& response, ResponseHeadBuffer& head, 
         throw std::invalid_argument("HTTP/1 response plan status does not match response");
     }
     const auto* buffered = plan.buffered();
+    const auto* knownLengthStream = plan.knownLengthStream();
     if (buffered != nullptr && buffered->contentLength() != bodyPlan.bufferedRepresentationLength(response)) {
         throw std::invalid_argument("HTTP/1 response plan representation does not match response");
     }
     const auto responseStatus = bodyPlan.responseStatus();
     const auto policy = bodyPlan.policy();
-    const bool emitChunkedTransferEncoding = plan.chunkedStream() != nullptr && policy.transferEncodingAllowed();
-    const bool autoContentLengthOwnedByWriter = policy.autoContentLengthAllowed() && !emitChunkedTransferEncoding && (plan.buffered() != nullptr || !policy.bodyAllowed());
+    const bool emitChunkedTransferEncoding = plan.chunkedStream() != nullptr && policy.transferEncodingAllowed() && !bodyPlan.bodySuppressed();
+    const bool autoContentLengthOwnedByWriter = policy.autoContentLengthAllowed() && !emitChunkedTransferEncoding && (buffered != nullptr || knownLengthStream != nullptr || !policy.bodyAllowed());
     const bool explicitContentLengthAllowed = policy.explicitContentLengthAllowed() && !emitChunkedTransferEncoding && !autoContentLengthOwnedByWriter && (plan.closeDelimitedStream() == nullptr || bodyPlan.bodySuppressed());
     const auto knownBits = responseKnownHeaderBits(response);
     const auto declaredContentLength = explicitContentLengthAllowed && (knownBits & kResponseHeaderContentLength) != 0 ? explicitContentLength(response) : std::nullopt;
@@ -160,7 +161,7 @@ void appendResponseHead(const HttpResponse& response, ResponseHeadBuffer& head, 
         // Buffered HEAD metadata retains the selected representation length.
         // A status-level no-content policy that still owns framing (205) is
         // canonicalized to zero for both buffered and streaming heads.
-        .canonicalContentLength = declaredContentLength.value_or(buffered != nullptr && policy.bodyAllowed() ? buffered->contentLength() : std::uint64_t{0})};
+        .canonicalContentLength = declaredContentLength.value_or(policy.bodyAllowed() ? (buffered != nullptr ? buffered->contentLength() : (knownLengthStream != nullptr ? knownLengthStream->contentLength() : std::uint64_t{0})) : std::uint64_t{0})};
 
     const auto reasonPhrase = httpReasonPhrase(responseStatus);
     const auto dateHeader = cachedDateHeader();
