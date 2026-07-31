@@ -10,7 +10,6 @@ set(RUVIA_EDGE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/DiskTier.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/EdgeCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/Freshness.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http1/Http1Wire.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ResponseWriter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/proxy/ByteRange.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/proxy/ForwardHeaders.cpp

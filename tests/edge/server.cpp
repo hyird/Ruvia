@@ -166,6 +166,27 @@ int main() {
         check(origin.hits() == before, "HEAD hit did not contact the origin");
     }
 
+    // A cache-miss HEAD keeps the origin's representation length without
+    // inventing chunked framing for a response that carries no payload.
+    {
+        const int before = origin.hits();
+        const auto r = httpHead(edgePort, "front.local", "/head-metadata");
+        check(statusOf(r) == 200, "origin HEAD is proxied");
+        check(contains(r, "Content-Length: 7"), "origin HEAD representation length is retained");
+        check(!contains(r, "Transfer-Encoding:"), "origin HEAD does not invent transfer framing");
+        check(bodyOf(r).empty(), "origin HEAD response carries no body");
+        check(origin.hits() == before + 1, "cache-miss HEAD contacted the origin once");
+    }
+
+    // Status-owned no-content semantics dominate an origin's illegal framing
+    // metadata: neither a payload nor Content-Length may reach the client.
+    {
+        const auto r = httpGet(edgePort, "front.local", "/no-content");
+        check(statusOf(r) == 204, "origin 204 is proxied");
+        check(!contains(r, "Content-Length:"), "204 response drops Content-Length");
+        check(bodyOf(r).empty(), "204 response carries no payload");
+    }
+
     // A non-GET method bypasses the cache, forwards its body to the origin, and
     // invalidates the cached GET for the same target on success.
     {
@@ -294,7 +315,7 @@ int main() {
     {
         const auto [first, second] = httpKeepAliveTwo(edgePort, "front.local", "/page");
         check(statusOf(first) == 200, "keep-alive request 1 served");
-        check(contains(first, "Connection: keep-alive"), "response 1 signals the connection stays open");
+        check(!contains(first, "Connection: close"), "response 1 remains reusable under HTTP/1.1 defaults");
         check(bodyOf(first) == "hello", "keep-alive body 1 is correct");
         check(statusOf(second) == 200, "keep-alive request 2 served on the same connection");
         check(bodyOf(second) == "hello", "keep-alive body 2 is correct");

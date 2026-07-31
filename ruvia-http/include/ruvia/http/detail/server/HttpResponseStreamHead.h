@@ -18,6 +18,7 @@
 namespace ruvia::detail {
 
 enum class ResponseStreamFraming : std::uint8_t {
+    kHttp1KnownLength,
     kHttp1Chunked,
     // RFC 9112 6.1: a server MUST NOT send Transfer-Encoding to a client that did
     // not indicate HTTP/1.1. An HTTP/1.0 stream therefore carries no chunk framing;
@@ -129,15 +130,17 @@ private:
     const auto framing = commitPlan.framing();
     const auto bodyPlan = commitPlan.bodyPlan();
     const auto policy = bodyPlan.policy();
-    const bool writerOwnsHttp1Chunked = framing == ResponseStreamFraming::kHttp1Chunked && policy.transferEncodingAllowed();
+    const bool writerOwnsHttp1KnownLength = framing == ResponseStreamFraming::kHttp1KnownLength && policy.autoContentLengthAllowed();
+    const bool writerOwnsHttp1Chunked = framing == ResponseStreamFraming::kHttp1Chunked && policy.transferEncodingAllowed() && !bodyPlan.bodySuppressed();
 
     // Keep the prepared response metadata consistent with the wire plan. The
     // framework's chunk writer is the only Transfer-Encoding producer; an
     // HTTP/1.0 close-delimited body cannot retain either framing field. HEAD/304
     // may retain Content-Length metadata because their body is suppressed.
-    if (writerOwnsHttp1Chunked) {
+    if (writerOwnsHttp1KnownLength || writerOwnsHttp1Chunked) {
         response.header("Content-Length", std::nullopt);
-    } else if (framing == ResponseStreamFraming::kHttp1Chunked || framing == ResponseStreamFraming::kHttp1CloseDelimited) {
+    }
+    if (framing == ResponseStreamFraming::kHttp1KnownLength || framing == ResponseStreamFraming::kHttp1Chunked || framing == ResponseStreamFraming::kHttp1CloseDelimited) {
         response.header("Transfer-Encoding", std::nullopt);
     }
     if (framing == ResponseStreamFraming::kHttp1CloseDelimited && !bodyPlan.bodySuppressed()) {

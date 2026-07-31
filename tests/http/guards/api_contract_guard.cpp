@@ -844,6 +844,7 @@ concept HasHttp1PreparedContentBytes = requires(const T& content) {
 template <typename T>
 concept HasHttp1ResponseHeadAlternatives = requires(const T& plan) {
     { plan.buffered() } -> std::same_as<const ruvia::detail::Http1BufferedResponseHead*>;
+    { plan.knownLengthStream() } -> std::same_as<const ruvia::detail::Http1KnownLengthResponseStreamHead*>;
     { plan.chunkedStream() } -> std::same_as<const ruvia::detail::Http1ChunkedResponseStreamHead*>;
     { plan.closeDelimitedStream() } -> std::same_as<const ruvia::detail::Http1CloseDelimitedResponseStreamHead*>;
 };
@@ -1062,7 +1063,7 @@ concept HasValueSemanticResponseBodyPlan = requires(const T& plan, const T&& tem
 };
 
 template <typename T>
-concept ExposesAnyRvalueHttpProtocolPlanBorrow = requires(T&& value) { std::move(value).ignored(); } || requires(T&& value) { std::move(value).unsatisfiable(); } || requires(T&& value) { std::move(value).resolved(); } || requires(T&& value) { std::move(value).withoutBody(); } || requires(T&& value) { std::move(value).knownLength(); } || requires(T&& value) { std::move(value).chunked(); } || requires(T&& value) { std::move(value).buffered(); } || requires(T&& value) { std::move(value).chunkedStream(); } || requires(T&& value) { std::move(value).closeDelimitedStream(); } || requires(T&& value) { std::move(value).knownLengthContent(); } || requires(T&& value) { std::move(value).streamingContent(); } || requires(T&& value) { std::move(value).control(); } || requires(T&& value) { std::move(value).writePlan(); } || requires(T&& value) { std::move(value).headPlan(); };
+concept ExposesAnyRvalueHttpProtocolPlanBorrow = requires(T&& value) { std::move(value).ignored(); } || requires(T&& value) { std::move(value).unsatisfiable(); } || requires(T&& value) { std::move(value).resolved(); } || requires(T&& value) { std::move(value).withoutBody(); } || requires(T&& value) { std::move(value).knownLength(); } || requires(T&& value) { std::move(value).chunked(); } || requires(T&& value) { std::move(value).buffered(); } || requires(T&& value) { std::move(value).knownLengthStream(); } || requires(T&& value) { std::move(value).chunkedStream(); } || requires(T&& value) { std::move(value).closeDelimitedStream(); } || requires(T&& value) { std::move(value).knownLengthContent(); } || requires(T&& value) { std::move(value).streamingContent(); } || requires(T&& value) { std::move(value).control(); } || requires(T&& value) { std::move(value).writePlan(); } || requires(T&& value) { std::move(value).headPlan(); };
 
 static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<ruvia::detail::HttpByteRangeResolution>);
 static_assert(std::is_enum_v<ruvia::detail::HttpResponseContentSemantics>);
@@ -1331,6 +1332,7 @@ static_assert(HasHttp1ResponseHeadAlternatives<ruvia::detail::Http1ResponseHeadP
 static_assert(HasHttp1ProtocolVersion<ruvia::detail::Http1ServerConnectionPlan>);
 static_assert(HasHttp1ProtocolVersion<ruvia::detail::Http1ResponseHeadPlan>);
 static_assert(HasHttp1BufferedContentLength<ruvia::detail::Http1BufferedResponseHead>);
+static_assert(HasHttp1BufferedContentLength<ruvia::detail::Http1KnownLengthResponseStreamHead>);
 static_assert(HasHttp1BufferedPlanContract<ruvia::detail::Http1BufferedResponsePlan>);
 static_assert(!HasStaleHttp1BufferedWritePlanForwarder<ruvia::detail::Http1BufferedResponsePlan>);
 static_assert(std::is_trivially_copyable_v<ruvia::detail::Http1BufferedResponsePlan>);
@@ -1341,6 +1343,7 @@ static_assert(!std::default_initializable<ruvia::detail::Http1ServerConnectionPl
 static_assert(!std::default_initializable<ruvia::detail::Http1ResponseHeadPlan>);
 static_assert(!std::default_initializable<ruvia::detail::Http1BufferedResponsePlan>);
 static_assert(!std::default_initializable<ruvia::detail::Http1BufferedResponseHead>);
+static_assert(!std::default_initializable<ruvia::detail::Http1KnownLengthResponseStreamHead>);
 static_assert(!std::default_initializable<ruvia::detail::Http1ChunkedResponseStreamHead>);
 static_assert(!std::default_initializable<ruvia::detail::Http1CloseDelimitedResponseStreamHead>);
 static_assert(!HasStalePreparedStreamPolicy<ruvia::detail::PreparedHttp1ResponseStream>);

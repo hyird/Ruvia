@@ -24,6 +24,7 @@ using ruvia::detail::appendResponseHead;
 using ruvia::detail::http1BufferedResponsePlan;
 using ruvia::detail::http1ChunkedResponseStreamHeadPlan;
 using ruvia::detail::http1CloseDelimitedResponseStreamHeadPlan;
+using ruvia::detail::http1KnownLengthResponseStreamHeadPlan;
 using ruvia::detail::Http1FinalResponseCommitError;
 using ruvia::detail::Http1FinalResponseCommitFailure;
 using ruvia::detail::Http1FinalResponseCommitResult;
@@ -62,6 +63,10 @@ std::string emitBufferedHead(HttpResponse& response, HttpKnownMethod requestMeth
 
 std::string emitChunkedStreamHead(HttpResponse& response, HttpKnownMethod requestMethod = HttpKnownMethod::kGet, ruvia::HttpProtocolVersion protocolVersion = ruvia::HttpProtocolVersion::kHttp11) {
     return emitHead(response, http1ChunkedResponseStreamHeadPlan(httpResponseBodyPlan(requestMethod, response.status()), connectionPlanFor(protocolVersion)));
+}
+
+std::string emitKnownLengthStreamHead(HttpResponse& response, std::uint64_t contentLength, HttpKnownMethod requestMethod = HttpKnownMethod::kGet, ruvia::HttpProtocolVersion protocolVersion = ruvia::HttpProtocolVersion::kHttp11) {
+    return emitHead(response, http1KnownLengthResponseStreamHeadPlan(httpResponseBodyPlan(requestMethod, response.status()), connectionPlanFor(protocolVersion), contentLength));
 }
 
 std::string emitCloseDelimitedStreamHead(HttpResponse& response, HttpKnownMethod requestMethod = HttpKnownMethod::kGet, ruvia::HttpProtocolVersion protocolVersion = ruvia::HttpProtocolVersion::kHttp11) {
@@ -285,6 +290,68 @@ RUVIA_TEST(response_head_suppresses_auto_content_length) {
     RUVIA_CHECK(head.find("Transfer-Encoding: chunked\r\n") != std::string_view::npos);
     RUVIA_CHECK(head.find("gzip") == std::string_view::npos);
     RUVIA_CHECK_EQ(countOccurrences(head, "Transfer-Encoding: "), std::size_t{1});
+}
+
+RUVIA_TEST(http1_known_length_stream_owns_canonical_length_and_status_semantics) {
+    HttpResponse get(std::pmr::new_delete_resource());
+    get.header("Content-Length", "999");
+    get.header("Transfer-Encoding", "chunked");
+    const auto getHead = emitKnownLengthStreamHead(get, 5);
+    RUVIA_CHECK_EQ(countOccurrences(getHead, "Content-Length: "), std::size_t{1});
+    RUVIA_CHECK(getHead.find("Content-Length: 5\r\n") != std::string_view::npos);
+    RUVIA_CHECK(getHead.find("Transfer-Encoding:") == std::string_view::npos);
+
+    HttpResponse head(std::pmr::new_delete_resource());
+    const auto headWire = emitKnownLengthStreamHead(head, 5, HttpKnownMethod::kHead);
+    RUVIA_CHECK(headWire.find("Content-Length: 5\r\n") != std::string_view::npos);
+
+    HttpResponse noContent(std::pmr::new_delete_resource());
+    noContent.status(ruvia::http_status::kNoContent);
+    noContent.header("Content-Length", "5");
+    const auto noContentWire = emitKnownLengthStreamHead(noContent, 5);
+    RUVIA_CHECK(noContentWire.find("Content-Length:") == std::string_view::npos);
+    RUVIA_CHECK(noContentWire.find("Transfer-Encoding:") == std::string_view::npos);
+}
+
+RUVIA_TEST(http1_chunked_stream_does_not_invent_framing_for_head) {
+    HttpResponse metadata(std::pmr::new_delete_resource());
+    metadata.header("Content-Length", "5");
+    metadata.header("Transfer-Encoding", "chunked");
+    const auto metadataWire = emitChunkedStreamHead(metadata, HttpKnownMethod::kHead);
+    RUVIA_CHECK(metadataWire.find("Content-Length: 5\r\n") != std::string_view::npos);
+    RUVIA_CHECK(metadataWire.find("Transfer-Encoding:") == std::string_view::npos);
+
+    HttpResponse unknown(std::pmr::new_delete_resource());
+    const auto unknownWire = emitChunkedStreamHead(unknown, HttpKnownMethod::kHead);
+    RUVIA_CHECK(unknownWire.find("Content-Length:") == std::string_view::npos);
+    RUVIA_CHECK(unknownWire.find("Transfer-Encoding:") == std::string_view::npos);
+}
+
+RUVIA_TEST(http1_consumed_request_body_can_commit_a_reusable_known_length_stream) {
+    ruvia::detail::Http1ServerRequestParser parser;
+    const auto parsed = parser.parseMessage(
+        "POST / HTTP/1.1\r\n"
+        "Host: x\r\n"
+        "Content-Length: 1\r\n"
+        "\r\n"
+        "x");
+    const auto streamPlan = ruvia::detail::http1PlanConsumedResponseStream(parsed, ruvia::detail::Http1ServerClosePolicy::kAllowReuse);
+    HttpResponse response(std::pmr::new_delete_resource());
+    const auto preparedResult = ruvia::detail::prepareHttp1KnownLengthResponseStreamHead(
+        std::move(response),
+        5,
+        ruvia::detail::ResponseStreamKind::kGeneric,
+        streamPlan);
+    const auto* prepared = preparedResult.prepared();
+    RUVIA_CHECK(prepared != nullptr);
+    if (prepared == nullptr) {
+        return;
+    }
+    RUVIA_CHECK(prepared->connectionPlan().disposition() == ruvia::detail::Http1ConnectionDisposition::kReuse);
+    RUVIA_CHECK(prepared->responseHeadPlan().knownLengthStream() != nullptr);
+    RUVIA_CHECK_EQ(prepared->responseHeadPlan().knownLengthStream()->contentLength(), std::uint64_t{5});
+    RUVIA_CHECK(prepared->responseHeadPlan().chunkedStream() == nullptr);
+    RUVIA_CHECK(prepared->commitPlan().framing() == ruvia::detail::ResponseStreamFraming::kHttp1KnownLength);
 }
 
 RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {

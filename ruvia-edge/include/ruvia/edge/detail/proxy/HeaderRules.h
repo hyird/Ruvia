@@ -24,14 +24,19 @@ using Headers = std::vector<std::pair<std::string, std::string>>;
     return ruvia::detail::httpAsciiEqualsIgnoreCase(a, b);
 }
 
+[[nodiscard]] inline bool istartsWith(std::string_view value, std::string_view prefix) noexcept {
+    return value.size() >= prefix.size() && iequals(value.substr(0, prefix.size()), prefix);
+}
+
 // Fields a proxy must not forward (RFC 9110 section 7.6.1), plus the framing
-// fields the edge regenerates itself. Age is handled separately: it is dropped
-// only when the edge emits its own computed value.
-[[nodiscard]] bool isConnectionOrFramingField(std::string_view lowerName) noexcept;
+// fields the edge regenerates itself. Matching is case-insensitive so callers
+// do not allocate a lowercase copy on the request path. Age is handled
+// separately: it is dropped only when the edge emits its own computed value.
+[[nodiscard]] bool isConnectionOrFramingField(std::string_view name) noexcept;
 
 // The client's precondition and Range fields. A caching edge answers these
 // itself from the stored response, so it must not also forward them.
-[[nodiscard]] bool isConditionalOrRangeField(std::string_view lowerName) noexcept;
+[[nodiscard]] bool isConditionalOrRangeField(std::string_view name) noexcept;
 
 // Whether a Connection header nominates `fieldName` as hop-by-hop.
 [[nodiscard]] bool connectionNominates(std::span<const HttpHeaderView> headers, std::string_view fieldName) noexcept;

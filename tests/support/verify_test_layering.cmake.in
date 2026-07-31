@@ -150,7 +150,7 @@ _ruvia_assert_matches(
 _ruvia_assert_matches(
     http_web_local
     "${_http_local_include_pattern}"
-    "#include \"../web/support/http2_sansio_session_fixture.h\"")
+    "#include \"../web/unit/support/http2_sansio_session_fixture.h\"")
 _ruvia_assert_matches(
     core_local
     "${_core_local_include_pattern}"
@@ -162,7 +162,7 @@ _ruvia_assert_matches(
 _ruvia_assert_matches(
     edge_local
     "${_edge_local_include_pattern}"
-    "#include \"../web/support/context_request_fixture.h\"")
+    "#include \"../web/unit/support/context_request_fixture.h\"")
 
 _ruvia_assert_ignores(
     commented_include
@@ -197,7 +197,7 @@ endif()
 _ruvia_collect_support_header_names(_http_support_header_names
     "${_ruvia_source_root}/tests/http/support")
 _ruvia_collect_support_header_names(_web_support_header_names
-    "${_ruvia_source_root}/tests/web/support")
+    "${_ruvia_source_root}/tests/web/unit/support")
 _ruvia_collect_support_header_names(_edge_support_header_names
     "${_ruvia_source_root}/tests/edge")
 
