@@ -3,6 +3,8 @@
 #include <mysql/mysql.h>
 
 #include <concepts>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <limits>
 #include <memory_resource>
@@ -15,6 +17,7 @@
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbSql.h"
+#include "ruvia/web/detail/db/DbSqlScan.h"
 #include "ruvia/web/db/DbTypes.h"
 
 namespace {
@@ -105,6 +108,51 @@ RUVIA_TEST(db_interpolate_sql_escapes_backslash_and_injection_payloads) {
     mysql_close(&mysql);
 }
 
+RUVIA_TEST(db_interpolate_sql_binds_only_statement_level_placeholders) {
+    MYSQL mysql;
+    RUVIA_CHECK(mysql_init(&mysql) != nullptr);
+
+    // A '?' inside a string literal is part of the value, not a placeholder:
+    // the statement keeps it and the one real placeholder takes the parameter.
+    RUVIA_CHECK_EQ(interp(mysql, "UPDATE t SET note = 'a?b' WHERE id = ?", {DbValue(std::int64_t{7})}),
+        std::string("UPDATE t SET note = 'a?b' WHERE id = 7"));
+    // Binding the literal's '?' used to consume the first parameter and shift
+    // every later one along, producing SQL that still ran and wrote the wrong
+    // rows ("note = 'a7b' WHERE id = 'X'"). That statement has one placeholder,
+    // so a second parameter is now a reported mismatch instead.
+    RUVIA_CHECK(throwsOn([&] { (void)interp(mysql, "UPDATE t SET note = 'a?b' WHERE id = ?", {DbValue(std::int64_t{7}), DbValue(std::string_view("X"))}); }));
+    RUVIA_CHECK_EQ(interp(mysql, "UPDATE t SET note = 'why?' WHERE id = ?", {DbValue(std::int64_t{7})}),
+        std::string("UPDATE t SET note = 'why?' WHERE id = 7"));
+
+    // The same holds for every construct that can carry an opaque byte: quoted
+    // identifiers, both line-comment forms, and block comments.
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT `we?rd` FROM t WHERE id = ?", {DbValue(std::int64_t{1})}),
+        std::string("SELECT `we?rd` FROM t WHERE id = 1"));
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT 1 -- really?\n WHERE id = ?", {DbValue(std::int64_t{2})}),
+        std::string("SELECT 1 -- really?\n WHERE id = 2"));
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT 1 # really?\n WHERE id = ?", {DbValue(std::int64_t{3})}),
+        std::string("SELECT 1 # really?\n WHERE id = 3"));
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT /* ? */ 1 WHERE id = ?", {DbValue(std::int64_t{4})}),
+        std::string("SELECT /* ? */ 1 WHERE id = 4"));
+
+    // A doubled quote escapes the quote rather than closing the literal, so the
+    // scan must not resume inside what is still one string.
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT 'a''?''b' WHERE id = ?", {DbValue(std::int64_t{5})}),
+        std::string("SELECT 'a''?''b' WHERE id = 5"));
+    // An escaped quote does not close it either.
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT 'a\\'?' WHERE id = ?", {DbValue(std::int64_t{6})}),
+        std::string("SELECT 'a\\'?' WHERE id = 6"));
+
+    // A placeholder immediately after a skipped construct is still bound.
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT '?'?", {DbValue(std::int64_t{8})}), std::string("SELECT '?'8"));
+
+    // Placeholders that only exist inside literals are not placeholders, so a
+    // parameter for them is an error rather than a silent substitution.
+    RUVIA_CHECK(throwsOn([&] { (void)interp(mysql, "SELECT 'only?'", {DbValue(1)}); }));
+
+    mysql_close(&mysql);
+}
+
 RUVIA_TEST(db_interpolate_sql_requires_matching_placeholder_count) {
     MYSQL mysql;
     mysql_init(&mysql);
@@ -157,6 +205,82 @@ RUVIA_TEST(db_migration_list_validation_enforces_integrity) {
     const std::string longId(191, 'x');
     const DbMigration tooLong[] = {{longId, "SQL"}};
     RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(tooLong, 1)); }));
+
+    // Ids that differ only in letter case are one id to a case-insensitive
+    // collation: MariaDB's default would report the second as already applied
+    // and never run it, while PostgreSQL would apply both. Refused here so one
+    // list cannot produce two schemas.
+    const DbMigration caseDup[] = {{"v1_users", "SQL1"}, {"V1_Users", "SQL2"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(caseDup, 2)); }));
+    // Ids that differ in more than case remain distinct.
+    const DbMigration distinct[] = {{"v1_users", "SQL1"}, {"v2_users", "SQL2"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(distinct, 2)); }));
+
+    // MariaDB collations are PAD SPACE -- the binary one the table pins
+    // included -- so "v1" and "v1 " would be one row there and two on
+    // PostgreSQL. A surrounded id is refused rather than folded.
+    const DbMigration padded[] = {{"v1_users ", "SQL1"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(padded, 1)); }));
+    const DbMigration leading[] = {{" v1_users", "SQL1"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(leading, 1)); }));
+    // Interior spaces are not the ambiguity; they compare exactly.
+    const DbMigration interior[] = {{"v1 users", "SQL1"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(interior, 1)); }));
+}
+
+RUVIA_TEST(db_migration_list_validation_enforces_one_statement) {
+    using ruvia::DbMigration;
+    using ruvia::detail::validateMigrationList;
+
+    // Neither backend runs two statements in one call, so the packaging error
+    // is reported here instead of arriving as a backend syntax error pointing
+    // at the second statement.
+    const DbMigration two[] = {{"001", "CREATE TABLE a(id INT); CREATE TABLE b(id INT)"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(two, 1)); }));
+
+    // A trailing separator is accepted by both backends, so it is accepted
+    // here -- with or without trailing whitespace.
+    const DbMigration trailing[] = {{"001", "CREATE TABLE a(id INT);"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(trailing, 1)); }));
+    const DbMigration trailingSpace[] = {{"001", "CREATE TABLE a(id INT);\n  "}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(trailingSpace, 1)); }));
+
+    // A ';' that is data -- inside a default value, a quoted identifier or a
+    // comment -- is not a statement separator.
+    const DbMigration quoted[] = {{"001", "CREATE TABLE a(id INT, s VARCHAR(4) DEFAULT 'a;b')"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(quoted, 1)); }));
+    const DbMigration commented[] = {{"001", "CREATE TABLE a(id INT) -- one; two\n"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(commented, 1)); }));
+}
+
+RUVIA_TEST(db_sql_scan_steps_over_opaque_constructs) {
+    using ruvia::detail::findSqlSyntaxByte;
+    using ruvia::detail::skipSqlAtom;
+
+    // The scan is shared by the parameter binder and the migration validator,
+    // so its own boundaries are pinned here.
+    RUVIA_CHECK_EQ(skipSqlAtom("abc", 0), std::size_t{1});
+    RUVIA_CHECK_EQ(skipSqlAtom("'ab'x", 0), std::size_t{4});
+    RUVIA_CHECK_EQ(skipSqlAtom("'a''b'x", 0), std::size_t{6});
+    RUVIA_CHECK_EQ(skipSqlAtom("`a``b`x", 0), std::size_t{6});
+    RUVIA_CHECK_EQ(skipSqlAtom("-- c\nx", 0), std::size_t{5});
+    RUVIA_CHECK_EQ(skipSqlAtom("/* c */x", 0), std::size_t{7});
+    // A backslash escapes inside quotes but never inside a quoted identifier,
+    // where MariaDB treats it as an ordinary byte.
+    RUVIA_CHECK_EQ(skipSqlAtom("'a\\'b'x", 0), std::size_t{6});
+    RUVIA_CHECK_EQ(skipSqlAtom("`a\\`x", 0), std::size_t{4});
+    // An unterminated construct consumes the rest rather than running past the
+    // end; the caller then reports a mismatch instead of binding into it.
+    RUVIA_CHECK_EQ(skipSqlAtom("'abc", 0), std::size_t{4});
+    RUVIA_CHECK_EQ(skipSqlAtom("/* abc", 0), std::size_t{6});
+    // A lone '-' or '/' is an operator, not a comment.
+    RUVIA_CHECK_EQ(skipSqlAtom("a-b", 1), std::size_t{2});
+    RUVIA_CHECK_EQ(skipSqlAtom("a/b", 1), std::size_t{2});
+
+    RUVIA_CHECK_EQ(findSqlSyntaxByte("a;b", ';'), std::size_t{1});
+    RUVIA_CHECK_EQ(findSqlSyntaxByte("'a;b'", ';'), std::string_view::npos);
+    RUVIA_CHECK_EQ(findSqlSyntaxByte("'a;b';", ';'), std::size_t{5});
+    RUVIA_CHECK_EQ(findSqlSyntaxByte("x", '?'), std::string_view::npos);
 }
 
 RUVIA_TEST(db_config_validation_checks_every_field) {

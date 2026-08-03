@@ -219,6 +219,7 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         include/ruvia/web/detail/db/DbPoolOperations.h
         include/ruvia/web/detail/db/DbResultAccess.h
         include/ruvia/web/detail/db/DbSlotSocket.h
+        include/ruvia/web/detail/db/DbSqlScan.h
         include/ruvia/web/detail/db/DbUtils.h
         include/ruvia/web/detail/db/DbValueAccess.h)
 endif()

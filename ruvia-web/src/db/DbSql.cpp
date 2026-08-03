@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/db/DbSql.h"
 
 #include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/web/detail/db/DbSqlScan.h"
 #include "ruvia/web/detail/db/DbUtils.h"
 
 #include <mysql/mysql.h>
@@ -100,9 +101,13 @@ std::pmr::string interpolateSql(st_mysql& connection, std::string_view sql, std:
     }
     output.reserve(sizeHint);
 
+    // Only a '?' at statement level is a placeholder. One inside a literal, a
+    // quoted identifier or a comment is data the statement wants to keep, and
+    // substituting it there would push every later parameter one slot along --
+    // valid SQL that reads and writes the wrong rows.
     std::size_t offset = 0;
     for (const auto& param : params) {
-        const auto placeholder = sql.find('?', offset);
+        const auto placeholder = findSqlSyntaxByte(sql, '?', offset);
         if (placeholder == std::string_view::npos) {
             throw std::invalid_argument("SQL parameter count does not match placeholders");
         }
@@ -111,7 +116,7 @@ std::pmr::string interpolateSql(st_mysql& connection, std::string_view sql, std:
         offset = placeholder + 1;
     }
 
-    if (sql.find('?', offset) != std::string_view::npos) {
+    if (findSqlSyntaxByte(sql, '?', offset) != std::string_view::npos) {
         throw std::invalid_argument("SQL parameter count does not match placeholders");
     }
 

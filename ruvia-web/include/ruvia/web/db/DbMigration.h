@@ -16,6 +16,16 @@ namespace ruvia {
 // Immutable migration descriptor borrowing stable application storage. String
 // literals and owning-string lvalues preserve constexpr/zero-allocation use;
 // owning-string rvalues are rejected before an async run can retain them.
+//
+// `sql` is exactly one statement. Neither backend accepts more than one per
+// call -- libpq's extended protocol refuses multiple commands and the MariaDB
+// connection never enables CLIENT_MULTI_STATEMENTS -- so a schema change that
+// needs several statements is several migrations. A trailing ';' is allowed.
+//
+// `id` identifies an applied migration for the rest of the schema's life. It is
+// compared with the migrations table's collation, so ids that differ only in
+// letter case are rejected up front rather than resolving differently per
+// backend.
 class DbMigration final {
 public:
     constexpr DbMigration(std::string_view id, std::string_view sql) noexcept
@@ -70,6 +80,18 @@ private:
     std::pmr::vector<std::pmr::string> skipped_;
 };
 
+// Applies pending migrations synchronously on the calling thread, holding a
+// backend lock so that concurrent deployers serialize. It runs its own event
+// loop and blocks until done, so it belongs in startup code, never on a worker.
+//
+// Each migration and the row that records it are separate statements: a crash
+// between them leaves the change applied and unrecorded, and the next run
+// retries it. Migrations that can be re-applied safely -- CREATE TABLE IF NOT
+// EXISTS and friends -- survive that; ones that cannot need a guard of their
+// own.
+//
+// DbConfig's timeouts apply here as they do on a worker: without connectTimeout
+// or queryTimeout a stalled backend blocks startup indefinitely.
 class DbMigrator final {
 public:
     explicit DbMigrator(DbConfig config, DbMigrationOptions options = {}, std::pmr::memory_resource* resource = nullptr);

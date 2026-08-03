@@ -488,6 +488,19 @@ if(RUVIA_ENABLE_POSTGRESQL)
     set_tests_properties(ruvia_postgresql_integration PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+if(RUVIA_ENABLE_MARIADB)
+    ruvia_add_test(ruvia_mariadb_integration web/server/mariadb_integration.cpp
+        LIB ruvia::web TIMEOUT 60 SERIAL LABELS "database;mariadb;integration")
+    set_tests_properties(ruvia_mariadb_integration PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# Needs no database: it drives the migration runner against a socket that
+# accepts and stays silent, which is what an unscanned deadline used to hang on.
+if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
+    ruvia_add_test(ruvia_db_migration_timeout web/server/db_migration_timeout.cpp
+        LIB ruvia::web TIMEOUT 60 LABELS "database")
+endif()
+
 ruvia_validate_test_sources(ruvia_http2_conformance_server ruvia::web
     web/server/http2_conformance_server.cpp)
 add_executable(ruvia_http2_conformance_server web/server/http2_conformance_server.cpp)

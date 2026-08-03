@@ -66,6 +66,20 @@ Task<void> detail::MariaDbPool::connectUnlocked(ConnectionSlot& slot) {
         if (connected == nullptr) {
             throw mysqlError(initialized, "mysql_real_connect");
         }
+
+        // MariaDB's non-blocking API suspends by yielding out of a fibre when
+        // the socket reports EAGAIN. Connect leaves that socket in blocking
+        // mode, so every later mysql_*_start() ran the entire statement inside
+        // the call instead of returning a wait mask: the worker's event loop
+        // stopped for as long as the query took -- no other connection on it
+        // progressed, no timer fired, and no deadline could be enforced,
+        // because nothing was running to enforce it. Switching the descriptor
+        // restores the suspend the API is built around.
+        const auto native = mysql_get_socket(&initialized);
+        using NativeSocket = std::remove_cv_t<decltype(native)>;
+        if (native == static_cast<NativeSocket>(MARIADB_INVALID_SOCKET) || slot.waitSocket == nullptr || !slot.waitSocket->ensureAssigned(static_cast<detail::DbSlotSocket::NativeSocket>(native)) || !slot.waitSocket->makeNonBlocking()) {
+            throw std::runtime_error("MariaDB connection socket could not be made non-blocking");
+        }
         slot.connected = true;
     } catch (...) {
         closeSlot(slot);
@@ -99,8 +113,17 @@ Task<st_mysql_res*> detail::MariaDbPool::storeMysqlResult(ConnectionSlot& slot, 
 Task<int> detail::MariaDbPool::waitForMysql(ConnectionSlot& slot, int status, const OperationTimeout& deadline) {
     auto& connection = *slot.connection;
     const auto timeout = deadline.remaining();
+    // A DbConfig deadline is this pool's to enforce, not the driver's. Reporting
+    // its expiry to MariaDB as MYSQL_WAIT_TIMEOUT only works where libmariadb
+    // has a matching timeout option of its own -- it has one for connect, none
+    // for a statement -- so a query deadline was handed over and dropped, and
+    // the wait was simply re-entered until the server answered. Failing here
+    // instead ends the operation, and the caller closes the connection: the
+    // statement may still be running server-side, which is exactly what a
+    // client-side timeout means.
+    const auto timedOut = [] { return std::runtime_error("MariaDB operation timed out"); };
     if (timeout.has_value() && timeout->count() <= 0) {
-        co_return MYSQL_WAIT_TIMEOUT;
+        throw timedOut();
     }
     const auto wantsRead = (status & MYSQL_WAIT_READ) != 0;
     const auto wantsWrite = (status & MYSQL_WAIT_WRITE) != 0;
@@ -148,7 +171,11 @@ Task<int> detail::MariaDbPool::waitForMysql(ConnectionSlot& slot, int status, co
         co_return MYSQL_WAIT_TIMEOUT;
     }
 
+    // Whose deadline governs this wait decides what its expiry means: ours ends
+    // the operation, one MariaDB asked for is an event it is waiting to be told
+    // about.
     auto timeoutMs = timeout.value_or(std::chrono::milliseconds(0));
+    const bool ownDeadline = timeout.has_value();
     if (timeoutMs.count() <= 0 && (status & MYSQL_WAIT_TIMEOUT) != 0) {
         const auto mysqlTimeout = mysql_get_timeout_value_ms(&connection);
         timeoutMs = std::chrono::milliseconds(mysqlTimeout == 0 ? 1 : mysqlTimeout);
@@ -260,9 +287,13 @@ Task<int> detail::MariaDbPool::waitForMysql(ConnectionSlot& slot, int status, co
         ConnectionSlot& slot;
     } activeWait(slot);
     const auto result = co_await SocketWaitAwaiter{slot, *slot.waitSocket, status, {}, MYSQL_WAIT_TIMEOUT, 0, false, {}};
+    const bool expired = slot.deadline.expired();
     clearSlotDeadline(slot);
     if (slot.closeRequested) {
         throw std::runtime_error("database client is closing");
+    }
+    if (ownDeadline && expired) {
+        throw timedOut();
     }
     co_return result;
 }

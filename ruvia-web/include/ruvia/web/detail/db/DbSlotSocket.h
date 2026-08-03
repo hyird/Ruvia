@@ -32,6 +32,11 @@ struct DbSlotSocket final {
     NativeSocket native{kInvalidSocket};
 
     [[nodiscard]] bool ensureAssigned(NativeSocket fd) noexcept;
+    // Puts the driver-owned descriptor into non-blocking mode. A driver whose
+    // asynchronous API suspends on EAGAIN cannot suspend at all while its
+    // socket blocks, so it runs the whole operation inside the call that was
+    // supposed to start it.
+    [[nodiscard]] bool makeNonBlocking() noexcept;
     void cancel() noexcept;
     // Detaches Asio without closing the driver-owned native descriptor.
     // Failure cannot be ignored: destroying an attached wrapper would close a

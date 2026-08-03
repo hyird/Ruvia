@@ -337,7 +337,7 @@ RUVIA_TEST(db_migrator_validates_before_opening_connection) {
     try {
         (void)ruvia::DbMigrator::migrate(ruvia::DbConfig{}, std::span<const ruvia::DbMigration>(migrations));
     } catch (const std::invalid_argument& error) {
-        rejected = std::string_view(error.what()) == "database migration ids must be unique";
+        rejected = std::string_view(error.what()) == "database migration ids must be unique, including case";
     }
     RUVIA_CHECK(rejected);
 }

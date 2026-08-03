@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/db/DbMigration.h"
+#include "ruvia/web/detail/db/DbSqlScan.h"
 
 #include <cstddef>
 #include <span>
@@ -28,9 +29,64 @@ namespace ruvia::detail {
     return true;
 }
 
+// Two migration ids are the same id to the schema table if they differ only in
+// ASCII letter case. The applied-migration lookup compares them with the
+// column's collation, and MariaDB's default (utf8mb4_general_ci) is
+// case-insensitive: "v1" and "V1" collide there while PostgreSQL keeps them
+// apart, so one list would produce two different schemas. New tables pin a
+// binary collation, but a table created before that still compares loosely, so
+// the ambiguity is refused at the source instead.
+// MariaDB's collations are PAD SPACE, including the binary one the migrations
+// table pins, so "v1" and "v1 " are one id there and two everywhere else. An id
+// wrapped in whitespace is a typo in every case that matters, so it is refused
+// rather than quietly folded.
+[[nodiscard]] inline bool hasSurroundingWhitespace(std::string_view id) noexcept {
+    const auto isSpace = [](char character) noexcept {
+        return character == ' ' || character == '\t' || character == '\r' || character == '\n';
+    };
+    return !id.empty() && (isSpace(id.front()) || isSpace(id.back()));
+}
+
+[[nodiscard]] inline bool migrationIdsCollide(std::string_view left, std::string_view right) noexcept {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        auto a = static_cast<unsigned char>(left[i]);
+        auto b = static_cast<unsigned char>(right[i]);
+        if (a >= 'A' && a <= 'Z') {
+            a = static_cast<unsigned char>(a - 'A' + 'a');
+        }
+        if (b >= 'A' && b <= 'Z') {
+            b = static_cast<unsigned char>(b - 'A' + 'a');
+        }
+        if (a != b) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// A migration is one statement. Both backends enforce that anyway -- libpq's
+// extended protocol rejects multiple commands outright and the MariaDB
+// connection never enables CLIENT_MULTI_STATEMENTS -- but they report it as a
+// backend syntax error pointing at the second statement, which reads like the
+// SQL is wrong rather than the packaging. A trailing separator is accepted by
+// both, so only a separator with statement text after it is refused.
+[[nodiscard]] inline bool hasTrailingSqlOnly(std::string_view sql, std::size_t after) noexcept {
+    for (auto index = after; index < sql.size(); ++index) {
+        const auto character = sql[index];
+        if (character != ' ' && character != '\t' && character != '\r' && character != '\n') {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Validates a developer-supplied migration list before it is applied: every id
 // must be non-empty, at most 190 bytes (the indexed schema column width), have
-// non-empty SQL, and be unique -- a duplicate id would run the wrong migration.
+// non-empty single-statement SQL, and be unique -- a duplicate id would run the
+// wrong migration.
 inline void validateMigrationList(std::span<const DbMigration> migrations) {
     for (std::size_t i = 0; i < migrations.size(); ++i) {
         const auto& migration = migrations[i];
@@ -40,12 +96,19 @@ inline void validateMigrationList(std::span<const DbMigration> migrations) {
         if (migration.id().size() > 190) {
             throw std::invalid_argument("database migration id must not exceed 190 bytes");
         }
+        if (hasSurroundingWhitespace(migration.id())) {
+            throw std::invalid_argument("database migration id must not begin or end with whitespace");
+        }
         if (migration.sql().empty()) {
             throw std::invalid_argument("database migration SQL must not be empty");
         }
+        const auto separator = findSqlSyntaxByte(migration.sql(), ';');
+        if (separator != std::string_view::npos && !hasTrailingSqlOnly(migration.sql(), separator + 1)) {
+            throw std::invalid_argument("database migration must contain exactly one SQL statement");
+        }
         for (std::size_t j = i + 1; j < migrations.size(); ++j) {
-            if (migrations[j].id() == migration.id()) {
-                throw std::invalid_argument("database migration ids must be unique");
+            if (migrationIdsCollide(migrations[j].id(), migration.id())) {
+                throw std::invalid_argument("database migration ids must be unique, including case");
             }
         }
     }
