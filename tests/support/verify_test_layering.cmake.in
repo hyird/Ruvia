@@ -106,22 +106,14 @@ function(_ruvia_scan_forbidden_support_headers _label)
 endfunction()
 
 set(_core_product_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(http|web|edge)/]=])
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(http|web)/]=])
 set(_http_product_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(core|web|edge)/]=])
-set(_web_product_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/edge/]=])
-set(_edge_product_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/web/]=])
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(core|web)/]=])
 
 set(_core_local_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(http|web|edge)/]=])
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(http|web)/]=])
 set(_http_local_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(core|web|edge)/]=])
-set(_web_local_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?edge/]=])
-set(_edge_local_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?web/]=])
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(core|web)/]=])
 
 _ruvia_assert_matches(
     core_product
@@ -136,14 +128,6 @@ _ruvia_assert_matches(
     "${_http_product_include_pattern}"
     "#include \"ruvia/web/Context.h\"")
 _ruvia_assert_matches(
-    web_product
-    "${_web_product_include_pattern}"
-    "#include <ruvia/edge/EdgeServer.h>")
-_ruvia_assert_matches(
-    edge_product
-    "${_edge_product_include_pattern}"
-    "#include <ruvia/web/App.h>")
-_ruvia_assert_matches(
     http_local
     "${_http_local_include_pattern}"
     "#include \"../core/support/runtime_fixture.h\"")
@@ -155,14 +139,6 @@ _ruvia_assert_matches(
     core_local
     "${_core_local_include_pattern}"
     "#include \"../http/support/content_decoding_fixture.h\"")
-_ruvia_assert_matches(
-    web_local
-    "${_web_local_include_pattern}"
-    "#include \"../edge/edge_testbed.h\"")
-_ruvia_assert_matches(
-    edge_local
-    "${_edge_local_include_pattern}"
-    "#include \"../web/unit/support/context_request_fixture.h\"")
 
 _ruvia_assert_ignores(
     commented_include
@@ -198,19 +174,11 @@ _ruvia_collect_support_header_names(_http_support_header_names
     "${_ruvia_source_root}/tests/http/support")
 _ruvia_collect_support_header_names(_web_support_header_names
     "${_ruvia_source_root}/tests/web/unit/support")
-_ruvia_collect_support_header_names(_edge_support_header_names
-    "${_ruvia_source_root}/tests/edge")
 
 set(_core_forbidden_support_headers
     ${_http_support_header_names}
-    ${_web_support_header_names}
-    ${_edge_support_header_names})
+    ${_web_support_header_names})
 set(_http_forbidden_support_headers
-    ${_web_support_header_names}
-    ${_edge_support_header_names})
-set(_web_forbidden_support_headers
-    ${_edge_support_header_names})
-set(_edge_forbidden_support_headers
     ${_web_support_header_names})
 
 _ruvia_scan_forbidden_test_includes(core-tests
@@ -237,29 +205,5 @@ _ruvia_scan_forbidden_support_headers(http-tests
     FORBIDDEN_NAMES
         ${_http_forbidden_support_headers})
 
-_ruvia_scan_forbidden_test_includes(web-tests
-    ROOTS
-        "${_ruvia_source_root}/tests/web"
-    PATTERNS
-        "${_web_product_include_pattern}"
-        "${_web_local_include_pattern}")
-_ruvia_scan_forbidden_support_headers(web-tests
-    ROOTS
-        "${_ruvia_source_root}/tests/web"
-    FORBIDDEN_NAMES
-        ${_web_forbidden_support_headers})
-
-_ruvia_scan_forbidden_test_includes(edge-tests
-    ROOTS
-        "${_ruvia_source_root}/tests/edge"
-    PATTERNS
-        "${_edge_product_include_pattern}"
-        "${_edge_local_include_pattern}")
-_ruvia_scan_forbidden_support_headers(edge-tests
-    ROOTS
-        "${_ruvia_source_root}/tests/edge"
-    FORBIDDEN_NAMES
-        ${_edge_forbidden_support_headers})
-
 message(STATUS
-    "ruvia_guard_test_layering: tests/core,http,web,edge include boundaries hold")
+    "ruvia_guard_test_layering: tests/core,http include boundaries hold")

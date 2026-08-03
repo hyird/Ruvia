@@ -2,7 +2,7 @@
 
 > 文档状态：定稿并开始实施（2026-07-23）
 >
-> 适用范围：`ruvia-core`、`ruvia-http`、`ruvia-web`、`ruvia-edge`
+> 适用范围：`ruvia-core`、`ruvia-http`、`ruvia-web`
 >
 > 相关文档：[worker runtime 与并发原语规范](ruvia-concurrency-primitives.md)
 
@@ -40,14 +40,14 @@
 | 级别 | 边界代码 | 失败后果 | 上报去向 |
 | --- | --- | --- | --- |
 | 请求 | `RouteTable::dispatch` / `handleException` | 返回 5xx，**连接继续** | `Context` 上的 `exception_ptr` → 应用 `onError` |
-| 连接 | `HttpServer::handleSession` 的 catch-all；edge 的 `spawnTracked` 完成回调 | 关闭该连接，**服务继续** | edge：`taskFailure(kSession)`；web：`App::onConnectionFailure` |
-| 任务 | edge `spawnTracked`；`DiskTier::runQueued` | 该任务结束，**节点继续** | `taskFailure(kAcceptLoop/kBackgroundRefresh/kDiskCache)` |
-| worker | `WorkerDispatcher::runContext`；edge 工作线程的 `run()` 循环 | web：停该 worker；edge：上报后继续 | web：`workerFailure`；edge：`taskFailure(kWorker)` |
+| 连接 | `HttpServer::handleSession` 的 catch-all | 关闭该连接，**服务继续** | `App::onConnectionFailure` |
+| 任务 | detached 任务边界（`asio::post`、`BlockingPool` 任务的 catch 包裹） | 该任务结束，**进程继续** | 应用 sink，兜底 `reportUnhandledFailure` |
+| worker | `WorkerDispatcher::runContext` | 停该 worker，**进程继续** | `workerFailure` |
 | 进程 | `std::terminate` | 进程结束 | 仅用于不变量破坏 |
 
 **关键规则：接受循环永不因失败退出。** 监听 socket 开着却不再 accept，是最坏的
-失败模式——进程活着、端口通着、服务实际已死，健康检查发现不了。web 与 edge 的
-accept 循环对所有瞬时错误（accept 失败、会话启动失败）都退避 50ms 后继续，只有
+失败模式——进程活着、端口通着、服务实际已死，健康检查发现不了。accept 循环对所有
+瞬时错误（描述符耗尽、`ECONNABORTED`、`EINTR` 等）都退避 50ms 后继续，只有
 `operation_aborted` / 监听器关闭才退出。
 
 退避不是可选的礼貌：描述符耗尽时失败的 accept **立刻**就绪，不退避就是 100% CPU
@@ -59,16 +59,11 @@ accept 循环对所有瞬时错误（accept 失败、会话启动失败）都退
 
 | 机制 | 位置 | 作用 |
 | --- | --- | --- |
-| 连接预算 | `HttpServerOptions::maxConnections`、`EdgeServerOptions::maxConnections` | 超出即接受并立即关闭，主动卸载而不是让 backlog 无限增长直到撞上描述符上限 |
-| 瞬时错误退避 | 两侧 accept 循环 | 见上 |
-| 上游熔断 | `OriginFetchLimits::circuitFailureThreshold` / `circuitResetTimeout` | 上游连续传输失败达阈值后停止拨号，直接返回；每个 reset 窗口放行一个探测请求。否则每个请求都要付满 `connectTimeout` 才发现上游已死 |
-| 陈旧兜底 | `stale-while-revalidate` / `stale-if-error` | 上游不可达时用过期副本应答，而不是网关错误 |
+| 连接预算 | `HttpServerOptions::maxConnections` | 超出即接受并立即关闭，主动卸载而不是让 backlog 无限增长直到撞上描述符上限 |
+| 瞬时错误退避 | accept 循环 | 见上 |
 | 请求级降级链 | handler → onError → 默认响应 | 见 §3 |
 | 上报限流 | `reportUnhandledFailure` | 故障风暴时保证第一条（信息量最大的）失败不被后续后果淹没，也避免阻塞的 stderr 拖慢恢复 |
-| 失败计数 | `EdgeServer::stats()`、`App::httpStats()` | 无回调也能被健康检查观测到 |
-
-熔断只对**传输失败**（连接/超时/读写）计数。畸形、超大、不支持的响应说明上游是活
-着的，对这些跳闸会把一个仅仅是配置错误的上游整个切掉。
+| 失败计数 | `App::httpStats()` | 无回调也能被健康检查观测到 |
 
 ## 3. 用户回调的三类契约
 
@@ -85,16 +80,17 @@ requires std::is_nothrow_invocable_r_v<void, Listener&, const AccessLogRecord&>
 **B 类 — 可抛，被容纳并上报。** 回调失败不改变服务行为，异常送上报通道。用于观测、
 诊断、清理类回调。
 
-- `EdgeServerOptions::accessLog` → 失败上报为 `kAccessLog`
-- `EdgeServerOptions::taskFailure` → 失败回退到 §5 的最终兜底
+- `App::onConnectionFailure` → 失败回退到 §5 的最终兜底
 - `EventLoop::onStop` → 失败进入 pool 的首失败记录，由 `join()` 重抛
 
 **C 类 — 可抛，传播给调用者。** 同步 API，调用方就在栈上，直接让异常传播或转成
 返回值。用于控制面。
 
-- `EdgeServer::addOrigin` / `removeOrigin` / `purge`：`packaged_task` + `future.get()` 重抛
-- `EdgeServer::setTlsCertificate`：转成 `false` 返回值，**同时**上报 `kControl`
-  携带的拒绝原因（否则"为什么这个 PEM 无效"随异常消失）
+- `App::run()`：启动期配置与 listener 失败直接传播给调用者
+- `EventLoopPool::join()`：worker 与 stop 回调的首个失败重抛给调用者
+
+转成返回值的控制面调用必须**同时**上报被降级掉的原因，否则"为什么被拒绝"随异常
+消失（见 §8）。
 
 ## 4. 取消不是失败
 
@@ -104,8 +100,6 @@ Asio 通过"恢复协程并抛 `operation_aborted`"来展开被 terminal-cancel 
 上报前必须过滤，判据卡到最窄：**已请求关闭** 且 **异常恰好是 `operation_aborted`**。
 `awaitable_operators` 的组合（`reader() && writer()`）被取消时抛的是
 `asio::multiple_exceptions` 包装，需要递归识别其 `first_exception()`。
-
-参考实现：`EdgeServer::Impl::isCancellationUnwind`。
 
 不做这个过滤的后果是每次 `stop()` 刷出一行/连接的假告警，把真失败淹掉——等价于
 违反原则 1。
@@ -139,8 +133,8 @@ stderr: "ruvia: <context> failed: <what>"
   变成 `terminate`。
 - 回滚型 catch 用 RAII guard 优先；手写 `catch (...) { rollback(); throw; }` 时
   rollback 本身必须 `noexcept`。
-- fire-and-forget 的 `asio::post` / 线程池任务**必须**在 lambda 内包一层 catch。
-  handler 抛出会离开线程池的工作线程，直接 `terminate`。参考 `DiskTier::runQueued`。
+- fire-and-forget 的 `asio::post` / 线程池任务**必须**在执行点包一层 catch。
+  任务抛出会离开工作线程，直接 `terminate`。参考 `BlockingPool::Impl::run`。
 - 占位后再启动的模式（先 `try_emplace` 占坑再 spawn），启动失败必须释放占位，
   否则后续请求会永久等待一个不存在的 leader。
 - 新增 `enum` 失败类别时，在 `switch` 中显式列出，靠 `-Werror` 兜住遗漏。
@@ -152,8 +146,6 @@ stderr: "ruvia: <context> failed: <what>"
 - `ruvia-http`：解析面全返回值，无异常控制流。
 - `ruvia-core`：契约违反抛异常；`noexcept` 边界 `terminate`；worker 失败经
   `failureHandler` 或 `join()` 重抛；stop 回调失败进首失败记录（2026-07-23）。
-- `ruvia-edge`：五类任务失败全部上报，取消展开已过滤，accept 循环退避续跑，
-  磁盘线程任务不再 `terminate`（2026-07-23）。
 - `ruvia-web`：请求级降级链完整（handler → onError → 默认响应），已提交响应后
   不伪造错误响应而是拆连接；连接级失败经 `App::onConnectionFailure` 上报，
   包括响应已提交后 handler 抛出的那一类（h1 与 h2 各有端到端测试）（2026-07-23）。
@@ -161,17 +153,15 @@ stderr: "ruvia: <context> failed: <what>"
 ## 8. 反模式：降级即丢弃
 
 最难发现的吞点不是空 `catch`，而是**把异常降级成一个更小的值**之后没人再持有它。
-本项目实际出现过四次，形态各不相同但本质相同：
+本项目实际出现过多次，形态各不相同但本质相同：
 
 | 位置 | 降级成 | 后果 |
 | --- | --- | --- |
 | `dispatchResponseStreamWith` | `makeFailedAfterCommit(status)` | 客户端收到截断的 200，服务端连日志都没有——访问日志记的正是那个 200 |
 | `finishWebSocketSession` | close code `1011` | 对端知道"出错了"，运维不知道错在哪 |
-| `EdgeServer::setTlsCertificate` | `return false` | 调用方知道证书被拒，不知道 PEM 哪里坏 |
-| edge `spawnTracked` 完成回调 | 忽略 `exception_ptr` 参数 | 会话与后台任务的失败全部消失 |
 
-前三个都藏在类型安全、设计良好的抽象背后：一个 variant 结果类型、一个 RFC 定义的
-关闭码、一个布尔返回值。类型越干净，越难看出异常已经没了。
+两个都藏在类型安全、设计良好的抽象背后：一个 variant 结果类型、一个 RFC 定义的
+关闭码。类型越干净，越难看出异常已经没了。
 
 **检查方法：每当一个失败被转换成状态码、布尔值、枚举或关闭码，问一句"原始异常
 现在谁持有？"** 答案是"没有人"时，就是一个静默吞点。修法统一为：让降级后的值
@@ -181,22 +171,22 @@ stderr: "ruvia: <context> failed: <what>"
 
 全树 `catch (...)` 逐个核实后的分布（2026-07-23）：
 
-- **上报**：edge 五类任务、edge 磁盘线程任务、web 连接级（h1/h2/WebSocket）、
-  core stop 回调、App stop hook、两个析构里的 `join()`。
-- **回滚后 `throw;`**：所有资源清理点（`EdgeCache`、`Db`、`PgDb`、`RedisPool`、
-  `PmrObject`、`AsioAwait` 等）。
+- **上报**：web 连接级（h1/h2/WebSocket）、`BlockingPool` 任务、core stop 回调、
+  App stop hook、两个析构里的 `join()`。
+- **回滚后 `throw;`**：所有资源清理点（`Db`、`PgDb`、`RedisPool`、`PmrObject`、
+  `AsioAwait` 等）。
 - **转成 `exception_ptr` 继续传播**：请求级降级链、`TaskScope`、`DbMigration`。
-- **转成契约内返回值**：`DiskCache` 的 best-effort 查询、`DbSlotSocket` 的探测。
-- **分类判断**（异常仍被调用方持有）：`isCancellationUnwind`、
-  `isUnsupportedRequestContentCoding`、`ResponseStreamHeadOnlyComplete` 识别。
+- **转成契约内返回值**：`DbSlotSocket` 的探测。
+- **分类判断**（异常仍被调用方持有）：`isUnsupportedRequestContentCoding`、
+  `ResponseStreamHeadOnlyComplete` 识别。
 - **最终兜底自身**：`reportUnhandledFailure` 内部的 `rethrow` 分支。
 
 **丢弃异常的 `catch` 数量：0。**
 
-语法上仍为空的 `catch (...) {}` 只剩三个，全部是分类判断——`isCancellationUnwind`、
-`isUnsupportedRequestContentCoding`、`ResponseStreamHeadOnlyComplete` 的识别。它们
+语法上仍为空的 `catch (...) {}` 只剩两个，全部是分类判断——
+`isUnsupportedRequestContentCoding` 与 `ResponseStreamHeadOnlyComplete` 的识别。它们
 `rethrow` 一个调用方仍然持有的 `exception_ptr` 只为读出类型，落空分支返回 false 后
-调用方照常处理该异常。三处都加了注释注明这一点，扫描者不必再逐个推断。
+调用方照常处理该异常。两处都加了注释注明这一点，扫描者不必再逐个推断。
 
 新增空 `catch` 时按此判断：**空块合法当且仅当异常的所有权在别处**，并且必须写明
 所有者是谁。

@@ -128,22 +128,19 @@ _ruvia_assert_matches(one_level_root "${_one_level_source_pattern}" "Server.cpp"
 _ruvia_assert_matches(one_level_category "${_one_level_source_pattern}" "server/Server.cpp")
 _ruvia_assert_ignores(two_level_category "${_one_level_source_pattern}" "net/server/Server.cpp")
 
-foreach(_forbidden_root IN ITEMS include src fuzz core http web edge)
+foreach(_forbidden_root IN ITEMS include src fuzz core http web)
     _ruvia_forbid_path("${_source_root}/${_forbidden_root}")
 endforeach()
 
 _ruvia_check_target_layout("ruvia-core" "core")
 _ruvia_check_target_layout("ruvia-http" "http")
 _ruvia_check_target_layout("ruvia-web" "web")
-_ruvia_check_target_layout("ruvia-edge" "edge")
 
 _ruvia_check_src_depth("ruvia-core" "flat")
 _ruvia_check_src_depth("ruvia-http" "one-level")
 _ruvia_check_src_depth("ruvia-web" "one-level")
-_ruvia_check_src_depth("ruvia-edge" "one-level")
 
 _ruvia_check_flat_test_dir("tests/core")
-_ruvia_check_flat_test_dir("tests/edge")
 _ruvia_check_test_categories(
     "tests/http"
     unit http1 http2 websocket guards support conformance benchmarks)
