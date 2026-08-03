@@ -57,6 +57,16 @@ void require(bool condition, std::string_view message) {
     }
 }
 
+template <typename Fn>
+[[nodiscard]] bool throwsOn(Fn&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::exception&) {
+        return true;
+    }
+}
+
 template <typename Factory>
 void runTask(Factory&& factory) {
     asio::io_context ioContext(1);
@@ -154,6 +164,32 @@ int main() {
         const auto second = ruvia::DbMigrator::migrate(config, migrations, options);
         require(first.applied().size() == 1, "migration was not applied");
         require(second.skipped().size() == 1, "migration was not idempotent");
+
+        // Editing an applied migration changes nothing on a machine that
+        // already ran it, so the edit is reported rather than skipped.
+        const std::array edited{ruvia::DbMigration{"001_create_items",
+            "CREATE TABLE ruvia_pg_integration_items ("
+            "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
+            "value TEXT NOT NULL, note TEXT)"}};
+        require(throwsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }),
+            "an edited migration body was accepted");
+
+        // CREATE INDEX CONCURRENTLY is refused inside a transaction block, so
+        // it reports whether the default wrap is really there -- and whether
+        // naming the exception really lifts it.
+        const std::array wrapped{ruvia::DbMigration{"002_concurrent_index",
+            "CREATE INDEX CONCURRENTLY ruvia_pg_integration_items_value_idx "
+            "ON ruvia_pg_integration_items (value)"}};
+        require(throwsOn([&] { (void)ruvia::DbMigrator::migrate(config, wrapped, options); }),
+            "a transactional migration did not run inside a transaction block");
+
+        const std::array unwrapped{ruvia::DbMigration{"002_concurrent_index",
+            "CREATE INDEX CONCURRENTLY ruvia_pg_integration_items_value_idx "
+            "ON ruvia_pg_integration_items (value)",
+            ruvia::DbMigrationAtomicity::kUnwrapped}};
+        const auto concurrent = ruvia::DbMigrator::migrate(config, unwrapped, options);
+        require(concurrent.applied().size() == 1,
+            "an unwrapped migration was not applied outside a transaction block");
 
         runTask([&](asio::io_context& ioContext) { return withDatabase(ioContext, config, false); });
         runTask([&](asio::io_context& ioContext) { return withDatabase(ioContext, config, true); });

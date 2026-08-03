@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
+#include "ruvia/web/detail/db/DbMigrationChecksum.h"
 #include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbUtils.h"
 #include "ruvia/web/db/Db.h"
@@ -8,6 +9,8 @@
 
 #include <asio/bind_executor.hpp>
 #include <asio/steady_timer.hpp>
+
+#include <openssl/evp.h>
 
 #include <array>
 #include <chrono>
@@ -146,14 +149,34 @@ void appendQuotedIdentifier(std::pmr::string& sql, std::string_view identifier, 
     // The CHECK is deliberately unnamed: MySQL scopes CHECK constraint names to
     // the schema, so a fixed name would collide the moment a second migration
     // table is created in one database.
-    sql.append(" CHECK (migration_id <> ''))");
+    sql.append(" checksum CHAR(64), CHECK (migration_id <> ''))");
+    return sql;
+}
+
+// Tables created before migrations were checksummed have no column for one.
+// Asking the catalogue is the portable way to find out: ALTER TABLE ... ADD
+// COLUMN IF NOT EXISTS is a MariaDB and PostgreSQL extension that MySQL does
+// not accept, and running an unguarded ALTER would fail on every later run.
+[[nodiscard]] std::pmr::string buildChecksumColumnProbeSql(DbDriver driver, std::pmr::memory_resource* resource) {
+    std::pmr::string sql("SELECT 1 FROM information_schema.columns WHERE table_schema = ", resource);
+    sql.append(driver == DbDriver::kPostgreSql ? "current_schema() AND table_name = $1" : "DATABASE() AND table_name = ?");
+    sql.append(" AND column_name = 'checksum'");
+    return sql;
+}
+
+[[nodiscard]] std::pmr::string buildAddChecksumColumnSql(std::string_view table, DbDriver driver, std::pmr::memory_resource* resource) {
+    std::pmr::string sql(resource);
+    sql.reserve(table.size() + 48);
+    sql.append("ALTER TABLE ");
+    appendQuotedIdentifier(sql, table, driver);
+    sql.append(" ADD COLUMN checksum CHAR(64)");
     return sql;
 }
 
 [[nodiscard]] std::pmr::string buildFindMigrationSql(std::string_view table, DbDriver driver, std::pmr::memory_resource* resource) {
     std::pmr::string sql(resource);
     sql.reserve(table.size() + 50);
-    sql.append("SELECT migration_id FROM ");
+    sql.append("SELECT checksum FROM ");
     appendQuotedIdentifier(sql, table, driver);
     sql.append(driver == DbDriver::kPostgreSql ? " WHERE migration_id = $1 LIMIT 1" : " WHERE migration_id = ? LIMIT 1");
     return sql;
@@ -164,7 +187,19 @@ void appendQuotedIdentifier(std::pmr::string& sql, std::string_view identifier, 
     sql.reserve(table.size() + 40);
     sql.append("INSERT INTO ");
     appendQuotedIdentifier(sql, table, driver);
-    sql.append(driver == DbDriver::kPostgreSql ? " (migration_id) VALUES ($1)" : " (migration_id) VALUES (?)");
+    sql.append(driver == DbDriver::kPostgreSql ? " (migration_id, checksum) VALUES ($1, $2)" : " (migration_id, checksum) VALUES (?, ?)");
+    return sql;
+}
+
+// A row written before checksums were recorded carries none. Adopting the
+// current text as that row's baseline is the only choice available -- whatever
+// ran back then is unknowable -- and it means the next edit is caught.
+[[nodiscard]] std::pmr::string buildAdoptChecksumSql(std::string_view table, DbDriver driver, std::pmr::memory_resource* resource) {
+    std::pmr::string sql(resource);
+    sql.reserve(table.size() + 72);
+    sql.append("UPDATE ");
+    appendQuotedIdentifier(sql, table, driver);
+    sql.append(driver == DbDriver::kPostgreSql ? " SET checksum = $1 WHERE migration_id = $2" : " SET checksum = ? WHERE migration_id = ?");
     return sql;
 }
 
@@ -173,7 +208,31 @@ void appendMigrationId(std::pmr::vector<std::pmr::string>& ids, std::string_view
     ids.back().assign(id.data(), id.size());
 }
 
+[[nodiscard]] std::runtime_error migrationDrift(std::string_view id, std::pmr::memory_resource* resource) {
+    std::pmr::string message("database migration '", resource);
+    message.append(id);
+    message.append("' was edited after it was applied; its recorded checksum no longer matches");
+    return std::runtime_error(message.c_str());
+}
+
 }  // namespace
+
+std::pmr::string detail::migrationChecksum(std::string_view sql, std::pmr::memory_resource* resource) {
+    std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+    unsigned int digestSize = 0;
+    if (EVP_Digest(sql.data(), sql.size(), digest.data(), &digestSize, EVP_sha256(), nullptr) != 1 || digestSize * 2 != kMigrationChecksumSize) {
+        throw std::runtime_error("database migration checksum could not be computed");
+    }
+
+    static constexpr char kHexDigits[] = "0123456789abcdef";
+    std::pmr::string hex(detail::pmrResourceOrDefault(resource));
+    hex.reserve(kMigrationChecksumSize);
+    for (unsigned int i = 0; i < digestSize; ++i) {
+        hex.push_back(kHexDigits[digest[i] >> 4]);
+        hex.push_back(kHexDigits[digest[i] & 0x0F]);
+    }
+    return hex;
+}
 
 class detail::DbMigrationRunner final {
 public:
@@ -223,19 +282,46 @@ public:
         try {
             (void)co_await handle.execute(buildCreateMigrationsTableSql(options.table, driver, resolved));
 
+            std::array<DbValue, 1> tableParams{DbValue{std::string_view(options.table)}};
+            auto checksumColumn = co_await handle.query(buildChecksumColumnProbeSql(driver, resolved), std::span<const DbValue>(tableParams));
+            if (checksumColumn.rows().empty()) {
+                (void)co_await handle.execute(buildAddChecksumColumnSql(options.table, driver, resolved));
+            }
+
             auto findSql = buildFindMigrationSql(options.table, driver, resolved);
             auto insertSql = buildInsertMigrationSql(options.table, driver, resolved);
+            auto adoptSql = buildAdoptChecksumSql(options.table, driver, resolved);
             for (const auto& migration : migrations) {
+                const auto checksum = detail::migrationChecksum(migration.sql(), resolved);
                 std::array<DbValue, 1> findParams{DbValue{migration.id()}};
                 auto existing = co_await handle.query(findSql, std::span<const DbValue>(findParams));
                 if (!existing.rows().empty()) {
+                    const auto& recorded = existing.rows()[0][0];
+                    if (recorded.isNull() || recorded.text().empty()) {
+                        std::array<DbValue, 2> adoptParams{DbValue{std::string_view(checksum)}, DbValue{migration.id()}};
+                        (void)co_await handle.execute(adoptSql, std::span<const DbValue>(adoptParams));
+                    } else if (recorded.text() != std::string_view(checksum)) {
+                        throw migrationDrift(migration.id(), resolved);
+                    }
                     appendMigrationId(report.skipped_, migration.id());
                     continue;
                 }
 
-                (void)co_await handle.execute(migration.sql());
-                std::array<DbValue, 1> insertParams{DbValue{migration.id()}};
-                (void)co_await handle.execute(insertSql, std::span<const DbValue>(insertParams));
+                std::array<DbValue, 2> insertParams{DbValue{migration.id()}, DbValue{std::string_view(checksum)}};
+                // On PostgreSQL the statement and the row recording it commit
+                // together, so an interruption between them cannot leave the
+                // schema changed and unrecorded. MariaDB commits DDL
+                // implicitly, so there is no transaction to put them in and the
+                // two-statement window stands.
+                if (driver == DbDriver::kPostgreSql && migration.atomicity() == DbMigrationAtomicity::kTransactional) {
+                    auto transaction = co_await handle.beginTransaction();
+                    (void)co_await transaction.execute(migration.sql());
+                    (void)co_await transaction.execute(insertSql, std::span<const DbValue>(insertParams));
+                    co_await transaction.commit();
+                } else {
+                    (void)co_await handle.execute(migration.sql());
+                    (void)co_await handle.execute(insertSql, std::span<const DbValue>(insertParams));
+                }
                 appendMigrationId(report.applied_, migration.id());
             }
         } catch (...) {

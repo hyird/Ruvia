@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "ruvia/web/detail/db/DbConfigValidation.h"
+#include "ruvia/web/detail/db/DbMigrationChecksum.h"
 #include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbSql.h"
 #include "ruvia/web/detail/db/DbSqlScan.h"
@@ -251,6 +252,41 @@ RUVIA_TEST(db_migration_list_validation_enforces_one_statement) {
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(quoted, 1)); }));
     const DbMigration commented[] = {{"001", "CREATE TABLE a(id INT) -- one; two\n"}};
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(commented, 1)); }));
+}
+
+RUVIA_TEST(db_migration_checksum_pins_the_recorded_text) {
+    using ruvia::detail::kMigrationChecksumSize;
+    using ruvia::detail::migrationChecksum;
+
+    // The published SHA-256 vector for "abc", lowercase hex: a stored checksum
+    // has to keep meaning the same thing across releases, so the digest and its
+    // encoding are pinned rather than merely self-consistent.
+    const auto abc = migrationChecksum("abc", std::pmr::get_default_resource());
+    RUVIA_CHECK_EQ(std::string(abc.data(), abc.size()), std::string("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
+    RUVIA_CHECK_EQ(abc.size(), kMigrationChecksumSize);
+
+    // Same text, same digest; one edited byte, a different one.
+    const auto first = migrationChecksum("CREATE TABLE a(id INT)", std::pmr::get_default_resource());
+    const auto again = migrationChecksum("CREATE TABLE a(id INT)", std::pmr::get_default_resource());
+    const auto edited = migrationChecksum("CREATE TABLE a(id BIGINT)", std::pmr::get_default_resource());
+    RUVIA_CHECK(first == again);
+    RUVIA_CHECK(first != edited);
+}
+
+RUVIA_TEST(db_migration_carries_its_atomicity) {
+    using ruvia::DbMigration;
+    using ruvia::DbMigrationAtomicity;
+
+    // Committing the statement and the row that records it together is the
+    // default; naming the exception is opt-in and per migration, so one
+    // statement that cannot run in a transaction block does not cost the rest
+    // of the list its atomicity.
+    constexpr DbMigration standard{"001", "CREATE TABLE a(id INT)"};
+    static_assert(standard.atomicity() == DbMigrationAtomicity::kTransactional);
+    constexpr DbMigration concurrent{"002", "CREATE INDEX CONCURRENTLY i ON a (id)", DbMigrationAtomicity::kUnwrapped};
+    static_assert(concurrent.atomicity() == DbMigrationAtomicity::kUnwrapped);
+    RUVIA_CHECK(standard.atomicity() == DbMigrationAtomicity::kTransactional);
+    RUVIA_CHECK(concurrent.atomicity() == DbMigrationAtomicity::kUnwrapped);
 }
 
 RUVIA_TEST(db_sql_scan_steps_over_opaque_constructs) {

@@ -214,6 +214,7 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         include/ruvia/web/detail/db/DbConfigValidation.h
         include/ruvia/web/detail/db/DbHostResolution.h
         include/ruvia/web/detail/db/DbRegistry.h
+        include/ruvia/web/detail/db/DbMigrationChecksum.h
         include/ruvia/web/detail/db/DbMigrationValidation.h
         include/ruvia/web/detail/db/DbOperationState.h
         include/ruvia/web/detail/db/DbPoolOperations.h

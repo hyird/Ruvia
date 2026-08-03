@@ -449,9 +449,23 @@ const auto report = ruvia::DbMigrator::migrate(config, migrations);
 Each `DbMigration` is exactly one statement -- neither backend accepts more
 than one per call -- and its id is recorded in a migrations table so later runs
 skip it. Ids that differ only in letter case are rejected, because a
-case-insensitive collation would treat them as the same migration. A migration
-and the row recording it are separate statements, so an interruption between
-them re-runs the migration on the next start: write them to be re-applicable.
+case-insensitive collation would treat them as the same migration. The text is
+recorded as a digest alongside the id, so editing a migration that has already
+run is reported rather than silently skipped.
+
+On PostgreSQL the statement and the row recording it commit together, so an
+interruption cannot leave the schema changed and unrecorded. A statement the
+backend refuses inside a transaction block names the exception, per migration:
+
+```cpp
+ruvia::DbMigration{"002_index",
+    "CREATE INDEX CONCURRENTLY items_value_idx ON items (value)",
+    ruvia::DbMigrationAtomicity::kUnwrapped},
+```
+
+MariaDB commits DDL implicitly, so there the two statements are always separate
+and an interruption between them re-runs the migration on the next start: write
+MariaDB migrations to be re-applicable.
 
 With tests and a driver enabled, that driver's live test is compiled
 automatically. Set `RUVIA_RUN_POSTGRESQL_INTEGRATION=1` or

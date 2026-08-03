@@ -5,6 +5,7 @@
 #include "ruvia/http/detail/util/BorrowedView.h"
 
 #include <chrono>
+#include <cstdint>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -12,6 +13,22 @@
 #include <vector>
 
 namespace ruvia {
+
+// Whether a migration and the row recording it commit together.
+//
+// PostgreSQL runs DDL inside transactions, so wrapping both is what keeps an
+// interrupted migration from being applied but unrecorded -- and re-applied on
+// the next start. A few statements are refused inside a transaction block
+// (CREATE INDEX CONCURRENTLY, VACUUM, ALTER TYPE ... ADD VALUE before 12), and
+// those name the exception rather than forcing every migration to give up
+// atomicity for one of them.
+//
+// MariaDB commits DDL implicitly whatever this says, so it applies to
+// PostgreSQL only.
+enum class DbMigrationAtomicity : std::uint8_t {
+    kTransactional,
+    kUnwrapped,
+};
 
 // Immutable migration descriptor borrowing stable application storage. String
 // literals and owning-string lvalues preserve constexpr/zero-allocation use;
@@ -28,15 +45,16 @@ namespace ruvia {
 // backend.
 class DbMigration final {
 public:
-    constexpr DbMigration(std::string_view id, std::string_view sql) noexcept
+    constexpr DbMigration(std::string_view id, std::string_view sql, DbMigrationAtomicity atomicity = DbMigrationAtomicity::kTransactional) noexcept
         : id_(id),
-          sql_(sql) {}
+          sql_(sql),
+          atomicity_(atomicity) {}
 
     template <detail::HttpTemporaryOwningCharString String>
-    DbMigration(String&&, std::string_view) = delete;
+    DbMigration(String&&, std::string_view, DbMigrationAtomicity = DbMigrationAtomicity::kTransactional) = delete;
 
     template <detail::HttpTemporaryOwningCharString String>
-    DbMigration(std::string_view, String&&) = delete;
+    DbMigration(std::string_view, String&&, DbMigrationAtomicity = DbMigrationAtomicity::kTransactional) = delete;
 
     [[nodiscard]] constexpr std::string_view id() const noexcept {
         return id_;
@@ -46,9 +64,14 @@ public:
         return sql_;
     }
 
+    [[nodiscard]] constexpr DbMigrationAtomicity atomicity() const noexcept {
+        return atomicity_;
+    }
+
 private:
     std::string_view id_;
     std::string_view sql_;
+    DbMigrationAtomicity atomicity_;
 };
 
 struct DbMigrationOptions final {
@@ -84,11 +107,15 @@ private:
 // backend lock so that concurrent deployers serialize. It runs its own event
 // loop and blocks until done, so it belongs in startup code, never on a worker.
 //
-// Each migration and the row that records it are separate statements: a crash
-// between them leaves the change applied and unrecorded, and the next run
-// retries it. Migrations that can be re-applied safely -- CREATE TABLE IF NOT
-// EXISTS and friends -- survive that; ones that cannot need a guard of their
-// own.
+// On PostgreSQL a migration and the row recording it commit together unless the
+// migration opts out. MariaDB commits DDL implicitly, so there they are two
+// statements and an interruption between them leaves the change applied and
+// unrecorded, to be retried on the next run: write MariaDB migrations to be
+// re-applicable -- CREATE TABLE IF NOT EXISTS and friends -- or guard them.
+//
+// The text of every applied migration is recorded as a digest. Editing one that
+// has already run is reported instead of silently skipped, because the edit
+// would otherwise reach only machines that had not migrated yet.
 //
 // DbConfig's timeouts apply here as they do on a worker: without connectTimeout
 // or queryTimeout a stalled backend blocks startup indefinitely.

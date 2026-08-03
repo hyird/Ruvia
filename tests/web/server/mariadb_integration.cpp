@@ -11,6 +11,7 @@
 
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/db/Db.h"
+#include "ruvia/web/db/DbMigration.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 
 #include <asio/bind_executor.hpp>
@@ -63,6 +64,38 @@ void require(bool condition, std::string_view message) {
     if (!condition) {
         throw std::runtime_error(std::string(message));
     }
+}
+
+template <typename Fn>
+[[nodiscard]] bool throwsOn(Fn&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::exception&) {
+        return true;
+    }
+}
+
+void exerciseMigrations(const ruvia::DbConfig& config) {
+    ruvia::DbMigrationOptions options;
+    options.table = "ruvia_mariadb_integration_migrations";
+
+    const std::array migrations{ruvia::DbMigration{"001_create_migrated",
+        "CREATE TABLE IF NOT EXISTS ruvia_mariadb_integration_migrated ("
+        "id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, value VARCHAR(64) NOT NULL)"}};
+    // The report owns its ids, so it is bound before they are read: the span
+    // accessors are deleted on an rvalue for exactly that reason.
+    const auto first = ruvia::DbMigrator::migrate(config, migrations, options);
+    require(first.applied().size() == 1, "migration was not applied");
+    const auto second = ruvia::DbMigrator::migrate(config, migrations, options);
+    require(second.skipped().size() == 1, "migration was not idempotent");
+
+    // Editing an applied migration changes nothing on a machine that already
+    // ran it, so the edit is reported rather than skipped.
+    const std::array edited{ruvia::DbMigration{"001_create_migrated",
+        "CREATE TABLE IF NOT EXISTS ruvia_mariadb_integration_migrated ("
+        "id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, value VARCHAR(128) NOT NULL)"}};
+    require(throwsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }), "an edited migration body was accepted");
 }
 
 ruvia::Task<void> exercise(asio::io_context& ioContext, unsigned& ticks) {
@@ -124,6 +157,8 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, unsigned& ticks) {
     require(streamed == 2002, "the stream did not deliver every row");
 
     (void)co_await db.execute("DROP TABLE ruvia_mariadb_integration_items");
+    (void)co_await db.execute("DROP TABLE IF EXISTS ruvia_mariadb_integration_migrated");
+    (void)co_await db.execute("DROP TABLE IF EXISTS ruvia_mariadb_integration_migrations");
     registry.closeNow();
 }
 
@@ -136,6 +171,13 @@ int main() {
             "MariaDB integration skipped; set "
             "RUVIA_RUN_MARIADB_INTEGRATION=1 to run it");
         return 77;
+    }
+
+    try {
+        exerciseMigrations(testConfig());
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "MariaDB integration failed: %s\n", error.what());
+        return 1;
     }
 
     asio::io_context ioContext(1);
