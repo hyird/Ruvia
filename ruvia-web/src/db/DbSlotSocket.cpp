@@ -46,6 +46,16 @@ DbSlotSocket::DbSlotSocket(asio::io_context& ioContext)
     return true;
 }
 
+bool DbSlotSocket::makeNonBlocking() noexcept {
+    std::error_code ec;
+#if defined(_WIN32)
+    socket.native_non_blocking(true, ec);
+#else
+    descriptor.native_non_blocking(true, ec);
+#endif
+    return !ec;
+}
+
 void DbSlotSocket::cancel() noexcept {
     std::error_code ignored;
 #if defined(_WIN32)

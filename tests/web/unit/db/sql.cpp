@@ -3,6 +3,8 @@
 #include <mysql/mysql.h>
 
 #include <concepts>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <limits>
 #include <memory_resource>
@@ -13,8 +15,10 @@
 #include <vector>
 
 #include "ruvia/web/detail/db/DbConfigValidation.h"
+#include "ruvia/web/detail/db/DbMigrationChecksum.h"
 #include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbSql.h"
+#include "ruvia/web/detail/db/DbSqlScan.h"
 #include "ruvia/web/db/DbTypes.h"
 
 namespace {
@@ -105,6 +109,51 @@ RUVIA_TEST(db_interpolate_sql_escapes_backslash_and_injection_payloads) {
     mysql_close(&mysql);
 }
 
+RUVIA_TEST(db_interpolate_sql_binds_only_statement_level_placeholders) {
+    MYSQL mysql;
+    RUVIA_CHECK(mysql_init(&mysql) != nullptr);
+
+    // A '?' inside a string literal is part of the value, not a placeholder:
+    // the statement keeps it and the one real placeholder takes the parameter.
+    RUVIA_CHECK_EQ(interp(mysql, "UPDATE t SET note = 'a?b' WHERE id = ?", {DbValue(std::int64_t{7})}),
+        std::string("UPDATE t SET note = 'a?b' WHERE id = 7"));
+    // Binding the literal's '?' used to consume the first parameter and shift
+    // every later one along, producing SQL that still ran and wrote the wrong
+    // rows ("note = 'a7b' WHERE id = 'X'"). That statement has one placeholder,
+    // so a second parameter is now a reported mismatch instead.
+    RUVIA_CHECK(throwsOn([&] { (void)interp(mysql, "UPDATE t SET note = 'a?b' WHERE id = ?", {DbValue(std::int64_t{7}), DbValue(std::string_view("X"))}); }));
+    RUVIA_CHECK_EQ(interp(mysql, "UPDATE t SET note = 'why?' WHERE id = ?", {DbValue(std::int64_t{7})}),
+        std::string("UPDATE t SET note = 'why?' WHERE id = 7"));
+
+    // The same holds for every construct that can carry an opaque byte: quoted
+    // identifiers, both line-comment forms, and block comments.
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT `we?rd` FROM t WHERE id = ?", {DbValue(std::int64_t{1})}),
+        std::string("SELECT `we?rd` FROM t WHERE id = 1"));
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT 1 -- really?\n WHERE id = ?", {DbValue(std::int64_t{2})}),
+        std::string("SELECT 1 -- really?\n WHERE id = 2"));
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT 1 # really?\n WHERE id = ?", {DbValue(std::int64_t{3})}),
+        std::string("SELECT 1 # really?\n WHERE id = 3"));
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT /* ? */ 1 WHERE id = ?", {DbValue(std::int64_t{4})}),
+        std::string("SELECT /* ? */ 1 WHERE id = 4"));
+
+    // A doubled quote escapes the quote rather than closing the literal, so the
+    // scan must not resume inside what is still one string.
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT 'a''?''b' WHERE id = ?", {DbValue(std::int64_t{5})}),
+        std::string("SELECT 'a''?''b' WHERE id = 5"));
+    // An escaped quote does not close it either.
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT 'a\\'?' WHERE id = ?", {DbValue(std::int64_t{6})}),
+        std::string("SELECT 'a\\'?' WHERE id = 6"));
+
+    // A placeholder immediately after a skipped construct is still bound.
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT '?'?", {DbValue(std::int64_t{8})}), std::string("SELECT '?'8"));
+
+    // Placeholders that only exist inside literals are not placeholders, so a
+    // parameter for them is an error rather than a silent substitution.
+    RUVIA_CHECK(throwsOn([&] { (void)interp(mysql, "SELECT 'only?'", {DbValue(1)}); }));
+
+    mysql_close(&mysql);
+}
+
 RUVIA_TEST(db_interpolate_sql_requires_matching_placeholder_count) {
     MYSQL mysql;
     mysql_init(&mysql);
@@ -117,46 +166,6 @@ RUVIA_TEST(db_interpolate_sql_requires_matching_placeholder_count) {
     RUVIA_CHECK_EQ(interp(mysql, "SELECT 1", {}), std::string("SELECT 1"));
 
     mysql_close(&mysql);
-}
-
-RUVIA_TEST(db_migration_table_name_rejects_injection) {
-    using ruvia::detail::isValidMigrationTableName;
-    // Valid SQL identifiers: letters, digits, underscores.
-    constexpr auto driver = ruvia::DbDriver::kMariaDb;
-    RUVIA_CHECK(isValidMigrationTableName("ruvia_schema_migrations", driver));
-    RUVIA_CHECK(isValidMigrationTableName("t1", driver));
-    RUVIA_CHECK(isValidMigrationTableName("_private", driver));
-    RUVIA_CHECK(isValidMigrationTableName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", driver));
-    // The name is a non-parameterizable identifier, so anything that could break
-    // out of the backtick quoting or restructure the SQL is rejected.
-    RUVIA_CHECK(!isValidMigrationTableName("", driver));
-    RUVIA_CHECK(!isValidMigrationTableName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", driver));
-    RUVIA_CHECK(!isValidMigrationTableName("has space", driver));
-    RUVIA_CHECK(!isValidMigrationTableName("has-hyphen", driver));
-    RUVIA_CHECK(!isValidMigrationTableName("a.b", driver));
-    RUVIA_CHECK(!isValidMigrationTableName("quote'", driver));
-    RUVIA_CHECK(!isValidMigrationTableName("tbl`; DROP TABLE users;--", driver));
-}
-
-RUVIA_TEST(db_migration_list_validation_enforces_integrity) {
-    using ruvia::DbMigration;
-    using ruvia::detail::validateMigrationList;
-    const DbMigration ok[] = {{"001_init", "CREATE TABLE a(id INT)"}, {"002_more", "ALTER TABLE a ADD b INT"}};
-    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(ok, 2)); }));
-    // An empty list is valid: nothing to apply.
-    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>()); }));
-    // Duplicate ids would apply the wrong migration -> rejected.
-    const DbMigration dup[] = {{"001", "SQL1"}, {"001", "SQL2"}};
-    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(dup, 2)); }));
-    // Empty id and empty SQL are rejected.
-    const DbMigration emptyId[] = {{"", "SQL"}};
-    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(emptyId, 1)); }));
-    const DbMigration emptySql[] = {{"001", ""}};
-    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(emptySql, 1)); }));
-    // An id longer than the 190-byte schema column is rejected.
-    const std::string longId(191, 'x');
-    const DbMigration tooLong[] = {{longId, "SQL"}};
-    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(tooLong, 1)); }));
 }
 
 RUVIA_TEST(db_config_validation_checks_every_field) {

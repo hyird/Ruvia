@@ -34,6 +34,20 @@ namespace {
 
 using namespace std::chrono_literals;
 
+// Polls the pool until it reports the state the next step depends on. The pool
+// is driven through a socket, so every transition is observed rather than
+// awaited; a bounded poll keeps a wrong state from hanging the suite.
+template <typename Predicate>
+[[nodiscard]] bool waitForPool(const ruvia::BlockingPool& pool, Predicate&& predicate) {
+    for (int attempt = 0; attempt < 500; ++attempt) {
+        if (predicate(pool.stats())) {
+            return true;
+        }
+        std::this_thread::sleep_for(10ms);
+    }
+    return false;
+}
+
 // Holds a pool thread until the test releases it.
 std::counting_semaphore<8> g_hold{0};
 
@@ -227,20 +241,20 @@ int main() {
         asio::streambuf queuedBuffer;
         asio::streambuf refusedBuffer;
 
+        // Saturation is one running task plus one queued, and the queue holds
+        // exactly one: until the pool thread has taken the first task, the one
+        // slot is still occupied by it and a second request is refused rather
+        // than queued. Waiting for the first to be running is what makes the
+        // second one's fate the behaviour under test instead of a race.
         writeRequest(runningSocket, "/hold", ec);
-        writeRequest(queuedSocket, "/hold", ec);
-        // The one thread is busy and the one queue slot is taken before the
-        // next request can be offloaded anywhere.
-        bool saturated = false;
-        for (int i = 0; i < 500 && !saturated; ++i) {
-            const auto stats = pool.stats();
-            saturated = stats.running == 1 && stats.queued == 1;
-            if (!saturated) {
-                std::this_thread::sleep_for(10ms);
-            }
+        if (!waitForPool(pool, [](const ruvia::BlockingPoolStats& stats) { return stats.running == 1 && stats.queued == 0; })) {
+            fail(6, "the pool never started the first offload");
         }
-        if (!saturated) {
-            fail(6, "the pool never reached its configured saturation point");
+        if (rc == 0) {
+            writeRequest(queuedSocket, "/hold", ec);
+            if (!waitForPool(pool, [](const ruvia::BlockingPoolStats& stats) { return stats.running == 1 && stats.queued == 1; })) {
+                fail(6, "the pool never reached its configured saturation point");
+            }
         }
 
         if (rc == 0) {
