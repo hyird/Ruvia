@@ -261,69 +261,11 @@ public:
         detail::ScopedOperationScope operationScope;
         auto handle = registry.get(resolved, operationScope);
 
-        if (driver == DbDriver::kMariaDb) {
-            const auto lockSeconds = static_cast<std::int64_t>(options.lockTimeout.count());
-            std::array<DbValue, 2> lockParams{DbValue{std::string_view(lockName)}, DbValue{lockSeconds}};
-            auto lockResult = co_await handle.query("SELECT GET_LOCK(?, ?)", std::span<const DbValue>(lockParams));
-            if (lockResult.rows().size() != 1 || lockResult.rows()[0].empty() || lockResult.rows()[0][0].text() != "1") {
-                registry.closeNow();
-                throw std::runtime_error("database migration lock could not be acquired");
-            }
-        } else {
-            std::pmr::string timeoutSql("SET lock_timeout TO '", resolved);
-            detail::appendDbNumber(timeoutSql, static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(options.lockTimeout).count()));
-            timeoutSql.append("ms'");
-            (void)co_await handle.execute(timeoutSql);
-            std::array<DbValue, 1> lockParams{DbValue{std::string_view(lockName)}};
-            (void)co_await handle.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", std::span<const DbValue>(lockParams));
-        }
+        co_await acquireLock(handle, driver, lockName, options.lockTimeout, resolved);
 
         std::exception_ptr failure;
         try {
-            (void)co_await handle.execute(buildCreateMigrationsTableSql(options.table, driver, resolved));
-
-            std::array<DbValue, 1> tableParams{DbValue{std::string_view(options.table)}};
-            auto checksumColumn = co_await handle.query(buildChecksumColumnProbeSql(driver, resolved), std::span<const DbValue>(tableParams));
-            if (checksumColumn.rows().empty()) {
-                (void)co_await handle.execute(buildAddChecksumColumnSql(options.table, driver, resolved));
-            }
-
-            auto findSql = buildFindMigrationSql(options.table, driver, resolved);
-            auto insertSql = buildInsertMigrationSql(options.table, driver, resolved);
-            auto adoptSql = buildAdoptChecksumSql(options.table, driver, resolved);
-            for (const auto& migration : migrations) {
-                const auto checksum = detail::migrationChecksum(migration.sql(), resolved);
-                std::array<DbValue, 1> findParams{DbValue{migration.id()}};
-                auto existing = co_await handle.query(findSql, std::span<const DbValue>(findParams));
-                if (!existing.rows().empty()) {
-                    const auto& recorded = existing.rows()[0][0];
-                    if (recorded.isNull() || recorded.text().empty()) {
-                        std::array<DbValue, 2> adoptParams{DbValue{std::string_view(checksum)}, DbValue{migration.id()}};
-                        (void)co_await handle.execute(adoptSql, std::span<const DbValue>(adoptParams));
-                    } else if (recorded.text() != std::string_view(checksum)) {
-                        throw migrationDrift(migration.id(), resolved);
-                    }
-                    appendMigrationId(report.skipped_, migration.id());
-                    continue;
-                }
-
-                std::array<DbValue, 2> insertParams{DbValue{migration.id()}, DbValue{std::string_view(checksum)}};
-                // On PostgreSQL the statement and the row recording it commit
-                // together, so an interruption between them cannot leave the
-                // schema changed and unrecorded. MariaDB commits DDL
-                // implicitly, so there is no transaction to put them in and the
-                // two-statement window stands.
-                if (driver == DbDriver::kPostgreSql && migration.atomicity() == DbMigrationAtomicity::kTransactional) {
-                    auto transaction = co_await handle.beginTransaction();
-                    (void)co_await transaction.execute(migration.sql());
-                    (void)co_await transaction.execute(insertSql, std::span<const DbValue>(insertParams));
-                    co_await transaction.commit();
-                } else {
-                    (void)co_await handle.execute(migration.sql());
-                    (void)co_await handle.execute(insertSql, std::span<const DbValue>(insertParams));
-                }
-                appendMigrationId(report.applied_, migration.id());
-            }
+            co_await applyMigrations(handle, driver, migrations, options, report, resolved);
         } catch (...) {
             failure = std::current_exception();
         }
@@ -336,12 +278,7 @@ public:
         // a lock" warning. closeNow() below covers the unreleased case.
         if (failure == nullptr) {
             try {
-                std::array<DbValue, 1> releaseParams{DbValue{std::string_view(lockName)}};
-                if (driver == DbDriver::kMariaDb) {
-                    (void)co_await handle.execute("DO RELEASE_LOCK(?)", std::span<const DbValue>(releaseParams));
-                } else {
-                    (void)co_await handle.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", std::span<const DbValue>(releaseParams));
-                }
+                co_await releaseLock(handle, driver, lockName);
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -352,6 +289,89 @@ public:
             std::rethrow_exception(failure);
         }
         co_return std::move(report);
+    }
+
+private:
+    // Serializes concurrent deployers. Both locks are held by the session, so
+    // losing the connection releases them -- including the migration's own
+    // failure path, which closes it.
+    [[nodiscard]] static Task<void> acquireLock(DbHandle& handle, DbDriver driver, std::string_view lockName, std::chrono::seconds lockTimeout, std::pmr::memory_resource* resource) {
+        if (driver == DbDriver::kMariaDb) {
+            const auto lockSeconds = static_cast<std::int64_t>(lockTimeout.count());
+            std::array<DbValue, 2> lockParams{DbValue{lockName}, DbValue{lockSeconds}};
+            auto lockResult = co_await handle.query("SELECT GET_LOCK(?, ?)", std::span<const DbValue>(lockParams));
+            // GET_LOCK answers 0 on timeout and NULL on error rather than
+            // failing the statement, so the wait has to be read out of the row.
+            if (lockResult.rows().size() != 1 || lockResult.rows()[0].empty() || lockResult.rows()[0][0].text() != "1") {
+                throw std::runtime_error("database migration lock could not be acquired");
+            }
+            co_return;
+        }
+
+        // PostgreSQL's advisory lock waits without a bound of its own; the
+        // session's lock_timeout is what ends that wait.
+        std::pmr::string timeoutSql("SET lock_timeout TO '", resource);
+        detail::appendDbNumber(timeoutSql, static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(lockTimeout).count()));
+        timeoutSql.append("ms'");
+        (void)co_await handle.execute(timeoutSql);
+        std::array<DbValue, 1> lockParams{DbValue{lockName}};
+        (void)co_await handle.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", std::span<const DbValue>(lockParams));
+    }
+
+    [[nodiscard]] static Task<void> releaseLock(DbHandle& handle, DbDriver driver, std::string_view lockName) {
+        std::array<DbValue, 1> releaseParams{DbValue{lockName}};
+        if (driver == DbDriver::kMariaDb) {
+            (void)co_await handle.execute("DO RELEASE_LOCK(?)", std::span<const DbValue>(releaseParams));
+        } else {
+            (void)co_await handle.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", std::span<const DbValue>(releaseParams));
+        }
+    }
+
+    [[nodiscard]] static Task<void> applyMigrations(DbHandle& handle, DbDriver driver, std::span<const DbMigration> migrations, const DbMigrationOptions& options, DbMigrationReport& report, std::pmr::memory_resource* resource) {
+        (void)co_await handle.execute(buildCreateMigrationsTableSql(options.table, driver, resource));
+
+        std::array<DbValue, 1> tableParams{DbValue{std::string_view(options.table)}};
+        auto checksumColumn = co_await handle.query(buildChecksumColumnProbeSql(driver, resource), std::span<const DbValue>(tableParams));
+        if (checksumColumn.rows().empty()) {
+            (void)co_await handle.execute(buildAddChecksumColumnSql(options.table, driver, resource));
+        }
+
+        auto findSql = buildFindMigrationSql(options.table, driver, resource);
+        auto insertSql = buildInsertMigrationSql(options.table, driver, resource);
+        auto adoptSql = buildAdoptChecksumSql(options.table, driver, resource);
+        for (const auto& migration : migrations) {
+            const auto checksum = detail::migrationChecksum(migration.sql(), resource);
+            std::array<DbValue, 1> findParams{DbValue{migration.id()}};
+            auto existing = co_await handle.query(findSql, std::span<const DbValue>(findParams));
+            if (!existing.rows().empty()) {
+                const auto& recorded = existing.rows()[0][0];
+                if (recorded.isNull() || recorded.text().empty()) {
+                    std::array<DbValue, 2> adoptParams{DbValue{std::string_view(checksum)}, DbValue{migration.id()}};
+                    (void)co_await handle.execute(adoptSql, std::span<const DbValue>(adoptParams));
+                } else if (recorded.text() != std::string_view(checksum)) {
+                    throw migrationDrift(migration.id(), resource);
+                }
+                appendMigrationId(report.skipped_, migration.id());
+                continue;
+            }
+
+            std::array<DbValue, 2> insertParams{DbValue{migration.id()}, DbValue{std::string_view(checksum)}};
+            // On PostgreSQL the statement and the row recording it commit
+            // together, so an interruption between them cannot leave the schema
+            // changed and unrecorded. MariaDB commits DDL implicitly, so there
+            // is no transaction to put them in and the two-statement window
+            // stands.
+            if (driver == DbDriver::kPostgreSql && migration.atomicity() == DbMigrationAtomicity::kTransactional) {
+                auto transaction = co_await handle.beginTransaction();
+                (void)co_await transaction.execute(migration.sql());
+                (void)co_await transaction.execute(insertSql, std::span<const DbValue>(insertParams));
+                co_await transaction.commit();
+            } else {
+                (void)co_await handle.execute(migration.sql());
+                (void)co_await handle.execute(insertSql, std::span<const DbValue>(insertParams));
+            }
+            appendMigrationId(report.applied_, migration.id());
+        }
     }
 };
 

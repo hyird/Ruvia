@@ -29,6 +29,18 @@ namespace ruvia::detail {
     return true;
 }
 
+[[nodiscard]] inline constexpr bool isSqlWhitespace(char character) noexcept {
+    return character == ' ' || character == '\t' || character == '\r' || character == '\n';
+}
+
+// MariaDB's collations are PAD SPACE, including the binary one the migrations
+// table pins, so "v1" and "v1 " are one id there and two everywhere else. An id
+// wrapped in whitespace is a typo in every case that matters, so it is refused
+// rather than quietly folded.
+[[nodiscard]] inline bool hasSurroundingWhitespace(std::string_view id) noexcept {
+    return !id.empty() && (isSqlWhitespace(id.front()) || isSqlWhitespace(id.back()));
+}
+
 // Two migration ids are the same id to the schema table if they differ only in
 // ASCII letter case. The applied-migration lookup compares them with the
 // column's collation, and MariaDB's default (utf8mb4_general_ci) is
@@ -36,17 +48,6 @@ namespace ruvia::detail {
 // apart, so one list would produce two different schemas. New tables pin a
 // binary collation, but a table created before that still compares loosely, so
 // the ambiguity is refused at the source instead.
-// MariaDB's collations are PAD SPACE, including the binary one the migrations
-// table pins, so "v1" and "v1 " are one id there and two everywhere else. An id
-// wrapped in whitespace is a typo in every case that matters, so it is refused
-// rather than quietly folded.
-[[nodiscard]] inline bool hasSurroundingWhitespace(std::string_view id) noexcept {
-    const auto isSpace = [](char character) noexcept {
-        return character == ' ' || character == '\t' || character == '\r' || character == '\n';
-    };
-    return !id.empty() && (isSpace(id.front()) || isSpace(id.back()));
-}
-
 [[nodiscard]] inline bool migrationIdsCollide(std::string_view left, std::string_view right) noexcept {
     if (left.size() != right.size()) {
         return false;
@@ -75,8 +76,7 @@ namespace ruvia::detail {
 // both, so only a separator with statement text after it is refused.
 [[nodiscard]] inline bool hasTrailingSqlOnly(std::string_view sql, std::size_t after) noexcept {
     for (auto index = after; index < sql.size(); ++index) {
-        const auto character = sql[index];
-        if (character != ' ' && character != '\t' && character != '\r' && character != '\n') {
+        if (!isSqlWhitespace(sql[index])) {
             return false;
         }
     }

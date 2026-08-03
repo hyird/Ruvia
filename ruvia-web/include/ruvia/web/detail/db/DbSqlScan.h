@@ -103,20 +103,15 @@ namespace ruvia::detail {
 
 // The index of the next `wanted` byte at statement level at or after `from`, or
 // npos. Bytes inside literals, quoted identifiers and comments are data and are
-// skipped whole.
+// skipped whole. A byte that opens one of those constructs is that construct
+// and is never reported as syntax.
 [[nodiscard]] constexpr std::size_t findSqlSyntaxByte(std::string_view sql, char wanted, std::size_t from = 0) noexcept {
     for (auto index = from; index < sql.size();) {
-        if (sql[index] == wanted) {
-            const auto next = skipSqlAtom(sql, index);
-            // A wanted byte that opens a construct is that construct, not
-            // syntax -- relevant only if a caller ever searches for a quote.
-            if (next == index + 1) {
-                return index;
-            }
-            index = next;
-            continue;
+        const auto next = skipSqlAtom(sql, index);
+        if (next == index + 1 && sql[index] == wanted) {
+            return index;
         }
-        index = skipSqlAtom(sql, index);
+        index = next;
     }
     return std::string_view::npos;
 }

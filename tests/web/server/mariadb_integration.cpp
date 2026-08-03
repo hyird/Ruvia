@@ -9,6 +9,8 @@
 // worker frozen meanwhile. Here a timer ticks against a deliberately slow
 // query, and silence means the loop was blocked.
 
+#include "db_integration_fixture.h"
+
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/db/DbMigration.h"
@@ -21,60 +23,28 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
-#include <cstdlib>
 #include <exception>
 #include <memory_resource>
 #include <span>
-#include <stdexcept>
-#include <string>
 #include <string_view>
 
 namespace {
 
-[[nodiscard]] std::string_view environment(const char* name, std::string_view fallback) noexcept {
-    const auto* value = std::getenv(name);
-    return value != nullptr && *value != '\0' ? std::string_view(value) : fallback;
-}
-
 [[nodiscard]] ruvia::DbConfig testConfig() {
     auto config = ruvia::DbConfig::mariaDb();
-    config.host = environment("RUVIA_TEST_MYSQL_HOST", "127.0.0.1");
-    config.username = environment("RUVIA_TEST_MYSQL_USER", "ruvia");
-    config.password = environment("RUVIA_TEST_MYSQL_PASSWORD", "ruvia");
-    config.database = environment("RUVIA_TEST_MYSQL_DATABASE", "ruvia");
-    const auto port = environment("RUVIA_TEST_MYSQL_PORT", "3306");
-    unsigned parsedPort = 0;
-    for (const auto character : port) {
-        if (character < '0' || character > '9') {
-            throw std::invalid_argument("RUVIA_TEST_MYSQL_PORT must be numeric");
-        }
-        parsedPort = parsedPort * 10U + static_cast<unsigned>(character - '0');
-    }
-    if (parsedPort == 0 || parsedPort > 65535) {
-        throw std::invalid_argument("RUVIA_TEST_MYSQL_PORT is outside the valid range");
-    }
-    config.port = static_cast<std::uint16_t>(parsedPort);
+    config.host = ruvia::testing::dbEnvironment("RUVIA_TEST_MYSQL_HOST", "127.0.0.1");
+    config.username = ruvia::testing::dbEnvironment("RUVIA_TEST_MYSQL_USER", "ruvia");
+    config.password = ruvia::testing::dbEnvironment("RUVIA_TEST_MYSQL_PASSWORD", "ruvia");
+    config.database = ruvia::testing::dbEnvironment("RUVIA_TEST_MYSQL_DATABASE", "ruvia");
+    config.port = ruvia::testing::dbEnvironmentPort("RUVIA_TEST_MYSQL_PORT", "3306");
     config.connectTimeout = std::chrono::seconds(5);
     config.acquireTimeout = std::chrono::seconds(5);
     config.queryTimeout = std::chrono::seconds(30);
     return config;
 }
 
-void require(bool condition, std::string_view message) {
-    if (!condition) {
-        throw std::runtime_error(std::string(message));
-    }
-}
-
-template <typename Fn>
-[[nodiscard]] bool throwsOn(Fn&& fn) {
-    try {
-        fn();
-        return false;
-    } catch (const std::exception&) {
-        return true;
-    }
-}
+using ruvia::testing::dbRequire;
+using ruvia::testing::dbThrowsOn;
 
 void exerciseMigrations(const ruvia::DbConfig& config) {
     ruvia::DbMigrationOptions options;
@@ -86,16 +56,16 @@ void exerciseMigrations(const ruvia::DbConfig& config) {
     // The report owns its ids, so it is bound before they are read: the span
     // accessors are deleted on an rvalue for exactly that reason.
     const auto first = ruvia::DbMigrator::migrate(config, migrations, options);
-    require(first.applied().size() == 1, "migration was not applied");
+    dbRequire(first.applied().size() == 1, "migration was not applied");
     const auto second = ruvia::DbMigrator::migrate(config, migrations, options);
-    require(second.skipped().size() == 1, "migration was not idempotent");
+    dbRequire(second.skipped().size() == 1, "migration was not idempotent");
 
     // Editing an applied migration changes nothing on a machine that already
     // ran it, so the edit is reported rather than skipped.
     const std::array edited{ruvia::DbMigration{"001_create_migrated",
         "CREATE TABLE IF NOT EXISTS ruvia_mariadb_integration_migrated ("
         "id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, value VARCHAR(128) NOT NULL)"}};
-    require(throwsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }), "an edited migration body was accepted");
+    dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }), "an edited migration body was accepted");
 }
 
 ruvia::Task<void> exercise(asio::io_context& ioContext, unsigned& ticks) {
@@ -108,29 +78,29 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, unsigned& ticks) {
 
     // The loop must keep running while the server takes its time.
     (void)co_await db.query("SELECT SLEEP(1)");
-    require(ticks > 0, "the event loop was blocked for the duration of the query");
+    dbRequire(ticks > 0, "the event loop was blocked for the duration of the query");
 
     (void)co_await db.execute("DROP TABLE IF EXISTS ruvia_mariadb_integration_items");
     (void)co_await db.execute("CREATE TABLE ruvia_mariadb_integration_items (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, name VARCHAR(64) NOT NULL, n BIGINT NOT NULL)");
 
     const std::array<ruvia::DbValue, 2> item{ruvia::DbValue{std::string_view("a'b?c")}, ruvia::DbValue{std::int64_t{-42}}};
     auto inserted = co_await db.execute("INSERT INTO ruvia_mariadb_integration_items(name, n) VALUES (?, ?)", std::span<const ruvia::DbValue>(item));
-    require(inserted.affectedRows() == 1, "insert affected-row count is incorrect");
-    require(inserted.lastInsertId() == 1, "last insert id is incorrect");
+    dbRequire(inserted.affectedRows() == 1, "insert affected-row count is incorrect");
+    dbRequire(inserted.lastInsertId() == 1, "last insert id is incorrect");
 
     // '?' in the value is data; the one placeholder outside the literal takes
     // the parameter.
     auto typed = co_await db.query("SELECT name, n FROM ruvia_mariadb_integration_items WHERE name = ?", std::span<const ruvia::DbValue>(item.data(), 1));
-    require(typed.rows().size() == 1 && typed.rows()[0].size() == 2, "typed query returned the wrong shape");
-    require(typed.rows()[0][0].text() == "a'b?c", "text binding round trip failed");
-    require(typed.rows()[0][1].text() == "-42", "integer binding round trip failed");
+    dbRequire(typed.rows().size() == 1 && typed.rows()[0].size() == 2, "typed query returned the wrong shape");
+    dbRequire(typed.rows()[0][0].text() == "a'b?c", "text binding round trip failed");
+    dbRequire(typed.rows()[0][1].text() == "-42", "integer binding round trip failed");
 
     // Larger than one socket read, so the async path has to suspend and resume
     // several times to assemble the result.
     (void)co_await db.execute("INSERT INTO ruvia_mariadb_integration_items(name, n) SELECT CONCAT('bulk-', seq), seq FROM seq_1_to_2000");
     auto bulk = co_await db.query("SELECT id, name, n FROM ruvia_mariadb_integration_items ORDER BY id");
-    require(bulk.rows().size() == 2001, "bulk result is missing rows");
-    require(bulk.rows()[2000][2].text() == "2000", "bulk result ends on the wrong row");
+    dbRequire(bulk.rows().size() == 2001, "bulk result is missing rows");
+    dbRequire(bulk.rows()[2000][2].text() == "2000", "bulk result ends on the wrong row");
 
     {
         auto transaction = co_await db.beginTransaction();
@@ -138,7 +108,7 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, unsigned& ticks) {
         co_await transaction.rollback();
     }
     auto afterRollback = co_await db.query("SELECT count(*) FROM ruvia_mariadb_integration_items");
-    require(afterRollback.rows()[0][0].text() == "2001", "rollback did not restore state");
+    dbRequire(afterRollback.rows()[0][0].text() == "2001", "rollback did not restore state");
 
     {
         auto transaction = co_await db.beginTransaction();
@@ -146,15 +116,15 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, unsigned& ticks) {
         co_await transaction.commit();
     }
     auto afterCommit = co_await db.query("SELECT count(*) FROM ruvia_mariadb_integration_items");
-    require(afterCommit.rows()[0][0].text() == "2002", "commit did not persist state");
+    dbRequire(afterCommit.rows()[0][0].text() == "2002", "commit did not persist state");
 
     auto stream = co_await db.queryStream("SELECT id FROM ruvia_mariadb_integration_items ORDER BY id");
     std::size_t streamed = 0;
     while (auto row = co_await stream.read()) {
-        require(row->size() == 1, "streamed row has the wrong shape");
+        dbRequire(row->size() == 1, "streamed row has the wrong shape");
         ++streamed;
     }
-    require(streamed == 2002, "the stream did not deliver every row");
+    dbRequire(streamed == 2002, "the stream did not deliver every row");
 
     (void)co_await db.execute("DROP TABLE ruvia_mariadb_integration_items");
     (void)co_await db.execute("DROP TABLE IF EXISTS ruvia_mariadb_integration_migrated");
@@ -165,8 +135,7 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, unsigned& ticks) {
 }  // namespace
 
 int main() {
-    const auto* runIntegration = std::getenv("RUVIA_RUN_MARIADB_INTEGRATION");
-    if (runIntegration == nullptr || std::string_view(runIntegration) != "1") {
+    if (!ruvia::testing::dbIntegrationRequested("RUVIA_RUN_MARIADB_INTEGRATION")) {
         std::puts(
             "MariaDB integration skipped; set "
             "RUVIA_RUN_MARIADB_INTEGRATION=1 to run it");
@@ -183,7 +152,11 @@ int main() {
     asio::io_context ioContext(1);
     unsigned ticks = 0;
     asio::steady_timer heartbeat(ioContext);
-    // Re-armed from its own completion, so it stops as soon as the loop does.
+    // Re-armed from its own completion, which is what makes a silent stretch
+    // measurable: a blocked loop simply stops delivering it. Cancelling is not
+    // enough to end it -- a tick already queued when the work finished would
+    // re-arm and keep run() alive forever -- so the flag is what stops the
+    // chain and the cancel only wakes the pending wait.
     struct Heartbeat final {
         asio::steady_timer& timer;
         unsigned& ticks;

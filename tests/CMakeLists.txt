@@ -468,7 +468,8 @@ endif()
 # The backend-neutral API suite is present for either database driver.
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_add_unit_sources(ruvia_web_unit_tests ruvia::web PRIVATE
-        web/unit/db/api_surface.cpp)
+        web/unit/db/api_surface.cpp
+        web/unit/db/migration.cpp)
 endif()
 
 # Driver-specific parameter encoding is tested against the same library that
