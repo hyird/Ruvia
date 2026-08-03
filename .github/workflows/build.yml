@@ -11,7 +11,6 @@ on:
       - "ruvia-core/**"
       - "ruvia-http/**"
       - "ruvia-web/**"
-      - "ruvia-edge/**"
       - "examples/**"
       - "tests/**"
       - "scripts/**"
@@ -27,7 +26,6 @@ on:
       - "ruvia-core/**"
       - "ruvia-http/**"
       - "ruvia-web/**"
-      - "ruvia-edge/**"
       - "examples/**"
       - "tests/**"
       - "scripts/**"
@@ -67,10 +65,10 @@ jobs:
       - name: Install toolchain
         run: |
           set -euo pipefail
-          # GCC 13 and Ninja ship with the image; only the nghttp2 client the
-          # conformance tests drive has to be installed.
+          # GCC 13 and Ninja ship with the image; only the tools vcpkg needs to
+          # fetch and unpack its ports have to be installed.
           sudo apt-get update
-          sudo apt-get install -y ninja-build nghttp2-client curl zip unzip tar
+          sudo apt-get install -y ninja-build curl zip unzip tar
           gcc-13 --version
           g++-13 --version
 
@@ -104,8 +102,7 @@ jobs:
             -DRUVIA_ENABLE_REDIS=ON \
             -DRUVIA_ENABLE_JWT=ON \
             -DRUVIA_BUILD_EXAMPLES=ON \
-            -DRUVIA_BUILD_TESTS=ON \
-            -DRUVIA_BUILD_EDGE=ON
+            -DRUVIA_BUILD_TESTS=ON
 
       - name: Save vcpkg binary cache
         if: steps.vcpkg-cache.outputs.cache-hit != 'true'
@@ -141,9 +138,7 @@ jobs:
         run: |
           set -euo pipefail
           # Nothing is installed here on purpose: the image already ships
-          # Xcode's Apple Clang, CMake and Ninja. Without the nghttp2 CLI the
-          # edge suite skips its HTTP/2 client checks, which the Linux job
-          # covers.
+          # Xcode's Apple Clang, CMake and Ninja.
           clang --version
           clang++ --version
           cmake --version
@@ -178,8 +173,7 @@ jobs:
             -DRUVIA_ENABLE_REDIS=ON \
             -DRUVIA_ENABLE_JWT=ON \
             -DRUVIA_BUILD_EXAMPLES=ON \
-            -DRUVIA_BUILD_TESTS=ON \
-            -DRUVIA_BUILD_EDGE=ON
+            -DRUVIA_BUILD_TESTS=ON
 
       - name: Save vcpkg binary cache
         if: steps.vcpkg-cache.outputs.cache-hit != 'true'
@@ -242,8 +236,7 @@ jobs:
             -DRUVIA_ENABLE_REDIS=ON `
             -DRUVIA_ENABLE_JWT=ON `
             -DRUVIA_BUILD_EXAMPLES=ON `
-            -DRUVIA_BUILD_TESTS=ON `
-            -DRUVIA_BUILD_EDGE=ON
+            -DRUVIA_BUILD_TESTS=ON
 
       - name: Save vcpkg binary cache
         if: steps.vcpkg-cache.outputs.cache-hit != 'true'

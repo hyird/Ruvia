@@ -2,8 +2,8 @@ set(_generated_config "@CMAKE_BINARY_DIR@/ruviaConfig.cmake")
 set(_config_template "@CMAKE_SOURCE_DIR@/cmake/ruviaConfig.cmake.in")
 
 # Package imports must be explicit. A component-less find_package used to import
-# every installed target, which silently pulled Web/Edge dependencies into
-# consumers that had not opted into those products.
+# every installed target, which silently pulled Web dependencies into consumers
+# that had not opted into that product.
 if(NOT EXISTS "${_generated_config}")
     message(FATAL_ERROR
         "ruvia_guard_package_components has no generated package config: "

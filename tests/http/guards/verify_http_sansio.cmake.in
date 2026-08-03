@@ -1,8 +1,8 @@
 set(_ruvia_source_root "@CMAKE_SOURCE_DIR@")
 
 # ruvia-http is the pure sans-I/O protocol layer: it must never reach an OS or
-# network I/O primitive. Only ruvia-http is scanned — core, web, and edge
-# perform real I/O by design, and tests may exercise anything they need.
+# network I/O primitive. Only ruvia-http is scanned — core and web perform real
+# I/O by design, and tests may exercise anything they need.
 set(_forbidden_io_patterns
     [=[#[ \t]*include[ \t]*<(fstream|cstdio|stdio[.]h|fcntl[.]h|unistd[.]h|windows[.]h|winsock2[.]h|sys/[a-z_]+[.]h|asio[/.]|boost/asio|openssl/)]=]
     [=[std::(i|o)?fstream]=]

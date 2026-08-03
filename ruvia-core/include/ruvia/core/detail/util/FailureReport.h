@@ -17,7 +17,7 @@ namespace ruvia::detail {
 //
 //     ruvia: <context> failed: <what>
 //
-// `context` names the failing unit ("edge session", "event loop stop callback").
+// `context` names the failing unit ("web connection", "event loop stop callback").
 // Writing is best effort -- stderr may be closed, full, or redirected -- but
 // nothing beyond this point could report the failure either way.
 //

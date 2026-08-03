@@ -5,15 +5,15 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 
-Ruvia is a C++20 HTTP/Web framework built as four independently consumable
+Ruvia is a C++20 HTTP/Web framework built as three independently consumable
 CMake targets. The repository is a monorepo, but its runtime foundation and
 protocol library do not require the full Web framework.
 
 ## Highlights
 
 - **Layered by design** — `ruvia::core` (runtime), `ruvia::http` (protocol),
-  `ruvia::web` (framework), and the opt-in `ruvia::edge` (CDN edge node)
-  install and import as independent package components.
+  and `ruvia::web` (framework) install and import as independent package
+  components.
 - **Sans-I/O protocol library** — one HTTP/1, HTTP/2, WebSocket, and HPACK
   implementation shared by the server and the outbound client; callers feed
   bytes and consume typed events. No sockets, no Asio, no TLS inside.
@@ -113,73 +113,17 @@ if (const auto* tls = info.tls()) {
 | `ruvia-core/` | `ruvia::core` | Coroutine tasks, Asio integration, PMR memory, connection scanning, and runtime helpers. |
 | `ruvia-http/` | `ruvia::http` | Pure sans-I/O HTTP, HTTP/2, WebSocket, multipart, SSE, content-coding, and outbound-client protocol primitives. |
 | `ruvia-web/` | `ruvia::web` | App, Context, Router, middleware, server I/O, TLS, streaming, WebSocket routes, validation, static files, and optional integrations. |
-| `ruvia-edge/` | `ruvia::edge` | Opt-in CDN edge node: a caching reverse proxy with its own event loop and a thread-safe embedding control plane. |
 
 Dependency direction is fixed:
 
 ```text
 ruvia-web   ->  ruvia-core + ruvia-http
-ruvia-edge  ->  ruvia-core + ruvia-http
 ```
 
 `ruvia-http` is core-free, Asio-free, and socket-free. Applications that need
 an outbound HTTP client provide their own I/O runtime and drive its sans-I/O
 client APIs; `ruvia-web` intentionally does not provide `fetch`, proxy,
 connection-pool, or client TLS runtime APIs.
-
-### Edge Node
-
-`ruvia::edge` exposes a runtime-independent product surface through
-`EdgeServer.h`; Asio sockets, protocol writers, cache storage and origin-fetch
-machinery remain implementation details. The listener and origin configuration
-use owned value types:
-
-```cpp
-#include <ruvia/edge/EdgeServer.h>
-
-ruvia::edge::EdgeServer edge({"0.0.0.0", 8080});
-if (!edge.addOrigin(
-        "www.example.com",
-        ruvia::edge::OriginSettings{"origin.internal", 8443, true})) {
-    throw std::runtime_error("duplicate edge origin");
-}
-edge.start();
-
-// From the embedding application's control thread:
-const bool removed = edge.purge("www.example.com", "/assets/app.js");
-edge.stop();
-```
-
-Runtime `addOrigin`, `removeOrigin`, certificate rotation and cache controls are
-synchronously serialized onto the Edge worker. An in-flight request retains a
-stable origin/cache lease across suspension, so later replacement, purge or
-removal cannot invalidate memory it is still using.
-
-Setting `EdgeServerOptions::cacheDirectory` enables a persistent disk tier. A
-live server exclusively leases that directory; records are checksummed and
-published by atomic replacement, and restart recovery ignores uncommitted or
-corrupt files. Do not point two live edge instances at the same directory.
-
-`EdgeServerOptions::maxConnections` bounds concurrent client connections;
-without it the only limit is the process descriptor budget, and reaching that
-turns every accept into an error. `OriginFetchLimits::circuitFailureThreshold`
-and `circuitResetTimeout` add a per-upstream circuit breaker: after that many
-consecutive transport failures the edge stops dialing a dead origin and answers
-immediately instead of paying `connectTimeout` on every request, letting one
-probe through per reset window to detect recovery. `EdgeServer::stats()` reports
-active connections, shed connections, breaker rejections, and cumulative task
-failures by kind, so a node can be monitored without installing any callback.
-
-An Edge task is a detached coroutine with no caller to rethrow into, so an
-exception that escapes one is reported rather than dropped:
-`EdgeServerOptions::taskFailure` receives every failure of an accept, a session,
-a background refresh, the worker's `io_context::run()`, a queued disk-tier
-write, a control operation, and the `accessLog` callback itself, tagged with an
-`EdgeTaskKind`. Shutdown, which unwinds tasks by cancelling them, is not a
-failure and is not reported. Without a callback each failure is written to
-stderr; the same line is the fallback when the callback itself throws. The node
-keeps serving in every case: a failed accept pauses briefly and resumes
-accepting instead of leaving the listener open but idle.
 
 ## Core Runtime
 
@@ -412,7 +356,7 @@ never offloads should not pay for idle threads.
 - Supported build platforms: Linux, macOS, and Windows 10 or newer. Windows
   builds require MSVC.
 - Component dependencies: core uses Asio; HTTP uses zlib, Brotli, and zstd;
-  Web and Edge add OpenSSL.
+  Web adds OpenSSL.
 - Optional vcpkg features: MariaDB, PostgreSQL, Redis, and JWT.
 
 ## Build
@@ -456,7 +400,6 @@ then run `ctest --test-dir build -C Release --output-on-failure`.
 | `RUVIA_BUILD_CORE` | `ON` | Build `ruvia::core`. |
 | `RUVIA_BUILD_HTTP` | `ON` | Build standalone `ruvia::http`. |
 | `RUVIA_BUILD_WEB` | `ON` | Build `ruvia::web`; requires core and HTTP. |
-| `RUVIA_BUILD_EDGE` | `OFF` | Build the `ruvia::edge` CDN edge node; requires core and HTTP. |
 | `RUVIA_BUILD_TESTS` | `OFF` | Build tests for every selected target and enabled feature. |
 | `RUVIA_BUILD_BENCHMARKS` | `OFF` | Build Release-oriented HTTP hot-path benchmarks; requires HTTP. |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | Build examples for every enabled Web feature; requires Web. |
@@ -536,9 +479,9 @@ target_link_libraries(protocol_tool PRIVATE ruvia::http)
 ```
 
 The package imports only the requested dependency closure: core and HTTP are
-independent, while Web and Edge each import core and HTTP alongside their own
-targets. Component-scoped installation uses `core`, `http`, `web`, `edge`, and
-`Development` install components.
+independent, while Web imports core and HTTP alongside its own targets.
+Component-scoped installation uses `core`, `http`, `web`, and `Development`
+install components.
 
 ## Web API Shape
 

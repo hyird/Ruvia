@@ -72,8 +72,7 @@ endforeach()
 file(GLOB_RECURSE _headers
     "${_source_root}/ruvia-core/include/*.h" "${_source_root}/ruvia-core/include/*.inl"
     "${_source_root}/ruvia-http/include/*.h" "${_source_root}/ruvia-http/include/*.inl"
-    "${_source_root}/ruvia-web/include/*.h" "${_source_root}/ruvia-web/include/*.inl"
-    "${_source_root}/ruvia-edge/include/*.h" "${_source_root}/ruvia-edge/include/*.inl")
+    "${_source_root}/ruvia-web/include/*.h" "${_source_root}/ruvia-web/include/*.inl")
 if(_headers STREQUAL "")
     message(FATAL_ERROR
         "ruvia_guard_header_definitions found no headers under ${_source_root}")

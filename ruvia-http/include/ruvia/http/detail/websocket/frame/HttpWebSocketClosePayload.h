@@ -5,7 +5,7 @@
 #include <string_view>
 #include <variant>
 
-// Building the payload the edge sends in a Close frame: a validated status code
+// Building the payload an endpoint sends in a Close frame: a validated status code
 // followed by an optional UTF-8 reason, capped at the 125-byte control-frame
 // limit. Encoding either yields the bytes or one typed reason it could not.
 
