@@ -27,12 +27,6 @@
         "openssl"
       ]
     },
-    "edge": {
-      "description": "Dependencies for the ruvia-edge CDN edge node library.",
-      "dependencies": [
-        "openssl"
-      ]
-    },
     "jwt": {
       "description": "Build HMAC JWT helper APIs."
     },

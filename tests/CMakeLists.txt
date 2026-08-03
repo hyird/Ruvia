@@ -37,9 +37,6 @@ function(ruvia_apply_test_support_includes name lib)
         target_include_directories(${name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/http/support
             ${CMAKE_CURRENT_SOURCE_DIR}/web/unit/support)
-    elseif("${lib}" STREQUAL "ruvia::edge")
-        target_include_directories(${name} PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
     elseif(NOT "${lib}" STREQUAL "ruvia::core")
         message(FATAL_ERROR "unknown Ruvia test library for ${name}: ${lib}")
     endif()
@@ -52,8 +49,6 @@ function(ruvia_expected_test_source_prefix out lib)
         set(_prefix "http/")
     elseif("${lib}" STREQUAL "ruvia::web")
         set(_prefix "web/")
-    elseif("${lib}" STREQUAL "ruvia::edge")
-        set(_prefix "edge/")
     else()
         message(FATAL_ERROR "unknown Ruvia test library: ${lib}")
     endif()
@@ -655,32 +650,4 @@ if(RUVIA_BUILD_WEB)
         web/server/app_web_worker.cpp LIB ruvia::web TIMEOUT 30)
     ruvia_add_test(ruvia_app_startup_retry
         web/server/app_startup_retry.cpp LIB ruvia::web TIMEOUT 30)
-endif()
-
-# Edge tests only need ruvia::edge; keep them outside the web gate so a
-# web-off edge build still runs them.
-if(RUVIA_BUILD_EDGE)
-    ruvia_add_test(ruvia_smoke_edge_target edge/smoke_edge_target.cpp LIB ruvia::edge)
-    ruvia_add_test(ruvia_edge_config edge/config.cpp LIB ruvia::edge TIMEOUT 30)
-    ruvia_add_test(ruvia_edge_freshness edge/freshness.cpp LIB ruvia::edge TIMEOUT 30)
-    ruvia_add_test(ruvia_edge_cache edge/cache.cpp LIB ruvia::edge TIMEOUT 30)
-    ruvia_add_test(ruvia_disk_cache edge/disk_cache.cpp LIB ruvia::edge TIMEOUT 30)
-    ruvia_add_test(ruvia_origin_fetcher edge/origin_fetcher.cpp LIB ruvia::edge TIMEOUT 30)
-    ruvia_add_test(ruvia_edge_server edge/server.cpp LIB ruvia::edge TIMEOUT 30)
-    # nghttp and h2load drive the edge HTTP/2 checks. They are an external CLI
-    # dependency, not a build dependency, so a machine without them configures
-    # and runs everything else instead of failing outright.
-    if(NOT WIN32)
-        find_program(RUVIA_NGHTTP_EXECUTABLE NAMES nghttp)
-        find_program(RUVIA_H2LOAD_EXECUTABLE NAMES h2load)
-        if(RUVIA_NGHTTP_EXECUTABLE AND RUVIA_H2LOAD_EXECUTABLE)
-            target_compile_definitions(ruvia_edge_server PRIVATE
-                RUVIA_NGHTTP_EXECUTABLE="${RUVIA_NGHTTP_EXECUTABLE}"
-                RUVIA_H2LOAD_EXECUTABLE="${RUVIA_H2LOAD_EXECUTABLE}")
-        else()
-            message(STATUS
-                "nghttp2 CLI tools not found: ruvia_edge_server will skip its "
-                "HTTP/2 client checks. Install nghttp2 to run them.")
-        endif()
-    endif()
 endif()

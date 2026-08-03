@@ -156,14 +156,11 @@ endfunction()
 
 function(ruvia_component_expectations requested_component out)
     set(_content "")
-    foreach(_component IN ITEMS core http web edge)
+    foreach(_component IN ITEMS core http web)
         set(_should_exist FALSE)
         if("${_component}" STREQUAL "${requested_component}")
             set(_should_exist TRUE)
         elseif("${requested_component}" STREQUAL "web" AND
-               ("${_component}" STREQUAL "core" OR "${_component}" STREQUAL "http"))
-            set(_should_exist TRUE)
-        elseif("${requested_component}" STREQUAL "edge" AND
                ("${_component}" STREQUAL "core" OR "${_component}" STREQUAL "http"))
             set(_should_exist TRUE)
         endif()
@@ -199,7 +196,7 @@ find_package(ruvia CONFIG REQUIRED COMPONENTS not_a_component)
 ruvia_run_consumer(unknown_component FAIL "")
 
 set(_available_components "")
-foreach(_component IN ITEMS core http web edge)
+foreach(_component IN ITEMS core http web)
     set(_component_available_${_component} FALSE)
     if(EXISTS "${_package_dir}/ruvia-${_component}-targets.cmake")
         set(_component_available_${_component} TRUE)
@@ -238,7 +235,7 @@ find_package(ruvia CONFIG REQUIRED COMPONENTS ${_component})
 ${_expectations}
 ")
         ruvia_run_consumer("component_${_component}_slice" PASS "" "${_component_prefix}")
-    elseif("${_component}" STREQUAL "web" OR "${_component}" STREQUAL "edge")
+    elseif("${_component}" STREQUAL "web")
         ruvia_install_components("${_component_prefix}" Development "${_component}")
         ruvia_write_consumer("component_${_component}_incomplete_slice" "
 cmake_minimum_required(VERSION 3.24)
@@ -264,7 +261,7 @@ ${_expectations}
     endif()
 endforeach()
 
-foreach(_component IN ITEMS core http web edge)
+foreach(_component IN ITEMS core http web)
     if(NOT _component_available_${_component})
         ruvia_write_consumer("missing_${_component}" "
 cmake_minimum_required(VERSION 3.24)

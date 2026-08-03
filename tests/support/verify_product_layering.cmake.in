@@ -52,22 +52,19 @@ function(_ruvia_scan_forbidden_product_includes _label)
 endfunction()
 
 set(_core_product_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(http|web|edge)/]=])
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(http|web)/]=])
 set(_http_product_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(core|web|edge)/]=])
-set(_web_product_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/edge/]=])
-set(_edge_product_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/web/]=])
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(core|web)/]=])
 
 set(_core_local_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(ruvia-http|ruvia-web|ruvia-edge)/]=])
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(ruvia-http|ruvia-web)/]=])
 set(_http_local_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(ruvia-core|ruvia-web|ruvia-edge)/]=])
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(ruvia-core|ruvia-web)/]=])
+# Web sits on top, so no product header is out of bounds for it. What is still
+# forbidden is reaching into a dependency's tree by path instead of through its
+# public include directory.
 set(_web_local_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?ruvia-edge/]=])
-set(_edge_local_include_pattern
-    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?ruvia-web/]=])
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(ruvia-core|ruvia-http)/]=])
 
 _ruvia_assert_matches(
     core_product
@@ -78,12 +75,8 @@ _ruvia_assert_matches(
     "${_http_product_include_pattern}"
     "#include \"ruvia/core/Task.h\"")
 _ruvia_assert_matches(
-    web_product
-    "${_web_product_include_pattern}"
-    "#include <ruvia/edge/EdgeServer.h>")
-_ruvia_assert_matches(
-    edge_product
-    "${_edge_product_include_pattern}"
+    http_web_product
+    "${_http_product_include_pattern}"
     "#include <ruvia/web/App.h>")
 _ruvia_assert_matches(
     http_local
@@ -96,11 +89,7 @@ _ruvia_assert_matches(
 _ruvia_assert_matches(
     web_local
     "${_web_local_include_pattern}"
-    "#include \"../ruvia-edge/include/ruvia/edge/EdgeServer.h\"")
-_ruvia_assert_matches(
-    edge_local
-    "${_edge_local_include_pattern}"
-    "#include \"../ruvia-web/include/ruvia/web/App.h\"")
+    "#include \"../ruvia-http/include/ruvia/http/HttpResponse.h\"")
 
 _ruvia_assert_ignores(
     commented_include
@@ -108,8 +97,8 @@ _ruvia_assert_ignores(
     "// #include \"ruvia/web/Context.h\"")
 _ruvia_assert_ignores(
     similarly_named_directory
-    "${_web_local_include_pattern}"
-    "#include \"edge_cache/fixture.h\"")
+    "${_http_local_include_pattern}"
+    "#include \"ruvia-core-extra/fixture.h\"")
 
 _ruvia_scan_forbidden_product_includes(core-product
     ROOTS
@@ -132,16 +121,7 @@ _ruvia_scan_forbidden_product_includes(web-product
         "${_ruvia_source_root}/ruvia-web/include"
         "${_ruvia_source_root}/ruvia-web/src"
     PATTERNS
-        "${_web_product_include_pattern}"
         "${_web_local_include_pattern}")
 
-_ruvia_scan_forbidden_product_includes(edge-product
-    ROOTS
-        "${_ruvia_source_root}/ruvia-edge/include"
-        "${_ruvia_source_root}/ruvia-edge/src"
-    PATTERNS
-        "${_edge_product_include_pattern}"
-        "${_edge_local_include_pattern}")
-
 message(STATUS
-    "ruvia_guard_product_layering: core,http,web,edge product include boundaries hold")
+    "ruvia_guard_product_layering: core,http,web product include boundaries hold")
