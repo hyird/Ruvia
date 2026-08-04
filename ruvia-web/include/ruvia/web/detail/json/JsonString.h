@@ -9,6 +9,7 @@
 
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/detail/util/Hex.h"
+#include "ruvia/web/detail/json/JsonByteScan.h"
 #include "ruvia/web/detail/json/JsonLex.h"
 
 namespace ruvia::detail {
@@ -111,7 +112,11 @@ private:
 
     auto encoding = JsonStringEncoding::kLiteral;
     const char* const begin = remaining.data();
-    for (std::size_t i = 0; i < remaining.size(); ++i) {
+    for (std::size_t i = 0; i < remaining.size();) {
+        i = findJsonStringTokenByte(remaining, i);
+        if (i == std::string_view::npos) {
+            return std::nullopt;
+        }
         const char c = remaining[i];
         if (c == '\\') {
             encoding = JsonStringEncoding::kEscaped;
@@ -120,7 +125,7 @@ private:
             }
             const char escape = remaining[i + 1];
             if (escape == '"' || escape == '\\' || escape == '/' || escape == 'b' || escape == 'f' || escape == 'n' || escape == 'r' || escape == 't') {
-                ++i;
+                i += 2;
                 continue;
             }
             if (escape == 'u') {
@@ -128,7 +133,7 @@ private:
                 if (i + 5 >= remaining.size() || !readJsonHex4(remaining.substr(i + 2), ignored)) {
                     return std::nullopt;
                 }
-                i += 5;
+                i += 6;
                 continue;
             }
             return std::nullopt;
@@ -148,8 +153,10 @@ private:
             if (length == 0) {
                 return std::nullopt;
             }
-            i += length - 1;  // the loop's ++i steps past the final byte
+            i += length;
+            continue;
         }
+        ++i;
     }
 
     return std::nullopt;

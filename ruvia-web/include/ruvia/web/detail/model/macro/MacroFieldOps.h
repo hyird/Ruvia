@@ -9,6 +9,7 @@
 private:                                                                                                                                                                                                                                                                                                                                                          \
     using RuviaFieldType_##field = RUVIA_MODEL_UNPAREN type;                                                                                                                                                                                                                                                                                                      \
     using RuviaFieldOptions_##field = decltype(::ruvia::detail::model::ModelOptions{__VA_ARGS__});                                                                                                                                                                                                                                                                \
+    static constexpr auto ruviaFieldWireHash_##field = ::ruvia::detail::model::modelFieldNameHash(::std::string_view{wire});                                                                                                                                                                                                                                      \
     ::ruvia::detail::model::ModelField<RuviaFieldType_##field, required, RuviaFieldOptions_##field> ruviaField_##field##_{wire, ::ruvia::detail::model::ModelOptions{__VA_ARGS__}};                                                                                                                                                                               \
                                                                                                                                                                                                                                                                                                                                                                   \
 public:                                                                                                                                                                                                                                                                                                                                                           \
@@ -45,25 +46,25 @@ public:                                                                         
         return ruviaField_##field##_.state();              \
     } else
 
-#define RUVIA_MODEL_PARSE_JSON_FIELD(T, field)                                                                                                   \
-    if (key == ruviaField_##field##_.wireName()) {                                                                                               \
+#define RUVIA_MODEL_PARSE_JSON_FIELD_DIRECT(T, field)                                                                                                                  \
+    if (ruviaFieldKeyHash == ruviaFieldWireHash_##field && key == ruviaField_##field##_.wireName()) {                                             \
         if (ruviaField_##field##_.state() != ::ruvia::detail::ModelFieldState::kMissing) {                                                       \
             ruviaField_##field##_.markDuplicate();                                                                                               \
-            return;                                                                                                                              \
+            return ::ruvia::detail::skipJsonValue(ruviaValueInput, ruviaDepth + 1);                                                              \
         }                                                                                                                                        \
-        auto ruviaValueInput = value;                                                                                                            \
+        const auto ruviaOriginalValueInput = ruviaValueInput;                                                                                    \
         using RuviaValueT = typename decltype(ruviaField_##field##_)::value_type;                                                                \
-        if (auto ruviaValue = ::ruvia::detail::parseJsonValue<RuviaValueT>(ruviaValueInput, ruviaResource, 0, ruviaStringStorage); ruviaValue) { \
-            ::ruvia::detail::skipJsonWhitespace(ruviaValueInput);                                                                                \
-            if (ruviaValueInput.empty()) {                                                                                                       \
-                ruviaField_##field##_.emplaceParsed(::std::move(*ruviaValue));                                                                   \
-            } else {                                                                                                                             \
-                ruviaField_##field##_.markInvalidType();                                                                                         \
-            }                                                                                                                                    \
-        } else {                                                                                                                                 \
-            ruviaField_##field##_.markInvalidType();                                                                                             \
+        if (auto ruviaValue = ::ruvia::detail::parseJsonValue<RuviaValueT>(ruviaValueInput, ruviaResource, ruviaDepth + 1, ruviaStringStorage); \
+            ruviaValue) {                                                                                                                        \
+            ruviaField_##field##_.emplaceParsed(::std::move(*ruviaValue));                                                                       \
+            return true;                                                                                                                         \
         }                                                                                                                                        \
-        return;                                                                                                                                  \
+        ruviaValueInput = ruviaOriginalValueInput;                                                                                               \
+        if (!::ruvia::detail::skipJsonValue(ruviaValueInput, ruviaDepth + 1)) {                                                                  \
+            return false;                                                                                                                        \
+        }                                                                                                                                        \
+        ruviaField_##field##_.markInvalidType();                                                                                                 \
+        return true;                                                                                                                             \
     }
 
 #define RUVIA_MODEL_PARSE_FORM_FIELD(T, field)                                                                                                                                                             \
