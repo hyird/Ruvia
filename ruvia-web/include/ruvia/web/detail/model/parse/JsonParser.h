@@ -17,6 +17,13 @@
 
 namespace ruvia::detail {
 
+struct ModelParseAccess final {
+    template <typename ModelT>
+    [[nodiscard]] static std::optional<ModelT> parseValue(std::string_view& input, std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage) {
+        return ModelT::ruviaParseJsonValue(input, resource, depth, stringStorage);
+    }
+};
+
 template <typename T>
 [[nodiscard]] std::optional<T> parseJsonValue(std::string_view& input, std::pmr::memory_resource* resource, std::size_t depth = 0, ModelStringStorage stringStorage = ModelStringStorage::kBorrowed);
 
@@ -141,12 +148,7 @@ template <typename T>
         input = remaining;
         return FieldT(parsed);
     } else if constexpr (JsonBody<FieldT>::value) {
-        const auto objectStart = remaining;
-        if (!skipJsonObject(remaining, depth + 1)) {
-            return std::nullopt;
-        }
-        const auto object = objectStart.substr(0, objectStart.size() - remaining.size());
-        auto nested = JsonBody<FieldT>::parseDepth(object, resource, depth + 1, stringStorage);
+        auto nested = ModelParseAccess::parseValue<FieldT>(remaining, resource, depth, stringStorage);
         if (!nested.has_value()) {
             return std::nullopt;
         }

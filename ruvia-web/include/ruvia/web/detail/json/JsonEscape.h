@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <string_view>
 
+#include "ruvia/web/detail/json/JsonByteScan.h"
+
 namespace ruvia::detail {
 
 [[nodiscard]] inline char jsonHexDigit(std::uint8_t value) noexcept {
@@ -15,8 +17,10 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] inline std::size_t jsonStringSizeHint(std::string_view value) noexcept {
-    std::size_t size = 2;
-    for (const unsigned char c : value) {
+    std::size_t size = value.size() + 2;
+    std::size_t offset = 0;
+    while ((offset = findJsonEscapeByte(value, offset)) != std::string_view::npos) {
+        const auto c = static_cast<unsigned char>(value[offset]);
         switch (c) {
             case '"':
             case '\\':
@@ -25,12 +29,13 @@ namespace ruvia::detail {
             case '\n':
             case '\r':
             case '\t':
-                size += 2;
+                ++size;
                 break;
             default:
-                size += c < 0x20 ? 6 : 1;
+                size += 5;
                 break;
         }
+        ++offset;
     }
     return size;
 }
@@ -45,11 +50,9 @@ template <typename StringT>
 inline void appendJsonString(StringT& output, std::string_view value) {
     output.push_back('"');
     std::size_t chunkBegin = 0;
-    for (std::size_t i = 0; i < value.size(); ++i) {
+    std::size_t i = 0;
+    while ((i = findJsonEscapeByte(value, i)) != std::string_view::npos) {
         const auto c = static_cast<unsigned char>(value[i]);
-        if (!jsonNeedsEscape(c)) {
-            continue;
-        }
         if (i > chunkBegin) {
             output.append(value.data() + chunkBegin, i - chunkBegin);
         }
@@ -82,6 +85,7 @@ inline void appendJsonString(StringT& output, std::string_view value) {
                 break;
         }
         chunkBegin = i + 1;
+        ++i;
     }
     if (chunkBegin < value.size()) {
         output.append(value.data() + chunkBegin, value.size() - chunkBegin);
