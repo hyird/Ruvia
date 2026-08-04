@@ -604,6 +604,8 @@ if(RUVIA_BUILD_HTTP)
     endif()
     ruvia_add_test(ruvia_guard_http_api_contract
         ${RUVIA_HTTP_API_CONTRACT_SOURCE} LIB ruvia::http)
+    ruvia_add_test(ruvia_guard_http_api_runtime
+        http/guards/api_contract_runtime.cpp LIB ruvia::http)
     ruvia_add_test(ruvia_guard_http2_stream_table
         http/guards/http2_stream_table_guard.cpp LIB ruvia::http)
 endif()
@@ -611,6 +613,12 @@ endif()
 if(RUVIA_BUILD_WEB)
     ruvia_add_test(ruvia_guard_web_api_surface
         web/guards/api_surface_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_web_blocking_api
+        web/guards/blocking_api_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_web_controller_api
+        web/guards/controller_api_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_web_model_api
+        web/guards/model_api_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_middleware_next
         web/guards/middleware_next_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_context_response_state

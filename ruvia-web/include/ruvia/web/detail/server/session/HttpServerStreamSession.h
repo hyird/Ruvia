@@ -9,6 +9,8 @@
 
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
+#include "ruvia/web/detail/server/HttpServerAccessLog.h"
 #include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
 #include "ruvia/web/detail/server/session/HttpServerIdleWorkSet.h"
 #include "ruvia/web/detail/server/http1/Http1RequestSequence.h"
@@ -17,6 +19,8 @@
 #include "ruvia/web/detail/server/route/HttpServerWebSocketRoute.h"
 #include "ruvia/web/detail/server/stream/HttpServerResponseStreamRoute.h"
 #include "ruvia/web/detail/server/response/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
+#include "ruvia/web/detail/server/response/HttpResponseWriter.h"
 #include "ruvia/web/detail/server/request/RequestMemoryArena.h"
 #include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
 #include "ruvia/web/detail/http2/CleartextUpgrade.h"
