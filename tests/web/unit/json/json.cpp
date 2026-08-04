@@ -153,6 +153,23 @@ RUVIA_TEST(json_string_token_carries_escape_encoding) {
     RUVIA_CHECK(parsed->encoding() == ruvia::detail::JsonStringEncoding::kEscaped);
 }
 
+RUVIA_TEST(json_string_token_scans_across_simd_boundaries) {
+    std::string storage = "\"";
+    storage.append(15, 'a');
+    storage.append("\xC3\xA9", 2);
+    storage.append(14, 'b');
+    storage.append("\\n");
+    storage.append(16, 'c');
+    storage.push_back('"');
+
+    std::string_view input = storage;
+    const auto parsed = ruvia::detail::parseJsonString(input);
+    RUVIA_CHECK(parsed.has_value());
+    RUVIA_CHECK(parsed->encoding() == ruvia::detail::JsonStringEncoding::kEscaped);
+    RUVIA_CHECK_EQ(parsed->raw().size(), storage.size() - 2);
+    RUVIA_CHECK(input.empty());
+}
+
 RUVIA_TEST(json_string_scan_failure_preserves_input_cursor) {
     {
         std::string_view in = std::string_view(

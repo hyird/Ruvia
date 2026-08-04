@@ -1,7 +1,7 @@
 #include "model_field_fixture.h"
 
-// Binding a model from repeated fields: the last occurrence wins, and an invalid duplicate does not
-// change that.
+// Object lookup uses the last occurrence. Model binding keeps the first parsed
+// value and marks the field duplicate so validation can reject ambiguity.
 
 RUVIA_TEST(model_factory_materializes_before_publication) {
     std::pmr::monotonic_buffer_resource modelResource;

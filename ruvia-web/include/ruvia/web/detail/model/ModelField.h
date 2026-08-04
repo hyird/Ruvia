@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <string_view>
@@ -10,6 +11,17 @@
 #include "ruvia/web/detail/model/ModelOptions.h"
 
 namespace ruvia::detail::model {
+
+[[nodiscard]] constexpr std::uint64_t modelFieldNameHash(std::string_view name) noexcept {
+    // FNV-1a is only a dispatch prefilter. The parser still compares the full
+    // decoded key before binding, so collisions cannot change JSON semantics.
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (const unsigned char byte : name) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
 
 template <typename ValueT, bool Required, typename OptionsT>
 class ModelField final {

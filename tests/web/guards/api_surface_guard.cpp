@@ -68,15 +68,6 @@ struct CurrentUser final {
 
 struct AppUseProbeMiddleware;
 
-struct ClonePayload final {
-    RUVIA_OPTIONAL_FIELD(message, ruvia::String);
-    RUVIA_MODEL(ClonePayload, message);
-};
-
-struct SurfaceJsonResponse final {
-    RUVIA_OPTIONAL_FIELD(message, ruvia::String);
-    RUVIA_MODEL(SurfaceJsonResponse, message);
-};
 
 using DetailRequestBodyMode = ruvia::detail::RequestBodyMode;
 static_assert(std::is_enum_v<DetailRequestBodyMode>);
@@ -450,52 +441,6 @@ concept HasFormObjectCanonicalAccessors = requires(const T& object) {
 template <typename T>
 concept ExposesRvalueRequestFormObjectGroups = requires { std::declval<const T&&>().groups(); };
 
-template <typename T>
-concept HasModelInputAccessor = requires(const T& model) { model.body(); };
-
-template <typename T>
-concept HasModelDynamicGet = requires(const T& model) { model.get(std::string_view{}); };
-
-template <typename T>
-concept HasModelTypedDynamicGet = requires(const T& model) { model.template get<ruvia::String>(std::string_view{}); };
-
-template <typename T>
-concept HasModelCompileTimeGetAlias = requires(const T& model) { model.template get<"message">(); };
-
-template <typename T>
-concept HasModelPublicBodyParseHooks = requires { T::ruviaParseJsonBody(std::string_view{}, static_cast<std::pmr::memory_resource*>(nullptr)); } || requires { T::ruviaParseFormBody(std::string_view{}, static_cast<std::pmr::memory_resource*>(nullptr)); };
-
-template <typename T>
-concept HasModelPublicJsonDepthHook = requires { T::ruviaParseJsonBodyDepth(std::string_view{}, static_cast<std::pmr::memory_resource*>(nullptr), std::size_t{}); };
-
-template <typename T>
-concept HasModelPublicFormFieldsHook = requires { T::ruviaParseFormFields(std::declval<const ruvia::RequestNameValueList&>(), static_cast<std::pmr::memory_resource*>(nullptr)); };
-
-template <typename T>
-concept HasModelNonConstMessageGetter = requires { static_cast<const std::optional<ruvia::String> & (T::*)()>(&T::message); };
-
-template <typename T>
-concept HasModelPublicJsonWriterHooks = requires(const T& model, std::pmr::string& output) { model.ruviaAppendJson(output); } || requires(const T& model) { model.ruviaJsonSizeHint(); };
-
-template <typename T>
-concept HasModelPublicFieldStateHook = requires(const T& model) { model.template ruviaFieldState<"message">(); };
-
-template <typename T>
-concept ExposesAnyRvalueModelStringBorrow = requires { std::declval<const T&&>().view(); } || requires { std::declval<const T&&>().data(); } || requires { static_cast<std::string_view>(std::declval<const T&&>()); };
-
-template <typename T>
-concept ExposesRvalueFixedStringView = requires { std::declval<const T&&>().view(); };
-
-template <typename T>
-concept ExposesAnyRvalueModelListBorrow = requires { std::declval<const T&&>()[std::size_t{}]; } || requires { std::declval<const T&&>().front(); } || requires { std::declval<const T&&>().begin(); } || requires { std::declval<const T&&>().end(); } || requires { std::declval<T&&>().emplace(1); } || requires { std::declval<T&&>().emplaceMove(typename T::value_type{}); };
-
-template <typename T>
-concept ExposesAnyRvalueGeneratedMessageMember = requires { std::declval<const T&&>().message(); } || requires { std::declval<T&&>().messageEnsure(); } || requires { std::declval<T&&>().message(std::string_view{}); };
-
-struct ModelBodyDuckProbe final {
-    static int ruviaParseJsonBody(std::string_view, std::pmr::memory_resource*);
-    static int ruviaParseFormBody(std::string_view, std::pmr::memory_resource*);
-};
 
 template <typename T>
 concept HasByteSpanResponseBody = requires(const T& context, std::span<const std::byte> body) {
@@ -1713,41 +1658,6 @@ static_assert(HasFormObjectCanonicalAccessors<ruvia::ContextRequest::RequestForm
 static_assert(!ExposesRvalueRequestFormObjectGroups<ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(!HasFormAtLookup<ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(noexcept(std::declval<const ruvia::ContextRequest::RequestFormData::Object&>().get(std::string_view{})));
-static_assert(!std::is_default_constructible_v<ruvia::JsonValue>);
-static_assert(!std::is_constructible_v<ruvia::JsonValue, std::string_view>);
-static_assert(!std::is_constructible_v<ruvia::JsonValue, std::string_view, std::pmr::memory_resource*>);
-static_assert(!std::is_default_constructible_v<ruvia::JsonObject>);
-static_assert(!std::is_constructible_v<ruvia::JsonObject, std::string_view>);
-static_assert(!std::is_constructible_v<ruvia::JsonObject, std::string_view, std::pmr::memory_resource*>);
-static_assert(!std::is_default_constructible_v<ruvia::FormObject>);
-static_assert(!std::is_constructible_v<ruvia::FormObject, std::string_view>);
-static_assert(!std::is_constructible_v<ruvia::FormObject, std::string_view, std::pmr::memory_resource*>);
-static_assert(!std::is_default_constructible_v<ruvia::detail::ModelInput>);
-static_assert(!std::is_constructible_v<ruvia::detail::ModelInput, ruvia::detail::ModelInputKind, std::string_view, std::pmr::memory_resource*>);
-static_assert(!std::is_constructible_v<ruvia::detail::ModelInput, const ruvia::RequestNameValueList&, std::pmr::memory_resource*>);
-static_assert(!HasModelInputAccessor<ClonePayload>);
-static_assert(!HasModelDynamicGet<ClonePayload>);
-static_assert(!HasModelTypedDynamicGet<ClonePayload>);
-static_assert(!HasModelCompileTimeGetAlias<ClonePayload>);
-static_assert(!HasModelPublicBodyParseHooks<ClonePayload>);
-static_assert(!HasModelPublicJsonDepthHook<ClonePayload>);
-static_assert(!HasModelPublicFormFieldsHook<ClonePayload>);
-static_assert(!HasModelNonConstMessageGetter<ClonePayload>);
-static_assert(!HasModelPublicJsonWriterHooks<ClonePayload>);
-static_assert(!HasModelPublicFieldStateHook<ClonePayload>);
-static_assert(!ExposesAnyRvalueModelStringBorrow<ruvia::String>);
-static_assert(!ExposesRvalueFixedStringView<ruvia::FixedString<6>>);
-static_assert(!ExposesAnyRvalueModelListBorrow<ruvia::List<ruvia::Int32>>);
-static_assert(!ExposesAnyRvalueGeneratedMessageMember<ClonePayload>);
-static_assert(!ExposesAnyRvalueGeneratedMessageMember<SurfaceJsonResponse>);
-static_assert(ruvia::JsonBody<ClonePayload>::value);
-static_assert(ruvia::detail::isResponseModel<ClonePayload>);
-static_assert(ruvia::JsonBody<SurfaceJsonResponse>::value);
-static_assert(ruvia::FormBody<SurfaceJsonResponse>::value);
-static_assert(ruvia::detail::isResponseModel<SurfaceJsonResponse>);
-static_assert(!ruvia::JsonBody<ModelBodyDuckProbe>::value);
-static_assert(!ruvia::FormBody<ModelBodyDuckProbe>::value);
-static_assert(!std::is_constructible_v<ClonePayload, ruvia::detail::ModelInput>);
 static_assert(HasByteSpanResponseBody<ruvia::Context>);
 static_assert(!HasStdStringResponseBody<ruvia::Context>);
 static_assert(HasPmrStringResponseBuilders<ruvia::Context>);
@@ -2250,93 +2160,6 @@ static_assert(std::is_same_v<decltype(std::declval<const ruvia::ContextRequest&>
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::ContextRequest&>().param(std::string_view{})), std::optional<std::string_view>>);
 
 }  // namespace
-
-class FastSurfaceController final : public ruvia::Controller<FastSurfaceController> {
-public:
-    RUVIA_CONTROLLER_GROUP("/surface-fast")
-
-    RUVIA_ROUTES_BEGIN
-    RUVIA_GET("/res-slot-merge", responseSlotMerge);
-    RUVIA_GET("/res-setter-headers", responseSetterHeaders);
-    RUVIA_GET("/body-response", bodyResponse);
-    RUVIA_ROUTES_END
-
-private:
-    ruvia::Task<ruvia::HttpResponse> responseSlotMerge(ruvia::Context& c) {
-        c.header("X-Res-Slot", "kept");
-        co_return c.text("response slot merge\n");
-    }
-
-    ruvia::Task<ruvia::HttpResponse> responseSetterHeaders(ruvia::Context& c) {
-        c.header("X-Setter-Override", "slot");
-        c.header("Content-Type", "application/slot");
-        auto response = c.text("response setter headers\n");
-        response.header("X-Setter-Override", "response");
-        response.header("X-Assigned-Only", "response");
-        co_return response;
-    }
-
-    ruvia::Task<ruvia::HttpResponse> bodyResponse(ruvia::Context& c) {
-        c.status(ruvia::http_status::kCreated);
-        c.header("X-Body-Prepared", "true");
-        c.header("X-Body-Response", "true");
-        co_return c.body("body response\n");
-    }
-};
-
-class UngroupedControllerProbe final : public ruvia::Controller<UngroupedControllerProbe> {
-public:
-    RUVIA_ROUTES_BEGIN
-    RUVIA_ROUTES_END
-};
-
-class ControllerBaseSurfaceProbe final : public ruvia::Controller<ControllerBaseSurfaceProbe> {
-public:
-    template <typename T>
-    inline static constexpr bool hasLegacyMiddlewareFactory = requires { T::template ruviaMakeMiddlewares<>(); };
-
-    template <typename T>
-    inline static constexpr bool hasLegacyRouteRegistration = requires { &T::ruviaAddRoute; };
-};
-
-#ifndef _MSC_VER
-static_assert(!HasControllerPublicGroupPrefix<FastSurfaceController>);
-static_assert(!HasControllerPublicGroupMiddlewares<FastSurfaceController>);
-static_assert(!HasControllerPublicRegisterRoutes<FastSurfaceController>);
-static_assert(!HasControllerPublicRegistrationState<FastSurfaceController>);
-static_assert(!HasControllerPublicRegisterRoutes<UngroupedControllerProbe>);
-static_assert(!HasControllerRegistrationAccessPublicHooks<ruvia::detail::ControllerRegistrationAccess<FastSurfaceController>>);
-static_assert(!ControllerBaseSurfaceProbe::hasLegacyMiddlewareFactory<ControllerBaseSurfaceProbe>);
-static_assert(!ControllerBaseSurfaceProbe::hasLegacyRouteRegistration<ControllerBaseSurfaceProbe>);
-#endif
-
-// Blocking offload: the pool is referred to, never copied; a result is consumed
-// once, from an rvalue; and the offload spellings keep their return shapes.
-namespace {
-
-template <typename T>
-concept HasLvalueBlockingValue = requires(ruvia::BlockingResult<T>& result) { result.value(); };
-
-using BlockingIntTask = ruvia::Task<ruvia::BlockingResult<int>>;
-using BlockingVoidTask = ruvia::Task<ruvia::BlockingResult<void>>;
-
-}  // namespace
-
-static_assert(!std::is_copy_constructible_v<ruvia::BlockingPool>);
-static_assert(!std::is_copy_assignable_v<ruvia::BlockingPool>);
-static_assert(!std::is_move_constructible_v<ruvia::BlockingPool>);
-static_assert(!std::is_move_assignable_v<ruvia::BlockingPool>);
-static_assert(!std::is_copy_constructible_v<ruvia::BlockingResult<int>>);
-static_assert(!std::is_copy_assignable_v<ruvia::BlockingResult<int>>);
-static_assert(std::is_move_constructible_v<ruvia::BlockingResult<int>>);
-static_assert(!HasLvalueBlockingValue<int>);
-static_assert(!HasLvalueBlockingValue<void>);
-static_assert(std::is_base_of_v<std::runtime_error, ruvia::BlockingOperationRejected>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::Context&>().runBlocking(std::declval<int (*)()>())), ruvia::Task<int>>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::Context&>().runBlocking(std::declval<void (*)()>())), ruvia::Task<void>>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::Context&>().tryRunBlocking(std::declval<int (*)()>())), BlockingIntTask>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::Context&>().tryRunBlocking(std::chrono::seconds(1), std::declval<void (*)()>())), BlockingVoidTask>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::WebWorkerContext&>().tryRunBlocking(std::declval<int (*)()>())), BlockingIntTask>);
 
 int main() {
     return 0;

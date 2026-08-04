@@ -60,6 +60,15 @@ RUVIA_TEST(json_string_size_hint_matches_output) {
     high += static_cast<char>(0xff);
     high += 'b';
     checkConsistent(ruvia_ctx, high);
+
+    // Exercise escapes immediately before, on, and after 16-byte SIMD blocks.
+    std::string blocks(15, 'a');
+    blocks.push_back('"');
+    blocks.append(15, 'b');
+    blocks.push_back('\\');
+    blocks.push_back('\x01');
+    blocks.append(17, 'c');
+    checkConsistent(ruvia_ctx, blocks);
 }
 
 RUVIA_TEST(json_string_escape_output_content_is_exact) {
