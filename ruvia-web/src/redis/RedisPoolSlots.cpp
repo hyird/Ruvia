@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 
 #include <exception>
+#include <stdexcept>
 
 namespace ruvia::detail {
 
@@ -23,10 +24,18 @@ void RedisPool::ConnectionGuard::discard() noexcept {
     discard_ = true;
 }
 
-Task<std::size_t> RedisPool::acquire() {
-    const auto result = co_await scheduler_.acquire(config_.acquireTimeout);
+Task<std::size_t> RedisPool::acquire(const OperationTimeout& timeout, StopToken stopToken) {
+    if (stopToken.stoppable() && (worker_ == nullptr || !worker_->valid())) {
+        throw std::logic_error("cancellable redis operation requires a valid worker");
+    }
+    PoolWaiterResult result = worker_ != nullptr
+        ? co_await scheduler_.acquire(timeout.constrainedBy(config_.acquireTimeout).remaining(), std::move(stopToken), *worker_)
+        : co_await scheduler_.acquire(timeout.constrainedBy(config_.acquireTimeout).remaining());
     if (result.timedOut() != nullptr) {
         throw RedisError(RedisError::Code::kTimeout, "redis connection pool acquire timed out");
+    }
+    if (result.cancelled() != nullptr) {
+        throw RedisError(RedisError::Code::kCancelled, "redis operation cancelled");
     }
     if (result.closed() != nullptr) {
         throw RedisError(RedisError::Code::kIoError, "redis pool is closing");

@@ -41,6 +41,13 @@ private:
     constexpr PoolWaiterClosed() noexcept = default;
 };
 
+class PoolWaiterCancelled final {
+private:
+    friend class PoolWaiterResult;
+
+    constexpr PoolWaiterCancelled() noexcept = default;
+};
+
 // A completed pool wait owns exactly one outcome. Only acquisition carries a
 // slot index; timeout and pool closure can never expose a plausible sentinel.
 class PoolWaiterResult final {
@@ -60,11 +67,16 @@ public:
     }
     [[nodiscard]] constexpr const PoolWaiterClosed* closed() const&& = delete;
 
+    [[nodiscard]] constexpr const PoolWaiterCancelled* cancelled() const& noexcept {
+        return std::get_if<PoolWaiterCancelled>(&value_);
+    }
+    [[nodiscard]] constexpr const PoolWaiterCancelled* cancelled() const&& = delete;
+
 private:
     friend class PoolWaiter;
     friend class PoolLeaseScheduler;
 
-    using Value = std::variant<PoolWaiterAcquired, PoolWaiterTimedOut, PoolWaiterClosed>;
+    using Value = std::variant<PoolWaiterAcquired, PoolWaiterTimedOut, PoolWaiterClosed, PoolWaiterCancelled>;
 
     template <typename Alternative>
     explicit constexpr PoolWaiterResult(Alternative alternative) noexcept
@@ -80,6 +92,10 @@ private:
 
     [[nodiscard]] static constexpr PoolWaiterResult makeClosed() noexcept {
         return PoolWaiterResult(PoolWaiterClosed());
+    }
+
+    [[nodiscard]] static constexpr PoolWaiterResult makeCancelled() noexcept {
+        return PoolWaiterResult(PoolWaiterCancelled());
     }
 
     Value value_;
@@ -137,6 +153,10 @@ private:
 
     void completeClosed() noexcept {
         complete(PoolWaiterResult::makeClosed());
+    }
+
+    void completeCancelled() noexcept {
+        complete(PoolWaiterResult::makeCancelled());
     }
 
     void resume() noexcept {
@@ -208,6 +228,16 @@ public:
         remove(*waiter);
         waiter->completeAcquired(index);
         waiter->resume();
+        return true;
+    }
+
+    [[nodiscard]] bool cancel(PoolWaiter& waiter) noexcept {
+        if (!std::holds_alternative<PoolWaiterQueued>(waiter.state_)) {
+            return false;
+        }
+        remove(waiter);
+        waiter.completeCancelled();
+        waiter.resume();
         return true;
     }
 

@@ -28,6 +28,7 @@ using ruvia::detail::appendRedisScanOptions;
 using ruvia::detail::appendRespCommand;
 using ruvia::detail::hiredisReplyToValue;
 using ruvia::detail::parseRedisBlockingPopReply;
+using ruvia::detail::parseRedisXReadGroupReply;
 using ruvia::detail::parseRedisHashScanResult;
 using ruvia::detail::parseRedisKeyValueArray;
 using ruvia::detail::parseRedisScanResult;
@@ -458,4 +459,57 @@ RUVIA_TEST(redis_blocking_pop_timeout_is_saturating_and_nonnegative) {
 
     const std::array<std::string_view, 1> keys{"queue"};
     RUVIA_CHECK(throwsOn([&] { (void)redisBlockingPopArgs("BLPOP", keys, seconds(-1), std::pmr::get_default_resource()); }));
+}
+
+RUVIA_TEST(redis_xreadgroup_builds_group_block_and_parallel_stream_arguments) {
+    auto* resource = std::pmr::get_default_resource();
+    const std::array streams{
+        ruvia::RedisStreamReadView{.stream = "orders", .id = ">"},
+        ruvia::RedisStreamReadView{.stream = "retries", .id = "0"},
+    };
+    ruvia::RedisXReadGroupOptions options;
+    options.count = 25;
+    options.block = ruvia::RedisBlockWait::forDuration(std::chrono::milliseconds(1500));
+    options.noAck = true;
+    const auto args = ruvia::detail::redisXReadGroupArgs("workers", "consumer-1", streams, options, resource);
+    constexpr std::array<std::string_view, 14> expected{
+        "XREADGROUP", "GROUP", "workers", "consumer-1", "COUNT", "25", "BLOCK", "1500", "NOACK", "STREAMS", "orders", "retries", ">", "0",
+    };
+    RUVIA_CHECK_EQ(args.size(), expected.size());
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        RUVIA_CHECK_EQ(std::string_view(args[i]), expected[i]);
+    }
+
+    options.block = ruvia::RedisBlockWait::indefinitely();
+    const auto infinite = ruvia::detail::redisXReadGroupArgs("workers", "consumer-1", streams, options, resource);
+    RUVIA_CHECK_EQ(std::string_view(infinite[7]), std::string_view("0"));
+}
+
+RUVIA_TEST(redis_xreadgroup_parser_owns_nested_stream_entries) {
+    auto* resource = std::pmr::get_default_resource();
+    std::pmr::vector<RedisValue> fields(resource);
+    fields.push_back(RedisTypesAccess::stringValue("type", resource));
+    fields.push_back(RedisTypesAccess::stringValue("created", resource));
+
+    std::pmr::vector<RedisValue> entry(resource);
+    entry.push_back(RedisTypesAccess::stringValue("1710000000000-0", resource));
+    entry.push_back(RedisTypesAccess::arrayValue(std::move(fields), resource));
+    std::pmr::vector<RedisValue> entries(resource);
+    entries.push_back(RedisTypesAccess::arrayValue(std::move(entry), resource));
+
+    std::pmr::vector<RedisValue> stream(resource);
+    stream.push_back(RedisTypesAccess::stringValue("orders", resource));
+    stream.push_back(RedisTypesAccess::arrayValue(std::move(entries), resource));
+    std::pmr::vector<RedisValue> root(resource);
+    root.push_back(RedisTypesAccess::arrayValue(std::move(stream), resource));
+
+    const auto parsed = parseRedisXReadGroupReply(RedisTypesAccess::arrayValue(std::move(root), resource), resource);
+    RUVIA_CHECK(parsed.has_value());
+    RUVIA_CHECK_EQ(parsed->streams().size(), std::size_t{1});
+    RUVIA_CHECK_EQ(parsed->streams()[0].stream(), std::string_view("orders"));
+    RUVIA_CHECK_EQ(parsed->streams()[0].entries().size(), std::size_t{1});
+    RUVIA_CHECK_EQ(parsed->streams()[0].entries()[0].id(), std::string_view("1710000000000-0"));
+    RUVIA_CHECK_EQ(parsed->streams()[0].entries()[0].fields()[0].key(), std::string_view("type"));
+    RUVIA_CHECK_EQ(parsed->streams()[0].entries()[0].fields()[0].value(), std::string_view("created"));
+    RUVIA_CHECK(!parseRedisXReadGroupReply(toNilValue(), resource).has_value());
 }

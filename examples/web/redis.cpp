@@ -405,8 +405,8 @@ public:
 
     ruvia::Task<ruvia::HttpResponse> blockingPop(ruvia::Context& c) {
         const std::array<std::string_view, 1> keys{"ruvia:example:blocking"};
-        auto left = co_await c.redis().blpop(keys, std::chrono::seconds(1));
-        auto right = co_await c.redis().brpop(keys, std::chrono::seconds(1));
+        auto left = co_await c.redis("blocking").blpop(keys, std::chrono::seconds(1));
+        auto right = co_await c.redis("blocking").brpop(keys, std::chrono::seconds(1));
 
         std::pmr::string body(c.allocator<char>());
         body.append("left=");
@@ -433,5 +433,7 @@ int main() {
     auto& app = ruvia::app();
     app.loadDotenv();
     auto config = redisConfig(app.env());
-    app.useRedis(config).useRedis("cache", std::move(config)).setListeners({ruvia::ListenerConfig::http("0.0.0.0", app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))}).setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setSignalShutdown(true).run();
+    auto blocking = config;
+    blocking.usage = ruvia::RedisPoolUsage::kBlocking;
+    app.useRedis(config).useRedis("cache", config).useRedis("blocking", std::move(blocking)).setListeners({ruvia::ListenerConfig::http("0.0.0.0", app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))}).setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setSignalShutdown(true).run();
 }

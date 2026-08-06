@@ -13,6 +13,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/StopToken.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/BorrowedText.h"
 
@@ -24,6 +25,12 @@ class RedisScoredValue;
 class RedisScanResult;
 class RedisHashScanResult;
 class RedisZScanResult;
+class RedisXReadGroupResult;
+
+enum class RedisPoolUsage : std::uint8_t {
+    kGeneral,
+    kBlocking,
+};
 
 struct RedisConfig {
     // Host name or unbracketed address only; keep the port in port.
@@ -35,6 +42,9 @@ struct RedisConfig {
     std::uint32_t database{0};
     // Must be greater than zero.
     std::size_t poolSizePerWorker{4};
+    // Long-running BLOCK commands must use a dedicated pool so they cannot
+    // consume every ordinary request/reply connection on a worker.
+    RedisPoolUsage usage{RedisPoolUsage::kGeneral};
     // Absence disables the corresponding timeout. connectTimeout is one
     // deadline shared by DNS resolution, TCP establishment, AUTH, and SELECT.
     // commandTimeout bounds a whole logical command or pipeline, including
@@ -49,6 +59,55 @@ struct RedisConfig {
     std::size_t maxArrayDepth{64};
     bool tcpNoDelay{true};
     bool keepAlive{false};
+};
+
+struct RedisOperationOptions final {
+    // End-to-end timeout beginning when the lazy operation starts. It includes
+    // pool acquisition, connection establishment, write, and reply parsing and
+    // is constrained by the corresponding pool-level timeouts. When present,
+    // it must be greater than zero.
+    std::optional<std::chrono::milliseconds> timeout;
+    StopToken stopToken;
+};
+
+class RedisBlockWait final {
+public:
+    [[nodiscard]] static RedisBlockWait forDuration(std::chrono::milliseconds duration) {
+        if (duration.count() <= 0) {
+            throw std::invalid_argument("redis block duration must be greater than zero");
+        }
+        return RedisBlockWait(duration);
+    }
+
+    [[nodiscard]] static RedisBlockWait indefinitely() noexcept {
+        return RedisBlockWait(std::nullopt);
+    }
+
+    [[nodiscard]] bool infinite() const noexcept {
+        return !duration_.has_value();
+    }
+
+    [[nodiscard]] std::optional<std::chrono::milliseconds> duration() const noexcept {
+        return duration_;
+    }
+
+private:
+    explicit RedisBlockWait(std::optional<std::chrono::milliseconds> duration) noexcept
+        : duration_(duration) {}
+
+    std::optional<std::chrono::milliseconds> duration_;
+};
+
+struct RedisStreamReadView final {
+    BorrowedText stream;
+    BorrowedText id;
+};
+
+struct RedisXReadGroupOptions final {
+    std::optional<std::uint64_t> count;
+    std::optional<RedisBlockWait> block;
+    bool noAck{false};
+    RedisOperationOptions operation;
 };
 
 enum class RedisSetCondition : std::uint8_t {
@@ -287,6 +346,83 @@ private:
     std::pmr::vector<RedisScoredValue> entries_;
 };
 
+class RedisStreamEntry final {
+public:
+    RedisStreamEntry(const RedisStreamEntry&) = default;
+    RedisStreamEntry& operator=(const RedisStreamEntry&) = default;
+    RedisStreamEntry(RedisStreamEntry&&) noexcept = default;
+    RedisStreamEntry& operator=(RedisStreamEntry&&) = default;
+
+    [[nodiscard]] std::string_view id() const& noexcept {
+        return id_;
+    }
+    [[nodiscard]] std::string_view id() const&& = delete;
+
+    [[nodiscard]] std::span<const RedisKeyValue> fields() const& noexcept {
+        return fields_;
+    }
+    [[nodiscard]] std::span<const RedisKeyValue> fields() const&& = delete;
+
+private:
+    friend struct detail::RedisTypesAccess;
+
+    RedisStreamEntry(std::string_view id, std::pmr::memory_resource* resource)
+        : id_(id.data(), id.size(), resource),
+          fields_(resource) {}
+
+    std::pmr::string id_;
+    std::pmr::vector<RedisKeyValue> fields_;
+};
+
+class RedisStreamReadResult final {
+public:
+    RedisStreamReadResult(const RedisStreamReadResult&) = default;
+    RedisStreamReadResult& operator=(const RedisStreamReadResult&) = default;
+    RedisStreamReadResult(RedisStreamReadResult&&) noexcept = default;
+    RedisStreamReadResult& operator=(RedisStreamReadResult&&) = default;
+
+    [[nodiscard]] std::string_view stream() const& noexcept {
+        return stream_;
+    }
+    [[nodiscard]] std::string_view stream() const&& = delete;
+
+    [[nodiscard]] std::span<const RedisStreamEntry> entries() const& noexcept {
+        return entries_;
+    }
+    [[nodiscard]] std::span<const RedisStreamEntry> entries() const&& = delete;
+
+private:
+    friend struct detail::RedisTypesAccess;
+
+    RedisStreamReadResult(std::string_view stream, std::pmr::memory_resource* resource)
+        : stream_(stream.data(), stream.size(), resource),
+          entries_(resource) {}
+
+    std::pmr::string stream_;
+    std::pmr::vector<RedisStreamEntry> entries_;
+};
+
+class RedisXReadGroupResult final {
+public:
+    RedisXReadGroupResult(const RedisXReadGroupResult&) = default;
+    RedisXReadGroupResult& operator=(const RedisXReadGroupResult&) = default;
+    RedisXReadGroupResult(RedisXReadGroupResult&&) noexcept = default;
+    RedisXReadGroupResult& operator=(RedisXReadGroupResult&&) = default;
+
+    [[nodiscard]] std::span<const RedisStreamReadResult> streams() const& noexcept {
+        return streams_;
+    }
+    [[nodiscard]] std::span<const RedisStreamReadResult> streams() const&& = delete;
+
+private:
+    friend struct detail::RedisTypesAccess;
+
+    explicit RedisXReadGroupResult(std::pmr::memory_resource* resource)
+        : streams_(resource) {}
+
+    std::pmr::vector<RedisStreamReadResult> streams_;
+};
+
 namespace detail {
 
 inline constexpr std::string_view kDefaultRedisAlias = "default";
@@ -298,7 +434,7 @@ class RedisRegistry;
 
 class RedisError : public std::exception {
 public:
-    enum class Code { kNotConfigured, kPoolExhausted, kConnectFailed, kAuthFailed, kProtocolError, kCommandError, kIoError, kTimeout, kTransactionAborted };
+    enum class Code { kNotConfigured, kPoolExhausted, kConnectFailed, kAuthFailed, kProtocolError, kCommandError, kIoError, kTimeout, kCancelled, kTransactionAborted };
 
     RedisError(Code code, std::string_view message);
     RedisError(const RedisError& other);

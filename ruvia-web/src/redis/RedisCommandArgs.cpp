@@ -190,4 +190,53 @@ std::optional<std::chrono::milliseconds> redisBlockingPopClientTimeout(std::chro
     return Milliseconds(milliseconds + kMillisecondsPerSecond);
 }
 
+std::pmr::vector<std::pmr::string> redisXReadGroupArgs(std::string_view group, std::string_view consumer, std::span<const RedisStreamReadView> streams, const RedisXReadGroupOptions& options, std::pmr::memory_resource* resource) {
+    if (group.empty() || consumer.empty()) {
+        throw std::invalid_argument("redis xreadgroup requires a group and consumer");
+    }
+    if (streams.empty()) {
+        throw std::invalid_argument("redis xreadgroup requires at least one stream");
+    }
+    if (options.count.has_value() && *options.count == 0) {
+        throw std::invalid_argument("redis xreadgroup count must be greater than zero");
+    }
+    for (const auto& stream : streams) {
+        if (stream.stream.empty() || stream.id.empty()) {
+            throw std::invalid_argument("redis xreadgroup stream and id must not be empty");
+        }
+    }
+
+    std::pmr::vector<std::pmr::string> args(resource);
+    args.reserve(6 + streams.size() * 2 + (options.count.has_value() ? 2 : 0) + (options.block.has_value() ? 2 : 0) + (options.noAck ? 1 : 0));
+    emplaceRedisString(args, "XREADGROUP");
+    emplaceRedisString(args, "GROUP");
+    emplaceRedisString(args, group);
+    emplaceRedisString(args, consumer);
+    if (options.count.has_value()) {
+        emplaceRedisString(args, "COUNT");
+        std::pmr::string count(resource);
+        appendRedisNumber(count, *options.count);
+        args.emplace_back(std::move(count));
+    }
+    if (options.block.has_value()) {
+        emplaceRedisString(args, "BLOCK");
+        if (const auto duration = options.block->duration(); duration.has_value()) {
+            args.emplace_back(redisMillisecondsString(*duration, resource));
+        } else {
+            emplaceRedisString(args, "0");
+        }
+    }
+    if (options.noAck) {
+        emplaceRedisString(args, "NOACK");
+    }
+    emplaceRedisString(args, "STREAMS");
+    for (const auto& stream : streams) {
+        emplaceRedisString(args, stream.stream.view());
+    }
+    for (const auto& stream : streams) {
+        emplaceRedisString(args, stream.id.view());
+    }
+    return args;
+}
+
 }  // namespace ruvia::detail

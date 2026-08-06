@@ -9,6 +9,7 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
@@ -490,6 +491,78 @@ private:
     std::thread thread_;
 };
 
+class CancelledRedisBlockServer final {
+public:
+    CancelledRedisBlockServer()
+        : acceptor_(ioContext_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+          commandReadFuture_(commandRead_.get_future()),
+          thread_([this] { run(); }) {}
+
+    ~CancelledRedisBlockServer() {
+        std::error_code ignored;
+        acceptor_.close(ignored);
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+
+    void waitUntilBlocked() {
+        commandReadFuture_.get();
+    }
+
+private:
+    [[nodiscard]] static bool readExact(asio::ip::tcp::socket& socket, std::size_t size) {
+        std::vector<char> input(size);
+        std::error_code error;
+        (void)asio::read(socket, asio::buffer(input), error);
+        return !error;
+    }
+
+    void run() noexcept {
+        try {
+            asio::ip::tcp::socket blockedSocket(ioContext_);
+            acceptor_.accept(blockedSocket);
+            constexpr std::string_view xread = "*8\r\n$10\r\nXREADGROUP\r\n$5\r\nGROUP\r\n$1\r\ng\r\n$1\r\nc\r\n$5\r\nBLOCK\r\n$1\r\n0\r\n$7\r\nSTREAMS\r\n$6\r\nevents\r\n$1\r\n>\r\n";
+            if (!readExact(blockedSocket, xread.size())) {
+                throw std::runtime_error("failed to read blocking redis command");
+            }
+            commandRead_.set_value();
+
+            std::array<char, 1> ignoredByte{};
+            std::error_code closedError;
+            (void)blockedSocket.read_some(asio::buffer(ignoredByte), closedError);
+            if (!closedError) {
+                throw std::runtime_error("cancelled redis socket remained open");
+            }
+
+            asio::ip::tcp::socket reconnected(ioContext_);
+            acceptor_.accept(reconnected);
+            constexpr std::string_view ping = "*1\r\n$4\r\nPING\r\n";
+            if (!readExact(reconnected, ping.size())) {
+                throw std::runtime_error("failed to read redis ping after reconnect");
+            }
+            constexpr std::string_view pong = "+PONG\r\n";
+            std::error_code writeError;
+            (void)asio::write(reconnected, asio::buffer(pong), writeError);
+        } catch (...) {
+            try {
+                commandRead_.set_exception(std::current_exception());
+            } catch (...) {
+            }
+        }
+    }
+
+    asio::io_context ioContext_;
+    asio::ip::tcp::acceptor acceptor_;
+    std::promise<void> commandRead_;
+    std::future<void> commandReadFuture_;
+    std::thread thread_;
+};
+
 int testStopWhileRedisConnectWaits() {
     StalledTcpServer server;
     auto redis = ruvia::RedisConfig{};
@@ -555,6 +628,108 @@ int testRedisCommandUsesOneAbsoluteTimeout() {
         return 3;
     }
 
+    const auto result = completedFuture.get();
+    loops.stop();
+    loops.join();
+    return result;
+}
+
+int testRedisSingleCommandTimeoutWithoutPoolDefault() {
+    SlowRedisReplyServer server;
+    auto redis = ruvia::RedisConfig{};
+    redis.host = "127.0.0.1";
+    redis.port = server.port();
+    redis.poolSizePerWorker = 1;
+
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
+    auto options = ruvia::DataAccessOptions{};
+    options.maintenanceInterval = std::chrono::milliseconds(25);
+    options.redis.push_back(ruvia::DataAccessRedisConfig{"default", std::move(redis)});
+    ruvia::DataAccessService service(loops.loop(0), std::move(options));
+
+    auto ready = service.connect();
+    loops.start();
+    ready.get();
+
+    std::promise<int> completed;
+    auto completedFuture = completed.get_future();
+    const auto posted = service.post([&completed](ruvia::DataAccessContext& context) -> ruvia::Task<void> {
+        try {
+            auto redisHandle = context.redis();
+            co_await redisHandle.command(ruvia::RedisOperationOptions{.timeout = std::chrono::milliseconds(250)}, "PING");
+            completed.set_value(1);
+        } catch (const ruvia::RedisError& error) {
+            completed.set_value(error.code() == ruvia::RedisError::Code::kTimeout ? 0 : 2);
+        }
+    });
+    if (!posted.accepted()) {
+        loops.stop();
+        loops.join();
+        return 3;
+    }
+
+    const auto result = completedFuture.get();
+    loops.stop();
+    loops.join();
+    return result;
+}
+
+int testRedisCancellationDiscardsSocketAndReconnects() {
+    CancelledRedisBlockServer server;
+    auto redis = ruvia::RedisConfig{};
+    redis.host = "127.0.0.1";
+    redis.port = server.port();
+    redis.poolSizePerWorker = 1;
+    redis.usage = ruvia::RedisPoolUsage::kBlocking;
+
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 4});
+    auto options = ruvia::DataAccessOptions{};
+    options.redis.push_back(ruvia::DataAccessRedisConfig{"default", std::move(redis)});
+    ruvia::DataAccessService service(loops.loop(0), std::move(options));
+    ruvia::detail::StopSource operationStop;
+
+    auto ready = service.connect();
+    loops.start();
+    ready.get();
+
+    std::promise<int> completed;
+    auto completedFuture = completed.get_future();
+    const auto posted = service.post([&completed, &operationStop](ruvia::DataAccessContext& context) -> ruvia::Task<void> {
+        const std::array streams{ruvia::RedisStreamReadView{.stream = "events", .id = ">"}};
+        bool cancelled = false;
+        try {
+            auto redisHandle = context.redis();
+            ruvia::RedisXReadGroupOptions readOptions;
+            readOptions.block = ruvia::RedisBlockWait::indefinitely();
+            readOptions.operation.stopToken = operationStop.token();
+            (void)co_await redisHandle.xreadGroup("g", "c", streams, std::move(readOptions));
+        } catch (const ruvia::RedisError& error) {
+            if (error.code() != ruvia::RedisError::Code::kCancelled) {
+                completed.set_value(2);
+                co_return;
+            }
+            cancelled = true;
+        }
+        if (!cancelled) {
+            completed.set_value(1);
+            co_return;
+        }
+        try {
+            auto redisHandle = context.redis();
+            co_await redisHandle.ping();
+            completed.set_value(0);
+        } catch (...) {
+            completed.set_value(3);
+        }
+    });
+    if (!posted.accepted()) {
+        loops.stop();
+        loops.join();
+        return 4;
+    }
+
+    server.waitUntilBlocked();
+    operationStop.requestStop();
     const auto result = completedFuture.get();
     loops.stop();
     loops.join();
@@ -685,8 +860,14 @@ int main() {
         if (const auto result = testRedisCommandUsesOneAbsoluteTimeout(); result != 0) {
             return 95 + result;
         }
-        if (const auto result = testRedisConnectTimeoutIncludesStartupCommands(); result != 0) {
+        if (const auto result = testRedisSingleCommandTimeoutWithoutPoolDefault(); result != 0) {
+            return 96 + result;
+        }
+        if (const auto result = testRedisCancellationDiscardsSocketAndReconnects(); result != 0) {
             return 97 + result;
+        }
+        if (const auto result = testRedisConnectTimeoutIncludesStartupCommands(); result != 0) {
+            return 98 + result;
         }
 #endif
         return 0;

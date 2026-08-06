@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/StopToken.h"
+#include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/pool/PoolWaiterQueue.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 #include "ruvia/core/memory/PmrResource.h"
@@ -9,8 +11,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -49,7 +53,11 @@ public:
     }
 
     [[nodiscard]] Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds> timeout) {
-        return acquireReserved(AcquireReservation(*this), timeout);
+        return acquireReserved(AcquireReservation(*this), timeout, {}, nullptr);
+    }
+
+    [[nodiscard]] Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds> timeout, StopToken stopToken, const WorkerHandle& worker) {
+        return acquireReserved(AcquireReservation(*this), timeout, std::move(stopToken), &worker);
     }
 
 private:
@@ -79,10 +87,19 @@ private:
         PoolLeaseScheduler* scheduler_;
     };
 
-    [[nodiscard]] static Task<PoolWaiterResult> acquireReserved(AcquireReservation reservation, std::optional<std::chrono::milliseconds> timeout) {
+    struct AcquireCancellation final {
+        PoolWaiterQueue* queue{nullptr};
+        PoolWaiter* waiter{nullptr};
+        bool active{true};
+    };
+
+    [[nodiscard]] static Task<PoolWaiterResult> acquireReserved(AcquireReservation reservation, std::optional<std::chrono::milliseconds> timeout, StopToken stopToken, const WorkerHandle* worker) {
         auto& scheduler = reservation.scheduler();
         if (scheduler.closing_) {
             co_return PoolWaiterResult::makeClosed();
+        }
+        if (stopToken.stopRequested()) {
+            co_return PoolWaiterResult::makeCancelled();
         }
         if (!scheduler.freeSlots_.empty()) {
             const auto slot = scheduler.freeSlots_.back();
@@ -103,7 +120,31 @@ private:
             }
         } guard{scheduler.waiters_, waiter};
 
-        co_return co_await waiter;
+        std::shared_ptr<AcquireCancellation> cancellation;
+        StopRegistration stopRegistration;
+        if (stopToken.stoppable()) {
+            if (worker == nullptr || !worker->valid()) {
+                throw std::logic_error("cancellable pool acquire requires a valid worker");
+            }
+            cancellation = std::make_shared<AcquireCancellation>(AcquireCancellation{&scheduler.waiters_, &waiter, true});
+            stopRegistration = stopToken.registerCallback([worker, cancellation] {
+                WorkerHandleAccess::deferOrTerminate(*worker, [cancellation] {
+                    if (cancellation->active) {
+                        (void)cancellation->queue->cancel(*cancellation->waiter);
+                    }
+                });
+            });
+            if (stopToken.stopRequested()) {
+                (void)scheduler.waiters_.cancel(waiter);
+            }
+        }
+
+        auto result = co_await waiter;
+        if (cancellation != nullptr) {
+            cancellation->active = false;
+        }
+        stopRegistration.reset();
+        co_return result;
     }
 
 public:

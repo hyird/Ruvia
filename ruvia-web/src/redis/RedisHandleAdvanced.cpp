@@ -52,9 +52,41 @@ Task<RedisZScanResult> executeRedisZScan(detail::RedisPool& pool, std::pmr::vect
     co_return detail::parseRedisZScanResult(value, resource);
 }
 
-Task<std::optional<RedisKeyValue>> executeRedisBlockingPop(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, std::chrono::seconds timeout, std::pmr::memory_resource* resource) {
-    auto reply = co_await pool.executeWithTimeout(std::span<const std::pmr::string>(args), detail::redisBlockingPopClientTimeout(timeout), resource);
+void constrainOperationTimeout(RedisOperationOptions& options, std::optional<std::chrono::milliseconds> timeout) noexcept {
+    if (timeout.has_value() && (!options.timeout.has_value() || *timeout < *options.timeout)) {
+        options.timeout = timeout;
+    }
+}
+
+[[nodiscard]] std::optional<std::chrono::milliseconds> redisBlockClientTimeout(std::chrono::milliseconds timeout) noexcept {
+    constexpr auto grace = std::chrono::seconds(1);
+    if (timeout > std::chrono::milliseconds::max() - grace) {
+        return std::chrono::milliseconds::max();
+    }
+    return timeout + grace;
+}
+
+void requireBlockingPool(const detail::RedisPool& pool) {
+    if (pool.usage() != RedisPoolUsage::kBlocking) {
+        throw std::invalid_argument("blocking redis command requires a dedicated blocking pool");
+    }
+}
+
+void requireCancelableInfiniteBlock(const detail::RedisPool& pool, const RedisOperationOptions& options) {
+    if (!options.stopToken.stoppable() && !options.timeout.has_value() && !pool.hasCommandTimeout()) {
+        throw std::invalid_argument("infinite redis block requires a StopToken or finite command timeout");
+    }
+}
+
+Task<std::optional<RedisKeyValue>> executeRedisBlockingPop(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, std::chrono::seconds timeout, RedisOperationOptions options, std::pmr::memory_resource* resource) {
+    constrainOperationTimeout(options, detail::redisBlockingPopClientTimeout(timeout));
+    auto reply = co_await detail::executeOwnedRedisCommand(pool, std::move(args), std::move(options), resource);
     co_return detail::parseRedisBlockingPopReply(reply, resource);
+}
+
+Task<std::optional<RedisXReadGroupResult>> executeRedisXReadGroup(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, RedisOperationOptions options, std::pmr::memory_resource* resource) {
+    auto reply = co_await detail::executeOwnedRedisCommand(pool, std::move(args), std::move(options), resource);
+    co_return detail::parseRedisXReadGroupReply(reply, resource);
 }
 
 }  // namespace
@@ -109,14 +141,39 @@ ScopedOperation<std::pmr::vector<bool>> RedisHandle::scriptExists(std::span<cons
     return scoped(detail::redisBoolArrayCommand(*pool_, std::move(args), resource_));
 }
 
-ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::blpop(std::span<const std::string_view> keys, std::chrono::seconds timeout) const {
+ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::blpop(std::span<const std::string_view> keys, std::chrono::seconds timeout, RedisOperationOptions options) const {
     requireActive();
-    return scoped(executeRedisBlockingPop(*pool_, detail::redisBlockingPopArgs("BLPOP", keys, timeout, resource_), timeout, resource_));
+    detail::validateRedisOperationOptions(options);
+    requireBlockingPool(*pool_);
+    if (timeout == std::chrono::seconds::zero()) {
+        requireCancelableInfiniteBlock(*pool_, options);
+    }
+    return scoped(executeRedisBlockingPop(*pool_, detail::redisBlockingPopArgs("BLPOP", keys, timeout, resource_), timeout, std::move(options), resource_));
 }
 
-ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::brpop(std::span<const std::string_view> keys, std::chrono::seconds timeout) const {
+ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::brpop(std::span<const std::string_view> keys, std::chrono::seconds timeout, RedisOperationOptions options) const {
     requireActive();
-    return scoped(executeRedisBlockingPop(*pool_, detail::redisBlockingPopArgs("BRPOP", keys, timeout, resource_), timeout, resource_));
+    detail::validateRedisOperationOptions(options);
+    requireBlockingPool(*pool_);
+    if (timeout == std::chrono::seconds::zero()) {
+        requireCancelableInfiniteBlock(*pool_, options);
+    }
+    return scoped(executeRedisBlockingPop(*pool_, detail::redisBlockingPopArgs("BRPOP", keys, timeout, resource_), timeout, std::move(options), resource_));
+}
+
+ScopedOperation<std::optional<RedisXReadGroupResult>> RedisHandle::xreadGroup(std::string_view group, std::string_view consumer, std::span<const RedisStreamReadView> streams, RedisXReadGroupOptions options) const {
+    requireActive();
+    detail::validateRedisOperationOptions(options.operation);
+    auto args = detail::redisXReadGroupArgs(group, consumer, streams, options, resource_);
+    if (options.block.has_value()) {
+        requireBlockingPool(*pool_);
+        if (const auto duration = options.block->duration(); duration.has_value()) {
+            constrainOperationTimeout(options.operation, redisBlockClientTimeout(*duration));
+        } else {
+            requireCancelableInfiniteBlock(*pool_, options.operation);
+        }
+    }
+    return scoped(executeRedisXReadGroup(*pool_, std::move(args), std::move(options.operation), resource_));
 }
 
 RedisPipeline RedisHandle::pipeline() const {

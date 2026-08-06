@@ -88,7 +88,7 @@ static_assert(std::is_move_assignable_v<ruvia::RedisValue>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisValue>);
 
 template <typename T>
-concept ExposesAnyRvalueRedisOwnedView = requires(T&& value) { std::move(value).duration(); } || requires(T&& value) { std::move(value).key(); } || requires(T&& value) { std::move(value).value(); } || requires(T&& value) { std::move(value).values(); } || requires(T&& value) { std::move(value).entries(); } || requires(T&& value) { std::move(value).message(); } || requires(T&& value) { std::move(value).string(); } || requires(T&& value) { std::move(value).array(); };
+concept ExposesAnyRvalueRedisOwnedView = requires(T&& value) { std::move(value).duration(); } || requires(T&& value) { std::move(value).key(); } || requires(T&& value) { std::move(value).value(); } || requires(T&& value) { std::move(value).values(); } || requires(T&& value) { std::move(value).entries(); } || requires(T&& value) { std::move(value).fields(); } || requires(T&& value) { std::move(value).streams(); } || requires(T&& value) { std::move(value).stream(); } || requires(T&& value) { std::move(value).id(); } || requires(T&& value) { std::move(value).message(); } || requires(T&& value) { std::move(value).string(); } || requires(T&& value) { std::move(value).array(); };
 
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisSetExpiration>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisKeyValue>);
@@ -96,6 +96,9 @@ static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisScoredValue>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisScanResult>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisHashScanResult>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisZScanResult>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisStreamEntry>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisStreamReadResult>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisXReadGroupResult>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisError>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisValue>);
 
@@ -227,6 +230,9 @@ static_assert(!std::default_initializable<ruvia::RedisScanCursor>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::RedisTtl&>().remaining()), std::optional<std::chrono::milliseconds>>);
 static_assert(std::same_as<decltype(ruvia::RedisScanOptions{}.count), std::optional<std::uint64_t>>);
 static_assert(std::is_aggregate_v<ruvia::RedisScanOptions>);
+static_assert(std::is_aggregate_v<ruvia::RedisOperationOptions>);
+static_assert(std::is_aggregate_v<ruvia::RedisXReadGroupOptions>);
+static_assert(std::same_as<decltype(ruvia::RedisConfig{}.usage), ruvia::RedisPoolUsage>);
 constexpr ruvia::RedisScanOptions kLiteralRedisScanOptions{
     .match = "session:*",
 };
@@ -248,6 +254,61 @@ static_assert(AssignsRedisScanMatch<std::string_view>);
 
 RUVIA_TEST(redis_api_surface_uses_span_args_without_initializer_list_overloads) {
     RUVIA_CHECK(true);
+}
+
+RUVIA_TEST(redis_blocking_commands_require_an_isolated_pool_and_cancellation_bound) {
+    asio::io_context ioContext;
+    ruvia::RedisConfig generalConfig;
+    const std::array generalDefinitions{redisDefinition("default", generalConfig)};
+    ruvia::detail::RedisRegistry generalRegistry(ioContext, std::pmr::get_default_resource(), generalDefinitions);
+    ruvia::detail::ScopedOperationScope generalScope;
+    auto general = generalRegistry.get(std::pmr::get_default_resource(), generalScope);
+    const std::array<std::string_view, 1> keys{"queue"};
+    const std::array streams{ruvia::RedisStreamReadView{.stream = "events", .id = ">"}};
+
+    bool popRejected = false;
+    bool streamRejected = false;
+    bool rawRejected = false;
+    bool statefulRejected = false;
+    try {
+        (void)general.blpop(keys, std::chrono::seconds(1));
+    } catch (const std::invalid_argument&) {
+        popRejected = true;
+    }
+    try {
+        (void)general.xreadGroup("workers", "consumer", streams, {.block = ruvia::RedisBlockWait::forDuration(std::chrono::milliseconds(10))});
+    } catch (const std::invalid_argument&) {
+        streamRejected = true;
+    }
+    try {
+        (void)general.command("BLPOP", "queue", "1");
+    } catch (const std::invalid_argument&) {
+        rawRejected = true;
+    }
+    try {
+        (void)general.command("SELECT", "1");
+    } catch (const std::invalid_argument&) {
+        statefulRejected = true;
+    }
+
+    ruvia::RedisConfig blockingConfig;
+    blockingConfig.usage = ruvia::RedisPoolUsage::kBlocking;
+    const std::array blockingDefinitions{redisDefinition("default", blockingConfig)};
+    ruvia::detail::RedisRegistry blockingRegistry(ioContext, std::pmr::get_default_resource(), blockingDefinitions);
+    ruvia::detail::ScopedOperationScope blockingScope;
+    auto blocking = blockingRegistry.get(std::pmr::get_default_resource(), blockingScope);
+    bool infiniteRejected = false;
+    try {
+        (void)blocking.xreadGroup("workers", "consumer", streams, {.block = ruvia::RedisBlockWait::indefinitely()});
+    } catch (const std::invalid_argument&) {
+        infiniteRejected = true;
+    }
+
+    RUVIA_CHECK(popRejected);
+    RUVIA_CHECK(streamRejected);
+    RUVIA_CHECK(rawRejected);
+    RUVIA_CHECK(statefulRejected);
+    RUVIA_CHECK(infiniteRejected);
 }
 
 RUVIA_TEST(redis_registry_derives_default_pool_from_owned_entry_index) {

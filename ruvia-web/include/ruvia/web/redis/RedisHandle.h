@@ -24,7 +24,7 @@ public:
     RedisHandle(const RedisHandle& other) noexcept;
     RedisHandle& operator=(const RedisHandle&) = delete;
 
-    ScopedOperation<RedisValue> command(std::span<const std::string_view> args) const;
+    ScopedOperation<RedisValue> command(std::span<const std::string_view> args, RedisOperationOptions options = {}) const;
     ScopedOperation<RedisValue> command(std::initializer_list<std::string_view> args) const = delete;
 
     ScopedOperation<void> ping() const;
@@ -110,8 +110,9 @@ public:
     ScopedOperation<std::pmr::string> scriptLoad(std::string_view script) const;
     ScopedOperation<std::pmr::vector<bool>> scriptExists(std::span<const std::string_view> sha1s) const;
     ScopedOperation<std::pmr::vector<bool>> scriptExists(std::initializer_list<std::string_view> sha1s) const = delete;
-    ScopedOperation<std::optional<RedisKeyValue>> blpop(std::span<const std::string_view> keys, std::chrono::seconds timeout) const;
-    ScopedOperation<std::optional<RedisKeyValue>> brpop(std::span<const std::string_view> keys, std::chrono::seconds timeout) const;
+    ScopedOperation<std::optional<RedisKeyValue>> blpop(std::span<const std::string_view> keys, std::chrono::seconds timeout, RedisOperationOptions options = {}) const;
+    ScopedOperation<std::optional<RedisKeyValue>> brpop(std::span<const std::string_view> keys, std::chrono::seconds timeout, RedisOperationOptions options = {}) const;
+    ScopedOperation<std::optional<RedisXReadGroupResult>> xreadGroup(std::string_view group, std::string_view consumer, std::span<const RedisStreamReadView> streams, RedisXReadGroupOptions options = {}) const;
 
     // Multi-argument commands as ordinary arguments: mget(a, b, c) instead of a
     // hand-built array plus a span. Every span overload above clones its
@@ -127,6 +128,13 @@ public:
     [[nodiscard]] ScopedOperation<RedisValue> command(Args&&... args) const {
         const std::string_view views[]{std::string_view(args)...};
         return command(std::span<const std::string_view>(views));
+    }
+
+    template <typename... Args>
+        requires detail::RedisArgumentPack<Args...>
+    [[nodiscard]] ScopedOperation<RedisValue> command(RedisOperationOptions options, Args&&... args) const {
+        const std::string_view views[]{std::string_view(args)...};
+        return command(std::span<const std::string_view>(views), std::move(options));
     }
 
     template <typename... Keys>

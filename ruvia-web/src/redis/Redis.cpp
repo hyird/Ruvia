@@ -11,7 +11,7 @@
 namespace ruvia {
 namespace detail {
 
-RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const RedisDefinition> redis)
+RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const RedisDefinition> redis, const WorkerHandle* worker)
     : resource_(detail::pmrResourceOrDefault(resource)),
       pools_(resource_),
       aliasIndex_(resource_) {
@@ -25,7 +25,7 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
         }
         auto config = cloneRedisConfig(definition.config, resource_);
         validateRedisConfig(config);
-        auto pool = makePmrObject<RedisPool>(resource_, ioContext, std::move(config), resource_);
+        auto pool = makePmrObject<RedisPool>(resource_, ioContext, std::move(config), resource_, worker);
         pools_.push_back(Entry{std::pmr::string(definition.alias, resource_), std::move(pool)});
         if (std::string_view(pools_.back().alias) == kDefaultRedisAlias) {
             defaultPoolIndex_ = pools_.size() - 1;
