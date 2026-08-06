@@ -147,7 +147,18 @@ void Context::storeResponse(HttpResponse&& response) {
         responseState_.finalizeActive();
         return;
     }
-    mergeActiveResponseHeaders(response, responseState_.activeResponse());
+    if (responseState_.activeResponse().headers().empty()) {
+        responseState_.finalize(std::move(response));
+        return;
+    }
+    // Stage a complete clone before merging. A moved staging response cannot
+    // provide rollback: a failed merge may already have published some header
+    // descriptors into that staging object. The clone stays disposable until
+    // every allocation and merge operation succeeds; the final move assignment
+    // is the publication point.
+    HttpResponse staged = detail::HttpResponseHeaderStateAccess::cloneForTransaction(response);
+    mergeActiveResponseHeaders(staged, responseState_.activeResponse());
+    response = std::move(staged);
     responseState_.finalize(std::move(response));
 }
 
@@ -156,7 +167,13 @@ void Context::storeAssignedResponse(HttpResponse&& response) {
         responseState_.finalizeActive();
         return;
     }
-    assignActiveResponseHeaders(response, responseState_.activeResponse());
+    if (responseState_.activeResponse().headers().empty()) {
+        responseState_.finalize(std::move(response));
+        return;
+    }
+    HttpResponse staged = detail::HttpResponseHeaderStateAccess::cloneForTransaction(response);
+    assignActiveResponseHeaders(staged, responseState_.activeResponse());
+    response = std::move(staged);
     responseState_.finalize(std::move(response));
 }
 

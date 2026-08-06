@@ -5,6 +5,7 @@
 #include <concepts>
 #include <cstddef>
 #include <exception>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -161,6 +162,18 @@ RUVIA_TEST(resp_serialized_size_matches_written_output) {
         appendRespCommand(out, span);
         RUVIA_CHECK_EQ(hinted, out.size());
     }
+}
+
+RUVIA_TEST(resp_serialized_size_rejects_wrapped_argument_length) {
+    const std::array<std::string_view, 1> args{std::string_view("x", std::numeric_limits<std::size_t>::max())};
+    bool lengthError = false;
+    try {
+        (void)respCommandSerializedSize(args);
+    } catch (const std::length_error&) {
+        lengthError = true;
+    } catch (...) {
+    }
+    RUVIA_CHECK(lengthError);
 }
 
 RUVIA_TEST(redis_parse_key_value_array_pairs_and_rejects_odd_length) {
@@ -422,4 +435,18 @@ RUVIA_TEST(redis_wrong_reply_type_throws_RedisError_not_logic_error) {
     // Correct types must still pass (no false rejections).
     RUVIA_CHECK(!throwsRedisError([&] { (void)redisValueInteger(num); }));
     RUVIA_CHECK(!throwsRedisError([&] { (void)redisValueString(str); }));
+}
+
+RUVIA_TEST(redis_blocking_pop_timeout_is_saturating_and_nonnegative) {
+    using ruvia::detail::redisBlockingPopArgs;
+    using ruvia::detail::redisBlockingPopClientTimeout;
+    using std::chrono::milliseconds;
+    using std::chrono::seconds;
+
+    RUVIA_CHECK(!redisBlockingPopClientTimeout(seconds::zero()).has_value());
+    RUVIA_CHECK_EQ(*redisBlockingPopClientTimeout(seconds(2)), milliseconds(3000));
+    RUVIA_CHECK_EQ(*redisBlockingPopClientTimeout(seconds::max()), milliseconds::max());
+
+    const std::array<std::string_view, 1> keys{"queue"};
+    RUVIA_CHECK(throwsOn([&] { (void)redisBlockingPopArgs("BLPOP", keys, seconds(-1), std::pmr::get_default_resource()); }));
 }

@@ -196,6 +196,34 @@ RUVIA_TEST(context_parse_body_multipart_yields_text_field_and_file_blob) {
     RUVIA_CHECK_EQ(fileData, std::string("hello"));
 }
 
+RUVIA_TEST(context_parse_body_rejects_multipart_with_wrong_media_type) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/json"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::setBody(request, "{}");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto multipartTask = [&]() -> ruvia::Task<void> {
+        (void)co_await context.req().multipart();
+        co_return;
+    };
+    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(multipartTask()), asio::use_future);
+    io.run();
+
+    bool rejected = false;
+    try {
+        future.get();
+    } catch (const ruvia::HttpError& error) {
+        rejected = error.info().status() == ruvia::http_status::kUnsupportedMediaType;
+    }
+    RUVIA_CHECK(rejected);
+}
+
 RUVIA_TEST(context_parse_body_rejects_malformed_urlencoded) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
@@ -207,16 +235,16 @@ RUVIA_TEST(context_parse_body_rejects_malformed_urlencoded) {
     HttpRequestAccess::setResource(request, requestMemory.resource());
     auto context = ContextAccess::make(requestMemory, request);
 
-    // A malformed body must surface as an exception (the handler maps it to a 400)
-    // rather than a silently-empty form or a crash.
+    // A malformed body must surface as an explicit 400 HttpError rather than a
+    // silently-empty form or an exception that the router could misclassify.
     asio::io_context& io = ruvia::test::newTestIoContext();
     auto future = asio::co_spawn(io, parseBodyDiscard(context), asio::use_future);
     io.run();
     bool threw = false;
     try {
         future.get();
-    } catch (const std::invalid_argument&) {
-        threw = true;
+    } catch (const ruvia::HttpError& error) {
+        threw = error.info().status() == ruvia::http_status::kBadRequest;
     }
     RUVIA_CHECK(threw);
 }

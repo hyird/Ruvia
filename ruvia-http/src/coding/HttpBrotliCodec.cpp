@@ -6,6 +6,7 @@
 #include <brotli/decode.h>
 #include <brotli/encode.h>
 
+#include "ruvia/http/detail/coding/PmrCodecAllocation.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
 // br (RFC 7932) through the Brotli reference library.
@@ -32,7 +33,7 @@ namespace {
 
 ContentDecodeAttempt decodeBrotliContent(std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    auto* state = BrotliDecoderCreateInstance(nullptr, nullptr, nullptr);
+    auto* state = BrotliDecoderCreateInstance(&pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource());
     if (state == nullptr) {
         return HttpContentDecodeError::kDecoderFailure;
     }
@@ -72,7 +73,7 @@ ContentDecodeAttempt decodeBrotliContent(std::string_view input, std::size_t max
 
 ContentEncodeAttempt encodeBrotliContent(std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    auto* state = BrotliEncoderCreateInstance(nullptr, nullptr, nullptr);
+    auto* state = BrotliEncoderCreateInstance(&pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource());
     if (state == nullptr) {
         return HttpContentEncodeError::kEncoderFailure;
     }

@@ -521,6 +521,10 @@ public:
     [[nodiscard]] HttpKnownMethod knownMethod() const noexcept;
     [[nodiscard]] std::string_view path() const noexcept;
     [[nodiscard]] std::string_view routePath() const noexcept;
+    // Malformed request fields and selected-body syntax errors throw HttpError
+    // with a 400 status. A selected body with the wrong media type throws
+    // HttpError with 415; application/programming exceptions are never
+    // represented by these request-validation signals.
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const;
@@ -542,12 +546,12 @@ public:
     template <typename T>
     [[nodiscard]] ScopedOperation<T> form() const;
 
-    // Non-throwing variants of json()/form() for endpoints that want to fall
-    // back instead of failing the request: nullopt when the Content-Type is
-    // not the consumed media type or the body does not parse as it. Transport
-    // and protocol failures (unreadable body, unsupported Content-Encoding,
-    // decoded size over the limit) still throw -- those describe the request
-    // stream, not its format.
+    // Optional format probes for endpoints that want to fall back when the
+    // Content-Type is not the consumed media type. Once the media type selects
+    // JSON or form, a malformed body still throws the same 400 as json()/form();
+    // nullopt never means "the selected format was invalid". Transport and
+    // protocol failures (unreadable body, unsupported Content-Encoding, decoded
+    // size over the limit) also throw because they describe the request stream.
     [[nodiscard]] ScopedOperation<std::optional<JsonValue>> jsonIf() const;
 
     template <typename T>

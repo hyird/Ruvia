@@ -1,7 +1,9 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <limits>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -58,4 +60,17 @@ RUVIA_TEST(websocket_accept_sha1_block_boundary_vectors) {
     RUVIA_CHECK_EQ(accept("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                           "aaaaaaaaaaaaaaaaaaaa"),
         std::string("QozTWdJkJ6Mr6+QwqAHt8yNpBdc="));  // total 128 (two full blocks)
+}
+
+RUVIA_TEST(websocket_accept_rejects_unrepresentable_input_before_scanning) {
+    ruvia::detail::WebSocketAcceptKey output{};
+    const std::string_view fakeKey("x", (std::numeric_limits<std::size_t>::max)());
+
+    bool rejected = false;
+    try {
+        ruvia::detail::encodeWebSocketAccept(output, fakeKey);
+    } catch (const std::length_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
 }

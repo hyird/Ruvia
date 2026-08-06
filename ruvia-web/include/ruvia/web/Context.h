@@ -63,6 +63,7 @@ class RedisRegistry;
 class RateLimiter;
 class RouteTable;
 class WorkerStateRegistry;
+enum class StaticFileSelectionMode : std::uint8_t;
 struct ContextAccess;
 class ContextServices;
 struct SessionAccess;
@@ -86,6 +87,8 @@ private:
     Context(RequestMemory& memory, const HttpRequest& request, detail::ContextServices services) noexcept;
 
     Context(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, const std::string_view* paramNames, const std::string_view* paramValues, std::size_t paramCount, std::uintptr_t routeRateLimitScope, detail::ContextServices services) noexcept;
+
+    [[nodiscard]] HttpResponse staticFile(const StaticRoot& root, std::string_view relativePath, std::string_view contentType, detail::StaticFileSelectionMode mode) const;
 
 public:
     using HeaderOptions = HttpResponse::HeaderOptions;
@@ -232,7 +235,10 @@ public:
     // handler. Internal provisional response storage is never exposed here.
     [[nodiscard]] const HttpResponse* response() const noexcept;
 
-    // End middleware dispatch with an explicitly constructed response.
+    // End middleware dispatch with an explicitly constructed response. Calling
+    // next() after respond() is a control-flow error and becomes a 500 response;
+    // a middleware may still call respond() after next() to replace an
+    // uncommitted downstream response.
     void respond(HttpResponse&& response);
 
     [[nodiscard]] HttpResponse body(std::string_view body) const;
@@ -346,6 +352,7 @@ private:
     const detail::RouteTable* routes_{nullptr};
     const detail::WorkerStateRegistry* workerStates_{nullptr};
     BlockingPool* blockingPool_{nullptr};
+    bool deferredStaticFileCompression_{false};
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
     detail::ContextRequestBodySource requestBodySource_;

@@ -7,17 +7,38 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 
 namespace ruvia::detail {
 namespace {
 
 template <typename Args>
-[[nodiscard]] std::size_t respSerializedSize(const Args& args) noexcept {
-    std::size_t size = 1 + httpUnsignedDecimalSize(static_cast<std::uint64_t>(args.size())) + 2;
+[[nodiscard]] std::size_t respSerializedSize(const Args& args) {
+    const auto decimalSize = [](std::size_t value) {
+        if (value > std::numeric_limits<std::uint64_t>::max()) {
+            throw std::length_error("redis RESP length is too large");
+        }
+        return httpUnsignedDecimalSize(static_cast<std::uint64_t>(value));
+    };
+    const auto addSize = [](std::size_t& current, std::size_t amount) {
+        if (amount > std::numeric_limits<std::size_t>::max() - current) {
+            throw std::length_error("redis RESP command is too large");
+        }
+        current += amount;
+    };
+
+    std::size_t size = 0;
+    addSize(size, 1);
+    addSize(size, decimalSize(args.size()));
+    addSize(size, 2);
     for (const auto& arg : args) {
         const auto bytes = static_cast<std::size_t>(arg.size());
-        size += 1 + httpUnsignedDecimalSize(static_cast<std::uint64_t>(bytes)) + 2 + bytes + 2;
+        addSize(size, 1);
+        addSize(size, decimalSize(bytes));
+        addSize(size, 2);
+        addSize(size, bytes);
+        addSize(size, 2);
     }
     return size;
 }
@@ -28,7 +49,10 @@ template <typename Args>
 // geometric growth keeps pipelined appends amortized O(total) bytes (an exact
 // per-command reserve would instead force O(n^2) copying for large pipelines).
 template <typename Args>
-void serializeRespCommand(std::pmr::string& output, const Args& args) {
+void serializeRespCommand(std::pmr::string& output, const Args& args, std::size_t serializedSize) {
+    if (serializedSize > std::numeric_limits<std::size_t>::max() - output.size()) {
+        throw std::length_error("redis RESP output is too large");
+    }
     output.push_back('*');
     appendRedisNumber(output, static_cast<std::uint64_t>(args.size()));
     output.append("\r\n", 2);
@@ -50,21 +74,21 @@ void appendRespCommand(std::pmr::string& output, std::span<const std::string_vie
     if (args.empty()) {
         throw std::invalid_argument("redis command must not be empty");
     }
-    serializeRespCommand(output, args);
+    serializeRespCommand(output, args, respSerializedSize(args));
 }
 
 void appendRespCommand(std::pmr::string& output, std::span<const std::pmr::string> args) {
     if (args.empty()) {
         throw std::invalid_argument("redis command must not be empty");
     }
-    serializeRespCommand(output, args);
+    serializeRespCommand(output, args, respSerializedSize(args));
 }
 
-std::size_t respCommandSerializedSize(std::span<const std::string_view> args) noexcept {
+std::size_t respCommandSerializedSize(std::span<const std::string_view> args) {
     return respSerializedSize(args);
 }
 
-std::size_t respCommandSerializedSize(std::span<const std::pmr::string> args) noexcept {
+std::size_t respCommandSerializedSize(std::span<const std::pmr::string> args) {
     return respSerializedSize(args);
 }
 

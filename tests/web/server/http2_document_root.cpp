@@ -26,6 +26,8 @@
 #include <string>
 #include <string_view>
 
+#include <zlib.h>
+
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/MemoryPool.h"
@@ -53,10 +55,56 @@ std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId,
 
 struct StreamResult {
     std::string status;
+    std::string contentEncoding;
     std::string body;
     bool sawData{false};
     bool ended{false};
 };
+
+[[nodiscard]] std::string gzipEncode(std::string_view plain) {
+    z_stream stream{};
+    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        return {};
+    }
+    std::string encoded(compressBound(static_cast<uLong>(plain.size())) + 64, '\0');
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(plain.data()));
+    stream.avail_in = static_cast<uInt>(plain.size());
+    stream.next_out = reinterpret_cast<Bytef*>(encoded.data());
+    stream.avail_out = static_cast<uInt>(encoded.size());
+    const int status = deflate(&stream, Z_FINISH);
+    if (status != Z_STREAM_END) {
+        (void)deflateEnd(&stream);
+        return {};
+    }
+    encoded.resize(stream.total_out);
+    (void)deflateEnd(&stream);
+    return encoded;
+}
+
+[[nodiscard]] std::string gzipDecode(std::string_view encoded) {
+    z_stream stream{};
+    if (inflateInit2(&stream, 15 + 32) != Z_OK) {
+        return {};
+    }
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(encoded.data()));
+    stream.avail_in = static_cast<uInt>(encoded.size());
+    std::string decoded;
+    char buffer[1024];
+    for (;;) {
+        stream.next_out = reinterpret_cast<Bytef*>(buffer);
+        stream.avail_out = sizeof(buffer);
+        const auto status = inflate(&stream, Z_NO_FLUSH);
+        decoded.append(buffer, sizeof(buffer) - stream.avail_out);
+        if (status == Z_STREAM_END) {
+            (void)inflateEnd(&stream);
+            return decoded;
+        }
+        if (status != Z_OK || (stream.avail_in == 0 && stream.avail_out != 0)) {
+            (void)inflateEnd(&stream);
+            return {};
+        }
+    }
+}
 
 }  // namespace
 
@@ -68,6 +116,11 @@ int main() {
     {
         std::ofstream f(dir / "asset.txt");
         f << kFileBody;
+    }
+    {
+        const auto encoded = gzipEncode(kFileBody);
+        std::ofstream f(dir / "asset.txt.gz", std::ios::binary);
+        f.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
     }
     ruvia::StaticRoot root(dir, {});
 
@@ -85,6 +138,7 @@ int main() {
             ruvia::detail::RouteTable routes(worker.resource());
             ruvia::test::Http2SansIoSessionFixture fixture;
             fixture.options.documentRoot.root = &root;
+            fixture.options.compression.reset();
             auto dispatcher = std::make_shared<WorkerDispatcher>(io, 64);
             const auto workerHandle = WorkerHandleAccess::make(dispatcher);
             co_await taskAsAwaitable(runHttp2SansIoSession(sock, routes, worker, fixture.context(ContextServices{}.withPlainTransport("127.0.0.1").withWorker(workerHandle))));
@@ -93,6 +147,7 @@ int main() {
 
     StreamResult getStream;
     StreamResult headStream;
+    StreamResult sidecarStream;
 
     asio::co_spawn(
         io,
@@ -109,12 +164,15 @@ int main() {
                 auto [ec, n] = co_await asio::async_read(sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
                 co_return !ec && n == size;
             };
-            auto requestHeaders = [&writeAll](std::string_view method, std::uint32_t streamId) -> asio::awaitable<bool> {
+            auto requestHeaders = [&writeAll](std::string_view method, std::uint32_t streamId, std::string_view acceptEncoding = {}) -> asio::awaitable<bool> {
                 std::pmr::string headerBlock(std::pmr::get_default_resource());
                 HpackEncoder::encodeHeader(headerBlock, ":method", method);
                 HpackEncoder::encodeHeader(headerBlock, ":path", "/asset.txt");
                 HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
                 HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+                if (!acceptEncoding.empty()) {
+                    HpackEncoder::encodeHeader(headerBlock, "accept-encoding", acceptEncoding);
+                }
                 co_return co_await writeAll(frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, streamId, std::string_view(headerBlock.data(), headerBlock.size())));
             };
 
@@ -122,9 +180,10 @@ int main() {
             if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
             if (!co_await requestHeaders("GET", 1)) co_return;
             if (!co_await requestHeaders("HEAD", 3)) co_return;
+            if (!co_await requestHeaders("GET", 5, "gzip, identity;q=0")) co_return;
 
             HpackDecoder decoder(std::pmr::get_default_resource());
-            while (!getStream.ended || !headStream.ended) {
+            while (!getStream.ended || !headStream.ended || !sidecarStream.ended) {
                 char headerBytes[kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
                 const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
@@ -132,7 +191,7 @@ int main() {
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
                 }
-                StreamResult* stream = header.streamId == 1 ? &getStream : header.streamId == 3 ? &headStream : nullptr;
+                StreamResult* stream = header.streamId == 1 ? &getStream : header.streamId == 3 ? &headStream : header.streamId == 5 ? &sidecarStream : nullptr;
                 if (stream == nullptr) {
                     continue;
                 }
@@ -140,6 +199,8 @@ int main() {
                     (void)decoder.decode(std::string_view(payload.data(), payload.size()), stream, [](void* target, std::string_view name, std::string_view value) {
                         if (name == ":status") {
                             static_cast<StreamResult*>(target)->status = std::string(value);
+                        } else if (name == "content-encoding") {
+                            static_cast<StreamResult*>(target)->contentEncoding = std::string(value);
                         }
                         return true;
                     });
@@ -175,6 +236,18 @@ int main() {
     if (headStream.sawData || !headStream.body.empty()) {
         std::fprintf(stderr, "HEAD over HTTP/2 must send no body, got '%s'\n", headStream.body.c_str());
         return 4;
+    }
+    if (sidecarStream.status != "200") {
+        std::fprintf(stderr, "precompressed document-root sidecar over HTTP/2 was not 200: status='%s'\n", sidecarStream.status.c_str());
+        return 5;
+    }
+    if (sidecarStream.contentEncoding != "gzip") {
+        std::fprintf(stderr, "precompressed document-root sidecar lost gzip encoding: '%s'\n", sidecarStream.contentEncoding.c_str());
+        return 6;
+    }
+    if (gzipDecode(sidecarStream.body) != kFileBody) {
+        std::fprintf(stderr, "precompressed document-root sidecar body was not valid gzip\n");
+        return 7;
     }
     return 0;
 }

@@ -3,13 +3,17 @@
 #include <concepts>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <memory_resource>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
 
 namespace {
 
@@ -17,6 +21,10 @@ using ruvia::detail::HpackDecodeError;
 using ruvia::detail::HpackDecoder;
 using ruvia::detail::HpackDecodeResult;
 using ruvia::detail::HpackEncoder;
+using ruvia::detail::Http2HeaderDecodeContext;
+using ruvia::detail::Http2StreamHeaderDecodeTransaction;
+using ruvia::detail::Http2StreamState;
+using ruvia::detail::http2OnDecodedInitialHeader;
 
 template <typename T>
 concept HasAnyRvalueHpackDecodeAccessor = requires(T&& result) { std::move(result).decoded(); } || requires(T&& result) { std::move(result).failure(); };
@@ -40,6 +48,56 @@ std::string bytes(std::initializer_list<int> values) {
     }
     return out;
 }
+
+class ToggleRejectingMemoryResource final : public std::pmr::memory_resource {
+public:
+    void rejectAllocations(bool value = true) noexcept {
+        reject_ = value;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (reject_) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool reject_{false};
+};
+
+class RejectLargeAllocationsResource final : public std::pmr::memory_resource {
+public:
+    void rejectLargeAllocations(bool value = true) noexcept {
+        rejectLarge_ = value;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (rejectLarge_ && bytes >= 1024) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool rejectLarge_{false};
+};
 
 // Decode an HPACK block into (name, value) pairs; returns whether it succeeded.
 bool decodeBlock(std::string_view block, Collector& out) {
@@ -86,6 +144,35 @@ RUVIA_TEST(hpack_encode_decode_round_trip) {
     RUVIA_CHECK(decodeBlock(std::string_view(encoded.data(), encoded.size()), out));
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{1});
     RUVIA_CHECK_EQ(out.headers[0], std::make_pair(std::string("x-custom-header"), std::string("custom value")));
+}
+
+RUVIA_TEST(hpack_encoder_rejects_unrepresentable_string_length_without_partial_output) {
+    // The view only carries metadata; the encoder must reject it before it ever
+    // reads the pointed-to bytes, so this does not allocate or dereference 4 GiB.
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint32_t)) {
+        const auto oversizedLength = static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) + 1U;
+        const std::string_view oversized("x", oversizedLength);
+
+        std::pmr::string indexedNameOutput(std::pmr::get_default_resource());
+        bool rejectedValue = false;
+        try {
+            HpackEncoder::encodeHeaderWithNameIndex(indexedNameOutput, ruvia::detail::HpackStaticIndex::kContentType, oversized);
+        } catch (const std::length_error&) {
+            rejectedValue = true;
+        }
+        RUVIA_CHECK(rejectedValue);
+        RUVIA_CHECK(indexedNameOutput.empty());
+
+        std::pmr::string literalNameOutput(std::pmr::get_default_resource());
+        bool rejectedName = false;
+        try {
+            HpackEncoder::encodeHeader(literalNameOutput, oversized, "value");
+        } catch (const std::length_error&) {
+            rejectedName = true;
+        }
+        RUVIA_CHECK(rejectedName);
+        RUVIA_CHECK(literalNameOutput.empty());
+    }
 }
 
 RUVIA_TEST(hpack_encoder_uses_without_indexing_representation) {
@@ -262,6 +349,143 @@ RUVIA_TEST(hpack_indexed_name_referencing_the_evicted_entry_is_safe) {
     // The reference reads the STORED dynamic entry -- the byte the use-after-free
     // would corrupt. It must still be the full 20-byte name.
     RUVIA_CHECK_EQ(out.headers[2], std::make_pair(name, std::string("w")));
+}
+
+RUVIA_TEST(hpack_dynamic_insert_allocation_failure_preserves_table) {
+    ToggleRejectingMemoryResource resource;
+    HpackDecoder decoder(&resource);
+
+    // Set the table to exactly one tiny entry, then insert "a: b". The vector
+    // has one live element and normally one capacity slot at this point.
+    std::string first = bytes({0x3f, 0x03, 0x40, 0x01, 'a', 0x01, 'b'});  // max = 34
+    Collector initial;
+    const auto initialResult = decoder.decode(first, &initial, &collect);
+    RUVIA_CHECK(initialResult.decoded() != nullptr);
+
+    // The next entry uses the existing dynamic name (index 62) and must evict the
+    // first one. Reject the vector growth after the entry is decoded. The failed
+    // insertion must not make the old indexed entry disappear.
+    const std::string second = bytes({0x7e, 0x01, 'c'});  // incremental, name index 62
+    Collector failedInsert;
+    resource.rejectAllocations();
+    bool allocationFailed = false;
+    try {
+        (void)decoder.decode(second, &failedInsert, &collect);
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+    RUVIA_CHECK(allocationFailed);
+
+    resource.rejectAllocations(false);
+    Collector retained;
+    const auto retainedResult = decoder.decode(bytes({0xbe}), &retained, &collect);  // indexed dynamic entry 62
+    RUVIA_CHECK(retainedResult.decoded() != nullptr);
+    RUVIA_CHECK_EQ(retained.headers.size(), std::size_t{1});
+    if (!retained.headers.empty()) {
+        RUVIA_CHECK_EQ(retained.headers[0], std::make_pair(std::string("a"), std::string("b")));
+    }
+}
+
+RUVIA_TEST(hpack_header_callback_allocation_failure_rolls_back_stream_state) {
+    ToggleRejectingMemoryResource resource;
+    HpackDecoder decoder(&resource);
+    Http2StreamState stream(1, &resource);
+
+    std::string largePath(4096, 'p');
+    largePath.front() = '/';
+    std::pmr::string block(std::pmr::get_default_resource());
+    HpackEncoder::encodeHeader(block, ":method", "GET");
+    HpackEncoder::encodeHeader(block, ":path", largePath);
+
+    const auto decode = [](void* target, std::string_view name, std::string_view value) {
+        return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value);
+    };
+
+    bool allocationFailed = false;
+    {
+        Http2StreamHeaderDecodeTransaction transaction(stream, true);
+        Http2HeaderDecodeContext context(stream, &transaction);
+        resource.rejectAllocations();
+        try {
+            (void)decoder.decode(block, &context, decode);
+        } catch (const std::bad_alloc&) {
+            allocationFailed = true;
+        }
+    }
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(!stream.hasMethod());
+    RUVIA_CHECK(!stream.hasPath());
+    RUVIA_CHECK_EQ(stream.requestHeaderCount(), std::size_t{0});
+
+    resource.rejectAllocations(false);
+    {
+        Http2StreamHeaderDecodeTransaction transaction(stream, true);
+        Http2HeaderDecodeContext context(stream, &transaction);
+        const auto result = decoder.decode(block, &context, decode);
+        RUVIA_CHECK(result.decoded() != nullptr);
+        if (result.decoded() != nullptr) {
+            transaction.commit();
+        }
+    }
+    RUVIA_CHECK_EQ(stream.requestMethod(), std::string_view("GET"));
+    RUVIA_CHECK_EQ(stream.requestPath(), std::string_view(largePath));
+}
+
+RUVIA_TEST(hpack_field_block_allocation_failure_rolls_back_prior_dynamic_inserts) {
+    RejectLargeAllocationsResource resource;
+    HpackDecoder decoder(&resource);
+
+    // Both fields use incremental indexing. The second value is large enough
+    // to fail while materialising its dynamic-table entry, after the first
+    // entry has already been inserted.
+    const std::string largeValue(3000, 'v');
+    std::string block;
+    {
+        std::pmr::string first(std::pmr::get_default_resource());
+        HpackEncoder::encodeHeader(first, "x-one", "one");
+        first[0] = static_cast<char>(0x40);  // literal with incremental indexing
+        block.append(first.data(), first.size());
+    }
+    {
+        std::pmr::string second(std::pmr::get_default_resource());
+        HpackEncoder::encodeHeader(second, "x-two", largeValue);
+        second[0] = static_cast<char>(0x40);  // literal with incremental indexing
+        block.append(second.data(), second.size());
+    }
+
+    resource.rejectLargeAllocations();
+    Collector failed;
+    bool allocationFailed = false;
+    try {
+        (void)decoder.decode(block, &failed, &collect);
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+    RUVIA_CHECK(allocationFailed);
+
+    // Index 62 is the first dynamic entry. It must not be visible after a
+    // failed field block, even though the first callback/insertion completed.
+    Collector beforeRetry;
+    const auto beforeRetryResult = decoder.decode(std::string_view("\xbe", 1), &beforeRetry, &collect);
+    RUVIA_CHECK(beforeRetryResult.failure() != nullptr);
+    if (const auto* failure = beforeRetryResult.failure()) {
+        RUVIA_CHECK(failure->error() == HpackDecodeError::kInvalidIndex);
+    }
+
+    resource.rejectLargeAllocations(false);
+    Collector retried;
+    const auto retryResult = decoder.decode(block, &retried, &collect);
+    RUVIA_CHECK(retryResult.decoded() != nullptr);
+
+    // A successful retry contains exactly two dynamic entries; index 64
+    // (dynamic index 3) must remain invalid rather than exposing a duplicated
+    // copy of the first field.
+    Collector afterRetry;
+    const auto afterRetryResult = decoder.decode(std::string_view("\xc0", 1), &afterRetry, &collect);
+    RUVIA_CHECK(afterRetryResult.failure() != nullptr);
+    if (const auto* failure = afterRetryResult.failure()) {
+        RUVIA_CHECK(failure->error() == HpackDecodeError::kInvalidIndex);
+    }
 }
 
 RUVIA_TEST(hpack_size_update_after_header_is_rejected) {

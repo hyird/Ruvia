@@ -1,5 +1,6 @@
 #include "ruvia/web/db/Db.h"
 
+#include <exception>
 #include <utility>
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbPreparedStatement.h"
@@ -80,7 +81,14 @@ DbTransaction::DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pm
 
 DbTransaction::DbTransaction(DbTransaction&& other) noexcept
     : detail::ScopedCapabilityNode(std::move(other)),
-      state_(std::move(other.state_)) {}
+      state_(std::move(other.state_)) {
+    if (other.operationScope_.hasPendingOperations()) {
+        // executePrepared/commitTask/rollbackTask are member coroutines. A
+        // cold frame retains the old `this`; moving the owner would otherwise
+        // make the eventual await operate on the moved-from transaction.
+        std::terminate();
+    }
+}
 
 DbTransaction::~DbTransaction() {
     reset();

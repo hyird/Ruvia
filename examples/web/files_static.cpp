@@ -1,10 +1,8 @@
 // Static files: c.file(...), c.staticFile(...), StaticRoot, a document root,
 // validators/ranges and gzip configuration.
 //
-// A StaticRoot indexes the tree once at construction and never rescans it, so
-// editing files under a running server does not take effect: modified and
-// deleted files make their requests fail, and added files answer 404, until the
-// server is restarted. See the contract on StaticRoot in StaticFiles.h.
+// A standalone StaticRoot is an immutable index by default. App document roots
+// can opt into development polling; see the commented configuration below.
 
 #include <filesystem>
 #include <memory>
@@ -55,6 +53,13 @@ int main() {
     documentRoot.root = examplesRoot() / "public";
     documentRoot.staticOptions.indexFile = "index.html";
     documentRoot.staticOptions.cacheControl = "public, max-age=3600";
+    // Development-only document-root refresh and browser reload:
+    // documentRoot.runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
+    // documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds(500);
+    // documentRoot.runtimeOptions.enableLiveReload = true;
+    // documentRoot.runtimeOptions.onDemandCompressionMaxBytes = 2 * 1024 * 1024;
+    // Polling requires an application blocking pool:
+    // ruvia::app().setBlockingPool(ruvia::BlockingPoolOptions{.threadCount = 2});
 
     ruvia::app().setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(8083)).setWorkersPerListener(2).setSignalShutdown(true).setCompression(ruvia::CompressionConfig{.minBytes = 128}).setDocumentRoot(std::move(documentRoot)).run();
 }

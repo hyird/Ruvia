@@ -45,6 +45,34 @@ private:
     bool rejecting_{false};
 };
 
+class TrackingResource final : public std::pmr::memory_resource {
+public:
+    void release() noexcept {
+        released_ = true;
+    }
+
+    [[nodiscard]] bool deallocatedAfterRelease() const noexcept {
+        return deallocatedAfterRelease_;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        deallocatedAfterRelease_ = deallocatedAfterRelease_ || released_;
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool released_{false};
+    bool deallocatedAfterRelease_{false};
+};
+
 static_assert(std::is_move_assignable_v<ruvia::RedisKeyValue>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisKeyValue>);
 static_assert(std::is_move_assignable_v<ruvia::RedisScoredValue>);
@@ -193,6 +221,30 @@ RUVIA_TEST(redis_registry_derives_default_pool_from_owned_entry_index) {
     }
     RUVIA_CHECK(defaultResolved);
     RUVIA_CHECK(aliasResolved);
+}
+
+RUVIA_TEST(redis_registry_owns_nested_pmr_configuration) {
+    TrackingResource sourceResource;
+    std::pmr::unsynchronized_pool_resource targetResource;
+    asio::io_context ioContext;
+    std::optional<ruvia::detail::RedisDefinition> definition;
+    ruvia::RedisConfig config{
+        .host = std::pmr::string(80, 'h', &sourceResource),
+        .port = 6379,
+        .username = std::pmr::string(80, 'u', &sourceResource),
+        .password = std::pmr::string(80, 'p', &sourceResource),
+        .database = 0,
+        .poolSizePerWorker = 1,
+    };
+    definition.emplace(std::pmr::string("default", &sourceResource), std::move(config));
+
+    std::optional<ruvia::detail::RedisRegistry> registry;
+    registry.emplace(ioContext, &targetResource, std::span<const ruvia::detail::RedisDefinition>(&*definition, 1));
+    definition.reset();
+    sourceResource.release();
+    registry.reset();
+
+    RUVIA_CHECK(!sourceResource.deallocatedAfterRelease());
 }
 
 RUVIA_TEST(redis_request_capabilities_reject_after_parent_scope_closes) {

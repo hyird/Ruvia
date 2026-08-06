@@ -3,13 +3,43 @@
 #include <chrono>
 #include <concepts>
 #include <exception>
+#include <memory_resource>
 #include <optional>
+#include <string_view>
 #include <type_traits>
 
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/App.h"
 
 namespace {
+
+class ReleasableMemoryResource final : public std::pmr::memory_resource {
+public:
+    void release() noexcept {
+        released_ = true;
+    }
+
+    [[nodiscard]] bool deallocatedAfterRelease() const noexcept {
+        return deallocatedAfterRelease_;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        deallocatedAfterRelease_ = deallocatedAfterRelease_ || released_;
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool released_{false};
+    bool deallocatedAfterRelease_{false};
+};
 
 using ruvia::detail::HttpServerOptions;
 using ruvia::detail::validateHttpServerOptions;
@@ -42,6 +72,26 @@ RUVIA_TEST(validate_server_options_accepts_defaults) {
     RUVIA_CHECK(HttpServerOptions{}.maxConnections.has_value());
     RUVIA_CHECK_EQ(*HttpServerOptions{}.maxConnections, std::size_t{1024});
     RUVIA_CHECK(!throwsInvalid([] { validateHttpServerOptions(HttpServerOptions{}); }));
+}
+
+RUVIA_TEST(validate_server_options_owns_document_root_runtime_policy) {
+    HttpServerOptions options;
+    options.documentRoot.runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
+    options.documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds::zero();
+    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    options.documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds(1);
+    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    options.documentRoot.runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kImmutable;
+    options.documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds::zero();
+    RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    // Browser reload assets need a changing root revision. Exposing them
+    // while the root is immutable would silently promise live reload that can
+    // never observe a filesystem change.
+    options.documentRoot.runtimeOptions.enableLiveReload = true;
+    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
 }
 
 RUVIA_TEST(validate_server_options_rejects_configured_nonpositive_timeout) {
@@ -233,4 +283,15 @@ RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {
     RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity({}, ruvia::TlsIdentity::fromFiles("other.pem", "other.key")); }));
     tls.addSniIdentity("Example.com", ruvia::TlsIdentity::fromFiles("other.pem", "other.key"));
     RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity("example.COM", ruvia::TlsIdentity::fromFiles("third.pem", "third.key")); }));
+}
+
+RUVIA_TEST(tls_identity_rebinds_password_storage_to_process_resource) {
+    ReleasableMemoryResource callerResource;
+    {
+        auto password = std::pmr::string("secret", &callerResource);
+        auto identity = ruvia::TlsIdentity::fromFiles("cert.pem", "key.pem", std::move(password));
+        callerResource.release();
+        RUVIA_CHECK_EQ(identity.privateKeyPassword(), std::string_view("secret"));
+    }
+    RUVIA_CHECK(!callerResource.deallocatedAfterRelease());
 }

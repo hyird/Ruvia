@@ -121,6 +121,9 @@ private:
 // or queryTimeout a stalled backend blocks startup indefinitely.
 class DbMigrator final {
 public:
+    // The configuration and migration-table name are copied into resource;
+    // their source PMR storage may be released after construction. The
+    // supplied resource itself must outlive this migrator.
     explicit DbMigrator(DbConfig config, DbMigrationOptions options = {}, std::pmr::memory_resource* resource = nullptr);
 
     [[nodiscard]] DbMigrationReport migrate(std::span<const DbMigration> migrations) const;

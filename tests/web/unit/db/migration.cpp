@@ -6,6 +6,7 @@
 #include "test_harness.h"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <exception>
 #include <memory_resource>
@@ -50,6 +51,21 @@ RUVIA_TEST(db_migration_table_name_rejects_injection) {
     RUVIA_CHECK(!isValidMigrationTableName("a.b", driver));
     RUVIA_CHECK(!isValidMigrationTableName("quote'", driver));
     RUVIA_CHECK(!isValidMigrationTableName("tbl`; DROP TABLE users;--", driver));
+}
+
+RUVIA_TEST(db_migration_postgresql_lock_timeout_conversion_is_checked) {
+    using ruvia::detail::postgresLockTimeoutMilliseconds;
+
+    const auto largestRepresentableSeconds = std::chrono::seconds(std::chrono::milliseconds::max().count() / 1000);
+    RUVIA_CHECK_EQ(postgresLockTimeoutMilliseconds(largestRepresentableSeconds), static_cast<std::uint64_t>(largestRepresentableSeconds.count()) * 1000U);
+
+    bool overflowRejected = false;
+    try {
+        (void)postgresLockTimeoutMilliseconds(std::chrono::seconds::max());
+    } catch (const std::invalid_argument&) {
+        overflowRejected = true;
+    }
+    RUVIA_CHECK(overflowRejected);
 }
 
 RUVIA_TEST(db_migration_list_validation_enforces_integrity) {

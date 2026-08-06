@@ -3,6 +3,7 @@
 #include "ruvia/http/detail/util/PmrResource.h"
 
 #include <algorithm>
+#include <exception>
 
 namespace ruvia::detail {
 
@@ -12,10 +13,39 @@ HpackDecoder::HpackDecoder(std::pmr::memory_resource* resource)
       nameScratch_(resource_),
       valueScratch_(resource_) {}
 
+HpackDecoder::DecodeTransaction::DecodeTransaction(HpackDecoder& decoder) noexcept
+    : decoder_(&decoder) {
+    decoder_->beginDecodeTransaction();
+}
+
+HpackDecoder::DecodeTransaction::~DecodeTransaction() {
+    rollback();
+}
+
+void HpackDecoder::DecodeTransaction::commit() noexcept {
+    if (!active_) {
+        return;
+    }
+    decoder_->commitDecodeTransaction();
+    active_ = false;
+}
+
+void HpackDecoder::DecodeTransaction::rollback() noexcept {
+    if (!active_) {
+        return;
+    }
+    decoder_->rollbackDecodeTransaction();
+    active_ = false;
+}
+
 void HpackDecoder::setMaxDynamicTableSize(std::size_t bytes) {
     allowedDynamicSize_ = bytes;
     maxDynamicSize_ = std::min(maxDynamicSize_, bytes);
     evictDynamic();
+}
+
+HpackDecoder::DecodeTransaction HpackDecoder::beginTransaction() noexcept {
+    return DecodeTransaction(*this);
 }
 
 HpackDecoder::StepResult HpackDecoder::decodeInteger(const unsigned char*& cursor, const unsigned char* end, std::uint8_t prefixBits, std::uint32_t& value) const noexcept {
@@ -121,6 +151,34 @@ void HpackDecoder::releaseScratch() {
 }
 
 HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, HeaderCallback callback) {
+    auto transaction = beginTransaction();
+    auto result = decode(block, target, callback, transaction);
+    if (transaction.active()) {
+        transaction.commit();
+    }
+    return result;
+}
+
+HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, HeaderCallback callback, DecodeTransaction& transaction) {
+    if (transaction.decoder_ != this || !transaction.active_) {
+        std::terminate();
+    }
+    try {
+        auto result = decodeBlock(block, target, callback);
+        if (const auto* failure = result.failure(); failure != nullptr && failure->error() != HpackDecodeError::kCallbackRejected) {
+            transaction.rollback();
+        }
+        return result;
+    } catch (...) {
+        // A field block is the HPACK transaction boundary. In particular, a
+        // later allocation failure must not leave earlier incremental-indexing
+        // entries visible when the caller retries the same block.
+        transaction.rollback();
+        throw;
+    }
+}
+
+HpackDecodeResult HpackDecoder::decodeBlock(std::string_view block, void* target, HeaderCallback callback) {
     struct ScratchReleaseGuard final {
         HpackDecoder& decoder;
 

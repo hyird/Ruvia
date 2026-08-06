@@ -15,9 +15,11 @@
 #include <vector>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/TaskScope.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/RuntimeLifecycle.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/integration/DataAccessState.h"
@@ -66,6 +68,7 @@ public:
 
 private:
     struct ValidatedOptionsTag final {};
+    using DocumentRootPtr = std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>>;
 
     HttpServer(ValidatedOptionsTag, asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, HttpServerOptions validatedOptions);
 
@@ -75,6 +78,7 @@ private:
     void failWorker(std::exception_ptr failure) noexcept;
     void runIoContext() noexcept;
     Task<void> runWorker();
+    Task<void> staticRootRefreshLoop();
     Task<void> acceptLoop();
     Task<void> handleSession(AcceptedConnectionLease connection);
     template <typename Stream>
@@ -89,10 +93,13 @@ private:
     asio::ip::tcp::endpoint endpoint_;
     const RouteTable& routes_;
     WorkerMemory memory_;
+    TaskScope backgroundTasks_;
     // Per-host SNI contexts (RFC 6066), owned here so they outlive connections;
     // sniLookup_ maps a lowercased host to its context for the SNI callback.
     SniContextStore sniContexts_;
     SniContextLookup sniLookup_;
+    DocumentRootPtr ownedDocumentRoot_;
+    std::pmr::vector<DocumentRootPtr> retiredDocumentRoots_;
     HttpServerOptions options_;
     ConnectionScanner connectionScanner_;
     DataAccessState dataAccess_;
@@ -107,6 +114,7 @@ private:
     std::atomic<std::size_t> connectionFailures_{0};
     std::atomic<std::size_t> acceptFailures_{0};
     std::atomic<std::size_t> workerFailures_{0};
+    std::atomic<std::size_t> documentRootRefreshFailures_{0};
 
     // lifecycle_ is touched by external start/stop callers. Request coroutines
     // observe workerState_, which is mutated only on this io_context.

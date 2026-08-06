@@ -99,6 +99,29 @@ private:
 
 namespace {
 
+[[nodiscard]] DbConfig cloneMigrationConfig(const DbConfig& source, std::pmr::memory_resource* resource) {
+    return DbConfig{
+        .driver = source.driver,
+        .host = std::pmr::string(source.host, resource),
+        .port = source.port,
+        .username = std::pmr::string(source.username, resource),
+        .password = std::pmr::string(source.password, resource),
+        .database = std::pmr::string(source.database, resource),
+        .connectTimeout = source.connectTimeout,
+        .readTimeout = source.readTimeout,
+        .writeTimeout = source.writeTimeout,
+        .queryTimeout = source.queryTimeout,
+        .acquireTimeout = source.acquireTimeout,
+    };
+}
+
+[[nodiscard]] DbMigrationOptions cloneMigrationOptions(const DbMigrationOptions& source, std::pmr::memory_resource* resource) {
+    return DbMigrationOptions{
+        .table = std::pmr::string(source.table, resource),
+        .lockTimeout = source.lockTimeout,
+    };
+}
+
 void appendQuotedIdentifier(std::pmr::string& sql, std::string_view identifier, DbDriver driver) {
     if (!detail::isValidMigrationTableName(identifier, driver)) {
         throw std::invalid_argument("database migration table has an invalid backend identifier");
@@ -245,12 +268,18 @@ public:
         if (options.lockTimeout.count() <= 0) {
             throw std::invalid_argument("database migration lock timeout must be greater than zero");
         }
+        const auto driver = config.driver;
+        if (driver == DbDriver::kPostgreSql) {
+            // Validate before opening a connection.  PostgreSQL receives this
+            // value in milliseconds, and a valid seconds duration can still
+            // overflow that representation during conversion.
+            (void)detail::postgresLockTimeoutMilliseconds(options.lockTimeout);
+        }
 
         if (!config.acquireTimeout.has_value()) {
             config.acquireTimeout = config.queryTimeout;
         }
         validateDbConfig(config);
-        const auto driver = config.driver;
         DbMigrationReport report(resolved);
 
         auto lockName = buildMigrationLockName(config, resolved);
@@ -311,7 +340,7 @@ private:
         // PostgreSQL's advisory lock waits without a bound of its own; the
         // session's lock_timeout is what ends that wait.
         std::pmr::string timeoutSql("SET lock_timeout TO '", resource);
-        detail::appendDbNumber(timeoutSql, static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(lockTimeout).count()));
+        detail::appendDbNumber(timeoutSql, detail::postgresLockTimeoutMilliseconds(lockTimeout));
         timeoutSql.append("ms'");
         (void)co_await handle.execute(timeoutSql);
         std::array<DbValue, 1> lockParams{DbValue{lockName}};
@@ -376,8 +405,8 @@ private:
 };
 
 DbMigrator::DbMigrator(DbConfig config, DbMigrationOptions options, std::pmr::memory_resource* resource)
-    : config_(std::move(config)),
-      options_(std::move(options)),
+    : config_(cloneMigrationConfig(config, detail::pmrResourceOrDefault(resource))),
+      options_(cloneMigrationOptions(options, detail::pmrResourceOrDefault(resource))),
       resource_(detail::pmrResourceOrDefault(resource)) {}
 
 DbMigrationReport DbMigrator::migrate(std::span<const DbMigration> migrations) const {

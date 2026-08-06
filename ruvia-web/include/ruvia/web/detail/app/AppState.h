@@ -70,6 +70,7 @@ struct AppDocumentRootConfig final {
 
     NativePathString root;
     StaticRootOptions staticOptions;
+    DocumentRootRuntimeOptions runtimeOptions;
 };
 
 struct AppState final {

@@ -1,5 +1,6 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
+#include "ruvia/core/memory/ProcessResource.h"
 
 #include <cstddef>
 #include <stdexcept>
@@ -44,7 +45,7 @@ TlsIdentity TlsIdentity::fromFiles(std::filesystem::path certificateChainFile, s
     if (privateKeyFile.empty()) {
         throw std::invalid_argument("TLS private key file must not be empty");
     }
-    return TlsIdentity(std::move(certificateChainFile), std::move(privateKeyFile), std::move(privateKeyPassword));
+    return TlsIdentity(std::move(certificateChainFile), std::move(privateKeyFile), std::pmr::string(privateKeyPassword, detail::processResource()));
 }
 
 TlsClientCertificatePolicy TlsClientCertificatePolicy::optional(std::filesystem::path verifyFile) {

@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <concepts>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -90,6 +91,19 @@ RUVIA_TEST(cookie_borrowed_text_accepts_stable_string_owners) {
     std::string wire(plan.size(), '\0');
     plan.write(wire.data());
     RUVIA_CHECK_EQ(wire, std::string("sid=value; Path=/account; Domain=example.com"));
+}
+
+RUVIA_TEST(cookie_plan_rejects_wrapped_wire_length_before_scanning) {
+    const auto oversizedName = std::string_view("x", std::numeric_limits<std::size_t>::max());
+    bool lengthError = false;
+    try {
+        ruvia::CookieOptions options;
+        (void)ruvia::detail::SetCookiePlan(oversizedName, "value", options);
+    } catch (const std::length_error&) {
+        lengthError = true;
+    } catch (...) {
+    }
+    RUVIA_CHECK(lengthError);
 }
 
 RUVIA_TEST(cookie_samesite_enum_maps_to_wire_tokens) {

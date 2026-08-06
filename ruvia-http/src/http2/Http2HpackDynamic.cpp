@@ -2,6 +2,8 @@
 #include "ruvia/http/detail/http2/frame/Http2OffsetVector.h"
 #include "ruvia/http/detail/http2/hpack/Http2HpackStaticTable.h"
 
+#include <exception>
+
 namespace ruvia::detail {
 
 std::size_t HpackDecoder::entrySize(std::string_view name, std::string_view value) noexcept {
@@ -42,6 +44,13 @@ void HpackDecoder::addDynamic(std::string_view name, std::string_view value) {
         return;
     }
 
+    // Eviction advances dynamicOffset_ and may compact/destroy the old entries.
+    // Reserve the vector slot first: if this allocation fails, the dynamic table
+    // remains untouched and the caller can retry the complete field block. Without
+    // this preflight, push_back() could throw after evictDynamicToFit() had already
+    // removed the entries needed to decode the next indexed field.
+    dynamic_.reserve(dynamic_.size() + 1);
+
     // Copy name and value into owned storage BEFORE evicting. For a "Literal
     // Header Field with Incremental Indexing -- Indexed Name" whose name indexes a
     // dynamic entry (RFC 7541 6.2.1), `name` aliases that entry's heap buffer --
@@ -65,6 +74,14 @@ const HpackDecoder::Entry& HpackDecoder::dynamicEntryByNewestIndex(std::size_t n
 }
 
 void HpackDecoder::clearDynamic() noexcept {
+    if (decodeTransactionActive_) {
+        // Keep the physical entries alive until the field-block transaction
+        // commits. A later allocation failure can then restore the original
+        // vector by truncating only entries appended by this decode.
+        dynamicOffset_ = dynamic_.size();
+        dynamicSize_ = 0;
+        return;
+    }
     dynamic_.clear();
     dynamicSize_ = 0;
     dynamicOffset_ = 0;
@@ -88,7 +105,46 @@ void HpackDecoder::evictDynamic() {
 }
 
 void HpackDecoder::compactDynamic() {
+    if (decodeTransactionActive_) {
+        return;
+    }
     http2CompactMovableOffsetVector(dynamic_, dynamicOffset_, 16);
+}
+
+void HpackDecoder::beginDecodeTransaction() noexcept {
+    if (decodeTransactionActive_) {
+        std::terminate();
+    }
+    decodeTransactionActive_ = true;
+    transactionDynamicSize_ = dynamicSize_;
+    transactionDynamicOffset_ = dynamicOffset_;
+    transactionDynamicVectorSize_ = dynamic_.size();
+    transactionMaxDynamicSize_ = maxDynamicSize_;
+}
+
+void HpackDecoder::commitDecodeTransaction() noexcept {
+    if (!decodeTransactionActive_) {
+        std::terminate();
+    }
+    // Do not compact here: compaction moves owning strings and is deliberately
+    // deferred until a normal non-transactional mutation. The logical offset is
+    // already part of the committed table state, while leaving physical storage
+    // untouched keeps this commit itself non-throwing.
+    decodeTransactionActive_ = false;
+}
+
+void HpackDecoder::rollbackDecodeTransaction() noexcept {
+    if (!decodeTransactionActive_) {
+        return;
+    }
+    if (dynamic_.size() < transactionDynamicVectorSize_) {
+        std::terminate();
+    }
+    dynamic_.resize(transactionDynamicVectorSize_);
+    dynamicSize_ = transactionDynamicSize_;
+    dynamicOffset_ = transactionDynamicOffset_;
+    maxDynamicSize_ = transactionMaxDynamicSize_;
+    decodeTransactionActive_ = false;
 }
 
 }  // namespace ruvia::detail

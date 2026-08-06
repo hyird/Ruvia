@@ -630,23 +630,23 @@ private:
     // HPACK header-block decode (all pure; ported 1:1 from the coroutine session but
     // WITHOUT resolveStreamRoute -- route resolution is application policy the owner runs
     // after pulling kMessageHead). Return the classification; the caller reacts.
-    [[nodiscard]] HeaderDecodeStatus decodeHeaderBlock(Http2StreamState& stream);
+    [[nodiscard]] HeaderDecodeStatus decodeHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction);
     // Client role: decode a RESPONSE header block (:status + regular headers into the
     // stream's header table). A 1xx interim head is validated then discarded WITHOUT
     // leaving the remote head-pending alternative active, so the next HEADERS block
     // decodes as the real head; callers emit events only after that alternative changes.
-    [[nodiscard]] HeaderDecodeStatus decodeResponseHeaderBlock(Http2StreamState& stream);
+    [[nodiscard]] HeaderDecodeStatus decodeResponseHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction);
     // Role-aware initial-head decode dispatch (request vs response semantics).
-    [[nodiscard]] HeaderDecodeStatus decodeInitialHeaderBlock(Http2StreamState& stream);
+    [[nodiscard]] HeaderDecodeStatus decodeInitialHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction);
     // Role-aware idle-stream test (server: above the highest peer id; client: any even
     // id or an odd id we have not opened yet).
     [[nodiscard]] bool isIdleStreamId(std::uint32_t streamId) const noexcept;
-    [[nodiscard]] HeaderDecodeStatus decodeRefusedHeaderBlock(Http2StreamState& stream);
-    [[nodiscard]] HeaderDecodeStatus decodeDiscardedHeaderBlock(Http2StreamState& stream);
-    [[nodiscard]] HeaderDecodeStatus finishTrailerBlock(Http2StreamState& stream);
+    [[nodiscard]] HeaderDecodeStatus decodeRefusedHeaderBlock(Http2StreamState& stream, HpackDecoder::DecodeTransaction& hpackTransaction);
+    [[nodiscard]] HeaderDecodeStatus decodeDiscardedHeaderBlock(Http2StreamState& stream, HpackDecoder::DecodeTransaction& hpackTransaction);
+    [[nodiscard]] HeaderDecodeStatus finishTrailerBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction);
     // On a decode failure: compression error is fatal (GOAWAY, returns false); anything
     // else RST_STREAMs the stream and survives (returns true).
-    [[nodiscard]] bool handleHeaderDecodeFailure(Http2StreamState& stream, HeaderDecodeStatus status);
+    [[nodiscard]] bool handleHeaderDecodeFailure(Http2StreamState& stream, HeaderDecodeStatus status, HpackDecoder::DecodeTransaction* hpackTransaction);
     // sans-I/O replacement for admitDecodedInitialStream/queueReady: emit kMessageHead
     // (and kMessageEnd when the peer already ended the stream) for the owner to dispatch.
     void emitRequestHeaders(Http2StreamState& stream);
@@ -669,6 +669,8 @@ private:
     void releaseLocalRequestStream(Http2StreamState& stream) noexcept;
     [[nodiscard]] bool isPinned(std::uint32_t streamId) const noexcept;
 
+    void reserveEventSlots(std::size_t count);
+
     // Close a stream: drop it from the ready queue, mark closed, emit kStreamClosed
     // (so the owner cancels any handler), remove it, and remember it as closed.
     enum class CloseNotification : std::uint8_t { kEmitEvent, kOwnerAlreadyKnows };
@@ -679,12 +681,18 @@ private:
     void discardDeferredStreamState(std::uint32_t streamId);
     // Preserve a removed stream's banked debt as batched connection credit.
     void flushWindowDebt(Http2StreamState& stream);
+    void reserveStreamCloseEffects(Http2StreamState& stream);
 
     std::pmr::memory_resource* resource_;
 
-    // inbound byte buffer (reused across feeds; inputOffset_ = consumed cursor)
+    // Inbound byte buffer (reused across feeds; inputOffset_ = consumed cursor).
+    // A slow-path feed owns the supplied span here before dispatching it. If a later
+    // frame throws, retryInput_ keeps that owned batch and its committed cursor so a
+    // retry of the same caller span resumes at the first uncommitted frame instead of
+    // appending and replaying the already committed prefix.
     std::pmr::string input_;
     std::size_t inputOffset_{0};
+    bool retryInput_{false};
 
     // Outbound serialization and consumed-prefix ownership are isolated from
     // connection state transitions.

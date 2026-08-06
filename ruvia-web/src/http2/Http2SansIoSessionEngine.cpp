@@ -38,6 +38,7 @@
 #include "ruvia/web/detail/server/request/RequestBodyLimit.h"
 #include "ruvia/web/detail/server/request/RequestMemoryArena.h"
 #include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
+#include "ruvia/web/detail/server/response/HttpStaticFileCompression.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
@@ -207,7 +208,32 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
     }
 
     HttpResponse response(requestMemory.resource());
+    // Request negotiation must retain precompressed static sidecars even when
+    // this worker cannot create a runtime encoder. The capability is enforced
+    // later by the selected response representation.
+    const auto responseCodingNegotiation = httpResponseCodingFor(request);
+    auto responseCodingPolicy = HttpResponseCodingPolicy::disabled();
+    if (const auto* selection = responseCodingNegotiation.selected()) {
+        responseCodingPolicy = HttpResponseCodingPolicy::selected(*selection);
+    } else {
+        // Buffered routes may still produce a representation-free 204/205/304.
+        // Preserve the negotiation failure until the response status is known;
+        // rejecting here would make those responses incorrectly become 406.
+        responseCodingPolicy = HttpResponseCodingPolicy::noAcceptableCoding();
+    }
+    const auto responseCodingAvailability = options.compression.has_value() ? HttpResponseCodingAvailability::kIdentityAndCompression : HttpResponseCodingAvailability::kIdentityOnly;
     do {
+        if (responseCodingPolicy.selection() == nullptr) {
+            response = co_await routes_->handleError(
+                request,
+                requestMemory,
+                HttpErrorInfo(
+                    ruvia::http_status::kNotAcceptable,
+                    "not_acceptable",
+                    "no acceptable response content coding"),
+                baseServices);
+            break;
+        }
         const auto expectationPlan =
             streamState->expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
         if (const auto* rejection = expectationPlan.rejection()) {
@@ -249,6 +275,19 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
             resolved == nullptr ? nullptr : resolved->route().endpoint().webSocket();
         const auto* responseStreamEndpoint =
             resolved == nullptr ? nullptr : resolved->route().endpoint().responseStream();
+        if (responseCodingPolicy.negotiationFailed() && (webSocketEndpoint != nullptr || responseStreamEndpoint != nullptr)) {
+            // Streaming and upgrade routes commit before a buffered response
+            // status can be inspected, so retain the pre-commit 406 boundary.
+            response = co_await routes_->handleError(
+                request,
+                requestMemory,
+                HttpErrorInfo(
+                    ruvia::http_status::kNotAcceptable,
+                    "not_acceptable",
+                    "no acceptable response content coding"),
+                baseServices);
+            break;
+        }
         if (webSocketEndpoint != nullptr) {
             const auto handshakeValidation =
                 validateHttp2WebSocketHandshake(*streamState, request);
@@ -344,7 +383,11 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 responseStreamEndpoint->kind(),
                 baseServices.worker(),
                 writeSignal_,
-                *streamSignal);
+                *streamSignal,
+                workerResource(),
+                request.knownMethod(),
+                *responseCodingPolicy.selection(),
+                responseCodingAvailability);
             auto result = co_await dispatchResponseStreamWith(
                 sink,
                 *routes_,
@@ -384,16 +427,53 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                     "response stream dispatch returned no HTTP/2 terminal alternative");
             }
         } else {
-            response = co_await routes_->dispatchBufferedResponse(
+            auto bufferedResult = co_await routes_->dispatchBufferedResponse(
                 request,
                 resolution,
                 requestMemory,
-                options.documentRoot.root,
-                dispatchServices);
+                options.documentRoot.binding(),
+                dispatchServices,
+                baseServices.deferredStaticFileCompression() ? StaticFileSelectionMode::kAllowDeferredCompression : StaticFileSelectionMode::kStrict);
+            response = std::move(bufferedResult).takeResponse();
+        }
+
+        if (baseServices.deferredStaticFileCompression() && responseBody(response).file().has_value()) {
+            const auto compressionResult = co_await tryCompressStaticFileResponse(
+                response,
+                *responseCodingPolicy.selection(),
+                request.knownMethod(),
+                *options.compression,
+                options.documentRoot.runtimeOptions.onDemandCompressionMaxBytes,
+                options.blockingPool,
+                baseServices.worker());
+            if (!compressionResult.compressed() && httpResponseNeedsNotAcceptable(responseCodingPolicy, request, response) && responseBody(response).file().has_value()) {
+                response = co_await routes_->handleError(
+                    request,
+                    requestMemory,
+                    httpStaticFileCompressionError(compressionResult),
+                    baseServices);
+            }
         }
     } while (false);
 
-    const auto writePlan = prepareBufferedHttpResponse(request, response, options);
+    auto preparation = prepareBufferedHttpResponse(request, responseCodingPolicy, response, options);
+    if (const auto error = httpBufferedResponsePreparationError(responseCodingPolicy, request, response, preparation.compressionResult())) {
+        response = co_await routes_->handleError(
+            request,
+            requestMemory,
+            *error,
+            baseServices);
+        preparation = prepareBufferedHttpResponse(request, responseCodingPolicy, response, options);
+        if (httpBufferedResponsePreparationError(responseCodingPolicy, request, response, preparation.compressionResult()).has_value()) {
+            // The negotiated coding could not be installed even on the
+            // generated terminal error. This is an explicit terminal error
+            // representation, not a silent identity fallback of the original
+            // application response.
+            responseCodingPolicy = HttpResponseCodingPolicy::disabled();
+            preparation = prepareBufferedHttpResponse(request, responseCodingPolicy, response, options);
+        }
+    }
+    const auto writePlan = preparation.writePlan();
     const auto result =
         co_await bufferedResponseWriter_.write(streamId, response, writePlan);
     if (const auto committedStatus = result.committedStatus()) {

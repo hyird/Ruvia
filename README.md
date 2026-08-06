@@ -37,6 +37,7 @@ protocol library do not require the full Web framework.
 - [Targets](#targets)
 - [Core Runtime](#core-runtime)
 - [Blocking Work](#blocking-work)
+- [Static Files and Compression](#static-files-and-compression)
 - [Requirements](#requirements)
 - [Build](#build)
 - [Database Drivers](#database-drivers)
@@ -178,11 +179,15 @@ attachment.stop(); // closes the mailbox, runs onStop hooks, releases its work g
 thread.join();
 ```
 
-The external `io_context` must outlive the attachment, every returned
-`EventLoop`, and their Asio objects. Attach at most once per context, call
-`attachment.stop()` while the context can still drain handlers, and retain
-ownership of `run()`, `stop()`, `restart()`, and the thread. The attachment
-never calls `io_context::stop()` because the context may host unrelated work.
+The attachment may be stopped or destroyed while another thread is inside
+`run()`: its context service retains the worker state until the terminal
+cleanup handler drains. The external owner still retains ownership of
+`run()`, `stop()`, `restart()`, and the thread; the attachment never calls
+`io_context::stop()` because the context may host unrelated work. If the
+context is destroyed first, returned `EventLoop` handles become terminal and
+their `ioContext()`/`executor()` access throws `std::logic_error`. A second
+attachment is rejected until the first attachment's terminal cleanup has
+completed.
 
 Database and Redis integrations remain in `ruvia::web`, but they do not require
 an HTTP `App`, `Context`, or server worker. `DataAccessService` does not create
@@ -340,12 +345,75 @@ stopping — shutdown accounting, deliberately kept out of `rejected`).
 
 The callable runs on a foreign thread: capture by value or move, and never
 capture the `Context`, the request, its arena, or any other worker-owned state.
-Shutdown does not wait for work that is still running — a suspended handler is
-resumed immediately and the pool result is discarded — so a captured reference
-into a request is a use-after-free. `BlockingPool` is a `ruvia::core` type and
+Shutdown does not wait for work that is still running — the pool handle stops
+accepting work and detaches its running threads, while a suspended handler is
+resumed immediately and the pool result is discarded. A callable may therefore
+finish after `App::run()` or a `BlockingPool` destructor returns, so its captures
+must remain self-contained. Call `BlockingPool::join()` explicitly when an
+owner needs a completion barrier. `BlockingPool` is a `ruvia::core` type and
 can be used directly with `ruvia::runBlocking(pool, worker, fn)` outside the Web
 framework. `App::setBlockingPool()` is absent by default: an application that
 never offloads should not pay for idle threads.
+
+## Static Files and Compression
+
+`DocumentRootConfig` builds a static-root index at startup. The default
+`DocumentRootRefreshMode::kImmutable` keeps requests on the index and does not
+rescan directories. For development, opt into polling; each refresh rebuilds
+the complete index on the blocking pool and publishes it between requests. A
+filesystem error rejects that candidate as a whole, so polling keeps the
+previous complete index instead of exposing a partial directory. Each failed
+poll increments `App::httpStats().documentRootRefreshFailures` without stopping
+the worker:
+
+```cpp
+ruvia::DocumentRootConfig documentRoot;
+documentRoot.root = "public";
+documentRoot.runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
+documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds(500);
+documentRoot.runtimeOptions.enableLiveReload = true;
+
+ruvia::app()
+    .setBlockingPool(ruvia::BlockingPoolOptions{.threadCount = 2})
+    .setCompression(ruvia::CompressionConfig{})
+    .setDocumentRoot(std::move(documentRoot))
+    .run();
+```
+
+Live reload is deliberately development-only. Include
+`/__ruvia/live-reload.js` in the development HTML; the script polls the
+version endpoint and reloads the page when the published index changes. The
+endpoint uses a monotonic snapshot revision, so a filesystem change cannot be
+hidden by a hash collision.
+It is only valid with `DocumentRootRefreshMode::kPolling`; enabling it with
+the immutable refresh mode is rejected during server-option validation.
+
+Static files prefer checked-in `.br`, `.gz`, or `.zst` sidecars whose mtime is
+at least as new as the identity file; an older sidecar is ignored so an update
+cannot serve stale decoded bytes. If no usable sidecar is available, an accepted coding can be produced for a complete file no larger
+than `DocumentRootRuntimeOptions::onDemandCompressionMaxBytes` through the blocking
+pool, subject to `CompressionConfig::minBytes`. Ranges, large files, pool
+rejection, and a coding that would not make the representation smaller keep the
+original file response, preserving the zero-copy path. File or encoder failures
+remain server errors when identity is forbidden. `setCompression()` also enables incremental gzip, Brotli, or zstd for
+response streams; each handler write is flushed through the encoder so SSE and
+other low-latency streams do not wait for a full buffered response.
+When both a document root and compression are configured, file responses returned
+by `Context::staticFile()` and `Context::file()` use the same Accept-Encoding
+negotiation and deferred-compression stage as the document-root fallback. The
+response plan is finalized only after that stage, so HTTP/1 and HTTP/2 advertise
+the compressed length and framing consistently. A standalone `Context` created
+without server services keeps `staticFile()` strict and does not defer an
+unacceptable identity response.
+An application-provided known `Content-Encoding` (including a stack composed only
+of known codings) is treated as an already-built representation and every coding
+must still be acceptable to the request's `Accept-Encoding`; otherwise the response
+is rejected with `406`. Stacks containing unknown custom codings remain the
+application's responsibility.
+For buffered handlers, a request with no acceptable response coding is checked
+after the handler status is known: representation-free `204`, `205`, and `304` responses
+remain valid, while a bodyful response is `406 Not Acceptable`; streaming and
+upgrade routes reject before committing their response head.
 
 ## Requirements
 
@@ -557,8 +625,8 @@ a response — the head is already on the wire — so it is reported instead:
 without a listener it is written to stderr rather than dropped with the
 connection. `App::httpStats()` sums the same events across every worker as
 counters — active and shed connections, connection failures, transient accept
-failures, worker failures — so a deployment can be monitored by polling instead
-of by installing callbacks.
+failures, worker failures, document-root refresh failures — so a deployment can
+be monitored by polling instead of by installing callbacks.
 [`docs/ruvia-exception-policy.md`](docs/ruvia-exception-policy.md)
 is the full contract: what each layer raises, which failures are isolated where,
 and the three kinds of callback contract.

@@ -30,7 +30,7 @@ Task<void> HttpServer::acceptLoop() {
             // Transient: fd exhaustion, ECONNABORTED, EINTR, ENOBUFS, ENOMEM,
             // etc. A single bad accept must not stop the worker forever.
             acceptFailures_.fetch_add(1, std::memory_order_relaxed);
-            static_cast<void>(co_await sleepFor(workerHandle_, std::chrono::milliseconds(50)));
+            static_cast<void>(co_await sleepForBorrowed(workerHandle_, std::chrono::milliseconds(50)));
             if (!httpServerWorkerRunning(workerState_)) {
                 co_return;
             }
@@ -63,7 +63,7 @@ Task<void> HttpServer::acceptLoop() {
             acceptFailures_.fetch_add(1, std::memory_order_relaxed);
             options_.connectionFailure.invoke({}, std::current_exception());
         }
-        static_cast<void>(co_await sleepFor(workerHandle_, std::chrono::milliseconds(50)));
+        static_cast<void>(co_await sleepForBorrowed(workerHandle_, std::chrono::milliseconds(50)));
         if (!httpServerWorkerRunning(workerState_)) {
             co_return;
         }

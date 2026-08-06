@@ -1,6 +1,37 @@
 #include "http2_connection_fixture.h"
 
+#include <new>
+
 // Http2Connection: submitting request and response heads.
+
+namespace {
+
+class ToggleRejectingMemoryResource final : public std::pmr::memory_resource {
+public:
+    void rejectAllocations(bool value = true) noexcept {
+        reject_ = value;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (reject_) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool reject_{false};
+};
+
+}  // namespace
 
 RUVIA_TEST(http2_connection_request_head_requires_started_preface_without_consuming_id) {
     std::pmr::monotonic_buffer_resource resource;
@@ -16,6 +47,78 @@ RUVIA_TEST(http2_connection_request_head_requires_started_preface_without_consum
     const auto accepted = client.submitRegularRequestHead("GET", "https", "example.test", "/", {}, Http2RequestContent::none());
     RUVIA_CHECK(accepted.submitted() != nullptr);
     RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
+}
+
+RUVIA_TEST(http2_connection_request_head_rolls_back_stream_admission_on_allocation_failure) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
+    beginClient(client);
+    std::pmr::string discarded(&resource);
+    client.takeOutput(discarded);
+
+    resource.rejectAllocations();
+    bool allocationFailed = false;
+    try {
+        (void)client.submitRegularRequestHead("GET", "https", "example.test", "/", {}, Http2RequestContent::none());
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(client.stream(1) == nullptr);
+    RUVIA_CHECK(client.pendingOutput().empty());
+
+    resource.rejectAllocations(false);
+    const auto retried = client.submitRegularRequestHead("GET", "https", "example.test", "/", {}, Http2RequestContent::none());
+    RUVIA_CHECK(retried.submitted() != nullptr);
+    RUVIA_CHECK_EQ(submittedRequestStreamId(retried), std::uint32_t{1});
+}
+
+RUVIA_TEST(http2_connection_response_head_does_not_publish_local_phase_before_output_commit) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveGetRequest(conn, &resource);
+    conn.consumeOutput(conn.pendingOutput().size());
+
+    auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream == nullptr) {
+        return;
+    }
+
+    // Keep HPACK staging allocation-free so the injected failure lands at the
+    // outbound reservation, after semantic header preparation but before any
+    // response lifecycle state is allowed to publish.
+    stream->responseHeaderBlock().reserve(64 * 1024);
+    const std::string largeValue(64'000, 'x');
+    ruvia::HttpResponse response(&resource);
+    response.status(ruvia::http_status::kOk);
+    response.header("X-Large", largeValue);
+
+    resource.rejectAllocations();
+    bool allocationFailed = false;
+    try {
+        (void)conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(conn.pendingOutput().empty());
+    RUVIA_CHECK(stream->responseHeaderBlock().empty());
+    RUVIA_CHECK(stream->localContent().unset() != nullptr);
+    RUVIA_CHECK(stream->localSend().headPending() != nullptr);
+
+    // The same stream remains a valid retry target once the resource recovers.
+    resource.rejectAllocations(false);
+    ruvia::HttpResponse retry(&resource);
+    retry.status(ruvia::http_status::kOk);
+    retry.header("X-Large", largeValue);
+    const auto retried = conn.submitStreamingResponseHead(1, std::move(retry), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+    RUVIA_CHECK(retried.submitted() != nullptr);
+    RUVIA_CHECK(stream->localContent().unbounded() != nullptr);
+    RUVIA_CHECK(stream->localSend().responseContentOpen() != nullptr);
 }
 
 RUVIA_TEST(http2_connection_feed_extension_method_emits_request_event) {

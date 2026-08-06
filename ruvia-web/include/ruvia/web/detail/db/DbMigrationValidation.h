@@ -3,12 +3,32 @@
 #include "ruvia/web/db/DbMigration.h"
 #include "ruvia/web/detail/db/DbSqlScan.h"
 
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <stdexcept>
 #include <string_view>
 
 namespace ruvia::detail {
+
+// PostgreSQL's lock_timeout is serialized as an integer number of
+// milliseconds.  Do not duration_cast() an arbitrary seconds value: the
+// seconds-to-milliseconds multiplication can overflow before the result is
+// handed to the backend.  This helper is deliberately checked rather than
+// saturating; silently making an enormous configured timeout finite changes
+// the migration lock contract.
+[[nodiscard]] inline std::uint64_t postgresLockTimeoutMilliseconds(std::chrono::seconds timeout) {
+    if (timeout.count() <= 0) {
+        throw std::invalid_argument("database migration lock timeout must be greater than zero");
+    }
+    constexpr auto kMillisecondsPerSecond = std::int64_t{1000};
+    constexpr auto kMaxSeconds = std::chrono::milliseconds::max().count() / kMillisecondsPerSecond;
+    if (timeout.count() > kMaxSeconds) {
+        throw std::invalid_argument("database migration lock timeout cannot be represented as PostgreSQL milliseconds");
+    }
+    return static_cast<std::uint64_t>(timeout.count()) * static_cast<std::uint64_t>(kMillisecondsPerSecond);
+}
 
 // A migration table name is a SQL identifier that cannot be parameterized, so it
 // is restricted to the selected backend's identifier byte limit and

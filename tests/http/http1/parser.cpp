@@ -19,6 +19,7 @@ using ruvia::HttpKnownMethod;
 using ruvia::HttpParseError;
 using ruvia::HttpProtocolVersion;
 using ruvia::detail::Http1ServerRequestParseFailureSource;
+using ruvia::detail::Http1ConnectionDisposition;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::Http1ServerRequestParseState;
 using ruvia::detail::HttpUnsupportedExpectationPolicy;
@@ -409,6 +410,24 @@ RUVIA_TEST(http1_parse_transfer_encoding_in_http10_rejected) {
     RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidTransferEncoding));
 }
 
+RUVIA_TEST(http1_parse_failure_preserves_accepted_http10_version) {
+    Http1ServerRequestParser parser;
+
+    // The request line is valid HTTP/1.0, but the target grammar is rejected
+    // afterwards. The error response must retain HTTP/1.0 as its wire version.
+    const auto invalidTarget = parser.parseMessage("GET * HTTP/1.0\r\n\r\n");
+    RUVIA_CHECK(invalidTarget.failure() != nullptr);
+    RUVIA_CHECK(invalidTarget.connectionPlan.protocolVersion() == HttpProtocolVersion::kHttp10);
+    RUVIA_CHECK(invalidTarget.connectionPlan.disposition() == Http1ConnectionDisposition::kClose);
+
+    // The same invariant applies to a framing rule checked after the version
+    // line has already been accepted.
+    const auto invalidFraming = parser.parseMessage("POST / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n");
+    RUVIA_CHECK(invalidFraming.failure() != nullptr);
+    RUVIA_CHECK(invalidFraming.connectionPlan.protocolVersion() == HttpProtocolVersion::kHttp10);
+    RUVIA_CHECK(invalidFraming.connectionPlan.disposition() == Http1ConnectionDisposition::kClose);
+}
+
 RUVIA_TEST(http1_parse_absolute_uri_uses_target_authority) {
     // RFC 9112 section 3.2.2 requires an origin server to accept absolute-form,
     // ignore Host, and use the request-target authority. The parsed request must
@@ -745,7 +764,22 @@ RUVIA_TEST(http1_response_coding_folds_all_accept_encoding_field_lines) {
         "Accept-Encoding: identity;q=0, gzip;q=0.2\r\n"
         "Accept-Encoding: br;q=0.8\r\n\r\n");
     RUVIA_CHECK(parsed.messageReady() != nullptr);
-    RUVIA_CHECK(parsed.responseCoding == ruvia::detail::HttpContentCoding::kBrotli);
+    const auto responseCoding = parsed.responseCodingSelection();
+    RUVIA_CHECK(responseCoding.selected() != nullptr);
+    if (const auto* selected = responseCoding.selected()) {
+        RUVIA_CHECK(selected->coding() == ruvia::detail::HttpContentCoding::kBrotli);
+    }
+}
+
+RUVIA_TEST(http1_response_coding_rejects_when_every_coding_is_forbidden) {
+    Http1ServerRequestParser parser;
+    const auto parsed = parser.parseMessage(
+        "GET / HTTP/1.1\r\nHost: x\r\n"
+        "Accept-Encoding: identity;q=0, gzip;q=0, br;q=0, zstd;q=0\r\n\r\n");
+    RUVIA_CHECK(parsed.messageReady() != nullptr);
+    const auto responseCoding = parsed.responseCodingSelection();
+    RUVIA_CHECK(responseCoding.selected() == nullptr);
+    RUVIA_CHECK(responseCoding.failure() != nullptr);
 }
 
 RUVIA_TEST(http1_parse_header_block_too_large_rejected) {

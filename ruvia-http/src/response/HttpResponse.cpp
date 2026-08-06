@@ -1,10 +1,17 @@
 #include "ruvia/http/HttpResponse.h"
 
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
+#include <array>
+#include <charconv>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace ruvia {
@@ -32,6 +39,40 @@ HttpResponse& HttpResponse::operator=(HttpResponse&& other) noexcept {
 
 std::pmr::memory_resource* HttpResponse::resource() const noexcept {
     return headers_.resource_;
+}
+
+HttpResponse HttpResponse::cloneForTransaction() const {
+    HttpResponse clone(detail::HttpResolvedPmrResourceTag{}, resource());
+    clone.statusCode_ = statusCode_;
+
+    clone.headers_.reserve(headers_.size());
+    for (const auto& header : headers_) {
+        auto copy = clone.headers_.makeOwnedHeader(header.name(), header.value(), header.knownBit);
+        detail::setResponseHeaderAppend(copy, detail::responseHeaderAppend(header));
+        (void)clone.headers_.appendPreparedHeader(copy);
+    }
+    clone.knownHeaderBits_ = knownHeaderBits_;
+    clone.knownHeaderIndexes_ = knownHeaderIndexes_;
+
+    if (const auto* const borrowedBytes = body_.borrowedBytes()) {
+        clone.body_.setBorrowed(borrowedBytes->bytes());
+    } else if (const auto* const staticBytes = body_.staticBytes()) {
+        clone.body_.setStatic(staticBytes->bytes());
+    } else if (const auto* const ownedBytes = body_.ownedBytes()) {
+        clone.body_.setCopy(clone.resource(), ownedBytes->bytes());
+    } else if (const auto* const ownedFile = body_.ownedFile()) {
+        clone.body_.setOwnedFile(
+            clone.resource(),
+            detail::makePathFromHttpNativePath(ownedFile->nativePathCStr()),
+            ownedFile->size(),
+            ownedFile->offset(),
+            ownedFile->length(),
+            ownedFile->identity());
+    } else if (const auto* const borrowedFile = body_.borrowedFile()) {
+        clone.body_.setBorrowedFile(borrowedFile->nativePathCStr(), borrowedFile->size(), borrowedFile->offset(), borrowedFile->length(), borrowedFile->identity());
+    }
+
+    return clone;
 }
 
 HttpStatusCode HttpResponse::status() const noexcept {
@@ -66,6 +107,108 @@ void HttpResponse::setBodyStaticView(std::string_view value) noexcept {
 
 void HttpResponse::setBodyOwned(std::pmr::string&& value) {
     body_.setOwned(resource(), std::move(value));
+}
+
+void HttpResponse::replaceBodyWithContentEncoding(std::pmr::string&& value, std::string_view contentEncoding) {
+    if (contentEncoding.empty()) {
+        throw std::invalid_argument("encoded response body requires a content coding");
+    }
+
+    constexpr std::size_t kEncodingHeader = 0;
+    constexpr std::size_t kEtagHeader = 1;
+    constexpr std::size_t kLengthHeader = 2;
+    std::array<HttpResponseHeader, 3> prepared{};
+    std::array<bool, 3> preparedActive{};
+    const auto releasePrepared = [&]() noexcept {
+        for (std::size_t i = 0; i < prepared.size(); ++i) {
+            if (preparedActive[i]) {
+                headers_.releaseHeader(prepared[i]);
+                preparedActive[i] = false;
+            }
+        }
+    };
+
+    // Build the weak validator and all replacement descriptors while the
+    // response still owns its identity body. Header vector growth is reserved
+    // before any descriptor is published; every later commit operation is a
+    // descriptor replacement or an append into already-reserved storage.
+    std::pmr::string weakEtag(resource());
+    const auto currentEtag = knownHeaderValue(detail::kResponseHeaderEtag);
+    if (!currentEtag.empty() && currentEtag.front() == '"') {
+        weakEtag.reserve(currentEtag.size() + 2);
+        weakEtag.append("W/");
+        weakEtag.append(currentEtag.data(), currentEtag.size());
+    }
+
+    const std::array<std::pair<std::string_view, std::uint32_t>, 3> fields{{
+        {"Content-Encoding", detail::kResponseHeaderContentEncoding},
+        {"ETag", detail::kResponseHeaderEtag},
+        {"Content-Length", detail::kResponseHeaderContentLength},
+    }};
+    std::size_t missingHeaders = 0;
+    for (const auto& [name, knownBit] : fields) {
+        if (knownBit == detail::kResponseHeaderEtag && weakEtag.empty()) {
+            continue;
+        }
+        if (findHeaderForRead(name, knownBit) == nullptr) {
+            ++missingHeaders;
+        }
+    }
+    headers_.reserve(headers_.size() + missingHeaders);
+
+    try {
+        const auto stage = [&](std::size_t slot, std::string_view name, std::string_view fieldValue, std::uint32_t knownBit) {
+            const auto builtin = HttpResponseHeaders::makeStaticHeader(name, fieldValue, knownBit);
+            prepared[slot] = builtin ? *builtin : headers_.makeOwnedHeader(name, fieldValue, knownBit);
+            preparedActive[slot] = true;
+        };
+
+        stage(kEncodingHeader, fields[kEncodingHeader].first, contentEncoding, fields[kEncodingHeader].second);
+        if (!weakEtag.empty()) {
+            stage(kEtagHeader, fields[kEtagHeader].first, weakEtag, fields[kEtagHeader].second);
+        }
+
+        std::array<char, 32> lengthBuffer{};
+        const auto [lengthEnd, lengthError] = std::to_chars(lengthBuffer.data(), lengthBuffer.data() + lengthBuffer.size(), value.size());
+        if (lengthError != std::errc{}) {
+            throw std::logic_error("failed to format encoded response length");
+        }
+        stage(kLengthHeader, fields[kLengthHeader].first, std::string_view(lengthBuffer.data(), static_cast<std::size_t>(lengthEnd - lengthBuffer.data())), fields[kLengthHeader].second);
+
+        // The encoded bytes use this response's resource. setOwned constructs
+        // the new body alternative before replacing the old variant, so a
+        // resource failure still leaves the identity body and old headers in
+        // place. Header commits below are no-throw after the reserve/staging
+        // phase and therefore form the publication point.
+        body_.setOwned(resource(), std::move(value));
+
+        const auto commit = [&](std::size_t slot, std::string_view name, std::uint32_t knownBit) noexcept {
+            if (auto* const existing = findHeaderForUpdate(name, knownBit)) {
+                const bool wasAppended = detail::responseHeaderAppend(*existing);
+                headers_.releaseHeader(*existing);
+                *existing = prepared[slot];
+                preparedActive[slot] = false;
+                if (wasAppended) {
+                    (void)collapseResponseHeaders(*existing, name, knownBit);
+                }
+                return;
+            }
+
+            const auto index = headers_.size();
+            (void)headers_.appendPreparedHeader(prepared[slot]);
+            preparedActive[slot] = false;
+            recordKnownHeaderIndex(knownBit, index);
+        };
+
+        commit(kEncodingHeader, fields[kEncodingHeader].first, fields[kEncodingHeader].second);
+        if (!weakEtag.empty()) {
+            commit(kEtagHeader, fields[kEtagHeader].first, fields[kEtagHeader].second);
+        }
+        commit(kLengthHeader, fields[kLengthHeader].first, fields[kLengthHeader].second);
+    } catch (...) {
+        releasePrepared();
+        throw;
+    }
 }
 
 void HttpResponse::materializeBody() {

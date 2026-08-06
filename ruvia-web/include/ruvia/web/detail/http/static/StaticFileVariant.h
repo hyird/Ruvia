@@ -1,12 +1,25 @@
 #pragma once
 
 #include <memory_resource>
+#include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
+
+namespace ruvia::detail {
+// A document-root fallback may defer an identity selection to the Web
+// compression stage when a client forbids identity but accepts a coding for
+// which no sidecar is indexed. Direct Context::staticFile() remains strict.
+enum class StaticFileSelectionMode : std::uint8_t {
+    kStrict,
+    kAllowDeferredCompression,
+};
+
+}  // namespace ruvia::detail
 
 namespace ruvia {
 
@@ -36,6 +49,6 @@ private:
 // ties resolve br > zstd > gzip. The served bytes are the variant's, so its
 // size/etag/modified describe the wire representation; the caller keeps the
 // original Content-Type. Index lookups only (no per-request filesystem stat).
-[[nodiscard]] StaticFileRepresentation selectStaticFileRepresentation(const StaticRoot& root, std::string_view relative, const HttpRequest& request, std::pmr::memory_resource* resource, detail::StaticRootEntryView identity);
+[[nodiscard]] std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const StaticRoot& root, std::string_view relative, const HttpRequest& request, std::pmr::memory_resource* resource, detail::StaticRootEntryView identity, detail::StaticFileSelectionMode mode = detail::StaticFileSelectionMode::kStrict);
 
 }  // namespace ruvia

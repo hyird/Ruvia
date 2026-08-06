@@ -21,6 +21,7 @@
 #include "ruvia/web/detail/server/response/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
 #include "ruvia/web/detail/server/response/HttpResponseWriter.h"
+#include "ruvia/web/detail/server/response/HttpStaticFileCompression.h"
 #include "ruvia/web/detail/server/request/RequestMemoryArena.h"
 #include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
 #include "ruvia/web/detail/http2/CleartextUpgrade.h"
@@ -116,6 +117,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
         std::optional<RequestMemory> requestMemoryStorage;
         auto& requestMemory = emplaceRequestMemory(requestMemoryStorage, memory_, std::span<std::byte>(workSet->arenaBlock, sizeof(workSet->arenaBlock)));
         HttpResponse response(requestMemory.resource());
+        HttpResponseCodingPolicy responseCodingPolicy = HttpResponseCodingPolicy::disabled();
         // Holds the next pipelined request from the moment a body route hands it
         // over until the read buffer is cleaned up below. Declared before
         // requestCompletion, which borrows it, and empty for the common case of a
@@ -154,6 +156,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                 }
             }
             const auto bufferView = std::string_view(readBuffer.data(), usedBytes);
+            responseCodingPolicy = HttpResponseCodingPolicy::disabled();
             parser.parseHead(bufferView, parsed, headerSearchOffset);
             HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
             if (const auto* requestHead = parsed.headReady()) {
@@ -164,6 +167,21 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                 // one of those transitions, keepaliveTimeout governs as the
                 // deadman switch for hung handlers.
                 scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
+                // Negotiate against every coding first. A document root or a
+                // Context::staticFile route may serve an indexed precompressed
+                // sidecar even when this worker has no runtime encoder. The
+                // actual encoder capability is carried to representation
+                // preparation instead of pruning the request's choices here.
+                const auto responseCodingNegotiation = parsed.responseCodingSelection();
+                if (const auto* selection = responseCodingNegotiation.selected()) {
+                    responseCodingPolicy = HttpResponseCodingPolicy::selected(*selection);
+                } else {
+                    // Buffered routes may still produce a representation-free
+                    // 204/205/304. Keep the negotiation failure typed until
+                    // the response status is known instead of rejecting every
+                    // request before its handler runs.
+                    responseCodingPolicy = HttpResponseCodingPolicy::noAcceptableCoding();
+                }
                 const auto expectationPlan = parsed.bodyPlan.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
                 if (const auto* rejection = expectationPlan.rejection()) {
                     // Expect extensions are valid HTTP syntax. The protocol parser
@@ -179,6 +197,21 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                         break;
                     }
                     response = makeAutoHttpsRedirectResponse(parsed.request, requestMemory, redirect->httpsPort);
+                    if (httpResponseNeedsNotAcceptable(responseCodingPolicy, parsed.request, response)) {
+                        response = co_await routes.handleError(
+                            parsed.request,
+                            requestMemory,
+                            HttpErrorInfo(
+                                ruvia::http_status::kNotAcceptable,
+                                "not_acceptable",
+                                "no acceptable response content coding"),
+                            baseRouteServices);
+                        // The redirect branch commits directly because its
+                        // connection is intentionally closing; make the
+                        // generated policy error terminal rather than letting
+                        // it inherit the original negotiated coding promise.
+                        responseCodingPolicy = HttpResponseCodingPolicy::disabled();
+                    }
                     const auto connectionPlan = requireHttp1FinalResponseCommit(response, parsed.connectionPlan.requireClose());
                     requestCompletion.emplace(Http1SessionRequestCompletion::makeBufferedClosing(connectionPlan));
                     scannerEntry.touch();
@@ -196,7 +229,14 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                         closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(requestMemory.resource(), bodyFailure->protocolError()));
                         break;
                     }
-                    response = co_await routes.dispatchBufferedResponse(parsed.request, routeResolution, requestMemory, options_.documentRoot.root, baseRouteServices);
+                    auto bufferedResult = co_await routes.dispatchBufferedResponse(
+                        parsed.request,
+                        routeResolution,
+                        requestMemory,
+                        options_.documentRoot.binding(),
+                        baseRouteServices,
+                        baseRouteServices.deferredStaticFileCompression() ? StaticFileSelectionMode::kAllowDeferredCompression : StaticFileSelectionMode::kStrict);
+                    response = std::move(bufferedResult).takeResponse();
                     // An unresolved request never consumes its body, regardless
                     // of whether the shared Web dispatch selected a document-root
                     // file, 404, 405, or OPTIONS response.
@@ -215,6 +255,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                         .memory = memory_,
                         .scannerEntry = scannerEntry,
                         .parsed = parsed,
+                        .responseCoding = *responseCodingPolicy.selection(),
+                        .responseCodingAvailability = options_.compression.has_value() ? HttpResponseCodingAvailability::kIdentityAndCompression : HttpResponseCodingAvailability::kIdentityOnly,
                         .routes = routes,
                         .requestMemory = requestMemory,
                         .baseRouteServices = baseRouteServices,
@@ -226,6 +268,13 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
 
                 const auto& route = resolved->route();
                 const auto& endpoint = route.endpoint();
+                if (responseCodingPolicy.negotiationFailed() && (endpoint.webSocket() != nullptr || endpoint.responseStream() != nullptr)) {
+                    // A stream/upgrade commits its representation before a
+                    // buffered status can be inspected. Preserve the old
+                    // pre-commit rejection for those routes.
+                    closingRejection = Http1ClosingRejection::error(HttpErrorInfo(ruvia::http_status::kNotAcceptable, "not_acceptable", "no acceptable response content coding"));
+                    break;
+                }
                 const auto maxRequestBodyBytes = requestBodyByteLimit(endpoint.requestBodyMode(), options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes);
                 if (const auto bodyFailure = contentLengthLimitFailure(parsed.bodyPlan, maxRequestBodyBytes)) {
                     closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(requestMemory.resource(), bodyFailure->protocolError()));
@@ -277,7 +326,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                         break;
                     }
 
-                    response = co_await routes.dispatchBufferedResponse(parsed.request, routeResolution, requestMemory, options_.documentRoot.root, bodyState.withLoader(baseRouteServices));
+                    auto bufferedResult = co_await routes.dispatchBufferedResponse(parsed.request, routeResolution, requestMemory, options_.documentRoot.binding(), bodyState.withLoader(baseRouteServices));
+                    response = std::move(bufferedResult).takeResponse();
 
                     requestCompletion.emplace(completeSuccessfulHttpBodyRoute(scannerEntry, response, parsed.connectionPlan, requestSequence, bodyState.consumption(), pipelineStash, [&bodyState](std::pmr::string& stash) { bodyState.takePipeline(stash); }));
                     break;
@@ -333,10 +383,51 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
         if (!requestCompletion) {
             throw std::logic_error("HTTP/1 request dispatch returned no terminal completion");
         }
-        const auto connectionPlan = requestCompletion->connectionPlan();
+        auto connectionPlan = requestCompletion->connectionPlan();
         if (requestCompletion->bufferedResponse() != nullptr) {
+            // Static files produced by a route and by the document-root
+            // fallback share one final transformation point. This also covers
+            // Context::file() when the server has enabled deferred static-file
+            // compression; the response plan is recomputed after a body
+            // replacement so its Content-Length/framing cannot describe the
+            // pre-compression file.
+            if (baseRouteServices.deferredStaticFileCompression() && responseBody(response).file().has_value()) {
+                const auto compressionResult = co_await tryCompressStaticFileResponse(
+                    response,
+                    *responseCodingPolicy.selection(),
+                    parsed.request.knownMethod(),
+                    *options_.compression,
+                    options_.documentRoot.runtimeOptions.onDemandCompressionMaxBytes,
+                    options_.blockingPool,
+                    workerHandle_);
+                if (!compressionResult.compressed() && httpResponseNeedsNotAcceptable(responseCodingPolicy, parsed.request, response) && responseBody(response).file().has_value()) {
+                    response = co_await routes.handleError(parsed.request, requestMemory, httpStaticFileCompressionError(compressionResult), baseRouteServices);
+                }
+                connectionPlan = requireHttp1FinalResponseCommit(response, connectionPlan);
+                requestCompletion = requestCompletion->withBufferedConnectionPlan(connectionPlan);
+                connectionPlan = requestCompletion->connectionPlan();
+            }
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
-            const auto writePlan = prepareBufferedHttpResponse(parsed.request, parsed.responseCoding, response, options_);
+            auto preparation = prepareBufferedHttpResponse(parsed.request, responseCodingPolicy, response, options_);
+            if (const auto error = httpBufferedResponsePreparationError(responseCodingPolicy, parsed.request, response, preparation.compressionResult())) {
+                response = co_await routes.handleError(
+                    parsed.request,
+                    requestMemory,
+                    *error,
+                    baseRouteServices);
+                preparation = prepareBufferedHttpResponse(parsed.request, responseCodingPolicy, response, options_);
+                if (httpBufferedResponsePreparationError(responseCodingPolicy, parsed.request, response, preparation.compressionResult()).has_value()) {
+                    // The negotiated coding could not be installed even on
+                    // the generated terminal error. Make the terminal error
+                    // state explicit before allowing identity bytes.
+                    responseCodingPolicy = HttpResponseCodingPolicy::disabled();
+                    preparation = prepareBufferedHttpResponse(parsed.request, responseCodingPolicy, response, options_);
+                }
+                connectionPlan = requireHttp1FinalResponseCommit(response, connectionPlan);
+                requestCompletion = requestCompletion->withBufferedConnectionPlan(connectionPlan);
+                connectionPlan = requestCompletion->connectionPlan();
+            }
+            const auto writePlan = preparation.writePlan();
             const auto responsePlan = http1BufferedResponsePlan(writePlan, connectionPlan);
             const auto writeResult = co_await writeResponse(stream, memory_, &responseHead, &fileChunk, response, responsePlan);
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);

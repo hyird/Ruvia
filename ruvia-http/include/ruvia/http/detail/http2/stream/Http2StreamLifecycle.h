@@ -70,6 +70,10 @@ private:
         return remoteReceive_.recordHeadEndStream();
     }
 
+    [[nodiscard]] bool rollbackRemoteHeadEndStream() noexcept {
+        return remoteReceive_.rollbackHeadEndStream();
+    }
+
     [[nodiscard]] bool finalizeRemoteContentHead() noexcept {
         return remoteReceive_.finalizeContentHead();
     }

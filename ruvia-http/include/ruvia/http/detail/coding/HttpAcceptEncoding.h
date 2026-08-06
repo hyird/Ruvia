@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
@@ -69,22 +71,21 @@ struct HttpAcceptedEncodingQuality {
     return quality.accepts();
 }
 
-[[nodiscard]] inline int httpAcceptedEncodingScore(const HttpAcceptedEncodingQuality& quality) noexcept {
-    if (!quality.accepts()) {
-        return -1;
-    }
-    return quality.explicitQuality >= 0 ? quality.explicitQuality : quality.wildcardQuality;
-}
-
 struct HttpResponseCodingQualities final {
+    // A missing field and an explicitly empty field have different RFC 9110
+    // semantics: absence accepts any coding, while an empty value accepts none.
+    bool fieldPresent{false};
+    bool hasNonEmptyItem{false};
     HttpAcceptedEncodingQuality gzip;
     HttpAcceptedEncodingQuality brotli;
     HttpAcceptedEncodingQuality zstd;
     HttpAcceptedEncodingQuality identity;
 
     void update(std::string_view acceptEncoding) noexcept {
+        fieldPresent = true;
         httpVisitCommaSeparatedQuoted(acceptEncoding, [this](std::string_view item) noexcept {
             const auto token = httpHeaderTokenBeforeParameters(item);
+            hasNonEmptyItem = true;
             if (httpAsciiEqualsIgnoreCase(token, "gzip")) {
                 httpAccumulateAcceptedQuality(httpEncodingQualityParameter(item), gzip.explicitQuality);
             } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
@@ -103,49 +104,232 @@ struct HttpResponseCodingQualities final {
             return true;
         });
     }
+
+    [[nodiscard]] bool accepts(HttpContentCoding coding) const noexcept {
+        return score(coding) >= 0;
+    }
+
+private:
+    friend class HttpResponseCodingSelection;
+
+    [[nodiscard]] int score(HttpContentCoding coding) const noexcept {
+        switch (coding) {
+            case HttpContentCoding::kIdentity:
+                if (fieldPresent && !hasNonEmptyItem) {
+                    return -1;
+                }
+                if (identity.explicitQuality >= 0) {
+                    return identity.explicitQuality > 0 ? identity.explicitQuality : -1;
+                }
+                // RFC 9110 section 12.5.3: identity is acceptable by
+                // default. A wildcard only excludes it when q=0.
+                return identity.wildcardQuality == 0 ? -1 : 1000;
+            case HttpContentCoding::kGzip:
+                return gzip.accepts() ? (gzip.explicitQuality >= 0 ? gzip.explicitQuality : gzip.wildcardQuality) : -1;
+            case HttpContentCoding::kBrotli:
+                return brotli.accepts() ? (brotli.explicitQuality >= 0 ? brotli.explicitQuality : brotli.wildcardQuality) : -1;
+            case HttpContentCoding::kZstd:
+                return zstd.accepts() ? (zstd.explicitQuality >= 0 ? zstd.explicitQuality : zstd.wildcardQuality) : -1;
+        }
+        return -1;
+    }
 };
 
-[[nodiscard]] inline int httpAcceptedIdentityScore(const HttpAcceptedEncodingQuality& identity) noexcept {
-    if (identity.explicitQuality >= 0) {
-        return identity.explicitQuality;
+// A representation policy supplies the codings it can actually produce or
+// retrieve. Keeping this set typed prevents callers from reimplementing
+// Accept-Encoding ranking with raw q-value integers.
+class HttpResponseCodingCandidates final {
+public:
+    [[nodiscard]] static constexpr HttpResponseCodingCandidates empty() noexcept {
+        return HttpResponseCodingCandidates(0);
     }
-    // RFC 9110 section 12.5.3: identity is acceptable by default. A wildcard
-    // only excludes it when the wildcard explicitly carries q=0; a positive
-    // wildcard quality describes otherwise-unlisted content codings and does
-    // not lower identity's implicit quality.
-    return identity.wildcardQuality == 0 ? 0 : 1000;
+
+    [[nodiscard]] static constexpr HttpResponseCodingCandidates identityOnly() noexcept {
+        return HttpResponseCodingCandidates(bit(HttpContentCoding::kIdentity));
+    }
+
+    [[nodiscard]] static constexpr HttpResponseCodingCandidates all() noexcept {
+        return HttpResponseCodingCandidates(
+            bit(HttpContentCoding::kIdentity) |
+            bit(HttpContentCoding::kGzip) |
+            bit(HttpContentCoding::kBrotli) |
+            bit(HttpContentCoding::kZstd));
+    }
+
+    constexpr HttpResponseCodingCandidates& include(HttpContentCoding coding) noexcept {
+        bits_ = static_cast<std::uint8_t>(bits_ | bit(coding));
+        return *this;
+    }
+
+    [[nodiscard]] constexpr bool contains(HttpContentCoding coding) const noexcept {
+        return (bits_ & bit(coding)) != 0;
+    }
+
+private:
+    explicit constexpr HttpResponseCodingCandidates(std::uint8_t bits) noexcept
+        : bits_(bits) {}
+
+    [[nodiscard]] static constexpr std::uint8_t bit(HttpContentCoding coding) noexcept {
+        switch (coding) {
+            case HttpContentCoding::kIdentity:
+                return 1u;
+            case HttpContentCoding::kGzip:
+                return 2u;
+            case HttpContentCoding::kBrotli:
+                return 4u;
+            case HttpContentCoding::kZstd:
+                return 8u;
+        }
+        return 0u;
+    }
+
+    std::uint8_t bits_;
+};
+
+// The selected coding and the identity fallback decision come from the same
+// Accept-Encoding snapshot. Keeping them together prevents a runtime from
+// selecting one coding and separately observing a stale or differently parsed
+// identity quality.
+class HttpResponseCodingSelectionResult;
+
+class HttpResponseCodingSelection final {
+public:
+    [[nodiscard]] static HttpResponseCodingSelectionResult select(const HttpResponseCodingQualities& qualities) noexcept;
+    [[nodiscard]] static HttpResponseCodingSelectionResult select(const HttpResponseCodingQualities& qualities, HttpResponseCodingCandidates candidates) noexcept;
+
+    [[nodiscard]] constexpr HttpContentCoding coding() const noexcept {
+        return coding_;
+    }
+
+    [[nodiscard]] constexpr bool identityAccepted() const noexcept {
+        return identityAccepted_;
+    }
+
+    // The selected coding is the server's preference, while this predicate
+    // retains the complete client acceptability snapshot for a response that
+    // was already encoded by application code or a representation store. A
+    // missing Accept-Encoding field accepts every coding; an explicitly
+    // present field uses the parsed q-value set, including wildcard rules.
+    [[nodiscard]] constexpr bool accepts(HttpContentCoding coding) const noexcept {
+        return !acceptEncodingPresent_ || (acceptableBits_ & bit(coding)) != 0;
+    }
+
+private:
+    constexpr HttpResponseCodingSelection(HttpContentCoding coding, bool identityAccepted, bool acceptEncodingPresent, std::uint8_t acceptableBits) noexcept
+        : coding_(coding),
+          identityAccepted_(identityAccepted),
+          acceptEncodingPresent_(acceptEncodingPresent),
+          acceptableBits_(acceptableBits) {}
+
+    [[nodiscard]] static constexpr std::uint8_t bit(HttpContentCoding coding) noexcept {
+        switch (coding) {
+            case HttpContentCoding::kIdentity:
+                return 1u;
+            case HttpContentCoding::kGzip:
+                return 2u;
+            case HttpContentCoding::kBrotli:
+                return 4u;
+            case HttpContentCoding::kZstd:
+                return 8u;
+        }
+        return 0u;
+    }
+
+    HttpContentCoding coding_;
+    bool identityAccepted_;
+    bool acceptEncodingPresent_;
+    std::uint8_t acceptableBits_;
+};
+
+enum class HttpResponseCodingSelectionError : std::uint8_t {
+    kNoAcceptableCoding,
+};
+
+class HttpResponseCodingSelectionFailure final {
+public:
+    [[nodiscard]] constexpr HttpResponseCodingSelectionError error() const noexcept {
+        return error_;
+    }
+
+private:
+    friend class HttpResponseCodingSelection;
+    friend class HttpResponseCodingSelectionResult;
+
+    explicit constexpr HttpResponseCodingSelectionFailure(HttpResponseCodingSelectionError error) noexcept
+        : error_(error) {}
+
+    HttpResponseCodingSelectionError error_;
+};
+
+// Response content negotiation has two valid protocol outcomes. Making the
+// rejection explicit prevents callers from confusing a 406 negotiation result
+// with an uninitialized selection or an intentionally disabled response policy.
+class HttpResponseCodingSelectionResult final {
+public:
+    [[nodiscard]] const HttpResponseCodingSelection* selected() const& noexcept {
+        return std::get_if<HttpResponseCodingSelection>(&value_);
+    }
+    const HttpResponseCodingSelection* selected() const&& = delete;
+
+    [[nodiscard]] const HttpResponseCodingSelectionFailure* failure() const& noexcept {
+        return std::get_if<HttpResponseCodingSelectionFailure>(&value_);
+    }
+    const HttpResponseCodingSelectionFailure* failure() const&& = delete;
+
+private:
+    friend class HttpResponseCodingSelection;
+
+    explicit HttpResponseCodingSelectionResult(HttpResponseCodingSelection selection) noexcept
+        : value_(selection) {}
+
+    explicit HttpResponseCodingSelectionResult(HttpResponseCodingSelectionFailure failure) noexcept
+        : value_(failure) {}
+
+    using Value = std::variant<HttpResponseCodingSelection, HttpResponseCodingSelectionFailure>;
+    Value value_;
+};
+
+// Picks the best response coding from the supplied representation candidates.
+// The highest client q-value wins; ties resolve by server preference br > zstd
+// > gzip > identity. A coding with q=0 or one the client never accepts is
+// excluded. A failure result means the request has no acceptable response
+// content coding and must be answered with 406 Not Acceptable by the Web layer.
+inline HttpResponseCodingSelectionResult HttpResponseCodingSelection::select(const HttpResponseCodingQualities& qualities) noexcept {
+    return select(qualities, HttpResponseCodingCandidates::all());
 }
 
-// Picks the best response coding from all candidate qualities. The highest client
-// q-value wins; ties resolve by server preference br > zstd > gzip (Brotli gives
-// the best ratio for text and is the most widely supported of the three), then
-// identity. A coding with q=0 or one the client never accepts is excluded.
-[[nodiscard]] inline HttpContentCoding httpSelectResponseCodingFromQualities(const HttpResponseCodingQualities& qualities) noexcept {
-    struct Candidate final {
-        HttpContentCoding coding;
-        int score;
+inline HttpResponseCodingSelectionResult HttpResponseCodingSelection::select(const HttpResponseCodingQualities& qualities, HttpResponseCodingCandidates candidates) noexcept {
+    const int identityScore = qualities.score(HttpContentCoding::kIdentity);
+    const HttpContentCoding availableCodings[] = {
+        HttpContentCoding::kBrotli,
+        HttpContentCoding::kZstd,
+        HttpContentCoding::kGzip,
+        HttpContentCoding::kIdentity,
     };
-    const Candidate candidates[] = {
-        {HttpContentCoding::kBrotli, httpAcceptedEncodingScore(qualities.brotli)},
-        {HttpContentCoding::kZstd, httpAcceptedEncodingScore(qualities.zstd)},
-        {HttpContentCoding::kGzip, httpAcceptedEncodingScore(qualities.gzip)},
-        {HttpContentCoding::kIdentity, httpAcceptedIdentityScore(qualities.identity)},
-    };
-    HttpContentCoding best = HttpContentCoding::kIdentity;
-    int bestScore = -1;
-    for (const auto& candidate : candidates) {
-        if (candidate.score > bestScore) {
-            bestScore = candidate.score;
-            best = candidate.coding;
+    std::uint8_t acceptableBits = 0;
+    for (const auto coding : availableCodings) {
+        if (qualities.accepts(coding)) {
+            acceptableBits = static_cast<std::uint8_t>(acceptableBits | bit(coding));
         }
     }
-    return best;
-}
-
-[[nodiscard]] inline HttpContentCoding httpSelectResponseCoding(std::string_view acceptEncoding) noexcept {
-    HttpResponseCodingQualities qualities;
-    qualities.update(acceptEncoding);
-    return httpSelectResponseCodingFromQualities(qualities);
+    HttpContentCoding best = HttpContentCoding::kIdentity;
+    bool found = false;
+    int bestScore = -1;
+    for (const auto coding : availableCodings) {
+        if (!candidates.contains(coding)) {
+            continue;
+        }
+        const int score = qualities.score(coding);
+        if (score > bestScore) {
+            bestScore = score;
+            best = coding;
+            found = true;
+        }
+    }
+    if (!found) {
+        return HttpResponseCodingSelectionResult(HttpResponseCodingSelectionFailure(HttpResponseCodingSelectionError::kNoAcceptableCoding));
+    }
+    return HttpResponseCodingSelectionResult(HttpResponseCodingSelection(best, identityScore >= 0, qualities.fieldPresent, acceptableBits));
 }
 
 }  // namespace ruvia::detail

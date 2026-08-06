@@ -1,5 +1,6 @@
 #include "ruvia/web/db/Db.h"
 
+#include <exception>
 #include <utility>
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbUtils.h"
@@ -67,7 +68,15 @@ DbStreamResult::DbStreamResult(detail::DbPoolRef client, std::size_t slot, void*
 
 DbStreamResult::DbStreamResult(DbStreamResult&& other) noexcept
     : detail::ScopedCapabilityNode(std::move(other)),
-      state_(std::move(other.state_)) {}
+      state_(std::move(other.state_)) {
+    if (other.operationScope_.hasPendingOperations()) {
+        // readTask/closeTask are member coroutines. Their cold frames still
+        // contain `this`, so moving the owner would make a later await use the
+        // moved-from state. Keep the structured lifetime explicit and fail at
+        // the invalid move instead of allowing a delayed lease error.
+        std::terminate();
+    }
+}
 
 DbStreamResult::~DbStreamResult() {
     reset();

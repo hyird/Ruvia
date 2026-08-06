@@ -1,7 +1,8 @@
 #pragma once
 
-#include <filesystem>
+#include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <initializer_list>
 #include <memory>
 #include <memory_resource>
@@ -73,11 +74,13 @@ struct StaticRootState;
 
 }  // namespace detail
 
-// An index of the document root, built once by this constructor and never
-// refreshed. Each entry records the file's size, ETag, Last-Modified and an
+// An immutable index of the document root, built once by this constructor and
+// never refreshed directly. The Web runtime's DocumentRootRuntimeOptions may
+// rebuild a complete replacement off the worker and publish it between
+// requests. Each entry records the file's size, ETag, Last-Modified and an
 // identity (device, inode, modification time); serving a request looks the file
-// up in that index rather than touching the directory again, so a request costs
-// no directory syscalls.
+// up in that index rather than touching the directory again, so the immutable
+// path costs no directory syscalls.
 //
 // The consequence is a deliberate one, and the reason this is spelled out:
 // **changing the tree under a live server does not take effect, and is not
@@ -89,10 +92,14 @@ struct StaticRootState;
 //     fails closed on purpose.
 //   - A newly added file is not in the index and answers 404.
 //   - A deleted file fails to open and errors out.
+//   - If any filesystem operation fails while an index is being built, the
+//     build fails as a whole. Polling therefore keeps the previous complete
+//     index instead of publishing a partial one.
 //
 // All three persist until a new StaticRoot is constructed, which in an App
-// means a restart. Treat the document root as immutable for the lifetime of the
-// server: deploy by starting a new instance, not by editing files in place.
+// means a restart unless its document-root runtime policy enables polling.
+// Standalone StaticRoot values never own refresh, compression, or browser reload
+// policy.
 class StaticRoot final {
 public:
     explicit StaticRoot(const std::filesystem::path& root, StaticRootOptions options = {});

@@ -36,6 +36,14 @@ public:
         return active_;
     }
 
+    // A cold operation still owns a coroutine frame that may borrow its
+    // capability owner.  Owner move constructors use this to reject moving
+    // that owner before the frame has either started and completed or been
+    // explicitly discarded by closing the scope.
+    [[nodiscard]] bool hasPendingOperations() const noexcept {
+        return head_ != nullptr;
+    }
+
 private:
     friend class ScopedOperationNode;
     friend class ScopedCapabilityNode;

@@ -156,6 +156,9 @@ std::pmr::vector<std::pmr::string> redisBlockingPopArgs(std::string_view command
     if (keys.empty()) {
         throw std::invalid_argument("redis blocking pop requires at least one key");
     }
+    if (timeout.count() < 0) {
+        throw std::invalid_argument("redis blocking pop timeout must not be negative");
+    }
     std::pmr::vector<std::pmr::string> args(resource);
     args.reserve(keys.size() + 2);
     emplaceRedisString(args, command);
@@ -164,6 +167,26 @@ std::pmr::vector<std::pmr::string> redisBlockingPopArgs(std::string_view command
     }
     args.emplace_back(redisSecondsString(timeout, resource));
     return args;
+}
+
+std::optional<std::chrono::milliseconds> redisBlockingPopClientTimeout(std::chrono::seconds timeout) noexcept {
+    if (timeout <= std::chrono::seconds::zero()) {
+        return std::nullopt;
+    }
+
+    using Milliseconds = std::chrono::milliseconds;
+    constexpr auto kMillisecondsPerSecond = Milliseconds(std::chrono::seconds(1)).count();
+    constexpr auto kMaximumMilliseconds = Milliseconds::max().count();
+    const auto seconds = timeout.count();
+    if (seconds > kMaximumMilliseconds / kMillisecondsPerSecond) {
+        return Milliseconds::max();
+    }
+
+    const auto milliseconds = static_cast<Milliseconds::rep>(seconds) * kMillisecondsPerSecond;
+    if (milliseconds > kMaximumMilliseconds - kMillisecondsPerSecond) {
+        return Milliseconds::max();
+    }
+    return Milliseconds(milliseconds + kMillisecondsPerSecond);
 }
 
 }  // namespace ruvia::detail

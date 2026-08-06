@@ -183,8 +183,8 @@ RUVIA_TEST(context_request_query_rejects_and_remembers_malformed_percent_encodin
         bool threw = false;
         try {
             (void)context.req().query("safe");
-        } catch (const std::invalid_argument&) {
-            threw = true;
+        } catch (const ruvia::HttpError& error) {
+            threw = error.info().status() == ruvia::http_status::kBadRequest;
         }
         RUVIA_CHECK(threw);
     }
@@ -209,8 +209,8 @@ RUVIA_TEST(context_request_param_rejects_and_remembers_malformed_percent_encodin
         bool threw = false;
         try {
             (void)context.req().param("id");
-        } catch (const std::invalid_argument&) {
-            threw = true;
+        } catch (const ruvia::HttpError& error) {
+            threw = error.info().status() == ruvia::http_status::kBadRequest;
         }
         RUVIA_CHECK(threw);
     }

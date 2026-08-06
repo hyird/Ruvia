@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <memory>
 #include <semaphore>
 #include <stdexcept>
@@ -102,6 +103,21 @@ Task<void> exerciseTimeout(BlockingPool& pool, WorkerHandle worker, ThreadGate& 
     success = rejected && inTime.completed() && std::move(inTime).value() == 9;
 }
 
+Task<void> exerciseSaturatingTimeout(BlockingPool& pool, WorkerHandle worker, ThreadGate& gate, bool& success) {
+    // Keep the pool occupied so a wrapped timeout cannot hide behind a task
+    // that happens to finish before the receiver arms its deadline.
+    std::thread releaser([&pool, &gate] {
+        while (pool.stats().queued == 0) {
+            std::this_thread::yield();
+        }
+        gate.release.release();
+    });
+
+    auto result = co_await ruvia::runBlocking(pool, worker, std::chrono::hours::max(), [] { return 17; });
+    releaser.join();
+    success = result.completed() && std::move(result).value() == 17;
+}
+
 Task<void> countOnWorker(std::atomic_int& order, int& observed) {
     observed = order.fetch_add(1);
     co_return;
@@ -188,6 +204,67 @@ Task<void> exerciseStoppedWorker(BlockingPool& pool, WorkerHandle worker, std::a
     success = result.status() == BlockingStatus::kWorkerStopping;
 }
 
+bool testDestructionDoesNotJoinRunningCallable() {
+    auto startedPromise = std::make_shared<std::promise<void>>();
+    auto started = startedPromise->get_future();
+    auto finishedPromise = std::make_shared<std::promise<void>>();
+    auto finished = finishedPromise->get_future();
+    std::promise<void> releasePromise;
+    auto release = releasePromise.get_future().share();
+    std::promise<void> destroyedPromise;
+    auto destroyed = destroyedPromise.get_future();
+
+    auto pool = std::make_unique<BlockingPool>(BlockingPoolOptions{.threadCount = 1});
+    if (pool->submit([started = std::move(startedPromise), finished = std::move(finishedPromise), release] {
+            started->set_value();
+            release.wait();
+            finished->set_value();
+        }) != BlockingSubmitStatus::kAccepted) {
+        return false;
+    }
+    started.wait();
+
+    std::thread destroyer([pool = std::move(pool), &destroyedPromise]() mutable {
+        pool.reset();
+        destroyedPromise.set_value();
+    });
+    const bool returnedBeforeCallable = destroyed.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready;
+
+    releasePromise.set_value();
+    destroyer.join();
+    const bool callableFinished = finished.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready;
+    return returnedBeforeCallable && callableFinished;
+}
+
+bool testExplicitJoinWaitsForRunningCallable() {
+    auto startedPromise = std::make_shared<std::promise<void>>();
+    auto started = startedPromise->get_future();
+    std::promise<void> releasePromise;
+    auto release = releasePromise.get_future().share();
+    std::promise<void> joinedPromise;
+    auto joined = joinedPromise.get_future();
+
+    BlockingPool pool(BlockingPoolOptions{.threadCount = 1});
+    if (pool.submit([started = std::move(startedPromise), release] {
+            started->set_value();
+            release.wait();
+        }) != BlockingSubmitStatus::kAccepted) {
+        return false;
+    }
+    started.wait();
+
+    std::thread joiner([&pool, &joinedPromise] {
+        pool.stop();
+        pool.join();
+        joinedPromise.set_value();
+    });
+    const bool joinWaited = joined.wait_for(std::chrono::milliseconds(200)) == std::future_status::timeout;
+
+    releasePromise.set_value();
+    joiner.join();
+    return joinWaited && joined.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;
+}
+
 }  // namespace
 
 int main() {
@@ -220,10 +297,24 @@ int main() {
         dispatcher->stopTimers();
     }
 
+    bool saturatingTimeout = false;
+    {
+        ThreadGate gate;
+        BlockingPool pool(BlockingPoolOptions{.threadCount = 1});
+        gate.occupy(pool);
+        asio::io_context ioContext;
+        const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
+        const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+        asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exerciseSaturatingTimeout(pool, worker, gate, saturatingTimeout)), asio::detached);
+        ioContext.run();
+        dispatcher->close();
+        dispatcher->stopTimers();
+    }
+
     bool stoppedPool = false;
     {
-        // The gate outlives the pool: the pool's destructor joins threads that
-        // are still holding it.
+        // The gate outlives the pool: the pool's destructor detaches the thread
+        // while the callable is still holding it.
         ThreadGate gate;
         BlockingPool pool(BlockingPoolOptions{.threadCount = 1});
         gate.occupy(pool);
@@ -294,6 +385,8 @@ int main() {
         rejectsEmptyTask = rejectsEmptyTask && pool.submit([] {}) == BlockingSubmitStatus::kStopped;
     }
 
-    const bool allPassed = results && workerStaysFree && timeout && stoppedPool && queueFull && workerStopping && stoppedWorker && rejectsEmptyTask;
+    const bool destructionDoesNotJoin = testDestructionDoesNotJoinRunningCallable();
+    const bool explicitJoinWaits = testExplicitJoinWaitsForRunningCallable();
+    const bool allPassed = results && workerStaysFree && timeout && saturatingTimeout && stoppedPool && queueFull && workerStopping && stoppedWorker && rejectsEmptyTask && destructionDoesNotJoin && explicitJoinWaits;
     return allPassed ? 0 : 1;
 }

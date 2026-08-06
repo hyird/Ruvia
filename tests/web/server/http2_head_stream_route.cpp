@@ -25,6 +25,8 @@
 #include <string>
 #include <string_view>
 
+#include <zlib.h>
+
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/MemoryPool.h"
@@ -35,6 +37,7 @@
 #include "ruvia/web/Router.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
+#include "ruvia/web/detail/util/CallableRef.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 
 namespace {
@@ -59,10 +62,36 @@ std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId,
 
 struct StreamResult {
     std::string status;
+    std::string contentEncoding;
     std::string body;
     bool sawData{false};
     bool ended{false};
 };
+
+[[nodiscard]] std::string gzipDecode(std::string_view encoded) {
+    z_stream stream{};
+    if (inflateInit2(&stream, 15 + 32) != Z_OK) {
+        return {};
+    }
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(encoded.data()));
+    stream.avail_in = static_cast<uInt>(encoded.size());
+    std::string decoded;
+    char buffer[1024];
+    for (;;) {
+        stream.next_out = reinterpret_cast<Bytef*>(buffer);
+        stream.avail_out = sizeof(buffer);
+        const auto status = inflate(&stream, Z_NO_FLUSH);
+        decoded.append(buffer, sizeof(buffer) - stream.avail_out);
+        if (status == Z_STREAM_END) {
+            (void)inflateEnd(&stream);
+            return decoded;
+        }
+        if (status != Z_OK || (stream.avail_in == 0 && stream.avail_out != 0)) {
+            (void)inflateEnd(&stream);
+            return {};
+        }
+    }
+}
 
 }  // namespace
 
@@ -71,6 +100,17 @@ int main() {
     auto& impl = ruvia::detail::RouterImpl::from(router);
     std::pmr::string eventsPath("/events", std::pmr::get_default_resource());
     impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(eventsPath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    auto emptyHandler = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
+        context.status(ruvia::http_status::kNoContent);
+        co_return context.body(nullptr);
+    };
+    impl.registerRoute(
+        ruvia::HttpKnownMethod::kGet,
+        std::pmr::string("/empty", std::pmr::get_default_resource()),
+        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(emptyHandler),
+        ruvia::detail::RequestBodyMode::kBuffered,
+        {},
+        {});
     impl.finalize();
     const auto& routes = impl.routeTable();
 
@@ -92,6 +132,8 @@ int main() {
 
     StreamResult getStream;
     StreamResult headStream;
+    StreamResult rejectedStream;
+    StreamResult emptyStream;
 
     asio::co_spawn(
         io,
@@ -108,22 +150,25 @@ int main() {
                 auto [ec, n] = co_await asio::async_read(sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
                 co_return !ec && n == size;
             };
-            auto requestHeaders = [&writeAll](std::string_view method, std::uint32_t streamId) -> asio::awaitable<bool> {
+            auto requestHeaders = [&writeAll](std::string_view method, std::string_view path, std::uint32_t streamId, bool rejectAllCodings) -> asio::awaitable<bool> {
                 std::pmr::string headerBlock(std::pmr::get_default_resource());
                 HpackEncoder::encodeHeader(headerBlock, ":method", method);
-                HpackEncoder::encodeHeader(headerBlock, ":path", "/events");
+                HpackEncoder::encodeHeader(headerBlock, ":path", path);
                 HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
                 HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+                HpackEncoder::encodeHeader(headerBlock, "accept-encoding", rejectAllCodings ? "identity;q=0, gzip;q=0, br;q=0, zstd;q=0" : "gzip");
                 co_return co_await writeAll(frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, streamId, std::string_view(headerBlock.data(), headerBlock.size())));
             };
 
             if (!co_await writeAll(kClientPreface)) co_return;
             if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
-            if (!co_await requestHeaders("GET", 1)) co_return;
-            if (!co_await requestHeaders("HEAD", 3)) co_return;
+            if (!co_await requestHeaders("GET", "/events", 1, false)) co_return;
+            if (!co_await requestHeaders("HEAD", "/events", 3, false)) co_return;
+            if (!co_await requestHeaders("GET", "/events", 5, true)) co_return;
+            if (!co_await requestHeaders("GET", "/empty", 7, true)) co_return;
 
             HpackDecoder decoder(std::pmr::get_default_resource());
-            while (!getStream.ended || !headStream.ended) {
+            while (!getStream.ended || !headStream.ended || !rejectedStream.ended || !emptyStream.ended) {
                 char headerBytes[kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
                 const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
@@ -131,7 +176,7 @@ int main() {
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
                 }
-                StreamResult* stream = header.streamId == 1 ? &getStream : header.streamId == 3 ? &headStream : nullptr;
+                StreamResult* stream = header.streamId == 1 ? &getStream : header.streamId == 3 ? &headStream : header.streamId == 5 ? &rejectedStream : header.streamId == 7 ? &emptyStream : nullptr;
                 if (stream == nullptr) {
                     continue;
                 }
@@ -139,6 +184,8 @@ int main() {
                     (void)decoder.decode(std::string_view(payload.data(), payload.size()), stream, [](void* target, std::string_view name, std::string_view value) {
                         if (name == ":status") {
                             static_cast<StreamResult*>(target)->status = std::string(value);
+                        } else if (name == "content-encoding") {
+                            static_cast<StreamResult*>(target)->contentEncoding = std::string(value);
                         }
                         return true;
                     });
@@ -161,17 +208,33 @@ int main() {
         std::fprintf(stderr, "streaming GET over HTTP/2 was not 200: status='%s'\n", getStream.status.c_str());
         return 1;
     }
-    if (getStream.body != "tick-1tick-2") {
-        std::fprintf(stderr, "streaming GET body mismatch over HTTP/2: '%s'\n", getStream.body.c_str());
+    if (getStream.contentEncoding != "gzip") {
+        std::fprintf(stderr, "streaming GET over HTTP/2 did not negotiate gzip: '%s'\n", getStream.contentEncoding.c_str());
         return 2;
+    }
+    if (gzipDecode(getStream.body) != "tick-1tick-2") {
+        std::fprintf(stderr, "streaming GET body was not a valid gzip stream over HTTP/2\n");
+        return 3;
     }
     if (headStream.status != "200") {
         std::fprintf(stderr, "HEAD of a streaming route over HTTP/2 was not 200: status='%s'\n", headStream.status.c_str());
-        return 3;
+        return 4;
+    }
+    if (headStream.contentEncoding != "gzip") {
+        std::fprintf(stderr, "HEAD of a streaming route over HTTP/2 lost gzip: '%s'\n", headStream.contentEncoding.c_str());
+        return 5;
     }
     if (headStream.sawData || !headStream.body.empty()) {
         std::fprintf(stderr, "HEAD of a streaming route over HTTP/2 must send no DATA, got '%s'\n", headStream.body.c_str());
-        return 4;
+        return 6;
+    }
+    if (rejectedStream.status != "406") {
+        std::fprintf(stderr, "an empty response coding set over HTTP/2 was not rejected with 406: status='%s'\n", rejectedStream.status.c_str());
+        return 7;
+    }
+    if (emptyStream.status != "204" || emptyStream.sawData || !emptyStream.body.empty()) {
+        std::fprintf(stderr, "a bodyless buffered response over HTTP/2 was rejected by empty coding negotiation: status='%s' body='%s'\n", emptyStream.status.c_str(), emptyStream.body.c_str());
+        return 8;
     }
     return 0;
 }

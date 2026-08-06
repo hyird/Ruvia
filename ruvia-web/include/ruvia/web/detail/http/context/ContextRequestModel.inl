@@ -41,7 +41,10 @@ Task<std::optional<T>> ContextRequest::jsonIfModelTask(const Context* context) {
     const auto requestBody = co_await contextTextTask(context);
     auto parsed = JsonBody<T>::parse(requestBody, contextResource(context));
     if (!parsed) {
-        co_return std::nullopt;
+        // Once Content-Type selects JSON, malformed JSON is a 400 rather than
+        // an absent optional format. This keeps jsonIf<T>() from turning an
+        // explicitly JSON request into a successful fallback.
+        detail::throwInvalidJsonBody();
     }
     co_return std::move(*parsed);
 }
@@ -81,7 +84,9 @@ Task<std::optional<T>> ContextRequest::formIfModelTask(const Context* context) {
     const auto requestBody = co_await contextTextTask(context);
     auto parsed = FormBody<T>::parse(requestBody, contextResource(context));
     if (!parsed) {
-        co_return std::nullopt;
+        // The selected form media type makes a malformed body a client error;
+        // nullopt is reserved for a different Content-Type.
+        detail::throwInvalidFormBody();
     }
     co_return std::move(*parsed);
 }

@@ -138,6 +138,7 @@ private:
     void assignStableView(HttpResponseHeader& header, std::string_view name, std::string_view value, std::uint32_t knownBit);
     void releaseHeader(HttpResponseHeader& header) noexcept;
     void reserve(std::size_t count);
+    HttpResponseHeader& appendPreparedHeader(HttpResponseHeader header) noexcept;
     void clear() noexcept;
     void spill(std::size_t minCapacity);
     void moveFrom(HttpResponseHeaders&& other) noexcept;
@@ -185,6 +186,7 @@ private:
     void setBodyBorrowedView(std::string_view value) noexcept;
     void setBodyStaticView(std::string_view value) noexcept;
     void setBodyOwned(std::pmr::string&& value);
+    void replaceBodyWithContentEncoding(std::pmr::string&& value, std::string_view contentEncoding);
     void materializeBody();
     void setHeaderStableView(std::string_view key, std::string_view value);
     void setHeaderUnsigned(std::string_view key, std::uint64_t value, std::uint32_t knownBit);
@@ -216,6 +218,7 @@ private:
     [[nodiscard]] const HttpResponseHeader* findHeaderForRead(std::string_view key, std::uint32_t knownBit) const noexcept;
     HttpResponseHeader& prepareHeaderValueStorage(std::string_view key, std::size_t valueSize, std::uint32_t knownBit);
     void recordKnownHeaderIndex(std::uint32_t knownBit, std::size_t index) noexcept;
+    [[nodiscard]] HttpResponse cloneForTransaction() const;
 
     HttpStatusCode statusCode_{http_status::kOk};
     std::uint32_t knownHeaderBits_{0};

@@ -18,6 +18,9 @@ class DbTransaction final : private detail::ScopedCapabilityNode {
 public:
     DbTransaction(const DbTransaction&) = delete;
     DbTransaction& operator=(const DbTransaction&) = delete;
+    // A pending query/commit/rollback task captures this object. Moving it
+    // while that task is cold would leave the frame pointing at the
+    // moved-from object.
     DbTransaction(DbTransaction&& other) noexcept;
     DbTransaction& operator=(DbTransaction&&) = delete;
     ~DbTransaction();

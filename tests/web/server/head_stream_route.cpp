@@ -8,6 +8,7 @@
 // the connection alive for a pipelined GET that still streams normally.
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
@@ -21,6 +22,8 @@
 #include <asio/streambuf.hpp>
 #include <asio/write.hpp>
 
+#include <zlib.h>
+
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Router.h"
 #include "ruvia/web/Streaming.h"
@@ -32,6 +35,13 @@ namespace {
 ruvia::Task<void> tickStreamHandler(void*, ruvia::Context& context) {
     co_await context.stream().write("tick-1");
     co_await context.stream().write("tick-2");
+    co_await context.stream().end();
+}
+
+ruvia::Task<void> noTransformStreamHandler(void*, ruvia::Context& context) {
+    context.header("Cache-Control", "no-transform");
+    context.header("Content-Type", "image/png");
+    co_await context.stream().write("identity-forbidden-stream");
     co_await context.stream().end();
 }
 
@@ -51,6 +61,56 @@ ruvia::Task<void> tickStreamHandler(void*, ruvia::Context& context) {
     return result;
 }
 
+[[nodiscard]] std::string decodeChunked(std::string_view wire) {
+    std::string body;
+    std::size_t offset = 0;
+    for (;;) {
+        const auto lineEnd = wire.find("\r\n", offset);
+        if (lineEnd == std::string_view::npos) {
+            return {};
+        }
+        std::size_t chunkSize = 0;
+        const auto parsed = std::from_chars(wire.data() + offset, wire.data() + lineEnd, chunkSize, 16);
+        if (parsed.ec != std::errc{} || parsed.ptr != wire.data() + lineEnd) {
+            return {};
+        }
+        offset = lineEnd + 2;
+        if (chunkSize == 0) {
+            return body;
+        }
+        if (chunkSize > wire.size() - offset || wire.size() - offset - chunkSize < 2 || wire.substr(offset + chunkSize, 2) != "\r\n") {
+            return {};
+        }
+        body.append(wire.data() + offset, chunkSize);
+        offset += chunkSize + 2;
+    }
+}
+
+[[nodiscard]] std::string gzipDecode(std::string_view encoded) {
+    z_stream stream{};
+    if (inflateInit2(&stream, 15 + 32) != Z_OK) {
+        return {};
+    }
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(encoded.data()));
+    stream.avail_in = static_cast<uInt>(encoded.size());
+    std::string decoded;
+    char buffer[1024];
+    for (;;) {
+        stream.next_out = reinterpret_cast<Bytef*>(buffer);
+        stream.avail_out = sizeof(buffer);
+        const auto status = inflate(&stream, Z_NO_FLUSH);
+        decoded.append(buffer, sizeof(buffer) - stream.avail_out);
+        if (status == Z_STREAM_END) {
+            (void)inflateEnd(&stream);
+            return decoded;
+        }
+        if (status != Z_OK || (stream.avail_in == 0 && stream.avail_out != 0)) {
+            (void)inflateEnd(&stream);
+            return {};
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -58,8 +118,10 @@ int main() {
     auto& impl = ruvia::detail::RouterImpl::from(router);
     std::pmr::string eventsPath("/events", std::pmr::get_default_resource());
     std::pmr::string ssePath("/sse", std::pmr::get_default_resource());
+    std::pmr::string noTransformPath("/no-transform", std::pmr::get_default_resource());
     impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(eventsPath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
     impl.registerSseRoute(ruvia::HttpKnownMethod::kGet, std::move(ssePath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(noTransformPath), ruvia::detail::RouteStreamHandler(nullptr, &noTransformStreamHandler), {}, {});
     impl.finalize();
 
     ruvia::detail::HttpServerOptions options;
@@ -81,7 +143,7 @@ int main() {
     asio::streambuf buffer;
 
     // HEAD of the generic streaming route: the streaming head, no body bytes.
-    asio::write(sock, asio::buffer(std::string_view("HEAD /events HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+    asio::write(sock, asio::buffer(std::string_view("HEAD /events HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n")), ec);
     const auto eventsHead = lowered(readHead(sock, buffer, ec));
     if (!eventsHead.starts_with("http/1.1 200")) {
         fail(1, "HEAD of a streaming route was not 200");
@@ -89,37 +151,75 @@ int main() {
         fail(2, "HEAD of a streaming route sent body bytes");
     } else if (eventsHead.find("connection: close") != std::string_view::npos) {
         fail(3, "HEAD of a streaming route forced the connection closed");
+    } else if (eventsHead.find("content-encoding: gzip") == std::string_view::npos) {
+        fail(4, "HEAD of a streaming route lost the negotiated content coding");
     }
 
     // HEAD of the SSE route mirrors the GET head, content type included.
     if (rc == 0) {
-        asio::write(sock, asio::buffer(std::string_view("HEAD /sse HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+        asio::write(sock, asio::buffer(std::string_view("HEAD /sse HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n")), ec);
         const auto sseHead = lowered(readHead(sock, buffer, ec));
         if (!sseHead.starts_with("http/1.1 200")) {
-            fail(4, "HEAD of an SSE route was not 200");
+            fail(5, "HEAD of an SSE route was not 200");
         } else if (sseHead.find("content-type: text/event-stream") == std::string_view::npos) {
-            fail(5, "HEAD of an SSE route lost the SSE content type");
+            fail(6, "HEAD of an SSE route lost the SSE content type");
         } else if (buffer.size() != 0) {
-            fail(6, "HEAD of an SSE route sent body bytes");
+            fail(7, "HEAD of an SSE route sent body bytes");
+        } else if (sseHead.find("content-encoding: gzip") == std::string_view::npos) {
+            fail(8, "HEAD of an SSE route lost the negotiated content coding");
         }
     }
 
     // The connection stayed alive and correctly framed: a pipelined GET on the
     // same socket must still stream the full chunked body.
     if (rc == 0) {
-        asio::write(sock, asio::buffer(std::string_view("GET /events HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+        asio::write(sock, asio::buffer(std::string_view("GET /events HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n")), ec);
         const auto getHead = lowered(readHead(sock, buffer, ec));
         if (!getHead.starts_with("http/1.1 200")) {
-            fail(7, "GET after HEAD did not parse as a clean 200 response");
+            fail(9, "GET after HEAD did not parse as a clean 200 response");
         } else if (getHead.find("transfer-encoding: chunked") == std::string_view::npos) {
-            fail(8, "streaming GET after HEAD was not chunked");
+            fail(10, "streaming GET after HEAD was not chunked");
+        } else if (getHead.find("content-encoding: gzip") == std::string_view::npos) {
+            fail(11, "streaming GET did not advertise gzip");
         } else {
             asio::read_until(sock, buffer, "0\r\n\r\n", ec);
-            const std::string body(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + buffer.size());
-            if (body.find("tick-1") == std::string_view::npos || body.find("tick-2") == std::string_view::npos) {
-                fail(9, "streaming GET body after HEAD was incomplete");
+            const std::string wireBody(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + buffer.size());
+            const auto encoded = decodeChunked(wireBody);
+            if (gzipDecode(encoded) != "tick-1tick-2") {
+                fail(12, "streaming GET body after HEAD was not a valid gzip stream");
             }
         }
+    }
+
+    // A request that forbids identity and every supported coding is rejected
+    // before route dispatch; it must not silently stream an identity body.
+    if (rc == 0) {
+        asio::ip::tcp::socket rejectedSock(ctx);
+        rejectedSock.connect(endpoint, ec);
+        asio::write(rejectedSock, asio::buffer(std::string_view("GET /events HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: identity;q=0, gzip;q=0, br;q=0, zstd;q=0\r\n\r\n")), ec);
+        asio::streambuf rejectedBuffer;
+        const auto rejectedHead = lowered(readHead(rejectedSock, rejectedBuffer, ec));
+        if (!rejectedHead.starts_with("http/1.1 406")) {
+            fail(13, "an empty response coding set was not rejected with 406");
+        }
+        rejectedSock.close(ec);
+    }
+
+    // Compression is negotiated, but the streaming head explicitly forbids
+    // transformation. The sink must reject before committing a 200 head;
+    // after commitment there is no legal way to turn the response into 406.
+    if (rc == 0) {
+        asio::ip::tcp::socket rejectedSock(ctx);
+        rejectedSock.connect(endpoint, ec);
+        asio::write(rejectedSock, asio::buffer(std::string_view(
+            "GET /no-transform HTTP/1.1\r\nHost: localhost\r\n"
+            "Accept-Encoding: gzip, identity;q=0\r\n\r\n")), ec);
+        asio::streambuf rejectedBuffer;
+        const auto rejectedHead = lowered(readHead(rejectedSock, rejectedBuffer, ec));
+        if (!rejectedHead.starts_with("http/1.1 406")) {
+            fail(14, "streaming identity fallback was not rejected before commit");
+        }
+        rejectedSock.close(ec);
     }
 
     sock.close(ec);

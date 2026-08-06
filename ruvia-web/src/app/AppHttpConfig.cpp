@@ -1,11 +1,55 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/app/AppConfigMutation.h"
+#include "ruvia/web/detail/router/PrefixFallback.h"
 #include "ruvia/core/detail/util/NativePath.h"
 
+#include <memory_resource>
 #include <type_traits>
 #include <utility>
 
 namespace ruvia {
+
+namespace {
+
+[[nodiscard]] StaticRootOptions copyStaticRootOptionsToAppResource(const StaticRootOptions& source) {
+    auto* const resource = detail::appResource();
+    StaticRootOptions result;
+    result.cacheControl = source.cacheControl;
+    result.indexFile = source.indexFile;
+    result.defaultContentType = source.defaultContentType;
+    result.mimeTypes = std::pmr::vector<StaticMimeType>(resource);
+    result.mimeTypes.reserve(source.mimeTypes.size());
+    for (const auto& mime : source.mimeTypes) {
+        result.mimeTypes.push_back(StaticMimeType{
+            .extension = std::pmr::string(mime.extension, resource),
+            .contentType = std::pmr::string(mime.contentType, resource),
+        });
+    }
+
+    switch (source.fileTypes.kind()) {
+        case StaticFileTypePolicy::Kind::kDefaults:
+            result.fileTypes = StaticFileTypePolicy::defaults();
+            break;
+        case StaticFileTypePolicy::Kind::kAll:
+            result.fileTypes = StaticFileTypePolicy::all();
+            break;
+        case StaticFileTypePolicy::Kind::kOnly: {
+            std::pmr::vector<std::string_view> extensions(resource);
+            extensions.reserve(source.fileTypes.extensions().size());
+            for (const auto& extension : source.fileTypes.extensions()) {
+                extensions.push_back(extension);
+            }
+            result.fileTypes = StaticFileTypePolicy::only(extensions);
+            break;
+        }
+    }
+    result.enableRanges = source.enableRanges;
+    result.enableValidators = source.enableValidators;
+    result.serveDotfiles = source.serveDotfiles;
+    return result;
+}
+
+}  // namespace
 
 App& App::setCompression(std::optional<CompressionConfig> config) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change compression config while app is running", [&config](detail::AppState& state) { state.options.compression = std::move(config); });
@@ -26,7 +70,8 @@ App& App::setDocumentRoot(DocumentRootConfig config) {
 
         auto& documentRootConfig = state.documentRootConfig.emplace(detail::appResource());
         detail::assignNativePath(documentRootConfig.root, config.root);
-        documentRootConfig.staticOptions = std::move(config.staticOptions);
+        documentRootConfig.staticOptions = copyStaticRootOptionsToAppResource(config.staticOptions);
+        documentRootConfig.runtimeOptions = config.runtimeOptions;
     });
 }
 
@@ -71,24 +116,19 @@ App& App::notFound(HttpNotFoundHandler handler) {
 
 namespace {
 
-// Shared registration shape for both prefix-scoped fallback kinds: prefixes
-// are normalized ("/api/" == "/api") and re-registering one replaces its
-// handler, mirroring how the prefix-less setters overwrite.
+// Shared registration shape for both prefix-scoped fallback kinds. Prefix-less
+// setters are explicit single slots and may be overwritten; a scoped fallback
+// is a route-like registration and duplicate normalized scopes are a config
+// error rather than an order-dependent last-wins mutation.
 template <typename Handler>
-void upsertPrefixHandler(std::pmr::vector<std::pair<std::pmr::string, Handler>>& handlers, std::string_view prefix, Handler handler) {
+void appendPrefixHandler(std::pmr::vector<std::pair<std::pmr::string, Handler>>& handlers, std::string_view prefix, Handler handler) {
     if (handler == nullptr) {
         throw std::invalid_argument("fallback handler must not be null");
     }
-    if (prefix.empty() || prefix.front() != '/') {
-        throw std::invalid_argument("fallback prefix must start with '/'");
-    }
-    while (prefix.size() > 1 && prefix.back() == '/') {
-        prefix.remove_suffix(1);
-    }
-    for (auto& [existingPrefix, existingHandler] : handlers) {
-        if (std::string_view(existingPrefix) == prefix) {
-            existingHandler = handler;
-            return;
+    prefix = detail::normalizeFallbackPrefix(prefix);
+    for (const auto& existing : handlers) {
+        if (std::string_view(existing.first) == prefix) {
+            throw std::invalid_argument("duplicate fallback prefix");
         }
     }
     handlers.emplace_back(std::pmr::string(prefix, detail::appResource()), handler);
@@ -97,11 +137,11 @@ void upsertPrefixHandler(std::pmr::vector<std::pair<std::pmr::string, Handler>>&
 }  // namespace
 
 App& App::onError(std::string_view prefix, HttpErrorHandler handler) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [prefix, handler](detail::AppState& state) { upsertPrefixHandler(state.prefixErrorHandlers, prefix, handler); });
+    return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [prefix, handler](detail::AppState& state) { appendPrefixHandler(state.prefixErrorHandlers, prefix, handler); });
 }
 
 App& App::notFound(std::string_view prefix, HttpNotFoundHandler handler) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [prefix, handler](detail::AppState& state) { upsertPrefixHandler(state.prefixNotFoundHandlers, prefix, handler); });
+    return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [prefix, handler](detail::AppState& state) { appendPrefixHandler(state.prefixNotFoundHandlers, prefix, handler); });
 }
 
 }  // namespace ruvia

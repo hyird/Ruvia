@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/Sse.h"
 #include "ruvia/web/ScopedOperation.h"
@@ -60,7 +61,10 @@ public:
 
     ScopedOperation<void> writeln(std::string_view chunk);
 
-    ScopedOperation<void> sleep(std::chrono::milliseconds duration);
+    /// Suspends the stream producer. The result is kElapsed for a normal
+    /// delay, or kWorkerStopping when the owning worker is shutting down.
+    /// HTTP/2 peer termination remains reported as its transport error.
+    ScopedOperation<TimerSleepResult> sleep(std::chrono::milliseconds duration);
 
     /// Whether the response stream can no longer be delivered. The signal is
     /// transport-dependent: on HTTP/2 it also turns true when the peer resets or
@@ -85,7 +89,7 @@ private:
 
     using Write = Task<void> (*)(void*, std::string_view);
     using End = Task<void> (*)(void*, std::span<const HttpHeaderView>);
-    using Sleep = Task<void> (*)(void*, std::chrono::milliseconds);
+    using Sleep = Task<TimerSleepResult> (*)(void*, std::chrono::milliseconds);
     using StreamingHeadThunk = HttpResponse (*)(Context&);
     using BindContext = void (*)(void*, Context*, StreamingHeadThunk);
     using ReleaseContext = void (*)(void*) noexcept;
@@ -134,7 +138,7 @@ class SseWriter final {
 public:
     ScopedOperation<void> write(const SseMessage& message);
 
-    ScopedOperation<void> sleep(std::chrono::milliseconds duration);
+    ScopedOperation<TimerSleepResult> sleep(std::chrono::milliseconds duration);
 
     [[nodiscard]] bool aborted() const noexcept {
         return writer_.aborted();

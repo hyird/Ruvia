@@ -1,9 +1,16 @@
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 
 #include "ruvia/core/memory/MemoryPool.h"
 
+#include <cstddef>
+#include <memory_resource>
+#include <new>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -14,6 +21,38 @@ void check(bool condition) {
         ++failures;
     }
 }
+
+class FailingResponseResource final : public std::pmr::memory_resource {
+public:
+    void failAfterSuccessfulAllocations(std::size_t count) noexcept {
+        failAfter_ = count;
+    }
+
+    void allowAllocations() noexcept {
+        failAfter_.reset();
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (failAfter_.has_value()) {
+            if (*failAfter_ == 0) {
+                throw std::bad_alloc();
+            }
+            --*failAfter_;
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::optional<std::size_t> failAfter_;
+};
 
 [[nodiscard]] std::size_t countHeaders(ruvia::HttpResponse& response, std::string_view name) {
     std::size_t count = 0;
@@ -190,6 +229,59 @@ void exerciseRawResponseStatusIsNotReinterpreted(ruvia::RequestMemory& memory, c
     check(response.status() == ruvia::http_status::kOk);
 }
 
+void exerciseResponseMergeRollsBackOnAllocationFailure(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
+    const auto exercise = [&](bool assigned) {
+        auto context = ruvia::detail::ContextAccess::make(memory, request);
+        context.header("X-Pending-A", "a");
+        context.header("X-Pending-B", "b");
+
+        FailingResponseResource resource;
+        const std::string rawBody(128, 'r');
+        ruvia::HttpResponse raw(&resource);
+        raw.status(ruvia::http_status::kAccepted);
+        raw.body(rawBody);
+        raw.header("X-Raw", "raw");
+
+        // Cloning the raw header and body consumes two allocations. The first
+        // pending header can then be published, but the second allocation
+        // fails. The raw response must still be exactly retryable afterward.
+        resource.failAfterSuccessfulAllocations(3);
+        bool failed = false;
+        try {
+            if (assigned) {
+                context.respond(std::move(raw));
+            } else {
+                ruvia::detail::ContextAccess::setResponse(context, std::move(raw));
+            }
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        check(failed);
+        check(context.response() == nullptr);
+        check(raw.status() == ruvia::http_status::kAccepted);
+        check(ruvia::detail::responseBody(raw).bytes() == rawBody);
+        check(countHeaders(raw, "X-Raw") == 1);
+        check(!hasHeaderValue(raw, "X-Pending-A", "a"));
+        check(!hasHeaderValue(raw, "X-Pending-B", "b"));
+
+        resource.allowAllocations();
+        if (assigned) {
+            context.respond(std::move(raw));
+        } else {
+            ruvia::detail::ContextAccess::setResponse(context, std::move(raw));
+        }
+        auto response = ruvia::detail::ContextAccess::takeResponse(context);
+        check(response.status() == ruvia::http_status::kAccepted);
+        check(ruvia::detail::responseBody(response).bytes() == rawBody);
+        check(hasHeaderValue(response, "X-Raw", "raw"));
+        check(hasHeaderValue(response, "X-Pending-A", "a"));
+        check(hasHeaderValue(response, "X-Pending-B", "b"));
+    };
+
+    exercise(false);
+    exercise(true);
+}
+
 }  // namespace
 
 int main() {
@@ -210,6 +302,7 @@ int main() {
     exerciseRedirectLocationWins(memory, request);
     exerciseContextStatusAppliesAsDefault(memory, request);
     exerciseRawResponseStatusIsNotReinterpreted(memory, request);
+    exerciseResponseMergeRollsBackOnAllocationFailure(memory, request);
 
     return failures;
 }

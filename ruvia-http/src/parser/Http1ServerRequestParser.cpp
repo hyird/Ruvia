@@ -29,13 +29,17 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer, std::si
     state.progress_ = Http1ServerNeedRequestHead{};
     state.bodyPlan = Http1RequestBodyPlan(HttpRequestExpectations{});
     state.connectionPlan = Http1ServerConnectionPlan::http11Close();
-    state.responseCoding = HttpContentCoding::kIdentity;
+    state.responseCodingQualities = {};
     HttpRequestAccess::reset(state.request);
 
     const auto fail = [&state](HttpParseError error) noexcept {
+        // The request version may already have been accepted when a later
+        // target/framing semantic check fails. Preserve that protocol contract
+        // so an HTTP/1.0 error response is not silently upgraded to HTTP/1.1.
+        const auto connectionPlan = state.connectionPlan;
         HttpRequestAccess::reset(state.request);
         state.progress_ = Http1ServerRequestParseFailure(error);
-        state.connectionPlan = Http1ServerConnectionPlan::http11Close();
+        state.connectionPlan = connectionPlan;
     };
 
     const auto headerBytes = findHttpHeaderEnd(buffer, headerSearchOffset);
@@ -77,6 +81,11 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer, std::si
     }
     const auto protocolVersion = version[7] == '1' ? HttpProtocolVersion::kHttp11 : HttpProtocolVersion::kHttp10;
     HttpRequestAccess::setProtocolVersion(state.request, protocolVersion);
+    // Publish the version-specific request contract before any validation that
+    // can fail after the version line itself has been accepted. The final
+    // disposition is already derived from the parsed Connection fields and is
+    // tightened to close by body/response policy later.
+    state.connectionPlan = protocolVersion == HttpProtocolVersion::kHttp11 ? http1PlanHttp11RequestConnection(block.connectionOptions) : http1PlanHttp10RequestConnection(block.connectionOptions);
 
     RequestTargetView targetView;
     if (!parseRequestTarget(knownMethod, target, targetView)) {
@@ -140,7 +149,7 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer, std::si
         (void)HttpRequestAccess::addHeader(state.request, HttpHeaderView{header.name.bind(buffer), value}, requestHeaderKindKnownSlot(header.kind));
     }
 
-    state.responseCoding = httpSelectResponseCodingFromQualities(block.responseCodingQualities);
+    state.responseCodingQualities = block.responseCodingQualities;
     auto expectations = block.expectations;
     if (protocolVersion == HttpProtocolVersion::kHttp10) {
         expectations.ignoreContinue();
@@ -152,7 +161,6 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer, std::si
     } else {
         state.bodyPlan = Http1RequestBodyPlan(expectations);
     }
-    state.connectionPlan = protocolVersion == HttpProtocolVersion::kHttp11 ? http1PlanHttp11RequestConnection(block.connectionOptions) : http1PlanHttp10RequestConnection(block.connectionOptions);
     state.progress_ = Http1ServerRequestHeadReady(headerBytes);
 }
 

@@ -103,6 +103,14 @@ private:
         return true;
     }
 
+    [[nodiscard]] bool rollbackHeadEndStream() noexcept {
+        if (headEndStreamPending() == nullptr) {
+            return false;
+        }
+        state_ = State(Http2RemoteHeadPending());
+        return true;
+    }
+
     [[nodiscard]] bool finalizeContentHead() noexcept {
         if (headPending() != nullptr) {
             state_ = State(Http2RemoteContentOpen());

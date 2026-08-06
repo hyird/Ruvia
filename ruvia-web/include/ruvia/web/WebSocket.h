@@ -66,7 +66,7 @@ struct WebSocketRouteOptions final {
             : value_(value) {}
 
         constexpr BorrowedText(const char* value) noexcept
-            : value_(value) {}
+            : value_(detail::httpBorrowedCStringView(value)) {}
 
         template <typename Traits, typename Allocator>
         constexpr BorrowedText(const std::basic_string<char, Traits, Allocator>& value) noexcept
@@ -81,7 +81,7 @@ struct WebSocketRouteOptions final {
         }
 
         constexpr BorrowedText& operator=(const char* value) noexcept {
-            value_ = std::string_view(value);
+            value_ = detail::httpBorrowedCStringView(value);
             return *this;
         }
 
@@ -115,7 +115,7 @@ struct WebSocketRouteOptions final {
         }
 
         friend constexpr bool operator==(BorrowedText left, const char* right) noexcept {
-            return left.value_ == right;
+            return left.value_ == detail::httpBorrowedCStringView(right);
         }
 
     private:

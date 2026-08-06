@@ -24,6 +24,10 @@ public:
         return pending_ >= kHttp2ReceiveWindowUpdateThreshold;
     }
 
+    [[nodiscard]] bool readyAfter(std::uint32_t bytes) const noexcept {
+        return ready() || bytes >= kHttp2ReceiveWindowUpdateThreshold - pending_;
+    }
+
     [[nodiscard]] std::uint32_t take() noexcept {
         return std::exchange(pending_, 0);
     }

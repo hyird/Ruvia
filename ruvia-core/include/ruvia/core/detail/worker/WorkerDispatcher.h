@@ -52,8 +52,9 @@ public:
     // terminal cleanup hook and must not throw.
     void runContext(MoveOnlyFunction<void()> startupHandler, MoveOnlyFunction<void(std::exception_ptr)> failureHandler, MoveOnlyFunction<void()> shutdownHandler);
     void close() noexcept;
-    // Called by the execution-context owner after all worker work has joined and
-    // before the io_context is destroyed. Handles remain safe terminal endpoints.
+    // Called after worker activity is serialized with teardown (by a joined
+    // pool thread, an attached context's terminal handler, or its context
+    // service). Handles remain safe terminal endpoints.
     void detachContext() noexcept;
     [[nodiscard]] bool attached() const noexcept;
     [[nodiscard]] bool isCurrent() const noexcept;

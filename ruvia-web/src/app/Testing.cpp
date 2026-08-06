@@ -7,8 +7,10 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <string>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
@@ -22,8 +24,27 @@
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
+#include "ruvia/web/detail/router/PrefixFallback.h"
 
 namespace ruvia {
+
+namespace {
+
+template <typename Handler>
+void appendPrefixHandler(std::vector<std::pair<std::string, Handler>>& handlers, std::string_view prefix, Handler handler) {
+    if (handler == nullptr) {
+        throw std::invalid_argument("fallback handler must not be null");
+    }
+    prefix = detail::normalizeFallbackPrefix(prefix);
+    for (const auto& existing : handlers) {
+        if (std::string_view(existing.first) == prefix) {
+            throw std::invalid_argument("duplicate fallback prefix");
+        }
+    }
+    handlers.emplace_back(std::string(prefix), handler);
+}
+
+}  // namespace
 
 struct TestApp::Impl final {
     Router router;
@@ -106,25 +127,13 @@ TestApp& TestApp::notFound(HttpNotFoundHandler handler) {
 
 TestApp& TestApp::onError(std::string_view prefix, HttpErrorHandler handler) {
     impl_->requireConfigurable();
-    for (auto& [existing, existingHandler] : impl_->prefixErrorHandlers) {
-        if (existing == prefix) {
-            existingHandler = handler;
-            return *this;
-        }
-    }
-    impl_->prefixErrorHandlers.emplace_back(std::string(prefix), handler);
+    appendPrefixHandler(impl_->prefixErrorHandlers, prefix, handler);
     return *this;
 }
 
 TestApp& TestApp::notFound(std::string_view prefix, HttpNotFoundHandler handler) {
     impl_->requireConfigurable();
-    for (auto& [existing, existingHandler] : impl_->prefixNotFoundHandlers) {
-        if (existing == prefix) {
-            existingHandler = handler;
-            return *this;
-        }
-    }
-    impl_->prefixNotFoundHandlers.emplace_back(std::string(prefix), handler);
+    appendPrefixHandler(impl_->prefixNotFoundHandlers, prefix, handler);
     return *this;
 }
 
@@ -188,7 +197,11 @@ TestResponse TestApp::request(const TestRequest& request) {
     const auto resolution = routes.resolve(parsed);
 
     asio::io_context context(1);
-    auto future = asio::co_spawn(context, detail::taskAsAwaitable(routes.dispatchBufferedResponse(parsed, resolution, requestMemory, nullptr, services)), asio::use_future);
+    auto dispatch = [&]() -> asio::awaitable<HttpResponse> {
+        auto result = co_await detail::taskAsAwaitable(routes.dispatchBufferedResponse(parsed, resolution, requestMemory, detail::DocumentRootBinding::none(), services));
+        co_return std::move(result).takeResponse();
+    };
+    auto future = asio::co_spawn(context, dispatch(), asio::use_future);
     context.run();
     auto response = future.get();
 

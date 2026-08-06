@@ -5,6 +5,7 @@
 #include <array>
 #include <memory>
 #include <memory_resource>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -143,17 +144,27 @@ public:
     }
 
     [[nodiscard]] bool applySendWindowDelta(std::int64_t delta) noexcept {
-        bool ok = true;
-        forEach([&ok, delta](Http2StreamState& stream) noexcept {
-            if (!ok) {
+        // SETTINGS_INITIAL_WINDOW_SIZE applies to every active stream as one
+        // protocol transaction. Preflight the complete table first; applying
+        // the delta while discovering a later overflow would leave earlier
+        // streams with a different window even though the SETTINGS is rejected.
+        bool fits = true;
+        forEach([&fits, delta](Http2StreamState& stream) noexcept {
+            if (!fits) {
                 return;
             }
-            if (!stream.addSendWindow(delta)) {
-                ok = false;
-                return;
+            const auto current = static_cast<std::int64_t>(stream.sendWindow());
+            if (delta > static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)()) - current || delta < static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::min)()) - current) {
+                fits = false;
             }
         });
-        return ok;
+        if (!fits) {
+            return false;
+        }
+        forEach([delta](Http2StreamState& stream) noexcept {
+            (void)stream.addSendWindow(delta);
+        });
+        return true;
     }
 
 private:

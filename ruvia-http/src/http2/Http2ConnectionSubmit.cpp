@@ -1,6 +1,10 @@
 #include "ruvia/http/detail/http2/Http2Connection.h"
 
 #include <algorithm>
+#include <array>
+#include <limits>
+#include <memory_resource>
+#include <stdexcept>
 #include <utility>
 
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
@@ -31,18 +35,53 @@ namespace {
     }
     return true;
 }
+
+[[nodiscard]] std::size_t http2DataFrameEncodedBytes(std::size_t dataBytes, std::size_t maxFrameSize) {
+    if (dataBytes == 0) {
+        return kHttp2FrameHeaderBytes;
+    }
+    const auto frameCount = dataBytes / maxFrameSize + (dataBytes % maxFrameSize == 0 ? 0 : 1);
+    if (frameCount > (std::numeric_limits<std::size_t>::max() - dataBytes) / kHttp2FrameHeaderBytes) {
+        throw std::length_error("HTTP/2 DATA output size overflow");
+    }
+    return dataBytes + frameCount * kHttp2FrameHeaderBytes;
+}
 }  // namespace
 
 void Http2Connection::appendResponseHeaderFrames(Http2StreamState& stream, std::string_view headerBlock, Http2EndStream endStream) {
+    const auto outputCheckpoint = output_.checkpoint();
+    const auto previousEncoderTableSizeUpdatePending = encoderTableSizeUpdatePending_;
+    try {
     // A HEADERS + CONTINUATION run must be an uninterrupted frame sequence for the same
     // stream (RFC 9113 §6.10). Appending them contiguously to the single outbound buffer
     // guarantees that ordering (replacing the coroutine writeHeaders' atomic write).
-    std::pmr::string tableSizeUpdate(resource_);
+    // The table-size update is at most six bytes. Keep this scratch on the
+    // stack so a later output-allocation failure cannot occur after a drain has
+    // already committed flow-control state.
+    std::array<std::byte, 32> tableSizeUpdateStorage{};
+    std::pmr::monotonic_buffer_resource tableSizeUpdateResource(tableSizeUpdateStorage.data(), tableSizeUpdateStorage.size(), std::pmr::null_memory_resource());
+    std::pmr::string tableSizeUpdate(&tableSizeUpdateResource);
     if (encoderTableSizeUpdatePending_) {
         HpackEncoder::encodeDynamicTableSizeUpdate(tableSizeUpdate, encoderDynamicTableSize_);
     }
 
     const std::size_t maxFrame = peerSettings_.maxFrameSize();
+    std::size_t encodedBytes = 0;
+    std::size_t plannedOffset = 0;
+    bool plannedFirst = true;
+    while (plannedOffset < headerBlock.size() || (plannedFirst && !tableSizeUpdate.empty())) {
+        const auto prefixSize = plannedFirst ? tableSizeUpdate.size() : std::size_t{0};
+        const auto chunk = std::min<std::size_t>(headerBlock.size() - plannedOffset, maxFrame - prefixSize);
+        const auto frameBytes = kHttp2FrameHeaderBytes + prefixSize + chunk;
+        if (frameBytes > std::numeric_limits<std::size_t>::max() - encodedBytes) {
+            throw std::length_error("HTTP/2 header output size overflow");
+        }
+        encodedBytes += frameBytes;
+        plannedOffset += chunk;
+        plannedFirst = false;
+    }
+    output_.reserveAdditional(encodedBytes);
+
     std::size_t offset = 0;
     bool first = true;
     while (offset < headerBlock.size() || (first && !tableSizeUpdate.empty())) {
@@ -56,6 +95,15 @@ void Http2Connection::appendResponseHeaderFrames(Http2StreamState& stream, std::
     }
     if (!tableSizeUpdate.empty()) {
         encoderTableSizeUpdatePending_ = false;
+    }
+    } catch (...) {
+        // Header submission is one transaction. A throwing PMR resource must not leave
+        // a partial frame run, consume a pending HPACK table-size update, or retain a
+        // staged block that no longer has a matching stream state.
+        output_.rollbackTo(outputCheckpoint);
+        encoderTableSizeUpdatePending_ = previousEncoderTableSizeUpdatePending;
+        stream.responseHeaderBlock().clear();
+        throw;
     }
 }
 
@@ -91,12 +139,12 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(std::u
         return Http2BufferedResponseHeadSubmitResult::makeInvalidMessageFailure();
     }
     const auto endStream = writePlan.sendBody() ? Http2EndStream::kKeepOpen : Http2EndStream::kEndStream;
+    appendResponseHeaderFrames(*stream, std::string_view(stream->responseHeaderBlock()), endStream);
     if (headPlan->bodyPlan().bodySuppressed()) {
         stream->beginLocalContentForbidden();
     } else {
         stream->beginLocalContentKnownLength(writePlan.contentLength());
     }
-    appendResponseHeaderFrames(*stream, std::string_view(stream->responseHeaderBlock()), endStream);
     if (http2EndsStream(endStream)) {
         (void)stream->commitLocalHeadEndStream();
     } else {
@@ -139,6 +187,7 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         return Http2StreamingResponseHeadSubmitResult::makeInvalidMessageFailure();
     }
     const auto endStream = commitPlan.headDisposition() == ResponseStreamHeadDisposition::kMessageEnded ? Http2EndStream::kEndStream : Http2EndStream::kKeepOpen;
+    appendResponseHeaderFrames(*stream, std::string_view(stream->responseHeaderBlock()), endStream);
     if (headPlan->bodyPlan().bodySuppressed()) {
         stream->beginLocalContentForbidden();
     } else if (const auto contentLength = headPlan->streamingContentLength()) {
@@ -146,7 +195,6 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
     } else {
         stream->beginLocalContentUnbounded();
     }
-    appendResponseHeaderFrames(*stream, std::string_view(stream->responseHeaderBlock()), endStream);
     if (commitPlan.headDisposition() == ResponseStreamHeadDisposition::kTrailersOnly) {
         (void)stream->beginLocalResponseTrailersOnly();
     } else {
@@ -210,14 +258,18 @@ Http2DataSubmitStatus Http2Connection::submitData(std::uint32_t streamId, std::s
     // input or consuming flow-control window. A recoverable allocation failure can
     // therefore never leave a framed prefix without its core-owned remainder.
     std::optional<Http2PendingSend> deferred;
+    std::size_t immediateBytes = 0;
     if (!chunk.empty()) {
-        const auto immediateBytes = std::min(chunk.size(), http2AvailableSendWindow(connectionSendWindow_, *stream));
+        immediateBytes = std::min(chunk.size(), http2AvailableSendWindow(connectionSendWindow_, *stream));
         if (immediateBytes < chunk.size()) {
             std::pmr::string remainder(resource_);
             remainder.append(chunk.data() + immediateBytes, chunk.size() - immediateBytes);
             pendingSends_.reserve(pendingSends_.size() + 1);
             deferred.emplace(Http2PendingSend{streamId, std::move(remainder), 0, endStream, std::pmr::string(resource_)});
         }
+    }
+    if (immediateBytes != 0 || (chunk.empty() && http2EndsStream(endStream))) {
+        output_.reserveAdditional(immediateBytes == 0 ? kHttp2FrameHeaderBytes : http2DataFrameEncodedBytes(immediateBytes, peerSettings_.maxFrameSize()));
     }
     // Accepted means ownership of the WHOLE input, even when flow control below
     // can only materialize a prefix and the prepared suffix becomes pending.

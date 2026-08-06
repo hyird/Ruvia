@@ -11,6 +11,7 @@
 #include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
 #include "ruvia/http/detail/http2/hpack/Http2HeaderBlock.h"
 #include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
+#include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
 #include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
 #include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
 
@@ -27,6 +28,10 @@ namespace {
 constexpr std::uint8_t kMaxHttp2InterimResponses = 8;
 
 struct Http2ResponseDecodeContext final {
+    explicit Http2ResponseDecodeContext(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction* transaction) noexcept
+        : base(stream, transaction),
+          interimHeaders(HttpFieldListRole::kRecipient) {}
+
     Http2HeaderDecodeContext base;
     HttpInterimResponseHeaderValidator interimHeaders;
     std::optional<HttpStatusCode> status;
@@ -118,10 +123,9 @@ bool http2OnDecodedResponseTrailer(void* target, std::string_view name, std::str
     return context.acceptRegularField() && http2IsValidDecodedResponseHeader(name, value) && !isForbiddenResponseTrailerName(name);
 }
 
-HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream) {
-    Http2ResponseDecodeContext context{Http2HeaderDecodeContext{stream}, HttpInterimResponseHeaderValidator(HttpFieldListRole::kRecipient), std::nullopt, false};
-    const auto result = decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedResponseHeader(target, name, value); });
-    http2ResetHeaderBlock(stream);
+HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction) {
+    Http2ResponseDecodeContext context{stream, &streamTransaction};
+    const auto result = decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedResponseHeader(target, name, value); }, hpackTransaction);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
@@ -171,6 +175,9 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
             (void)stream.rejectLocalConnect();
         }
     } else if (!stream.finalizeRemoteContentHead()) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
+    if (http2RemotePeerHalfClosed(stream) && !stream.remoteContent().terminalLengthValid()) {
         return HeaderDecodeStatus::kProtocolError;
     }
     return HeaderDecodeStatus::kOk;
