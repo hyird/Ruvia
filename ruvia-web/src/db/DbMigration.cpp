@@ -342,7 +342,7 @@ private:
         if (driver == DbDriver::kMariaDb) {
             (void)co_await handle.execute("DO RELEASE_LOCK(?)", std::span<const DbValue>(releaseParams));
         } else {
-            (void)co_await handle.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", std::span<const DbValue>(releaseParams));
+            (void)co_await handle.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", std::span<const DbValue>(releaseParams));
         }
     }
 
