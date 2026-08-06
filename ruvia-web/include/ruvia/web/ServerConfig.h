@@ -23,6 +23,8 @@
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/StaticFiles.h"
 
 namespace ruvia {
@@ -435,6 +437,16 @@ public:
         return AccessLogCallback(std::addressof(listener), [](void* target, const AccessLogRecord& record) noexcept { (*static_cast<Listener*>(target))(record); });
     }
 
+    // A listener with nothing to borrow -- a lambda over copies, say -- does not
+    // need an object of its own to bind to. It is copied onto the process
+    // resource at registration; bind() remains the way to observe through an
+    // object the caller already owns and wants to read afterwards.
+    template <typename Listener, typename Stored = std::decay_t<Listener>>
+        requires(!std::is_same_v<Stored, AccessLogCallback> && !std::is_lvalue_reference_v<Listener> && std::is_nothrow_invocable_r_v<void, Stored&, const AccessLogRecord&>)
+    AccessLogCallback(Listener&& listener)
+        : target_(detail::constructPmrObject<Stored>(detail::processResource(), std::forward<Listener>(listener))),
+          invoke_([](void* target, const AccessLogRecord& record) noexcept { (*static_cast<Stored*>(target))(record); }) {}
+
     [[nodiscard]] constexpr explicit operator bool() const noexcept {
         return invoke_ != nullptr;
     }
@@ -531,6 +543,14 @@ public:
     [[nodiscard]] static constexpr ConnectionFailureCallback bind(Listener& listener) noexcept {
         return ConnectionFailureCallback(std::addressof(listener), [](void* target, const ConnectionFailureRecord& record) noexcept { (*static_cast<Listener*>(target))(record); });
     }
+
+    // As on AccessLogCallback: a self-contained listener is copied onto the
+    // process resource instead of requiring an object to bind to.
+    template <typename Listener, typename Stored = std::decay_t<Listener>>
+        requires(!std::is_same_v<Stored, ConnectionFailureCallback> && !std::is_lvalue_reference_v<Listener> && std::is_nothrow_invocable_r_v<void, Stored&, const ConnectionFailureRecord&>)
+    ConnectionFailureCallback(Listener&& listener)
+        : target_(detail::constructPmrObject<Stored>(detail::processResource(), std::forward<Listener>(listener))),
+          invoke_([](void* target, const ConnectionFailureRecord& record) noexcept { (*static_cast<Stored*>(target))(record); }) {}
 
     [[nodiscard]] constexpr explicit operator bool() const noexcept {
         return invoke_ != nullptr;

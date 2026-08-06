@@ -65,9 +65,15 @@ public:
     RUVIA_GET("/link", link);
     RUVIA_GET("/count", count);
     RUVIA_POST("/echo", echo);
+    RUVIA_GET("/boom", boom);
     RUVIA_ROUTES_END
 
 private:
+    ruvia::Task<ruvia::HttpResponse> boom(ruvia::Context&) {
+        throw std::runtime_error("boom");
+        co_return ruvia::HttpResponse{};
+    }
+
     ruvia::Task<ruvia::HttpResponse> hello(ruvia::Context& c) {
         co_return c.text("hello");
     }
@@ -211,6 +217,42 @@ RUVIA_TEST(testing_facade_constructs_middleware_from_registration_arguments) {
     const auto distinct = other.request(ruvia::TestRequest::get("/t/hello"));
     RUVIA_CHECK_EQ(distinct.header("X-Test-Configured").value_or(""), std::string_view("other"));
     RUVIA_CHECK_EQ(distinct.header("X-Test-Level").value_or(""), std::string_view("other"));
+}
+
+RUVIA_TEST(testing_facade_runs_fallback_handlers_that_carry_state) {
+    // A fallback handler used to be a plain function pointer, so anything it
+    // needed had to be a global. It now accepts any callable, including one that
+    // captures the collaborators the handler depends on.
+    struct Branding final {
+        std::string label;
+    };
+    const Branding branding{"tenant-a"};
+
+    ruvia::TestApp app;
+    app.notFound([branding](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {
+        c.status(ruvia::http_status::kNotFound);
+        co_return c.text(std::string_view(branding.label));
+    });
+    app.onError([branding](ruvia::Context& c, ruvia::HttpErrorInfo error) -> ruvia::Task<ruvia::HttpResponse> {
+        c.status(error.status());
+        std::pmr::string body(c.resource());
+        body.append(branding.label);
+        body.append(":error");
+        co_return c.text(std::move(body));
+    });
+
+    const auto missed = app.request(ruvia::TestRequest::get("/nowhere"));
+    RUVIA_CHECK(missed.status() == ruvia::http_status::kNotFound);
+    RUVIA_CHECK_EQ(missed.body(), std::string_view("tenant-a"));
+
+    // The captured state is still readable on a later request: the callable was
+    // copied at registration, not borrowed from the caller's frame.
+    const auto missedAgain = app.request(ruvia::TestRequest::get("/nowhere/else"));
+    RUVIA_CHECK_EQ(missedAgain.body(), std::string_view("tenant-a"));
+
+    const auto failed = app.request(ruvia::TestRequest::get("/t/boom"));
+    RUVIA_CHECK(failed.status() == ruvia::http_status::kInternalServerError);
+    RUVIA_CHECK_EQ(failed.body(), std::string_view("tenant-a:error"));
 }
 
 RUVIA_TEST(testing_facade_rejects_duplicate_normalized_fallback_prefixes) {
