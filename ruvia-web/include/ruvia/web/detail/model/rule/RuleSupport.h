@@ -25,7 +25,7 @@ template <typename T>
 template <typename T>
 [[nodiscard]] long double modelNumber(const T& value) noexcept {
     using ValueT = std::remove_cvref_t<T>;
-    if constexpr (detail::isRuviaScalar<ValueT>) {
+    if constexpr (detail::isWrappedModelScalar<ValueT>) {
         return static_cast<long double>(value.value);
     } else {
         return static_cast<long double>(value);
@@ -83,7 +83,7 @@ template <typename T>
     } else if constexpr (JsonBody<ValueT>::value) {
         return "must be an object";
     } else if constexpr (detail::isRuviaScalar<ValueT>) {
-        using ScalarT = typename detail::RuviaScalarTraits<ValueT>::value_type;
+        using ScalarT = detail::ModelScalarValueT<ValueT>;
         if constexpr (std::is_same_v<ScalarT, bool>) {
             return "must be a boolean";
         } else {
@@ -104,7 +104,7 @@ template <typename T>
 [[nodiscard]] constexpr bool modelHasNumberRule() noexcept {
     using ValueT = std::remove_cvref_t<T>;
     if constexpr (detail::isRuviaScalar<ValueT>) {
-        using ScalarT = typename detail::RuviaScalarTraits<ValueT>::value_type;
+        using ScalarT = detail::ModelScalarValueT<ValueT>;
         return std::is_arithmetic_v<ScalarT> && !std::is_same_v<ScalarT, bool>;
     } else {
         return std::is_arithmetic_v<ValueT> && !std::is_same_v<ValueT, bool>;

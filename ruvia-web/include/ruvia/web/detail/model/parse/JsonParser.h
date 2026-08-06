@@ -130,7 +130,7 @@ template <typename T>
         input = remaining;
         return parsed;
     } else if constexpr (isRuviaScalar<FieldT>) {
-        using ScalarT = typename RuviaScalarTraits<FieldT>::value_type;
+        using ScalarT = ModelScalarValueT<FieldT>;
         ScalarT parsed{};
         if constexpr (std::is_same_v<ScalarT, bool>) {
             if (consumeJsonLiteral(remaining, "true")) {

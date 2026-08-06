@@ -76,8 +76,40 @@ struct RuviaScalarTraits<UInt64> : std::true_type {
     using value_type = std::uint64_t;
 };
 
+// The wrapper types (ruvia::Int32 and friends) carry the value in a .value
+// member; a field declared with the plain type holds it directly. Both are
+// model scalars, and the parse, validation, and serialization layers work off
+// the two traits below rather than naming either form.
 template <typename T>
-inline constexpr bool isRuviaScalar = RuviaScalarTraits<std::remove_cvref_t<T>>::value;
+inline constexpr bool isWrappedModelScalar = RuviaScalarTraits<std::remove_cvref_t<T>>::value;
+
+// The standard types a field may be declared with. Deliberately an explicit
+// list rather than std::is_arithmetic: char and the sized character types carry
+// text, not numbers, and admitting them would silently parse a string field as
+// an integer.
+template <typename T>
+inline constexpr bool isPlainModelScalar =
+    std::is_same_v<std::remove_cvref_t<T>, bool> || std::is_same_v<std::remove_cvref_t<T>, float> || std::is_same_v<std::remove_cvref_t<T>, double> ||
+    std::is_same_v<std::remove_cvref_t<T>, std::int32_t> || std::is_same_v<std::remove_cvref_t<T>, std::uint32_t> ||
+    std::is_same_v<std::remove_cvref_t<T>, std::int64_t> || std::is_same_v<std::remove_cvref_t<T>, std::uint64_t>;
+
+template <typename T>
+inline constexpr bool isRuviaScalar = isWrappedModelScalar<T> || isPlainModelScalar<T>;
+
+// The arithmetic type a model scalar parses into and validates against: the
+// wrapper's value_type, or the plain type itself.
+template <typename T, bool Wrapped = isWrappedModelScalar<T>>
+struct ModelScalarValue {
+    using type = std::remove_cvref_t<T>;
+};
+
+template <typename T>
+struct ModelScalarValue<T, true> {
+    using type = typename RuviaScalarTraits<std::remove_cvref_t<T>>::value_type;
+};
+
+template <typename T>
+using ModelScalarValueT = typename ModelScalarValue<T>::type;
 
 template <typename T>
 inline constexpr bool isFormField = isRuviaString<T> || isRuviaScalar<T>;

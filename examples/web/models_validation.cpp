@@ -9,10 +9,14 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
+// A numeric field may be declared with the plain standard type; ruvia::UInt32
+// and friends remain available and behave identically. ruvia::String stays its
+// own type because it carries the borrowed/owned distinction a std::string_view
+// cannot express.
 struct ProfileRequest final {
     RUVIA_OPTIONAL_FIELD(displayName, ruvia::String);
     RUVIA_OPTIONAL_FIELD(email, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32);
+    RUVIA_OPTIONAL_FIELD(age, std::uint32_t);
     RUVIA_MODEL(ProfileRequest, displayName, email, age);
 };
 
