@@ -44,22 +44,20 @@ void HpackDecoder::addDynamic(std::string_view name, std::string_view value) {
         return;
     }
 
-    // Eviction advances dynamicOffset_ and may compact/destroy the old entries.
-    // Reserve the vector slot first: if this allocation fails, the dynamic table
-    // remains untouched and the caller can retry the complete field block. Without
-    // this preflight, push_back() could throw after evictDynamicToFit() had already
-    // removed the entries needed to decode the next indexed field.
-    dynamic_.reserve(dynamic_.size() + 1);
-
-    // Copy name and value into owned storage BEFORE evicting. For a "Literal
+    // Copy name and value into owned storage before ANY operation that can move or
+    // destroy a dynamic entry. For a "Literal
     // Header Field with Incremental Indexing -- Indexed Name" whose name indexes a
-    // dynamic entry (RFC 7541 6.2.1), `name` aliases that entry's heap buffer --
-    // and RFC 7541 4.4 explicitly allows a new entry to reference the name of an
-    // entry the same insertion evicts. evictDynamicToFit() -> compactDynamic()
-    // move-assigns survivors over the evicted front slots (or clears the vector on
-    // full eviction), freeing the referenced buffer; copying `name` afterwards
-    // would then read freed memory. Materializing first makes the insert safe.
+    // dynamic entry (RFC 7541 6.2.1), `name` aliases storage inside that entry.
+    // RFC 7541 4.4 allows the insertion to evict the referenced entry, while a
+    // vector reserve can move an SSO-backed name even before eviction. Either
+    // operation would invalidate the view. Materializing first makes both safe;
+    // if either this copy or the following reserve throws, the live table remains
+    // untouched and the complete field block is retryable.
     Entry entry{std::pmr::string(name, resource_), std::pmr::string(value, resource_)};
+
+    // Reserve before eviction so push_back cannot throw after logical entries have
+    // been removed from the table.
+    dynamic_.reserve(dynamic_.size() + 1);
     evictDynamicToFit(size);
     dynamic_.push_back(std::move(entry));
     dynamicSize_ += size;

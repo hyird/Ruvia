@@ -144,19 +144,28 @@ RUVIA_TEST(http2_connection_lifecycle_output_transitions_are_retryable_on_alloca
         std::memset(ping + 9, 0, 8);
         resource.rejectAllocations();
         bool allocationFailed = false;
-        try {
-            (void)conn.feed(std::string_view(ping, sizeof(ping)));
-        } catch (const std::bad_alloc&) {
-            allocationFailed = true;
+        std::string outputBeforeFailure;
+        // A 17-byte PING ACK exceeds libstdc++'s string SSO but fits in libc++'s.
+        // Keep submitting complete fast-path frames until the actual output
+        // capacity is reached, then verify that the first allocating transition
+        // leaves the failed frame wholly retryable on either implementation.
+        for (std::size_t attempt = 0; attempt < 64 && !allocationFailed; ++attempt) {
+            outputBeforeFailure.assign(conn.pendingOutput());
+            try {
+                RUVIA_CHECK(conn.feed(std::string_view(ping, sizeof(ping))) == Http2FeedResult::kAccepted);
+            } catch (const std::bad_alloc&) {
+                allocationFailed = true;
+            }
         }
 
         RUVIA_CHECK(allocationFailed);
-        RUVIA_CHECK(conn.pendingOutput().empty());
+        RUVIA_CHECK_EQ(conn.pendingOutput(), std::string_view(outputBeforeFailure));
         RUVIA_CHECK(!conn.connectionError().has_value());
 
         resource.rejectAllocations(false);
+        const auto pendingBeforeRetry = conn.pendingOutput().size();
         RUVIA_CHECK(conn.feed(std::string_view(ping, sizeof(ping))) == Http2FeedResult::kAccepted);
-        RUVIA_CHECK_EQ(conn.pendingOutput().size(), std::size_t{9 + 8});
+        RUVIA_CHECK_EQ(conn.pendingOutput().size(), pendingBeforeRetry + std::size_t{9 + 8});
     }
 }
 
@@ -183,7 +192,22 @@ RUVIA_TEST(http2_connection_feed_batch_is_retryable_when_a_later_frame_allocates
     ruvia::detail::http2EncodeFrameHeader(batch.data() + 13, 8, Http2FrameType::kPing, 0, 0);
     std::memset(batch.data() + 13 + 9, 0, 8);
 
+    // Fill the implementation-defined small-string output capacity first. The
+    // failed probe is a complete fast-path PING and therefore leaves no retained
+    // input; the following batch then deterministically fails on its later PING
+    // output rather than depending on whether 17 bytes fit libc++ or libstdc++ SSO.
     resource.rejectAllocations();
+    bool primedOutputFailure = false;
+    const auto ping = std::string_view(batch.data() + 13, 9 + 8);
+    for (std::size_t attempt = 0; attempt < 64 && !primedOutputFailure; ++attempt) {
+        try {
+            RUVIA_CHECK(conn.feed(ping) == Http2FeedResult::kAccepted);
+        } catch (const std::bad_alloc&) {
+            primedOutputFailure = true;
+        }
+    }
+    RUVIA_CHECK(primedOutputFailure);
+
     bool allocationFailed = false;
     try {
         (void)conn.feed(std::string_view(batch.data(), batch.size()));

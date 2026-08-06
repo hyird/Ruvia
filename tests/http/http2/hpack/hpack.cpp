@@ -323,13 +323,12 @@ RUVIA_TEST(hpack_dynamic_table_add_then_reference) {
 
 RUVIA_TEST(hpack_indexed_name_referencing_the_evicted_entry_is_safe) {
     // RFC 7541 4.4: a new entry may reference (by indexed name) an existing entry
-    // that the same insertion evicts. Here the referenced name is heap-allocated
-    // (20 bytes, past any small-string buffer) and the insertion fully evicts it,
-    // so addDynamic must copy the name BEFORE eviction frees that heap buffer --
-    // otherwise the copy reads freed memory (a remotely reachable heap
-    // use-after-free during HPACK decode). This block
-    // aborts without the fix; it also pins the functional invariant that the
-    // newly inserted entry resolves to the correct (uncorrupted) name.
+    // that the same insertion evicts. Here the 20-byte referenced name is
+    // heap-backed in libstdc++ but SSO-backed in libc++; addDynamic must copy it
+    // before either vector growth moves the SSO storage or eviction frees heap
+    // storage. Otherwise the copy reads an invalidated view (a remotely reachable
+    // memory-safety bug during HPACK decode). The final indexed field pins the
+    // stored entry's full, uncorrupted name on both standard libraries.
     const std::string name(20, 'a');
     std::string block;
     block += bytes({0x3f, 0x16});  // dynamic table size update -> 53 (fits exactly one entry)
