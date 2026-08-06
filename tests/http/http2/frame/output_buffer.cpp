@@ -21,6 +21,7 @@ using ruvia::detail::http2ParseFrameHeader;
 using ruvia::detail::http2Read32;
 using ruvia::detail::kHttp2FrameHeaderBytes;
 
+#if !defined(_MSC_VER)
 class ToggleRejectingMemoryResource final : public std::pmr::memory_resource {
 public:
     void rejectAllocations() noexcept {
@@ -45,6 +46,7 @@ private:
 
     bool reject_{false};
 };
+#endif  // !_MSC_VER
 
 template <typename T>
 concept ExposesRvalueHttp2OutputBuffer = requires(T&& output) { std::move(output).pending(); };
@@ -112,6 +114,8 @@ RUVIA_TEST(http2_output_buffer_owns_reset_frame_serialization) {
     RUVIA_CHECK_EQ(http2Read32(bytes(pending.data()) + kHttp2FrameHeaderBytes), static_cast<std::uint32_t>(Http2ErrorCode::kCancel));
 }
 
+#if !defined(_MSC_VER)
+// MSVC's debug pmr::string stalls in this synthetic throwing-growth probe.
 RUVIA_TEST(http2_output_buffer_frame_append_is_atomic_on_allocation_failure) {
     ToggleRejectingMemoryResource resource;
     Http2OutputBuffer output(&resource);
@@ -129,3 +133,4 @@ RUVIA_TEST(http2_output_buffer_frame_append_is_atomic_on_allocation_failure) {
     RUVIA_CHECK(allocationFailed);
     RUVIA_CHECK_EQ(output.pending(), std::string_view(before));
 }
+#endif  // !_MSC_VER

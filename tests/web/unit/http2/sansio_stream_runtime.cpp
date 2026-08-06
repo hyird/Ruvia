@@ -34,6 +34,7 @@
 
 namespace {
 
+#if !defined(_MSC_VER)
 class ToggleRejectingMemoryResource final : public std::pmr::memory_resource {
 public:
     void rejectAllocations(bool value) noexcept {
@@ -58,6 +59,7 @@ private:
 
     bool rejecting_{false};
 };
+#endif  // !_MSC_VER
 
 using ruvia::ProtocolByteLimit;
 using ruvia::detail::Http2BufferedRequestBody;
@@ -317,6 +319,9 @@ RUVIA_TEST(http2_web_body_queue_reuses_storage_and_ignores_empty_chunks) {
     RUVIA_CHECK_EQ(queue.pop(), std::string_view("reused"));
 }
 
+#if !defined(_MSC_VER)
+// The queue probe injects failure through PMR string growth; MSVC's debug
+// implementation does not complete that synthetic throwing path.
 RUVIA_TEST(http2_web_body_queue_commits_backlog_only_after_storage_succeeds) {
     const std::string allocationSizedChunk(256, 'x');
 
@@ -348,6 +353,7 @@ RUVIA_TEST(http2_web_body_queue_commits_backlog_only_after_storage_succeeds) {
     RUVIA_CHECK_EQ(populatedQueue.pop(), std::string_view("retained"));
     RUVIA_CHECK(populatedQueue.empty());
 }
+#endif  // !_MSC_VER
 
 RUVIA_TEST(http2_web_route_selection_owns_exact_body_storage) {
     Http2SansIoStreamRuntime bufferedRuntime(1, std::pmr::get_default_resource());
