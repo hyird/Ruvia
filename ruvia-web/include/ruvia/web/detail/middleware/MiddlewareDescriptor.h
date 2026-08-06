@@ -13,17 +13,14 @@ namespace detail {
 
 class ControllerMiddlewareDescriptor;
 
-template <typename MiddlewareT>
-[[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor();
-
 template <typename MiddlewareT, typename... Args>
 [[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args);
 
 class ControllerMiddlewareDescriptor final {
 public:
     using Invoke = Task<void> (*)(void*, Context&, Next&);
-    // `args` is null for a default-constructed middleware, or points at the
-    // registration-owned argument tuple captured by App::use<T>(args...). It
+    // `args` points at the registration-owned argument tuple captured by
+    // use<T>(args...) -- empty when the middleware is default constructed. It
     // lives on the process registration resource, so it outlives every instance
     // the router materializes from this descriptor.
     using Create = void* (*)(const void* args);
@@ -64,9 +61,6 @@ public:
     }
 
 private:
-    template <typename MiddlewareT>
-    friend ControllerMiddlewareDescriptor makeMiddlewareDescriptor();
-
     template <typename MiddlewareT, typename... Args>
     friend ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args);
 

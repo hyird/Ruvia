@@ -41,18 +41,14 @@ template <typename MiddlewareT>
     }
 }
 
-template <typename MiddlewareT>
-[[nodiscard]] void* createMiddleware(const void*) {
-    return constructPmrObject<MiddlewareT>(registrationResource());
-}
-
-// Constructs the middleware from the arguments App::use<T>(args...) captured.
-// The tuple lives on the registration resource for the process lifetime, so it
-// is still readable every time the router materializes an instance -- including
+// Constructs the middleware from the arguments use<T>(args...) captured. The
+// tuple lives on the registration resource for the process lifetime, so it is
+// still readable every time the router materializes an instance -- including
 // across a stop()/run() cycle, which rebuilds instances from the same
-// descriptors.
+// descriptors. Registering without arguments is the empty-tuple case, not a
+// separate path: std::apply then calls the default constructor.
 template <typename MiddlewareT, typename ArgsT>
-[[nodiscard]] void* createMiddlewareWithArgs(const void* args) {
+[[nodiscard]] void* createMiddleware(const void* args) {
     return std::apply([](const auto&... values) { return static_cast<void*>(constructPmrObject<MiddlewareT>(registrationResource(), values...)); }, *static_cast<const ArgsT*>(args));
 }
 
@@ -79,32 +75,21 @@ template <typename MiddlewareT>
     }
 }
 
-template <typename MiddlewareT>
-void assertMiddlewareShape() {
-    static_assert(std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>, "middleware must derive from ruvia::Middleware<MiddlewareT>");
-    static_assert(std::is_final_v<MiddlewareT>, "middleware must be final");
-}
-
-template <typename MiddlewareT>
-[[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor() {
-    assertMiddlewareShape<MiddlewareT>();
-    static_assert(std::is_default_constructible_v<MiddlewareT>, "middleware registered without arguments must be default constructible; pass constructor arguments to use<T>() otherwise");
-
-    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddleware<MiddlewareT>, &destroyMiddleware<MiddlewareT>, nullptr, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>());
-}
-
 // Registers one middleware type together with the arguments every instance of
 // it is constructed from. Arguments are decayed and copied once, at
 // registration; a middleware is built per router materialization, so they must
 // stay readable for the process lifetime rather than the caller's scope.
+// Registering without arguments is the zero-argument case of this, so there is
+// one descriptor shape and one construction path.
 template <typename MiddlewareT, typename... Args>
 [[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args) {
-    assertMiddlewareShape<MiddlewareT>();
-    static_assert(std::is_constructible_v<MiddlewareT, const std::decay_t<Args>&...>, "middleware is not constructible from the arguments passed to use<T>()");
+    static_assert(std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>, "middleware must derive from ruvia::Middleware<MiddlewareT>");
+    static_assert(std::is_final_v<MiddlewareT>, "middleware must be final");
+    static_assert(std::is_constructible_v<MiddlewareT, const std::decay_t<Args>&...>, "middleware is not constructible from the arguments passed to use<T>(); a middleware registered without arguments must be default constructible");
 
     using ArgsT = std::tuple<std::decay_t<Args>...>;
     const auto* stored = constructPmrObject<ArgsT>(registrationResource(), std::forward<Args>(args)...);
-    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddlewareWithArgs<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>());
+    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddleware<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>());
 }
 
 }  // namespace ruvia::detail

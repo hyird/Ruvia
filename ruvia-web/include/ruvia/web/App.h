@@ -69,21 +69,14 @@ public:
     // requests that end in 404/405 without matching a route never enter a
     // middleware chain. Validator middlewares (RUVIA_VALIDATE_*) bind one
     // model to one route and are rejected here.
-    template <typename MiddlewareT>
-    App& use() {
-        return useMiddleware(detail::makeMiddlewareDescriptor<MiddlewareT>());
-    }
-
-    // The same, for a middleware that takes configuration: the arguments are
-    // copied once at registration and every instance of that middleware is
-    // constructed from them. A middleware registered this way does not need to
-    // be default constructible.
     //
-    // Route- and controller-level middleware lists (the trailing arguments of
-    // RUVIA_GET and friends) name types only, so a configured middleware is
-    // registered here and applies app-wide.
+    // Arguments configure the middleware: they are copied once at registration
+    // and every instance is constructed from them, so a configured middleware
+    // does not need to be default constructible. Route- and controller-level
+    // middleware lists (the trailing arguments of RUVIA_GET and friends) name
+    // types only, so a configured middleware is registered here and applies
+    // app-wide.
     template <typename MiddlewareT, typename... Args>
-        requires(sizeof...(Args) > 0)
     App& use(Args&&... args) {
         return useMiddleware(detail::makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...));
     }

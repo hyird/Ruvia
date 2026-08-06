@@ -169,13 +169,7 @@ public:
 
     // The App configuration knobs that change dispatch behavior, with the
     // same semantics as their App counterparts.
-    template <typename MiddlewareT>
-    TestApp& use() {
-        return useMiddleware(detail::makeMiddlewareDescriptor<MiddlewareT>());
-    }
-
     template <typename MiddlewareT, typename... Args>
-        requires(sizeof...(Args) > 0)
     TestApp& use(Args&&... args) {
         return useMiddleware(detail::makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...));
     }
