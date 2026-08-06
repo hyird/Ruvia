@@ -196,9 +196,22 @@ static_assert(sizeof(SecurityHeadersOptions::HeaderInit) == sizeof(std::span<con
 
 void applySecurityHeaders(Context& context, const SecurityHeadersOptions& options = {});
 
+// Registered app-wide with the defaults as `app().use<SecurityHeadersMiddleware>()`,
+// or with a policy as `app().use<SecurityHeadersMiddleware>(options)`. The
+// options value is borrowed text throughout, and one instance serves the whole
+// process, so whatever it points at must outlive App::run() -- the same rule the
+// SecurityHeadersOptions members already enforce against owning temporaries.
 class SecurityHeadersMiddleware final : public Middleware<SecurityHeadersMiddleware> {
 public:
+    SecurityHeadersMiddleware() noexcept = default;
+
+    explicit SecurityHeadersMiddleware(SecurityHeadersOptions options) noexcept
+        : options_(options) {}
+
     Task<void> handle(Context& context, Next& next);
+
+private:
+    SecurityHeadersOptions options_{};
 };
 
 }  // namespace ruvia

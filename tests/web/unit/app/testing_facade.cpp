@@ -35,6 +35,26 @@ public:
     }
 };
 
+// Registered with constructor arguments rather than default constructed, so it
+// is deliberately not default constructible: the descriptor must carry the
+// registration arguments to every instance the router builds.
+class TestingFacadeConfiguredStamp final : public ruvia::Middleware<TestingFacadeConfiguredStamp> {
+public:
+    TestingFacadeConfiguredStamp(std::string_view name, int level) noexcept
+        : name_(name),
+          level_(level) {}
+
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+        co_await next();
+        c.header("X-Test-Configured", name_);
+        c.header("X-Test-Level", level_ == 2 ? "two" : "other");
+    }
+
+private:
+    std::string_view name_;
+    int level_;
+};
+
 class TestingFacadeController final : public ruvia::Controller<TestingFacadeController> {
 public:
     RUVIA_CONTROLLER_GROUP("/t")
@@ -170,6 +190,27 @@ RUVIA_TEST(testing_facade_applies_app_level_configuration) {
         sealed = true;
     }
     RUVIA_CHECK(sealed);
+}
+
+RUVIA_TEST(testing_facade_constructs_middleware_from_registration_arguments) {
+    ruvia::TestApp app;
+    app.use<TestingFacadeConfiguredStamp>("audit", 2);
+
+    const auto first = app.request(ruvia::TestRequest::get("/t/hello"));
+    RUVIA_CHECK_EQ(first.header("X-Test-Configured").value_or(""), std::string_view("audit"));
+    RUVIA_CHECK_EQ(first.header("X-Test-Level").value_or(""), std::string_view("two"));
+
+    // One instance serves every request, so the arguments must still be readable
+    // after the first dispatch rather than having been consumed by it.
+    const auto second = app.request(ruvia::TestRequest::get("/t/hello"));
+    RUVIA_CHECK_EQ(second.header("X-Test-Configured").value_or(""), std::string_view("audit"));
+
+    // Separate registrations of the same type stay independent.
+    ruvia::TestApp other;
+    other.use<TestingFacadeConfiguredStamp>("other", 5);
+    const auto distinct = other.request(ruvia::TestRequest::get("/t/hello"));
+    RUVIA_CHECK_EQ(distinct.header("X-Test-Configured").value_or(""), std::string_view("other"));
+    RUVIA_CHECK_EQ(distinct.header("X-Test-Level").value_or(""), std::string_view("other"));
 }
 
 RUVIA_TEST(testing_facade_rejects_duplicate_normalized_fallback_prefixes) {

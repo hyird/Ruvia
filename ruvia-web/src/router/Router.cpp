@@ -163,7 +163,7 @@ detail::RouteMiddleware detail::RouterImpl::materializeMiddleware(ControllerMidd
         throw std::invalid_argument("middleware must be constructible");
     }
 
-    auto* target = middleware.create()();
+    auto* target = middleware.create()(middleware.args());
     middlewareLifetimes_.emplace_back(target, middleware.destroy());
     return RouteMiddleware(target, middleware.invoke());
 }
@@ -201,7 +201,7 @@ void detail::RouterImpl::setGlobalMiddlewares(std::span<const ControllerMiddlewa
         // A finalized table's middleware ranges are immutable. Re-applying the
         // identical set (an app stop()/run() cycle) is a no-op; changing it
         // requires a fresh router.
-        const bool unchanged = descriptors.size() == globalMiddlewareDescriptors_.size() && std::ranges::equal(descriptors, globalMiddlewareDescriptors_, [](const auto& left, const auto& right) noexcept { return left.invoke() == right.invoke() && left.create() == right.create() && left.destroy() == right.destroy(); });
+        const bool unchanged = descriptors.size() == globalMiddlewareDescriptors_.size() && std::ranges::equal(descriptors, globalMiddlewareDescriptors_);
         if (unchanged) {
             return;
         }

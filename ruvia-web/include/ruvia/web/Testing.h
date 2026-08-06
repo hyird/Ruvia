@@ -174,6 +174,12 @@ public:
         return useMiddleware(detail::makeMiddlewareDescriptor<MiddlewareT>());
     }
 
+    template <typename MiddlewareT, typename... Args>
+        requires(sizeof...(Args) > 0)
+    TestApp& use(Args&&... args) {
+        return useMiddleware(detail::makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...));
+    }
+
     TestApp& onError(HttpErrorHandler handler);
     TestApp& notFound(HttpNotFoundHandler handler);
     // Prefixes use the same segment and trailing-slash normalization as App;
