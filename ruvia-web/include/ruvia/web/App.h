@@ -18,6 +18,7 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/WebWorker.h"
+#include "ruvia/web/detail/app/AppConfiguration.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 
@@ -37,7 +38,7 @@ struct AppState;
 
 }  // namespace detail
 
-class App final {
+class App final : public detail::AppConfiguration<App> {
 public:
     ~App();
 
@@ -63,38 +64,6 @@ public:
     App& setCors(std::optional<CorsConfig> config);
     App& setDocumentRoot(DocumentRootConfig config);
     App& setMemoryPoolConfig(MemoryPoolConfig config);
-    // Hono app.use analog: registers one app-wide middleware instance that
-    // runs before every matched route's controller and route middlewares, in
-    // use() registration order. It participates only in routed dispatch;
-    // requests that end in 404/405 without matching a route never enter a
-    // middleware chain. Validator middlewares (RUVIA_VALIDATE_*) bind one
-    // model to one route and are rejected here.
-    //
-    // Arguments configure the middleware: they are copied once at registration
-    // and every instance is constructed from them, so a configured middleware
-    // does not need to be default constructible. Route- and controller-level
-    // middleware lists (the trailing arguments of RUVIA_GET and friends) name
-    // types only, so a configured middleware is registered here and applies
-    // app-wide.
-    template <typename MiddlewareT, typename... Args>
-    App& use(Args&&... args) {
-        return useMiddleware(detail::makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...));
-    }
-
-    // Worker-local user state, generalizing the per-worker db()/redis()
-    // registries to application types: every worker builds its own T from the
-    // registered factory at startup, and Context::workerState<T>() /
-    // WebWorkerContext::workerState<T>() return that worker's instance.
-    // Workers are single-threaded, so the instance needs no synchronization;
-    // it must not be shared across workers by the application. One
-    // registration per type; the factory and destructor run while that worker's
-    // WorkerHandle reports isCurrent(), and a throwing factory fails run()
-    // before any request is served.
-    template <typename T, typename Factory>
-    App& useWorkerState(Factory&& factory) {
-        return useWorkerStateDefinition(detail::WorkerStateDefinition::make<T>(std::forward<Factory>(factory)));
-    }
-
     // Enables Context::runBlocking(): one process-wide pool of ordinary threads
     // that handlers offload blocking work to, so a blocking call cannot freeze
     // the single-threaded worker that owns the connection. Absent by default --
@@ -104,16 +73,8 @@ public:
     // awaited and may finish on the pool's detached state.
     App& setBlockingPool(std::optional<BlockingPoolOptions> options);
 
-    template <typename T>
-    App& useWorkerState() {
-        static_assert(std::is_default_constructible_v<T>,
-            "useWorkerState<T>() without a factory requires T to be default "
-            "constructible; pass a factory otherwise");
-        return useWorkerState<T>([] { return T(); });
-    }
-
     App& onError(HttpErrorHandler handler);
-    App& notFound(HttpNotFoundHandler handler);
+    App& onNotFound(HttpNotFoundHandler handler);
     // Path-prefix-scoped fallbacks, the Hono sub-app scoping analog: the
     // longest matching registered prefix wins, matching on whole path
     // segments ("/api" scopes "/api" and "/api/x", never "/apix"); the
@@ -121,7 +82,7 @@ public:
     // slash is ignored; registering the same normalized prefix twice throws
     // std::invalid_argument instead of silently choosing by call order.
     App& onError(std::string_view prefix, HttpErrorHandler handler);
-    App& notFound(std::string_view prefix, HttpNotFoundHandler handler);
+    App& onNotFound(std::string_view prefix, HttpNotFoundHandler handler);
     App& setDefaultRateLimitPerWorker(std::optional<RateLimitRule> rule);
     App& setRateLimitSlotsPerWorker(std::size_t slotsPerWorker);
     App& onAccess(AccessLogCallback callback);
@@ -156,6 +117,8 @@ public:
 
 private:
     friend App& app();
+
+    friend class detail::AppConfiguration<App>;
 
     App& useMiddleware(detail::ControllerMiddlewareDescriptor descriptor);
     App& useWorkerStateDefinition(detail::WorkerStateDefinition definition);

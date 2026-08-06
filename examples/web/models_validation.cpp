@@ -74,7 +74,7 @@ struct PreferencesCookie final {
 
 struct Category final {
     RUVIA_OPTIONAL_FIELD(name, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(children, ruvia::List<Category>);
+    RUVIA_OPTIONAL_FIELD(children, ruvia::BoxedArray<Category>);
     RUVIA_MODEL(Category, name, children);
 };
 

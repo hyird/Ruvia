@@ -102,7 +102,7 @@ void validateRule(const ValueT& value, std::string_view path, ValidatorT& valida
 
 template <typename ValueT, typename ValidatorT, typename ValidationSchemaT>
 void validateRule(const ValueT& value, std::string_view path, ValidatorT& validator, const Each<ValidationSchemaT>&) {
-    static_assert(detail::isRuviaArray<ValueT> || detail::isRuviaList<ValueT>, "RUVIA_EACH can only validate ruvia::Array<T> or ruvia::List<T> fields");
+    static_assert(detail::isRuviaArray<ValueT> || detail::isRuviaBoxedArray<ValueT>, "RUVIA_EACH can only validate ruvia::Array<T> or ruvia::BoxedArray<T> fields");
     static_assert(
         requires(const ValidationSchemaT& schema, const typename std::remove_cvref_t<ValueT>::value_type& item, std::string_view itemPath, ValidatorT& nestedValidator) { schema.validateNested(item, itemPath, nestedValidator); },
         "RUVIA_EACH validator must provide validateNested(const ItemT&, std::string_view, "

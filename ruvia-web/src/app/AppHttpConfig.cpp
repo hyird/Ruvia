@@ -110,28 +110,18 @@ App& App::onError(HttpErrorHandler handler) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [handler](detail::AppState& state) { state.errorHandler = handler; });
 }
 
-App& App::notFound(HttpNotFoundHandler handler) {
+App& App::onNotFound(HttpNotFoundHandler handler) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [handler](detail::AppState& state) { state.notFoundHandler = handler; });
 }
 
 namespace {
 
-// Shared registration shape for both prefix-scoped fallback kinds. Prefix-less
-// setters are explicit single slots and may be overwritten; a scoped fallback
-// is a route-like registration and duplicate normalized scopes are a config
-// error rather than an order-dependent last-wins mutation.
-template <typename Handler>
-void appendPrefixHandler(std::pmr::vector<std::pair<std::pmr::string, Handler>>& handlers, std::string_view prefix, Handler handler) {
-    if (handler == nullptr) {
-        throw std::invalid_argument("fallback handler must not be null");
-    }
-    prefix = detail::normalizeFallbackPrefix(prefix);
-    for (const auto& existing : handlers) {
-        if (std::string_view(existing.first) == prefix) {
-            throw std::invalid_argument("duplicate fallback prefix");
-        }
-    }
-    handlers.emplace_back(std::pmr::string(prefix, detail::appResource()), handler);
+// Storage differs from TestApp's -- these live on the app resource -- but the
+// rule that decides what is accepted is shared.
+template <typename Handlers, typename Handler>
+void appendPrefixHandler(Handlers& handlers, std::string_view prefix, Handler handler) {
+    const auto normalized = detail::validateFallbackPrefix(handlers, prefix, handler);
+    handlers.emplace_back(std::pmr::string(normalized, detail::appResource()), handler);
 }
 
 }  // namespace
@@ -140,7 +130,7 @@ App& App::onError(std::string_view prefix, HttpErrorHandler handler) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [prefix, handler](detail::AppState& state) { appendPrefixHandler(state.prefixErrorHandlers, prefix, handler); });
 }
 
-App& App::notFound(std::string_view prefix, HttpNotFoundHandler handler) {
+App& App::onNotFound(std::string_view prefix, HttpNotFoundHandler handler) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [prefix, handler](detail::AppState& state) { appendPrefixHandler(state.prefixNotFoundHandlers, prefix, handler); });
 }
 

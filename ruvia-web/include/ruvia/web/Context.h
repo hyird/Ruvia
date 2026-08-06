@@ -34,6 +34,7 @@
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/model/rule/ValidatedValues.h"
 #include "ruvia/web/detail/integration/BlockingCapability.h"
+#include "ruvia/web/detail/integration/WorkerStateCapability.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/http/context/ContextCapabilities.h"
 #include "ruvia/web/detail/http/context/ContextResponseState.h"
@@ -70,7 +71,7 @@ class ContextServices;
 struct SessionAccess;
 }  // namespace detail
 
-class Context final : public detail::BlockingCapability<Context> {
+class Context final : public detail::BlockingCapability<Context>, public detail::WorkerStateCapability<Context> {
 private:
     friend class ContextRequest;
     friend struct detail::ContextAccess;
@@ -150,15 +151,6 @@ public:
     // mismatch, and std::logic_error when the context carries no route table
     // (for example a hand-built test context).
     [[nodiscard]] std::pmr::string urlFor(std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
-
-    // This worker's instance of an App::useWorkerState<T>() registration.
-    // The reference is worker-local: it stays valid for the worker's lifetime
-    // but must never be handed to another worker. Throws std::logic_error for
-    // a type that was not registered before App::run().
-    template <typename T>
-    [[nodiscard]] T& workerState() const {
-        return *static_cast<T*>(workerStateInstance(detail::workerStateTypeKey<T>()));
-    }
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
@@ -298,6 +290,7 @@ private:
     [[nodiscard]] HttpResponse takeResponse();
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
     friend class detail::BlockingCapability<Context>;
+    friend class detail::WorkerStateCapability<Context>;
     [[nodiscard]] BlockingPool& blockingPool() const;
     [[nodiscard]] const WorkerHandle& blockingWorker() const noexcept {
         return worker_;

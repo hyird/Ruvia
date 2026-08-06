@@ -659,5 +659,5 @@ private:
 };
 
 int main() {
-    ruvia::app().setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(8088)).setWorkersPerListener(2).setSignalShutdown(true).notFound(&surfaceNotFound).run();
+    ruvia::app().setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(8088)).setWorkersPerListener(2).setSignalShutdown(true).onNotFound(&surfaceNotFound).run();
 }

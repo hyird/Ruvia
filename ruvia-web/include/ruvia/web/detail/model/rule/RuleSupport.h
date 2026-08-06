@@ -66,7 +66,7 @@ template <typename T>
 
 template <typename T>
 [[nodiscard]] bool isEmptyValue(const T& value) noexcept {
-    if constexpr (detail::isRuviaString<T> || detail::isRuviaArray<T> || detail::isRuviaList<T>) {
+    if constexpr (detail::isRuviaString<T> || detail::isRuviaArray<T> || detail::isRuviaBoxedArray<T>) {
         return value.empty();
     } else {
         return false;
@@ -78,7 +78,7 @@ template <typename T>
     using ValueT = std::remove_cvref_t<T>;
     if constexpr (detail::isRuviaString<ValueT>) {
         return "must be a string";
-    } else if constexpr (detail::isRuviaArray<ValueT> || detail::isRuviaList<ValueT>) {
+    } else if constexpr (detail::isRuviaArray<ValueT> || detail::isRuviaBoxedArray<ValueT>) {
         return "must be an array";
     } else if constexpr (JsonBody<ValueT>::value) {
         return "must be an object";
@@ -97,7 +97,7 @@ template <typename T>
 template <typename T>
 [[nodiscard]] constexpr bool modelHasSizeRule() noexcept {
     using ValueT = std::remove_cvref_t<T>;
-    return detail::isRuviaString<ValueT> || detail::isRuviaArray<ValueT> || detail::isRuviaList<ValueT>;
+    return detail::isRuviaString<ValueT> || detail::isRuviaArray<ValueT> || detail::isRuviaBoxedArray<ValueT>;
 }
 
 template <typename T>

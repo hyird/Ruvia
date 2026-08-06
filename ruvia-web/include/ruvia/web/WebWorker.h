@@ -15,6 +15,7 @@
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/ScopedOperation.h"
 #include "ruvia/web/detail/integration/BlockingCapability.h"
+#include "ruvia/web/detail/integration/WorkerStateCapability.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
@@ -35,7 +36,7 @@ class WebWorkerDispatch;
 class WorkerStateRegistry;
 }  // namespace detail
 
-class WebWorkerContext final : public detail::BlockingCapability<WebWorkerContext> {
+class WebWorkerContext final : public detail::BlockingCapability<WebWorkerContext>, public detail::WorkerStateCapability<WebWorkerContext> {
 public:
     WebWorkerContext(const WebWorkerContext&) = delete;
     WebWorkerContext& operator=(const WebWorkerContext&) = delete;
@@ -46,15 +47,6 @@ public:
     const WorkerHandle& worker() const&& = delete;
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] StopToken stopToken() const noexcept;
-
-    // This worker's instance of an App::useWorkerState<T>() registration --
-    // the same instance Context::workerState<T>() returns for HTTP requests
-    // dispatched on this worker. Throws std::logic_error for an unregistered
-    // type.
-    template <typename T>
-    [[nodiscard]] T& workerState() const {
-        return *static_cast<T*>(workerStateInstance(detail::workerStateTypeKey<T>()));
-    }
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
@@ -72,6 +64,7 @@ private:
 
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
     friend class detail::BlockingCapability<WebWorkerContext>;
+    friend class detail::WorkerStateCapability<WebWorkerContext>;
     [[nodiscard]] BlockingPool& blockingPool() const;
     [[nodiscard]] const WorkerHandle& blockingWorker() const noexcept {
         return worker_;

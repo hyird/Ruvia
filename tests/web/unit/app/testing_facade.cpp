@@ -165,7 +165,7 @@ RUVIA_TEST(testing_facade_runs_model_bodies_with_media_type_split) {
 
 RUVIA_TEST(testing_facade_applies_app_level_configuration) {
     ruvia::TestApp app;
-    app.use<TestingFacadeStamp>().notFound(&facadeNotFound).notFound("/api", &apiScopedMiss);
+    app.use<TestingFacadeStamp>().onNotFound(&facadeNotFound).onNotFound("/api", &apiScopedMiss);
     app.useWorkerState<TestingFacadeCounter>();
 
     // Global middleware wraps every matched route.
@@ -229,7 +229,7 @@ RUVIA_TEST(testing_facade_runs_fallback_handlers_that_carry_state) {
     const Branding branding{"tenant-a"};
 
     ruvia::TestApp app;
-    app.notFound([branding](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {
+    app.onNotFound([branding](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {
         c.status(ruvia::http_status::kNotFound);
         co_return c.text(std::string_view(branding.label));
     });
@@ -257,11 +257,11 @@ RUVIA_TEST(testing_facade_runs_fallback_handlers_that_carry_state) {
 
 RUVIA_TEST(testing_facade_rejects_duplicate_normalized_fallback_prefixes) {
     ruvia::TestApp notFoundApp;
-    notFoundApp.notFound("/api", &apiScopedMiss);
+    notFoundApp.onNotFound("/api", &apiScopedMiss);
 
     bool notFoundRejected = false;
     try {
-        notFoundApp.notFound("/api///", &apiScopedMiss);
+        notFoundApp.onNotFound("/api///", &apiScopedMiss);
     } catch (const std::invalid_argument& error) {
         notFoundRejected = std::string_view(error.what()) == "duplicate fallback prefix";
     }
@@ -280,7 +280,7 @@ RUVIA_TEST(testing_facade_rejects_duplicate_normalized_fallback_prefixes) {
 
     bool malformedRejected = false;
     try {
-        errorApp.notFound("api", &apiScopedMiss);
+        errorApp.onNotFound("api", &apiScopedMiss);
     } catch (const std::invalid_argument& error) {
         malformedRejected = std::string_view(error.what()) == "fallback prefix must start with '/'";
     }

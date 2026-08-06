@@ -84,7 +84,7 @@ void expect(bool condition, const char* what) {
 
 int main() {
     ruvia::TestApp app;
-    app.use<AuditMiddleware>().notFound("/notes", &notesMissing);
+    app.use<AuditMiddleware>().onNotFound("/notes", &notesMissing);
     app.useWorkerState<NoteCounter>();
 
     // Routing, params and urlFor.

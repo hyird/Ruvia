@@ -27,6 +27,7 @@
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
+#include "ruvia/web/detail/app/AppConfiguration.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 
 namespace ruvia {
@@ -157,7 +158,7 @@ private:
 // configuration calls below may run in any order before that. Not thread-safe:
 // drive one TestApp from one thread, like the single-threaded worker it
 // stands in for.
-class TestApp final {
+class TestApp final : public detail::AppConfiguration<TestApp> {
 public:
     TestApp();
     ~TestApp();
@@ -168,33 +169,16 @@ public:
     TestApp& operator=(TestApp&&) = delete;
 
     // The App configuration knobs that change dispatch behavior, with the
-    // same semantics as their App counterparts.
-    template <typename MiddlewareT, typename... Args>
-    TestApp& use(Args&&... args) {
-        return useMiddleware(detail::makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...));
-    }
-
+    // same semantics as their App counterparts; use<>() and useWorkerState<>()
+    // come from the shared configuration base.
     TestApp& onError(HttpErrorHandler handler);
-    TestApp& notFound(HttpNotFoundHandler handler);
+    TestApp& onNotFound(HttpNotFoundHandler handler);
     // Prefixes use the same segment and trailing-slash normalization as App;
     // duplicate normalized registrations throw std::invalid_argument rather
     // than allowing production and in-memory tests to choose different
     // handlers by call order.
     TestApp& onError(std::string_view prefix, HttpErrorHandler handler);
-    TestApp& notFound(std::string_view prefix, HttpNotFoundHandler handler);
-
-    template <typename T, typename Factory>
-    TestApp& useWorkerState(Factory&& factory) {
-        return useWorkerStateDefinition(detail::WorkerStateDefinition::make<T>(std::forward<Factory>(factory)));
-    }
-
-    template <typename T>
-    TestApp& useWorkerState() {
-        static_assert(std::is_default_constructible_v<T>,
-            "useWorkerState<T>() without a factory requires T to be default "
-            "constructible; pass a factory otherwise");
-        return useWorkerState<T>([] { return T(); });
-    }
+    TestApp& onNotFound(std::string_view prefix, HttpNotFoundHandler handler);
 
     // Dispatches one request through the production route table and returns
     // the copied-out response. Never throws for request-level failures --
@@ -202,6 +186,8 @@ public:
     [[nodiscard]] TestResponse request(const TestRequest& request);
 
 private:
+    friend class detail::AppConfiguration<TestApp>;
+
     TestApp& useMiddleware(detail::ControllerMiddlewareDescriptor descriptor);
     TestApp& useWorkerStateDefinition(detail::WorkerStateDefinition definition);
 

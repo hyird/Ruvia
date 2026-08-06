@@ -41,7 +41,7 @@ template <typename ValueT>
         return jsonStringSizeHint(value.view());
     } else if constexpr (isResponseModel<T>) {
         return ModelJsonAccess::sizeHint(value);
-    } else if constexpr (isRuviaArray<T> || isRuviaList<T>) {
+    } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
         std::size_t size = 2;
         bool first = true;
         for (const auto& item : value) {
@@ -100,7 +100,7 @@ void appendJsonValue(std::pmr::string& output, const ValueT& value) {
         appendJsonString(output, value.view());
     } else if constexpr (isResponseModel<T>) {
         ModelJsonAccess::append(output, value);
-    } else if constexpr (isRuviaArray<T> || isRuviaList<T>) {
+    } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
         appendJsonSequence(output, value);
     } else {
         static_assert(alwaysFalse<T>, "JSON output must use Ruvia scalar types or RUVIA_MODEL");

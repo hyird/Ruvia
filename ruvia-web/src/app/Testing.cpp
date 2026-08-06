@@ -30,18 +30,10 @@ namespace ruvia {
 
 namespace {
 
-template <typename Handler>
-void appendPrefixHandler(std::vector<std::pair<std::string, Handler>>& handlers, std::string_view prefix, Handler handler) {
-    if (handler == nullptr) {
-        throw std::invalid_argument("fallback handler must not be null");
-    }
-    prefix = detail::normalizeFallbackPrefix(prefix);
-    for (const auto& existing : handlers) {
-        if (std::string_view(existing.first) == prefix) {
-            throw std::invalid_argument("duplicate fallback prefix");
-        }
-    }
-    handlers.emplace_back(std::string(prefix), handler);
+template <typename Handlers, typename Handler>
+void appendPrefixHandler(Handlers& handlers, std::string_view prefix, Handler handler) {
+    const auto normalized = detail::validateFallbackPrefix(handlers, prefix, handler);
+    handlers.emplace_back(std::string(normalized), handler);
 }
 
 }  // namespace
@@ -119,7 +111,7 @@ TestApp& TestApp::onError(HttpErrorHandler handler) {
     return *this;
 }
 
-TestApp& TestApp::notFound(HttpNotFoundHandler handler) {
+TestApp& TestApp::onNotFound(HttpNotFoundHandler handler) {
     impl_->requireConfigurable();
     impl_->notFoundHandler = handler;
     return *this;
@@ -131,7 +123,7 @@ TestApp& TestApp::onError(std::string_view prefix, HttpErrorHandler handler) {
     return *this;
 }
 
-TestApp& TestApp::notFound(std::string_view prefix, HttpNotFoundHandler handler) {
+TestApp& TestApp::onNotFound(std::string_view prefix, HttpNotFoundHandler handler) {
     impl_->requireConfigurable();
     appendPrefixHandler(impl_->prefixNotFoundHandlers, prefix, handler);
     return *this;
