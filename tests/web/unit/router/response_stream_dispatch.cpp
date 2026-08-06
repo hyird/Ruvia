@@ -22,7 +22,7 @@
 #include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
@@ -172,7 +172,7 @@ Task<void> failAfterCommit(void* target, Context& context) {
 }
 
 [[nodiscard]] ResponseStreamDispatchResult dispatchStream(RouteStreamHandler handler, bool peerAborted) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerResponseStreamRoute(HttpKnownMethod::kGet, routePath("/stream"), handler, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.finalize();

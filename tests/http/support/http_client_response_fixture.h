@@ -56,8 +56,8 @@ static_assert(!CanMutateHttpClientResponseHeadStatus<ruvia::detail::HttpClientRe
 
 inline Http1ClientResponseParseResult parseWire(std::string_view method, std::string_view wire, Http1ClientRequestClosePolicy closePolicy = Http1ClientRequestClosePolicy::kAllowReuse, std::span<const ruvia::HttpHeaderView> requestHeaders = {}, std::pmr::memory_resource* resource = nullptr) {
     std::array<char, 2048> requestHead;
-    const auto origin = ruvia::HttpOrigin::https("example.test");
-    ruvia::HttpClientRequest request;
+    const auto origin = ruvia::HttpOriginView::https("example.test");
+    ruvia::HttpClientRequestView request;
     request.method = method;
     request.headers = requestHeaders;
     const auto preparedResult = method == "CONNECT" ? ruvia::Http1ClientRequestWriter().prepareConnect(origin, requestHeaders, requestHead, Http1ClientRequestWirePolicy::withoutExpectation(closePolicy)) : ruvia::Http1ClientRequestWriter().prepare(origin, request, requestHead, Http1ClientRequestWirePolicy::withoutExpectation(closePolicy));

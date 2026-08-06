@@ -6,6 +6,7 @@
 
 namespace {
 
+#if !defined(_MSC_VER)
 class ToggleRejectingMemoryResource final : public std::pmr::memory_resource {
 public:
     void rejectAllocations(bool value = true) noexcept {
@@ -30,6 +31,7 @@ private:
 
     bool reject_{false};
 };
+#endif  // !_MSC_VER
 
 }  // namespace
 
@@ -49,6 +51,9 @@ RUVIA_TEST(http2_connection_request_head_requires_started_preface_without_consum
     RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
 }
 
+#if !defined(_MSC_VER)
+// Both probes inject failure while outbound PMR strings can grow; see the
+// MSVC debug-library limitation documented by the response-head spill test.
 RUVIA_TEST(http2_connection_request_head_rolls_back_stream_admission_on_allocation_failure) {
     ToggleRejectingMemoryResource resource;
     Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
@@ -120,6 +125,7 @@ RUVIA_TEST(http2_connection_response_head_does_not_publish_local_phase_before_ou
     RUVIA_CHECK(stream->localContent().unbounded() != nullptr);
     RUVIA_CHECK(stream->localSend().responseContentOpen() != nullptr);
 }
+#endif  // !_MSC_VER
 
 RUVIA_TEST(http2_connection_feed_extension_method_emits_request_event) {
     std::pmr::monotonic_buffer_resource resource;

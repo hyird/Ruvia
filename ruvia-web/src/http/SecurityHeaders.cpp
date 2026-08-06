@@ -64,9 +64,9 @@ void applySecurityHeaders(Context& context, const SecurityHeadersOptions& option
 Task<void> SecurityHeadersMiddleware::handle(Context& context, Next& next) {
     const auto connection = getConnInfo(context);
     const bool secureTransport = connection.tls() != nullptr;
-    applySecurityHeadersTo(context, SecurityHeadersOptions{}, secureTransport);
+    applySecurityHeadersTo(context, options_, secureTransport);
     co_await next();
-    applySecurityHeadersTo(detail::ContextAccess::responseStorage(context), SecurityHeadersOptions{}, secureTransport);
+    applySecurityHeadersTo(detail::ContextAccess::responseStorage(context), options_, secureTransport);
 }
 
 }  // namespace ruvia

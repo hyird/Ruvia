@@ -36,12 +36,21 @@ struct StaticRootEntry final {
     bool directlyServable{true};
 };
 
+struct StaticMimeTypeStorage final {
+    explicit StaticMimeTypeStorage(std::pmr::memory_resource* resource)
+        : extension(resource),
+          contentType(resource) {}
+
+    std::pmr::string extension;
+    std::pmr::string contentType;
+};
+
 struct StaticRootState final {
     NativePathString root;
     std::pmr::string indexFile;
     std::pmr::string cacheControl;
     std::pmr::string defaultContentType;
-    std::pmr::vector<StaticMimeType> mimeTypes;
+    std::pmr::vector<StaticMimeTypeStorage> mimeTypes;
     StaticFileTypePolicy::Kind fileTypeKind{StaticFileTypePolicy::Kind::kDefaults};
     std::pmr::vector<std::pmr::string> fileTypeExtensions;
     std::pmr::vector<StaticRootEntry> entries;

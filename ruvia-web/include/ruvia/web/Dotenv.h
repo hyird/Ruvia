@@ -67,12 +67,30 @@ public:
     // absence returns nullopt, while a present value that cannot be parsed as
     // T throws std::invalid_argument. Falling back with value_or() is
     // therefore safe for optional deployment settings, but cannot hide a
-    // misspelled port, limit, or boolean in the environment.
+    // misspelled port, limit, or boolean in the environment -- which is the
+    // point: a typo in a deployment variable should stop startup, not silently
+    // select the default.
     template <typename T>
     [[nodiscard]] std::optional<std::remove_cvref_t<T>> get(std::string_view name) const&;
 
     template <typename T>
     [[nodiscard]] std::optional<std::remove_cvref_t<T>> get(std::string_view) const&& = delete;
+
+    // The same lookup for a caller that treats a malformed value as absent
+    // rather than fatal -- an optional feature flag, say. Absent and malformed
+    // are indistinguishable here by design; use get<T>() when the difference
+    // matters, which is the common case for deployment settings.
+    template <typename T>
+    [[nodiscard]] std::optional<std::remove_cvref_t<T>> tryGet(std::string_view name) const& noexcept {
+        const auto value = get(name);
+        if (!value.has_value()) {
+            return std::nullopt;
+        }
+        return parseTypedValue<T>(*value);
+    }
+
+    template <typename T>
+    [[nodiscard]] std::optional<std::remove_cvref_t<T>> tryGet(std::string_view) const&& = delete;
 
     [[nodiscard]] bool loaded() const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;

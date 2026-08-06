@@ -71,4 +71,28 @@ foreach(_ruvia_component IN ITEMS core http web)
     endif()
 endforeach()
 
+# Controller translation units register through static initialization. Static
+# archives are otherwise free to discard unreferenced objects, so applications
+# link controller targets through this helper instead of linker-specific flags.
+if(ruvia_web_FOUND)
+function(ruvia_link_controllers application)
+    if(NOT TARGET "${application}")
+        message(FATAL_ERROR "ruvia_link_controllers requires an existing application target")
+    endif()
+    foreach(_ruvia_controller_target IN LISTS ARGN)
+        if(NOT TARGET "${_ruvia_controller_target}")
+            message(FATAL_ERROR "ruvia_link_controllers target does not exist: ${_ruvia_controller_target}")
+        endif()
+        get_target_property(_ruvia_controller_type "${_ruvia_controller_target}" TYPE)
+        if(_ruvia_controller_type STREQUAL "STATIC_LIBRARY")
+            target_link_libraries("${application}" PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_ruvia_controller_target}>")
+        elseif(_ruvia_controller_type STREQUAL "OBJECT_LIBRARY")
+            target_sources("${application}" PRIVATE "$<TARGET_OBJECTS:${_ruvia_controller_target}>")
+        else()
+            message(FATAL_ERROR "ruvia_link_controllers accepts only STATIC_LIBRARY or OBJECT_LIBRARY targets")
+        endif()
+    endforeach()
+endfunction()
+endif()
+
 check_required_components(ruvia)

@@ -6,6 +6,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
@@ -22,16 +23,16 @@ enum class JwtAlgorithm { kHs256, kHs384, kHs512 };
 class JwtClaim final {
 public:
     JwtClaim(std::string_view name, std::string_view value)
-        : name_(name, detail::pmrResourceOrDefault(nullptr)),
-          value_(value, name_.get_allocator().resource()) {}
+        : name_(std::in_place_type<std::string>, name),
+          value_(std::in_place_type<std::string>, value) {}
 
     [[nodiscard]] std::string_view name() const& noexcept {
-        return name_;
+        return text(name_);
     }
     [[nodiscard]] std::string_view name() const&& = delete;
 
     [[nodiscard]] std::string_view value() const& noexcept {
-        return value_;
+        return text(value_);
     }
     [[nodiscard]] std::string_view value() const&& = delete;
 
@@ -41,31 +42,37 @@ private:
     struct OwnedTag final {};
 
     JwtClaim(OwnedTag, std::pmr::string name, std::pmr::string value) noexcept
-        : name_(std::move(name)),
-          value_(std::move(value)) {}
+        : name_(std::in_place_type<std::pmr::string>, std::move(name)),
+          value_(std::in_place_type<std::pmr::string>, std::move(value)) {}
 
-    std::pmr::string name_;
-    std::pmr::string value_;
+    using Text = std::variant<std::string, std::pmr::string>;
+
+    [[nodiscard]] static std::string_view text(const Text& value) noexcept {
+        return std::visit([](const auto& stored) noexcept { return std::string_view(stored); }, value);
+    }
+
+    Text name_;
+    Text value_;
 };
 
 struct JwtSignOptions final {
     JwtAlgorithm algorithm{JwtAlgorithm::kHs256};
-    std::pmr::string secret;
-    std::pmr::string issuer;
-    std::pmr::string subject;
-    std::pmr::string audience;
-    std::pmr::string id;
+    std::string secret;
+    std::string issuer;
+    std::string subject;
+    std::string audience;
+    std::string id;
     std::optional<std::chrono::seconds> expiresIn{std::chrono::hours(1)};
     std::optional<std::chrono::seconds> notBeforeDelay;
-    std::pmr::vector<JwtClaim> claims{detail::pmrResourceOrDefault(nullptr)};
+    std::vector<JwtClaim> claims;
 };
 
 struct JwtVerifyOptions final {
     JwtAlgorithm algorithm{JwtAlgorithm::kHs256};
-    std::pmr::string secret;
-    std::pmr::string issuer;
-    std::pmr::string subject;
-    std::pmr::string audience;
+    std::string secret;
+    std::string issuer;
+    std::string subject;
+    std::string audience;
     std::chrono::seconds leeway{0};
     bool requireExpiration{true};
 };

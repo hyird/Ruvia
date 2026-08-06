@@ -34,7 +34,7 @@
 #include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/util/CallableRef.h"
@@ -96,7 +96,7 @@ struct StreamResult {
 }  // namespace
 
 int main() {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     std::pmr::string eventsPath("/events", std::pmr::get_default_resource());
     impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(eventsPath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});

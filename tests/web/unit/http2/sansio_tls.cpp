@@ -34,7 +34,7 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 
 namespace {
 
@@ -149,7 +149,7 @@ RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
             alpnWasH2 = ruvia::detail::isHttp2AlpnSelected(tls);
 
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/ping", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(&connectionObservation, &tlsPongHandler), ruvia::detail::RequestBodyMode::kBuffered, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();

@@ -268,21 +268,21 @@ template <typename T>
 using Array = std::pmr::vector<T>;
 
 template <typename T>
-class List final {
+class BoxedArray final {
 public:
     using value_type = T;
 
-    explicit List(std::pmr::memory_resource* resource = nullptr)
-        : List(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+    explicit BoxedArray(std::pmr::memory_resource* resource = nullptr)
+        : BoxedArray(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
 
-    List(const List&) = delete;
-    List& operator=(const List&) = delete;
+    BoxedArray(const BoxedArray&) = delete;
+    BoxedArray& operator=(const BoxedArray&) = delete;
 
-    List(List&& other) noexcept
+    BoxedArray(BoxedArray&& other) noexcept
         : resource_(other.resource_),
           items_(std::move(other.items_)) {}
 
-    List& operator=(List&& other) noexcept {
+    BoxedArray& operator=(BoxedArray&& other) noexcept {
         if (this == &other) {
             return *this;
         }
@@ -297,7 +297,7 @@ public:
         return *this;
     }
 
-    ~List() {
+    ~BoxedArray() {
         clear();
     }
 
@@ -364,7 +364,7 @@ public:
 private:
     friend struct detail::ModelValueFactory;
 
-    List(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+    BoxedArray(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : resource_(resource),
           items_(resource_) {}
 
@@ -423,7 +423,7 @@ struct ModelValueFactory final {
     }
 
     template <typename ListT>
-    [[nodiscard]] static ListT makeList(std::pmr::memory_resource* resource) {
+    [[nodiscard]] static ListT makeBoxedArray(std::pmr::memory_resource* resource) {
         return ListT(ResolvedPmrResourceTag{}, resource);
     }
 };

@@ -2,8 +2,8 @@
 
 // Outbound HTTP client protocol models.
 //
-// OWNERSHIP: these are transport-free HTTP values. HttpOrigin and
-// HttpClientRequest borrow their string storage; HttpClientResponseHead owns
+// OWNERSHIP: these are transport-free HTTP values. HttpOriginView and
+// HttpClientRequestView borrow their string storage; HttpClientResponseHead owns
 // parsed header storage through PMR. Response content remains owned by the
 // external sans-I/O driver that follows the framing plan. Socket/TLS
 // configuration, pools, redirect limits, and timeouts also belong there.
@@ -22,7 +22,7 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/util/BorrowedView.h"
+#include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
@@ -38,27 +38,27 @@ enum class HttpScheme : std::uint8_t {
     kHttps,
 };
 
-class HttpOrigin final {
+class HttpOriginView final {
 public:
     // `host` is a borrowed RFC 3986 uri-host; its storage must outlive this
     // value and its bytes must remain unchanged. IP literals therefore include
     // brackets (for example, "[::1]"). Factories reject an empty or malformed
     // host before an origin can be observed.
-    [[nodiscard]] static HttpOrigin http(std::string_view host, std::uint16_t port = 80);
+    [[nodiscard]] static HttpOriginView http(std::string_view host, std::uint16_t port = 80);
 
     template <typename Traits, typename Allocator>
-    static HttpOrigin http(std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 80) = delete;
+    static HttpOriginView http(std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 80) = delete;
 
     template <typename Traits, typename Allocator>
-    static HttpOrigin http(const std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 80) = delete;
+    static HttpOriginView http(const std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 80) = delete;
 
-    [[nodiscard]] static HttpOrigin https(std::string_view host, std::uint16_t port = 443);
-
-    template <typename Traits, typename Allocator>
-    static HttpOrigin https(std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 443) = delete;
+    [[nodiscard]] static HttpOriginView https(std::string_view host, std::uint16_t port = 443);
 
     template <typename Traits, typename Allocator>
-    static HttpOrigin https(const std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 443) = delete;
+    static HttpOriginView https(std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 443) = delete;
+
+    template <typename Traits, typename Allocator>
+    static HttpOriginView https(const std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 443) = delete;
 
     [[nodiscard]] constexpr HttpScheme scheme() const noexcept {
         return scheme_;
@@ -74,7 +74,7 @@ public:
     }
 
 private:
-    constexpr HttpOrigin(HttpScheme scheme, std::string_view host, std::uint16_t port) noexcept
+    constexpr HttpOriginView(HttpScheme scheme, std::string_view host, std::uint16_t port) noexcept
         : host_(host),
           port_(port),
           scheme_(scheme) {}
@@ -111,25 +111,25 @@ private:
     std::pmr::string value_;
 };
 
-class HttpClientRequestContent;
+class HttpClientRequestContentView;
 
 class HttpClientRequestWithoutContent final {
 private:
-    friend class HttpClientRequestContent;
+    friend class HttpClientRequestContentView;
 
     constexpr HttpClientRequestWithoutContent() noexcept = default;
 };
 
-class HttpClientRequestBytes final {
+class HttpClientRequestBytesView final {
 public:
     [[nodiscard]] constexpr std::string_view value() const noexcept {
         return value_;
     }
 
 private:
-    friend class HttpClientRequestContent;
+    friend class HttpClientRequestContentView;
 
-    explicit constexpr HttpClientRequestBytes(std::string_view value) noexcept
+    explicit constexpr HttpClientRequestBytesView(std::string_view value) noexcept
         : value_(value) {}
 
     std::string_view value_;
@@ -140,109 +140,49 @@ private:
 // the former sends no content framing field. Only the active bytes alternative
 // exposes a value. The referenced bytes must remain alive and unchanged until
 // the external runtime finishes sending them.
-class HttpClientRequestContent final {
+class HttpClientRequestContentView final {
 public:
-    [[nodiscard]] static constexpr HttpClientRequestContent none() noexcept {
-        return HttpClientRequestContent(HttpClientRequestWithoutContent());
+    [[nodiscard]] static constexpr HttpClientRequestContentView none() noexcept {
+        return HttpClientRequestContentView(HttpClientRequestWithoutContent());
     }
 
-    [[nodiscard]] static constexpr HttpClientRequestContent bytes(std::string_view value) noexcept {
-        return HttpClientRequestContent(HttpClientRequestBytes(value));
+    [[nodiscard]] static constexpr HttpClientRequestContentView bytes(std::string_view value) noexcept {
+        return HttpClientRequestContentView(HttpClientRequestBytesView(value));
     }
 
     template <typename Traits, typename Allocator>
-    static HttpClientRequestContent bytes(std::basic_string<char, Traits, Allocator>&&) = delete;
+    static HttpClientRequestContentView bytes(std::basic_string<char, Traits, Allocator>&&) = delete;
 
     template <typename Traits, typename Allocator>
-    static HttpClientRequestContent bytes(const std::basic_string<char, Traits, Allocator>&&) = delete;
+    static HttpClientRequestContentView bytes(const std::basic_string<char, Traits, Allocator>&&) = delete;
 
     [[nodiscard]] constexpr const HttpClientRequestWithoutContent* withoutContent() const& noexcept {
         return std::get_if<HttpClientRequestWithoutContent>(&content_);
     }
     const HttpClientRequestWithoutContent* withoutContent() const&& = delete;
 
-    [[nodiscard]] constexpr const HttpClientRequestBytes* borrowedBytes() const& noexcept {
-        return std::get_if<HttpClientRequestBytes>(&content_);
+    [[nodiscard]] constexpr const HttpClientRequestBytesView* borrowedBytes() const& noexcept {
+        return std::get_if<HttpClientRequestBytesView>(&content_);
     }
-    const HttpClientRequestBytes* borrowedBytes() const&& = delete;
+    const HttpClientRequestBytesView* borrowedBytes() const&& = delete;
 
 private:
-    using Content = std::variant<HttpClientRequestWithoutContent, HttpClientRequestBytes>;
+    using Content = std::variant<HttpClientRequestWithoutContent, HttpClientRequestBytesView>;
 
-    explicit constexpr HttpClientRequestContent(HttpClientRequestWithoutContent content) noexcept
+    explicit constexpr HttpClientRequestContentView(HttpClientRequestWithoutContent content) noexcept
         : content_(content) {}
 
-    explicit constexpr HttpClientRequestContent(HttpClientRequestBytes content) noexcept
+    explicit constexpr HttpClientRequestContentView(HttpClientRequestBytesView content) noexcept
         : content_(content) {}
 
     Content content_;
 };
 
-struct HttpClientRequest {
+struct HttpClientRequestView {
     // Zero-cost field wrapper for request text retained by the sans-I/O
     // request/response transaction. String literals, string_view values, and
     // owning-string lvalues remain valid inputs; owning-string temporaries are
     // rejected before they can leave a dangling view in the request.
-    class BorrowedText final {
-    public:
-        constexpr BorrowedText() noexcept = default;
-
-        constexpr BorrowedText(std::string_view value) noexcept
-            : value_(value) {}
-
-        constexpr BorrowedText(const char* value) noexcept
-            : value_(detail::httpBorrowedCStringView(value)) {}
-
-        template <typename Traits, typename Allocator>
-        constexpr BorrowedText(const std::basic_string<char, Traits, Allocator>& value) noexcept
-            : value_(value) {}
-
-        template <detail::HttpTemporaryOwningCharString String>
-        BorrowedText(String&&) = delete;
-
-        constexpr BorrowedText& operator=(std::string_view value) noexcept {
-            value_ = value;
-            return *this;
-        }
-
-        constexpr BorrowedText& operator=(const char* value) noexcept {
-            value_ = detail::httpBorrowedCStringView(value);
-            return *this;
-        }
-
-        template <typename Traits, typename Allocator>
-        constexpr BorrowedText& operator=(const std::basic_string<char, Traits, Allocator>& value) noexcept {
-            value_ = std::string_view(value);
-            return *this;
-        }
-
-        template <detail::HttpTemporaryOwningCharString String>
-        BorrowedText& operator=(String&&) = delete;
-
-        [[nodiscard]] constexpr std::string_view view() const noexcept {
-            return value_;
-        }
-
-        [[nodiscard]] constexpr operator std::string_view() const noexcept {
-            return value_;
-        }
-
-        friend constexpr bool operator==(BorrowedText lhs, BorrowedText rhs) noexcept {
-            return lhs.value_ == rhs.value_;
-        }
-
-        friend constexpr bool operator==(BorrowedText lhs, std::string_view rhs) noexcept {
-            return lhs.value_ == rhs;
-        }
-
-        friend constexpr bool operator==(BorrowedText lhs, const char* rhs) noexcept {
-            return lhs.value_ == detail::httpBorrowedCStringView(rhs);
-        }
-
-    private:
-        std::string_view value_;
-    };
-
     class HeaderInit final {
     public:
         constexpr HeaderInit() noexcept = default;
@@ -315,16 +255,14 @@ struct HttpClientRequest {
         std::span<const HttpHeaderView> headers_{};
     };
 
-    BorrowedText method{"GET"};
-    BorrowedText target{"/"};
+    ::ruvia::BorrowedText method{"GET"};
+    ::ruvia::BorrowedText target{"/"};
     // Borrowed header table; its elements and their strings must remain alive
     // and unchanged through request preparation and any corresponding HTTP/1
     // response-head decision that inspects the prepared request context.
     HeaderInit headers{};
-    HttpClientRequestContent content{HttpClientRequestContent::none()};
+    HttpClientRequestContentView content{HttpClientRequestContentView::none()};
 };
-
-static_assert(sizeof(HttpClientRequest::BorrowedText) == sizeof(std::string_view));
 
 class HttpClientResponseHead final {
 public:

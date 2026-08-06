@@ -32,8 +32,8 @@ int main() {
 
     // The outbound client is http-owned (framework-free): its public surface must
     // be usable from a ruvia::http-only consumer.
-    const auto origin = ruvia::HttpOrigin::https("example.test");
-    ruvia::HttpClientRequest outboundRequest;
+    const auto origin = ruvia::HttpOriginView::https("example.test");
+    ruvia::HttpClientRequestView outboundRequest;
     std::array<char, 256> requestHead;
     const auto requestPlan = ruvia::Http1ClientRequestWriter().prepare(origin, outboundRequest, requestHead);
     const auto* preparedRequest = requestPlan.prepared();

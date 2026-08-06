@@ -42,7 +42,7 @@ App& App::useDb(std::string_view alias, DbConfig config) {
         detail::validateDbConfig(config);
 
         auto storedConfig = detail::cloneDbConfig(config, detail::appResource());
-        upsertDefinition(state.databases, alias, storedConfig, [](std::string_view storedAlias, DbConfig&& definitionConfig) {
+        upsertDefinition(state.databases, alias, storedConfig, [](std::string_view storedAlias, detail::DbConfigStorage&& definitionConfig) {
             auto* resource = detail::appResource();
             return detail::DbDefinition{std::pmr::string(storedAlias, resource), std::move(definitionConfig)};
         });
@@ -63,7 +63,7 @@ App& App::useRedis(std::string_view alias, RedisConfig config) {
         detail::validateRedisConfig(config);
 
         auto storedConfig = detail::cloneRedisConfig(config, detail::appResource());
-        upsertDefinition(state.redis, alias, storedConfig, [](std::string_view storedAlias, RedisConfig&& definitionConfig) {
+        upsertDefinition(state.redis, alias, storedConfig, [](std::string_view storedAlias, detail::RedisConfigStorage&& definitionConfig) {
             auto* resource = detail::appResource();
             return detail::RedisDefinition{std::pmr::string(storedAlias, resource), std::move(definitionConfig)};
         });

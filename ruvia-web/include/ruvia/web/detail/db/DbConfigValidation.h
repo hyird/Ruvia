@@ -7,7 +7,8 @@
 
 namespace ruvia::detail {
 
-inline void validateDbConfig(const DbConfig& config) {
+template <typename Config>
+inline void validateDbConfig(const Config& config) {
     ensureConfigHost(config.host, "database host must not be empty", "database host is invalid", kSeparatedPortHostRules);
     ensureNonZeroPort(config.port, "database port must not be zero");
     ensurePositiveOptionalDurations("configured database timeouts must be greater than zero", config.connectTimeout, config.readTimeout, config.writeTimeout, config.queryTimeout, config.acquireTimeout);

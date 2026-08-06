@@ -84,14 +84,14 @@ private:
 }  // namespace
 
 template <typename T>
-concept ExposesAnyRvalueModelListBorrow = requires { std::declval<const T&&>()[std::size_t{}]; } || requires { std::declval<const T&&>().front(); } || requires { std::declval<const T&&>().begin(); } || requires { std::declval<const T&&>().end(); } || requires { std::declval<T&&>().emplace(1); } || requires { std::declval<T&&>().emplaceMove(typename T::value_type{}); };
+concept ExposesAnyRvalueModelBoxedArrayBorrow = requires { std::declval<const T&&>()[std::size_t{}]; } || requires { std::declval<const T&&>().front(); } || requires { std::declval<const T&&>().begin(); } || requires { std::declval<const T&&>().end(); } || requires { std::declval<T&&>().emplace(1); } || requires { std::declval<T&&>().emplaceMove(typename T::value_type{}); };
 
-static_assert(!ExposesAnyRvalueModelListBorrow<ruvia::List<ruvia::Int32>>);
+static_assert(!ExposesAnyRvalueModelBoxedArrayBorrow<ruvia::BoxedArray<ruvia::Int32>>);
 
 RUVIA_TEST(model_list_clear_and_destructor_release_owned_elements) {
     CountingMemoryResource resource;
     {
-        ruvia::List<TrackedValue> values(&resource);
+        ruvia::BoxedArray<TrackedValue> values(&resource);
         values.emplace(1);
         values.emplace(2);
         RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{2});
@@ -113,11 +113,11 @@ RUVIA_TEST(model_list_move_assignment_transfers_element_resource) {
     CountingMemoryResource sourceResource;
     CountingMemoryResource targetResource;
     {
-        ruvia::List<TrackedValue> source(&sourceResource);
+        ruvia::BoxedArray<TrackedValue> source(&sourceResource);
         source.emplace(4);
         source.emplace(5);
 
-        ruvia::List<TrackedValue> target(&targetResource);
+        ruvia::BoxedArray<TrackedValue> target(&targetResource);
         target.emplace(9);
         RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{3});
 

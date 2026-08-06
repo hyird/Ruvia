@@ -154,6 +154,40 @@ function(ruvia_write_consumer name content)
     file(WRITE "${_source_dir}/CMakeLists.txt" "${content}")
 endfunction()
 
+function(ruvia_build_and_run_consumer name executable_name)
+    set(_consumer_build_dir "${_consumer_root}/${name}-build")
+    set(_build_args --build "${_consumer_build_dir}")
+    if(DEFINED RUVIA_TEST_CONFIG AND NOT RUVIA_TEST_CONFIG STREQUAL "")
+        list(APPEND _build_args --config "${RUVIA_TEST_CONFIG}")
+    endif()
+    execute_process(
+        COMMAND "@CMAKE_COMMAND@" ${_build_args}
+        RESULT_VARIABLE _build_result
+        OUTPUT_VARIABLE _build_output
+        ERROR_VARIABLE _build_error)
+    if(NOT _build_result EQUAL 0)
+        message(FATAL_ERROR
+            "ruvia_guard_package_install_consumer: consumer ${name} failed to build.\n"
+            "${_build_output}${_build_error}")
+    endif()
+
+    set(_executable "${_consumer_build_dir}/${executable_name}@CMAKE_EXECUTABLE_SUFFIX@")
+    if(NOT "@CMAKE_CONFIGURATION_TYPES@" STREQUAL "" AND
+       DEFINED RUVIA_TEST_CONFIG AND NOT RUVIA_TEST_CONFIG STREQUAL "")
+        set(_executable "${_consumer_build_dir}/${RUVIA_TEST_CONFIG}/${executable_name}@CMAKE_EXECUTABLE_SUFFIX@")
+    endif()
+    execute_process(
+        COMMAND "${_executable}"
+        RESULT_VARIABLE _run_result
+        OUTPUT_VARIABLE _run_output
+        ERROR_VARIABLE _run_error)
+    if(NOT _run_result EQUAL 0)
+        message(FATAL_ERROR
+            "ruvia_guard_package_install_consumer: consumer ${name} did not retain its controller archive "
+            "(result: ${_run_result}).\n${_run_output}${_run_error}")
+    endif()
+endfunction()
+
 function(ruvia_component_expectations requested_component out)
     set(_content "")
     foreach(_component IN ITEMS core http web)
@@ -177,6 +211,17 @@ function(ruvia_component_expectations requested_component out)
                 "endif()\n")
         endif()
     endforeach()
+    if("${requested_component}" STREQUAL "web")
+        string(APPEND _content
+            "if(NOT COMMAND ruvia_link_controllers)\n"
+            "    message(FATAL_ERROR \"missing ruvia_link_controllers helper\")\n"
+            "endif()\n")
+    else()
+        string(APPEND _content
+            "if(COMMAND ruvia_link_controllers)\n"
+            "    message(FATAL_ERROR \"unexpected Web controller helper\")\n"
+            "endif()\n")
+    endif()
     set(${out} "${_content}" PARENT_SCOPE)
 endfunction()
 
@@ -260,6 +305,48 @@ ${_expectations}
             "component_${_component}_closure_slice" PASS "" "${_component_closure_prefix}")
     endif()
 endforeach()
+
+if(_component_available_web)
+    set(_controller_consumer "${_consumer_root}/controller_link")
+    file(MAKE_DIRECTORY "${_controller_consumer}")
+    file(WRITE "${_controller_consumer}/controller.cpp" [=[
+#include "ruvia/web/Controller.h"
+
+class RetainedController final : public ruvia::Controller<RetainedController> {
+public:
+    RUVIA_CONTROLLER_GROUP("")
+    RUVIA_ROUTES_BEGIN
+    RUVIA_GET("/retained", retained);
+    RUVIA_ROUTES_END
+
+private:
+    ruvia::Task<ruvia::HttpResponse> retained(ruvia::Context& context) {
+        co_return context.text("retained");
+    }
+};
+]=])
+    file(WRITE "${_controller_consumer}/main.cpp" [=[
+#include "ruvia/web/Testing.h"
+
+int main() {
+    ruvia::TestApp app;
+    const auto response = app.request(ruvia::TestRequest::get("/retained"));
+    return response.body() == "retained" ? 0 : 1;
+}
+]=])
+    file(WRITE "${_controller_consumer}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(ruvia_controller_link_consumer LANGUAGES CXX)
+find_package(ruvia CONFIG REQUIRED COMPONENTS web)
+add_library(controller_archive STATIC controller.cpp)
+target_link_libraries(controller_archive PRIVATE ruvia::web)
+add_executable(controller_link main.cpp)
+target_link_libraries(controller_link PRIVATE ruvia::web)
+ruvia_link_controllers(controller_link controller_archive)
+]=])
+    ruvia_run_consumer("controller_link" PASS "")
+    ruvia_build_and_run_consumer("controller_link" "controller_link")
+endif()
 
 foreach(_component IN ITEMS core http web)
     if(NOT _component_available_${_component})

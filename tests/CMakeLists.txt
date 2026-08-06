@@ -416,9 +416,10 @@ ruvia_add_unit_suite(ruvia_web_unit_tests ruvia::web
     web/unit/model/email_like.cpp
     web/unit/model/form_parser.cpp
     web/unit/model/json_parser.cpp
+    web/unit/model/plain_scalar_fields.cpp
     web/unit/model/json_writer.cpp
     web/unit/model/last_match.cpp
-    web/unit/model/list.cpp
+    web/unit/model/boxed_array.cpp
     web/unit/model/pattern_compiler.cpp
     web/unit/model/pattern_matcher.cpp
     web/unit/model/pattern_types.cpp

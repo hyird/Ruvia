@@ -21,7 +21,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/web/Context.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/util/CallableRef.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/server/HttpServer.h"
@@ -68,7 +68,7 @@ void registerRoute(ruvia::detail::RouterImpl& router, ruvia::HttpKnownMethod met
 }  // namespace
 
 int main() {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
     auto handler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> { co_return c.text("ok"); };
     auto identityForbiddenHandler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {

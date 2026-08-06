@@ -25,12 +25,12 @@ enum class DbDriver : std::uint8_t {
 struct DbConfig {
     DbDriver driver{DbDriver::kMariaDb};
     // Host name or unbracketed address only; keep the port in port.
-    std::pmr::string host{"127.0.0.1"};
+    std::string host{"127.0.0.1"};
     // Must be non-zero.
     std::uint16_t port{3306};
-    std::pmr::string username;
-    std::pmr::string password;
-    std::pmr::string database;
+    std::string username;
+    std::string password;
+    std::string database;
     // Absence disables the corresponding timeout.
     std::optional<std::chrono::milliseconds> connectTimeout;
     std::optional<std::chrono::milliseconds> readTimeout;
@@ -51,11 +51,6 @@ struct DbConfig {
 };
 
 namespace detail {
-
-struct DbDefinition final {
-    std::pmr::string alias;
-    DbConfig config;
-};
 
 class MariaDbPool;
 class PostgreSqlPool;

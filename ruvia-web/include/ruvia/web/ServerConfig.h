@@ -11,6 +11,7 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <string>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -23,7 +24,10 @@
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/StaticFiles.h"
+#include "ruvia/web/detail/CallbackRef.h"
 
 namespace ruvia {
 
@@ -36,7 +40,7 @@ struct ConnectionFailureSink;
 
 class TlsIdentity final {
 public:
-    [[nodiscard]] static TlsIdentity fromFiles(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::pmr::string privateKeyPassword = {});
+    [[nodiscard]] static TlsIdentity fromFiles(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::string_view privateKeyPassword = {});
 
     [[nodiscard]] const std::filesystem::path& certificateChainFile() const& noexcept {
         return certificateChainFile_;
@@ -48,20 +52,20 @@ public:
     }
     const std::filesystem::path& privateKeyFile() const&& = delete;
 
-    [[nodiscard]] const std::pmr::string& privateKeyPassword() const& noexcept {
+    [[nodiscard]] const std::string& privateKeyPassword() const& noexcept {
         return privateKeyPassword_;
     }
-    const std::pmr::string& privateKeyPassword() const&& = delete;
+    const std::string& privateKeyPassword() const&& = delete;
 
 private:
-    TlsIdentity(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::pmr::string privateKeyPassword) noexcept
+    TlsIdentity(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::string privateKeyPassword) noexcept
         : certificateChainFile_(std::move(certificateChainFile)),
           privateKeyFile_(std::move(privateKeyFile)),
           privateKeyPassword_(std::move(privateKeyPassword)) {}
 
     std::filesystem::path certificateChainFile_;
     std::filesystem::path privateKeyFile_;
-    std::pmr::string privateKeyPassword_;
+    std::string privateKeyPassword_;
 };
 
 enum class TlsClientCertificateRequirement : std::uint8_t {
@@ -108,11 +112,11 @@ public:
 private:
     friend class TlsConfig;
 
-    TlsSniIdentity(std::pmr::string host, TlsIdentity identity) noexcept
+    TlsSniIdentity(std::string host, TlsIdentity identity) noexcept
         : host_(std::move(host)),
           identity_(std::move(identity)) {}
 
-    std::pmr::string host_;
+    std::string host_;
     TlsIdentity identity_;
 };
 
@@ -134,59 +138,52 @@ public:
     }
     const std::optional<TlsClientCertificatePolicy>& clientCertificatePolicy() const&& = delete;
 
-    [[nodiscard]] const std::pmr::vector<TlsSniIdentity>& sniIdentities() const& noexcept {
+    [[nodiscard]] const std::vector<TlsSniIdentity>& sniIdentities() const& noexcept {
         return sniIdentities_;
     }
-    const std::pmr::vector<TlsSniIdentity>& sniIdentities() const&& = delete;
+    const std::vector<TlsSniIdentity>& sniIdentities() const&& = delete;
 
 private:
     TlsIdentity identity_;
     std::optional<TlsClientCertificatePolicy> clientCertificatePolicy_;
-    std::pmr::vector<TlsSniIdentity> sniIdentities_;
+    std::vector<TlsSniIdentity> sniIdentities_;
 };
 
-// The complete listener graph is selected atomically. HTTPS and redirect
-// topologies always carry their TLS identity, so App cannot observe a partially
-// configured listener/TLS combination.
-class ServerTopology final {
+// One independently replicated listener. App validates the complete listener
+// list atomically, including unique ports and redirect targets, before storing
+// it. This scales beyond the old fixed one/two-listener combinations.
+class ListenerConfig final {
 public:
-    ServerTopology() noexcept = default;
-
-    [[nodiscard]] static ServerTopology http(std::uint16_t port = 8080);
-    [[nodiscard]] static ServerTopology https(std::uint16_t port, TlsConfig tls);
-    [[nodiscard]] static ServerTopology httpAndHttps(std::uint16_t httpPort, std::uint16_t httpsPort, TlsConfig tls);
-    [[nodiscard]] static ServerTopology redirectHttpToHttps(std::uint16_t httpPort, std::uint16_t httpsPort, TlsConfig tls);
+    [[nodiscard]] static ListenerConfig http(std::string_view address = "0.0.0.0", std::uint16_t port = 8080);
+    [[nodiscard]] static ListenerConfig https(std::string_view address, std::uint16_t port, TlsConfig tls);
+    [[nodiscard]] static ListenerConfig redirectHttpToHttps(std::string_view address, std::uint16_t port, std::uint16_t targetHttpsPort);
 
 private:
     friend class App;
 
     struct Http final {
+        std::string address;
         std::uint16_t port;
     };
 
     struct Https final {
+        std::string address;
         std::uint16_t port;
         TlsConfig tls;
     };
 
-    struct HttpAndHttps final {
-        std::uint16_t httpPort;
-        std::uint16_t httpsPort;
-        TlsConfig tls;
-    };
-
     struct RedirectHttpToHttps final {
-        std::uint16_t httpPort;
-        std::uint16_t httpsPort;
-        TlsConfig tls;
+        std::string address;
+        std::uint16_t port;
+        std::uint16_t targetHttpsPort;
     };
 
-    using Topology = std::variant<Http, Https, HttpAndHttps, RedirectHttpToHttps>;
+    using Listener = std::variant<Http, Https, RedirectHttpToHttps>;
 
-    explicit ServerTopology(Topology topology) noexcept
-        : topology_(std::move(topology)) {}
+    explicit ListenerConfig(Listener listener) noexcept
+        : listener_(std::move(listener)) {}
 
-    Topology topology_{Http{8080}};
+    Listener listener_;
 };
 
 // Canonical startup values shared by App setters and every worker's server
@@ -208,10 +205,10 @@ public:
 private:
     friend class CorsOriginPolicy;
 
-    explicit CorsOrigin(std::pmr::string value) noexcept
+    explicit CorsOrigin(std::string value) noexcept
         : value_(std::move(value)) {}
 
-    std::pmr::string value_;
+    std::string value_;
 };
 
 class CorsOriginPolicy final {
@@ -244,12 +241,12 @@ public:
     std::string_view origin() const&& = delete;
 
 private:
-    CorsOriginPolicy(Kind kind, std::pmr::string value) noexcept
+    CorsOriginPolicy(Kind kind, std::string value) noexcept
         : kind_(kind),
           value_(std::move(value)) {}
 
     Kind kind_;
-    std::pmr::string value_;
+    std::string value_;
 };
 
 class CorsHeaderNames final {
@@ -271,10 +268,10 @@ public:
     }
 
 private:
-    explicit CorsHeaderNames(std::pmr::string value) noexcept
+    explicit CorsHeaderNames(std::string value) noexcept
         : value_(std::move(value)) {}
 
-    std::pmr::string value_;
+    std::string value_;
 };
 
 class CorsRequestHeadersPolicy final {
@@ -422,17 +419,50 @@ private:
     std::uint64_t durationMicros_;
 };
 
-// A non-owning, allocation-free access-log listener. The bound object must
-// outlive App::run(); the request hot path performs one null check and one
-// function-pointer call.
+namespace detail {
+using AccessLogCallbackRef = CallbackRef<void(const AccessLogRecord&) noexcept>;
+}  // namespace detail
+
+// App-owned access-log listener. Request dispatch receives only an internal,
+// allocation-free CallbackRef and never participates in this owner's lifetime.
 class AccessLogCallback final {
 public:
     constexpr AccessLogCallback() noexcept = default;
+    template <typename Listener, typename Stored = std::decay_t<Listener>>
+        requires(!std::is_same_v<Stored, AccessLogCallback> && !std::is_lvalue_reference_v<Listener> && std::is_nothrow_invocable_r_v<void, Stored&, const AccessLogRecord&> && std::is_copy_constructible_v<Stored>)
+    AccessLogCallback(Listener&& listener)
+        : target_(detail::constructPmrObject<Stored>(detail::processResource(), std::forward<Listener>(listener))),
+          invoke_([](void* target, const AccessLogRecord& record) noexcept { (*static_cast<Stored*>(target))(record); }),
+          destroy_([](void* target, std::pmr::memory_resource* resource) noexcept { detail::destroyPmrObject(static_cast<Stored*>(target), resource); }),
+          clone_([](const void* target, std::pmr::memory_resource* resource) -> void* { return detail::constructPmrObject<Stored>(resource, *static_cast<const Stored*>(target)); }),
+          resource_(detail::processResource()) {}
 
-    template <typename Listener>
-        requires(!std::is_function_v<Listener> && std::is_nothrow_invocable_r_v<void, Listener&, const AccessLogRecord&>)
-    [[nodiscard]] static constexpr AccessLogCallback bind(Listener& listener) noexcept {
-        return AccessLogCallback(std::addressof(listener), [](void* target, const AccessLogRecord& record) noexcept { (*static_cast<Listener*>(target))(record); });
+    AccessLogCallback(const AccessLogCallback& other) {
+        copyFrom(other);
+    }
+
+    AccessLogCallback& operator=(const AccessLogCallback& other) {
+        if (this != &other) {
+            AccessLogCallback copy(other);
+            swap(copy);
+        }
+        return *this;
+    }
+
+    AccessLogCallback(AccessLogCallback&& other) noexcept {
+        moveFrom(other);
+    }
+
+    AccessLogCallback& operator=(AccessLogCallback&& other) noexcept {
+        if (this != &other) {
+            reset();
+            moveFrom(other);
+        }
+        return *this;
+    }
+
+    ~AccessLogCallback() {
+        reset();
     }
 
     [[nodiscard]] constexpr explicit operator bool() const noexcept {
@@ -440,21 +470,57 @@ public:
     }
 
 private:
+    friend struct detail::CallbackAccess;
     friend struct detail::AccessLogRecordAccess;
-    friend struct detail::AccessLogSink;
 
     using Invoke = void (*)(void*, const AccessLogRecord&) noexcept;
+    using Destroy = void (*)(void*, std::pmr::memory_resource*) noexcept;
+    using Clone = void* (*)(const void*, std::pmr::memory_resource*);
 
-    constexpr AccessLogCallback(void* target, Invoke invoke) noexcept
-        : target_(target),
-          invoke_(invoke) {}
+    [[nodiscard]] constexpr detail::AccessLogCallbackRef callbackRef() const noexcept {
+        return detail::CallbackAccess::make<void(const AccessLogRecord&) noexcept>(target_, invoke_);
+    }
 
-    void invoke(const AccessLogRecord& record) const noexcept {
-        invoke_(target_, record);
+    void copyFrom(const AccessLogCallback& other) {
+        target_ = other.clone_ == nullptr ? other.target_ : other.clone_(other.target_, other.resource_);
+        invoke_ = other.invoke_;
+        destroy_ = other.destroy_;
+        clone_ = other.clone_;
+        resource_ = other.resource_;
+    }
+
+    void moveFrom(AccessLogCallback& other) noexcept {
+        target_ = std::exchange(other.target_, nullptr);
+        invoke_ = std::exchange(other.invoke_, nullptr);
+        destroy_ = std::exchange(other.destroy_, nullptr);
+        clone_ = std::exchange(other.clone_, nullptr);
+        resource_ = std::exchange(other.resource_, nullptr);
+    }
+
+    void swap(AccessLogCallback& other) noexcept {
+        std::swap(target_, other.target_);
+        std::swap(invoke_, other.invoke_);
+        std::swap(destroy_, other.destroy_);
+        std::swap(clone_, other.clone_);
+        std::swap(resource_, other.resource_);
+    }
+
+    void reset() noexcept {
+        if (destroy_ != nullptr) {
+            destroy_(target_, resource_);
+        }
+        target_ = nullptr;
+        invoke_ = nullptr;
+        destroy_ = nullptr;
+        clone_ = nullptr;
+        resource_ = nullptr;
     }
 
     void* target_{nullptr};
     Invoke invoke_{nullptr};
+    Destroy destroy_{nullptr};
+    Clone clone_{nullptr};
+    std::pmr::memory_resource* resource_{nullptr};
 };
 
 // One connection lost to an exception that escaped its session: a handler bug
@@ -517,19 +583,52 @@ struct HttpServerStats final {
     std::size_t documentRootRefreshFailures{0};
 };
 
-// A non-owning, allocation-free connection-failure listener. The bound object
-// must outlive App::run(). The listener must not throw: it runs on the last
+namespace detail {
+using ConnectionFailureCallbackRef = CallbackRef<void(const ConnectionFailureRecord&) noexcept>;
+}  // namespace detail
+
+// App-owned connection-failure listener. The listener must not throw: it runs on the last
 // line of defense for a connection, where a second failure would have nowhere
 // left to go, so the requirement is enforced at compile time rather than
 // swallowed at runtime.
 class ConnectionFailureCallback final {
 public:
     constexpr ConnectionFailureCallback() noexcept = default;
+    template <typename Listener, typename Stored = std::decay_t<Listener>>
+        requires(!std::is_same_v<Stored, ConnectionFailureCallback> && !std::is_lvalue_reference_v<Listener> && std::is_nothrow_invocable_r_v<void, Stored&, const ConnectionFailureRecord&> && std::is_copy_constructible_v<Stored>)
+    ConnectionFailureCallback(Listener&& listener)
+        : target_(detail::constructPmrObject<Stored>(detail::processResource(), std::forward<Listener>(listener))),
+          invoke_([](void* target, const ConnectionFailureRecord& record) noexcept { (*static_cast<Stored*>(target))(record); }),
+          destroy_([](void* target, std::pmr::memory_resource* resource) noexcept { detail::destroyPmrObject(static_cast<Stored*>(target), resource); }),
+          clone_([](const void* target, std::pmr::memory_resource* resource) -> void* { return detail::constructPmrObject<Stored>(resource, *static_cast<const Stored*>(target)); }),
+          resource_(detail::processResource()) {}
 
-    template <typename Listener>
-        requires(!std::is_function_v<Listener> && std::is_nothrow_invocable_r_v<void, Listener&, const ConnectionFailureRecord&>)
-    [[nodiscard]] static constexpr ConnectionFailureCallback bind(Listener& listener) noexcept {
-        return ConnectionFailureCallback(std::addressof(listener), [](void* target, const ConnectionFailureRecord& record) noexcept { (*static_cast<Listener*>(target))(record); });
+    ConnectionFailureCallback(const ConnectionFailureCallback& other) {
+        copyFrom(other);
+    }
+
+    ConnectionFailureCallback& operator=(const ConnectionFailureCallback& other) {
+        if (this != &other) {
+            ConnectionFailureCallback copy(other);
+            swap(copy);
+        }
+        return *this;
+    }
+
+    ConnectionFailureCallback(ConnectionFailureCallback&& other) noexcept {
+        moveFrom(other);
+    }
+
+    ConnectionFailureCallback& operator=(ConnectionFailureCallback&& other) noexcept {
+        if (this != &other) {
+            reset();
+            moveFrom(other);
+        }
+        return *this;
+    }
+
+    ~ConnectionFailureCallback() {
+        reset();
     }
 
     [[nodiscard]] constexpr explicit operator bool() const noexcept {
@@ -537,21 +636,57 @@ public:
     }
 
 private:
+    friend struct detail::CallbackAccess;
     friend struct detail::ConnectionFailureRecordAccess;
-    friend struct detail::ConnectionFailureSink;
 
     using Invoke = void (*)(void*, const ConnectionFailureRecord&) noexcept;
+    using Destroy = void (*)(void*, std::pmr::memory_resource*) noexcept;
+    using Clone = void* (*)(const void*, std::pmr::memory_resource*);
 
-    constexpr ConnectionFailureCallback(void* target, Invoke invoke) noexcept
-        : target_(target),
-          invoke_(invoke) {}
+    [[nodiscard]] constexpr detail::ConnectionFailureCallbackRef callbackRef() const noexcept {
+        return detail::CallbackAccess::make<void(const ConnectionFailureRecord&) noexcept>(target_, invoke_);
+    }
 
-    void invoke(const ConnectionFailureRecord& record) const noexcept {
-        invoke_(target_, record);
+    void copyFrom(const ConnectionFailureCallback& other) {
+        target_ = other.clone_ == nullptr ? other.target_ : other.clone_(other.target_, other.resource_);
+        invoke_ = other.invoke_;
+        destroy_ = other.destroy_;
+        clone_ = other.clone_;
+        resource_ = other.resource_;
+    }
+
+    void moveFrom(ConnectionFailureCallback& other) noexcept {
+        target_ = std::exchange(other.target_, nullptr);
+        invoke_ = std::exchange(other.invoke_, nullptr);
+        destroy_ = std::exchange(other.destroy_, nullptr);
+        clone_ = std::exchange(other.clone_, nullptr);
+        resource_ = std::exchange(other.resource_, nullptr);
+    }
+
+    void swap(ConnectionFailureCallback& other) noexcept {
+        std::swap(target_, other.target_);
+        std::swap(invoke_, other.invoke_);
+        std::swap(destroy_, other.destroy_);
+        std::swap(clone_, other.clone_);
+        std::swap(resource_, other.resource_);
+    }
+
+    void reset() noexcept {
+        if (destroy_ != nullptr) {
+            destroy_(target_, resource_);
+        }
+        target_ = nullptr;
+        invoke_ = nullptr;
+        destroy_ = nullptr;
+        clone_ = nullptr;
+        resource_ = nullptr;
     }
 
     void* target_{nullptr};
     Invoke invoke_{nullptr};
+    Destroy destroy_{nullptr};
+    Clone clone_{nullptr};
+    std::pmr::memory_resource* resource_{nullptr};
 };
 
 }  // namespace ruvia

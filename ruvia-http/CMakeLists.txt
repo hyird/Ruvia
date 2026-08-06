@@ -18,7 +18,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseHead.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponsePlan.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpOrigin.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpOriginView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpBrotliCodec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpContentCoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpContentEncoder.cpp
@@ -97,6 +97,7 @@ target_link_libraries(ruvia-http
 ruvia_install_target(ruvia-http http)
 
 ruvia_install_public_headers(http
+    include/ruvia/http/BorrowedText.h
     include/ruvia/http/Cookies.h
     include/ruvia/http/ProtocolByteLimit.h
     include/ruvia/http/HttpProtocolError.h

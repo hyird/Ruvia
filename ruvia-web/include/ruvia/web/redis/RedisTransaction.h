@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/redis/RedisPipeline.h"
+#include "ruvia/web/detail/redis/RedisArgumentPack.h"
 
 #include <chrono>
 #include <cstdint>
@@ -23,6 +24,24 @@ public:
     RedisTransaction& command(std::initializer_list<std::string_view> args) = delete;
     RedisTransaction& watch(std::string_view key);
     RedisTransaction& watch(std::span<const std::string_view> keys);
+
+    // As on RedisPipeline: command words and watched keys as ordinary arguments,
+    // copied into the batch before the call returns. Two or more keys, so a
+    // single-key watch(key) keeps its own overload.
+    template <typename... Args>
+        requires detail::RedisArgumentPack<Args...>
+    RedisTransaction& command(Args&&... args) {
+        const std::string_view views[]{std::string_view(args)...};
+        return command(std::span<const std::string_view>(views));
+    }
+
+    template <typename... Keys>
+        requires(detail::RedisArgumentPack<Keys...> && sizeof...(Keys) >= 2)
+    RedisTransaction& watch(Keys&&... keys) {
+        const std::string_view views[]{std::string_view(keys)...};
+        return watch(std::span<const std::string_view>(views));
+    }
+
     RedisTransaction& unwatch();
     RedisTransaction& get(std::string_view key);
     RedisTransaction& set(std::string_view key, std::string_view value);

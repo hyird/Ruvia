@@ -54,7 +54,7 @@
 #include <ruvia/http/detail/response/HttpResponseFileBody.h>
 #include <ruvia/http/detail/request/RequestBodyDecoding.h>
 #include <ruvia/http/detail/client/HttpClientContentEncoding.h>
-#include <ruvia/http/detail/client/HttpOrigin.h>
+#include <ruvia/http/detail/client/HttpOriginView.h>
 #include <ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h>
 #include <ruvia/http/detail/http1/Http1ChunkedFraming.h>
 #include <ruvia/http/detail/coding/HttpTransferCodingDecoder.h>
@@ -191,11 +191,11 @@ int main() {
         return 36;
     }
 
-    const auto outboundOrigin = ruvia::HttpOrigin::https("example.test");
-    ruvia::HttpClientRequest outboundRequest;
+    const auto outboundOrigin = ruvia::HttpOriginView::https("example.test");
+    ruvia::HttpClientRequestView outboundRequest;
     outboundRequest.method = "POST";
     outboundRequest.target = "/submit";
-    outboundRequest.content = ruvia::HttpClientRequestContent::bytes("payload");
+    outboundRequest.content = ruvia::HttpClientRequestContentView::bytes("payload");
     const auto* outboundBytes = outboundRequest.content.borrowedBytes();
     if (outboundRequest.content.withoutContent() != nullptr || outboundBytes == nullptr || outboundBytes->value() != "payload") {
         return 34;
@@ -227,14 +227,14 @@ int main() {
     if (expectFinalHead == nullptr || expectFinalHead->plan().withoutContent() == nullptr || expectFinalHead->plan().requestContentSignal().has_value()) {
         return 25;
     }
-    const auto zeroPortOrigin = ruvia::HttpOrigin::http("example.test", 0);
+    const auto zeroPortOrigin = ruvia::HttpOriginView::http("example.test", 0);
     const auto zeroPortAuthority = ruvia::detail::makeHttpOriginAuthority(zeroPortOrigin, std::pmr::get_default_resource());
     if (zeroPortAuthority != "example.test:0") {
         return 20;
     }
     bool invalidOriginRejected = false;
     try {
-        (void)ruvia::HttpOrigin::http("");
+        (void)ruvia::HttpOriginView::http("");
     } catch (const std::invalid_argument&) {
         invalidOriginRejected = true;
     }
@@ -319,7 +319,7 @@ int main() {
         return 14;
     }
 
-    ruvia::HttpClientRequest getRequest;
+    ruvia::HttpClientRequestView getRequest;
     getRequest.method = "GET";
     std::array<char, 256> getHeadBuffer;
     const auto getPrepared = ruvia::Http1ClientRequestWriter().prepare(outboundOrigin, getRequest, getHeadBuffer);
@@ -375,7 +375,7 @@ int main() {
         {"Connection", "Upgrade"},
         {"Upgrade", "websocket"},
     };
-    ruvia::HttpClientRequest upgradeRequest;
+    ruvia::HttpClientRequestView upgradeRequest;
     upgradeRequest.method = "GET";
     upgradeRequest.headers = upgradeRequestHeaders;
     std::array<char, 512> upgradeHeadBuffer;

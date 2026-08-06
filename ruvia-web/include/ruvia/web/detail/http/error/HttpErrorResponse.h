@@ -10,6 +10,6 @@ namespace ruvia::detail {
 
 [[nodiscard]] HttpResponse makeDefaultErrorResponse(std::pmr::memory_resource* resource, HttpErrorInfo error);
 
-[[nodiscard]] Task<HttpResponse> invokeErrorHandler(Context& context, HttpErrorInfo error, HttpErrorHandler handler);
+[[nodiscard]] Task<HttpResponse> invokeErrorHandler(Context& context, HttpErrorInfo error, HttpErrorHandlerRef handler);
 
 }  // namespace ruvia::detail

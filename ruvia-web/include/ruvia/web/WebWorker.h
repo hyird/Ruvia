@@ -14,6 +14,8 @@
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/ScopedOperation.h"
+#include "ruvia/web/detail/integration/BlockingCapability.h"
+#include "ruvia/web/detail/integration/WorkerStateCapability.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
@@ -34,7 +36,7 @@ class WebWorkerDispatch;
 class WorkerStateRegistry;
 }  // namespace detail
 
-class WebWorkerContext final {
+class WebWorkerContext final : public detail::BlockingCapability<WebWorkerContext>, public detail::WorkerStateCapability<WebWorkerContext> {
 public:
     WebWorkerContext(const WebWorkerContext&) = delete;
     WebWorkerContext& operator=(const WebWorkerContext&) = delete;
@@ -45,51 +47,6 @@ public:
     const WorkerHandle& worker() const&& = delete;
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] StopToken stopToken() const noexcept;
-
-    // This worker's instance of an App::useWorkerState<T>() registration --
-    // the same instance Context::workerState<T>() returns for HTTP requests
-    // dispatched on this worker. Throws std::logic_error for an unregistered
-    // type.
-    template <typename T>
-    [[nodiscard]] T& workerState() const {
-        return *static_cast<T*>(workerStateInstance(detail::workerStateTypeKey<T>()));
-    }
-
-    // Offloads blocking work exactly as Context::runBlocking() does for
-    // requests -- same pool, same ownership rule for the callable, same
-    // exceptions. A posted background task blocks its worker just as a handler
-    // would.
-    template <typename Fn>
-    [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(Fn fn) const {
-        auto result = co_await tryRunBlocking(std::move(fn));
-        if constexpr (std::is_void_v<std::invoke_result_t<Fn&>>) {
-            std::move(result).value();
-            co_return;
-        } else {
-            co_return std::move(result).value();
-        }
-    }
-
-    template <typename Rep, typename Period, typename Fn>
-    [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const {
-        auto result = co_await tryRunBlocking(timeout, std::move(fn));
-        if constexpr (std::is_void_v<std::invoke_result_t<Fn&>>) {
-            std::move(result).value();
-            co_return;
-        } else {
-            co_return std::move(result).value();
-        }
-    }
-
-    template <typename Fn>
-    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(Fn fn) const {
-        return ruvia::runBlocking(blockingPool(), worker_, std::move(fn));
-    }
-
-    template <typename Rep, typename Period, typename Fn>
-    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const {
-        return ruvia::runBlocking(blockingPool(), worker_, timeout, std::move(fn));
-    }
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
@@ -106,7 +63,12 @@ private:
     WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource, detail::DbRegistry* databases, detail::RedisRegistry* redis, const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool, StopToken stopToken) noexcept;
 
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
+    friend class detail::BlockingCapability<WebWorkerContext>;
+    friend class detail::WorkerStateCapability<WebWorkerContext>;
     [[nodiscard]] BlockingPool& blockingPool() const;
+    [[nodiscard]] const WorkerHandle& blockingWorker() const noexcept {
+        return worker_;
+    }
 
     WorkerHandle worker_;
     std::pmr::memory_resource* resource_;

@@ -80,7 +80,7 @@ RUVIA_TEST(access_log_record_borrows_one_typed_request) {
     auto request = makeRequest("PROPFIND", "/collection", HttpProtocolVersion::kHttp10);
     AccessLogObservation observation;
     AccessLogSink accessLog;
-    accessLog.callback = ruvia::AccessLogCallback::bind(observation);
+    accessLog.callback = ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(observation);
 
     recordHttpAccess(accessLog, request, "192.0.2.80", ruvia::http_status::kMultiStatus, std::chrono::steady_clock::now());
 
@@ -96,7 +96,7 @@ RUVIA_TEST(access_log_record_borrows_one_typed_request) {
 RUVIA_TEST(access_log_preserves_all_protocol_versions_without_transport_bool) {
     AccessLogObservation observation;
     AccessLogSink accessLog;
-    accessLog.callback = ruvia::AccessLogCallback::bind(observation);
+    accessLog.callback = ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(observation);
     constexpr std::array versions{HttpProtocolVersion::kHttp10, HttpProtocolVersion::kHttp11, HttpProtocolVersion::kHttp2};
 
     for (const auto version : versions) {

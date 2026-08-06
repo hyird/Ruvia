@@ -70,7 +70,7 @@ void exerciseMigrations(const ruvia::DbConfig& config) {
 
 ruvia::Task<void> exercise(asio::io_context& ioContext, unsigned& ticks) {
     auto* resource = std::pmr::get_default_resource();
-    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource), testConfig()}};
+    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(testConfig(), resource)}};
     ruvia::detail::DbRegistry registry(ioContext, resource, definitions);
     co_await registry.connect();
     ruvia::detail::ScopedOperationScope operationScope;
@@ -94,6 +94,20 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, unsigned& ticks) {
     dbRequire(typed.rows().size() == 1 && typed.rows()[0].size() == 2, "typed query returned the wrong shape");
     dbRequire(typed.rows()[0][0].text() == "a'b?c", "text binding round trip failed");
     dbRequire(typed.rows()[0][1].text() == "-42", "integer binding round trip failed");
+
+    // The same lookup with the parameters passed as ordinary arguments: both
+    // bindings must reach the server in order and with their types intact, and
+    // the '?' inside the value must still travel as data.
+    auto variadic = co_await db.query("SELECT name, n FROM ruvia_mariadb_integration_items WHERE name = ? AND n = ?", std::string_view("a'b?c"), std::int64_t{-42});
+    dbRequire(variadic.rows().size() == 1 && variadic.rows()[0].size() == 2, "variadic query returned the wrong shape");
+    dbRequire(variadic.rows()[0][0].text() == "a'b?c", "variadic text binding round trip failed");
+    dbRequire(variadic.rows()[0][1].text() == "-42", "variadic integer binding round trip failed");
+
+    // The variadic write path, round-tripped so the row count the assertions
+    // below depend on is unchanged.
+    auto variadicUpdate = co_await db.execute("UPDATE ruvia_mariadb_integration_items SET n = ? WHERE name = ?", std::int64_t{-43}, std::string_view("a'b?c"));
+    dbRequire(variadicUpdate.affectedRows() == 1, "variadic update affected-row count is incorrect");
+    (void)co_await db.execute("UPDATE ruvia_mariadb_integration_items SET n = ? WHERE name = ?", std::int64_t{-42}, std::string_view("a'b?c"));
 
     // Larger than one socket read, so the async path has to suspend and resume
     // several times to assemble the result.

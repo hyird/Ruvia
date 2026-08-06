@@ -99,28 +99,18 @@ private:
 
 namespace {
 
-[[nodiscard]] DbConfig cloneMigrationConfig(const DbConfig& source, std::pmr::memory_resource* resource) {
-    return DbConfig{
-        .driver = source.driver,
-        .host = std::pmr::string(source.host, resource),
-        .port = source.port,
-        .username = std::pmr::string(source.username, resource),
-        .password = std::pmr::string(source.password, resource),
-        .database = std::pmr::string(source.database, resource),
-        .connectTimeout = source.connectTimeout,
-        .readTimeout = source.readTimeout,
-        .writeTimeout = source.writeTimeout,
-        .queryTimeout = source.queryTimeout,
-        .acquireTimeout = source.acquireTimeout,
-    };
+[[nodiscard]] detail::DbConfigStorage cloneMigrationConfig(const DbConfig& source, std::pmr::memory_resource* resource) {
+    return detail::DbConfigStorage(source, resource);
 }
 
-[[nodiscard]] DbMigrationOptions cloneMigrationOptions(const DbMigrationOptions& source, std::pmr::memory_resource* resource) {
-    return DbMigrationOptions{
-        .table = std::pmr::string(source.table, resource),
-        .lockTimeout = source.lockTimeout,
-    };
-}
+struct DbMigrationOptionsStorage final {
+    DbMigrationOptionsStorage(const DbMigrationOptions& source, std::pmr::memory_resource* resource)
+        : table(source.table, resource),
+          lockTimeout(source.lockTimeout) {}
+
+    std::pmr::string table;
+    std::chrono::seconds lockTimeout;
+};
 
 void appendQuotedIdentifier(std::pmr::string& sql, std::string_view identifier, DbDriver driver) {
     if (!detail::isValidMigrationTableName(identifier, driver)) {
@@ -132,7 +122,7 @@ void appendQuotedIdentifier(std::pmr::string& sql, std::string_view identifier, 
     sql.push_back(quote);
 }
 
-[[nodiscard]] std::pmr::string buildMigrationLockName(const DbConfig& config, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::pmr::string buildMigrationLockName(const detail::DbConfigStorage& config, std::pmr::memory_resource* resource) {
     constexpr std::string_view kPrefix = "ruvia:migrations:";
     std::pmr::string name(resource);
     name.reserve(kPrefix.size() + (!config.database.empty() ? config.database.size() : config.host.size() + 1 + 10));
@@ -259,7 +249,7 @@ std::pmr::string detail::migrationChecksum(std::string_view sql, std::pmr::memor
 
 class detail::DbMigrationRunner final {
 public:
-    [[nodiscard]] static Task<DbMigrationReport> run(asio::io_context& ioContext, detail::DbMigrationDeadlineScanner& scanner, DbConfig config, std::span<const DbMigration> migrations, DbMigrationOptions options, std::pmr::memory_resource* resource) {
+    [[nodiscard]] static Task<DbMigrationReport> run(asio::io_context& ioContext, detail::DbMigrationDeadlineScanner& scanner, detail::DbConfigStorage config, std::span<const DbMigration> migrations, DbMigrationOptionsStorage options, std::pmr::memory_resource* resource) {
         auto* resolved = detail::pmrResourceOrDefault(resource);
         detail::validateMigrationList(migrations);
         if (!detail::isValidMigrationTableName(options.table, config.driver)) {
@@ -356,7 +346,7 @@ private:
         }
     }
 
-    [[nodiscard]] static Task<void> applyMigrations(DbHandle& handle, DbDriver driver, std::span<const DbMigration> migrations, const DbMigrationOptions& options, DbMigrationReport& report, std::pmr::memory_resource* resource) {
+    [[nodiscard]] static Task<void> applyMigrations(DbHandle& handle, DbDriver driver, std::span<const DbMigration> migrations, const DbMigrationOptionsStorage& options, DbMigrationReport& report, std::pmr::memory_resource* resource) {
         (void)co_await handle.execute(buildCreateMigrationsTableSql(options.table, driver, resource));
 
         std::array<DbValue, 1> tableParams{DbValue{std::string_view(options.table)}};
@@ -404,23 +394,26 @@ private:
     }
 };
 
-DbMigrator::DbMigrator(DbConfig config, DbMigrationOptions options, std::pmr::memory_resource* resource)
-    : config_(cloneMigrationConfig(config, detail::pmrResourceOrDefault(resource))),
-      options_(cloneMigrationOptions(options, detail::pmrResourceOrDefault(resource))),
+DbMigrator::DbMigrator(const DbConfig& config, const DbMigrationOptions& options, std::pmr::memory_resource* resource)
+    : config_(config),
+      options_(options),
       resource_(detail::pmrResourceOrDefault(resource)) {}
 
 DbMigrationReport DbMigrator::migrate(std::span<const DbMigration> migrations) const {
     return migrate(config_, migrations, options_, resource_);
 }
 
-DbMigrationReport DbMigrator::migrate(DbConfig config, std::span<const DbMigration> migrations, DbMigrationOptions options, std::pmr::memory_resource* resource) {
+DbMigrationReport DbMigrator::migrate(const DbConfig& config, std::span<const DbMigration> migrations, const DbMigrationOptions& options, std::pmr::memory_resource* resource) {
+    auto* resolved = detail::pmrResourceOrDefault(resource);
+    auto ownedConfig = cloneMigrationConfig(config, resolved);
+    auto ownedOptions = DbMigrationOptionsStorage(options, resolved);
     asio::io_context ioContext(1);
     // Outlives the coroutine that attaches to it and is destroyed before the
     // io_context, so no tick can observe either after it is gone.
     detail::DbMigrationDeadlineScanner scanner(ioContext);
     std::optional<DbMigrationReport> report;
     std::exception_ptr exception;
-    detail::asyncStartTask(detail::DbMigrationRunner::run(ioContext, scanner, std::move(config), migrations, std::move(options), resource), asio::bind_executor(ioContext.get_executor(), [&report, &exception](detail::TaskCompletionResult<DbMigrationReport> completion) {
+    detail::asyncStartTask(detail::DbMigrationRunner::run(ioContext, scanner, std::move(ownedConfig), migrations, std::move(ownedOptions), resolved), asio::bind_executor(ioContext.get_executor(), [&report, &exception](detail::TaskCompletionResult<DbMigrationReport> completion) {
         if (const auto* failure = completion.failure()) {
             exception = failure->exception();
         } else {

@@ -3,7 +3,7 @@
 // Routing: dispatching into a route and turning failures into responses.
 
 RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
-    ruvia::Router invalidRouter;
+    ruvia::detail::Router invalidRouter;
     auto& invalid = ruvia::detail::RouterImpl::from(invalidRouter);
     ruvia::WebSocketRouteOptions invalidOptions;
     invalidOptions.lifecycle.closeHandshakeTimeout = std::chrono::milliseconds(0);
@@ -16,7 +16,7 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     RUVIA_CHECK(rejected);
 
     const auto rejectsSubprotocols = [](std::string_view subprotocols) {
-        ruvia::Router router;
+        ruvia::detail::Router router;
         auto& impl = ruvia::detail::RouterImpl::from(router);
         ruvia::WebSocketRouteOptions options;
         options.subprotocols = subprotocols;
@@ -40,7 +40,7 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     }
     RUVIA_CHECK(rejectsSubprotocols(tooManySubprotocols));
 
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     ruvia::WebSocketRouteOptions options;
     options.lifecycle.closeHandshakeTimeout = std::chrono::milliseconds(1234);
@@ -69,7 +69,7 @@ RUVIA_TEST(head_only_stream_completion_is_success_not_error) {
 }
 
 RUVIA_TEST(streaming_get_routes_gain_head_shadow) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerResponseStreamRoute(HttpKnownMethod::kGet, path("/events"), ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), {}, {});
     impl.registerSseRoute(HttpKnownMethod::kGet, path("/sse"), ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), {}, {});
@@ -232,14 +232,17 @@ RUVIA_TEST(request_json_if_and_form_if_only_fall_back_on_media_type_mismatch) {
 }
 
 RUVIA_TEST(prefix_not_found_handler_scopes_by_longest_segment_prefix) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/api/real"), RouteHandler(nullptr, &okHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
-    impl.setNotFoundHandler(&customNotFound);
+    ruvia::HttpNotFoundHandler defaultNotFound(&customNotFound);
+    ruvia::HttpNotFoundHandler apiNotFound(&apiScopedNotFound);
+    ruvia::HttpNotFoundHandler v2NotFound(&v2ScopedNotFound);
+    impl.setNotFoundHandler(ruvia::detail::CallbackAccess::ref(defaultNotFound));
     const ruvia::detail::HttpPrefixNotFoundHandler scoped[] = {
-        {"/api", &apiScopedNotFound},
+        {"/api", ruvia::detail::CallbackAccess::ref(apiNotFound)},
         // Trailing slash normalizes away; this is the same scope as "/api/v2".
-        {"/api/v2/", &v2ScopedNotFound},
+        {"/api/v2/", ruvia::detail::CallbackAccess::ref(v2NotFound)},
     };
     impl.setPrefixNotFoundHandlers(std::span<const ruvia::detail::HttpPrefixNotFoundHandler>(scoped, 2));
     impl.finalize();
@@ -258,13 +261,15 @@ RUVIA_TEST(prefix_not_found_handler_scopes_by_longest_segment_prefix) {
 }
 
 RUVIA_TEST(prefix_error_handler_scopes_thrown_route_failures) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/api/boom"), RouteHandler(nullptr, &throwsHttpErrorHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.registerRoute(HttpKnownMethod::kGet, path("/boom"), RouteHandler(nullptr, &throwsHttpErrorHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
-    impl.setErrorHandler(&customError);
+    ruvia::HttpErrorHandler defaultError(&customError);
+    ruvia::HttpErrorHandler apiError(&apiScopedError);
+    impl.setErrorHandler(ruvia::detail::CallbackAccess::ref(defaultError));
     const ruvia::detail::HttpPrefixErrorHandler scoped[] = {
-        {"/api", &apiScopedError},
+        {"/api", ruvia::detail::CallbackAccess::ref(apiError)},
     };
     impl.setPrefixErrorHandlers(std::span<const ruvia::detail::HttpPrefixErrorHandler>(scoped, 1));
     impl.finalize();
@@ -282,7 +287,7 @@ RUVIA_TEST(prefix_error_handler_scopes_thrown_route_failures) {
 RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
     // A server-wide OPTIONS * request is answered with 204 and an Allow header
     // listing every method registered anywhere on the server, not per-route.
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/a"), RouteHandler(nullptr, &okHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.registerRoute(HttpKnownMethod::kPost, path("/b"), RouteHandler(nullptr, &okHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});

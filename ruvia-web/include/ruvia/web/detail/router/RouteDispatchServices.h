@@ -12,7 +12,7 @@ namespace ruvia {
 
 // Every dispatch path hands the Context the same three things: the table it may
 // re-enter, and the error and not-found handlers that apply at this scope.
-[[nodiscard]] inline detail::ContextServices withRouteHandlers(detail::ContextServices services, const detail::RouteTable& routes, HttpErrorHandler errorHandler, HttpNotFoundHandler notFoundHandler) noexcept {
+[[nodiscard]] inline detail::ContextServices withRouteHandlers(detail::ContextServices services, const detail::RouteTable& routes, detail::HttpErrorHandlerRef errorHandler, detail::HttpNotFoundHandlerRef notFoundHandler) noexcept {
     return services.withRoutes(routes).withErrorHandler(errorHandler).withNotFoundHandler(notFoundHandler);
 }
 

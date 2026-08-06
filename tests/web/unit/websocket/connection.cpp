@@ -183,7 +183,7 @@ RUVIA_TEST(websocket_session_finish_maps_chain_failure_to_1011) {
         }
     } observation;
     ruvia::detail::ConnectionFailureSink connectionFailure;
-    connectionFailure.callback = ruvia::ConnectionFailureCallback::bind(observation);
+    connectionFailure.callback = ruvia::detail::CallbackAccess::bind<void(const ruvia::ConnectionFailureRecord&) noexcept>(observation);
 
     auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(ruvia::detail::finishWebSocketSession(connection, std::make_exception_ptr(std::runtime_error("middleware post failed")), connectionFailure, "127.0.0.1")), asio::use_future);
     io.run();

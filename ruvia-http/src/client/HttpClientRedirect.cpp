@@ -2,7 +2,7 @@
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/util/PmrResource.h"
-#include "ruvia/http/detail/client/HttpOrigin.h"
+#include "ruvia/http/detail/client/HttpOriginView.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 #include <utility>
@@ -171,7 +171,7 @@ HttpClientRedirectRequestPlan::HttpClientRedirectRequestPlan(std::string_view me
     : method_(method, detail::httpPmrResourceOrDefault(resource)),
       contentDisposition_(contentDisposition) {}
 
-HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequest& request, HttpStatusCode status, std::pmr::memory_resource* resource) {
+HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequestView& request, HttpStatusCode status, std::pmr::memory_resource* resource) {
     if (status == http_status::kSeeOther) {
         return HttpClientRedirectRequestPlan(request.method == "HEAD" ? request.method.view() : std::string_view("GET"), HttpClientRedirectContentDisposition::kDrop, resource);
     }
@@ -181,7 +181,7 @@ HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequ
     return HttpClientRedirectRequestPlan(request.method.view(), HttpClientRedirectContentDisposition::kPreserve, resource);
 }
 
-HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(const HttpOrigin& origin, std::string_view authority) noexcept {
+HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(const HttpOriginView& origin, std::string_view authority) noexcept {
     if (authority.find('@') != std::string_view::npos) {
         return HttpClientOriginAuthorityStatus::kInvalidAuthority;
     }
@@ -192,7 +192,7 @@ HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(const HttpOrig
     return parsed->effectivePort(detail::httpSchemeDefaultPort(origin.scheme())) == origin.port() && detail::httpUriHostEquals(parsed->host(), origin.host()) ? HttpClientOriginAuthorityStatus::kSameOrigin : HttpClientOriginAuthorityStatus::kDifferentOrigin;
 }
 
-HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(const HttpOrigin& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource) {
+HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource) {
     if (currentTarget.empty() || currentTarget.front() != '/' || !isValidHttpClientOriginTarget(currentTarget)) {
         return HttpClientRedirectTargetResult::makeFailure(HttpClientRedirectTargetError::kInvalidCurrentTarget);
     }
@@ -259,11 +259,11 @@ HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(const H
     return HttpClientRedirectTargetResult::makeTarget(std::move(resolved));
 }
 
-HttpOrigin HttpClientResolvedRedirect::origin() const& {
-    return scheme_ == HttpScheme::kHttps ? HttpOrigin::https(host(), port_) : HttpOrigin::http(host(), port_);
+HttpOriginView HttpClientResolvedRedirect::origin() const& {
+    return scheme_ == HttpScheme::kHttps ? HttpOriginView::https(host(), port_) : HttpOriginView::http(host(), port_);
 }
 
-HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOrigin& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource) {
+HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource) {
     if (currentTarget.empty() || currentTarget.front() != '/' || !isValidHttpClientOriginTarget(currentTarget)) {
         return HttpClientRedirectResolutionResult::makeFailure(HttpClientRedirectResolutionError::kInvalidCurrentTarget);
     }
