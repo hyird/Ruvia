@@ -18,7 +18,7 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kPost, std::pmr::string("/echo", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(nullptr, &echoHandler), ruvia::detail::RequestBodyMode::kBuffered, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -134,7 +134,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             const auto noMiddleware = std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{};
             impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/buffered-status", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(nullptr, &bufferedStatusHandler), ruvia::detail::RequestBodyMode::kBuffered, noMiddleware, noMiddleware);
@@ -221,7 +221,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_peer_abort_before_commit_has_no_status) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/peer-abort", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(&io, &slowHandler), ruvia::detail::RequestBodyMode::kBuffered, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -279,7 +279,7 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/trail", std::pmr::get_default_resource()), ruvia::detail::RouteStreamHandler(nullptr, &streamTrailerHandler), std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -367,7 +367,7 @@ RUVIA_TEST(sansio_driver_h2_stream_send_window_pacing) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/big", std::pmr::get_default_resource()), ruvia::detail::RouteStreamHandler(nullptr, &streamBigChunkHandler), std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -465,7 +465,7 @@ RUVIA_TEST(sansio_driver_h2_large_file_body_paces_and_completes) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/file", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(nullptr, &largeFileHandler), ruvia::detail::RequestBodyMode::kBuffered, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -547,7 +547,7 @@ RUVIA_TEST(sansio_driver_h2_streaming_request_body) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kPost, std::pmr::string("/upload", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(&receivedBytes, &streamBodyCountHandler), ruvia::detail::RequestBodyMode::kStream, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -623,7 +623,7 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kPost, std::pmr::string("/echo", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(nullptr, &echoHandler), ruvia::detail::RequestBodyMode::kBuffered, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -695,7 +695,7 @@ RUVIA_TEST(sansio_driver_h2_large_buffered_body_paces_and_completes) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/big", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(nullptr, &largeBufferedHandler), ruvia::detail::RequestBodyMode::kBuffered, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();

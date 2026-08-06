@@ -32,7 +32,7 @@
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/RateLimit.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
@@ -140,7 +140,7 @@ inline void addRoute(ruvia::detail::RouterImpl& impl, std::string_view route) {
 // Registers the given routes and reports whether finalize() rejects them as a
 // dynamic route-shape conflict.
 inline bool finalizeConflicts(std::initializer_list<std::string_view> routes) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     for (const auto route : routes) {
         addRoute(impl, route);
@@ -154,7 +154,7 @@ inline bool finalizeConflicts(std::initializer_list<std::string_view> routes) {
 }
 
 struct Router final {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     ruvia::detail::RouterImpl& impl = ruvia::detail::RouterImpl::from(router);
 
     void finalize() {
@@ -290,7 +290,7 @@ inline ruvia::Task<ruvia::HttpResponse> chainHandler(void*, ruvia::Context& cont
 }
 
 inline std::string dispatchChain(std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares = {}) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/chain"), RouteHandler(nullptr, &chainHandler), RequestBodyMode::kBuffered, controllerMiddlewares, routeMiddlewares);
     impl.finalize();
@@ -363,7 +363,7 @@ struct EmptyStreamDispatchObservation final {
 };
 
 inline EmptyStreamDispatchObservation dispatchEmptyStreamWith(const ControllerMiddlewareDescriptor& middleware) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerResponseStreamRoute(HttpKnownMethod::kGet, path("/empty-stream"), ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>(&middleware, 1));
     impl.finalize();
@@ -433,7 +433,7 @@ inline ruvia::Task<void> webSocketTerminal(void* target, ruvia::Context& context
 }
 
 inline WebSocketDispatchObservation dispatchWebSocketWith(const ControllerMiddlewareDescriptor& middleware) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerWebSocketRoute(HttpKnownMethod::kGet, path("/ws-middleware"), ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>(&middleware, 1), {});
     impl.finalize();
@@ -508,7 +508,7 @@ struct HeadOnlyDispatchObservation final {
 };
 
 inline HeadOnlyDispatchObservation dispatchHeadOnlyStream(std::span<const ControllerMiddlewareDescriptor> middlewares) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerResponseStreamRoute(HttpKnownMethod::kGet, path("/head-only-stream"), ruvia::detail::RouteStreamHandler(nullptr, &headOnlyProbeStreamHandler), std::span<const ControllerMiddlewareDescriptor>{}, middlewares);
     impl.finalize();
@@ -610,7 +610,7 @@ inline DispatchResult extractDispatchResult(const ruvia::HttpResponse& response)
 // Registers GET /x with `handler`, dispatches the exact wire method token and
 // path, then returns the rendered result.
 inline DispatchResult dispatchOneToken(RouteHandler handler, std::string_view method, std::string_view p, std::string_view contentEncoding = {}, std::string_view body = {}) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.finalize();
@@ -658,7 +658,7 @@ inline ruvia::Task<ruvia::HttpResponse> customError(ruvia::Context& context, Htt
 }
 
 inline DispatchResult dispatchWithHandlersToken(RouteHandler handler, HttpErrorHandler errorH, HttpNotFoundHandler notFoundH, std::string_view method, std::string_view p, std::string_view contentEncoding = {}, std::string_view body = {}) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     if (errorH != nullptr) {
         impl.setErrorHandler(errorH);
@@ -762,7 +762,7 @@ inline ruvia::Task<ruvia::HttpResponse> jsonValueIfEchoHandler(void*, ruvia::Con
 
 // Dispatches one GET /x with an optional Content-Type header and body.
 inline DispatchResult dispatchBodyRequest(RouteHandler handler, std::string_view contentType, std::string_view body) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.finalize();

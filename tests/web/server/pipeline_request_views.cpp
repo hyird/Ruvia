@@ -24,7 +24,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/web/Context.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/util/CallableRef.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
@@ -83,7 +83,7 @@ std::vector<std::string> logPipelinedBurst(const asio::ip::tcp::endpoint& endpoi
 }  // namespace
 
 int main() {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
     // The route table borrows the handlers, so they must outlive the server.
     auto firstHandler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> { co_return c.text("one"); };

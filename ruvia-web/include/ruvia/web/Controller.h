@@ -90,7 +90,7 @@ private:                                                                        
 private:                                                                                                                                                              \
     using RuviaControllerAccess = ::ruvia::detail::ControllerRegistrationAccess<RuviaControllerType>;                                                                 \
     friend class ::ruvia::detail::ControllerRegistrationAccess<RuviaControllerType>;                                                                                  \
-    void registerRoutes(::ruvia::Router& router) {                                                                                                                    \
+    void registerRoutes(::ruvia::detail::Router& router) {                                                                                                                    \
         auto ruviaControllerGroup = RuviaControllerAccess::createRouteGroup(router, RuviaControllerAccess::groupPrefix(), RuviaControllerAccess::groupMiddlewares()); \
         [[maybe_unused]] auto& ruviaRouteScope = ruviaControllerGroup;
 

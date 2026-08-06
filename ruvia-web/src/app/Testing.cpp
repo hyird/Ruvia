@@ -19,7 +19,7 @@
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/Dotenv.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
@@ -47,7 +47,7 @@ void appendPrefixHandler(std::vector<std::pair<std::string, Handler>>& handlers,
 }  // namespace
 
 struct TestApp::Impl final {
-    Router router;
+    detail::Router router;
     detail::ControllerStore controllers;
     WorkerMemory memory;
     Env env;

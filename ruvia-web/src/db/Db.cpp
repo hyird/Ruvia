@@ -12,7 +12,7 @@
 
 namespace ruvia {
 
-Task<QueryResult> detail::MariaDbPool::execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbQueryResult> detail::MariaDbPool::execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     return executeDbQuery(*this, std::move(sql), std::move(params), resource);
 }
 
@@ -120,11 +120,11 @@ void detail::MariaDbPool::abortStream(std::size_t slot, void*) noexcept {
     releaseSlot(slot);
 }
 
-Task<QueryResult> detail::MariaDbPool::executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbQueryResult> detail::MariaDbPool::executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     return detail::executeOnDbTransactionSlot(*this, slot, std::move(sql), std::move(params), resource);
 }
 
-Task<QueryResult> detail::MariaDbPool::executeOnSlot(ConnectionSlot& slot, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbQueryResult> detail::MariaDbPool::executeOnSlot(ConnectionSlot& slot, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource) {
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }

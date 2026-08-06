@@ -88,11 +88,11 @@ public:
     template <typename Pool>
     friend Task<void> finishDbTransaction(Pool&, std::size_t, std::string_view, std::pmr::memory_resource*);
     template <typename Pool>
-    friend Task<QueryResult> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
+    friend Task<DbQueryResult> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
     template <typename Pool, typename Slot>
     friend Task<DbResolvedAddresses> resolveDbHost(Pool&, Slot&, const OperationTimeout&, std::string_view);
     template <typename Pool>
-    friend Task<QueryResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
+    friend Task<DbQueryResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
     template <typename Pool>
     friend Task<std::size_t> acquireDbSlot(Pool&);
     template <typename Pool>
@@ -139,14 +139,14 @@ public:
     Task<int> waitForMysql(ConnectionSlot& slot, int status, const OperationTimeout& deadline);
     Task<void> runMysqlQuery(ConnectionSlot& slot, std::string_view sql, const OperationTimeout& deadline);
     Task<st_mysql_res*> storeMysqlResult(ConnectionSlot& slot, const OperationTimeout& deadline);
-    Task<QueryResult> executeOnSlot(ConnectionSlot& slot, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
+    Task<DbQueryResult> executeOnSlot(ConnectionSlot& slot, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
     Task<void> executeControl(ConnectionSlot& slot, std::string_view sql, std::pmr::memory_resource* resource);
-    Task<QueryResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
+    Task<DbQueryResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     Task<DbStreamResult> stream(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     Task<std::optional<DbRow>> readStreamRow(std::size_t slot, void* result, std::pmr::memory_resource* resource);
     Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource);
     void abortStream(std::size_t slot, void* result) noexcept;
-    Task<QueryResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
+    Task<DbQueryResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource);
     Task<void> commitTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     Task<void> rollbackTransaction(std::size_t slot, std::pmr::memory_resource* resource);
@@ -181,11 +181,11 @@ private:
     template <typename Pool>
     friend Task<void> finishDbTransaction(Pool&, std::size_t, std::string_view, std::pmr::memory_resource*);
     template <typename Pool>
-    friend Task<QueryResult> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
+    friend Task<DbQueryResult> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
     template <typename Pool, typename Slot>
     friend Task<DbResolvedAddresses> resolveDbHost(Pool&, Slot&, const OperationTimeout&, std::string_view);
     template <typename Pool>
-    friend Task<QueryResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
+    friend Task<DbQueryResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
     template <typename Pool>
     friend Task<std::size_t> acquireDbSlot(Pool&);
     template <typename Pool>
@@ -227,14 +227,14 @@ public:
     Task<void> flushOutput(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<void> waitUntilResultReady(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<void> sendQuery(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, const OperationTimeout& deadline, bool singleRow);
-    Task<QueryResult> executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
+    Task<DbQueryResult> executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
     Task<void> executeControl(ConnectionSlot& slot, std::string_view sql, std::pmr::memory_resource* resource);
-    Task<QueryResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
+    Task<DbQueryResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     Task<DbStreamResult> stream(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     Task<std::optional<DbRow>> readStreamRow(std::size_t slot, void* result, std::pmr::memory_resource* resource);
     Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource);
     void abortStream(std::size_t slot, void* result) noexcept;
-    Task<QueryResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
+    Task<DbQueryResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource);
     Task<void> commitTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     Task<void> rollbackTransaction(std::size_t slot, std::pmr::memory_resource* resource);

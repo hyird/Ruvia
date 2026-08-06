@@ -97,6 +97,7 @@ target_link_libraries(ruvia-http
 ruvia_install_target(ruvia-http http)
 
 ruvia_install_public_headers(http
+    include/ruvia/http/BorrowedText.h
     include/ruvia/http/Cookies.h
     include/ruvia/http/ProtocolByteLimit.h
     include/ruvia/http/HttpProtocolError.h

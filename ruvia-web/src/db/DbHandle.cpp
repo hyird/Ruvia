@@ -12,7 +12,7 @@ namespace ruvia {
 
 namespace {
 
-Task<QueryResult> executePool(detail::DbPoolRef pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbQueryResult> executePool(detail::DbPoolRef pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
         return (*client)->execute(std::move(sql), std::move(params), resource);
@@ -72,17 +72,17 @@ void DbHandle::expireCapability(detail::ScopedCapabilityNode& capability) noexce
     handle.resource_ = nullptr;
 }
 
-ScopedOperation<QueryResult> DbHandle::query(std::string_view sql, std::span<const DbValue> params) const {
+ScopedOperation<DbQueryResult> DbHandle::query(std::string_view sql, std::span<const DbValue> params) const {
     return execute(sql, params);
 }
 
-ScopedOperation<QueryResult> DbHandle::execute(std::string_view sql, std::span<const DbValue> params) const {
+ScopedOperation<DbQueryResult> DbHandle::execute(std::string_view sql, std::span<const DbValue> params) const {
     requireActive();
     auto statement = prepareDbStatement(sql, params, resource_);
     return detail::makeScopedOperation(operationScope(), executePrepared(client_, std::move(statement.sql), std::move(statement.params), resource_));
 }
 
-Task<QueryResult> DbHandle::executePrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbQueryResult> DbHandle::executePrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     co_return co_await executePool(client, std::move(sql), std::move(params), resource);
 }
 

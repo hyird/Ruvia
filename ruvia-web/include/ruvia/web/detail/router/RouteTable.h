@@ -28,7 +28,7 @@
 #include "ruvia/web/Next.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 
 namespace ruvia {
 class StaticRoot;

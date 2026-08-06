@@ -82,9 +82,19 @@ static_assert(ruvia::SecurityHeadersOptions{}.legacyXssFilter == ruvia::LegacyXs
 template <typename T>
 concept HasConfigurableDbPoolSize = requires(T& config) { config.poolSizePerWorker; };
 
-static_assert(ruvia::WebSocketRouteOptions::BorrowedText(nullptr).empty());
-static_assert(ruvia::SecurityHeader::BorrowedText(nullptr).empty());
-static_assert(ruvia::RedisScanOptions::BorrowedText(nullptr).empty());
+static_assert(ruvia::BorrowedText(nullptr).empty());
+
+// Every borrowed-text field across the public surface is the one shared type.
+// These used to be six separate nested classes with identical bodies; asserting
+// the identity here is what stops a seventh copy from being introduced.
+static_assert(std::is_same_v<decltype(ruvia::SecurityHeader::name), ruvia::BorrowedText>);
+static_assert(std::is_same_v<decltype(ruvia::SecurityHeadersOptions::contentSecurityPolicy), ruvia::BorrowedText>);
+static_assert(std::is_same_v<decltype(ruvia::WebSocketRouteOptions::subprotocols), ruvia::BorrowedText>);
+static_assert(std::is_same_v<decltype(ruvia::RedisScanOptions::match), ruvia::BorrowedText>);
+static_assert(std::is_same_v<decltype(ruvia::CookieOptions::path), ruvia::BorrowedText>);
+static_assert(std::is_same_v<decltype(ruvia::HttpClientRequest::method), ruvia::BorrowedText>);
+static_assert(std::is_same_v<decltype(ruvia::SseMessage::event), ruvia::BorrowedText>);
+
 static_assert(ruvia::detail::httpBorrowedView(nullptr).empty());
 constexpr auto kNullRoutePath = [] {
     const char* path = nullptr;
@@ -984,7 +994,7 @@ template <typename T>
 concept HasControllerPublicGroupMiddlewares = requires { T::ruviaControllerGroupMiddlewares(); };
 
 template <typename T>
-concept HasControllerPublicRegisterRoutes = requires(T& controller, ruvia::Router& router) { controller.registerRoutes(router); };
+concept HasControllerPublicRegisterRoutes = requires(T& controller, ruvia::detail::Router& router) { controller.registerRoutes(router); };
 
 template <typename T>
 concept HasControllerPublicRegistrationState = requires { T::ruviaControllerRegistered_; };
@@ -1976,7 +1986,7 @@ static_assert(!HasRateLimitSlotCount<ruvia::RateLimitRule>);
 static_assert(!std::default_initializable<ruvia::RateLimitRule>);
 static_assert(std::same_as<decltype(ruvia::RateLimitRule::fixedWindow(std::size_t{1}, std::chrono::seconds(1))), ruvia::RateLimitRule>);
 static_assert(HasAppUseMiddlewareTemplate<ruvia::App>);
-static_assert(!std::is_constructible_v<ruvia::detail::ControllerRouteBuilder, ruvia::Router&, std::string_view>);
+static_assert(!std::is_constructible_v<ruvia::detail::ControllerRouteBuilder, ruvia::detail::Router&, std::string_view>);
 #ifndef _MSC_VER
 static_assert(!HasControllerRouteBuilderPublicRegisterRoute<ruvia::detail::ControllerRouteBuilder>);
 static_assert(!HasControllerRouteBuilderPublicRegisterResponseStreamRoute<ruvia::detail::ControllerRouteBuilder>);
@@ -2006,11 +2016,11 @@ static_assert(!std::is_constructible_v<ruvia::DbField, std::string_view, std::pm
 static_assert(HasDbFieldCanonicalReadAccessors<ruvia::DbField>);
 static_assert(std::is_move_assignable_v<ruvia::DbField>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbField>);
-static_assert(!std::is_default_constructible_v<ruvia::QueryResult>);
-static_assert(!std::is_constructible_v<ruvia::QueryResult, std::pmr::memory_resource*>);
-static_assert(HasQueryResultCanonicalReadAccessors<ruvia::QueryResult>);
-static_assert(std::is_move_constructible_v<ruvia::QueryResult>);
-static_assert(!std::is_move_assignable_v<ruvia::QueryResult>);
+static_assert(!std::is_default_constructible_v<ruvia::DbQueryResult>);
+static_assert(!std::is_constructible_v<ruvia::DbQueryResult, std::pmr::memory_resource*>);
+static_assert(HasQueryResultCanonicalReadAccessors<ruvia::DbQueryResult>);
+static_assert(std::is_move_constructible_v<ruvia::DbQueryResult>);
+static_assert(!std::is_move_assignable_v<ruvia::DbQueryResult>);
 static_assert(std::is_move_constructible_v<ruvia::DbStreamResult>);
 static_assert(!std::is_move_assignable_v<ruvia::DbStreamResult>);
 static_assert(std::is_move_constructible_v<ruvia::DbTransaction>);

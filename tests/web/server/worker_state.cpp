@@ -20,7 +20,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/web/Context.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
@@ -131,7 +131,7 @@ int main() {
     };
 
     {
-        ruvia::Router router;
+        ruvia::detail::Router router;
         auto& impl = ruvia::detail::RouterImpl::from(router);
         std::pmr::string countPath("/count", std::pmr::get_default_resource());
         std::pmr::string missingPath("/missing", std::pmr::get_default_resource());

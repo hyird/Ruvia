@@ -21,13 +21,9 @@
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/core/memory/PmrObject.h"
 
-namespace ruvia {
+namespace ruvia::detail {
 
 class Router;
-
-}  // namespace ruvia
-
-namespace ruvia::detail {
 
 template <typename ControllerT>
 class ControllerRegistrationAccess;

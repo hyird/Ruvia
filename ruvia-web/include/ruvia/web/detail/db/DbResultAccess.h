@@ -12,31 +12,31 @@ namespace ruvia::detail {
 // them through this single internal access point instead of accumulating one
 // friend declaration per driver.
 struct DbResultAccess final {
-    [[nodiscard]] static QueryResult makeResult(std::pmr::memory_resource* resource) {
-        return QueryResult(resource);
+    [[nodiscard]] static DbQueryResult makeResult(std::pmr::memory_resource* resource) {
+        return DbQueryResult(resource);
     }
 
-    static void setAffectedRows(QueryResult& result, std::uint64_t value) noexcept {
+    static void setAffectedRows(DbQueryResult& result, std::uint64_t value) noexcept {
         result.affectedRows_ = value;
     }
 
-    static void setLastInsertId(QueryResult& result, std::uint64_t value) noexcept {
+    static void setLastInsertId(DbQueryResult& result, std::uint64_t value) noexcept {
         result.lastInsertId_ = value;
     }
 
-    [[nodiscard]] static std::pmr::vector<DbRow>& rows(QueryResult& result) noexcept {
+    [[nodiscard]] static std::pmr::vector<DbRow>& rows(DbQueryResult& result) noexcept {
         return result.rows_;
     }
 
-    [[nodiscard]] static std::pmr::vector<DbField>& fields(QueryResult& result) noexcept {
+    [[nodiscard]] static std::pmr::vector<DbField>& fields(DbQueryResult& result) noexcept {
         return result.fields_;
     }
 
-    static void ownRawResult(QueryResult& result, void* raw, void (*release)(void*) noexcept) noexcept {
-        if (raw == nullptr || release == nullptr || std::holds_alternative<QueryResult::OwnedRawResult>(result.rawResult_)) {
+    static void ownRawResult(DbQueryResult& result, void* raw, void (*release)(void*) noexcept) noexcept {
+        if (raw == nullptr || release == nullptr || std::holds_alternative<DbQueryResult::OwnedRawResult>(result.rawResult_)) {
             std::terminate();
         }
-        result.rawResult_.template emplace<QueryResult::OwnedRawResult>(raw, release);
+        result.rawResult_.template emplace<DbQueryResult::OwnedRawResult>(raw, release);
     }
 
     [[nodiscard]] static DbField nullField(std::pmr::memory_resource* resource) {

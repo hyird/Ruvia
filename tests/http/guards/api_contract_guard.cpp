@@ -113,9 +113,10 @@ template <typename T>
 concept HasLegacyResponseBodyCopy = requires(T& response) { response.setBodyCopy(std::string_view{}); };
 
 static_assert(ruvia::detail::httpBorrowedCStringView(nullptr).empty());
-static_assert(ruvia::CookieOptions::BorrowedText(nullptr).empty());
-static_assert(ruvia::SseMessage::BorrowedText(nullptr).empty());
-static_assert(ruvia::HttpClientRequest::BorrowedText(nullptr).view().empty());
+// One shared type now backs every borrowed-text field, so a null C string
+// collapsing to an empty view is asserted once rather than per owner.
+static_assert(ruvia::BorrowedText(nullptr).empty());
+static_assert(ruvia::BorrowedText(nullptr).view().empty());
 
 struct MatchAnyHeaderToken final {
     [[nodiscard]] constexpr bool operator()(std::string_view) const noexcept {

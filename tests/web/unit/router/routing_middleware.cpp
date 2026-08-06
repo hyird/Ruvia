@@ -9,7 +9,7 @@ RUVIA_TEST(validated_model_binding_spans_next_and_unwinds_before_upstream_resume
         scopedValidationHandlerThrows = handlerThrows;
         ValidationScopeProbe::releasedAfterNext = false;
 
-        ruvia::Router router;
+        ruvia::detail::Router router;
         auto& impl = ruvia::detail::RouterImpl::from(router);
         const std::array middlewares{ruvia::detail::makeMiddlewareDescriptor<ValidationScopeProbe>(), ruvia::detail::makeMiddlewareDescriptor<ScopedValidationValidator>()};
         impl.registerRoute(HttpKnownMethod::kPost, path("/validated-scope"), RouteHandler(nullptr, &scopedValidationHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span(middlewares));
@@ -123,7 +123,7 @@ RUVIA_TEST(middleware_chain_rejects_calling_next_twice) {
 RUVIA_TEST(global_middleware_prepends_to_every_route_chain) {
     // App-wide middleware (App::use) materializes once and runs before the
     // route's own middleware on EVERY matched route.
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     const ControllerMiddlewareDescriptor routeMws[] = {
         ruvia::detail::makeMiddlewareDescriptor<ChainMwB>(),
@@ -168,7 +168,7 @@ RUVIA_TEST(global_middleware_prepends_to_every_route_chain) {
 }
 
 RUVIA_TEST(global_middleware_registration_rejected_after_finalize) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/sealed"), RouteHandler(nullptr, &chainHandler), RequestBodyMode::kBuffered, {}, {});
     const ControllerMiddlewareDescriptor globals[] = {
@@ -201,7 +201,7 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
     // finalizes the stream with a clean terminator -- framing a truncated body as a
     // complete one. dispatchResponseStream must therefore rethrow so the transport
     // aborts (connection close / RST_STREAM).
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     const ControllerMiddlewareDescriptor mws[] = {
         ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),

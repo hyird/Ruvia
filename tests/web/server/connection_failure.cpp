@@ -23,7 +23,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/web/Context.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
@@ -74,7 +74,7 @@ struct FailureObservation final {
 }  // namespace
 
 int main() {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     std::pmr::string failingPath("/boom", std::pmr::get_default_resource());
     std::pmr::string healthyPath("/fine", std::pmr::get_default_resource());

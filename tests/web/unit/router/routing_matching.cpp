@@ -3,7 +3,7 @@
 // Routing: registering routes and matching a request to one.
 
 RUVIA_TEST(route_rejects_duplicate_validated_model_types_at_registration) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     const auto controllerValidator = ruvia::detail::makeMiddlewareDescriptor<FirstIntValidator>();
     const auto routeValidator = ruvia::detail::makeMiddlewareDescriptor<SecondIntValidator>();
@@ -19,7 +19,7 @@ RUVIA_TEST(route_rejects_duplicate_validated_model_types_at_registration) {
 
 RUVIA_TEST(finalized_route_table_records_route_rate_limit_usage) {
     {
-        ruvia::Router router;
+        ruvia::detail::Router router;
         auto& impl = ruvia::detail::RouterImpl::from(router);
         addRoute(impl, "/plain");
         impl.finalize();
@@ -27,7 +27,7 @@ RUVIA_TEST(finalized_route_table_records_route_rate_limit_usage) {
     }
 
     {
-        ruvia::Router router;
+        ruvia::detail::Router router;
         auto& impl = ruvia::detail::RouterImpl::from(router);
         const auto rateLimit = ruvia::detail::makeMiddlewareDescriptor<ruvia::RouteRateLimit<1, 1000>>();
         impl.registerRoute(HttpKnownMethod::kGet, path("/limited"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span(&rateLimit, std::size_t{1}));
@@ -271,7 +271,7 @@ RUVIA_TEST(routing_rejects_registration_after_finalize) {
 }
 
 RUVIA_TEST(url_for_builds_paths_from_registered_patterns) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     for (const auto route : {"/users/:id", "/files/*", "/about", "/a/:x/b/:y"}) {
         impl.registerRoute(HttpKnownMethod::kGet, path(route), RouteHandler(nullptr, &okHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
@@ -309,7 +309,7 @@ RUVIA_TEST(url_for_builds_paths_from_registered_patterns) {
 }
 
 RUVIA_TEST(context_url_for_uses_dispatch_bound_route_table) {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/echo"), RouteHandler(nullptr, &urlForEchoHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.registerRoute(HttpKnownMethod::kGet, path("/users/:id"), RouteHandler(nullptr, &okHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});

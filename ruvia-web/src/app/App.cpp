@@ -65,7 +65,7 @@ struct AppRuntimeGraph final {
     // continue on the detached shared state until they return.
     std::unique_ptr<BlockingPool, PmrObjectDeleter<BlockingPool>> blockingPool;
     std::pmr::vector<ControllerStore> controllers;
-    std::pmr::vector<std::unique_ptr<Router, PmrObjectDeleter<Router>>> routers;
+    std::pmr::vector<std::unique_ptr<detail::Router, PmrObjectDeleter<detail::Router>>> routers;
     std::pmr::vector<std::unique_ptr<HttpServer, PmrObjectDeleter<HttpServer>>> workers;
 };
 
@@ -201,8 +201,8 @@ namespace {
 // then every handler the app was configured with -- error, not-found, their
 // prefix-scoped variants, and the global middlewares -- and finalize. Each worker
 // builds its own so a router is never shared across event loops.
-[[nodiscard]] std::unique_ptr<Router, detail::PmrObjectDeleter<Router>> buildWorkerRouter(const detail::AppState& state, std::pmr::memory_resource* runtimeResource, detail::ControllerStore& controllers, std::span<const detail::ControllerRegistrar> controllerRegistrars) {
-    auto router = detail::makePmrObject<Router>(runtimeResource);
+[[nodiscard]] std::unique_ptr<detail::Router, detail::PmrObjectDeleter<detail::Router>> buildWorkerRouter(const detail::AppState& state, std::pmr::memory_resource* runtimeResource, detail::ControllerStore& controllers, std::span<const detail::ControllerRegistrar> controllerRegistrars) {
+    auto router = detail::makePmrObject<detail::Router>(runtimeResource);
     detail::registerControllers(*router, controllers, controllerRegistrars);
     auto& routes = detail::RouterImpl::from(*router);
     routes.setErrorHandler(state.errorHandler);

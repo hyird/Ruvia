@@ -13,7 +13,7 @@
 namespace ruvia {
 namespace {
 
-Task<QueryResult> executeTransactionPool(detail::DbPoolRef pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbQueryResult> executeTransactionPool(detail::DbPoolRef pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
         return (*client)->executeOnTransactionSlot(slot, std::move(sql), std::move(params), resource);
@@ -108,11 +108,11 @@ void DbTransaction::expireCapability(detail::ScopedCapabilityNode& capability) n
     transaction.reset();
 }
 
-ScopedOperation<QueryResult> DbTransaction::query(std::string_view sql, std::span<const DbValue> params) {
+ScopedOperation<DbQueryResult> DbTransaction::query(std::string_view sql, std::span<const DbValue> params) {
     return execute(sql, params);
 }
 
-ScopedOperation<QueryResult> DbTransaction::execute(std::string_view sql, std::span<const DbValue> params) {
+ScopedOperation<DbQueryResult> DbTransaction::execute(std::string_view sql, std::span<const DbValue> params) {
     // executePrepared performs the authoritative admission check when its lazy
     // task starts. Preparing parameters only needs the transaction's stable
     // request memory domain while the lease is idle.
@@ -121,7 +121,7 @@ ScopedOperation<QueryResult> DbTransaction::execute(std::string_view sql, std::s
     return detail::makeScopedOperation(operationScope_, executePrepared(std::move(statement.sql), std::move(statement.params)));
 }
 
-Task<QueryResult> DbTransaction::executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) {
+Task<DbQueryResult> DbTransaction::executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) {
     OperationGuard operation(*this);
     auto& lease = operation.lease();
     auto result = co_await executeTransactionPool(lease.client, lease.slot, std::move(sql), std::move(params), lease.resource);

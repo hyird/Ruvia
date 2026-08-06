@@ -27,7 +27,7 @@
 
 #include "ruvia/core/BlockingPool.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/router/RouteTable.h"
@@ -153,7 +153,7 @@ int main() {
     ruvia::StaticRoot root(dir, {});
 
     std::pmr::memory_resource* resource = std::pmr::get_default_resource();
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
     routerImpl.registerRoute(
         ruvia::HttpKnownMethod::kGet,

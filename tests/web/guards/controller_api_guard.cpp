@@ -15,7 +15,7 @@ template <typename T>
 concept HasControllerPublicGroupMiddlewares = requires { T::ruviaControllerGroupMiddlewares(); };
 
 template <typename T>
-concept HasControllerPublicRegisterRoutes = requires(T& controller, ruvia::Router& router) { controller.registerRoutes(router); };
+concept HasControllerPublicRegisterRoutes = requires(T& controller, ruvia::detail::Router& router) { controller.registerRoutes(router); };
 
 template <typename T>
 concept HasControllerPublicRegistrationState = requires { T::ruviaControllerRegistered_; };

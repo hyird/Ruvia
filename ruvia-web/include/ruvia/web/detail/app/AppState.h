@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/app/AppLifecycle.h"
 #include "ruvia/web/detail/app/AppResource.h"
 #include "ruvia/core/detail/util/NativePath.h"

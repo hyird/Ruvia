@@ -198,7 +198,7 @@ RUVIA_TEST(sansio_driver_h2_post_echo_real_handler) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kPost, std::pmr::string("/echo", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(nullptr, &echoHandler), ruvia::detail::RequestBodyMode::kBuffered, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -269,7 +269,7 @@ RUVIA_TEST(sansio_driver_h2_concurrent_streams_multiplex) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/slow", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(&io, &slowHandler), ruvia::detail::RequestBodyMode::kBuffered, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/fast", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(nullptr, &fastHandler), ruvia::detail::RequestBodyMode::kBuffered, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
@@ -342,7 +342,7 @@ RUVIA_TEST(sansio_driver_h2_transport_end_is_error_and_joins_handler) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kPost, std::pmr::string("/upload", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(&observation, &terminatedBodyHandler), ruvia::detail::RequestBodyMode::kStream, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -399,7 +399,7 @@ RUVIA_TEST(sansio_driver_h2_keepalive_requests_drains_connection) {
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
-            ruvia::Router router;
+            ruvia::detail::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/ping", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(nullptr, &echoHandler), ruvia::detail::RequestBodyMode::kBuffered, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();

@@ -23,7 +23,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/web/Context.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/server/HttpServer.h"
@@ -50,7 +50,7 @@ ruvia::Task<void> writeUntilBlocked(void*, ruvia::Context& context) {
 }  // namespace
 
 int main() {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
     routerImpl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/big", std::pmr::get_default_resource()), ruvia::detail::RouteStreamHandler(nullptr, &writeUntilBlocked), {}, {});
     routerImpl.finalize();

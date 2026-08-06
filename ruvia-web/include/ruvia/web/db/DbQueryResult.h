@@ -19,13 +19,13 @@ struct st_mysql_res;
 
 namespace ruvia {
 
-class QueryResult final {
+class DbQueryResult final {
 public:
-    QueryResult(const QueryResult&) = delete;
-    QueryResult& operator=(const QueryResult&) = delete;
-    QueryResult(QueryResult&& other) noexcept;
-    QueryResult& operator=(QueryResult&&) = delete;
-    ~QueryResult();
+    DbQueryResult(const DbQueryResult&) = delete;
+    DbQueryResult& operator=(const DbQueryResult&) = delete;
+    DbQueryResult(DbQueryResult&& other) noexcept;
+    DbQueryResult& operator=(DbQueryResult&&) = delete;
+    ~DbQueryResult();
 
     [[nodiscard]] std::span<const DbRow> rows() const& noexcept;
     [[nodiscard]] std::span<const DbRow> rows() const&& = delete;
@@ -46,8 +46,8 @@ private:
         void (*release)(void*) noexcept;
     };
 
-    explicit QueryResult(std::pmr::memory_resource* resource = nullptr);
-    QueryResult(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
+    explicit DbQueryResult(std::pmr::memory_resource* resource = nullptr);
+    DbQueryResult(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
 
     std::pmr::vector<DbRow> rows_;
     std::pmr::vector<DbField> fields_;

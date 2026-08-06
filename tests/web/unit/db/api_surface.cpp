@@ -128,8 +128,8 @@ concept ExposesDbValueInspection = requires(const T& value) {
 static_assert(!ExposesDbValueInspection<ruvia::DbValue>);
 static_assert(std::is_move_constructible_v<ruvia::DbMigrationReport>);
 static_assert(!std::is_move_assignable_v<ruvia::DbMigrationReport>);
-static_assert(std::is_move_constructible_v<ruvia::QueryResult>);
-static_assert(!std::is_move_assignable_v<ruvia::QueryResult>);
+static_assert(std::is_move_constructible_v<ruvia::DbQueryResult>);
+static_assert(!std::is_move_assignable_v<ruvia::DbQueryResult>);
 static_assert(std::is_move_constructible_v<ruvia::DbStreamResult>);
 static_assert(!std::is_move_assignable_v<ruvia::DbStreamResult>);
 static_assert(std::is_move_constructible_v<ruvia::DbTransaction>);
@@ -141,7 +141,7 @@ concept ExposesAnyRvalueDbOwnedView = requires(T&& value) { std::move(value).tex
 static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbValue>);
 static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbField>);
 static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbRow>);
-static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::QueryResult>);
+static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbQueryResult>);
 static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbMigrationReport>);
 
 template <typename T>
