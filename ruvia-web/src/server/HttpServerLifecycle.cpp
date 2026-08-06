@@ -157,7 +157,7 @@ HttpServer::HttpServer(ValidatedOptionsTag, TcpEndpoint endpoint, const RouteTab
       retiredDocumentRoots_(memory_.resource()),
       options_(std::move(validatedOptions)),
       connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
-      dataAccess_(ioContext_, memory_.resource(), databases, redis, connectionScanner_),
+      dataAccess_(ioContext_, workerHandle_, memory_.resource(), databases, redis, connectionScanner_),
       workerStates_(memory_.resource(), workerStates),
       webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(), workerHandle_, memory_.resource(), dataAccess_.databases(), dataAccess_.redis(), workerStates_, options_.blockingPool, [this](std::exception_ptr failure) { failWorker(std::move(failure)); })),
       rateLimiter_(options_.defaultRateLimitPerWorker, routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent : RouteRateLimitPresence::kAbsent, options_.rateLimitSlotsPerWorker, memory_.resource()),

@@ -1,6 +1,7 @@
 #include "ruvia/web/redis/Redis.h"
 
 #include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
 #include <stdexcept>
@@ -91,6 +92,7 @@ void RedisPipeline::appendCommand(std::pmr::vector<Command>& target, std::pmr::m
 
 RedisPipeline& RedisPipeline::command(std::span<const std::string_view> args) {
     requireActive();
+    detail::validateRedisPooledCommand(std::get<Ready>(state_).pool.get(), args, false);
     appendCommand(commands_, resource(), args);
     return *this;
 }

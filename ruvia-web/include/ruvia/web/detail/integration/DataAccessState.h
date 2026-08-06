@@ -5,6 +5,7 @@
 #include <span>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/WorkerHandle.h"
 
 namespace asio {
 class io_context;
@@ -23,7 +24,7 @@ struct RedisDefinition;
 // server dependency.
 class DataAccessState final {
 public:
-    DataAccessState(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, ConnectionScanner& scanner);
+    DataAccessState(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, ConnectionScanner& scanner);
     ~DataAccessState();
 
     DataAccessState(const DataAccessState&) = delete;

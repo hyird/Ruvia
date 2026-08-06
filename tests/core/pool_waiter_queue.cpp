@@ -15,6 +15,7 @@ namespace {
 using ruvia::detail::PoolWaiter;
 using ruvia::detail::PoolWaiterAcquired;
 using ruvia::detail::PoolWaiterClosed;
+using ruvia::detail::PoolWaiterCancelled;
 using ruvia::detail::PoolWaiterQueue;
 using ruvia::detail::PoolWaiterResult;
 using ruvia::detail::PoolWaiterTimedOut;
@@ -25,7 +26,7 @@ using Clock = std::chrono::steady_clock;
 constexpr Clock::time_point kNever = Clock::time_point::max();
 
 template <typename T>
-concept HasAnyRvaluePoolWaiterAccessor = requires(T&& result) { std::move(result).acquired(); } || requires(T&& result) { std::move(result).timedOut(); } || requires(T&& result) { std::move(result).closed(); };
+concept HasAnyRvaluePoolWaiterAccessor = requires(T&& result) { std::move(result).acquired(); } || requires(T&& result) { std::move(result).timedOut(); } || requires(T&& result) { std::move(result).closed(); } || requires(T&& result) { std::move(result).cancelled(); };
 
 static_assert(!std::default_initializable<PoolWaiter>);
 static_assert(!std::default_initializable<PoolWaiterResult>);
@@ -33,6 +34,7 @@ static_assert(!HasAnyRvaluePoolWaiterAccessor<PoolWaiterResult>);
 static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().acquired()), const PoolWaiterAcquired*>);
 static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().timedOut()), const PoolWaiterTimedOut*>);
 static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().closed()), const PoolWaiterClosed*>);
+static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().cancelled()), const PoolWaiterCancelled*>);
 static_assert(std::same_as<decltype(std::declval<PoolWaiter&>().await_resume()), const PoolWaiterResult&>);
 static_assert(std::same_as<decltype(&PoolWaiterQueue::closeAll), void (PoolWaiterQueue::*)() noexcept>);
 
@@ -233,6 +235,24 @@ RUVIA_TEST(pool_waiter_queue_close_all_wakes_with_closed_result) {
     }
     RUVIA_CHECK(!resumedAnotherWaiter);
     RUVIA_CHECK(queue.empty());
+}
+
+RUVIA_TEST(pool_waiter_queue_cancel_unlinks_and_wakes_with_cancelled_result) {
+    PoolWaiterQueue queue;
+    PoolWaiter waiter(kNever);
+    queue.enqueue(waiter);
+    const PoolWaiterResult* observed = nullptr;
+    auto probe = observeWaiterCompletion(waiter, observed);
+    probe.start();
+
+    RUVIA_CHECK(queue.cancel(waiter));
+    RUVIA_CHECK(observed == &waiter.await_resume());
+    RUVIA_CHECK(observed->cancelled() != nullptr);
+    RUVIA_CHECK(observed->acquired() == nullptr);
+    RUVIA_CHECK(observed->timedOut() == nullptr);
+    RUVIA_CHECK(observed->closed() == nullptr);
+    RUVIA_CHECK(queue.empty());
+    RUVIA_CHECK(!queue.cancel(waiter));
 }
 
 RUVIA_TEST(pool_waiter_queue_expire_deadlines_is_selective) {

@@ -24,8 +24,9 @@ RedisPool::Connection::~Connection() = default;
 RedisPool::Connection::Connection(Connection&&) noexcept = default;
 RedisPool::Connection& RedisPool::Connection::operator=(Connection&&) noexcept = default;
 
-RedisPool::RedisPool(asio::io_context& ioContext, RedisConfigStorage config, std::pmr::memory_resource* resource)
+RedisPool::RedisPool(asio::io_context& ioContext, RedisConfigStorage config, std::pmr::memory_resource* resource, const WorkerHandle* worker)
     : ioContext_(ioContext),
+      worker_(worker),
       config_(std::move(config)),
       resource_(detail::pmrResourceOrDefault(resource)),
       connections_(resource_),
@@ -61,9 +62,7 @@ void RedisPool::closeNow() noexcept {
 }
 
 void RedisPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
-    if (config_.acquireTimeout.has_value()) {
-        scheduler_.scanDeadlines(now);
-    }
+    scheduler_.scanDeadlines(now);
 
     for (auto& connection : connections_) {
         const auto kind = connection.deadline.expire(now);
@@ -80,7 +79,17 @@ void RedisPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcep
 }
 
 bool RedisPool::hasAnyTimeout() const noexcept {
-    return config_.connectTimeout.has_value() || config_.commandTimeout.has_value() || config_.acquireTimeout.has_value();
+    // A command may supply its own deadline even when the pool defaults do
+    // not. Keep the worker maintenance hook registered for every Redis pool.
+    return true;
+}
+
+RedisPoolUsage RedisPool::usage() const noexcept {
+    return config_.usage;
+}
+
+bool RedisPool::hasCommandTimeout() const noexcept {
+    return config_.commandTimeout.has_value();
 }
 
 }  // namespace ruvia::detail
