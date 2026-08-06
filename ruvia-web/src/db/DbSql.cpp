@@ -8,27 +8,42 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <stdexcept>
 
 namespace ruvia::detail {
 namespace {
 
+[[nodiscard]] std::size_t mariaDbStringLiteralSizeHint(std::size_t valueSize) {
+    // mysql_real_escape_string may expand every input byte to two output
+    // bytes, and its input/output lengths are both unsigned long. Check both
+    // bounds before doing the multiplication or passing the input to C.
+    if (valueSize > (std::numeric_limits<unsigned long>::max)() / 2 || valueSize > ((std::numeric_limits<std::size_t>::max)() - 2) / 2) {
+        throw std::length_error("MariaDB string parameter is too large");
+    }
+    return valueSize * 2 + 2;
+}
+
 void appendStringLiteral(st_mysql& connection, std::pmr::string& output, std::string_view value) {
+    const auto literalSizeHint = mariaDbStringLiteralSizeHint(value.size());
+    if (output.size() > (std::numeric_limits<std::size_t>::max)() - literalSizeHint) {
+        throw std::length_error("MariaDB SQL is too large");
+    }
     output.push_back('\'');
     const auto offset = output.size();
-    output.resize(offset + value.size() * 2 + 1);
+    output.resize(offset + literalSizeHint - 1);
     const auto length = mysql_real_escape_string(&connection, output.data() + offset, value.empty() ? "" : value.data(), static_cast<unsigned long>(value.size()));
     output.resize(offset + length);
     output.push_back('\'');
 }
 
-[[nodiscard]] std::size_t valueLiteralSizeHint(const DbValue& value) noexcept {
+[[nodiscard]] std::size_t valueLiteralSizeHint(const DbValue& value) {
     switch (DbValueAccess::type(value)) {
         case DbValueType::kNull:
             return 4;
         case DbValueType::kString:
-            return DbValueAccess::text(value).size() * 2 + 2;
+            return mariaDbStringLiteralSizeHint(DbValueAccess::text(value).size());
         case DbValueType::kSigned:
         case DbValueType::kUnsigned:
             return 32;
@@ -65,6 +80,12 @@ void appendValueLiteral(st_mysql& connection, std::pmr::string& output, const Db
 
 }  // namespace
 
+void validateMariaDbSqlLength(std::size_t length) {
+    if (length > (std::numeric_limits<unsigned long>::max)()) {
+        throw std::length_error("MariaDB SQL is too large for the client API");
+    }
+}
+
 std::runtime_error mysqlError(const st_mysql& connection, std::string_view operation) {
     auto* mutableConnection = const_cast<st_mysql*>(&connection);
     const auto* message = mysql_error(mutableConnection);
@@ -94,10 +115,16 @@ void freeStoredResult(void* result) noexcept {
 }
 
 std::pmr::string interpolateSql(st_mysql& connection, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource) {
+    validateMariaDbSqlLength(sql.size());
     std::pmr::string output(pmrResourceOrDefault(resource));
     std::size_t sizeHint = sql.size();
     for (const auto& param : params) {
-        sizeHint += valueLiteralSizeHint(param);
+        const auto literalSizeHint = valueLiteralSizeHint(param);
+        if (sizeHint > (std::numeric_limits<std::size_t>::max)() - literalSizeHint) {
+            throw std::length_error("MariaDB SQL size calculation overflowed");
+        }
+        sizeHint += literalSizeHint;
+        validateMariaDbSqlLength(sizeHint);
     }
     output.reserve(sizeHint);
 
@@ -121,6 +148,7 @@ std::pmr::string interpolateSql(st_mysql& connection, std::string_view sql, std:
     }
 
     output.append(sql.data() + offset, sql.size() - offset);
+    validateMariaDbSqlLength(output.size());
     return output;
 }
 

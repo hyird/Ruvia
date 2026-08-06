@@ -41,6 +41,12 @@
 #include "ruvia/web/Session.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/WebWorker.h"
+#include "ruvia/web/detail/server/DocumentRootBinding.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
+#include "ruvia/web/detail/server/response/HttpStaticFileCompression.h"
+#include "ruvia/web/detail/server/response/HttpStreamingResponseCompression.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/redis/RedisTypes.h"
 
 namespace ruvia::detail {
@@ -75,6 +81,17 @@ static_assert(std::same_as<decltype(ruvia::SecurityHeadersOptions{}.legacyXssFil
 static_assert(ruvia::SecurityHeadersOptions{}.legacyXssFilter == ruvia::LegacyXssFilterPolicy::kDisable);
 template <typename T>
 concept HasConfigurableDbPoolSize = requires(T& config) { config.poolSizePerWorker; };
+
+static_assert(ruvia::WebSocketRouteOptions::BorrowedText(nullptr).empty());
+static_assert(ruvia::SecurityHeader::BorrowedText(nullptr).empty());
+static_assert(ruvia::RedisScanOptions::BorrowedText(nullptr).empty());
+static_assert(ruvia::detail::httpBorrowedView(nullptr).empty());
+constexpr auto kNullRoutePath = [] {
+    const char* path = nullptr;
+    ruvia::detail::RuviaPathList paths(path);
+    return *paths.begin();
+}();
+static_assert(kNullRoutePath.empty());
 
 static_assert(!HasConfigurableDbPoolSize<ruvia::DbConfig>);
 
@@ -1182,6 +1199,109 @@ concept HasAppDocumentRootConfigSetter = requires(T& app) {
 };
 
 template <typename T>
+concept HasStaticRootRuntimePolicyFields = requires(T& options) {
+    options.refreshMode;
+    options.refreshInterval;
+    options.onDemandCompressionMaxBytes;
+    options.enableLiveReload;
+};
+
+template <typename T>
+concept HasDocumentRootRuntimePolicy = requires(T& config) {
+    { config.runtimeOptions } -> std::same_as<ruvia::DocumentRootRuntimeOptions&>;
+};
+
+template <typename T>
+concept HasDocumentRootBindingAccessor = requires(const T& documentRoot) {
+    { documentRoot.binding() } -> std::same_as<ruvia::detail::DocumentRootBinding>;
+};
+
+template <typename T>
+concept HasSplitDocumentRootDispatch = requires(
+    T& routes,
+    const ruvia::HttpRequest& request,
+    const ruvia::detail::RouteResolution& resolution,
+    ruvia::RequestMemory& memory,
+    const ruvia::StaticRoot* root,
+    const ruvia::DocumentRootRuntimeOptions* runtimeOptions) {
+    routes.dispatchBufferedResponse(request, resolution, memory, root, runtimeOptions, ruvia::detail::ContextServices{});
+};
+
+template <typename T>
+concept HasRawDocumentRootDispatch = requires(
+    T& routes,
+    const ruvia::HttpRequest& request,
+    const ruvia::detail::RouteResolution& resolution,
+    ruvia::RequestMemory& memory,
+    const ruvia::StaticRoot* root) {
+    routes.dispatchBufferedResponse(request, resolution, memory, root);
+};
+
+template <typename T>
+concept HasTypedBufferedDispatchResult = requires(
+    T& routes,
+    const ruvia::HttpRequest& request,
+    const ruvia::detail::RouteResolution& resolution,
+    ruvia::RequestMemory& memory,
+    ruvia::detail::DocumentRootBinding documentRoot) {
+    { routes.dispatchBufferedResponse(request, resolution, memory, std::move(documentRoot)) } -> std::same_as<ruvia::Task<ruvia::detail::BufferedResponseDispatchResult>>;
+};
+
+template <typename T>
+concept HasRawResponseCompressionCoding = requires(
+    const ruvia::HttpRequest& request,
+    T coding,
+    ruvia::HttpResponse& response,
+    const ruvia::detail::HttpServerOptions& options) {
+    ruvia::detail::prepareBufferedHttpResponse(request, coding, response, options);
+};
+
+template <typename T>
+concept HasTypedResponseCompressionSelection = requires(
+    const ruvia::HttpRequest& request,
+    const T& policy,
+    ruvia::HttpResponse& response,
+    const ruvia::detail::HttpServerOptions& options) {
+    { ruvia::detail::prepareBufferedHttpResponse(request, policy, response, options) } -> std::same_as<ruvia::detail::HttpBufferedResponsePreparation>;
+};
+
+template <typename T>
+concept HasRawApplyResponseCompressionCoding = requires(
+    T coding,
+    ruvia::HttpKnownMethod method,
+    ruvia::HttpResponse& response,
+    const ruvia::CompressionConfig& options) {
+    ruvia::detail::applyResponseCompression(coding, method, response, options);
+};
+
+template <typename T>
+concept HasTypedApplyResponseCompressionSelection = requires(
+    const T& selection,
+    ruvia::HttpKnownMethod method,
+    ruvia::HttpResponse& response,
+    const ruvia::CompressionConfig& options) {
+    { ruvia::detail::applyResponseCompression(selection, method, response, options) } -> std::same_as<ruvia::detail::HttpResponseCompressionResult>;
+};
+
+template <typename T>
+concept HasTypedResponseCompressionPreflight = requires(
+    const T& selection,
+    ruvia::HttpKnownMethod method,
+    const ruvia::HttpResponse& response) {
+    { ruvia::detail::httpResponseCompressionEligibility(selection, method, response, ruvia::detail::ResponseStreamKind::kGeneric) } -> std::same_as<ruvia::detail::HttpResponseCompressionEligibility>;
+};
+
+template <typename Result>
+concept HasStaticFileCompressionResult = requires(
+    ruvia::HttpResponse& response,
+    const ruvia::detail::HttpResponseCodingSelection& selection,
+    ruvia::HttpKnownMethod method,
+    ruvia::CompressionConfig compression,
+    const ruvia::WorkerHandle& worker) {
+    { ruvia::detail::tryCompressStaticFileResponse(response, selection, method, compression, std::size_t{1}, nullptr, worker) } -> std::same_as<ruvia::Task<Result>>;
+};
+
+template <typename T>
 concept HasAppDocumentRootPathSetter = requires(T& app, const std::filesystem::path& root) {
     { app.setDocumentRoot(root) } -> std::same_as<ruvia::App&>;
 };
@@ -1508,6 +1628,11 @@ static_assert(!std::is_copy_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_assignable_v<ruvia::Next::Awaitable>);
+static_assert(!std::is_default_constructible_v<ruvia::detail::HttpStreamingResponseCompression>);
+static_assert(!std::is_copy_constructible_v<ruvia::detail::HttpStreamingResponseCompression>);
+static_assert(!std::is_move_constructible_v<ruvia::detail::HttpStreamingResponseCompression>);
+static_assert(std::constructible_from<ruvia::detail::HttpStreamingResponseCompression, std::pmr::memory_resource*, ruvia::detail::HttpResponseCodingSelection, ruvia::detail::HttpResponseCodingAvailability>);
+static_assert(!std::constructible_from<ruvia::detail::HttpStreamingResponseCompression, std::pmr::memory_resource*, ruvia::detail::HttpResponseCodingSelection>);
 static_assert(!HasPlainAddressOf<const ruvia::Next>);
 static_assert(!HasPlainAddressOf<ruvia::Next::Awaitable>);
 static_assert(!HasLvalueAwait<ruvia::Next::Awaitable>);
@@ -1954,6 +2079,30 @@ static_assert(HasAppWorkersPerListenerSetter<ruvia::App>);
 static_assert(!HasLegacyAppThreadNumSetter<ruvia::App>);
 static_assert(!HasLegacyAppGlobalRateLimitSetter<ruvia::App>);
 static_assert(HasAppDocumentRootConfigSetter<ruvia::App>);
+static_assert(!HasStaticRootRuntimePolicyFields<ruvia::StaticRootOptions>);
+static_assert(HasDocumentRootRuntimePolicy<ruvia::DocumentRootConfig>);
+static_assert(!std::is_default_constructible_v<ruvia::detail::DocumentRootBinding>);
+static_assert(!std::copy_constructible<ruvia::detail::DocumentRootBinding>);
+static_assert(std::move_constructible<ruvia::detail::DocumentRootBinding>);
+static_assert(!std::is_constructible_v<ruvia::detail::DocumentRootBinding, const ruvia::StaticRoot*, const ruvia::DocumentRootRuntimeOptions*>);
+static_assert(HasDocumentRootBindingAccessor<ruvia::detail::HttpServerOptions::DocumentRoot>);
+static_assert(!HasSplitDocumentRootDispatch<ruvia::detail::RouteTable>);
+static_assert(!HasRawDocumentRootDispatch<ruvia::detail::RouteTable>);
+static_assert(HasTypedBufferedDispatchResult<ruvia::detail::RouteTable>);
+static_assert(!HasRawResponseCompressionCoding<ruvia::detail::HttpContentCoding>);
+static_assert(!HasTypedResponseCompressionSelection<ruvia::detail::HttpResponseCodingSelection>);
+static_assert(HasTypedResponseCompressionSelection<ruvia::detail::HttpResponseCodingPolicy>);
+static_assert(!std::default_initializable<ruvia::detail::HttpResponseCompressionResult>);
+static_assert(!std::default_initializable<ruvia::detail::HttpResponseCodingPolicy>);
+static_assert(!HasRawApplyResponseCompressionCoding<ruvia::detail::HttpContentCoding>);
+  static_assert(HasTypedApplyResponseCompressionSelection<ruvia::detail::HttpResponseCodingSelection>);
+  static_assert(HasTypedResponseCompressionPreflight<ruvia::detail::HttpResponseCodingSelection>);
+  static_assert(!HasStaticFileCompressionResult<bool>);
+  static_assert(HasStaticFileCompressionResult<ruvia::detail::HttpStaticFileCompressionResult>);
+  static_assert(!std::default_initializable<ruvia::detail::HttpStaticFileCompressionResult>);
+static_assert(!std::default_initializable<ruvia::detail::BufferedResponseDispatchResult>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::detail::BufferedResponseDispatchResult&>().application()), const ruvia::detail::BufferedApplicationResponse*>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::detail::BufferedResponseDispatchResult&>().documentRoot()), const ruvia::detail::BufferedDocumentRootResponse*>);
 static_assert(!HasAppDocumentRootPathSetter<ruvia::App>);
 static_assert(HasAppListenAddressSetter<ruvia::App>);
 static_assert(!HasAppListenAddressPortSetter<ruvia::App>);
@@ -2147,11 +2296,11 @@ static_assert(std::is_same_v<decltype(std::declval<const ruvia::ContextRequest&>
 static_assert(!HasContextCookieGenerator<ruvia::Context>);
 static_assert(!HasContextSignedCookieGenerator<ruvia::Context>);
 static_assert(std::is_same_v<decltype(std::declval<ruvia::ResponseStreamWriter&>().writeln(std::string_view{})), ruvia::ScopedOperation<void>>);
-static_assert(std::is_same_v<decltype(std::declval<ruvia::ResponseStreamWriter&>().sleep(std::chrono::milliseconds{1})), ruvia::ScopedOperation<void>>);
+static_assert(std::is_same_v<decltype(std::declval<ruvia::ResponseStreamWriter&>().sleep(std::chrono::milliseconds{1})), ruvia::ScopedOperation<ruvia::TimerSleepResult>>);
 static_assert(std::is_same_v<decltype(std::declval<ruvia::ResponseStreamWriter&>().end(std::declval<std::span<const ruvia::HttpHeaderView>>())), ruvia::ScopedOperation<void>>);
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::ResponseStreamWriter&>().aborted()), bool>);
 static_assert(std::is_same_v<decltype(std::declval<ruvia::Context&>().streamSse()), ruvia::SseWriter>);
-static_assert(std::is_same_v<decltype(std::declval<ruvia::SseWriter&>().sleep(std::chrono::milliseconds{1})), ruvia::ScopedOperation<void>>);
+static_assert(std::is_same_v<decltype(std::declval<ruvia::SseWriter&>().sleep(std::chrono::milliseconds{1})), ruvia::ScopedOperation<ruvia::TimerSleepResult>>);
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::SseWriter&>().aborted()), bool>);
 static_assert(!std::is_constructible_v<ruvia::SseWriter, ruvia::ResponseStreamWriter&>);
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::ContextRequest&>().queries(std::string_view{})), std::span<const std::string_view>>);

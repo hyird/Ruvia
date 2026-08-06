@@ -5,10 +5,15 @@
 #include <cstdint>
 #include <memory_resource>
 #include <string_view>
+#include <utility>
 
 namespace ruvia::detail {
 
 struct HttpResponseHeaderStateAccess final {
+    [[nodiscard]] static HttpResponse cloneForTransaction(const HttpResponse& response) {
+        return response.cloneForTransaction();
+    }
+
     static void setStableView(HttpResponse& response, std::string_view key, std::string_view value) {
         response.setHeaderStableView(key, value);
     }
@@ -47,6 +52,10 @@ struct HttpResponseHeaderStateAccess final {
 
     static void reserve(HttpResponse& response, std::size_t count) {
         response.reserveHeaders(count);
+    }
+
+    static void replaceBodyWithContentEncoding(HttpResponse& response, std::pmr::string&& value, std::string_view contentEncoding) {
+        response.replaceBodyWithContentEncoding(std::move(value), contentEncoding);
     }
 
     [[nodiscard]] static std::uint32_t knownBits(const HttpResponse& response) noexcept {
@@ -104,6 +113,15 @@ inline void setResponseContentRangeUnsatisfied(HttpResponse& response, std::uint
 
 inline void reserveResponseHeaders(HttpResponse& response, std::size_t count) {
     HttpResponseHeaderStateAccess::reserve(response, count);
+}
+
+// Atomically prepares the three representation fields affected by buffered
+// content-coding (Content-Encoding, Content-Length and a strong ETag's weak
+// replacement) before publishing the owned body. Web compression uses this
+// boundary so an allocation failure cannot leave identity bytes carrying
+// compressed metadata, or compressed bytes carrying an identity length.
+inline void replaceResponseBodyWithContentEncoding(HttpResponse& response, std::pmr::string&& value, std::string_view contentEncoding) {
+    HttpResponseHeaderStateAccess::replaceBodyWithContentEncoding(response, std::move(value), contentEncoding);
 }
 
 [[nodiscard]] inline std::uint32_t responseKnownHeaderBits(const HttpResponse& response) noexcept {

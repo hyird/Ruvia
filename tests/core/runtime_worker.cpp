@@ -10,6 +10,7 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ip/udp.hpp>
+#include <asio/steady_timer.hpp>
 
 #include <atomic>
 #include <array>
@@ -273,6 +274,91 @@ bool testExternalEventLoopAttachment() {
         return true;
     }
     return false;
+}
+
+bool testExternalAttachmentRetainsStateUntilContextCleanup() {
+    asio::io_context ioContext;
+    std::mutex gateMutex;
+    std::condition_variable gateChanged;
+    bool entered = false;
+    bool release = false;
+    std::atomic_bool stopCallbackRan{false};
+    ruvia::EventLoopStopRegistration stopRegistration;
+    std::thread externalThread;
+
+    {
+        auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 4});
+        stopRegistration = attachment.loop().onStop([&] { stopCallbackRan.store(true, std::memory_order_release); });
+        asio::post(ioContext, [&] {
+            {
+                const std::lock_guard lock(gateMutex);
+                entered = true;
+            }
+            gateChanged.notify_one();
+            std::unique_lock lock(gateMutex);
+            gateChanged.wait(lock, [&] { return release; });
+        });
+        externalThread = std::thread([&] { ioContext.run(); });
+        {
+            std::unique_lock lock(gateMutex);
+            gateChanged.wait(lock, [&] { return entered; });
+        }
+    }
+
+    bool duplicateRejectedWhileCleanupIsPending = false;
+    try {
+        auto duplicate = ruvia::attachEventLoop(ioContext);
+    } catch (const std::invalid_argument&) {
+        duplicateRejectedWhileCleanupIsPending = true;
+    }
+
+    {
+        const std::lock_guard lock(gateMutex);
+        release = true;
+    }
+    gateChanged.notify_one();
+    externalThread.join();
+    stopRegistration.reset();
+
+    bool reattachedAfterCleanup = false;
+    try {
+        ioContext.restart();
+        auto replacement = ruvia::attachEventLoop(ioContext);
+        replacement.stop();
+        ioContext.run();
+        reattachedAfterCleanup = true;
+    } catch (...) {
+    }
+    return duplicateRejectedWhileCleanupIsPending && stopCallbackRan.load(std::memory_order_acquire) && reattachedAfterCleanup;
+}
+
+bool testExternalAttachmentHandlesContextDestruction() {
+    auto ioContext = std::make_unique<asio::io_context>();
+    {
+        // Register the timer service before Ruvia's external-context service;
+        // shutdown must remain safe regardless of Asio service registration
+        // order.
+        asio::steady_timer timer(*ioContext);
+    }
+    auto attachment = ruvia::attachEventLoop(*ioContext);
+    const auto loop = attachment.loop();
+    ioContext.reset();
+
+    bool ioContextRejected = false;
+    try {
+        static_cast<void>(loop.ioContext());
+    } catch (const std::logic_error&) {
+        ioContextRejected = true;
+    }
+    bool executorRejected = false;
+    try {
+        static_cast<void>(loop.executor());
+    } catch (const std::logic_error&) {
+        executorRejected = true;
+    }
+    const bool postRejected = loop.post([] {}) == ruvia::PostStatus::kWorkerStopping;
+    attachment.stop();
+    return ioContextRejected && executorRejected && postRejected;
 }
 
 bool testFailurePropagation() {
@@ -623,5 +709,5 @@ int main() {
         std::fflush(stdout);
         return passed;
     };
-    return run("worker_signal_is_worker_affine", testWorkerSignalIsWorkerAffine) && run("worker_signal_has_no_waiter_limit", testWorkerSignalHasNoArbitraryWaiterLimit) && run("worker_signal_rechecks_cold_wait_affinity", testWorkerSignalRechecksAffinityWhenColdWaitStarts) && run("dispatch_and_affinity", testDispatchAndAffinity) && run("bounded_mailbox", testBoundedMailbox) && run("external_event_loop_attachment", testExternalEventLoopAttachment) && run("failure_propagation", testFailurePropagation) && run("join_before_start_drains_on_owners", testJoinBeforeStartDrainsOnOwners) && run("stop_before_start_propagates_failure", testStopBeforeStartPropagatesFailure) && run("join_rejects_pool_worker", testJoinRejectsPoolWorker) && run("executor_failure_drains_shutdown_on_owners", testExecutorFailureDrainsShutdownOnOwners) && run("expired_handle", testExpiredHandle) && run("escaped_worker_handle_detaches", testEscapedWorkerHandleBecomesDetachedEndpoint) && run("failure_destroys_abandoned_mailbox_tasks", testFailureDestroysAbandonedMailboxTasks) && run("dispatcher_lifecycle_hooks_are_worker_affine", testDispatcherLifecycleHooksAreWorkerAffine) && run("stop_callback_failure_reaches_join", testStopCallbackFailureReachesJoin) && run("lifecycle_transitions_are_monotonic", testLifecycleTransitionsAreMonotonic) && run("concurrent_stop_has_one_initiator", testConcurrentStopHasOneInitiator) ? 0 : 1;
+    return run("worker_signal_is_worker_affine", testWorkerSignalIsWorkerAffine) && run("worker_signal_has_no_waiter_limit", testWorkerSignalHasNoArbitraryWaiterLimit) && run("worker_signal_rechecks_cold_wait_affinity", testWorkerSignalRechecksAffinityWhenColdWaitStarts) && run("dispatch_and_affinity", testDispatchAndAffinity) && run("bounded_mailbox", testBoundedMailbox) && run("external_event_loop_attachment", testExternalEventLoopAttachment) && run("external_attachment_retains_state_until_cleanup", testExternalAttachmentRetainsStateUntilContextCleanup) && run("external_attachment_handles_context_destruction", testExternalAttachmentHandlesContextDestruction) && run("failure_propagation", testFailurePropagation) && run("join_before_start_drains_on_owners", testJoinBeforeStartDrainsOnOwners) && run("stop_before_start_propagates_failure", testStopBeforeStartPropagatesFailure) && run("join_rejects_pool_worker", testJoinRejectsPoolWorker) && run("executor_failure_drains_shutdown_on_owners", testExecutorFailureDrainsShutdownOnOwners) && run("expired_handle", testExpiredHandle) && run("escaped_worker_handle_detaches", testEscapedWorkerHandleBecomesDetachedEndpoint) && run("failure_destroys_abandoned_mailbox_tasks", testFailureDestroysAbandonedMailboxTasks) && run("dispatcher_lifecycle_hooks_are_worker_affine", testDispatcherLifecycleHooksAreWorkerAffine) && run("stop_callback_failure_reaches_join", testStopCallbackFailureReachesJoin) && run("lifecycle_transitions_are_monotonic", testLifecycleTransitionsAreMonotonic) && run("concurrent_stop_has_one_initiator", testConcurrentStopHasOneInitiator) ? 0 : 1;
 }

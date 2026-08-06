@@ -30,6 +30,9 @@ void gzipZfree(voidpf, voidpf address) noexcept {
 ContentDecodeAttempt decodeGzipContent(std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
     z_stream stream{};
+    stream.zalloc = &gzipZalloc;
+    stream.zfree = &gzipZfree;
+    stream.opaque = output.get_allocator().resource();
     if (inflateInit2(&stream, 15 + 16) != Z_OK) {
         return HttpContentDecodeError::kDecoderFailure;
     }

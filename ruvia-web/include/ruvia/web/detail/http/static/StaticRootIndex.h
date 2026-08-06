@@ -4,6 +4,7 @@
 #include "ruvia/http/detail/response/HttpResponseFileBody.h"
 #include "ruvia/web/StaticFiles.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -39,15 +40,29 @@ struct StaticRootState final {
     NativePathString root;
     std::pmr::string indexFile;
     std::pmr::string cacheControl;
+    std::pmr::string defaultContentType;
+    std::pmr::vector<StaticMimeType> mimeTypes;
+    StaticFileTypePolicy::Kind fileTypeKind{StaticFileTypePolicy::Kind::kDefaults};
+    std::pmr::vector<std::pmr::string> fileTypeExtensions;
     std::pmr::vector<StaticRootEntry> entries;
     std::pmr::vector<std::pmr::string> directories;
     bool enableRanges{true};
     bool enableValidators{true};
+    bool serveDotfiles{false};
+    // Request leases are charged to this immutable snapshot, not to the server
+    // globally. The refresh loop can therefore reclaim unrelated retired
+    // snapshots while a long request still holds an older one.
+    std::size_t activeBindings{0};
+    std::uint64_t fingerprint{0};
+    std::uint64_t revision{0};
 
     explicit StaticRootState(std::pmr::memory_resource* resource)
         : root(resource),
           indexFile(resource),
           cacheControl(resource),
+          defaultContentType(resource),
+          mimeTypes(resource),
+          fileTypeExtensions(resource),
           entries(resource),
           directories(resource) {}
 };
@@ -136,6 +151,13 @@ public:
     [[nodiscard]] static std::optional<StaticRootEntryView> find(const StaticRoot& root, std::string_view relativePath) noexcept;
     [[nodiscard]] static std::optional<StaticRootEntryView> findVariant(const StaticRoot& root, std::string_view relativePath) noexcept;
     [[nodiscard]] static bool isIndexedDirectory(const StaticRoot& root, std::string_view relativePath) noexcept;
+    [[nodiscard]] static StaticRootOptions options(const StaticRoot& root);
+    [[nodiscard]] static std::uint64_t fingerprint(const StaticRoot& root) noexcept;
+    [[nodiscard]] static std::uint64_t revision(const StaticRoot& root) noexcept;
+    [[nodiscard]] static bool sameSnapshot(const StaticRoot& left, const StaticRoot& right) noexcept;
+    static void acquireBinding(const StaticRoot& root) noexcept;
+    static void releaseBinding(const StaticRoot& root) noexcept;
+    [[nodiscard]] static bool hasActiveBindings(const StaticRoot& root) noexcept;
 };
 
 }  // namespace ruvia::detail

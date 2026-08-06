@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -34,6 +35,20 @@ public:
         return consumed_ < bytes_.size();
     }
 
+    // Internal transaction checkpoint. The checkpoint includes already-consumed
+    // bytes, so a caller can remove only the frames appended after it without
+    // disturbing a transport's pending cursor.
+    [[nodiscard]] std::size_t checkpoint() const noexcept {
+        return bytes_.size();
+    }
+
+    void rollbackTo(std::size_t checkpoint) noexcept {
+        if (checkpoint < consumed_ || checkpoint > bytes_.size()) {
+            std::terminate();
+        }
+        bytes_.resize(checkpoint);
+    }
+
     [[nodiscard]] Http2OutputConsumeStatus consume(std::size_t bytes) noexcept {
         const auto remaining = bytes_.size() - consumed_;
         if (bytes > remaining) {
@@ -59,6 +74,16 @@ public:
         }
     }
 
+    // Reserve storage for a whole sequence before its first frame is emitted.
+    // Callers that need multi-frame wire atomicity use this once, while
+    // appendFrame() applies the same guarantee to an individual frame.
+    void reserveAdditional(std::size_t additional) {
+        if (additional > bytes_.max_size() - bytes_.size()) {
+            throw std::length_error("HTTP/2 output buffer size overflow");
+        }
+        bytes_.reserve(bytes_.size() + additional);
+    }
+
     void appendFrame(Http2FrameType type, std::uint8_t flags, std::uint32_t streamId, std::string_view first, std::string_view second = {}) {
         if (first.size() > kHttp2MaxFrameSizeLimit || second.size() > kHttp2MaxFrameSizeLimit - first.size()) {
             std::terminate();
@@ -66,6 +91,10 @@ public:
 
         std::array<char, kHttp2FrameHeaderBytes> header;
         http2EncodeFrameHeader(header.data(), static_cast<std::uint32_t>(first.size() + second.size()), type, flags, streamId);
+        // A frame is the smallest wire-level transaction. Reserve the complete
+        // frame before appending any part so a throwing PMR resource cannot leave
+        // a header or prefix without its payload in pendingOutput().
+        reserveAdditional(kHttp2FrameHeaderBytes + first.size() + second.size());
         appendBytes(std::string_view(header.data(), header.size()));
         appendBytes(first);
         appendBytes(second);

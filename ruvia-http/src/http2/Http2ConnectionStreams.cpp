@@ -4,6 +4,7 @@
 
 #include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/frame/Http2FramePayload.h"
+#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
 #include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
 #include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
 
@@ -103,6 +104,18 @@ void Http2Connection::discardDeferredStreamState(std::uint32_t streamId) {
 
 bool Http2Connection::closeStreamImpl(std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error, CloseNotification notification) {
     auto* stream = streams_.find(streamId);
+    if (stream != nullptr && !stream->isAborted()) {
+        // The terminal transition below is allocation-free only after its two
+        // externally visible side effects have been reserved. In particular,
+        // do not abort the stream and then discover that publishing its close
+        // event or returning its connection-level receive credit needs storage.
+        if (notification == CloseNotification::kEmitEvent) {
+            reserveEventSlots(1);
+        }
+        if (const auto debt = stream->windowDebt(); debt != 0 && connectionReceiveCredit_.readyAfter(debt)) {
+            output_.reserveAdditional(kHttp2WindowUpdateFrameBytes);
+        }
+    }
     if (stream != nullptr && !stream->isAborted()) {
         detachActiveHeaderBlock(*stream);
     }

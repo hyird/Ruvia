@@ -4,10 +4,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
@@ -24,6 +26,14 @@ struct Http2StoredHeaderView final {
 
 class Http2HeaderList final {
 public:
+    struct Checkpoint final {
+        std::size_t storageSize;
+        std::size_t overflowStorageSize;
+        std::size_t overflowFieldCount;
+        std::uint8_t count;
+        bool usingOverflowStorage;
+    };
+
     explicit Http2HeaderList(std::pmr::memory_resource* resource = nullptr)
         : Http2HeaderList(HttpResolvedPmrResourceTag{}, httpPmrResourceOrDefault(resource)) {}
 
@@ -33,6 +43,35 @@ public:
 
     [[nodiscard]] bool full() const noexcept {
         return count_ == kMaxHttpHeaderFields;
+    }
+
+    void swap(Http2HeaderList& other) noexcept {
+        if (overflowStorage_.get_allocator().resource() != other.overflowStorage_.get_allocator().resource()) {
+            std::terminate();
+        }
+        using std::swap;
+        swap(inlineStorage_, other.inlineStorage_);
+        overflowStorage_.swap(other.overflowStorage_);
+        swap(inlineFields_, other.inlineFields_);
+        overflowFields_.swap(other.overflowFields_);
+        swap(storageSize_, other.storageSize_);
+        swap(count_, other.count_);
+        swap(usingOverflowStorage_, other.usingOverflowStorage_);
+    }
+
+    [[nodiscard]] Checkpoint checkpoint() const noexcept {
+        return Checkpoint{storageSize_, overflowStorage_.size(), overflowFields_.size(), count_, usingOverflowStorage_};
+    }
+
+    void rollback(Checkpoint checkpoint) noexcept {
+        if (checkpoint.storageSize > storageSize_ || checkpoint.overflowStorageSize > overflowStorage_.size() || checkpoint.overflowFieldCount > overflowFields_.size() || checkpoint.count > count_) {
+            std::terminate();
+        }
+        overflowStorage_.resize(checkpoint.overflowStorageSize);
+        overflowFields_.resize(checkpoint.overflowFieldCount);
+        storageSize_ = checkpoint.storageSize;
+        count_ = checkpoint.count;
+        usingOverflowStorage_ = checkpoint.usingOverflowStorage;
     }
 
     [[nodiscard]] Http2StoredHeaderView at(std::size_t index) const& noexcept {

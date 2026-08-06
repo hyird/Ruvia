@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
+#include <stdexcept>
 #include <utility>
 
 #include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
@@ -26,6 +28,15 @@ constexpr std::uint32_t kHttp2MaxUndrainedPings = 1000;
 // the same output drains; a peer legitimately re-tuning SETTINGS mid-connection sends only
 // a handful and never trips.
 constexpr std::uint32_t kHttp2MaxUndrainedSettings = 1000;
+
+[[nodiscard]] std::size_t http2GoawayEncodedBytes(std::string_view debug) {
+    constexpr std::size_t kGoawayFixedPayloadBytes = 8;
+    constexpr std::size_t kFixedBytes = kHttp2FrameHeaderBytes + kGoawayFixedPayloadBytes;
+    if (debug.size() > std::numeric_limits<std::size_t>::max() - kFixedBytes) {
+        throw std::length_error("HTTP/2 GOAWAY output size overflow");
+    }
+    return kFixedBytes + debug.size();
+}
 }  // namespace
 
 Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2Role role)
@@ -78,6 +89,13 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
     return std::nullopt;
 }
 
+void Http2Connection::reserveEventSlots(std::size_t count) {
+    if (count > events_.max_size() - events_.size()) {
+        throw std::length_error("HTTP/2 event queue size overflow");
+    }
+    events_.reserve(events_.size() + count);
+}
+
 std::span<const std::uint32_t> Http2Connection::takeDrainedDataStreams() & noexcept {
     // Swap-and-clear so each drain is reported exactly once; the returned span stays
     // valid until the next call (double buffer, no allocation churn).
@@ -103,6 +121,10 @@ void Http2Connection::appendGoaway(Http2ErrorCode error, std::string_view debug)
     if (const auto* drain = localConnectionState_.gracefulDrain()) {
         advertised = std::min(advertised, drain->lastStreamId());
     }
+    // A fatal transition is only observable together with its GOAWAY. Preflight the
+    // complete frame so a throwing PMR resource cannot leave the connection marked
+    // failed while the required terminal bytes were never queued.
+    output_.reserveAdditional(http2GoawayEncodedBytes(debug));
     localConnectionState_.fail(error);
     output_.appendGoawayFrame(advertised, error, debug);
 }
@@ -111,6 +133,13 @@ void Http2Connection::beginDrain() {
     // Graceful drain (RFC 9113 §6.8): advertise GOAWAY(NO_ERROR) at the last accepted
     // stream id WITHOUT a connection error -- established streams keep running, and HEADERS
     // for a stream above the advertised id are refused in processHeaders.
+    if (localConnectionState_.open() == nullptr) {
+        return;
+    }
+    // Keep the lifecycle transition and its GOAWAY as one externally visible
+    // operation. The reservation is made while the state is still open, so a
+    // failed allocation leaves beginDrain() retryable.
+    output_.reserveAdditional(http2GoawayEncodedBytes("connection draining"));
     if (!localConnectionState_.beginGracefulDrain(lastStreamId_)) {
         return;
     }
@@ -122,27 +151,41 @@ bool Http2Connection::applySettingsPayload(std::string_view payload) {
         appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid SETTINGS size");
         return false;
     }
+
+    // SETTINGS is one protocol transaction. Validate and apply every entry to a
+    // detached candidate first; an invalid later entry must not leave an earlier
+    // valid entry visible in the live peer model before the fatal GOAWAY is queued.
+    Http2PeerSettings candidate = peerSettings_;
+    bool encoderTableSizeReduction = false;
     for (std::size_t offset = 0; offset < payload.size(); offset += 6) {
         const auto entry = http2ReadSettingEntry(payload, offset);
-        const auto result = peerSettings_.apply(entry.id, entry.value);
+        const auto result = candidate.apply(entry.id, entry.value);
         if (const auto* failure = result.failure()) {
             appendGoaway(http2PeerSettingErrorCode(failure->error()), http2PeerSettingErrorMessage(failure->error()));
             return false;
         }
         if (entry.id == Http2SettingId::kHeaderTableSize && entry.value < encoderDynamicTableSize_) {
-            // RFC 9113 §4.3.1 requires the next field block after our SETTINGS ACK
-            // to begin with a conformant table-size update. This encoder never uses
-            // dynamic entries, so permanently selecting zero is both exact and avoids
-            // carrying a fictitious compression capacity through later SETTINGS.
-            encoderDynamicTableSize_ = 0;
-            encoderTableSizeUpdatePending_ = true;
-        }
-        const auto* initialWindowChange = result.initialWindowChange();
-        if (initialWindowChange && !http2ApplyStreamSendWindowDelta(streams_, initialWindowChange->delta())) {
-            appendGoaway(Http2ErrorCode::kFlowControlError, "stream window overflow");
-            return false;
+            encoderTableSizeReduction = true;
         }
     }
+
+    const auto initialWindowDelta = static_cast<std::int64_t>(candidate.initialWindowSize()) - static_cast<std::int64_t>(peerSettings_.initialWindowSize());
+    // Http2StreamTable preflights every stream before changing any of them. Do
+    // this while the live peer settings are still untouched; a rejected delta can
+    // therefore emit GOAWAY without publishing a partially applied SETTINGS.
+    if (!http2ApplyStreamSendWindowDelta(streams_, initialWindowDelta)) {
+        appendGoaway(Http2ErrorCode::kFlowControlError, "stream window overflow");
+        return false;
+    }
+    if (encoderTableSizeReduction) {
+        // RFC 9113 §4.3.1 requires the next field block after our SETTINGS ACK
+        // to begin with a conformant table-size update. This encoder never uses
+        // dynamic entries, so permanently selecting zero is both exact and avoids
+        // carrying a fictitious compression capacity through later SETTINGS.
+        encoderDynamicTableSize_ = 0;
+        encoderTableSizeUpdatePending_ = true;
+    }
+    peerSettings_.replaceValuesFrom(candidate);
     return true;
 }
 
@@ -164,23 +207,56 @@ bool Http2Connection::processSettings(const Http2FrameHeader& header, std::strin
         }
         return true;
     }
-    if (!applySettingsPayload(payload)) {
-        return false;
-    }
-    if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings) {
-        prefacePhase_ = PrefacePhase::kReady;
-    }
-    // SETTINGS flood budget (CVE-2019-9515): bound non-ACK SETTINGS seen since output
-    // was last drained, exactly like the PING flood, since each appends an ACK below.
-    if (++consecutiveSettings_ > kHttp2MaxUndrainedSettings) {
+    // Check the flood budget before applying this frame. The limit is based on
+    // ACKs that are still queued, so the frame that would exceed it must not
+    // consume any SETTINGS state before its fatal GOAWAY is constructed.
+    if (consecutiveSettings_ >= kHttp2MaxUndrainedSettings) {
         appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "excessive SETTINGS");
         return false;
     }
-    output_.appendFrame(Http2FrameType::kSettings, kHttp2FlagAck, 0, {});
-    // SETTINGS_INITIAL_WINDOW_SIZE may have opened send windows: drain deferred DATA
-    // and report streams whose core-owned remainder completed.
-    markSendWindowOpened();
-    return true;
+    // The ACK is part of the SETTINGS transaction. Reserve it before changing
+    // peer settings or stream windows so a throwing PMR resource leaves the
+    // incoming frame wholly retryable.
+    const auto outputCheckpoint = output_.checkpoint();
+    const auto previousSettings = peerSettings_;
+    const auto previousEncoderDynamicTableSize = encoderDynamicTableSize_;
+    const auto previousEncoderTableSizeUpdatePending = encoderTableSizeUpdatePending_;
+    const auto previousPrefacePhase = prefacePhase_;
+    const auto previousConsecutiveSettings = consecutiveSettings_;
+    const auto previousInitialWindowSize = peerSettings_.initialWindowSize();
+    bool settingsApplied = false;
+    try {
+        output_.reserveAdditional(kHttp2FrameHeaderBytes);
+        if (!applySettingsPayload(payload)) {
+            return false;
+        }
+        settingsApplied = true;
+        if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings) {
+            prefacePhase_ = PrefacePhase::kReady;
+        }
+        // SETTINGS flood budget (CVE-2019-9515): bound non-ACK SETTINGS seen since output
+        // was last drained, exactly like the PING flood, since each appends an ACK below.
+        ++consecutiveSettings_;
+        output_.appendFrame(Http2FrameType::kSettings, kHttp2FlagAck, 0, {});
+        // SETTINGS_INITIAL_WINDOW_SIZE may have opened send windows: drain deferred DATA
+        // and report streams whose core-owned remainder completed.
+        markSendWindowOpened();
+        return true;
+    } catch (...) {
+        if (settingsApplied) {
+            const auto appliedInitialWindowDelta = static_cast<std::int64_t>(peerSettings_.initialWindowSize()) - static_cast<std::int64_t>(previousInitialWindowSize);
+            if (!http2ApplyStreamSendWindowDelta(streams_, -appliedInitialWindowDelta)) {
+                std::terminate();
+            }
+            peerSettings_.replaceValuesFrom(previousSettings);
+            encoderDynamicTableSize_ = previousEncoderDynamicTableSize;
+            encoderTableSizeUpdatePending_ = previousEncoderTableSizeUpdatePending;
+            prefacePhase_ = previousPrefacePhase;
+            consecutiveSettings_ = previousConsecutiveSettings;
+            output_.rollbackTo(outputCheckpoint);
+        }
+        throw;
+    }
 }
 
 bool Http2Connection::processPriority(const Http2FrameHeader& header, std::string_view payload) {
@@ -255,13 +331,20 @@ bool Http2Connection::processGoaway(const Http2FrameHeader& header, std::string_
         std::ranges::sort(std::span(unprocessedStreamIds).first(unprocessedCount));
     }
 
-    peerGoaway_ = goaway;
-    events_.push_back(Http2Event::goaway(goaway));
+    // Reserve every event that this frame can publish before changing peer or local
+    // lifecycle state. The client may add one request-unprocessed event per stream
+    // below; without this preflight an allocator failure after peerGoaway_ was set
+    // would leave a half-published GOAWAY transaction.
+    const auto eventCount = std::size_t{1} + unprocessedCount;
+    reserveEventSlots(eventCount);
 
     // A valid peer GOAWAY is graceful shutdown state, not a local connection error.
-    // Send our directional GOAWAY through the same idempotent drain path, then keep
-    // processing streams within each advertised boundary until they finish.
+    // Send our directional GOAWAY through the same idempotent drain path before
+    // publishing the peer event. beginDrain() reserves its complete output first,
+    // so a throwing resource leaves both lifecycle sides retryable.
     beginDrain();
+    peerGoaway_ = goaway;
+    events_.push_back(Http2Event::goaway(goaway));
 
     if (role_ == Http2Role::kServer) {
         return true;
@@ -295,11 +378,16 @@ bool Http2Connection::processPing(const Http2FrameHeader& header, std::string_vi
     // PING-flood budget: bound inbound PINGs seen since the owner last flushed output
     // (see kHttp2MaxUndrainedPings). A peer echoing keepalive normally lets us drain the
     // ACKs and resets the counter; one flooding PINGs without reading the ACKs trips.
-    if (++consecutivePings_ > kHttp2MaxUndrainedPings) {
+    if (consecutivePings_ >= kHttp2MaxUndrainedPings) {
         appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "excessive PING frames");
         return false;
     }
+    // The flood counter describes ACKs that are now queued. Reserve before either
+    // side effect so an allocation failure does not consume the peer's retryable
+    // PING or make the counter lie about the output buffer.
+    output_.reserveAdditional(kHttp2FrameHeaderBytes + payload.size());
     output_.appendFrame(Http2FrameType::kPing, kHttp2FlagAck, 0, payload);  // echo back
+    ++consecutivePings_;
     return true;
 }
 
@@ -397,80 +485,97 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
     // (or into the caller's `in` on the fast path), and reclaiming shifts the buffer;
     // deferring the reclaim keeps those views valid until this next feed, matching the
     // documented contract. All prior events have been pulled (enforced above), so the
-    // exhausted queue and its now-stale views can be reset.
-    if (inputOffset_ > 0) {
+    // exhausted queue and its now-stale views can be reset. A retry keeps the prefix
+    // and cursor intact until the retained uncommitted suffix has been dispatched.
+    const bool retryingInput = retryInput_;
+    if (!retryingInput && inputOffset_ > 0) {
         input_.erase(0, inputOffset_);
         inputOffset_ = 0;
     }
     events_.clear();
     eventOffset_ = 0;
 
-    // FAST PATH: nothing buffered and no preface pending -> parse the complete frames
-    // DIRECTLY over the caller's `in`, buffering only the unconsumed partial-frame tail.
-    // This avoids copying the whole read (up to the driver's read-chunk size) into
-    // input_ on the common case where each read delivers whole frames. Event body views
-    // then point into `in`, valid until the next feed -- the same lifetime input_ views
-    // have, and both in-tree drivers keep their read buffer alive across a feed.
-    if (input_.empty() && prefacePhase_ != PrefacePhase::kAwaitingClientMagic) {
-        std::size_t offset = 0;
-        if (!consumeFrames(in, offset)) {
+    // FAST PATH: nothing buffered and no preface pending -> parse exactly one complete
+    // frame DIRECTLY over the caller's `in`. A span containing a second frame (or even
+    // a partial tail) takes the owned slow path below. This is the boundary that keeps
+    // a throwing later frame from making the caller retry an already committed prefix.
+    if (input_.empty() && prefacePhase_ != PrefacePhase::kAwaitingClientMagic && in.size() >= kHttp2FrameHeaderBytes) {
+        const auto header = http2ParseFrameHeader(in.substr(0, kHttp2FrameHeaderBytes));
+        if (in.size() - kHttp2FrameHeaderBytes == header.length) {
+            std::size_t offset = 0;
+            if (!consumeFrames(in, offset)) {
+                return Http2FeedResult::kProtocolFailure;
+            }
+            if (localConnectionState_.fatalFailure() != nullptr) {
+                return Http2FeedResult::kProtocolFailure;
+            }
+            return Http2FeedResult::kAccepted;
+        }
+    }
+
+    // SLOW PATH: a buffered partial-frame tail, a connection preface, or more than
+    // one frame is pending. Own all new bytes before dispatch. If dispatch throws,
+    // retain the cursor and do not append the caller's retry span a second time.
+    if (!retryingInput) {
+        input_.append(in.data(), in.size());
+    }
+
+    try {
+        // Server mode: the 24-byte client connection preface precedes the first frame
+        // (RFC 9113 §3.4). Consume + validate it before any frame parsing.
+        if (prefacePhase_ == PrefacePhase::kAwaitingClientMagic) {
+            if (input_.size() - inputOffset_ < kHttp2ClientPreface.size()) {
+                return Http2FeedResult::kNeedInput;  // wait for the full preface
+            }
+            if (std::string_view(input_.data() + inputOffset_, kHttp2ClientPreface.size()) != kHttp2ClientPreface) {
+                appendGoaway(Http2ErrorCode::kProtocolError, "invalid connection preface");
+                return Http2FeedResult::kProtocolFailure;
+            }
+            inputOffset_ += kHttp2ClientPreface.size();
+            prefacePhase_ = PrefacePhase::kAwaitingPeerSettings;
+        }
+
+        if (!consumeFrames(std::string_view(input_), inputOffset_)) {
             return Http2FeedResult::kProtocolFailure;
         }
-        if (offset < in.size()) {
-            input_.append(in.data() + offset, in.size() - offset);  // partial-frame tail
-        }
+        // NOTE: the consumed prefix is reclaimed at the START of the next feed (see
+        // above), so body-chunk views handed out via events stay valid until then.
         if (localConnectionState_.fatalFailure() != nullptr) {
             return Http2FeedResult::kProtocolFailure;
         }
-        return input_.empty() ? Http2FeedResult::kAccepted : Http2FeedResult::kNeedInput;
-    }
-
-    // SLOW PATH: a buffered partial-frame tail and/or the connection preface is pending.
-    // Buffer all fed bytes (nghttp2_session_mem_recv semantics) then consume frames.
-    input_.append(in.data(), in.size());
-
-    // Server mode: the 24-byte client connection preface precedes the first frame
-    // (RFC 9113 §3.4). Consume + validate it before any frame parsing.
-    if (prefacePhase_ == PrefacePhase::kAwaitingClientMagic) {
-        if (input_.size() - inputOffset_ < kHttp2ClientPreface.size()) {
-            return Http2FeedResult::kNeedInput;  // wait for the full preface
+        retryInput_ = false;
+        return inputOffset_ < input_.size() ? Http2FeedResult::kNeedInput : Http2FeedResult::kAccepted;
+    } catch (...) {
+        if (!retryingInput) {
+            retryInput_ = true;
         }
-        if (std::string_view(input_.data() + inputOffset_, kHttp2ClientPreface.size()) != kHttp2ClientPreface) {
-            appendGoaway(Http2ErrorCode::kProtocolError, "invalid connection preface");
-            return Http2FeedResult::kProtocolFailure;
-        }
-        inputOffset_ += kHttp2ClientPreface.size();
-        prefacePhase_ = PrefacePhase::kAwaitingPeerSettings;
+        throw;
     }
-
-    if (!consumeFrames(std::string_view(input_), inputOffset_)) {
-        return Http2FeedResult::kProtocolFailure;
-    }
-    // NOTE: the consumed prefix is reclaimed at the START of the next feed (see above),
-    // so body-chunk views handed out via events stay valid until then.
-    if (localConnectionState_.fatalFailure() != nullptr) {
-        return Http2FeedResult::kProtocolFailure;
-    }
-    return inputOffset_ < input_.size() ? Http2FeedResult::kNeedInput : Http2FeedResult::kAccepted;
 }
 
 void Http2Connection::beginConnection() {
     if (prefacePhase_ != PrefacePhase::kNotStarted) {
         return;
     }
-    if (role_ == Http2Role::kClient) {
-        output_.appendBytes(kHttp2ClientPreface);
-        prefacePhase_ = PrefacePhase::kAwaitingPeerSettings;
-    } else {
-        prefacePhase_ = PrefacePhase::kAwaitingClientMagic;
-    }
-
     std::array<char, Http2LocalSettings::kFrameBytes + kHttp2WindowUpdateFrameBytes> buffer;
     auto* out = http2WriteLocalSettingsFrame(buffer.data());
     if constexpr (Http2LocalSettings::kInitialWindowSize > static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize)) {
         out = http2WriteWindowUpdate(out, 0, Http2LocalSettings::kInitialWindowSize - static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize));
     }
-    output_.appendBytes(std::string_view(buffer.data(), static_cast<std::size_t>(out - buffer.data())));
+    const auto settingsBytes = static_cast<std::size_t>(out - buffer.data());
+    const auto prefaceBytes = role_ == Http2Role::kClient ? kHttp2ClientPreface.size() : std::size_t{0};
+    if (settingsBytes > std::numeric_limits<std::size_t>::max() - prefaceBytes) {
+        throw std::length_error("HTTP/2 connection preface output size overflow");
+    }
+    // Queue the complete local preface before publishing that this connection has
+    // started. A failed reserve therefore leaves the exact beginConnection() call
+    // retryable instead of exposing a half-started protocol state.
+    output_.reserveAdditional(prefaceBytes + settingsBytes);
+    if (role_ == Http2Role::kClient) {
+        output_.appendBytes(kHttp2ClientPreface);
+    }
+    output_.appendBytes(std::string_view(buffer.data(), settingsBytes));
+    prefacePhase_ = role_ == Http2Role::kClient ? PrefacePhase::kAwaitingPeerSettings : PrefacePhase::kAwaitingClientMagic;
 }
 
 }  // namespace ruvia::detail

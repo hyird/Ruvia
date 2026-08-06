@@ -219,6 +219,21 @@ RUVIA_TEST(http2_connection_first_peer_settings_must_not_be_ack_for_either_role)
     }
 }
 
+RUVIA_TEST(http2_connection_settings_validation_is_atomic_across_entries) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
+    handshake(client);
+
+    char frame[9 + 12];
+    auto* out = ruvia::detail::http2WriteFrameHeader(frame, 12, Http2FrameType::kSettings, 0, 0);
+    out = ruvia::detail::http2WriteSettingsEntry(out, ruvia::detail::Http2SettingId::kEnableConnectProtocol, 1);
+    out = ruvia::detail::http2WriteSettingsEntry(out, ruvia::detail::Http2SettingId::kMaxFrameSize, 0);
+    RUVIA_CHECK_EQ(out, frame + sizeof(frame));
+
+    RUVIA_CHECK(client.feed(std::string_view(frame, sizeof(frame))) == Http2FeedResult::kProtocolFailure);
+    RUVIA_CHECK(!client.peerExtendedConnectEnabled());
+}
+
 // After the handshake, a PING is echoed back with the ACK flag and the same payload.
 
 RUVIA_TEST(http2_connection_feed_ping_echoes_ack) {

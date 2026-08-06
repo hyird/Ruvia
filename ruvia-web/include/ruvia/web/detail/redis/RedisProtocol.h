@@ -20,8 +20,10 @@ namespace ruvia::detail {
 // intermediate string_view vector.
 void appendRespCommand(std::pmr::string& output, std::span<const std::string_view> args);
 void appendRespCommand(std::pmr::string& output, std::span<const std::pmr::string> args);
-[[nodiscard]] std::size_t respCommandSerializedSize(std::span<const std::string_view> args) noexcept;
-[[nodiscard]] std::size_t respCommandSerializedSize(std::span<const std::pmr::string> args) noexcept;
+// Throws std::length_error when the complete RESP command size cannot be
+// represented by std::size_t.
+[[nodiscard]] std::size_t respCommandSerializedSize(std::span<const std::string_view> args);
+[[nodiscard]] std::size_t respCommandSerializedSize(std::span<const std::pmr::string> args);
 [[nodiscard]] RedisValue hiredisReplyToValue(const redisReply& reply, std::size_t depth, std::size_t maxDepth, std::pmr::memory_resource* resource);
 [[nodiscard]] const char* hiredisReaderError(const redisReader& reader) noexcept;
 

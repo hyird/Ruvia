@@ -19,6 +19,16 @@
 
 namespace {
 
+static_assert(std::same_as<decltype(ruvia::sleepFor(std::declval<ruvia::WorkerHandle>(), std::chrono::steady_clock::duration{})), ruvia::Task<ruvia::TimerSleepResult>>);
+static_assert(std::same_as<decltype(ruvia::detail::sleepForBorrowed(std::declval<const ruvia::WorkerHandle&>(), std::chrono::steady_clock::duration{})), ruvia::Task<ruvia::TimerSleepResult>>);
+
+template <typename Worker>
+concept AcceptsTemporaryBorrowedWorker = requires(Worker&& worker) {
+    ruvia::detail::sleepForBorrowed(std::forward<Worker>(worker), std::chrono::steady_clock::duration{});
+};
+
+static_assert(!AcceptsTemporaryBorrowedWorker<ruvia::WorkerHandle>);
+static_assert(!std::is_convertible_v<ruvia::TimerSleepResult, bool>);
 static_assert(!std::is_move_constructible_v<ruvia::detail::WorkerTimerRegistration>);
 static_assert(!std::is_move_assignable_v<ruvia::detail::WorkerTimerRegistration>);
 
@@ -149,12 +159,12 @@ bool timerImmediateShutdownWorks() {
 }
 
 ruvia::Task<void> markAfterSleep(ruvia::WorkerHandle worker, bool& completed, bool& reportedElapsed) {
-    reportedElapsed = co_await ruvia::sleepFor(worker, std::chrono::hours(1));
+    reportedElapsed = co_await ruvia::sleepFor(worker, std::chrono::hours(1)) == ruvia::TimerSleepResult::kElapsed;
     completed = true;
 }
 
 ruvia::Task<void> exercise(const std::shared_ptr<ruvia::detail::WorkerDispatcher>& dispatcher, ruvia::WorkerHandle worker, bool& success) {
-    const bool firstSleepElapsed = co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));
+    const bool firstSleepElapsed = co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)) == ruvia::TimerSleepResult::kElapsed;
 
     bool expired = false;
     bool cancelled = false;

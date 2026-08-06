@@ -5,6 +5,8 @@
 #include "ruvia/web/detail/redis/RedisProtocol.h"
 #include <asio/error.hpp>
 
+#include <limits>
+#include <stdexcept>
 #include <system_error>
 #include <utility>
 
@@ -81,7 +83,11 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(CommandSource 
         std::size_t serializedBytes = 0;
         for (const auto& command : commands) {
             const std::span<const std::pmr::string> args = command.args;
-            serializedBytes += respCommandSerializedSize(args);
+            const auto commandBytes = respCommandSerializedSize(args);
+            if (commandBytes > std::numeric_limits<std::size_t>::max() - serializedBytes) {
+                throw std::length_error("redis RESP pipeline is too large");
+            }
+            serializedBytes += commandBytes;
         }
         connection.writeBuffer.reserve(serializedBytes);
         for (const auto& command : commands) {

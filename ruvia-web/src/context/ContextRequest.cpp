@@ -45,7 +45,7 @@ namespace detail {
 }
 
 [[noreturn]] void throwInvalidJsonBody() {
-    throw std::invalid_argument("invalid json body");
+    throw HttpError(http_status::kBadRequest, {}, "invalid json body");
 }
 
 [[noreturn]] void throwInvalidFormContentType() {
@@ -53,7 +53,7 @@ namespace detail {
 }
 
 [[noreturn]] void throwInvalidFormBody() {
-    throw std::invalid_argument("invalid form body");
+    throw HttpError(http_status::kBadRequest, {}, "invalid form body");
 }
 
 [[noreturn]] void throwTooManyFormFields() {
@@ -61,19 +61,19 @@ namespace detail {
 }
 
 [[noreturn]] void throwInvalidQuery() {
-    throw std::invalid_argument("invalid query");
+    throw HttpError(http_status::kBadRequest, {}, "invalid query");
 }
 
 [[noreturn]] void throwInvalidParam() {
-    throw std::invalid_argument("invalid route parameter");
+    throw HttpError(http_status::kBadRequest, {}, "invalid route parameter");
 }
 
 [[noreturn]] void throwInvalidHeader() {
-    throw std::invalid_argument("invalid request header");
+    throw HttpError(http_status::kBadRequest, {}, "invalid request header");
 }
 
 [[noreturn]] void throwInvalidCookie() {
-    throw std::invalid_argument("invalid cookie");
+    throw HttpError(http_status::kBadRequest, {}, "invalid cookie");
 }
 
 }  // namespace detail
@@ -101,7 +101,10 @@ Task<std::optional<JsonValue>> ContextRequest::jsonIfTask(const Context* context
     const auto requestBody = co_await contextTextTask(context);
     auto parsed = JsonValue::parse(requestBody, contextResource(context));
     if (!parsed) {
-        co_return std::nullopt;
+        // The media type selected JSON, so a malformed body is a client error,
+        // not an absent optional format. Treating it as nullopt lets a handler
+        // silently accept a request that explicitly claimed to be JSON.
+        detail::throwInvalidJsonBody();
     }
     co_return std::move(*parsed);
 }
@@ -455,7 +458,7 @@ MultipartBoundary Context::multipartBoundary() const {
         return *parsed;
     }
     if (boundary.notApplicable() != nullptr) {
-        throw std::invalid_argument("invalid multipart content type");
+        throw HttpError(http_status::kUnsupportedMediaType, "unsupported_media_type", "request body must be multipart/form-data");
     }
     if (const auto* failure = boundary.failure()) {
         throw failure->protocolError();

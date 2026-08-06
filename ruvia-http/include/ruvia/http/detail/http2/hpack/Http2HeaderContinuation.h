@@ -28,12 +28,24 @@ inline constexpr std::uint32_t kHttp2MaxContinuationFrames = 1024;
 
 class Http2HeaderContinuation final {
 public:
+    struct Checkpoint final {
+        std::uint32_t streamId;
+        std::uint32_t continuationFrames;
+        Http2HeaderBlockKind kind;
+    };
+
     [[nodiscard]] bool active() const noexcept {
         return streamId_ != 0;
     }
 
-    // Count one CONTINUATION frame against the per-block budget. Returns false
-    // once the budget is exhausted so the caller can fail the connection.
+    // Check the budget without changing it. The caller performs any fallible
+    // fragment buffering first, then commits the count so a recoverable PMR
+    // failure leaves the exact CONTINUATION frame retryable.
+    [[nodiscard]] bool continuationFrameBudgetAvailable() const noexcept {
+        return continuationFrames_ < kHttp2MaxContinuationFrames;
+    }
+
+    // Count one already-buffered CONTINUATION frame against the per-block budget.
     [[nodiscard]] bool recordContinuationFrame() noexcept {
         return ++continuationFrames_ <= kHttp2MaxContinuationFrames;
     }
@@ -60,6 +72,16 @@ public:
 
     [[nodiscard]] Http2HeaderBlockKind kind() const noexcept {
         return kind_;
+    }
+
+    [[nodiscard]] Checkpoint checkpoint() const noexcept {
+        return Checkpoint{streamId_, continuationFrames_, kind_};
+    }
+
+    void restore(Checkpoint checkpoint) noexcept {
+        streamId_ = checkpoint.streamId;
+        continuationFrames_ = checkpoint.continuationFrames;
+        kind_ = checkpoint.kind;
     }
 
     [[nodiscard]] Http2HeaderBlockKind finishKind() noexcept {

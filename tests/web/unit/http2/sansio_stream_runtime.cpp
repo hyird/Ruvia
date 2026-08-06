@@ -1,6 +1,8 @@
 #include "test_io_context.h"
 #include "test_harness.h"
+#include "http2_connection_fixture.h"
 
+#include <chrono>
 #include <concepts>
 #include <cstddef>
 #include <memory_resource>
@@ -9,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include <asio/awaitable.hpp>
@@ -17,9 +20,13 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
 #include "ruvia/web/detail/router/RouteModes.h"
@@ -63,8 +70,24 @@ using ruvia::detail::Http2SansIoTermination;
 using ruvia::detail::Http2SendWindowWaitResult;
 using ruvia::detail::Http2StreamingRequestBody;
 using ruvia::detail::Http2StreamState;
+using ruvia::detail::HttpResponseCodingSelection;
 using ruvia::detail::RequestBodyMode;
 using ruvia::detail::RouteResolution;
+
+ruvia::HttpResponse invalidStreamingHead(ruvia::Context&) {
+    ruvia::HttpResponse response(std::pmr::new_delete_resource());
+    response.header("Content-Length", "not-a-number");
+    return response;
+}
+
+[[nodiscard]] HttpResponseCodingSelection identityResponseCoding() {
+    ruvia::detail::HttpResponseCodingQualities qualities;
+    const auto selected = HttpResponseCodingSelection::select(qualities);
+    if (selected.selected() == nullptr) {
+        throw std::logic_error("identity response coding selection was empty");
+    }
+    return *selected.selected();
+}
 
 template <typename T>
 concept HasDirectBodyModeSelection = requires(T& body) { body.selectMode(RequestBodyMode::kBuffered); };
@@ -84,8 +107,10 @@ static_assert(std::same_as<decltype(std::declval<Http2SansIoStreamRuntimeTable&>
 static_assert(!std::default_initializable<Http2SendWindowWaitResult>);
 static_assert(std::same_as<decltype(std::declval<const Http2SendWindowWaitResult&>().ready()), const ruvia::detail::Http2SendWindowReady*>);
 static_assert(std::same_as<decltype(std::declval<const Http2SendWindowWaitResult&>().aborted()), const ruvia::detail::Http2SendWindowAborted*>);
-static_assert(std::constructible_from<Http2SansIoResponseStreamSink, ruvia::detail::Http2Connection&, std::uint32_t, ruvia::detail::ResponseStreamKind, const ruvia::WorkerHandle&, ruvia::detail::WorkerSignal&, ruvia::detail::Http2SansIoStreamSignal&>);
-static_assert(!std::constructible_from<Http2SansIoResponseStreamSink, ruvia::detail::Http2Connection&, std::uint32_t, ruvia::detail::ResponseStreamKind, ruvia::WorkerHandle&&, ruvia::detail::WorkerSignal&, ruvia::detail::Http2SansIoStreamSignal&>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2SansIoSleepAwaiter&>().await_resume()), ruvia::TimerSleepResult>);
+static_assert(std::constructible_from<Http2SansIoResponseStreamSink, ruvia::detail::Http2Connection&, std::uint32_t, ruvia::detail::ResponseStreamKind, const ruvia::WorkerHandle&, ruvia::detail::WorkerSignal&, ruvia::detail::Http2SansIoStreamSignal&, std::pmr::memory_resource*, ruvia::HttpKnownMethod, HttpResponseCodingSelection, ruvia::detail::HttpResponseCodingAvailability>);
+static_assert(!std::constructible_from<Http2SansIoResponseStreamSink, ruvia::detail::Http2Connection&, std::uint32_t, ruvia::detail::ResponseStreamKind, const ruvia::WorkerHandle&, ruvia::detail::WorkerSignal&, ruvia::detail::Http2SansIoStreamSignal&, std::pmr::memory_resource*, ruvia::HttpKnownMethod, HttpResponseCodingSelection>);
+static_assert(!std::constructible_from<Http2SansIoResponseStreamSink, ruvia::detail::Http2Connection&, std::uint32_t, ruvia::detail::ResponseStreamKind, ruvia::WorkerHandle&&, ruvia::detail::WorkerSignal&, ruvia::detail::Http2SansIoStreamSignal&, std::pmr::memory_resource*, ruvia::HttpKnownMethod, HttpResponseCodingSelection, ruvia::detail::HttpResponseCodingAvailability>);
 
 Http2SansIoStreamRuntime& ensureAcceptedRuntime(Http2SansIoStreamRuntimeTable& table, std::uint32_t streamId, std::pmr::memory_resource* resource) {
     Http2StreamState acceptedStream(streamId, resource);
@@ -109,13 +134,60 @@ RUVIA_TEST(http2_send_window_wait_rejects_missing_stream_or_signal) {
     RUVIA_CHECK(result->aborted() != nullptr);
 }
 
+RUVIA_TEST(http2_stream_sleep_reports_elapsed_result) {
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    Http2SansIoTermination termination;
+    std::optional<ruvia::TimerSleepResult> observed;
+    const auto waitForElapsed = [&]() -> ruvia::Task<ruvia::TimerSleepResult> {
+        co_return co_await ruvia::detail::Http2SansIoSleepAwaiter(worker, termination, std::chrono::milliseconds(0));
+    };
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            observed = co_await ruvia::detail::taskAsAwaitable(waitForElapsed());
+        },
+        asio::detached);
+    io.run();
+
+    RUVIA_CHECK(observed.has_value());
+    RUVIA_CHECK_EQ(*observed, ruvia::TimerSleepResult::kElapsed);
+}
+
+RUVIA_TEST(http2_worker_shutdown_reports_typed_sleep_result) {
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    Http2SansIoTermination termination;
+    std::optional<ruvia::TimerSleepResult> observed;
+    const auto waitForShutdown = [&]() -> ruvia::Task<ruvia::TimerSleepResult> {
+        co_return co_await ruvia::detail::Http2SansIoSleepAwaiter(worker, termination, std::chrono::hours(1));
+    };
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            observed = co_await ruvia::detail::taskAsAwaitable(waitForShutdown());
+        },
+        asio::detached);
+    asio::post(io, [&dispatcher] { dispatcher->stopTimers(); });
+    io.run();
+
+    RUVIA_CHECK(observed.has_value());
+    RUVIA_CHECK_EQ(*observed, ruvia::TimerSleepResult::kWorkerStopping);
+}
+
 RUVIA_TEST(http2_session_termination_cancels_stream_sleep_with_exact_error) {
     asio::io_context& io = ruvia::test::newTestIoContext();
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     Http2SansIoTermination termination;
     std::error_code observed;
-    const auto waitForTermination = [&]() -> ruvia::Task<void> { co_await ruvia::detail::Http2SansIoSleepAwaiter(worker, termination, std::chrono::hours(1)); };
+    const auto waitForTermination = [&]() -> ruvia::Task<ruvia::TimerSleepResult> {
+        co_return co_await ruvia::detail::Http2SansIoSleepAwaiter(worker, termination, std::chrono::hours(1));
+    };
 
     asio::co_spawn(
         io,
@@ -131,6 +203,83 @@ RUVIA_TEST(http2_session_termination_cancels_stream_sleep_with_exact_error) {
     io.run();
 
     RUVIA_CHECK_EQ(observed, std::make_error_code(std::errc::connection_reset));
+}
+
+RUVIA_TEST(http2_stream_head_failure_aborts_precommit_state) {
+    using http2_connection_test::driveGetRequest;
+    using http2_connection_test::handshake;
+
+    std::pmr::monotonic_buffer_resource resource;
+    ruvia::detail::Http2Connection connection(&resource);
+    handshake(connection);
+    driveGetRequest(connection, &resource);
+
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    ruvia::detail::WorkerSignal writeSignal(worker);
+    ruvia::detail::Http2SansIoTermination termination;
+    ruvia::detail::Http2SansIoStreamSignal streamSignal(worker, termination);
+
+    ruvia::WorkerMemory workerMemory;
+    ruvia::RequestMemory requestMemory(workerMemory);
+    auto request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
+    ruvia::detail::HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ruvia::detail::ContextAccess::make(requestMemory, request);
+
+    Http2SansIoResponseStreamSink sink(
+        connection,
+        1,
+        ruvia::detail::ResponseStreamKind::kGeneric,
+        worker,
+        writeSignal,
+        streamSignal,
+        &resource,
+        ruvia::HttpKnownMethod::kGet,
+        identityResponseCoding(),
+        ruvia::detail::HttpResponseCodingAvailability::kIdentityOnly);
+    sink.bindContext(&context, &invalidStreamingHead);
+
+    bool firstFailed = false;
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                co_await ruvia::detail::taskAsAwaitable(sink.write("body"));
+            } catch (const std::exception&) {
+                firstFailed = true;
+            }
+        },
+        asio::detached);
+    io.run();
+
+    RUVIA_CHECK(firstFailed);
+    RUVIA_CHECK(!sink.committed());
+    RUVIA_CHECK(sink.aborted());
+    RUVIA_CHECK(connection.stream(1) != nullptr);
+    if (const auto* stream = connection.stream(1)) {
+        RUVIA_CHECK(stream->localSend().headPending() != nullptr);
+    }
+
+    // A failed head is terminal even though no HEADERS were emitted. The
+    // second attempt must not reach the compression object's "already
+    // prepared" state or manufacture a different representation.
+    bool retryRejected = false;
+    io.restart();
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                co_await ruvia::detail::taskAsAwaitable(sink.write("retry"));
+            } catch (const std::logic_error&) {
+                retryRejected = true;
+            }
+        },
+        asio::detached);
+    io.run();
+    RUVIA_CHECK(retryRejected);
 }
 
 RUVIA_TEST(http2_web_body_queue_preserves_fifo_and_tracks_backlog) {

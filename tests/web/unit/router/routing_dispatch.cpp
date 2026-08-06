@@ -107,6 +107,13 @@ RUVIA_TEST(dispatch_maps_handler_exceptions_to_error_responses) {
     // library error (SQL text, paths) could otherwise be disclosed to the client.
     RUVIA_CHECK(generic.body.find("boom") == std::string_view::npos);
     RUVIA_CHECK(generic.body.find("Internal Server Error") != std::string_view::npos);
+
+    // std::invalid_argument is not a request-validation protocol. Application
+    // code can throw it for programming errors (for example, a bad route
+    // generation call), so it must not be downgraded to a client-visible 400.
+    const auto invalidArgument = dispatchOne(RouteHandler(nullptr, &throwsInvalidArgumentHandler), HttpKnownMethod::kGet, "/x");
+    RUVIA_CHECK_EQ(invalidArgument.status, std::uint16_t{500});
+    RUVIA_CHECK(invalidArgument.body.find("application bug") == std::string_view::npos);
 }
 
 RUVIA_TEST(dispatch_rejects_unsupported_request_content_coding_with_advertisement) {
@@ -195,22 +202,27 @@ RUVIA_TEST(request_json_form_map_media_type_mismatch_to_415) {
     RUVIA_CHECK_EQ(formOk.body, std::string("hi"));
 }
 
-RUVIA_TEST(request_json_if_and_form_if_fall_back_instead_of_failing) {
-    // Format problems yield nullopt so the handler can fall back...
+RUVIA_TEST(request_json_if_and_form_if_only_fall_back_on_media_type_mismatch) {
+    // A media-type mismatch yields nullopt so the handler can try another
+    // representation...
     const auto wrongType = dispatchBodyRequest(RouteHandler(nullptr, &jsonIfEchoHandler), "text/plain", "x");
     RUVIA_CHECK_EQ(wrongType.status, std::uint16_t{200});
     RUVIA_CHECK_EQ(wrongType.body, std::string("no-json"));
     const auto badBody = dispatchBodyRequest(RouteHandler(nullptr, &jsonIfEchoHandler), "application/json", "{not-json");
-    RUVIA_CHECK_EQ(badBody.status, std::uint16_t{200});
-    RUVIA_CHECK_EQ(badBody.body, std::string("no-json"));
+    RUVIA_CHECK_EQ(badBody.status, std::uint16_t{400});
     const auto formWrongType = dispatchBodyRequest(RouteHandler(nullptr, &formIfEchoHandler), "text/plain", "value=hi");
     RUVIA_CHECK_EQ(formWrongType.status, std::uint16_t{200});
     RUVIA_CHECK_EQ(formWrongType.body, std::string("no-form"));
     const auto jsonValueWrongType = dispatchBodyRequest(RouteHandler(nullptr, &jsonValueIfEchoHandler), "text/plain", "{}");
     RUVIA_CHECK_EQ(jsonValueWrongType.status, std::uint16_t{200});
     RUVIA_CHECK_EQ(jsonValueWrongType.body, std::string("no-json"));
+    const auto badJsonValue = dispatchBodyRequest(RouteHandler(nullptr, &jsonValueIfEchoHandler), "application/json", "{not-json");
+    RUVIA_CHECK_EQ(badJsonValue.status, std::uint16_t{400});
 
-    // ...and a well-formed body of the right type still parses.
+    const auto badForm = dispatchBodyRequest(RouteHandler(nullptr, &formIfEchoHandler), "application/x-www-form-urlencoded", "value=%ZZ");
+    RUVIA_CHECK_EQ(badForm.status, std::uint16_t{400});
+
+    // A well-formed body of the right type still parses.
     const auto ok = dispatchBodyRequest(RouteHandler(nullptr, &jsonIfEchoHandler), "application/json", R"({"value":"hi"})");
     RUVIA_CHECK_EQ(ok.status, std::uint16_t{200});
     RUVIA_CHECK_EQ(ok.body, std::string("hi"));

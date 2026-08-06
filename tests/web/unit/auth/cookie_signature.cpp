@@ -1,5 +1,9 @@
 #include "test_harness.h"
 
+#include <array>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -62,6 +66,41 @@ RUVIA_TEST(cookie_signature_large_value_spills_past_stack_arena) {
     RUVIA_CHECK_EQ(a.size(), ruvia::detail::kCookieSignatureSize);
     RUVIA_CHECK_EQ(a, sign("secret", "big", big));     // deterministic across the fallback
     RUVIA_CHECK(a != sign("secret", "big", mutated));  // change beyond the stack arena matters
+}
+
+RUVIA_TEST(cookie_signature_rejects_unrepresentable_lengths) {
+    std::array<char, ruvia::detail::kCookieSignatureSize> output{};
+
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint32_t)) {
+        const auto oversizedNameSize = static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)()) + 1;
+        bool rejected = false;
+        try {
+            ruvia::detail::writeCookieSignature(output.data(), "secret", std::string_view("x", oversizedNameSize), "value");
+        } catch (const std::length_error&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+
+    if constexpr (sizeof(std::size_t) > sizeof(int)) {
+        const auto oversizedSecretSize = static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
+        bool rejected = false;
+        try {
+            ruvia::detail::writeCookieSignature(output.data(), std::string_view("x", oversizedSecretSize), "name", "value");
+        } catch (const std::length_error&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+
+        const auto oversizedMessageSize = static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
+        rejected = false;
+        try {
+            ruvia::detail::writeCookieSignature(output.data(), "secret", "name", std::string_view("x", oversizedMessageSize));
+        } catch (const std::length_error&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
 }
 
 RUVIA_TEST(cookie_signature_roundtrip_verify) {

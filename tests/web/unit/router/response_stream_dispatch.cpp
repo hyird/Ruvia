@@ -19,6 +19,7 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Router.h"
@@ -42,6 +43,7 @@ using ruvia::detail::ResponseStreamFraming;
 using ruvia::detail::ResponseStreamKind;
 using ruvia::detail::ResponseTrailerIntent;
 using ruvia::detail::RouteStreamHandler;
+using ruvia::detail::HttpResponseCodingSelection;
 
 struct BorrowTestStream final {};
 
@@ -51,8 +53,9 @@ struct BorrowTestScannerEntry final {
 
 using Http1BorrowTestSink = ruvia::detail::ResponseStreamSink<BorrowTestStream, BorrowTestScannerEntry>;
 
-static_assert(std::constructible_from<Http1BorrowTestSink, BorrowTestStream&, ruvia::WorkerMemory&, ruvia::detail::ResponseHeadBuffer&, BorrowTestScannerEntry&, const ruvia::WorkerHandle&, ResponseStreamKind, ruvia::detail::Http1ResponseStreamPlan>);
-static_assert(!std::constructible_from<Http1BorrowTestSink, BorrowTestStream&, ruvia::WorkerMemory&, ruvia::detail::ResponseHeadBuffer&, BorrowTestScannerEntry&, ruvia::WorkerHandle&&, ResponseStreamKind, ruvia::detail::Http1ResponseStreamPlan>);
+static_assert(std::constructible_from<Http1BorrowTestSink, BorrowTestStream&, ruvia::WorkerMemory&, ruvia::detail::ResponseHeadBuffer&, BorrowTestScannerEntry&, const ruvia::WorkerHandle&, ResponseStreamKind, ruvia::detail::Http1ResponseStreamPlan, HttpResponseCodingSelection, ruvia::detail::HttpResponseCodingAvailability>);
+static_assert(!std::constructible_from<Http1BorrowTestSink, BorrowTestStream&, ruvia::WorkerMemory&, ruvia::detail::ResponseHeadBuffer&, BorrowTestScannerEntry&, const ruvia::WorkerHandle&, ResponseStreamKind, ruvia::detail::Http1ResponseStreamPlan, HttpResponseCodingSelection>);
+static_assert(!std::constructible_from<Http1BorrowTestSink, BorrowTestStream&, ruvia::WorkerMemory&, ruvia::detail::ResponseHeadBuffer&, BorrowTestScannerEntry&, ruvia::WorkerHandle&&, ResponseStreamKind, ruvia::detail::Http1ResponseStreamPlan, HttpResponseCodingSelection, ruvia::detail::HttpResponseCodingAvailability>);
 
 template <typename Result>
 concept HasLegacyStreamedPredicate = requires(const Result& result) {
@@ -126,8 +129,8 @@ public:
         co_return;
     }
 
-    Task<void> sleep(std::chrono::milliseconds) {
-        co_return;
+    Task<ruvia::TimerSleepResult> sleep(std::chrono::milliseconds) {
+        co_return ruvia::TimerSleepResult::kElapsed;
     }
 
 private:

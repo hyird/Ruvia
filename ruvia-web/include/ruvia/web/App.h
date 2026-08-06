@@ -92,7 +92,8 @@ public:
     // the single-threaded worker that owns the connection. Absent by default --
     // an app that never offloads should not pay for idle threads, and one that
     // does should size the pool for its own workload. run() starts the threads
-    // before the first request and joins them after the last worker.
+    // before the first request; after workers stop, running callables are not
+    // awaited and may finish on the pool's detached state.
     App& setBlockingPool(std::optional<BlockingPoolOptions> options);
 
     template <typename T>
@@ -109,7 +110,8 @@ public:
     // longest matching registered prefix wins, matching on whole path
     // segments ("/api" scopes "/api" and "/api/x", never "/apix"); the
     // prefix-less onError/notFound remain the app-wide fallback. A trailing
-    // slash is ignored and re-registering a prefix replaces its handler.
+    // slash is ignored; registering the same normalized prefix twice throws
+    // std::invalid_argument instead of silently choosing by call order.
     App& onError(std::string_view prefix, HttpErrorHandler handler);
     App& notFound(std::string_view prefix, HttpNotFoundHandler handler);
     App& setDefaultRateLimitPerWorker(std::optional<RateLimitRule> rule);

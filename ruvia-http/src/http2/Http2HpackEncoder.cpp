@@ -1,7 +1,22 @@
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 #include "ruvia/http/detail/http2/hpack/Http2HpackStaticTable.h"
 
+#include <limits>
+#include <stdexcept>
+
 namespace ruvia::detail {
+
+namespace {
+
+constexpr std::size_t kMaxHpackStringLength = std::numeric_limits<std::uint32_t>::max();
+
+void validateHpackStringLength(std::string_view value) {
+    if (value.size() > kMaxHpackStringLength) {
+        throw std::length_error("HPACK string literal exceeds the uint32 length limit");
+    }
+}
+
+}  // namespace
 
 void HpackEncoder::encodeInteger(std::pmr::string& out, std::uint8_t firstByteMask, std::uint8_t prefixBits, std::uint32_t value) {
     const auto prefixMax = static_cast<std::uint32_t>((1U << prefixBits) - 1U);
@@ -20,6 +35,7 @@ void HpackEncoder::encodeInteger(std::pmr::string& out, std::uint8_t firstByteMa
 }
 
 void HpackEncoder::encodeString(std::pmr::string& out, std::string_view value) {
+    validateHpackStringLength(value);
     encodeInteger(out, 0, 7, static_cast<std::uint32_t>(value.size()));
     out.append(value.data(), value.size());
 }
@@ -34,6 +50,11 @@ void HpackEncoder::encodeDynamicTableSizeUpdate(std::pmr::string& out, std::uint
 }
 
 void HpackEncoder::encodeHeader(std::pmr::string& out, std::string_view name, std::string_view value) {
+    // Validate both literals before static-table matching or writing the field
+    // prefix. A string_view can be larger than HPACK's uint32 length domain, and
+    // rejecting it here keeps the output unchanged when the input is invalid.
+    validateHpackStringLength(name);
+    validateHpackStringLength(value);
     const auto match = hpackFindStaticHeaderMatch(name, value);
     if (match.exactIndex != 0) {
         // A fully indexed static-table entry carries no field value on the wire, so
@@ -55,6 +76,7 @@ void HpackEncoder::encodeHeader(std::pmr::string& out, std::string_view name, st
 }
 
 void HpackEncoder::encodeHeaderWithNameIndex(std::pmr::string& out, std::uint32_t nameIndex, std::string_view value, bool neverIndexed) {
+    validateHpackStringLength(value);
     encodeInteger(out, neverIndexed ? kHpackLiteralNeverIndexed : kHpackLiteralWithoutIndexing, 4, nameIndex);
     encodeString(out, value);
 }

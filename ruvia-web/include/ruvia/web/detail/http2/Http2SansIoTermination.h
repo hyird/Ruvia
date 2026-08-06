@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 
 namespace ruvia::detail {
@@ -145,13 +146,14 @@ public:
         return true;
     }
 
-    void await_resume() const {
+    TimerSleepResult await_resume() const {
         if (termination_.terminated()) {
             throw std::system_error(termination_.error());
         }
         if (timerOutcome_ == WorkerTimerOutcome::kCancelled) {
-            throw std::system_error(std::make_error_code(std::errc::operation_canceled));
+            return TimerSleepResult::kWorkerStopping;
         }
+        return TimerSleepResult::kElapsed;
     }
 
 private:

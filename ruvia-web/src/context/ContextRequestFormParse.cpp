@@ -148,7 +148,7 @@ void compactParsedBodyFields(std::pmr::vector<ContextRequest::RequestFormField>&
         return true;
     });
     if (!ok || !valid) {
-        throw std::invalid_argument("invalid form body");
+        throwInvalidFormBody();
     }
     compactParsedBodyFields(fields, options);
     return detail::RequestFormDataAccess::fromFields(std::move(fields));

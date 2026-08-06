@@ -71,7 +71,19 @@ int main() {
     ruvia::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
     auto handler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> { co_return c.text("ok"); };
+    auto identityForbiddenHandler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {
+        auto response = c.text("identity is not an acceptable representation");
+        response.header("Cache-Control", "no-transform");
+        response.header("Content-Type", "image/png");
+        co_return response;
+    };
+    auto noContentHandler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {
+        c.status(ruvia::http_status::kNoContent);
+        co_return c.body(nullptr);
+    };
     registerRoute(routerImpl, ruvia::HttpKnownMethod::kGet, "/only", handler);
+    registerRoute(routerImpl, ruvia::HttpKnownMethod::kGet, "/identity-forbidden", identityForbiddenHandler);
+    registerRoute(routerImpl, ruvia::HttpKnownMethod::kGet, "/empty", noContentHandler);
     routerImpl.finalize();
 
     ruvia::detail::HttpServerOptions options;
@@ -95,6 +107,54 @@ int main() {
         server.stop();
         server.join();
         return rc;
+    }
+
+    // An empty acceptable coding set must not reject a response that has no
+    // content. The handler status is needed before the protocol can decide
+    // whether 406 is meaningful, and the connection remains reusable.
+    {
+        asio::ip::tcp::socket sock(ctx);
+        std::error_code ec;
+        sock.connect(endpoint, ec);
+        asio::write(sock,
+            asio::buffer(std::string_view(
+                "GET /empty HTTP/1.1\r\nHost: localhost\r\n"
+                "Accept-Encoding: identity;q=0, gzip;q=0, br;q=0, zstd;q=0\r\n\r\n")),
+            ec);
+        if (!readResponseHead(sock, ec).starts_with("HTTP/1.1 204")) {
+            std::fputs("bodyless response was rejected by empty coding negotiation\n", stderr);
+            server.stop();
+            server.join();
+            return 10;
+        }
+        asio::write(sock, asio::buffer(std::string_view("GET /missing-after-empty HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+        if (ec || !readResponseHead(sock, ec).starts_with("HTTP/1.1 404")) {
+            std::fputs("connection was not reusable after bodyless negotiated response\n", stderr);
+            server.stop();
+            server.join();
+            return 11;
+        }
+    }
+
+    // The request selects gzip but explicitly rejects identity. The route's
+    // no-transform/incompressible metadata prevents compression, so the
+    // framework must convert the buffered response to 406 before writing it;
+    // silently sending the identity body would violate Accept-Encoding.
+    {
+        asio::ip::tcp::socket sock(ctx);
+        std::error_code ec;
+        sock.connect(endpoint, ec);
+        asio::write(sock,
+            asio::buffer(std::string_view(
+                "GET /identity-forbidden HTTP/1.1\r\nHost: localhost\r\n"
+                "Accept-Encoding: gzip, identity;q=0\r\n\r\n")),
+            ec);
+        if (!readResponseHead(sock, ec).starts_with("HTTP/1.1 406")) {
+            std::fputs("forbidden identity fallback was not converted to 406\n", stderr);
+            server.stop();
+            server.join();
+            return 9;
+        }
     }
 
     // A not-found request that still owes body bytes must close the connection.

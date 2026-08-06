@@ -36,21 +36,29 @@ ruvia::Task<void> writeOwned(void* target, ruvia::Task<void> (*write)(void*, std
 }
 
 struct OwnedTrailers final {
+    struct OwnedTrailer final {
+        OwnedTrailer(ruvia::HttpHeaderView header, std::pmr::memory_resource* resource)
+            : name(header.name(), resource),
+              value(header.value(), resource) {}
+
+        std::pmr::string name;
+        std::pmr::string value;
+    };
+
     explicit OwnedTrailers(std::span<const ruvia::HttpHeaderView> source, std::pmr::memory_resource* resource)
-        : strings(resource),
+        : fields(resource),
           views(resource) {
-        strings.reserve(source.size() * 2);
+        fields.reserve(source.size());
         views.reserve(source.size());
         for (const auto& header : source) {
-            strings.emplace_back(header.name());
-            strings.emplace_back(header.value());
+            fields.emplace_back(header, resource);
         }
-        for (std::size_t index = 0; index < source.size(); ++index) {
-            views.emplace_back(strings[index * 2], strings[index * 2 + 1]);
+        for (const auto& field : fields) {
+            views.emplace_back(field.name, field.value);
         }
     }
 
-    std::pmr::vector<std::pmr::string> strings;
+    std::pmr::vector<OwnedTrailer> fields;
     std::pmr::vector<ruvia::HttpHeaderView> views;
 };
 
@@ -138,7 +146,7 @@ ScopedOperation<void> ResponseStreamWriter::writeln(std::string_view chunk) {
     return writeOwned(std::move(owned));
 }
 
-ScopedOperation<void> ResponseStreamWriter::sleep(std::chrono::milliseconds duration) {
+ScopedOperation<TimerSleepResult> ResponseStreamWriter::sleep(std::chrono::milliseconds duration) {
     return detail::makeScopedOperation(operationScope_, sleep_(target_, duration));
 }
 
@@ -146,7 +154,7 @@ ScopedOperation<void> ResponseStreamWriter::end(std::span<const HttpHeaderView> 
     return detail::makeScopedOperation(operationScope_, endOwned(target_, end_, OwnedTrailers(trailers, detail::processResource()), outputActive_));
 }
 
-ScopedOperation<void> SseWriter::sleep(std::chrono::milliseconds duration) {
+ScopedOperation<TimerSleepResult> SseWriter::sleep(std::chrono::milliseconds duration) {
     return writer_.sleep(duration);
 }
 

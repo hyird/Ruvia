@@ -1,4 +1,5 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
+#include "ruvia/web/detail/integration/DataAccessDefinitions.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/detail/db/DbConfigValidation.h"
@@ -40,9 +41,10 @@ App& App::useDb(std::string_view alias, DbConfig config) {
         }
         detail::validateDbConfig(config);
 
-        upsertDefinition(state.databases, alias, config, [](std::string_view storedAlias, DbConfig&& storedConfig) {
+        auto storedConfig = detail::cloneDbConfig(config, detail::appResource());
+        upsertDefinition(state.databases, alias, storedConfig, [](std::string_view storedAlias, DbConfig&& definitionConfig) {
             auto* resource = detail::appResource();
-            return detail::DbDefinition{std::pmr::string(storedAlias, resource), std::move(storedConfig)};
+            return detail::DbDefinition{std::pmr::string(storedAlias, resource), std::move(definitionConfig)};
         });
     });
 }
@@ -60,9 +62,10 @@ App& App::useRedis(std::string_view alias, RedisConfig config) {
         }
         detail::validateRedisConfig(config);
 
-        upsertDefinition(state.redis, alias, config, [](std::string_view storedAlias, RedisConfig&& storedConfig) {
+        auto storedConfig = detail::cloneRedisConfig(config, detail::appResource());
+        upsertDefinition(state.redis, alias, storedConfig, [](std::string_view storedAlias, RedisConfig&& definitionConfig) {
             auto* resource = detail::appResource();
-            return detail::RedisDefinition{std::pmr::string(storedAlias, resource), std::move(storedConfig)};
+            return detail::RedisDefinition{std::pmr::string(storedAlias, resource), std::move(definitionConfig)};
         });
     });
 }

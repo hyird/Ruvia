@@ -27,6 +27,7 @@
 #include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
@@ -230,6 +231,16 @@ public:
     }
 };
 
+// Misuse: respond() ends the middleware chain, so a later next() must not run
+// downstream handlers and silently replace the response.
+class ChainMwRespondThenNext final : public ruvia::Middleware<ChainMwRespondThenNext> {
+public:
+    ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
+        context.respond(context.body("early"));
+        co_await next();
+    }
+};
+
 // Misuse: calls next() twice. The second invocation must be rejected rather than
 // re-entering the downstream chain (which would run the handler -- and its side
 // effects -- a second time).
@@ -323,8 +334,8 @@ inline ruvia::Task<void> scEnd(void* target, std::span<const ruvia::HttpHeaderVi
     sink->endedFlag = true;
     co_return;
 }
-inline ruvia::Task<void> scSleep(void*, std::chrono::milliseconds) {
-    co_return;
+inline ruvia::Task<ruvia::TimerSleepResult> scSleep(void*, std::chrono::milliseconds) {
+    co_return ruvia::TimerSleepResult::kElapsed;
 }
 inline void scBind(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
 inline void scReleaseContext(void* target) noexcept {
@@ -549,6 +560,11 @@ inline ruvia::Task<ruvia::HttpResponse> throwsHttpErrorHandler(void*, ruvia::Con
 
 inline ruvia::Task<ruvia::HttpResponse> throwsGenericHandler(void*, ruvia::Context&) {
     throw std::runtime_error("boom");
+    co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
+}
+
+inline ruvia::Task<ruvia::HttpResponse> throwsInvalidArgumentHandler(void*, ruvia::Context&) {
+    throw std::invalid_argument("application bug");
     co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
 }
 

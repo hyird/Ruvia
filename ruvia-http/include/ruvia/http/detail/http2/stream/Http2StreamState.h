@@ -22,7 +22,11 @@
 
 namespace ruvia::detail {
 
+class Http2StreamHeaderDecodeTransaction;
+
 class Http2StreamState final {
+    friend class Http2StreamHeaderDecodeTransaction;
+
     std::uint32_t id_{0};
     Http2RemoteContentState remoteContent_;
     Http2LocalContentState localContent_;
@@ -66,8 +70,16 @@ public:
         return flowControl_.consumeReceive(bytes);
     }
 
+    [[nodiscard]] std::int32_t receiveWindow() const noexcept {
+        return flowControl_.receiveWindow();
+    }
+
     void addWindowDebt(std::uint32_t bytes) noexcept {
         windowDebt_ += bytes;
+    }
+
+    [[nodiscard]] std::uint32_t windowDebt() const noexcept {
+        return windowDebt_;
     }
 
     [[nodiscard]] std::uint32_t takeWindowDebt() noexcept {
@@ -185,6 +197,10 @@ public:
 
     [[nodiscard]] bool recordRemoteHeadEndStream() noexcept {
         return lifecycle_.recordRemoteHeadEndStream();
+    }
+
+    [[nodiscard]] bool rollbackRemoteHeadEndStreamForRetry() noexcept {
+        return lifecycle_.rollbackRemoteHeadEndStream();
     }
 
     [[nodiscard]] bool finalizeRemoteContentHead() noexcept {
@@ -501,6 +517,75 @@ public:
     void countInterimResponse() noexcept {
         requestState_.countInterimResponse();
     }
+};
+
+// Header callbacks write into stream-owned PMR storage and typed protocol state. A
+// callback is allowed to throw (most commonly from a request-header allocation), so
+// the complete field block needs the same strong exception guarantee as HPACK's
+// connection-global dynamic table. The transaction swaps out the prior request data
+// without allocating, snapshots the scalar protocol state, and restores both on
+// destruction unless the decoder explicitly commits the block.
+class Http2StreamHeaderDecodeTransaction final {
+public:
+    explicit Http2StreamHeaderDecodeTransaction(Http2StreamState& stream, bool isolateRequestData = true) noexcept
+        : stream_(&stream),
+          requestData_(stream.requestData_.resource()),
+          remoteContent_(stream.remoteContent_),
+          localContent_(stream.localContent_),
+          lifecycle_(stream.lifecycle_),
+          expectations_(stream.expectations_),
+          requestState_(stream.requestState_),
+          tunnelState_(stream.tunnelState_),
+          isolateRequestData_(isolateRequestData),
+          requestHeadersCheckpoint_(stream.requestData_.headerCheckpoint()) {
+        if (isolateRequestData_) {
+            requestData_.swap(stream.requestData_);
+        }
+    }
+
+    Http2StreamHeaderDecodeTransaction(const Http2StreamHeaderDecodeTransaction&) = delete;
+    Http2StreamHeaderDecodeTransaction& operator=(const Http2StreamHeaderDecodeTransaction&) = delete;
+    Http2StreamHeaderDecodeTransaction(Http2StreamHeaderDecodeTransaction&&) = delete;
+    Http2StreamHeaderDecodeTransaction& operator=(Http2StreamHeaderDecodeTransaction&&) = delete;
+
+    ~Http2StreamHeaderDecodeTransaction() {
+        rollback();
+    }
+
+    void commit() noexcept {
+        active_ = false;
+    }
+
+    void rollback() noexcept {
+        if (!active_) {
+            return;
+        }
+        if (isolateRequestData_) {
+            stream_->requestData_.swap(requestData_);
+        } else {
+            stream_->requestData_.rollbackHeaders(requestHeadersCheckpoint_);
+        }
+        stream_->remoteContent_ = remoteContent_;
+        stream_->localContent_ = localContent_;
+        stream_->lifecycle_ = lifecycle_;
+        stream_->expectations_ = expectations_;
+        stream_->requestState_ = requestState_;
+        stream_->tunnelState_ = tunnelState_;
+        active_ = false;
+    }
+
+private:
+    Http2StreamState* stream_;
+    Http2StreamRequestData requestData_;
+    Http2RemoteContentState remoteContent_;
+    Http2LocalContentState localContent_;
+    Http2StreamLifecycle lifecycle_;
+    HttpRequestExpectations expectations_;
+    Http2StreamRequestState requestState_;
+    Http2TunnelState tunnelState_;
+    bool isolateRequestData_;
+    Http2StreamRequestData::HeaderCheckpoint requestHeadersCheckpoint_;
+    bool active_{true};
 };
 
 }  // namespace ruvia::detail

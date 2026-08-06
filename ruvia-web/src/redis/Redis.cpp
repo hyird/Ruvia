@@ -2,8 +2,10 @@
 
 #include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "ruvia/web/detail/integration/DataAccessDefinitions.h"
 #include <ranges>
 #include <stdexcept>
+#include <utility>
 
 namespace ruvia {
 namespace detail {
@@ -19,8 +21,9 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
         if (std::ranges::any_of(pools_, [&definition](const Entry& entry) { return std::string_view(entry.alias) == std::string_view(definition.alias); })) {
             throw std::invalid_argument("duplicate redis alias");
         }
-        validateRedisConfig(definition.config);
-        auto pool = makePmrObject<RedisPool>(resource_, ioContext, definition.config, resource_);
+        auto config = cloneRedisConfig(definition.config, resource_);
+        validateRedisConfig(config);
+        auto pool = makePmrObject<RedisPool>(resource_, ioContext, std::move(config), resource_);
         pools_.push_back(Entry{std::pmr::string(definition.alias, resource_), std::move(pool)});
         if (std::string_view(pools_.back().alias) == kDefaultRedisAlias) {
             defaultPoolIndex_ = pools_.size() - 1;

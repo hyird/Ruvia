@@ -8,6 +8,7 @@
 // application's own test suite would.
 
 #include <string>
+#include <stdexcept>
 #include <string_view>
 
 #include "ruvia/web/App.h"
@@ -91,6 +92,11 @@ ruvia::Task<ruvia::HttpResponse> apiScopedMiss(ruvia::Context& c) {
     co_return c.body("api-miss");
 }
 
+ruvia::Task<ruvia::HttpResponse> facadeError(ruvia::Context& c, ruvia::HttpErrorInfo error) {
+    c.status(error.status());
+    co_return c.body("custom-error");
+}
+
 }  // namespace
 
 RUVIA_TEST(testing_facade_dispatches_routes_params_query_and_cookies) {
@@ -164,6 +170,38 @@ RUVIA_TEST(testing_facade_applies_app_level_configuration) {
         sealed = true;
     }
     RUVIA_CHECK(sealed);
+}
+
+RUVIA_TEST(testing_facade_rejects_duplicate_normalized_fallback_prefixes) {
+    ruvia::TestApp notFoundApp;
+    notFoundApp.notFound("/api", &apiScopedMiss);
+
+    bool notFoundRejected = false;
+    try {
+        notFoundApp.notFound("/api///", &apiScopedMiss);
+    } catch (const std::invalid_argument& error) {
+        notFoundRejected = std::string_view(error.what()) == "duplicate fallback prefix";
+    }
+    RUVIA_CHECK(notFoundRejected);
+
+    ruvia::TestApp errorApp;
+    errorApp.onError("/api/", &facadeError);
+
+    bool errorRejected = false;
+    try {
+        errorApp.onError("/api", &facadeError);
+    } catch (const std::invalid_argument& error) {
+        errorRejected = std::string_view(error.what()) == "duplicate fallback prefix";
+    }
+    RUVIA_CHECK(errorRejected);
+
+    bool malformedRejected = false;
+    try {
+        errorApp.notFound("api", &apiScopedMiss);
+    } catch (const std::invalid_argument& error) {
+        malformedRejected = std::string_view(error.what()) == "fallback prefix must start with '/'";
+    }
+    RUVIA_CHECK(malformedRejected);
 }
 
 RUVIA_TEST(testing_facade_isolates_instances) {

@@ -6,6 +6,7 @@
 #include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamSink.h"
 #include "ruvia/web/detail/server/response/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"
@@ -26,7 +27,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(Http1RouteDi
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().responseStream();
-    ResponseSink responseSink(d.stream, d.memory, responseHead, d.scannerEntry, d.baseRouteServices.worker(), endpoint.kind(), streamPlan);
+    ResponseSink responseSink(d.stream, d.memory, responseHead, d.scannerEntry, d.baseRouteServices.worker(), endpoint.kind(), streamPlan, d.responseCoding, d.responseCodingAvailability);
 
     d.scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
     auto result = co_await dispatchResponseStreamWith(responseSink, d.routes, d.parsed.request, resolved, d.requestMemory, d.baseRouteServices,

@@ -26,6 +26,7 @@ namespace {
 }  // namespace
 
 HttpResponseHeader HttpResponseHeaders::makeOwnedHeader(std::string_view name, std::string_view value, std::uint32_t knownBit) {
+    detail::validateResponseHeaderStorageSize(name.size(), value.size());
     const auto total = name.size() + value.size();
     char* bytes = nullptr;
     if (total > 0) {
@@ -37,6 +38,7 @@ HttpResponseHeader HttpResponseHeaders::makeOwnedHeader(std::string_view name, s
 }
 
 HttpResponseHeader HttpResponseHeaders::makeUninitializedHeader(std::string_view name, std::size_t valueSize, std::uint32_t knownBit) {
+    detail::validateResponseHeaderStorageSize(name.size(), valueSize);
     const auto total = name.size() + valueSize;
     char* bytes = nullptr;
     if (total > 0) {
@@ -70,17 +72,27 @@ void HttpResponseHeaders::releaseHeader(HttpResponseHeader& header) noexcept {
 }
 
 HttpResponseHeader& HttpResponseHeaders::appendHeader(HttpResponseHeader header) {
-    if (!spilled_ && size_ == kInlineCapacity) {
-        spill(size_ + 1);
+    // `header` may own a separately allocated name/value block.  The vector
+    // stores the small descriptor by value, so an exception while spilling or
+    // appending must release that block here; otherwise a failed PMR
+    // allocation leaks the response header and leaves the next retry with a
+    // different ownership picture.
+    try {
+        if (!spilled_ && size_ == kInlineCapacity) {
+            spill(size_ + 1);
+        }
+        if (!spilled_) {
+            auto* target = inlineData() + size_;
+            *target = header;
+            ++size_;
+            return *target;
+        }
+        heap_.push_back(header);
+        return heap_.back();
+    } catch (...) {
+        releaseHeader(header);
+        throw;
     }
-    if (!spilled_) {
-        auto* target = inlineData() + size_;
-        *target = header;
-        ++size_;
-        return *target;
-    }
-    heap_.push_back(header);
-    return heap_.back();
 }
 
 HttpResponseHeader& HttpResponseHeaders::add(std::string_view name, std::string_view value, std::uint32_t knownBit) {
@@ -88,6 +100,7 @@ HttpResponseHeader& HttpResponseHeaders::add(std::string_view name, std::string_
 }
 
 HttpResponseHeader& HttpResponseHeaders::addStableView(std::string_view name, std::string_view value, std::uint32_t knownBit) {
+    detail::validateResponseHeaderStorageSize(name.size(), value.size());
     const auto staticHeader = makeStaticHeader(name, value, knownBit);
     return appendHeader(staticHeader ? *staticHeader : makeOwnedHeader(name, value, knownBit));
 }
@@ -97,6 +110,7 @@ HttpResponseHeader& HttpResponseHeaders::addUninitializedValue(std::string_view 
 }
 
 HttpResponseHeader& HttpResponseHeaders::assignUninitializedValue(HttpResponseHeader& header, std::string_view name, std::size_t valueSize, std::uint32_t knownBit) {
+    detail::validateResponseHeaderStorageSize(name.size(), valueSize);
     const auto total = name.size() + valueSize;
     if (header.owned && header.bytes != nullptr && !overlapsHeaderStorage(header, name) && total == static_cast<std::size_t>(header.nameSize) + header.valueSize) {
         auto* const bytes = const_cast<char*>(header.bytes);
@@ -115,6 +129,9 @@ HttpResponseHeader& HttpResponseHeaders::assignUninitializedValue(HttpResponseHe
 }
 
 bool HttpResponseHeaders::tryAssignOwnedInPlace(HttpResponseHeader& header, std::string_view name, std::string_view value, std::uint32_t knownBit) noexcept {
+    if (!detail::responseHeaderStorageSizeFits(name.size(), value.size())) {
+        return false;
+    }
     const auto total = name.size() + value.size();
     if (!header.owned || header.bytes == nullptr || overlapsHeaderStorage(header, name) || overlapsHeaderStorage(header, value) || total != static_cast<std::size_t>(header.nameSize) + header.valueSize) {
         return false;
@@ -139,6 +156,7 @@ void HttpResponseHeaders::assign(HttpResponseHeader& header, std::string_view na
 }
 
 void HttpResponseHeaders::assignStableView(HttpResponseHeader& header, std::string_view name, std::string_view value, std::uint32_t knownBit) {
+    detail::validateResponseHeaderStorageSize(name.size(), value.size());
     const auto staticHeader = makeStaticHeader(name, value, knownBit);
     if (staticHeader) {
         releaseHeader(header);

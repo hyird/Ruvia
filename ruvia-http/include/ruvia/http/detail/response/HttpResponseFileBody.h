@@ -43,6 +43,7 @@ private:
 };
 
 class HttpResponseBody;
+struct ResponseFileBodyAccess;
 
 // Non-owning descriptor derived atomically from an active response file
 // alternative. Its native path remains valid until that response body is
@@ -75,6 +76,7 @@ public:
 
 private:
     friend class HttpResponseBody;
+    friend struct ResponseFileBodyAccess;
 
     constexpr ResponseFileBody(const HttpNativePathChar* nativePath, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) noexcept
         : nativePath_(nativePath),
@@ -88,6 +90,15 @@ private:
     std::uint64_t offset_;
     std::uint64_t length_;
     ResponseFileIdentity identity_;
+};
+
+// Runtime drivers that must reopen a descriptor on another execution context
+// can build the same typed file descriptor without reaching into the response
+// body's private representation.
+struct ResponseFileBodyAccess final {
+    [[nodiscard]] static constexpr ResponseFileBody make(const HttpNativePathChar* path, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) noexcept {
+        return ResponseFileBody(path, size, offset, length, identity);
+    }
 };
 
 }  // namespace ruvia::detail

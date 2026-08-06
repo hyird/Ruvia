@@ -6,6 +6,8 @@
 #include <openssl/hmac.h>
 
 #include <array>
+#include <cstddef>
+#include <limits>
 #include <stdexcept>
 
 namespace ruvia::detail {
@@ -27,6 +29,15 @@ void validateSecret(std::string_view secret) {
     if (secret.empty()) {
         throw std::invalid_argument("JWT secret must not be empty");
     }
+    if (secret.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+        throw std::length_error("JWT secret is too large");
+    }
+}
+
+void validateHmacData(std::string_view data) {
+    if (data.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+        throw std::length_error("JWT signing input is too large");
+    }
 }
 
 }  // namespace
@@ -45,6 +56,7 @@ std::string_view jwtAlgorithmName(JwtAlgorithm algorithm) {
 
 std::pmr::string jwtHmacSign(JwtAlgorithm algorithm, std::string_view secret, std::string_view data, std::pmr::memory_resource* resource) {
     validateSecret(secret);
+    validateHmacData(data);
     unsigned int length = 0;
     std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
     if (HMAC(digestFor(algorithm), secret.data(), static_cast<int>(secret.size()), reinterpret_cast<const unsigned char*>(data.data()), data.size(), digest.data(), &length) == nullptr) {

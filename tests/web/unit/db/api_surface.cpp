@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include <array>
+#include <chrono>
 #include <concepts>
 #include <cstdint>
 #include <initializer_list>
@@ -44,6 +45,34 @@ private:
     }
 
     bool rejecting_{false};
+};
+
+class TrackingResource final : public std::pmr::memory_resource {
+public:
+    void release() noexcept {
+        released_ = true;
+    }
+
+    [[nodiscard]] bool deallocatedAfterRelease() const noexcept {
+        return deallocatedAfterRelease_;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        deallocatedAfterRelease_ = deallocatedAfterRelease_ || released_;
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool released_{false};
+    bool deallocatedAfterRelease_{false};
 };
 
 static_assert(std::is_move_assignable_v<ruvia::DbField>);
@@ -215,6 +244,16 @@ RUVIA_TEST(database_cold_operations_do_not_consume_pool_lease) {
     RUVIA_CHECK_EQ(state.activePayload().value, 7);
 }
 
+RUVIA_TEST(scoped_operation_scope_tracks_cold_owner_operations) {
+    ruvia::detail::ScopedOperationScope operationScope;
+    auto coldTask = []() -> ruvia::Task<void> { co_return; }();
+    {
+        auto operation = ruvia::detail::makeScopedOperation(operationScope, std::move(coldTask));
+        RUVIA_CHECK(operationScope.hasPendingOperations());
+    }
+    RUVIA_CHECK(!operationScope.hasPendingOperations());
+}
+
 RUVIA_TEST(db_value_and_result_storage_have_one_live_alternative) {
     const ruvia::DbValue nullValue(nullptr);
     const ruvia::DbValue textValue("value");
@@ -298,6 +337,36 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
     RUVIA_CHECK(aliasResolved);
 }
 
+RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
+    TrackingResource sourceResource;
+    std::pmr::unsynchronized_pool_resource targetResource;
+    asio::io_context ioContext;
+    std::optional<ruvia::detail::DbDefinition> definition;
+    ruvia::DbConfig config{
+        .driver = ruvia::DbDriver::kMariaDb,
+        .host = std::pmr::string(80, 'h', &sourceResource),
+        .port = 3306,
+        .username = std::pmr::string(80, 'u', &sourceResource),
+        .password = std::pmr::string(80, 'p', &sourceResource),
+        .database = std::pmr::string(80, 'd', &sourceResource),
+    };
+#ifdef RUVIA_ENABLE_POSTGRESQL
+#ifndef RUVIA_ENABLE_MARIADB
+    config.driver = ruvia::DbDriver::kPostgreSql;
+    config.port = 5432;
+#endif
+#endif
+    definition.emplace(std::pmr::string("default", &sourceResource), std::move(config));
+
+    std::optional<ruvia::detail::DbRegistry> registry;
+    registry.emplace(ioContext, &targetResource, std::span<const ruvia::detail::DbDefinition>(&*definition, 1));
+    definition.reset();
+    sourceResource.release();
+    registry.reset();
+
+    RUVIA_CHECK(!sourceResource.deallocatedAfterRelease());
+}
+
 RUVIA_TEST(db_handle_copy_rejects_after_parent_scope_closes) {
     asio::io_context ioContext;
 #ifdef RUVIA_ENABLE_MARIADB
@@ -340,6 +409,44 @@ RUVIA_TEST(db_migrator_validates_before_opening_connection) {
         rejected = std::string_view(error.what()) == "database migration ids must be unique, including case";
     }
     RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_connecting) {
+    ruvia::DbConfig config;
+    config.driver = ruvia::DbDriver::kPostgreSql;
+    ruvia::DbMigrationOptions options;
+    options.lockTimeout = std::chrono::seconds::max();
+
+    bool rejected = false;
+    try {
+        (void)ruvia::DbMigrator::migrate(config, std::span<const ruvia::DbMigration>(), options);
+    } catch (const std::invalid_argument& error) {
+        rejected = std::string_view(error.what()) == "database migration lock timeout cannot be represented as PostgreSQL milliseconds";
+    }
+    RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(db_migrator_owns_pmr_configuration) {
+    TrackingResource sourceResource;
+    std::pmr::unsynchronized_pool_resource targetResource;
+    {
+        ruvia::DbConfig config{
+            .driver = ruvia::DbDriver::kMariaDb,
+            .host = std::pmr::string(80, 'h', &sourceResource),
+            .port = 3306,
+            .username = std::pmr::string(80, 'u', &sourceResource),
+            .password = std::pmr::string(80, 'p', &sourceResource),
+            .database = std::pmr::string(80, 'd', &sourceResource),
+        };
+        ruvia::DbMigrationOptions options{
+            .table = std::pmr::string(80, 't', &sourceResource),
+            .lockTimeout = std::chrono::seconds(30),
+        };
+        ruvia::DbMigrator migrator(std::move(config), std::move(options), &targetResource);
+
+        sourceResource.release();
+    }
+    RUVIA_CHECK(!sourceResource.deallocatedAfterRelease());
 }
 
 RUVIA_TEST(db_result_value_move_assignment_propagates_allocator_failure) {

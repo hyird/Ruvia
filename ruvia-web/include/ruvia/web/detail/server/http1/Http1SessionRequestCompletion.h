@@ -164,6 +164,29 @@ public:
     }
     [[nodiscard]] constexpr const Http1RequestBufferCompletion& bufferCompletion() const&& = delete;
 
+    // A buffered response can be replaced by a pre-commit policy error after
+    // representation preparation (for example a forbidden identity fallback).
+    // Rebind the final response plan without losing the exact read-buffer
+    // cleanup alternative already established by request-body dispatch.
+    [[nodiscard]] Http1SessionRequestCompletion withBufferedConnectionPlan(Http1ServerConnectionPlan connectionPlan) const& noexcept {
+        if (std::get_if<Http1CommittedStreamResponse>(&value_) != nullptr) {
+            std::terminate();
+        }
+        if (bufferCompletion_.discarded() != nullptr) {
+            return makeBufferedClosing(connectionPlan.requireClose());
+        }
+        if (const auto* compaction = bufferCompletion_.compaction()) {
+            return makeBufferedUnrestored(connectionPlan, compaction->consumedBytes());
+        }
+        if (const auto* pipeline = bufferCompletion_.pipelineRestore()) {
+            if (connectionPlan.disposition() == Http1ConnectionDisposition::kClose) {
+                return makeBufferedClosing(connectionPlan);
+            }
+            return makeBufferedPipelineRestore(connectionPlan, pipeline->pipeline());
+        }
+        std::terminate();
+    }
+
 private:
     using Value = std::variant<Http1BufferedResponseReady, Http1CommittedStreamResponse>;
 

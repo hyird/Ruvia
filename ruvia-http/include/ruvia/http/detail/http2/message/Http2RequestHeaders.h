@@ -16,8 +16,15 @@
 namespace ruvia::detail {
 
 struct Http2HeaderDecodeContext final {
-    explicit Http2HeaderDecodeContext(Http2StreamState& streamValue) noexcept
-        : stream(streamValue) {}
+    explicit Http2HeaderDecodeContext(Http2StreamState& streamValue, Http2StreamHeaderDecodeTransaction* transactionValue = nullptr) noexcept
+        : stream(streamValue),
+          transaction(transactionValue) {}
+
+    void commitHeaderDecode() noexcept {
+        if (transaction != nullptr) {
+            transaction->commit();
+        }
+    }
 
     [[nodiscard]] bool acceptRegularField() noexcept {
         if (regularFieldCount == kMaxHttpHeaderFields) {
@@ -28,6 +35,7 @@ struct Http2HeaderDecodeContext final {
     }
 
     Http2StreamState& stream;
+    Http2StreamHeaderDecodeTransaction* transaction{nullptr};
     HttpHeaderSectionSize decodedHeaderListSize;
     std::size_t regularFieldCount{0};
 };

@@ -161,6 +161,18 @@ public:
         return enableConnectProtocol_;
     }
 
+    // A complete SETTINGS frame is validated against a detached candidate and
+    // committed only after every entry has passed. The local role is immutable,
+    // so only the peer-controlled values need to be copied into the live state.
+    void replaceValuesFrom(const Http2PeerSettings& candidate) noexcept {
+        maxFrameSize_ = candidate.maxFrameSize_;
+        initialWindowSize_ = candidate.initialWindowSize_;
+        maxConcurrentStreams_ = candidate.maxConcurrentStreams_;
+        enableConnectProtocol_ = candidate.enableConnectProtocol_;
+        headerTableSize_ = candidate.headerTableSize_;
+        maxHeaderListSize_ = candidate.maxHeaderListSize_;
+    }
+
     [[nodiscard]] Http2PeerSettingApplyResult apply(Http2SettingId id, std::uint32_t value) noexcept {
         switch (id) {
             case Http2SettingId::kHeaderTableSize:

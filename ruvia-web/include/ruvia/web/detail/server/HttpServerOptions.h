@@ -18,6 +18,7 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ServerConfig.h"
+#include "ruvia/web/detail/server/DocumentRootBinding.h"
 
 namespace ruvia {
 class Env;
@@ -113,6 +114,16 @@ struct HttpServerOptions final {
 
     struct DocumentRoot final {
         const StaticRoot* root{nullptr};
+        DocumentRootRuntimeOptions runtimeOptions;
+
+        // Keep the root and its runtime policy coupled at the dispatch
+        // boundary; a null root produces the explicit no-root state.
+        [[nodiscard]] DocumentRootBinding binding() const noexcept {
+            if (root == nullptr) {
+                return DocumentRootBinding::none();
+            }
+            return DocumentRootBinding::configured(*root, runtimeOptions);
+        }
     };
 
     // nginx-aligned inactivity timeouts. Absence disables a phase timeout;

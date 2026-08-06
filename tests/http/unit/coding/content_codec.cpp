@@ -1,5 +1,58 @@
 #include "content_decoding_fixture.h"
 
+#include "ruvia/http/detail/coding/HttpContentEncoder.h"
+
+using ruvia::detail::HttpContentEncodeStep;
+using ruvia::detail::HttpContentEncoder;
+
+namespace {
+
+class CountingMemoryResource final : public std::pmr::memory_resource {
+public:
+    [[nodiscard]] std::size_t allocations() const noexcept {
+        return allocations_;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        ++allocations_;
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::size_t allocations_{0};
+};
+
+class RejectOutputCapAllocationResource final : public std::pmr::memory_resource {
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        // The Brotli state for a one-megabyte input is intentionally much
+        // larger than the output cap. Reject only the cap-sized allocation so
+        // the test remains about output reservation, not codec initialization.
+        if (bytes >= (1u << 20) && bytes < (2u << 20)) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
+
+}  // namespace
+
 // The Content-Encoding field and the codecs behind it, independent of any message.
 
 RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
@@ -125,9 +178,99 @@ RUVIA_TEST(http_content_encode_enforces_exact_cap_without_partial_output) {
     }
 }
 
+RUVIA_TEST(http_content_decoder_state_uses_the_callers_memory_resource) {
+    const struct {
+        HttpContentCoding coding;
+        std::string encoded;
+    } cases[] = {
+        {HttpContentCoding::kGzip, gzipCompress({})},
+        {HttpContentCoding::kBrotli, brotliCompress({})},
+        {HttpContentCoding::kZstd, zstdCompress({})},
+    };
+
+    for (const auto& test : cases) {
+        CountingMemoryResource resource;
+        const auto result = decodeHttpContent(test.coding, test.encoded, 0, &resource);
+        RUVIA_CHECK(result.decoded() != nullptr);
+        // The decoded representation is empty and stays in the string's SSO
+        // buffer. Any observed allocation therefore belongs to codec state.
+        RUVIA_CHECK(resource.allocations() != 0);
+    }
+}
+
+RUVIA_TEST(http_content_encoder_round_trips_incremental_chunks) {
+    const std::string input =
+        "incremental HTTP response data with enough repetition to exercise "
+        "each encoder's pending output and finalization state. ";
+    const std::string repeated = input + input + input + input + input;
+
+    for (const auto coding : {HttpContentCoding::kIdentity, HttpContentCoding::kGzip, HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
+        std::pmr::string encoded(std::pmr::get_default_resource());
+        std::pmr::string chunk(std::pmr::get_default_resource());
+        HttpContentEncoder encoder(coding, std::pmr::get_default_resource());
+        for (std::size_t offset = 0; offset < repeated.size();) {
+            const auto size = std::min<std::size_t>(13, repeated.size() - offset);
+            chunk.clear();
+            const auto step = encoder.write(std::string_view(repeated).substr(offset, size), chunk);
+            RUVIA_CHECK(step != HttpContentEncodeStep::kFailure);
+            encoded.append(chunk);
+            offset += size;
+        }
+        chunk.clear();
+        RUVIA_CHECK(encoder.finish(chunk) == HttpContentEncodeStep::kFinished);
+        encoded.append(chunk);
+        RUVIA_CHECK_EQ(decoded(coding, encoded, repeated.size()), repeated);
+    }
+}
+
+RUVIA_TEST(http_content_encoder_rejects_writes_after_finish) {
+    for (const auto coding : {HttpContentCoding::kIdentity, HttpContentCoding::kGzip, HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
+        HttpContentEncoder encoder(coding, std::pmr::get_default_resource());
+        std::pmr::string output(std::pmr::get_default_resource());
+        RUVIA_CHECK(encoder.write("body", output) != HttpContentEncodeStep::kFailure);
+        output.clear();
+        RUVIA_CHECK(encoder.finish(output) == HttpContentEncodeStep::kFinished);
+        output.clear();
+        RUVIA_CHECK(encoder.write("late body", output) == HttpContentEncodeStep::kFailure);
+        RUVIA_CHECK(output.empty());
+        RUVIA_CHECK(encoder.finish(output) == HttpContentEncodeStep::kFinished);
+    }
+}
+
+RUVIA_TEST(http_content_encoder_failure_is_terminal) {
+    HttpContentEncoder encoder(HttpContentCoding::kIdentity, std::pmr::get_default_resource());
+    std::pmr::string output(std::pmr::null_memory_resource());
+    const std::string input(128, 'f');
+    RUVIA_CHECK(encoder.write(input, output) == HttpContentEncodeStep::kFailure);
+    RUVIA_CHECK(encoder.finish(output) == HttpContentEncodeStep::kFailure);
+    RUVIA_CHECK(encoder.write("retry", output) == HttpContentEncodeStep::kFailure);
+}
+
+RUVIA_TEST(http_content_encoder_flushes_each_incremental_chunk) {
+    const std::string input(4096, 's');
+
+    for (const auto coding : {HttpContentCoding::kGzip, HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
+        std::pmr::string encoded(std::pmr::get_default_resource());
+        std::pmr::string chunk(std::pmr::get_default_resource());
+        HttpContentEncoder encoder(coding, std::pmr::get_default_resource());
+        for (std::size_t offset = 0; offset < input.size();) {
+            const auto size = std::min<std::size_t>(257, input.size() - offset);
+            chunk.clear();
+            const auto step = encoder.write(std::string_view(input).substr(offset, size), chunk, true);
+            RUVIA_CHECK(step != HttpContentEncodeStep::kFailure);
+            encoded.append(chunk);
+            offset += size;
+        }
+        chunk.clear();
+        RUVIA_CHECK(encoder.finish(chunk) == HttpContentEncodeStep::kFinished);
+        encoded.append(chunk);
+        RUVIA_CHECK_EQ(decoded(coding, encoded, input.size()), input);
+    }
+}
+
 RUVIA_TEST(http_brotli_encode_does_not_reserve_the_output_cap) {
     const std::string input(1u << 20, 'b');
-    RejectLargeAllocationResource resource(4096);
+    RejectOutputCapAllocationResource resource;
     bool completed = false;
     bool roundTripped = false;
     try {

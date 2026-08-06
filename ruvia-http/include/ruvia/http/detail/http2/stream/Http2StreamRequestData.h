@@ -3,6 +3,8 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <exception>
+#include <utility>
 
 #include "ruvia/http/detail/http2/hpack/Http2HeaderList.h"
 #include "ruvia/http/HttpKnownMethod.h"
@@ -13,6 +15,8 @@ namespace ruvia::detail {
 
 class Http2StreamRequestData final {
 public:
+    using HeaderCheckpoint = Http2HeaderList::Checkpoint;
+
     explicit Http2StreamRequestData(std::pmr::memory_resource* resource = nullptr)
         : Http2StreamRequestData(HttpResolvedPmrResourceTag{}, httpPmrResourceOrDefault(resource)) {}
 
@@ -23,6 +27,33 @@ public:
 
     [[nodiscard]] HttpKnownMethod knownMethod() const noexcept {
         return knownMethod_;
+    }
+
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return method_.get_allocator().resource();
+    }
+
+    void swap(Http2StreamRequestData& other) noexcept {
+        if (resource() != other.resource()) {
+            std::terminate();
+        }
+        method_.swap(other.method_);
+        using std::swap;
+        swap(knownMethod_, other.knownMethod_);
+        scheme_.swap(other.scheme_);
+        authority_.swap(other.authority_);
+        path_.swap(other.path_);
+        protocol_.swap(other.protocol_);
+        cookie_.swap(other.cookie_);
+        headers_.swap(other.headers_);
+    }
+
+    [[nodiscard]] HeaderCheckpoint headerCheckpoint() const noexcept {
+        return headers_.checkpoint();
+    }
+
+    void rollbackHeaders(HeaderCheckpoint checkpoint) noexcept {
+        headers_.rollback(checkpoint);
     }
 
     void assignMethod(std::string_view method) {

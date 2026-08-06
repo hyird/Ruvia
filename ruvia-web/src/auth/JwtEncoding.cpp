@@ -3,13 +3,43 @@
 #include "ruvia/core/detail/util/Base64Url.h"
 
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 
 namespace ruvia::detail {
 
+namespace {
+
+[[nodiscard]] std::size_t jwtBase64UrlEncodedSize(std::size_t inputSize) {
+    constexpr auto kMax = std::numeric_limits<std::size_t>::max();
+    const auto fullGroups = inputSize / 3;
+    const auto remainder = inputSize % 3;
+    if (fullGroups > kMax / 4) {
+        throw std::length_error("JWT base64url output is too large");
+    }
+
+    const auto fullGroupSize = fullGroups * 4;
+    if (remainder == 0) {
+        return fullGroupSize;
+    }
+    if (fullGroupSize > kMax - 4) {
+        throw std::length_error("JWT base64url output is too large");
+    }
+    return fullGroupSize + 4;
+}
+
+[[nodiscard]] constexpr std::size_t jwtBase64UrlDecodedSize(std::size_t inputSize) noexcept {
+    const auto fullGroups = inputSize / 4;
+    const auto remainder = inputSize % 4;
+    // fullGroups * 3 cannot overflow: fullGroups <= max(size_t) / 4.
+    return fullGroups * 3 + (remainder == 0 ? 0 : remainder - 1);
+}
+
+}  // namespace
+
 std::pmr::string jwtBase64UrlEncode(std::string_view input, std::pmr::memory_resource* resource) {
     std::pmr::string out(pmrResourceOrDefault(resource));
-    out.reserve((input.size() * 4 + 2) / 3);
+    out.reserve(jwtBase64UrlEncodedSize(input.size()));
     std::uint32_t buffer = 0;
     int bits = 0;
     for (const auto ch : input) {
@@ -28,7 +58,7 @@ std::pmr::string jwtBase64UrlEncode(std::string_view input, std::pmr::memory_res
 
 std::pmr::string jwtBase64UrlDecode(std::string_view input, std::pmr::memory_resource* resource) {
     std::pmr::string out(pmrResourceOrDefault(resource));
-    out.reserve(input.size() * 3 / 4);
+    out.reserve(jwtBase64UrlDecodedSize(input.size()));
     std::uint32_t buffer = 0;
     int bits = 0;
     for (const auto ch : input) {

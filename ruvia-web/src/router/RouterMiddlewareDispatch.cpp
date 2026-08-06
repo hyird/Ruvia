@@ -20,6 +20,11 @@ void storeRepeatedNextError(Context& context) {
     detail::ContextAccess::setResponse(context, detail::makeDefaultErrorResponse(context.resource(), HttpErrorInfo(ruvia::http_status::kInternalServerError, "next_called_multiple_times", "next() called multiple times")));
 }
 
+void storeNextAfterResponseError(Context& context) {
+    detail::ContextAccess::setError(context, std::make_exception_ptr(std::logic_error("next() called after respond()")));
+    detail::ContextAccess::setResponse(context, detail::makeDefaultErrorResponse(context.resource(), HttpErrorInfo(ruvia::http_status::kInternalServerError, "next_called_after_response", "next() called after respond()")));
+}
+
 detail::NextState::Control* makeNextControl(Context& context) {
     auto* control = static_cast<detail::NextState::Control*>(context.resource()->allocate(sizeof(detail::NextState::Control), alignof(detail::NextState::Control)));
     std::construct_at(control);
@@ -99,6 +104,10 @@ Task<void> detail::RouteTable::invokeMiddlewareContinuation(NextState state) {
         storeRepeatedNextError(*context);
         co_return;
     }
+    if (detail::ContextAccess::hasResponse(*context)) {
+        storeNextAfterResponseError(*context);
+        co_return;
+    }
     const auto* table = state.table;
     const auto* route = state.route;
     std::exception_ptr exception;
@@ -132,6 +141,10 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(NextState stat
     auto* context = state.context;
     if (state.invocation != detail::NextState::Invocation::kReady) {
         storeRepeatedNextError(*context);
+        co_return;
+    }
+    if (detail::ContextAccess::hasResponse(*context)) {
+        storeNextAfterResponseError(*context);
         co_return;
     }
     const auto* table = state.table;

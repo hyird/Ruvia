@@ -1,11 +1,14 @@
 #include "test_harness.h"
 
 #include <chrono>
+#include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -126,6 +129,28 @@ RUVIA_TEST(jwt_sign_rejects_duplicate_custom_claim_names) {
 RUVIA_TEST(jwt_verify_rejects_wrong_secret) {
     const auto token = sign(signOptions("secretA"));
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(token, verifyOptions("secretB")); }));
+}
+
+RUVIA_TEST(jwt_hmac_rejects_unrepresentable_secret_length) {
+    if constexpr (sizeof(std::size_t) > sizeof(int)) {
+        const auto oversizedSecretSize = static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
+        bool rejected = false;
+        try {
+            (void)ruvia::detail::jwtHmacSign(JwtAlgorithm::kHs256, std::string_view("x", oversizedSecretSize), "data", std::pmr::get_default_resource());
+        } catch (const std::length_error&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+
+        const auto oversizedDataSize = static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
+        rejected = false;
+        try {
+            (void)ruvia::detail::jwtHmacSign(JwtAlgorithm::kHs256, "secret", std::string_view("x", oversizedDataSize), std::pmr::get_default_resource());
+        } catch (const std::length_error&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
 }
 
 RUVIA_TEST(jwt_verify_rejects_tampered_payload) {
@@ -458,6 +483,22 @@ RUVIA_TEST(jwt_base64url_round_trip_and_strict_decode) {
 
     // A length of 1 (mod 4) cannot encode a whole byte group.
     RUVIA_CHECK(throwsOn([&] { (void)jwtBase64UrlDecode("abcde", res); }));
+}
+
+RUVIA_TEST(jwt_base64url_rejects_unrepresentable_capacity_hint) {
+    using ruvia::detail::jwtBase64UrlEncode;
+    const auto max = std::numeric_limits<std::size_t>::max();
+    const auto tooLarge = (max / 4) * 3 + 1;
+    const std::string_view fakeInput("x", tooLarge);
+
+    bool lengthError = false;
+    try {
+        (void)jwtBase64UrlEncode(fakeInput, std::pmr::get_default_resource());
+    } catch (const std::length_error&) {
+        lengthError = true;
+    } catch (...) {
+    }
+    RUVIA_CHECK(lengthError);
 }
 
 RUVIA_TEST(jwt_bearer_token_extraction) {

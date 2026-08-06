@@ -15,6 +15,27 @@ inline void validateHttpServerTlsIdentity(const HttpServerOptions::TlsIdentity& 
     }
 }
 
+inline void validateDocumentRootRuntimeOptions(const HttpServerOptions& options) {
+    if (options.documentRoot.runtimeOptions.enableLiveReload && options.documentRoot.runtimeOptions.refreshMode != DocumentRootRefreshMode::kPolling) {
+        throw std::invalid_argument("document root live reload requires polling refresh");
+    }
+    switch (options.documentRoot.runtimeOptions.refreshMode) {
+        case DocumentRootRefreshMode::kImmutable:
+            break;
+        case DocumentRootRefreshMode::kPolling:
+            ensurePositiveDuration(options.documentRoot.runtimeOptions.refreshInterval, "document root refresh interval must be greater than zero");
+            if (options.documentRoot.root == nullptr) {
+                throw std::invalid_argument("document root polling requires a document root");
+            }
+            if (options.blockingPool == nullptr) {
+                throw std::invalid_argument("document root polling requires a blocking pool");
+            }
+            break;
+        default:
+            throw std::invalid_argument("document root refresh mode is invalid");
+    }
+}
+
 inline void validateHttpServerOptions(const HttpServerOptions& options) {
     ensurePositiveOptionalDurations("configured server timeouts must be greater than zero", options.keepaliveTimeout, options.clientHeaderTimeout, options.clientBodyTimeout, options.sendTimeout);
     ensurePositiveDuration(options.scanInterval, "connection scan interval must be greater than 0");
@@ -28,6 +49,7 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
     ensurePositiveSize(options.maxWebSocketMessageBytes, "websocket message limit must be greater than 0");
     ensurePositiveOptionalSize(options.maxConnections, "configured connection limit must be greater than zero");
     ensurePositiveOptionalSize(options.keepaliveRequests, "configured keepalive request limit must be greater than zero");
+    validateDocumentRootRuntimeOptions(options);
     if (const auto* tls = options.tls()) {
         validateHttpServerTlsIdentity(tls->identity);
         if (tls->clientCertificates.has_value()) {

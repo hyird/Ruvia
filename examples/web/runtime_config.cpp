@@ -1,5 +1,6 @@
 // Runtime configuration: dotenv, app-wide middleware via App::use, memory
-// pool, timeouts, limits, compression and optional TLS.
+// pool, timeouts, limits, compression and optional TLS. Typed Env::get<T>()
+// returns nullopt only when a variable is absent; malformed values fail fast.
 
 #include <chrono>
 #include <filesystem>

@@ -13,6 +13,7 @@
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http/error/HttpErrorResponse.h"
 #include "ruvia/web/detail/http/request/UnsupportedRequestContentCoding.h"
+#include "ruvia/web/detail/router/PrefixFallback.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
 
 // Turning a failed request into a response: the error a thrown exception really
@@ -75,11 +76,6 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
         // overload instead of a 500. The message is the framework's own and
         // names no application internals.
         errorInfo.assign(HttpErrorInfo(ruvia::http_status::kServiceUnavailable, "blocking_pool_unavailable", error.what()));
-    } catch (const std::invalid_argument& error) {
-        // invalid_argument is the framework's own request-validation signal (bad
-        // cookie/json/form); its message describes the request, so it is safe to
-        // surface to the client as a 400.
-        errorInfo.assign(HttpErrorInfo(ruvia::http_status::kBadRequest, {}, error.what()));
     } catch (const std::exception&) {
         // An unexpected exception (e.g. a database/library error) may carry
         // internal detail -- table names, query fragments, file paths. Do NOT echo
@@ -180,20 +176,6 @@ void detail::RouteTable::setNotFoundHandler(HttpNotFoundHandler handler) noexcep
 
 namespace {
 
-// Normalizes one prefix registration ("/api/" and "/api" are the same scope)
-// and validates the shape shared by both fallback kinds. "/" stays "/" and
-// scopes every path; plain setErrorHandler/setNotFoundHandler remain the
-// simpler spelling for that.
-[[nodiscard]] std::string_view normalizeFallbackPrefix(std::string_view prefix) {
-    if (prefix.empty() || prefix.front() != '/') {
-        throw std::invalid_argument("fallback prefix must start with '/'");
-    }
-    while (prefix.size() > 1 && prefix.back() == '/') {
-        prefix.remove_suffix(1);
-    }
-    return prefix;
-}
-
 template <typename Stored, typename Registration>
 void replacePrefixHandlers(std::pmr::vector<Stored>& stored, std::pmr::memory_resource* resource, std::span<const Registration> handlers) {
     std::pmr::vector<Stored> normalized(resource);
@@ -202,7 +184,7 @@ void replacePrefixHandlers(std::pmr::vector<Stored>& stored, std::pmr::memory_re
         if (registration.handler == nullptr) {
             throw std::invalid_argument("fallback handler must not be null");
         }
-        const auto prefix = normalizeFallbackPrefix(registration.prefix);
+        const auto prefix = detail::normalizeFallbackPrefix(registration.prefix);
         for (const auto& existing : normalized) {
             if (std::string_view(existing.prefix) == prefix) {
                 throw std::invalid_argument("duplicate fallback prefix");

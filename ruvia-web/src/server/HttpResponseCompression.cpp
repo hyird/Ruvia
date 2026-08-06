@@ -11,15 +11,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <utility>
 
 namespace ruvia::detail {
 namespace {
-
-void setCompressedContentLength(HttpResponse& response, std::size_t size) {
-    setResponseHeaderUnsigned(response, "Content-Length", static_cast<std::uint64_t>(size), kResponseHeaderContentLength);
-}
 
 [[nodiscard]] bool mediaTypeStartsWith(std::string_view mediaType, std::string_view prefix) noexcept {
     return mediaType.size() >= prefix.size() && httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
@@ -86,17 +83,24 @@ void weakenStrongResponseEtag(HttpResponse& response) {
 
 }  // namespace
 
-void applyResponseCompression(HttpContentCoding coding, HttpKnownMethod requestMethod, HttpResponse& response, const CompressionConfig& options) {
+HttpResponseCompressionEligibility httpResponseCompressionEligibility(const HttpResponseCodingSelection& /*selection*/, HttpKnownMethod requestMethod, const HttpResponse& response, ResponseStreamKind kind) noexcept {
     const auto bodyPlan = httpResponseBodyPlan(requestMethod, response.status());
     if (!bodyPlan.statusAllowsBody()) {
-        return;
+        return HttpResponseCompressionEligibility::kIneligible;
     }
 
     const auto statusCode = response.status();
     if (statusCode == http_status::kPartialContent || statusCode == http_status::kResetContent) {
-        return;
+        return HttpResponseCompressionEligibility::kIneligible;
     }
 
+    if (responseHasKnownHeader(response, kResponseHeaderContentEncoding) || responseHasKnownHeader(response, kResponseHeaderContentRange) || (kind != ResponseStreamKind::kSse && responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType))) || responseCacheControl(response).noTransform) {
+        return HttpResponseCompressionEligibility::kIneligible;
+    }
+    return HttpResponseCompressionEligibility::kEligible;
+}
+
+HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, HttpResponse& response, const CompressionConfig& options) {
     const auto& responseContent = responseBody(response);
 
     // These responses never vary by Accept-Encoding, so they are served identity
@@ -104,9 +108,11 @@ void applyResponseCompression(HttpContentCoding coding, HttpKnownMethod requestM
     // the representation): a file body (framed and Vary'd by the static-file path),
     // an already-chosen Content-Encoding, a Content-Range, an incompressible media
     // type, or an explicit no-transform.
-    if (responseContent.file().has_value() || responseHasKnownHeader(response, kResponseHeaderContentEncoding) || responseHasKnownHeader(response, kResponseHeaderContentRange) || responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType)) || responseCacheControl(response).noTransform) {
-        return;
+    if (responseContent.file().has_value() || httpResponseCompressionEligibility(selection, requestMethod, response, ResponseStreamKind::kGeneric) != HttpResponseCompressionEligibility::kEligible) {
+        return HttpResponseCompressionResult::makeNotApplicable();
     }
+
+    const auto coding = selection.coding();
 
     // A compressible representation IS selected by Accept-Encoding, so it varies by
     // it even when this particular response is left identity -- because the client
@@ -117,20 +123,50 @@ void applyResponseCompression(HttpContentCoding coding, HttpKnownMethod requestM
     addVaryToken(response, "Accept-Encoding");
 
     if (coding == HttpContentCoding::kIdentity || responseContent.size() < options.minBytes) {
-        return;
+        return HttpResponseCompressionResult::makeNotApplicable();
     }
     const auto body = responseContent.bytes();
     const auto maxEncodedBytes = body.empty() ? 0 : body.size() - 1;
-    auto encoding = encodeHttpContent(coding, body, maxEncodedBytes, responseResource(response));
-    auto* encoded = encoding.encoded();
+    std::optional<HttpContentEncodeResult> encoding;
+    try {
+        encoding.emplace(encodeHttpContent(coding, body, maxEncodedBytes, responseResource(response)));
+    } catch (...) {
+        return HttpResponseCompressionResult::makeFailed();
+    }
+    auto* encoded = encoding->encoded();
     if (encoded == nullptr) {
-        return;
+        const auto* failure = encoding->failure();
+        if (failure != nullptr && failure->error() == HttpContentEncodeError::kEncodedSizeExceeded) {
+            return HttpResponseCompressionResult::makeNotApplicable();
+        }
+        return HttpResponseCompressionResult::makeFailed();
     }
 
-    setResponseHeaderStableView(response, "Content-Encoding", httpContentCodingToken(coding));
+    try {
+        replaceResponseBodyWithContentEncoding(response, std::move(*encoded).takeBytes(), httpContentCodingToken(coding));
+    } catch (...) {
+        // The representation commit stages every affected header before
+        // publishing the owned body. A request-resource failure therefore
+        // leaves the identity response usable for the typed 500 path instead
+        // of exposing a mixed body/metadata state.
+        return HttpResponseCompressionResult::makeFailed();
+    }
+    return HttpResponseCompressionResult::makeCompressed();
+}
+
+bool prepareStreamingResponseCompression(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, HttpResponse& response, ResponseStreamKind kind) {
+    if (selection.coding() == HttpContentCoding::kIdentity || httpResponseCompressionEligibility(selection, requestMethod, response, kind) != HttpResponseCompressionEligibility::kEligible) {
+        return false;
+    }
+
+    addVaryToken(response, "Accept-Encoding");
+
+    // The encoded length is not known until finish(), so a handler-provided
+    // identity Content-Length cannot survive selecting a coding.
+    response.header("Content-Length", std::nullopt);
+    setResponseHeaderStableView(response, "Content-Encoding", httpContentCodingToken(selection.coding()));
     weakenStrongResponseEtag(response);
-    setCompressedContentLength(response, encoded->bytes().size());
-    setResponseBodyOwned(response, std::move(*encoded).takeBytes());
+    return true;
 }
 
 }  // namespace ruvia::detail

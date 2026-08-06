@@ -17,10 +17,15 @@ void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view na
 void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view name, std::int64_t value);
 [[nodiscard]] std::pmr::string jwtParseJoseAlgorithm(std::string_view json, std::pmr::memory_resource* resource);
 
+// Throws std::length_error when the encoded or decoded capacity hint cannot be
+// represented by std::size_t before allocating the result.
 [[nodiscard]] std::pmr::string jwtBase64UrlEncode(std::string_view input, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::string jwtBase64UrlDecode(std::string_view input, std::pmr::memory_resource* resource);
 
 [[nodiscard]] std::string_view jwtAlgorithmName(JwtAlgorithm algorithm);
+// Throws std::invalid_argument for an empty secret and std::length_error when
+// the secret or signing input cannot be represented by OpenSSL's HMAC length
+// parameters.
 [[nodiscard]] std::pmr::string jwtHmacSign(JwtAlgorithm algorithm, std::string_view secret, std::string_view data, std::pmr::memory_resource* resource);
 [[nodiscard]] bool jwtConstantTimeEquals(std::string_view left, std::string_view right) noexcept;
 

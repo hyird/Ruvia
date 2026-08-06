@@ -52,15 +52,8 @@ Task<RedisZScanResult> executeRedisZScan(detail::RedisPool& pool, std::pmr::vect
     co_return detail::parseRedisZScanResult(value, resource);
 }
 
-[[nodiscard]] std::optional<std::chrono::milliseconds> redisBlockingPopClientTimeout(std::chrono::seconds timeout) noexcept {
-    if (timeout <= std::chrono::seconds(0)) {
-        return std::nullopt;
-    }
-    return std::chrono::duration_cast<std::chrono::milliseconds>(timeout) + std::chrono::seconds(1);
-}
-
 Task<std::optional<RedisKeyValue>> executeRedisBlockingPop(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, std::chrono::seconds timeout, std::pmr::memory_resource* resource) {
-    auto reply = co_await pool.executeWithTimeout(std::span<const std::pmr::string>(args), redisBlockingPopClientTimeout(timeout), resource);
+    auto reply = co_await pool.executeWithTimeout(std::span<const std::pmr::string>(args), detail::redisBlockingPopClientTimeout(timeout), resource);
     co_return detail::parseRedisBlockingPopReply(reply, resource);
 }
 

@@ -42,6 +42,8 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
     }
 
     Http2StreamState* stream = nullptr;
+    bool newPeerStream = false;
+    bool createdPeerStream = false;
     std::optional<DiscardedHeaderAction> discardedAction;
     if (auto* existing = findStream(header.streamId); existing != nullptr) {
         if (existing->isAborted()) {
@@ -107,12 +109,16 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             // as permitted by RFC 9113 5.1.
             discardedAction = DiscardedHeaderAction::kIgnore;
         } else {
-            // Record every genuinely new peer stream ID, even when it is malformed or
-            // refused, so a later lower ID cannot be reopened as idle.
-            lastStreamId_ = header.streamId;
+            // Publish a genuinely new peer stream ID only after the first HEADERS
+            // fragment has been accepted. A throwing stream allocation or header
+            // buffer append must leave the complete frame retryable; advancing the
+            // high-water mark before that point would turn the retry into a false
+            // "stream id is not increasing" connection error.
+            newPeerStream = true;
             const auto* gracefulDrain = localConnectionState_.gracefulDrain();
             const bool drainRefused = gracefulDrain != nullptr && header.streamId > gracefulDrain->lastStreamId();
             stream = drainRefused ? nullptr : createStream(header.streamId);
+            createdPeerStream = stream != nullptr;
             if (stream == nullptr) {
                 discardedAction = DiscardedHeaderAction::kRefuseStream;
             }
@@ -120,17 +126,30 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
     }
 
     if (discardedAction) {
-        return startDiscardedHeaderBlock(header, fragment, *discardedAction);
+        const auto result = startDiscardedHeaderBlock(header, fragment, *discardedAction);
+        if (newPeerStream && result) {
+            lastStreamId_ = header.streamId;
+        }
+        return result;
     }
 
-    if ((header.flags & kHttp2FlagEndStream) != 0) {
-        if (!stream->recordRemoteHeadEndStream()) {
-            output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
-            return true;
+    // Buffering the compressed fragment is the first fallible operation. Do it
+    // before publishing END_STREAM in the remote lifecycle; if the PMR rejects the
+    // append, a retry sees the original head-pending state. A newly created stream
+    // is likewise removed on this failure because it has not become observable yet.
+    bool startedHeaderBlock = false;
+    try {
+        startedHeaderBlock = http2StartHeaderBlock(*stream, fragment);
+    } catch (...) {
+        if (createdPeerStream) {
+            streams_.remove(header.streamId);
         }
+        throw;
     }
-    if (!http2StartHeaderBlock(*stream, fragment)) {
+    if (!startedHeaderBlock) {
+        if (createdPeerStream) {
+            streams_.remove(header.streamId);
+        }
         // The block exceeds the header buffer cap. We cannot decode a block we could
         // not fully buffer, and skipping it would desync the connection-global HPACK
         // dynamic table for every later block (RFC 9113 §4.3) -- so this is a
@@ -139,13 +158,40 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
         return false;
     }
 
-    if ((header.flags & kHttp2FlagEndHeaders) != 0) {
-        const auto status = decodeInitialHeaderBlock(*stream);
-        if (status != HeaderDecodeStatus::kOk) {
-            return handleHeaderDecodeFailure(*stream, status);
+    if (newPeerStream) {
+        lastStreamId_ = header.streamId;
+    }
+
+    bool recordedHeadEndStream = false;
+    if ((header.flags & kHttp2FlagEndStream) != 0) {
+        if (!stream->recordRemoteHeadEndStream()) {
+            output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
+            return true;
         }
-        if (http2RemoteFinalHeadDecoded(*stream)) {
-            emitRequestHeaders(*stream);  // not yet decoded = a 1xx interim head (client)
+        recordedHeadEndStream = true;
+    }
+
+    if ((header.flags & kHttp2FlagEndHeaders) != 0) {
+        try {
+            Http2StreamHeaderDecodeTransaction transaction{*stream, role_ == Http2Role::kServer};
+            auto hpackTransaction = decoder_.beginTransaction();
+            const auto status = decodeInitialHeaderBlock(*stream, transaction, hpackTransaction);
+            if (status != HeaderDecodeStatus::kOk) {
+                transaction.rollback();
+                return handleHeaderDecodeFailure(*stream, status, &hpackTransaction);
+            }
+            if (http2RemoteFinalHeadDecoded(*stream)) {
+                emitRequestHeaders(*stream);  // not yet decoded = a 1xx interim head (client)
+            }
+            transaction.commit();
+            hpackTransaction.commit();
+            http2ResetHeaderBlock(*stream);
+        } catch (...) {
+            if (recordedHeadEndStream) {
+                (void)stream->rollbackRemoteHeadEndStreamForRetry();
+            }
+            throw;
         }
     } else {
         headerContinuation_.start(stream->id(), Http2HeaderBlockKind::kInitial);
@@ -171,10 +217,16 @@ bool Http2Connection::processTrailerHeaders(Http2StreamState& stream, const Http
     }
 
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
-        const auto status = finishTrailerBlock(stream);
+        Http2StreamHeaderDecodeTransaction transaction{stream, false};
+        auto hpackTransaction = decoder_.beginTransaction();
+        const auto status = finishTrailerBlock(stream, transaction, hpackTransaction);
         if (status != HeaderDecodeStatus::kOk) {
-            return handleHeaderDecodeFailure(stream, status);
+            transaction.rollback();
+            return handleHeaderDecodeFailure(stream, status, &hpackTransaction);
         }
+        transaction.commit();
+        hpackTransaction.commit();
+        http2ResetHeaderBlock(stream);
     } else {
         headerContinuation_.start(stream.id(), Http2HeaderBlockKind::kTrailers);
     }
@@ -189,8 +241,10 @@ bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::s
     // Bound the CONTINUATION count per header block. Empty CONTINUATION frames add
     // no bytes and so never trip the accumulated-block size cap; without this an
     // endless stream of them keeps the block "in progress" forever (RFC 9113 §6.10,
-    // CVE-2024-27316 CONTINUATION flood).
-    if (!headerContinuation_.recordContinuationFrame()) {
+    // CVE-2024-27316 CONTINUATION flood). Check without mutating first: buffering
+    // the fragment below can allocate, and a failed retry must not spend the
+    // frame-count budget twice.
+    if (!headerContinuation_.continuationFrameBudgetAvailable()) {
         appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "CONTINUATION flood");
         return false;
     }
@@ -218,24 +272,46 @@ bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::s
         appendGoaway(Http2ErrorCode::kCompressionError, "field block not decompressed");
         return false;
     }
+    (void)headerContinuation_.recordContinuationFrame();
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
-        const auto completedKind = headerContinuation_.finishKind();
-        if (completedKind == Http2HeaderBlockKind::kDiscarded) {
-            return finishDiscardedHeaderBlock();
-        }
-        if (completedKind == Http2HeaderBlockKind::kTrailers) {
-            const auto status = finishTrailerBlock(*stream);
-            if (status != HeaderDecodeStatus::kOk) {
-                return handleHeaderDecodeFailure(*stream, status);
+        const auto continuationCheckpoint = headerContinuation_.checkpoint();
+        try {
+            const auto completedKind = headerContinuation_.finishKind();
+            if (completedKind == Http2HeaderBlockKind::kDiscarded) {
+                return finishDiscardedHeaderBlock();
             }
-        } else {
-            const auto status = decodeInitialHeaderBlock(*stream);
-            if (status != HeaderDecodeStatus::kOk) {
-                return handleHeaderDecodeFailure(*stream, status);
+            if (completedKind == Http2HeaderBlockKind::kTrailers) {
+                Http2StreamHeaderDecodeTransaction transaction{*stream, false};
+                auto hpackTransaction = decoder_.beginTransaction();
+                const auto status = finishTrailerBlock(*stream, transaction, hpackTransaction);
+                if (status != HeaderDecodeStatus::kOk) {
+                    transaction.rollback();
+                    return handleHeaderDecodeFailure(*stream, status, &hpackTransaction);
+                }
+                transaction.commit();
+                hpackTransaction.commit();
+                http2ResetHeaderBlock(*stream);
+            } else {
+                Http2StreamHeaderDecodeTransaction transaction{*stream, role_ == Http2Role::kServer};
+                auto hpackTransaction = decoder_.beginTransaction();
+                const auto status = decodeInitialHeaderBlock(*stream, transaction, hpackTransaction);
+                if (status != HeaderDecodeStatus::kOk) {
+                    transaction.rollback();
+                    return handleHeaderDecodeFailure(*stream, status, &hpackTransaction);
+                }
+                if (http2RemoteFinalHeadDecoded(*stream)) {
+                    emitRequestHeaders(*stream);
+                }
+                transaction.commit();
+                hpackTransaction.commit();
+                http2ResetHeaderBlock(*stream);
             }
-            if (http2RemoteFinalHeadDecoded(*stream)) {
-                emitRequestHeaders(*stream);
-            }
+        } catch (...) {
+            // `finishKind()` is a commit of the continuation latch. Decode and
+            // subsequent event/output reservation remain fallible, so restore the
+            // latch before rethrowing; the caller may retry this exact final frame.
+            headerContinuation_.restore(continuationCheckpoint);
+            throw;
         }
     }
     return true;

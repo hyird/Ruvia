@@ -13,6 +13,7 @@
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/error.hpp>
 #include <asio/system_error.hpp>
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <memory>
@@ -28,6 +29,9 @@
 #endif
 
 #include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/Timer.h"
+#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -146,8 +150,11 @@ HttpServer::HttpServer(ValidatedOptionsTag, TcpEndpoint endpoint, const RouteTab
       endpoint_(std::move(endpoint)),
       routes_(routes),
       memory_(validatedOptions.memoryConfig),
+      backgroundTasks_(workerHandle_, memory_.resource()),
       sniContexts_(memory_.resource()),
       sniLookup_(memory_.resource()),
+      ownedDocumentRoot_(nullptr, PmrObjectDeleter<StaticRoot>{processResource()}),
+      retiredDocumentRoots_(memory_.resource()),
       options_(std::move(validatedOptions)),
       connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
       dataAccess_(ioContext_, memory_.resource(), databases, redis, connectionScanner_),
@@ -155,6 +162,12 @@ HttpServer::HttpServer(ValidatedOptionsTag, TcpEndpoint endpoint, const RouteTab
       webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(), workerHandle_, memory_.resource(), dataAccess_.databases(), dataAccess_.redis(), workerStates_, options_.blockingPool, [this](std::exception_ptr failure) { failWorker(std::move(failure)); })),
       rateLimiter_(options_.defaultRateLimitPerWorker, routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent : RouteRateLimitPresence::kAbsent, options_.rateLimitSlotsPerWorker, memory_.resource()),
       workSetPool_(memory_) {
+    if (options_.documentRoot.root != nullptr && options_.documentRoot.runtimeOptions.refreshMode == DocumentRootRefreshMode::kPolling) {
+        const auto* configuredRoot = options_.documentRoot.root;
+        auto rootOptions = StaticRootAccess::options(*configuredRoot);
+        ownedDocumentRoot_ = makePmrObject<StaticRoot>(processResource(), configuredRoot->path(), std::move(rootOptions));
+        options_.documentRoot.root = ownedDocumentRoot_.get();
+    }
     // Claim the failure sink's counter. Every reporting site shares this one
     // options_ instance, so the count cannot drift from what the callback saw.
     options_.connectionFailure.counter = &connectionFailures_;
@@ -239,6 +252,7 @@ HttpServerStats HttpServer::stats() const noexcept {
     stats.connectionFailures = connectionFailures_.load(std::memory_order_relaxed);
     stats.acceptFailures = acceptFailures_.load(std::memory_order_relaxed);
     stats.workerFailures = workerFailures_.load(std::memory_order_relaxed);
+    stats.documentRootRefreshFailures = documentRootRefreshFailures_.load(std::memory_order_relaxed);
     return stats;
 }
 
@@ -396,15 +410,137 @@ Task<void> HttpServer::runWorker() {
     if (!httpServerWorkerRunning(workerState_)) {
         co_return;
     }
+    bool refreshStarted = false;
     try {
         connectionScanner_.start();
         co_await dataAccess_.connect();
         (void)workerCompletion_.markStartupReady();
+        if (options_.documentRoot.root != nullptr && options_.documentRoot.runtimeOptions.refreshMode == DocumentRootRefreshMode::kPolling) {
+            backgroundTasks_.spawn(staticRootRefreshLoop());
+            refreshStarted = true;
+        }
         co_await acceptLoop();
     } catch (...) {
         const auto failure = std::current_exception();
         (void)workerCompletion_.markStartupFailed(failure);
         failWorker(failure);
+    }
+    if (refreshStarted) {
+        backgroundTasks_.requestStop();
+        try {
+            co_await backgroundTasks_.join();
+        } catch (...) {
+            const auto failure = std::current_exception();
+            (void)workerCompletion_.markStartupFailed(failure);
+            failWorker(failure);
+        }
+    }
+}
+
+Task<void> HttpServer::staticRootRefreshLoop() {
+    const auto interval = options_.documentRoot.runtimeOptions.refreshInterval;
+    const auto reclaimRetiredRoots = [this]() noexcept {
+        std::erase_if(retiredDocumentRoots_, [](const DocumentRootPtr& root) {
+            return root == nullptr || !StaticRootAccess::hasActiveBindings(*root);
+        });
+    };
+    for (;;) {
+        if (!httpServerWorkerRunning(workerState_)) {
+            co_return;
+        }
+        if (co_await sleepForBorrowed(workerHandle_, interval) == TimerSleepResult::kWorkerStopping) {
+            co_return;
+        }
+        if (!httpServerWorkerRunning(workerState_)) {
+            co_return;
+        }
+
+        // Lease counts belong to the snapshot they protect. Reclaim old
+        // generations independently; a long request on an older generation
+        // must not pin every newer generation published by polling.
+        reclaimRetiredRoots();
+
+        const auto* currentRoot = options_.documentRoot.root;
+        if (currentRoot == nullptr) {
+            // The validated polling configuration owns this invariant. Keep
+            // the loop defensive anyway: a broken runtime binding must not
+            // turn a background task into a null dereference on the worker.
+            documentRootRefreshFailures_.fetch_add(1, std::memory_order_relaxed);
+            co_return;
+        }
+
+        std::filesystem::path rootPath;
+        StaticRootOptions rootOptions;
+        try {
+            // Both operations copy PMR-backed configuration. They are outside
+            // runBlocking because the source snapshot is worker-owned, but a
+            // transient allocation failure here is still a refresh failure,
+            // not a reason to terminate the listener and discard its last
+            // complete index.
+            rootPath = currentRoot->path();
+            rootOptions = StaticRootAccess::options(*currentRoot);
+        } catch (...) {
+            documentRootRefreshFailures_.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        DocumentRootPtr candidate(nullptr, PmrObjectDeleter<StaticRoot>{processResource()});
+        try {
+            auto rebuilt = co_await ruvia::runBlocking(*options_.blockingPool, workerHandle_, [rootPath = std::move(rootPath), rootOptions = std::move(rootOptions)]() mutable {
+                return makePmrObject<StaticRoot>(processResource(), rootPath, std::move(rootOptions));
+            });
+            if (!rebuilt.completed()) {
+                if (rebuilt.failed()) {
+                    // A refresh is transactional: keep serving the last complete
+                    // index, but expose repeated filesystem/permission failures to
+                    // metrics instead of silently turning them into stale content.
+                    documentRootRefreshFailures_.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (!httpServerWorkerRunning(workerState_)) {
+                    co_return;
+                }
+                continue;
+            }
+
+            candidate = std::move(rebuilt).value();
+        } catch (...) {
+            // The offload wrapper reports queue/pool shutdown as a status, but
+            // creating its one-shot channel or transporting a result can still
+            // fail with an allocation/runtime exception. Refresh is best effort:
+            // retain the last complete snapshot and keep the listener alive.
+            documentRootRefreshFailures_.fetch_add(1, std::memory_order_relaxed);
+            if (!httpServerWorkerRunning(workerState_)) {
+                co_return;
+            }
+            continue;
+        }
+
+        if (!httpServerWorkerRunning(workerState_)) {
+            co_return;
+        }
+        if (StaticRootAccess::fingerprint(*candidate) == StaticRootAccess::fingerprint(*currentRoot) && StaticRootAccess::sameSnapshot(*candidate, *currentRoot)) {
+            continue;
+        }
+
+        // A binding is a request-scoped lease. If no request can still hold
+        // the current index, replacing it may destroy the old root directly;
+        // otherwise retain the old immutable snapshot until every in-flight
+        // dispatch releases its move-only binding. Publishing a raw pointer
+        // without this retirement step leaves a suspended coroutine with a
+        // dangling StaticRoot after the next poll.
+        try {
+            if (ownedDocumentRoot_ != nullptr && StaticRootAccess::hasActiveBindings(*ownedDocumentRoot_)) {
+                // A vector growth is the only fallible part of publication.
+                // The old pointer remains owned by this server if growth is
+                // rejected, so the candidate can be discarded and the next
+                // poll can retry without exposing a half-published root.
+                retiredDocumentRoots_.push_back(std::move(ownedDocumentRoot_));
+            }
+        } catch (...) {
+            documentRootRefreshFailures_.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        ownedDocumentRoot_ = std::move(candidate);
+        options_.documentRoot.root = ownedDocumentRoot_.get();
     }
 }
 

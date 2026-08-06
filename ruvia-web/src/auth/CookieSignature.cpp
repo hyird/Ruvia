@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
@@ -18,6 +19,7 @@ namespace ruvia::detail {
 namespace {
 
 inline constexpr std::size_t kHmacSha256Size = 32;
+inline constexpr std::size_t kMaxHmacParameterBytes = static_cast<std::size_t>((std::numeric_limits<int>::max)());
 static_assert(kCookieSignatureSize == base64EncodedSize(kHmacSha256Size));
 
 }  // namespace
@@ -25,6 +27,13 @@ static_assert(kCookieSignatureSize == base64EncodedSize(kHmacSha256Size));
 void writeCookieSignature(char* output, std::string_view secret, std::string_view name, std::string_view value) {
     if (secret.empty()) {
         throw std::invalid_argument("signed cookie secret must not be empty");
+    }
+    constexpr auto kMaxCookieNameBytes = static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)());
+    if (secret.size() > kMaxHmacParameterBytes) {
+        throw std::length_error("signed cookie secret is too large");
+    }
+    if (name.size() > kMaxCookieNameBytes) {
+        throw std::length_error("signed cookie name is too large");
     }
     // Length-frame the name so the name/value boundary is unambiguous regardless
     // of the bytes either contains (prevents name||value collisions).
@@ -38,10 +47,17 @@ void writeCookieSignature(char* output, std::string_view secret, std::string_vie
     // Assemble lenPrefix||name||value for the one-shot HMAC. A stack arena keeps
     // signing a typical cookie allocation-free; an oversized name/value spills to
     // the default upstream resource transparently.
+    if (name.size() > std::numeric_limits<std::size_t>::max() - nameLenBytes.size() || value.size() > std::numeric_limits<std::size_t>::max() - nameLenBytes.size() - name.size()) {
+        throw std::length_error("signed cookie message is too large");
+    }
     std::array<std::byte, 512> messageBuffer;
     std::pmr::monotonic_buffer_resource messageArena(messageBuffer.data(), messageBuffer.size());
     std::pmr::string message(&messageArena);
-    message.reserve(nameLenBytes.size() + name.size() + value.size());
+    const auto messageSize = nameLenBytes.size() + name.size() + value.size();
+    if (messageSize > kMaxHmacParameterBytes) {
+        throw std::length_error("signed cookie message is too large for HMAC");
+    }
+    message.reserve(messageSize);
     message.append(nameLenBytes.data(), nameLenBytes.size());
     message.append(name.data(), name.size());
     message.append(value.data(), value.size());

@@ -1,7 +1,7 @@
 // Typed models and validation: unified JSON models, form bodies, nested
 // models, arrays, recursive lists, defaults, validation
-// middleware and rules, and the non-throwing jsonIf/formIf fallbacks (wrong
-// media type or unparsable body yield nullopt instead of 415/400).
+// middleware and rules, and jsonIf/formIf probes that fall back only on a
+// media-type mismatch; malformed selected bodies remain 400 responses.
 
 #include <cstdint>
 #include <string_view>
@@ -151,10 +151,9 @@ private:
     }
 
     // json<T>()/form<T>() answer a wrong Content-Type with 415 and a
-    // malformed body of the right type with 400. When the endpoint prefers
-    // to fall back instead of failing -- optional bodies, content
-    // negotiation -- the *If variants return nullopt for exactly those two
-    // format problems while transport/protocol failures still throw.
+    // malformed body of the right type with 400. The *If variants only return
+    // nullopt for a different Content-Type; a malformed body still receives
+    // the 400 so content negotiation cannot silently accept broken JSON/form.
     ruvia::Task<ruvia::HttpResponse> feedback(ruvia::Context& c) {
         if (const auto json = co_await c.req().jsonIf<ContactForm>()) {
             std::pmr::string body(c.allocator<char>());
