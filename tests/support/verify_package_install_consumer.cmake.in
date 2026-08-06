@@ -74,6 +74,13 @@ function(ruvia_consumer_common_args out package_prefix)
     if(NOT "@CMAKE_BUILD_TYPE@" STREQUAL "")
         list(APPEND _args "-DCMAKE_BUILD_TYPE=@CMAKE_BUILD_TYPE@")
     endif()
+    if(NOT "@CMAKE_CONFIGURATION_TYPES@" STREQUAL "" AND
+       DEFINED RUVIA_TEST_CONFIG AND NOT RUVIA_TEST_CONFIG STREQUAL "")
+        # The guard installs only RUVIA_TEST_CONFIG. Restrict the generated
+        # multi-config consumer to the same configuration so CMake does not
+        # require import locations that were deliberately not installed.
+        list(APPEND _args "-DCMAKE_CONFIGURATION_TYPES=${RUVIA_TEST_CONFIG}")
+    endif()
     set(${out} "${_args}" PARENT_SCOPE)
 endfunction()
 

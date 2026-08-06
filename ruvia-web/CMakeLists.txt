@@ -207,14 +207,15 @@ ruvia_install_public_header_tree(web include/ruvia/web
 # not.
 ruvia_install_public_headers(web
     include/ruvia/web/db/DbTypes.h
-    include/ruvia/web/redis/RedisTypes.h)
+    include/ruvia/web/redis/RedisTypes.h
+    include/ruvia/web/detail/db/DbConfigStorage.h
+    include/ruvia/web/detail/redis/RedisConfigStorage.h)
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_install_public_header_tree(web include/ruvia/web/db
         PATTERN "DbTypes.h" EXCLUDE)
     ruvia_install_public_headers(web
         include/ruvia/web/detail/db/DbBackend.h
-        include/ruvia/web/detail/db/DbConfigStorage.h
         include/ruvia/web/detail/db/DbConfigValidation.h
         include/ruvia/web/detail/db/DbHostResolution.h
         include/ruvia/web/detail/db/DbRegistry.h
@@ -244,7 +245,8 @@ endif()
 if(RUVIA_ENABLE_REDIS)
     ruvia_install_public_header_tree(web include/ruvia/web/redis
         PATTERN "RedisTypes.h" EXCLUDE)
-    ruvia_install_public_header_tree(web include/ruvia/web/detail/redis)
+    ruvia_install_public_header_tree(web include/ruvia/web/detail/redis
+        PATTERN "RedisConfigStorage.h" EXCLUDE)
 endif()
 
 if(RUVIA_ENABLE_JWT)
