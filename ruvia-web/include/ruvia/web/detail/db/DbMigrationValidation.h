@@ -122,7 +122,7 @@ inline void validateMigrationList(std::span<const DbMigration> migrations) {
         if (migration.sql().empty()) {
             throw std::invalid_argument("database migration SQL must not be empty");
         }
-        const auto separator = findSqlSyntaxByte(migration.sql(), ';');
+        const auto separator = findPostgreSqlSyntaxByte(migration.sql(), ';');
         if (separator != std::string_view::npos && !hasTrailingSqlOnly(migration.sql(), separator + 1)) {
             throw std::invalid_argument("database migration must contain exactly one SQL statement");
         }

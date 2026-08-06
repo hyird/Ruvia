@@ -133,6 +133,14 @@ RUVIA_TEST(db_migration_list_validation_enforces_one_statement) {
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(quoted, 1)); }));
     const DbMigration commented[] = {{"001", "CREATE TABLE a(id INT) -- one; two\n"}};
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(commented, 1)); }));
+
+    // PostgreSQL DO blocks and function bodies routinely contain statement
+    // separators inside dollar-quoted text. Those bytes are part of the one DO
+    // or CREATE FUNCTION statement, including when tags are nested.
+    const DbMigration dollarQuoted[] = {{"001", "DO $$ BEGIN PERFORM 1; PERFORM 2; END $$;"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(dollarQuoted, 1)); }));
+    const DbMigration tagged[] = {{"001", "DO $schema$ BEGIN EXECUTE $body$ SELECT 1; SELECT 2 $body$; END $schema$;"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(tagged, 1)); }));
 }
 
 RUVIA_TEST(db_migration_checksum_pins_the_recorded_text) {
@@ -171,7 +179,9 @@ RUVIA_TEST(db_migration_carries_its_atomicity) {
 }
 
 RUVIA_TEST(db_sql_scan_steps_over_opaque_constructs) {
+    using ruvia::detail::findPostgreSqlSyntaxByte;
     using ruvia::detail::findSqlSyntaxByte;
+    using ruvia::detail::skipPostgreSqlDollarQuotedAtom;
     using ruvia::detail::skipSqlAtom;
 
     // The scan is shared by the parameter binder and the migration validator,
@@ -198,4 +208,11 @@ RUVIA_TEST(db_sql_scan_steps_over_opaque_constructs) {
     RUVIA_CHECK_EQ(findSqlSyntaxByte("'a;b'", ';'), std::string_view::npos);
     RUVIA_CHECK_EQ(findSqlSyntaxByte("'a;b';", ';'), std::size_t{5});
     RUVIA_CHECK_EQ(findSqlSyntaxByte("x", '?'), std::string_view::npos);
+
+    RUVIA_CHECK_EQ(skipPostgreSqlDollarQuotedAtom("$$a;b$$x", 0), std::size_t{7});
+    RUVIA_CHECK_EQ(skipPostgreSqlDollarQuotedAtom("$tag$a;b$tag$x", 0), std::size_t{13});
+    RUVIA_CHECK_EQ(findPostgreSqlSyntaxByte("DO $$a;b$$;", ';'), std::size_t{10});
+    RUVIA_CHECK_EQ(findPostgreSqlSyntaxByte("DO $tag$a;b$tag$; SELECT 2", ';'), std::size_t{16});
+    // A positional parameter is not a dollar-quote opener.
+    RUVIA_CHECK_EQ(findPostgreSqlSyntaxByte("SELECT $1; SELECT 2", ';'), std::size_t{9});
 }

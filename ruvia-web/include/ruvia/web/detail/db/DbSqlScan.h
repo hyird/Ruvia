@@ -101,12 +101,75 @@ namespace ruvia::detail {
     }
 }
 
+[[nodiscard]] constexpr bool isPostgreSqlDollarTagStart(char character) noexcept {
+    const auto byte = static_cast<unsigned char>(character);
+    return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || byte == '_';
+}
+
+[[nodiscard]] constexpr bool isPostgreSqlDollarTagContinue(char character) noexcept {
+    const auto byte = static_cast<unsigned char>(character);
+    return isPostgreSqlDollarTagStart(character) || (byte >= '0' && byte <= '9');
+}
+
+// PostgreSQL dollar-quoted strings are opaque SQL data just like ordinary
+// string literals, but their delimiter is either $$ or $tag$. Keep this scan
+// separate from skipSqlAtom(): MariaDB's '?' binder shares that generic helper
+// and must not treat its ordinary '$' identifiers as quoted strings.
+[[nodiscard]] constexpr std::size_t skipPostgreSqlDollarQuotedAtom(std::string_view sql, std::size_t index) noexcept {
+    const auto size = sql.size();
+    if (index >= size || sql[index] != '$') {
+        return index < size ? index + 1 : size;
+    }
+
+    auto delimiterEnd = index + 1;
+    if (delimiterEnd >= size) {
+        return size;
+    }
+    if (sql[delimiterEnd] != '$') {
+        if (!isPostgreSqlDollarTagStart(sql[delimiterEnd])) {
+            return index + 1;
+        }
+        ++delimiterEnd;
+        while (delimiterEnd < size && isPostgreSqlDollarTagContinue(sql[delimiterEnd])) {
+            ++delimiterEnd;
+        }
+        if (delimiterEnd >= size || sql[delimiterEnd] != '$') {
+            return index + 1;
+        }
+    }
+
+    const auto delimiter = sql.substr(index, delimiterEnd - index + 1);
+    const auto closing = sql.find(delimiter, delimiterEnd + 1);
+    return closing == std::string_view::npos ? size : closing + delimiter.size();
+}
+
 // The index of the next `wanted` byte at statement level at or after `from`, or
 // npos. Bytes inside literals, quoted identifiers and comments are data and are
 // skipped whole. A byte that opens one of those constructs is that construct
 // and is never reported as syntax.
 [[nodiscard]] constexpr std::size_t findSqlSyntaxByte(std::string_view sql, char wanted, std::size_t from = 0) noexcept {
     for (auto index = from; index < sql.size();) {
+        const auto next = skipSqlAtom(sql, index);
+        if (next == index + 1 && sql[index] == wanted) {
+            return index;
+        }
+        index = next;
+    }
+    return std::string_view::npos;
+}
+
+// PostgreSQL adds dollar-quoted strings to the generic opaque constructs. This
+// variant is used by migration statement validation; the MariaDB parameter
+// binder intentionally continues to use findSqlSyntaxByte().
+[[nodiscard]] constexpr std::size_t findPostgreSqlSyntaxByte(std::string_view sql, char wanted, std::size_t from = 0) noexcept {
+    for (auto index = from; index < sql.size();) {
+        if (sql[index] == '$') {
+            const auto next = skipPostgreSqlDollarQuotedAtom(sql, index);
+            if (next != index + 1) {
+                index = next;
+                continue;
+            }
+        }
         const auto next = skipSqlAtom(sql, index);
         if (next == index + 1 && sql[index] == wanted) {
             return index;
