@@ -433,5 +433,5 @@ int main() {
     auto& app = ruvia::app();
     app.loadDotenv();
     auto config = redisConfig(app.env());
-    app.useRedis(config).useRedis("cache", std::move(config)).setListenAddress("0.0.0.0").setListeners({ruvia::ListenerConfig::http(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))}).setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setSignalShutdown(true).run();
+    app.useRedis(config).useRedis("cache", std::move(config)).setListeners({ruvia::ListenerConfig::http("0.0.0.0", app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))}).setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setSignalShutdown(true).run();
 }

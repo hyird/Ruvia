@@ -123,8 +123,12 @@ namespace {
 
 using ruvia::CorsConfig;
 using ruvia::HttpResponse;
-using ruvia::detail::applyCorsHeaders;
 using ruvia::detail::Http1ServerRequestParser;
+
+void applyCorsHeaders(const ruvia::HttpRequest& request, HttpResponse& response, const CorsConfig& config) {
+    const auto options = ruvia::detail::makeCorsOptions(config, std::pmr::new_delete_resource());
+    ruvia::detail::applyCorsHeaders(request, response, options);
+}
 
 CorsConfig corsOptions(std::string_view configuredOrigin, bool credentials) {
     CorsConfig cors;

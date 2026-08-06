@@ -35,5 +35,5 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    ruvia::app().setListenAddress("127.0.0.1").setListeners({ruvia::ListenerConfig::http(port)}).setWorkersPerListener(1).setSignalShutdown(true).setCompression(std::nullopt).run();
+    ruvia::app().setListeners({ruvia::ListenerConfig::http("127.0.0.1", port)}).setWorkersPerListener(1).setSignalShutdown(true).setCompression(std::nullopt).run();
 }

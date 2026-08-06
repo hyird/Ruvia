@@ -102,12 +102,20 @@ struct AppDocumentRootConfig final {
     DocumentRootRuntimeOptions runtimeOptions;
 };
 
+struct AppListenerConfig final {
+    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerOptions::ListenerTransport configuredTransport)
+        : address(configuredAddress, resource), port(configuredPort), transport(std::move(configuredTransport)) {}
+
+    std::pmr::string address;
+    std::uint16_t port;
+    HttpServerOptions::ListenerTransport transport;
+};
+
 struct AppState final {
     AppState();
     ~AppState();
 
-    std::pmr::string listenAddress{appResource()};
-    std::pmr::vector<ListenerConfig> listeners{appResource()};
+    std::pmr::vector<AppListenerConfig> listeners{appResource()};
     std::size_t workersPerListener;
     bool signalShutdown{false};
     AccessLogCallback accessLogCallback;

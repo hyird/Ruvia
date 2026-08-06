@@ -9,13 +9,16 @@
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] RedisScanCursor parseRedisCursor(std::string_view value) {
+[[nodiscard]] std::optional<RedisScanCursor> parseRedisCursor(std::string_view value) {
     std::uint64_t cursor = 0;
     const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), cursor);
     if (ec != std::errc{} || ptr != value.data() + value.size()) {
         throw RedisError(RedisError::Code::kProtocolError, "invalid redis scan cursor");
     }
-    return RedisScanCursor(cursor);
+    if (cursor == 0) {
+        return std::nullopt;
+    }
+    return RedisTypesAccess::scanCursor(cursor);
 }
 
 }  // namespace
@@ -69,7 +72,7 @@ RedisScanResult parseRedisScanResult(const RedisValue& value, std::pmr::memory_r
     const auto cursor = parseRedisCursor(redisValueString(root[0]));
     const auto values = redisValueArray(root[1]);
     RedisScanResult result = RedisTypesAccess::scanResult(resource);
-    RedisTypesAccess::cursor(result) = cursor;
+    RedisTypesAccess::nextCursor(result) = cursor;
     auto& outputValues = RedisTypesAccess::values(result);
     outputValues.reserve(values.size());
     for (const auto& item : values) {
@@ -91,7 +94,7 @@ RedisHashScanResult parseRedisHashScanResult(const RedisValue& value, std::pmr::
         throw RedisError(RedisError::Code::kProtocolError, "unexpected redis hscan entry count");
     }
     RedisHashScanResult result = RedisTypesAccess::hashScanResult(resource);
-    RedisTypesAccess::cursor(result) = cursor;
+    RedisTypesAccess::nextCursor(result) = cursor;
     auto& outputEntries = RedisTypesAccess::entries(result);
     outputEntries.reserve(values.size() / 2);
     for (std::size_t i = 0; i < values.size(); i += 2) {
@@ -114,7 +117,7 @@ RedisZScanResult parseRedisZScanResult(const RedisValue& value, std::pmr::memory
         throw RedisError(RedisError::Code::kProtocolError, "unexpected redis zscan entry count");
     }
     RedisZScanResult result = RedisTypesAccess::zScanResult(resource);
-    RedisTypesAccess::cursor(result) = cursor;
+    RedisTypesAccess::nextCursor(result) = cursor;
     auto& outputEntries = RedisTypesAccess::entries(result);
     outputEntries.reserve(values.size() / 2);
     for (std::size_t i = 0; i < values.size(); i += 2) {

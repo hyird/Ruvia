@@ -16,16 +16,8 @@ struct DbResultAccess final {
         return DbRows(resource);
     }
 
-    static void setAffectedRows(DbRows& result, std::uint64_t value) noexcept {
-        result.affectedRows_ = value;
-    }
-
-    static void setLastInsertId(DbRows& result, std::uint64_t value) noexcept {
-        result.lastInsertId_ = value;
-    }
-
-    [[nodiscard]] static DbExecResult makeExecResult(const DbRows& result) noexcept {
-        return DbExecResult(result.affectedRows_, result.lastInsertId_);
+    [[nodiscard]] static constexpr DbExecResult makeExecResult(std::uint64_t affectedRows, std::optional<std::uint64_t> lastInsertId = std::nullopt) noexcept {
+        return DbExecResult(affectedRows, lastInsertId);
     }
 
     [[nodiscard]] static std::pmr::vector<DbRow>& rows(DbRows& result) noexcept {

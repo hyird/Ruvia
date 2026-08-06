@@ -45,7 +45,6 @@ public:
     [[nodiscard]] const Env& env() const noexcept;
     App& loadDotenv(DotenvOptions options = {});
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
-    App& setListenAddress(std::string_view address);
     App& setListeners(std::vector<ListenerConfig> listeners);
     App& setWorkersPerListener(std::size_t workersPerListener);
     App& setSignalShutdown(bool enabled);

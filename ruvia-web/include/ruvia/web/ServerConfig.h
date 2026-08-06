@@ -27,6 +27,7 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/StaticFiles.h"
+#include "ruvia/web/detail/CallbackRef.h"
 
 namespace ruvia {
 
@@ -153,23 +154,26 @@ private:
 // it. This scales beyond the old fixed one/two-listener combinations.
 class ListenerConfig final {
 public:
-    [[nodiscard]] static ListenerConfig http(std::uint16_t port = 8080);
-    [[nodiscard]] static ListenerConfig https(std::uint16_t port, TlsConfig tls);
-    [[nodiscard]] static ListenerConfig redirectHttpToHttps(std::uint16_t port, std::uint16_t targetHttpsPort);
+    [[nodiscard]] static ListenerConfig http(std::string_view address = "0.0.0.0", std::uint16_t port = 8080);
+    [[nodiscard]] static ListenerConfig https(std::string_view address, std::uint16_t port, TlsConfig tls);
+    [[nodiscard]] static ListenerConfig redirectHttpToHttps(std::string_view address, std::uint16_t port, std::uint16_t targetHttpsPort);
 
 private:
     friend class App;
 
     struct Http final {
+        std::string address;
         std::uint16_t port;
     };
 
     struct Https final {
+        std::string address;
         std::uint16_t port;
         TlsConfig tls;
     };
 
     struct RedirectHttpToHttps final {
+        std::string address;
         std::uint16_t port;
         std::uint16_t targetHttpsPort;
     };
@@ -415,21 +419,15 @@ private:
     std::uint64_t durationMicros_;
 };
 
-// A non-owning, allocation-free access-log listener. The bound object must
-// outlive App::run(); the request hot path performs one null check and one
-// function-pointer call.
+namespace detail {
+using AccessLogCallbackRef = CallbackRef<void(const AccessLogRecord&) noexcept>;
+}  // namespace detail
+
+// App-owned access-log listener. Request dispatch receives only an internal,
+// allocation-free CallbackRef and never participates in this owner's lifetime.
 class AccessLogCallback final {
 public:
     constexpr AccessLogCallback() noexcept = default;
-
-    template <typename Listener>
-        requires(!std::is_function_v<Listener> && std::is_nothrow_invocable_r_v<void, Listener&, const AccessLogRecord&>)
-    [[nodiscard]] static AccessLogCallback bind(Listener& listener) noexcept {
-        return AccessLogCallback(std::addressof(listener), [](void* target, const AccessLogRecord& record) noexcept { (*static_cast<Listener*>(target))(record); });
-    }
-
-    // A self-contained listener is owned until the callback value is destroyed.
-    // bind() remains the explicit non-owning form for caller-owned observers.
     template <typename Listener, typename Stored = std::decay_t<Listener>>
         requires(!std::is_same_v<Stored, AccessLogCallback> && !std::is_lvalue_reference_v<Listener> && std::is_nothrow_invocable_r_v<void, Stored&, const AccessLogRecord&> && std::is_copy_constructible_v<Stored>)
     AccessLogCallback(Listener&& listener)
@@ -467,28 +465,20 @@ public:
         reset();
     }
 
-    [[nodiscard]] AccessLogCallback borrow() const noexcept {
-        return AccessLogCallback(target_, invoke_);
-    }
-
     [[nodiscard]] constexpr explicit operator bool() const noexcept {
         return invoke_ != nullptr;
     }
 
 private:
+    friend struct detail::CallbackAccess;
     friend struct detail::AccessLogRecordAccess;
-    friend struct detail::AccessLogSink;
 
     using Invoke = void (*)(void*, const AccessLogRecord&) noexcept;
     using Destroy = void (*)(void*, std::pmr::memory_resource*) noexcept;
     using Clone = void* (*)(const void*, std::pmr::memory_resource*);
 
-    constexpr AccessLogCallback(void* target, Invoke invoke) noexcept
-        : target_(target),
-          invoke_(invoke) {}
-
-    void invoke(const AccessLogRecord& record) const noexcept {
-        invoke_(target_, record);
+    [[nodiscard]] constexpr detail::AccessLogCallbackRef callbackRef() const noexcept {
+        return detail::CallbackAccess::make<void(const AccessLogRecord&) noexcept>(target_, invoke_);
     }
 
     void copyFrom(const AccessLogCallback& other) {
@@ -593,23 +583,17 @@ struct HttpServerStats final {
     std::size_t documentRootRefreshFailures{0};
 };
 
-// A non-owning, allocation-free connection-failure listener. The bound object
-// must outlive App::run(). The listener must not throw: it runs on the last
+namespace detail {
+using ConnectionFailureCallbackRef = CallbackRef<void(const ConnectionFailureRecord&) noexcept>;
+}  // namespace detail
+
+// App-owned connection-failure listener. The listener must not throw: it runs on the last
 // line of defense for a connection, where a second failure would have nowhere
 // left to go, so the requirement is enforced at compile time rather than
 // swallowed at runtime.
 class ConnectionFailureCallback final {
 public:
     constexpr ConnectionFailureCallback() noexcept = default;
-
-    template <typename Listener>
-        requires(!std::is_function_v<Listener> && std::is_nothrow_invocable_r_v<void, Listener&, const ConnectionFailureRecord&>)
-    [[nodiscard]] static ConnectionFailureCallback bind(Listener& listener) noexcept {
-        return ConnectionFailureCallback(std::addressof(listener), [](void* target, const ConnectionFailureRecord& record) noexcept { (*static_cast<Listener*>(target))(record); });
-    }
-
-    // As on AccessLogCallback: a self-contained listener is owned, while bind
-    // explicitly borrows a caller-owned observer.
     template <typename Listener, typename Stored = std::decay_t<Listener>>
         requires(!std::is_same_v<Stored, ConnectionFailureCallback> && !std::is_lvalue_reference_v<Listener> && std::is_nothrow_invocable_r_v<void, Stored&, const ConnectionFailureRecord&> && std::is_copy_constructible_v<Stored>)
     ConnectionFailureCallback(Listener&& listener)
@@ -647,28 +631,20 @@ public:
         reset();
     }
 
-    [[nodiscard]] ConnectionFailureCallback borrow() const noexcept {
-        return ConnectionFailureCallback(target_, invoke_);
-    }
-
     [[nodiscard]] constexpr explicit operator bool() const noexcept {
         return invoke_ != nullptr;
     }
 
 private:
+    friend struct detail::CallbackAccess;
     friend struct detail::ConnectionFailureRecordAccess;
-    friend struct detail::ConnectionFailureSink;
 
     using Invoke = void (*)(void*, const ConnectionFailureRecord&) noexcept;
     using Destroy = void (*)(void*, std::pmr::memory_resource*) noexcept;
     using Clone = void* (*)(const void*, std::pmr::memory_resource*);
 
-    constexpr ConnectionFailureCallback(void* target, Invoke invoke) noexcept
-        : target_(target),
-          invoke_(invoke) {}
-
-    void invoke(const ConnectionFailureRecord& record) const noexcept {
-        invoke_(target_, record);
+    [[nodiscard]] constexpr detail::ConnectionFailureCallbackRef callbackRef() const noexcept {
+        return detail::CallbackAccess::make<void(const ConnectionFailureRecord&) noexcept>(target_, invoke_);
     }
 
     void copyFrom(const ConnectionFailureCallback& other) {

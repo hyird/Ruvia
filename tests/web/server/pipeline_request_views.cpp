@@ -101,7 +101,7 @@ int main() {
 
     AccessLogListener listener;
     ruvia::detail::HttpServerOptions options;
-    options.accessLog.callback = ruvia::AccessLogCallback::bind(listener);
+    options.accessLog.callback = ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(listener);
 
     ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, std::move(options));
     server.start();

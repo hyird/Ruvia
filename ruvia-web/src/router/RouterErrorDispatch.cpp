@@ -166,11 +166,11 @@ Task<HttpResponse> detail::RouteTable::handleException(Context& context, std::ex
 // scope that covers it, or the table-wide fallback. The dispatch above is the
 // only caller.
 
-void detail::RouteTable::setErrorHandler(HttpErrorHandler handler) noexcept {
+void detail::RouteTable::setErrorHandler(HttpErrorHandlerRef handler) noexcept {
     errorHandler_ = handler;
 }
 
-void detail::RouteTable::setNotFoundHandler(HttpNotFoundHandler handler) noexcept {
+void detail::RouteTable::setNotFoundHandler(HttpNotFoundHandlerRef handler) noexcept {
     notFoundHandler_ = handler;
 }
 
@@ -222,12 +222,12 @@ void detail::RouteTable::setPrefixNotFoundHandlers(std::span<const HttpPrefixNot
     replacePrefixHandlers(prefixNotFoundHandlers_, resource_, handlers);
 }
 
-HttpErrorHandler detail::RouteTable::errorHandlerFor(std::string_view path) const noexcept {
+detail::HttpErrorHandlerRef detail::RouteTable::errorHandlerFor(std::string_view path) const noexcept {
     const auto handler = selectPrefixHandler(prefixErrorHandlers_, path);
     return handler != nullptr ? handler : errorHandler_;
 }
 
-HttpNotFoundHandler detail::RouteTable::notFoundHandlerFor(std::string_view path) const noexcept {
+detail::HttpNotFoundHandlerRef detail::RouteTable::notFoundHandlerFor(std::string_view path) const noexcept {
     const auto handler = selectPrefixHandler(prefixNotFoundHandlers_, path);
     return handler != nullptr ? handler : notFoundHandler_;
 }

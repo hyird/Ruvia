@@ -51,5 +51,5 @@ private:
 };
 
 int main() {
-    ruvia::app().setListenAddress("0.0.0.0").setListeners({ruvia::ListenerConfig::http(8089)}).setWorkersPerListener(1).setSignalShutdown(true).run();
+    ruvia::app().setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8089)}).setWorkersPerListener(1).setSignalShutdown(true).run();
 }

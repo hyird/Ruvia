@@ -49,8 +49,6 @@ private:
 
     std::pmr::vector<DbRow> rows_;
     std::pmr::vector<DbField> fields_;
-    std::uint64_t affectedRows_{0};
-    std::optional<std::uint64_t> lastInsertId_;
     std::variant<NoRawResult, OwnedRawResult> rawResult_;
 };
 

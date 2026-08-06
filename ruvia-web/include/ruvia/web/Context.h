@@ -310,8 +310,8 @@ private:
     [[maybe_unused]] detail::RedisRegistry* redis_{nullptr};
     detail::RateLimiter* rateLimiter_{nullptr};
     const Env* env_{nullptr};
-    HttpErrorHandler errorHandler_{nullptr};
-    HttpNotFoundHandler notFoundHandler_{nullptr};
+    detail::HttpErrorHandlerRef errorHandler_{nullptr};
+    detail::HttpNotFoundHandlerRef notFoundHandler_{nullptr};
     const detail::RouteTable* routes_{nullptr};
     const detail::WorkerStateRegistry* workerStates_{nullptr};
     BlockingPool* blockingPool_{nullptr};

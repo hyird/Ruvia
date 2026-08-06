@@ -108,7 +108,21 @@ Task<void> finishDbTransaction(Pool& pool, std::size_t slot, std::string_view co
 // connection and gives the slot back, because a transaction whose statement
 // failed mid-protocol cannot continue on it.
 template <typename Pool>
-Task<DbRows> executeOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbRows> queryOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+    if (slot >= pool.slots_.size()) {
+        throw std::logic_error("database transaction slot is invalid");
+    }
+    try {
+        co_return co_await pool.queryOnSlot(pool.slots_[slot], sql, std::span<const DbValue>(params), resource);
+    } catch (...) {
+        pool.closeSlot(pool.slots_[slot]);
+        pool.releaseSlot(slot);
+        throw;
+    }
+}
+
+template <typename Pool>
+Task<DbExecResult> executeOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     if (slot >= pool.slots_.size()) {
         throw std::logic_error("database transaction slot is invalid");
     }
@@ -127,6 +141,22 @@ Task<DbRows> executeOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::
 // failed mid-protocol cannot be reused. The guard releases the slot either way.
 template <typename Pool>
 Task<DbRows> executeDbQuery(Pool& pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+    if (sql.empty()) {
+        throw std::invalid_argument("SQL must not be empty");
+    }
+
+    const auto slotIndex = co_await pool.acquireSlot();
+    typename Pool::SlotGuard guard(pool, slotIndex);
+    try {
+        co_return co_await pool.queryOnSlot(pool.slots_[slotIndex], sql, std::span<const DbValue>(params), resource);
+    } catch (...) {
+        pool.closeSlot(pool.slots_[slotIndex]);
+        throw;
+    }
+}
+
+template <typename Pool>
+Task<DbExecResult> executeDbCommand(Pool& pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }

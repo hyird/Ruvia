@@ -18,11 +18,11 @@
 namespace ruvia::detail {
 namespace {
 
-void setCorsMaxAge(HttpResponse& response, const std::optional<CorsMaxAge>& maxAge) {
+void setCorsMaxAge(HttpResponse& response, const std::optional<std::chrono::seconds>& maxAge) {
     if (!maxAge.has_value() || responseHasKnownHeader(response, kResponseHeaderAccessControlMaxAge)) {
         return;
     }
-    setResponseHeaderUnsigned(response, "Access-Control-Max-Age", static_cast<std::uint64_t>(maxAge->value().count()), kResponseHeaderAccessControlMaxAge);
+    setResponseHeaderUnsigned(response, "Access-Control-Max-Age", static_cast<std::uint64_t>(maxAge->count()), kResponseHeaderAccessControlMaxAge);
 }
 
 void reflectCorsRequestHeaderNames(const HttpRequest& request, HttpResponse& response) {
@@ -52,22 +52,22 @@ void reflectCorsRequestHeaderNames(const HttpRequest& request, HttpResponse& res
 
 }  // namespace
 
-void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const CorsConfig& cors) {
+void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const CorsOptions& cors) {
     const auto origin = requestKnownHeader(request, RequestKnownHeader::kOrigin);
-    const bool wildcardOrigin = cors.origin.kind() == CorsOriginPolicy::Kind::kAny;
-    const auto allowOrigin = wildcardOrigin ? std::string_view("*") : cors.origin.origin();
+    const bool wildcardOrigin = cors.originKind == CorsOriginPolicy::Kind::kAny;
+    const auto allowOrigin = wildcardOrigin ? std::string_view("*") : std::string_view(cors.origin);
     std::array<std::string_view, 3> varyTokens{};
     std::size_t varyTokenCount = 0;
     const bool options = request.knownMethod() == HttpKnownMethod::kOptions;
     if (options) {
         varyTokens[varyTokenCount++] = "Origin";
         varyTokens[varyTokenCount++] = "Access-Control-Request-Method";
-        if (cors.requestHeaders.kind() == CorsRequestHeadersPolicy::Kind::kReflect) {
+        if (cors.requestHeadersKind == CorsRequestHeadersPolicy::Kind::kReflect) {
             varyTokens[varyTokenCount++] = "Access-Control-Request-Headers";
         }
     }
     setStableResponseHeaderIfMissing(response, kResponseHeaderAccessControlAllowOrigin, "Access-Control-Allow-Origin", allowOrigin);
-    if (cors.origin.kind() == CorsOriginPolicy::Kind::kCredentialedExact && !responseHasKnownHeader(response, kResponseHeaderAccessControlAllowCredentials)) {
+    if (cors.originKind == CorsOriginPolicy::Kind::kCredentialedExact && !responseHasKnownHeader(response, kResponseHeaderAccessControlAllowCredentials)) {
         setResponseHeaderStableView(response, "Access-Control-Allow-Credentials", "true");
     }
 
@@ -76,8 +76,8 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
         if (const auto allow = responseKnownHeader(response, kResponseHeaderAllow); !allow.empty()) {
             setResponseHeaderIfMissing(response, kResponseHeaderAccessControlAllowMethods, "Access-Control-Allow-Methods", allow);
         }
-        if (cors.requestHeaders.kind() == CorsRequestHeadersPolicy::Kind::kFixed) {
-            setStableResponseHeaderIfMissing(response, kResponseHeaderAccessControlAllowHeaders, "Access-Control-Allow-Headers", cors.requestHeaders.headers());
+        if (cors.requestHeadersKind == CorsRequestHeadersPolicy::Kind::kFixed) {
+            setStableResponseHeaderIfMissing(response, kResponseHeaderAccessControlAllowHeaders, "Access-Control-Allow-Headers", cors.requestHeaders);
         } else {
             reflectCorsRequestHeaderNames(request, response);
         }
@@ -88,7 +88,7 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
 
     addVaryTokens(response, varyTokens.data(), varyTokenCount);
     if (!cors.exposeHeaders.empty()) {
-        setStableResponseHeaderIfMissing(response, kResponseHeaderAccessControlExposeHeaders, "Access-Control-Expose-Headers", cors.exposeHeaders.value());
+        setStableResponseHeaderIfMissing(response, kResponseHeaderAccessControlExposeHeaders, "Access-Control-Expose-Headers", cors.exposeHeaders);
     }
 }
 

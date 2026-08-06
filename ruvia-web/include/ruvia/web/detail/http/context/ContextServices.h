@@ -79,11 +79,11 @@ public:
     }
     ContextServices withWorker(WorkerHandle&&) const = delete;
 
-    [[nodiscard]] HttpErrorHandler errorHandler() const noexcept {
+    [[nodiscard]] HttpErrorHandlerRef errorHandler() const noexcept {
         return errorHandler_;
     }
 
-    [[nodiscard]] HttpNotFoundHandler notFoundHandler() const noexcept {
+    [[nodiscard]] HttpNotFoundHandlerRef notFoundHandler() const noexcept {
         return notFoundHandler_;
     }
 
@@ -117,13 +117,13 @@ public:
         return services;
     }
 
-    [[nodiscard]] ContextServices withErrorHandler(HttpErrorHandler value) const noexcept {
+    [[nodiscard]] ContextServices withErrorHandler(HttpErrorHandlerRef value) const noexcept {
         auto services = *this;
         services.errorHandler_ = value;
         return services;
     }
 
-    [[nodiscard]] ContextServices withNotFoundHandler(HttpNotFoundHandler value) const noexcept {
+    [[nodiscard]] ContextServices withNotFoundHandler(HttpNotFoundHandlerRef value) const noexcept {
         auto services = *this;
         services.notFoundHandler_ = value;
         return services;
@@ -210,8 +210,8 @@ private:
     // Request/session services borrow the address-stable server-owned handle.
     // Every derived ContextServices value stays inside that server's dispatch.
     const WorkerHandle* worker_{nullptr};
-    HttpErrorHandler errorHandler_{nullptr};
-    HttpNotFoundHandler notFoundHandler_{nullptr};
+    HttpErrorHandlerRef errorHandler_{nullptr};
+    HttpNotFoundHandlerRef notFoundHandler_{nullptr};
     const RouteTable* routes_{nullptr};
     const WorkerStateRegistry* workerStates_{nullptr};
     BlockingPool* blockingPool_{nullptr};

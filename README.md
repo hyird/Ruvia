@@ -67,7 +67,7 @@ public:
 
 int main() {
     ruvia::app()
-        .setListeners({ruvia::ListenerConfig::http(8080)})
+        .setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8080)})
         .setSignalShutdown(true)
         .run();
 }
@@ -611,9 +611,11 @@ only configuration and lifecycle entry point; applications do not construct
 additional `App` instances. Controllers use CRTP and register themselves at
 startup when their route macro block is declared, so there is no separate
 controller list or `useController()` step. Every controller translation unit
-retained in the final executable contributes to this process-wide registry;
-controllers supplied by a static library must therefore be linked into the
-executable, and dynamically loaded modules must be present before `run()`.
+retained in the final executable contributes to this process-wide registry.
+Controller static or object libraries are linked with
+`ruvia_link_controllers(application controllers)`, which preserves every
+controller object across GNU, Apple, and MSVC linkers without a manual
+controller list. Dynamically loaded modules must be present before `run()`.
 The first `App::run()` or `TestApp::request()` seals and deduplicates that
 registry. Loading a controller-bearing module after sealing is a startup error,
 so every worker observes the same controller set.
@@ -650,15 +652,15 @@ is the full contract: what each layer raises, which failures are isolated where,
 and the three kinds of callback contract.
 
 Self-contained callbacks passed to App are owned and destroyed with the App;
-request dispatch retains only allocation-free borrowed call targets. The
-explicit `AccessLogCallback::bind()` and `ConnectionFailureCallback::bind()`
-forms remain non-owning and require the bound observer to outlive `run()`.
+request dispatch retains only internal, allocation-free callback references.
+Public callback types never expose non-owning `bind()` or `borrow()` factories.
 
 Redis time APIs avoid exposing wire-level sentinel values in application code:
 `expireAt()` accepts `std::chrono::system_clock::time_point`, `ttl()` and
 `pttl()` return `RedisTtl` (`missing`, `persistent`, or an expiring duration),
-and scan options/results exchange a `RedisScanCursor` whose `finished()` method
-identifies the terminal cursor.
+and scan options accept an optional continuation cursor. Scan results expose
+`done()` and `nextCursor()`, so Redis's wire-level zero sentinel never doubles
+as both an initial and terminal application state.
 
 Models are ordinary structs with one schema for JSON parsing, validation, and
 serialization. They support nested models and arrays; `RUVIA_FIELD` is required

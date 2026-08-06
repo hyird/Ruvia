@@ -84,7 +84,7 @@ Router::Router()
 
 Router::~Router() = default;
 
-Router& detail::RouterImpl::setErrorHandler(HttpErrorHandler handler) noexcept {
+Router& detail::RouterImpl::setErrorHandler(HttpErrorHandlerRef handler) noexcept {
     errorHandler_ = handler;
     if (routeTable_) {
         routeTable_->setErrorHandler(handler);
@@ -92,7 +92,7 @@ Router& detail::RouterImpl::setErrorHandler(HttpErrorHandler handler) noexcept {
     return owner;
 }
 
-Router& detail::RouterImpl::setNotFoundHandler(HttpNotFoundHandler handler) noexcept {
+Router& detail::RouterImpl::setNotFoundHandler(HttpNotFoundHandlerRef handler) noexcept {
     notFoundHandler_ = handler;
     if (routeTable_) {
         routeTable_->setNotFoundHandler(handler);

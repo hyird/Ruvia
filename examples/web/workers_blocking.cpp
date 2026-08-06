@@ -112,7 +112,7 @@ private:
 
 int main() {
     ruvia::app()
-        .setListeners({ruvia::ListenerConfig::http(8090)})
+        .setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8090)})
         .setWorkersPerListener(2)
         .setSignalShutdown(true)
         // Each worker builds its own WorkerStats before serving; the factory

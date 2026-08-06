@@ -105,25 +105,14 @@ struct RedisTypesAccess;
 
 class RedisScanCursor final {
 public:
-    constexpr RedisScanCursor() noexcept = default;
-    explicit constexpr RedisScanCursor(std::uint64_t value) noexcept
-        : value_(value) {}
-
-    [[nodiscard]] static constexpr RedisScanCursor start() noexcept {
-        return RedisScanCursor{};
-    }
-
-    [[nodiscard]] constexpr std::uint64_t value() const noexcept {
-        return value_;
-    }
-
-    [[nodiscard]] constexpr bool finished() const noexcept {
-        return value_ == 0;
-    }
-
     friend constexpr bool operator==(RedisScanCursor, RedisScanCursor) noexcept = default;
 
 private:
+    friend struct detail::RedisTypesAccess;
+
+    explicit constexpr RedisScanCursor(std::uint64_t value) noexcept
+        : value_(value) {}
+
     std::uint64_t value_{0};
 };
 
@@ -157,7 +146,7 @@ struct RedisScanOptions {
     // A scan options value may be retained before the command copies its
     // arguments. Keep MATCH zero-copy while rejecting owning-string rvalues
     // that would leave a saved options value with an already-dangling view.
-    RedisScanCursor cursor;
+    std::optional<RedisScanCursor> cursor;
     ::ruvia::BorrowedText match;
     std::optional<std::uint64_t> count;
 };
@@ -225,8 +214,12 @@ private:
 
 class RedisScanResult final {
 public:
-    [[nodiscard]] RedisScanCursor cursor() const noexcept {
-        return cursor_;
+    [[nodiscard]] bool done() const noexcept {
+        return !nextCursor_.has_value();
+    }
+
+    [[nodiscard]] std::optional<RedisScanCursor> nextCursor() const noexcept {
+        return nextCursor_;
     }
 
     [[nodiscard]] std::span<const std::pmr::string> values() const& noexcept {
@@ -240,14 +233,18 @@ private:
     explicit RedisScanResult(std::pmr::memory_resource* resource)
         : values_(detail::pmrResourceOrDefault(resource)) {}
 
-    RedisScanCursor cursor_;
+    std::optional<RedisScanCursor> nextCursor_;
     std::pmr::vector<std::pmr::string> values_;
 };
 
 class RedisHashScanResult final {
 public:
-    [[nodiscard]] RedisScanCursor cursor() const noexcept {
-        return cursor_;
+    [[nodiscard]] bool done() const noexcept {
+        return !nextCursor_.has_value();
+    }
+
+    [[nodiscard]] std::optional<RedisScanCursor> nextCursor() const noexcept {
+        return nextCursor_;
     }
 
     [[nodiscard]] std::span<const RedisKeyValue> entries() const& noexcept {
@@ -261,14 +258,18 @@ private:
     explicit RedisHashScanResult(std::pmr::memory_resource* resource)
         : entries_(detail::pmrResourceOrDefault(resource)) {}
 
-    RedisScanCursor cursor_;
+    std::optional<RedisScanCursor> nextCursor_;
     std::pmr::vector<RedisKeyValue> entries_;
 };
 
 class RedisZScanResult final {
 public:
-    [[nodiscard]] RedisScanCursor cursor() const noexcept {
-        return cursor_;
+    [[nodiscard]] bool done() const noexcept {
+        return !nextCursor_.has_value();
+    }
+
+    [[nodiscard]] std::optional<RedisScanCursor> nextCursor() const noexcept {
+        return nextCursor_;
     }
 
     [[nodiscard]] std::span<const RedisScoredValue> entries() const& noexcept {
@@ -282,7 +283,7 @@ private:
     explicit RedisZScanResult(std::pmr::memory_resource* resource)
         : entries_(detail::pmrResourceOrDefault(resource)) {}
 
-    RedisScanCursor cursor_;
+    std::optional<RedisScanCursor> nextCursor_;
     std::pmr::vector<RedisScoredValue> entries_;
 };
 

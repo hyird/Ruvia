@@ -73,13 +73,13 @@ struct TestApp::Impl final {
         const auto controllerRegistrars = detail::sealControllerRegistrars();
         detail::registerControllers(router, controllers, controllerRegistrars);
         auto& routes = detail::RouterImpl::from(router);
-        routes.setErrorHandler(errorHandler.borrow());
-        routes.setNotFoundHandler(notFoundHandler.borrow());
+        routes.setErrorHandler(detail::CallbackAccess::ref(errorHandler));
+        routes.setNotFoundHandler(detail::CallbackAccess::ref(notFoundHandler));
         if (!prefixErrorHandlers.empty()) {
             std::pmr::vector<detail::HttpPrefixErrorHandler> views(detail::registrationResource());
             views.reserve(prefixErrorHandlers.size());
             for (const auto& [prefix, handler] : prefixErrorHandlers) {
-                views.push_back({std::string_view(prefix), handler.borrow()});
+                views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
             }
             routes.setPrefixErrorHandlers(views);
         }
@@ -87,7 +87,7 @@ struct TestApp::Impl final {
             std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(detail::registrationResource());
             views.reserve(prefixNotFoundHandlers.size());
             for (const auto& [prefix, handler] : prefixNotFoundHandlers) {
-                views.push_back({std::string_view(prefix), handler.borrow()});
+                views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
             }
             routes.setPrefixNotFoundHandlers(views);
         }

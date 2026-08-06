@@ -148,12 +148,12 @@ struct NextAccess final {
 // owned storage. Selection is longest-prefix-first on whole path segments.
 struct HttpPrefixErrorHandler final {
     std::string_view prefix;
-    HttpErrorHandler handler{nullptr};
+    HttpErrorHandlerRef handler{nullptr};
 };
 
 struct HttpPrefixNotFoundHandler final {
     std::string_view prefix;
-    HttpNotFoundHandler handler{nullptr};
+    HttpNotFoundHandlerRef handler{nullptr};
 };
 
 class RouteTable final {
@@ -164,8 +164,8 @@ public:
     RouteTable(RouteTable&&) = delete;
     RouteTable& operator=(RouteTable&&) = delete;
 
-    void setErrorHandler(HttpErrorHandler handler) noexcept;
-    void setNotFoundHandler(HttpNotFoundHandler handler) noexcept;
+    void setErrorHandler(HttpErrorHandlerRef handler) noexcept;
+    void setNotFoundHandler(HttpNotFoundHandlerRef handler) noexcept;
     // Wholesale replacement (idempotent for an app stop()/run() cycle). The
     // stored set is normalized (trailing slash stripped) and ordered longest
     // prefix first so selection is a first-match scan.
@@ -310,8 +310,8 @@ private:
         Handler handler{nullptr};
     };
 
-    [[nodiscard]] HttpErrorHandler errorHandlerFor(std::string_view path) const noexcept;
-    [[nodiscard]] HttpNotFoundHandler notFoundHandlerFor(std::string_view path) const noexcept;
+    [[nodiscard]] HttpErrorHandlerRef errorHandlerFor(std::string_view path) const noexcept;
+    [[nodiscard]] HttpNotFoundHandlerRef notFoundHandlerFor(std::string_view path) const noexcept;
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<RouteEntry> routes_;
@@ -326,10 +326,10 @@ private:
     std::uint32_t allowedMethodMask_{0};
     std::uint64_t exactSeed_{0};
     std::size_t exactMask_{0};
-    HttpErrorHandler errorHandler_{nullptr};
-    HttpNotFoundHandler notFoundHandler_{nullptr};
-    std::pmr::vector<StoredPrefixHandler<HttpErrorHandler>> prefixErrorHandlers_{resource_};
-    std::pmr::vector<StoredPrefixHandler<HttpNotFoundHandler>> prefixNotFoundHandlers_{resource_};
+    HttpErrorHandlerRef errorHandler_{nullptr};
+    HttpNotFoundHandlerRef notFoundHandler_{nullptr};
+    std::pmr::vector<StoredPrefixHandler<HttpErrorHandlerRef>> prefixErrorHandlers_{resource_};
+    std::pmr::vector<StoredPrefixHandler<HttpNotFoundHandlerRef>> prefixNotFoundHandlers_{resource_};
     bool hasRouteRateLimit_{false};
 };
 

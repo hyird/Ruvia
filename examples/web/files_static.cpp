@@ -61,5 +61,5 @@ int main() {
     // Polling requires an application blocking pool:
     // ruvia::app().setBlockingPool(ruvia::BlockingPoolOptions{.threadCount = 2});
 
-    ruvia::app().setListenAddress("0.0.0.0").setListeners({ruvia::ListenerConfig::http(8083)}).setWorkersPerListener(2).setSignalShutdown(true).setCompression(ruvia::CompressionConfig{.minBytes = 128}).setDocumentRoot(std::move(documentRoot)).run();
+    ruvia::app().setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8083)}).setWorkersPerListener(2).setSignalShutdown(true).setCompression(ruvia::CompressionConfig{.minBytes = 128}).setDocumentRoot(std::move(documentRoot)).run();
 }

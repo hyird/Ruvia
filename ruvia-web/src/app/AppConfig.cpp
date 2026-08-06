@@ -1,8 +1,10 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 #include "ruvia/web/detail/app/EnvState.h"
+#include "ruvia/web/detail/app/AppListenerOptions.h"
 
 #include <bit>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace ruvia {
@@ -13,16 +15,6 @@ App& App::loadDotenv(DotenvOptions options) {
 
 App& App::loadDotenv(const std::filesystem::path& path, DotenvOptions options) {
     return detail::mutateStoppedApp(*this, *state_, "cannot load dotenv while app is running", [&](detail::AppState& state) { (void)detail::loadEnvFromFile(state.env, path, options); });
-}
-
-App& App::setListenAddress(std::string_view address) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change listen address while app is running", [&](detail::AppState& state) {
-        if (address.empty()) {
-            throw std::invalid_argument("listen address must not be empty");
-        }
-
-        state.listenAddress.assign(address.data(), address.size());
-    });
 }
 
 App& App::setListeners(std::vector<ListenerConfig> listeners) {
@@ -57,8 +49,18 @@ App& App::setListeners(std::vector<ListenerConfig> listeners) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change listeners while app is running", [&listeners](detail::AppState& state) {
         state.listeners.clear();
         state.listeners.reserve(listeners.size());
-        for (auto& listener : listeners) {
-            state.listeners.push_back(std::move(listener));
+        for (const auto& listener : listeners) {
+            std::visit(
+                [&state]<typename Listener>(const Listener& config) {
+                    if constexpr (std::is_same_v<Listener, ListenerConfig::Http>) {
+                        state.listeners.emplace_back(detail::appResource(), config.address, config.port, detail::HttpServerOptions::PlainHttp{});
+                    } else if constexpr (std::is_same_v<Listener, ListenerConfig::Https>) {
+                        state.listeners.emplace_back(detail::appResource(), config.address, config.port, detail::makeTlsOptions(config.tls, detail::appResource()));
+                    } else {
+                        state.listeners.emplace_back(detail::appResource(), config.address, config.port, detail::HttpServerOptions::RedirectHttpToHttps{config.targetHttpsPort});
+                    }
+                },
+                listener.listener_);
         }
     });
 }
@@ -188,14 +190,14 @@ App& App::setRateLimitSlotsPerWorker(std::size_t slotsPerWorker) {
 App& App::onAccess(AccessLogCallback callback) {
     return detail::mutateStoppedApp(*this, *state_, "cannot register access-log hook while app is running", [callback = std::move(callback)](detail::AppState& state) mutable {
         state.accessLogCallback = std::move(callback);
-        state.options.accessLog.callback = state.accessLogCallback.borrow();
+        state.options.accessLog.callback = detail::CallbackAccess::ref(state.accessLogCallback);
     });
 }
 
 App& App::onConnectionFailure(ConnectionFailureCallback callback) {
     return detail::mutateStoppedApp(*this, *state_, "cannot register connection-failure hook while app is running", [callback = std::move(callback)](detail::AppState& state) mutable {
         state.connectionFailureCallback = std::move(callback);
-        state.options.connectionFailure.callback = state.connectionFailureCallback.borrow();
+        state.options.connectionFailure.callback = detail::CallbackAccess::ref(state.connectionFailureCallback);
     });
 }
 

@@ -56,8 +56,8 @@ public:
         return *router.impl_;
     }
 
-    Router& setErrorHandler(HttpErrorHandler handler) noexcept;
-    Router& setNotFoundHandler(HttpNotFoundHandler handler) noexcept;
+    Router& setErrorHandler(HttpErrorHandlerRef handler) noexcept;
+    Router& setNotFoundHandler(HttpNotFoundHandlerRef handler) noexcept;
     // Path-prefix-scoped fallbacks (Hono sub-app scoping analog): wholesale
     // replacement, owned copies; applied to the table at finalize or, when the
     // table already exists, immediately (both are idempotent for restarts).
@@ -163,10 +163,10 @@ private:
     std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewareDescriptors_;
     std::pmr::vector<RouteMiddleware> globalMiddlewareFrames_;
     std::unique_ptr<RouteTable, RouteTableDeleter> routeTable_;
-    HttpErrorHandler errorHandler_{nullptr};
-    HttpNotFoundHandler notFoundHandler_{nullptr};
-    std::pmr::vector<std::pair<std::pmr::string, HttpErrorHandler>> prefixErrorHandlers_{registrationResource()};
-    std::pmr::vector<std::pair<std::pmr::string, HttpNotFoundHandler>> prefixNotFoundHandlers_{registrationResource()};
+    HttpErrorHandlerRef errorHandler_{nullptr};
+    HttpNotFoundHandlerRef notFoundHandler_{nullptr};
+    std::pmr::vector<std::pair<std::pmr::string, HttpErrorHandlerRef>> prefixErrorHandlers_{registrationResource()};
+    std::pmr::vector<std::pair<std::pmr::string, HttpNotFoundHandlerRef>> prefixNotFoundHandlers_{registrationResource()};
     bool hasRouteRateLimit_{false};
 };
 

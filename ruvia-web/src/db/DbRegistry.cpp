@@ -4,6 +4,7 @@
 #include "ruvia/web/detail/integration/DataAccessDefinitions.h"
 
 #include <chrono>
+#include <algorithm>
 #include <memory>
 #include <memory_resource>
 #include <ranges>
@@ -90,7 +91,8 @@ void scanPool(detail::DbPoolRef pool, std::chrono::steady_clock::time_point now)
 
 detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const detail::DbDefinition> databases)
     : resource_(detail::pmrResourceOrDefault(resource)),
-      clients_(resource_) {
+      clients_(resource_),
+      aliasIndex_(resource_) {
     clients_.reserve(databases.size());
     for (const auto& definition : databases) {
         if (definition.alias.empty()) {
@@ -125,6 +127,11 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_res
             defaultClientIndex_ = clients_.size() - 1;
         }
     }
+    aliasIndex_.resize(clients_.size());
+    for (std::size_t index = 0; index < aliasIndex_.size(); ++index) {
+        aliasIndex_[index] = index;
+    }
+    std::ranges::sort(aliasIndex_, {}, [this](std::size_t index) -> std::string_view { return clients_[index].alias; });
 }
 
 detail::DbRegistry::~DbRegistry() = default;
@@ -165,10 +172,9 @@ DbHandle detail::DbRegistry::get(std::pmr::memory_resource* resource, ScopedOper
 }
 
 DbHandle detail::DbRegistry::get(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
-    for (const auto& entry : clients_) {
-        if (std::string_view(entry.alias) == alias) {
-            return DbHandle(poolRef(entry.client), resource, operationScope);
-        }
+    const auto match = std::ranges::lower_bound(aliasIndex_, alias, {}, [this](std::size_t index) -> std::string_view { return clients_[index].alias; });
+    if (match != aliasIndex_.end() && std::string_view(clients_[*match].alias) == alias) {
+        return DbHandle(poolRef(clients_[*match].client), resource, operationScope);
     }
     throw std::logic_error("database is not configured");
 }

@@ -34,7 +34,7 @@ Task<std::pmr::string> redisStatusCommand(RedisPool& pool, std::pmr::vector<std:
 
 [[nodiscard]] std::pmr::string redisSecondsString(std::chrono::seconds ttl, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::string redisMillisecondsString(std::chrono::milliseconds ttl, std::pmr::memory_resource* resource);
-[[nodiscard]] std::pmr::string redisCursorString(RedisScanCursor cursor, std::pmr::memory_resource* resource);
+[[nodiscard]] std::pmr::string redisCursorString(std::optional<RedisScanCursor> cursor, std::pmr::memory_resource* resource);
 
 [[nodiscard]] std::pmr::vector<std::pmr::string> redisCommandWithKeys(std::string_view command, std::span<const std::string_view> keys, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::vector<std::pmr::string> redisMsetArgs(std::span<const std::pair<std::string_view, std::string_view>> items, std::pmr::memory_resource* resource);

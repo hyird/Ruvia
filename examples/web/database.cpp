@@ -182,5 +182,5 @@ int main() {
         app.useDb(config);
     }
 
-    app.setListenAddress("0.0.0.0").setListeners({ruvia::ListenerConfig::http(8086)}).setWorkersPerListener(2).setSignalShutdown(true).run();
+    app.setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8086)}).setWorkersPerListener(2).setSignalShutdown(true).run();
 }

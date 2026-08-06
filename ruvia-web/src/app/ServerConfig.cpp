@@ -71,23 +71,32 @@ TlsConfig& TlsConfig::addSniIdentity(std::string_view host, TlsIdentity identity
     return *this;
 }
 
-ListenerConfig ListenerConfig::http(std::uint16_t port) {
+ListenerConfig ListenerConfig::http(std::string_view address, std::uint16_t port) {
+    if (address.empty()) {
+        throw std::invalid_argument("HTTP listen address must not be empty");
+    }
     detail::ensureNonZeroPort(port, "HTTP listen port must not be zero");
-    return ListenerConfig(Http{port});
+    return ListenerConfig(Http{std::string(address), port});
 }
 
-ListenerConfig ListenerConfig::https(std::uint16_t port, TlsConfig tls) {
+ListenerConfig ListenerConfig::https(std::string_view address, std::uint16_t port, TlsConfig tls) {
+    if (address.empty()) {
+        throw std::invalid_argument("HTTPS listen address must not be empty");
+    }
     detail::ensureNonZeroPort(port, "HTTPS listen port must not be zero");
-    return ListenerConfig(Https{port, std::move(tls)});
+    return ListenerConfig(Https{std::string(address), port, std::move(tls)});
 }
 
-ListenerConfig ListenerConfig::redirectHttpToHttps(std::uint16_t port, std::uint16_t targetHttpsPort) {
+ListenerConfig ListenerConfig::redirectHttpToHttps(std::string_view address, std::uint16_t port, std::uint16_t targetHttpsPort) {
+    if (address.empty()) {
+        throw std::invalid_argument("HTTP redirect listen address must not be empty");
+    }
     detail::ensureNonZeroPort(port, "HTTP redirect listen port must not be zero");
     detail::ensureNonZeroPort(targetHttpsPort, "HTTPS redirect target port must not be zero");
     if (port == targetHttpsPort) {
         throw std::invalid_argument("HTTP redirect and HTTPS target ports must be different");
     }
-    return ListenerConfig(RedirectHttpToHttps{port, targetHttpsPort});
+    return ListenerConfig(RedirectHttpToHttps{std::string(address), port, targetHttpsPort});
 }
 
 }  // namespace ruvia

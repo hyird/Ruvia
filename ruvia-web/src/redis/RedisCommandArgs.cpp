@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 
+#include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
 #include <stdexcept>
@@ -31,9 +32,9 @@ std::pmr::string redisMillisecondsString(std::chrono::milliseconds ttl, std::pmr
     return output;
 }
 
-std::pmr::string redisCursorString(RedisScanCursor cursor, std::pmr::memory_resource* resource) {
+std::pmr::string redisCursorString(std::optional<RedisScanCursor> cursor, std::pmr::memory_resource* resource) {
     std::pmr::string output(resource);
-    appendRedisNumber(output, cursor.value());
+    appendRedisNumber(output, cursor.has_value() ? RedisTypesAccess::cursorValue(*cursor) : 0);
     return output;
 }
 

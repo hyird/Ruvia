@@ -661,10 +661,10 @@ inline DispatchResult dispatchWithHandlersToken(RouteHandler handler, HttpErrorH
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     if (errorH != nullptr) {
-        impl.setErrorHandler(errorH);
+        impl.setErrorHandler(ruvia::detail::CallbackAccess::ref(errorH));
     }
     if (notFoundH != nullptr) {
-        impl.setNotFoundHandler(notFoundH);
+        impl.setNotFoundHandler(ruvia::detail::CallbackAccess::ref(notFoundH));
     }
     impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.finalize();

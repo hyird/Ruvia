@@ -213,8 +213,6 @@ DbRows::DbRows(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resour
 DbRows::DbRows(DbRows&& other) noexcept
     : rows_(std::move(other.rows_)),
       fields_(std::move(other.fields_)),
-      affectedRows_(std::exchange(other.affectedRows_, 0)),
-      lastInsertId_(std::exchange(other.lastInsertId_, std::nullopt)),
       rawResult_(std::move(other.rawResult_)) {
     other.rawResult_.template emplace<NoRawResult>();
 }

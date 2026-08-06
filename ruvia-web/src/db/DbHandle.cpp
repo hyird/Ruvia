@@ -13,7 +13,21 @@ namespace ruvia {
 
 namespace {
 
-Task<DbRows> executePool(detail::DbPoolRef pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbRows> queryPool(detail::DbPoolRef pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+#ifdef RUVIA_ENABLE_MARIADB
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+        return (*client)->query(std::move(sql), std::move(params), resource);
+    }
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+        return (*client)->query(std::move(sql), std::move(params), resource);
+    }
+#endif
+    detail::throwUnavailableDbBackend();
+}
+
+Task<DbExecResult> executePool(detail::DbPoolRef pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
         return (*client)->execute(std::move(sql), std::move(params), resource);
@@ -86,12 +100,11 @@ ScopedOperation<DbExecResult> DbHandle::execute(std::string_view sql, std::span<
 }
 
 Task<DbRows> DbHandle::queryPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
-    co_return co_await executePool(client, std::move(sql), std::move(params), resource);
+    co_return co_await queryPool(client, std::move(sql), std::move(params), resource);
 }
 
 Task<DbExecResult> DbHandle::executePrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
-    const auto result = co_await executePool(client, std::move(sql), std::move(params), resource);
-    co_return detail::DbResultAccess::makeExecResult(result);
+    co_return co_await executePool(client, std::move(sql), std::move(params), resource);
 }
 
 ScopedOperation<DbStreamResult> DbHandle::queryStream(std::string_view sql, std::span<const DbValue> params) const {

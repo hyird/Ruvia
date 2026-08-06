@@ -60,11 +60,15 @@ void materializeBorrowedResult(DbRows& output, PGresult& result, std::pmr::memor
 
 }  // namespace
 
-Task<DbRows> PostgreSqlPool::execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbRows> PostgreSqlPool::query(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     return executeDbQuery(*this, std::move(sql), std::move(params), resource);
 }
 
-Task<DbRows> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbExecResult> PostgreSqlPool::execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+    return executeDbCommand(*this, std::move(sql), std::move(params), resource);
+}
+
+Task<DbRows> PostgreSqlPool::queryOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource* resource) {
     if (!slot.connected) {
         co_await connectUnlocked(slot);
     }
@@ -89,7 +93,6 @@ Task<DbRows> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std::pmr:
             throw error;
         }
 
-        DbResultAccess::setAffectedRows(output, postgreSqlAffectedRows(*result));
         if (status == PGRES_TUPLES_OK) {
             if (retainedTupleResult) {
                 PQclear(result);
@@ -102,7 +105,46 @@ Task<DbRows> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std::pmr:
             PQclear(result);
         }
     }
+    if (!retainedTupleResult) {
+        throw std::invalid_argument("query() requires row-producing SQL");
+    }
     co_return output;
+}
+
+Task<DbExecResult> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource*) {
+    if (!slot.connected) {
+        co_await connectUnlocked(slot);
+    }
+    OperationTimeout deadline(config_.queryTimeout);
+    co_await sendQuery(slot, sql, params, deadline, false);
+
+    std::uint64_t affectedRows = 0;
+    while (true) {
+        co_await waitUntilResultReady(slot, deadline);
+        auto* result = PQgetResult(slot.connection);
+        if (result == nullptr) {
+            break;
+        }
+        const auto status = PQresultStatus(result);
+        if (!successfulResultStatus(status)) {
+            auto error = postgreSqlError(*slot.connection, "PostgreSQL execute", result);
+            PQclear(result);
+            while (auto* remaining = PQgetResult(slot.connection)) {
+                PQclear(remaining);
+            }
+            throw error;
+        }
+        if (status == PGRES_TUPLES_OK) {
+            PQclear(result);
+            while (auto* remaining = PQgetResult(slot.connection)) {
+                PQclear(remaining);
+            }
+            throw std::invalid_argument("execute() does not accept row-producing SQL");
+        }
+        affectedRows = postgreSqlAffectedRows(*result);
+        PQclear(result);
+    }
+    co_return DbResultAccess::makeExecResult(affectedRows);
 }
 
 Task<DbStreamResult> PostgreSqlPool::stream(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
@@ -191,7 +233,11 @@ Task<void> PostgreSqlPool::executeControl(ConnectionSlot& slot, std::string_view
     (void)co_await executeOnSlot(slot, command, {}, resource);
 }
 
-Task<DbRows> PostgreSqlPool::executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbRows> PostgreSqlPool::queryOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+    return queryOnDbTransactionSlot(*this, slot, std::move(sql), std::move(params), resource);
+}
+
+Task<DbExecResult> PostgreSqlPool::executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     return executeOnDbTransactionSlot(*this, slot, std::move(sql), std::move(params), resource);
 }
 

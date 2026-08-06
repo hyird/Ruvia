@@ -235,11 +235,14 @@ RUVIA_TEST(prefix_not_found_handler_scopes_by_longest_segment_prefix) {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/api/real"), RouteHandler(nullptr, &okHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
-    impl.setNotFoundHandler(&customNotFound);
+    ruvia::HttpNotFoundHandler defaultNotFound(&customNotFound);
+    ruvia::HttpNotFoundHandler apiNotFound(&apiScopedNotFound);
+    ruvia::HttpNotFoundHandler v2NotFound(&v2ScopedNotFound);
+    impl.setNotFoundHandler(ruvia::detail::CallbackAccess::ref(defaultNotFound));
     const ruvia::detail::HttpPrefixNotFoundHandler scoped[] = {
-        {"/api", &apiScopedNotFound},
+        {"/api", ruvia::detail::CallbackAccess::ref(apiNotFound)},
         // Trailing slash normalizes away; this is the same scope as "/api/v2".
-        {"/api/v2/", &v2ScopedNotFound},
+        {"/api/v2/", ruvia::detail::CallbackAccess::ref(v2NotFound)},
     };
     impl.setPrefixNotFoundHandlers(std::span<const ruvia::detail::HttpPrefixNotFoundHandler>(scoped, 2));
     impl.finalize();
@@ -262,9 +265,11 @@ RUVIA_TEST(prefix_error_handler_scopes_thrown_route_failures) {
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/api/boom"), RouteHandler(nullptr, &throwsHttpErrorHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.registerRoute(HttpKnownMethod::kGet, path("/boom"), RouteHandler(nullptr, &throwsHttpErrorHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
-    impl.setErrorHandler(&customError);
+    ruvia::HttpErrorHandler defaultError(&customError);
+    ruvia::HttpErrorHandler apiError(&apiScopedError);
+    impl.setErrorHandler(ruvia::detail::CallbackAccess::ref(defaultError));
     const ruvia::detail::HttpPrefixErrorHandler scoped[] = {
-        {"/api", &apiScopedError},
+        {"/api", ruvia::detail::CallbackAccess::ref(apiError)},
     };
     impl.setPrefixErrorHandlers(std::span<const ruvia::detail::HttpPrefixErrorHandler>(scoped, 1));
     impl.finalize();

@@ -180,6 +180,7 @@ private:
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> pools_;
+    std::pmr::vector<std::size_t> aliasIndex_;
     std::optional<std::size_t> defaultPoolIndex_;
 };
 

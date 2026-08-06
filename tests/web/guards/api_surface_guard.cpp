@@ -1148,7 +1148,8 @@ concept HasRedisScanResultPublicFields = requires(T& result) {
 
 template <typename T>
 concept HasRedisScanResultCanonicalReadAccessors = requires(const T& result) {
-    { result.cursor() } -> std::same_as<ruvia::RedisScanCursor>;
+    { result.done() } -> std::same_as<bool>;
+    { result.nextCursor() } -> std::same_as<std::optional<ruvia::RedisScanCursor>>;
     { result.values() } -> std::same_as<std::span<const std::pmr::string>>;
 };
 
@@ -1160,7 +1161,8 @@ concept HasRedisHashScanResultPublicFields = requires(T& result) {
 
 template <typename T>
 concept HasRedisHashScanResultCanonicalReadAccessors = requires(const T& result) {
-    { result.cursor() } -> std::same_as<ruvia::RedisScanCursor>;
+    { result.done() } -> std::same_as<bool>;
+    { result.nextCursor() } -> std::same_as<std::optional<ruvia::RedisScanCursor>>;
     { result.entries() } -> std::same_as<std::span<const ruvia::RedisKeyValue>>;
 };
 
@@ -1172,7 +1174,8 @@ concept HasRedisZScanResultPublicFields = requires(T& result) {
 
 template <typename T>
 concept HasRedisZScanResultCanonicalReadAccessors = requires(const T& result) {
-    { result.cursor() } -> std::same_as<ruvia::RedisScanCursor>;
+    { result.done() } -> std::same_as<bool>;
+    { result.nextCursor() } -> std::same_as<std::optional<ruvia::RedisScanCursor>>;
     { result.entries() } -> std::same_as<std::span<const ruvia::RedisScoredValue>>;
 };
 
@@ -1332,7 +1335,7 @@ concept HasAppListenAddressPortSetter = requires(T& app) {
 
 template <typename T>
 concept HasAppListenerSetter = requires(T& app) {
-    { app.setListeners({ruvia::ListenerConfig::http(8080)}) } -> std::same_as<ruvia::App&>;
+    { app.setListeners({ruvia::ListenerConfig::http("127.0.0.1", 8080)}) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
@@ -1357,6 +1360,11 @@ struct AccessLogListener final {
 template <typename T>
 concept HasBoundAccessLogCallback = requires(AccessLogListener& listener) {
     { T::bind(listener) } -> std::same_as<T>;
+};
+
+template <typename T>
+concept HasPublicCallbackBorrow = requires(const T& callback) {
+    callback.borrow();
 };
 
 template <typename T>
@@ -2121,11 +2129,15 @@ static_assert(!std::default_initializable<ruvia::detail::BufferedResponseDispatc
 static_assert(std::same_as<decltype(std::declval<const ruvia::detail::BufferedResponseDispatchResult&>().application()), const ruvia::detail::BufferedApplicationResponse*>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::detail::BufferedResponseDispatchResult&>().documentRoot()), const ruvia::detail::BufferedDocumentRootResponse*>);
 static_assert(!HasAppDocumentRootPathSetter<ruvia::App>);
-static_assert(HasAppListenAddressSetter<ruvia::App>);
+static_assert(!HasAppListenAddressSetter<ruvia::App>);
 static_assert(!HasAppListenAddressPortSetter<ruvia::App>);
 static_assert(HasAppListenerSetter<ruvia::App>);
 static_assert(HasCanonicalAccessLogCallback<ruvia::App>);
-static_assert(HasBoundAccessLogCallback<ruvia::AccessLogCallback>);
+static_assert(!HasBoundAccessLogCallback<ruvia::AccessLogCallback>);
+static_assert(!HasPublicCallbackBorrow<ruvia::AccessLogCallback>);
+static_assert(!HasPublicCallbackBorrow<ruvia::ConnectionFailureCallback>);
+static_assert(!HasPublicCallbackBorrow<ruvia::HttpErrorHandler>);
+static_assert(!HasPublicCallbackBorrow<ruvia::HttpNotFoundHandler>);
 static_assert(!std::is_default_constructible_v<ruvia::AccessLogRecord>);
 static_assert(!std::is_constructible_v<ruvia::AccessLogRecord, std::string_view, ruvia::HttpKnownMethod, std::string_view, std::string_view, std::uint16_t, std::uint64_t, bool>);
 #ifndef _MSC_VER

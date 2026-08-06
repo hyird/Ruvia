@@ -232,10 +232,18 @@ RUVIA_TEST(redis_parse_scan_result_reads_cursor_and_values) {
     redisReply* root[] = {&cursor, &inner};
     const auto reply = arrayReply(root, 2);
     const auto scan = parseRedisScanResult(hiredisReplyToValue(reply, 0, 32, resource), resource);
-    RUVIA_CHECK_EQ(scan.cursor(), ruvia::RedisScanCursor{10});
+    RUVIA_CHECK(!scan.done());
+    RUVIA_CHECK_EQ(scan.nextCursor(), ruvia::detail::RedisTypesAccess::scanCursor(10));
     RUVIA_CHECK_EQ(scan.values().size(), std::size_t{2});
     RUVIA_CHECK_EQ(scan.values()[0], std::string_view("key1"));
     RUVIA_CHECK_EQ(scan.values()[1], std::string_view("key2"));
+
+    redisReply terminalCursor = stringReply("0");
+    redisReply* terminalRoot[] = {&terminalCursor, &inner};
+    const auto terminalReply = arrayReply(terminalRoot, 2);
+    const auto terminal = parseRedisScanResult(hiredisReplyToValue(terminalReply, 0, 32, resource), resource);
+    RUVIA_CHECK(terminal.done());
+    RUVIA_CHECK(!terminal.nextCursor().has_value());
 
     // A non-numeric cursor is a protocol error (guards parseRedisCursor).
     redisReply badCursor = stringReply("notacursor");
@@ -262,7 +270,8 @@ RUVIA_TEST(redis_parse_hash_scan_result_reads_field_value_pairs) {
     redisReply* root[] = {&cursor, &inner};
     const auto reply = arrayReply(root, 2);
     const auto hscan = parseRedisHashScanResult(hiredisReplyToValue(reply, 0, 32, resource), resource);
-    RUVIA_CHECK_EQ(hscan.cursor(), ruvia::RedisScanCursor{7});
+    RUVIA_CHECK(!hscan.done());
+    RUVIA_CHECK_EQ(hscan.nextCursor(), ruvia::detail::RedisTypesAccess::scanCursor(7));
     RUVIA_CHECK_EQ(hscan.entries().size(), std::size_t{2});
     RUVIA_CHECK_EQ(hscan.entries()[0].key(), std::string_view("field1"));
     RUVIA_CHECK_EQ(hscan.entries()[0].value(), std::string_view("value1"));

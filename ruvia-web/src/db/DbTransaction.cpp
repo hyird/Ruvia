@@ -14,7 +14,21 @@
 namespace ruvia {
 namespace {
 
-Task<DbRows> executeTransactionPool(detail::DbPoolRef pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbRows> queryTransactionPool(detail::DbPoolRef pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+#ifdef RUVIA_ENABLE_MARIADB
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+        return (*client)->queryOnTransactionSlot(slot, std::move(sql), std::move(params), resource);
+    }
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+        return (*client)->queryOnTransactionSlot(slot, std::move(sql), std::move(params), resource);
+    }
+#endif
+    detail::throwUnavailableDbBackend();
+}
+
+Task<DbExecResult> executeTransactionPool(detail::DbPoolRef pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
         return (*client)->executeOnTransactionSlot(slot, std::move(sql), std::move(params), resource);
@@ -127,14 +141,17 @@ ScopedOperation<DbExecResult> DbTransaction::execute(std::string_view sql, std::
 Task<DbRows> DbTransaction::queryPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) {
     OperationGuard operation(*this);
     auto& lease = operation.lease();
-    auto result = co_await executeTransactionPool(lease.client, lease.slot, std::move(sql), std::move(params), lease.resource);
+    auto result = co_await queryTransactionPool(lease.client, lease.slot, std::move(sql), std::move(params), lease.resource);
     operation.finishActive();
     co_return result;
 }
 
 Task<DbExecResult> DbTransaction::executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) {
-    const auto result = co_await queryPrepared(std::move(sql), std::move(params));
-    co_return detail::DbResultAccess::makeExecResult(result);
+    OperationGuard operation(*this);
+    auto& lease = operation.lease();
+    auto result = co_await executeTransactionPool(lease.client, lease.slot, std::move(sql), std::move(params), lease.resource);
+    operation.finishActive();
+    co_return result;
 }
 
 ScopedOperation<void> DbTransaction::commit() {

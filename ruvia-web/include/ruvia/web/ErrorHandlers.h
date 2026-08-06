@@ -10,10 +10,16 @@
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Error.h"
+#include "ruvia/web/detail/CallbackRef.h"
 
 namespace ruvia {
 
 class Context;
+
+namespace detail {
+using HttpErrorHandlerRef = CallbackRef<Task<HttpResponse>(Context&, HttpErrorInfo)>;
+using HttpNotFoundHandlerRef = CallbackRef<Task<HttpResponse>(Context&)>;
+}  // namespace detail
 
 // Answers a request that failed. Accepts a plain function -- onError(&handler)
 // -- and equally a lambda or any other callable, including one that captures
@@ -63,12 +69,6 @@ public:
         reset();
     }
 
-    // App owns the registered callable. Routers and request services retain
-    // only this allocation-free view and never participate in its lifetime.
-    [[nodiscard]] HttpErrorHandler borrow() const noexcept {
-        return HttpErrorHandler(target_, invoke_);
-    }
-
     [[nodiscard]] Task<HttpResponse> operator()(Context& context, HttpErrorInfo error) const {
         return invoke_(target_, context, std::move(error));
     }
@@ -82,12 +82,15 @@ public:
     }
 
 private:
+    friend struct detail::CallbackAccess;
+
     using Invoke = Task<HttpResponse> (*)(void*, Context&, HttpErrorInfo);
     using Destroy = void (*)(void*, std::pmr::memory_resource*) noexcept;
     using Clone = void* (*)(const void*, std::pmr::memory_resource*);
 
-    constexpr HttpErrorHandler(void* target, Invoke invoke) noexcept
-        : target_(target), invoke_(invoke) {}
+    [[nodiscard]] constexpr detail::HttpErrorHandlerRef callbackRef() const noexcept {
+        return detail::CallbackAccess::make<Task<HttpResponse>(Context&, HttpErrorInfo)>(target_, invoke_);
+    }
 
     void copyFrom(const HttpErrorHandler& other) {
         target_ = other.clone_ == nullptr ? other.target_ : other.clone_(other.target_, other.resource_);
@@ -176,10 +179,6 @@ public:
         reset();
     }
 
-    [[nodiscard]] HttpNotFoundHandler borrow() const noexcept {
-        return HttpNotFoundHandler(target_, invoke_);
-    }
-
     [[nodiscard]] Task<HttpResponse> operator()(Context& context) const {
         return invoke_(target_, context);
     }
@@ -193,12 +192,15 @@ public:
     }
 
 private:
+    friend struct detail::CallbackAccess;
+
     using Invoke = Task<HttpResponse> (*)(void*, Context&);
     using Destroy = void (*)(void*, std::pmr::memory_resource*) noexcept;
     using Clone = void* (*)(const void*, std::pmr::memory_resource*);
 
-    constexpr HttpNotFoundHandler(void* target, Invoke invoke) noexcept
-        : target_(target), invoke_(invoke) {}
+    [[nodiscard]] constexpr detail::HttpNotFoundHandlerRef callbackRef() const noexcept {
+        return detail::CallbackAccess::make<Task<HttpResponse>(Context&)>(target_, invoke_);
+    }
 
     void copyFrom(const HttpNotFoundHandler& other) {
         target_ = other.clone_ == nullptr ? other.target_ : other.clone_(other.target_, other.resource_);

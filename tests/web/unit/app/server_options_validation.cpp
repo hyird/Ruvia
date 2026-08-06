@@ -223,7 +223,7 @@ RUVIA_TEST(validate_server_options_enforces_nested_tls_material) {
     {
         HttpServerOptions options;
         auto tls = validTls();
-        tls.clientCertificates.emplace(std::pmr::string{}, ruvia::TlsClientCertificateRequirement::kOptional);
+        tls.clientCertificates.emplace(std::pmr::get_default_resource(), ruvia::TlsClientCertificateRequirement::kOptional);
         options.transport = std::move(tls);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
@@ -274,11 +274,13 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
     RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsIdentity::fromFiles({}, "key.pem"); }));
     RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsIdentity::fromFiles("cert.pem", {}); }));
     RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsClientCertificatePolicy::required({}); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ListenerConfig::http(0); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ListenerConfig::redirectHttpToHttps(8443, 8443); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ListenerConfig::http({}, 8080); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ListenerConfig::http("127.0.0.1", 0); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ListenerConfig::redirectHttpToHttps({}, 8080, 8443); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ListenerConfig::redirectHttpToHttps("127.0.0.1", 8443, 8443); }));
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({}); }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::http(8080), ruvia::ListenerConfig::http(8080)}); }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::redirectHttpToHttps(8080, 8443)}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::http("127.0.0.1", 8080), ruvia::ListenerConfig::http("0.0.0.0", 8080)}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::redirectHttpToHttps("127.0.0.1", 8080, 8443)}); }));
 }
 
 RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {

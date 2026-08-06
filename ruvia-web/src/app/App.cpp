@@ -111,8 +111,7 @@ struct AppRuntimeGraph final {
 AppState::AppState()
     : workersPerListener(std::max(1U, std::thread::hardware_concurrency())),
       runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{detail::appResource()}) {
-    listenAddress.assign("0.0.0.0");
-    listeners.push_back(ListenerConfig::http());
+    listeners.emplace_back(detail::appResource(), "0.0.0.0", 8080, HttpServerOptions::PlainHttp{});
 }
 
 AppState::~AppState() = default;
@@ -245,13 +244,13 @@ namespace {
     auto router = detail::makePmrObject<detail::Router>(runtimeResource);
     detail::registerControllers(*router, controllers, controllerRegistrars);
     auto& routes = detail::RouterImpl::from(*router);
-    routes.setErrorHandler(state.errorHandler.borrow());
-    routes.setNotFoundHandler(state.notFoundHandler.borrow());
+    routes.setErrorHandler(detail::CallbackAccess::ref(state.errorHandler));
+    routes.setNotFoundHandler(detail::CallbackAccess::ref(state.notFoundHandler));
     if (!state.prefixErrorHandlers.empty()) {
         std::pmr::vector<detail::HttpPrefixErrorHandler> views(runtimeResource);
         views.reserve(state.prefixErrorHandlers.size());
         for (const auto& [prefix, handler] : state.prefixErrorHandlers) {
-            views.push_back({std::string_view(prefix), handler.borrow()});
+            views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
         }
         routes.setPrefixErrorHandlers(views);
     }
@@ -259,7 +258,7 @@ namespace {
         std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(runtimeResource);
         views.reserve(state.prefixNotFoundHandlers.size());
         for (const auto& [prefix, handler] : state.prefixNotFoundHandlers) {
-            views.push_back({std::string_view(prefix), handler.borrow()});
+            views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
         }
         routes.setPrefixNotFoundHandlers(views);
     }
@@ -304,15 +303,14 @@ void App::run() {
             preparedOptions.blockingPool = runtime->blockingPool.get();
         }
 
-        const auto address = asio::ip::make_address(state.listenAddress);
         const auto workerCount = state.workersPerListener * state.listeners.size();
         runtime->controllers.reserve(workerCount);
         runtime->routers.reserve(workerCount);
         runtime->workers.reserve(workerCount);
 
-        const auto addWorkers = [&state, &address, &runtime, &controllerRegistrars, &preparedOptions, runtimeResource](std::uint16_t port, detail::HttpServerOptions::ListenerTransport transport) {
-            const asio::ip::tcp::endpoint endpoint(address, port);
-            auto listenerOptions = detail::makeListenerOptions(preparedOptions, std::move(transport), runtime->documentRoot.get());
+        const auto addWorkers = [&state, &runtime, &controllerRegistrars, &preparedOptions, runtimeResource](const detail::AppListenerConfig& listener) {
+            const asio::ip::tcp::endpoint endpoint(asio::ip::make_address(std::string_view(listener.address)), listener.port);
+            auto listenerOptions = detail::makeListenerOptions(preparedOptions, listener.transport, runtime->documentRoot.get());
             for (std::size_t i = 0; i < state.workersPerListener; ++i) {
                 auto workerOptions = i + 1 == state.workersPerListener ? std::move(listenerOptions) : listenerOptions;  // NOLINT(bugprone-use-after-move): moved only on
                                                                                                                         // the final iteration
@@ -338,17 +336,7 @@ void App::run() {
         };
 
         for (const auto& listener : state.listeners) {
-            std::visit(
-                [&]<typename Listener>(const Listener& config) {
-                    if constexpr (std::is_same_v<Listener, ListenerConfig::Http>) {
-                        addWorkers(config.port, detail::HttpServerOptions::PlainHttp{});
-                    } else if constexpr (std::is_same_v<Listener, ListenerConfig::Https>) {
-                        addWorkers(config.port, detail::makeTlsOptions(config.tls));
-                    } else {
-                        addWorkers(config.port, detail::HttpServerOptions::RedirectHttpToHttps{config.targetHttpsPort});
-                    }
-                },
-                listener.listener_);
+            addWorkers(listener);
         }
 
         // All fallible startup preparation is complete. Memory configuration is

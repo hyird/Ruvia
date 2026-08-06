@@ -77,8 +77,7 @@ int main() {
     std::size_t stopCalls = 0;
     std::vector<ruvia::WebWorkerHandle> workers;
 
-    app.setListenAddress("127.0.0.1")
-        .setListeners({ruvia::ListenerConfig::http(availablePort())})
+    app.setListeners({ruvia::ListenerConfig::http("127.0.0.1", availablePort())})
         .setWorkersPerListener(2)
         .setWorkerMailboxCapacity(8)
         .onStop([&] {

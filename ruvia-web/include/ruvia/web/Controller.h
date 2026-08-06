@@ -94,9 +94,17 @@ private:                                                                        
         auto ruviaControllerGroup = RuviaControllerAccess::createRouteGroup(router, RuviaControllerAccess::groupPrefix(), RuviaControllerAccess::groupMiddlewares()); \
         [[maybe_unused]] auto& ruviaRouteScope = ruviaControllerGroup;
 
-#define RUVIA_ROUTES_END \
-    }                    \
-    inline static const bool ruviaControllerRegistered_ = ::ruvia::detail::registerController<RuviaControllerType>();
+#if defined(_MSC_VER)
+#define RUVIA_DETAIL_CONTROLLER_RETAIN __declspec(selectany)
+#elif defined(__GNUC__) || defined(__clang__)
+#define RUVIA_DETAIL_CONTROLLER_RETAIN __attribute__((used))
+#else
+#define RUVIA_DETAIL_CONTROLLER_RETAIN
+#endif
+
+#define RUVIA_ROUTES_END                                                                                                   \
+    }                                                                                                                      \
+    RUVIA_DETAIL_CONTROLLER_RETAIN inline static const bool ruviaControllerRegistered_ = ::ruvia::detail::registerController<RuviaControllerType>();
 
 #define RUVIA_GET(path, handler, ...) RuviaControllerAccess::addRoute(ruviaRouteScope, ::ruvia::HttpKnownMethod::kGet, path, RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), ::ruvia::detail::RequestBodyMode::kBuffered, RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 

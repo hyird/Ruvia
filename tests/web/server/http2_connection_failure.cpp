@@ -101,7 +101,7 @@ int main() {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::test::Http2SansIoSessionFixture fixture;
-            fixture.options.connectionFailure.callback = ruvia::ConnectionFailureCallback::bind(observation);
+            fixture.options.connectionFailure.callback = ruvia::detail::CallbackAccess::bind<void(const ruvia::ConnectionFailureRecord&) noexcept>(observation);
             auto dispatcher = std::make_shared<WorkerDispatcher>(io, 64);
             const auto workerHandle = WorkerHandleAccess::make(dispatcher);
             co_await taskAsAwaitable(runHttp2SansIoSession(sock, routes, worker, fixture.context(ContextServices{}.withPlainTransport("127.0.0.1").withWorker(workerHandle))));

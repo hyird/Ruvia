@@ -3,6 +3,7 @@
 #include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/integration/DataAccessDefinitions.h"
+#include <algorithm>
 #include <ranges>
 #include <stdexcept>
 #include <utility>
@@ -12,7 +13,8 @@ namespace detail {
 
 RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const RedisDefinition> redis)
     : resource_(detail::pmrResourceOrDefault(resource)),
-      pools_(resource_) {
+      pools_(resource_),
+      aliasIndex_(resource_) {
     pools_.reserve(redis.size());
     for (const auto& definition : redis) {
         if (definition.alias.empty()) {
@@ -29,6 +31,11 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
             defaultPoolIndex_ = pools_.size() - 1;
         }
     }
+    aliasIndex_.resize(pools_.size());
+    for (std::size_t index = 0; index < aliasIndex_.size(); ++index) {
+        aliasIndex_[index] = index;
+    }
+    std::ranges::sort(aliasIndex_, {}, [this](std::size_t index) -> std::string_view { return pools_[index].alias; });
 }
 
 RedisRegistry::~RedisRegistry() = default;
@@ -62,10 +69,9 @@ RedisHandle RedisRegistry::get(std::pmr::memory_resource* resource, ScopedOperat
 }
 
 RedisHandle RedisRegistry::get(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
-    for (const auto& entry : pools_) {
-        if (std::string_view(entry.alias) == alias) {
-            return RedisHandle(*entry.pool, resource, operationScope);
-        }
+    const auto match = std::ranges::lower_bound(aliasIndex_, alias, {}, [this](std::size_t index) -> std::string_view { return pools_[index].alias; });
+    if (match != aliasIndex_.end() && std::string_view(pools_[*match].alias) == alias) {
+        return RedisHandle(*pools_[*match].pool, resource, operationScope);
     }
     throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
 }

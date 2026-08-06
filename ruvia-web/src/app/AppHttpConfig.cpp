@@ -44,7 +44,13 @@ App& App::setCompression(std::optional<CompressionConfig> config) {
 }
 
 App& App::setCors(std::optional<CorsConfig> config) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change CORS config while app is running", [&config](detail::AppState& state) { state.options.cors = std::move(config); });
+    return detail::mutateStoppedApp(*this, *state_, "cannot change CORS config while app is running", [&config](detail::AppState& state) {
+        if (!config.has_value()) {
+            state.options.cors.reset();
+            return;
+        }
+        state.options.cors = detail::makeCorsOptions(*config, detail::appResource());
+    });
 }
 
 App& App::setDocumentRoot(DocumentRootConfig config) {
