@@ -662,6 +662,15 @@ and scan options accept an optional continuation cursor. Scan results expose
 `done()` and `nextCursor()`, so Redis's wire-level zero sentinel never doubles
 as both an initial and terminal application state.
 
+Redis blocking commands use an explicitly isolated alias configured with
+`RedisPoolUsage::kBlocking`; ordinary pools reject `BLPOP`/`BRPOP` and commands
+such as `XREADGROUP ... BLOCK`. `RedisHandle::command()` accepts
+`RedisOperationOptions` for an end-to-end per-command timeout and `StopToken`,
+while typed `xreadGroup()` accepts `RedisXReadGroupOptions`. Cancelling an active
+operation discards its socket, and that pool slot reconnects before its next
+command. An infinite block therefore requires either a stoppable token or a
+finite command timeout.
+
 Models are ordinary structs with one schema for JSON parsing, validation, and
 serialization. They support nested models and arrays; `RUVIA_FIELD` is required
 and `RUVIA_OPTIONAL_FIELD` may be absent. Route middleware keeps the Hono-style

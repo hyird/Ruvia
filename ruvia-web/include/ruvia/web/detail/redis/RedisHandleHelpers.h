@@ -19,11 +19,14 @@ namespace ruvia::detail {
 [[nodiscard]] std::int64_t redisValueInteger(const RedisValue& value);
 [[nodiscard]] std::span<const RedisValue> redisValueArray(const RedisValue& value);
 void throwIfRedisError(const RedisValue& value);
+void validateRedisOperationOptions(const RedisOperationOptions& options);
+void validateRedisPooledCommand(const RedisPool& pool, std::span<const std::string_view> args, bool allowBlocking, const RedisOperationOptions* options = nullptr);
 
 [[nodiscard]] std::pmr::vector<std::pmr::string> ownRedisArgs(std::span<const std::string_view> args, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::vector<std::pmr::string> ownRedisArgs(std::initializer_list<std::string_view> args, std::pmr::memory_resource* resource);
 
 Task<RedisValue> executeOwnedRedisCommand(RedisPool& pool, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
+Task<RedisValue> executeOwnedRedisCommand(RedisPool& pool, std::pmr::vector<std::pmr::string> args, RedisOperationOptions options, std::pmr::memory_resource* resource);
 Task<std::optional<std::pmr::string>> redisStringCommand(RedisPool& pool, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
 Task<std::int64_t> redisIntegerCommand(RedisPool& pool, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
 Task<std::pmr::vector<std::pmr::string>> redisStringArrayCommand(RedisPool& pool, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
@@ -54,5 +57,7 @@ void appendRedisScanOptions(std::pmr::vector<std::pmr::string>& args, const Redi
 [[nodiscard]] std::pmr::vector<std::pmr::string> redisBlockingPopArgs(std::string_view command, std::span<const std::string_view> keys, std::chrono::seconds timeout, std::pmr::memory_resource* resource);
 [[nodiscard]] std::optional<std::chrono::milliseconds> redisBlockingPopClientTimeout(std::chrono::seconds timeout) noexcept;
 [[nodiscard]] std::optional<RedisKeyValue> parseRedisBlockingPopReply(const RedisValue& value, std::pmr::memory_resource* resource);
+[[nodiscard]] std::pmr::vector<std::pmr::string> redisXReadGroupArgs(std::string_view group, std::string_view consumer, std::span<const RedisStreamReadView> streams, const RedisXReadGroupOptions& options, std::pmr::memory_resource* resource);
+[[nodiscard]] std::optional<RedisXReadGroupResult> parseRedisXReadGroupReply(const RedisValue& value, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

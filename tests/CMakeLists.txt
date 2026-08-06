@@ -204,6 +204,7 @@ ruvia_add_unit_suite(ruvia_core_unit_tests ruvia::core
     # core
     core/base64.cpp
     core/pool_waiter_queue.cpp
+    core/stop_token.cpp
 
     # support
     support/test_main.cpp

@@ -63,6 +63,30 @@ struct RedisTypesAccess final {
         return result.entries_;
     }
 
+    [[nodiscard]] static RedisStreamEntry streamEntry(std::string_view id, std::pmr::memory_resource* resource) {
+        return RedisStreamEntry(id, resource);
+    }
+
+    [[nodiscard]] static std::pmr::vector<RedisKeyValue>& fields(RedisStreamEntry& entry) noexcept {
+        return entry.fields_;
+    }
+
+    [[nodiscard]] static RedisStreamReadResult streamReadResult(std::string_view stream, std::pmr::memory_resource* resource) {
+        return RedisStreamReadResult(stream, resource);
+    }
+
+    [[nodiscard]] static std::pmr::vector<RedisStreamEntry>& entries(RedisStreamReadResult& result) noexcept {
+        return result.entries_;
+    }
+
+    [[nodiscard]] static RedisXReadGroupResult xreadGroupResult(std::pmr::memory_resource* resource) {
+        return RedisXReadGroupResult(resource);
+    }
+
+    [[nodiscard]] static std::pmr::vector<RedisStreamReadResult>& streams(RedisXReadGroupResult& result) noexcept {
+        return result.streams_;
+    }
+
     [[nodiscard]] static constexpr RedisTtl ttl(RedisTtlState state, std::optional<std::chrono::milliseconds> remaining = std::nullopt) noexcept {
         return RedisTtl(state, remaining);
     }

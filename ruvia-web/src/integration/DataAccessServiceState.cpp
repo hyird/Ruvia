@@ -16,7 +16,7 @@ DataAccessServiceState::DataAccessServiceState(EventLoop loop, DataAccessOptions
       databaseDefinitions_(makeDatabaseDefinitions(options, memory_.resource())),
       redisDefinitions_(makeRedisDefinitions(options, memory_.resource())),
       scanner_(worker_, ConnectionScannerOptions{.scanInterval = options.maintenanceInterval, .idleTimeout = std::nullopt, .initialReadTimeout = std::nullopt, .payloadReadTimeout = std::nullopt, .writeTimeout = std::nullopt}),
-      access_(loop_.ioContext(), memory_.resource(), databaseDefinitions_, redisDefinitions_, scanner_),
+      access_(loop_.ioContext(), worker_, memory_.resource(), databaseDefinitions_, redisDefinitions_, scanner_),
       failureHandler_(std::move(options.failureHandler)) {}
 
 DataAccessServiceState::~DataAccessServiceState() {

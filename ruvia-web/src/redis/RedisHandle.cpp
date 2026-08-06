@@ -56,9 +56,11 @@ void RedisHandle::expireCapability(detail::ScopedCapabilityNode& capability) noe
     handle.resource_ = nullptr;
 }
 
-ScopedOperation<RedisValue> RedisHandle::command(std::span<const std::string_view> args) const {
+ScopedOperation<RedisValue> RedisHandle::command(std::span<const std::string_view> args, RedisOperationOptions options) const {
     requireActive();
-    return scoped(detail::executeOwnedRedisCommand(*pool_, detail::ownRedisArgs(args, resource_), resource_));
+    detail::validateRedisOperationOptions(options);
+    detail::validateRedisPooledCommand(*pool_, args, true, &options);
+    return scoped(detail::executeOwnedRedisCommand(*pool_, detail::ownRedisArgs(args, resource_), std::move(options), resource_));
 }
 
 ScopedOperation<void> RedisHandle::ping() const {
