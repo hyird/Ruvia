@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
+#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
 #include "ruvia/http/detail/http2/hpack/Http2HeaderBlock.h"
 #include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
@@ -12,10 +13,9 @@
 
 namespace ruvia::detail {
 
-HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) {
-    Http2HeaderDecodeContext context{stream};
-    const auto result = decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value); });
-    http2ResetHeaderBlock(stream);
+HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction) {
+    Http2HeaderDecodeContext context{stream, &streamTransaction};
+    const auto result = decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
@@ -68,30 +68,32 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
     if (!remoteHeadFinalized) {
         return HeaderDecodeStatus::kProtocolError;
     }
+    if (http2RemotePeerHalfClosed(stream) && !stream.remoteContent().terminalLengthValid()) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
     // NOTE (sans-I/O): resolveStreamRoute is deliberately NOT called here -- route
     // resolution and body-mode selection are application policy the owner applies
     // after pulling the kMessageHead event.
     return HeaderDecodeStatus::kOk;
 }
 
-HeaderDecodeStatus Http2Connection::decodeInitialHeaderBlock(Http2StreamState& stream) {
-    return role_ == Http2Role::kClient ? decodeResponseHeaderBlock(stream) : decodeHeaderBlock(stream);
+HeaderDecodeStatus Http2Connection::decodeInitialHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction) {
+    return role_ == Http2Role::kClient ? decodeResponseHeaderBlock(stream, streamTransaction, hpackTransaction) : decodeHeaderBlock(stream, streamTransaction, hpackTransaction);
 }
 
-HeaderDecodeStatus Http2Connection::decodeRefusedHeaderBlock(Http2StreamState& stream) {
-    Http2HeaderDecodeContext context{stream};
-    const auto result = decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value); });
-    http2ResetHeaderBlock(stream);
+HeaderDecodeStatus Http2Connection::decodeRefusedHeaderBlock(Http2StreamState& stream, HpackDecoder::DecodeTransaction& hpackTransaction) {
+    Http2StreamHeaderDecodeTransaction transaction{stream, true};
+    Http2HeaderDecodeContext context{stream, &transaction};
+    const auto result = decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction);
     return http2ClassifyHeaderDecodeResult(result);
 }
 
-HeaderDecodeStatus Http2Connection::decodeDiscardedHeaderBlock(Http2StreamState& stream) {
+HeaderDecodeStatus Http2Connection::decodeDiscardedHeaderBlock(Http2StreamState& stream, HpackDecoder::DecodeTransaction& hpackTransaction) {
     // Even a block whose HTTP semantics are no longer observable must be decoded in
     // full because HPACK's dynamic table is connection-scoped. Keep the decompressed
     // field-list budget, but deliberately avoid mutating request/response state.
     Http2HeaderDecodeContext context{stream};
-    const auto result = decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2AccumulateHeaderListBytes(*static_cast<Http2HeaderDecodeContext*>(target), name, value); });
-    http2ResetHeaderBlock(stream);
+    const auto result = decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2AccumulateHeaderListBytes(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction);
     return http2ClassifyHeaderDecodeResult(result);
 }
 
@@ -100,19 +102,28 @@ bool Http2Connection::startDiscardedHeaderBlock(const Http2FrameHeader& header, 
         appendGoaway(Http2ErrorCode::kProtocolError, "overlapping discarded HEADERS block");
         return false;
     }
-    discardedHeaderStream_.emplace(header.streamId, resource_);
-    discardedHeaderAction_ = action;
-    if (!http2StartHeaderBlock(*discardedHeaderStream_, fragment)) {
+    try {
+        discardedHeaderStream_.emplace(header.streamId, resource_);
+        discardedHeaderAction_ = action;
+        if (!http2StartHeaderBlock(*discardedHeaderStream_, fragment)) {
+            discardedHeaderStream_.reset();
+            discardedHeaderAction_ = DiscardedHeaderAction::kIgnore;
+            appendGoaway(Http2ErrorCode::kCompressionError, "field block not decompressed");
+            return false;
+        }
+        if ((header.flags & kHttp2FlagEndHeaders) != 0) {
+            return finishDiscardedHeaderBlock();
+        }
+        headerContinuation_.start(header.streamId, Http2HeaderBlockKind::kDiscarded);
+        return true;
+    } catch (...) {
+        // The caller retries the complete HEADERS frame after a recoverable PMR
+        // failure. Never leave an engaged scratch stream or an action latch behind:
+        // either would make the retry look like an overlapping CONTINUATION run.
         discardedHeaderStream_.reset();
         discardedHeaderAction_ = DiscardedHeaderAction::kIgnore;
-        appendGoaway(Http2ErrorCode::kCompressionError, "field block not decompressed");
-        return false;
+        throw;
     }
-    if ((header.flags & kHttp2FlagEndHeaders) != 0) {
-        return finishDiscardedHeaderBlock();
-    }
-    headerContinuation_.start(header.streamId, Http2HeaderBlockKind::kDiscarded);
-    return true;
 }
 
 bool Http2Connection::finishDiscardedHeaderBlock() {
@@ -122,15 +133,22 @@ bool Http2Connection::finishDiscardedHeaderBlock() {
     }
     const auto streamId = discardedHeaderStream_->id();
     const auto action = discardedHeaderAction_;
-    const auto status = action == DiscardedHeaderAction::kRefuseStream ? decodeRefusedHeaderBlock(*discardedHeaderStream_) : decodeDiscardedHeaderBlock(*discardedHeaderStream_);
-    discardedHeaderStream_.reset();
-    discardedHeaderAction_ = DiscardedHeaderAction::kIgnore;
+    auto hpackTransaction = decoder_.beginTransaction();
+    const auto status = action == DiscardedHeaderAction::kRefuseStream ? decodeRefusedHeaderBlock(*discardedHeaderStream_, hpackTransaction) : decodeDiscardedHeaderBlock(*discardedHeaderStream_, hpackTransaction);
 
     if (status == HeaderDecodeStatus::kCompressionError) {
         appendGoaway(Http2ErrorCode::kCompressionError, "invalid HPACK block");
+        hpackTransaction.rollback();
+        http2ResetHeaderBlock(*discardedHeaderStream_);
+        discardedHeaderStream_.reset();
+        discardedHeaderAction_ = DiscardedHeaderAction::kIgnore;
         return false;
     }
     if (action == DiscardedHeaderAction::kIgnore) {
+        hpackTransaction.commit();
+        http2ResetHeaderBlock(*discardedHeaderStream_);
+        discardedHeaderStream_.reset();
+        discardedHeaderAction_ = DiscardedHeaderAction::kIgnore;
         return true;
     }
 
@@ -140,19 +158,32 @@ bool Http2Connection::finishDiscardedHeaderBlock() {
     } else if (action == DiscardedHeaderAction::kRefuseStream && status == HeaderDecodeStatus::kOk) {
         error = Http2ErrorCode::kRefusedStream;
     }
+    auto* const liveStream = findStream(streamId);
+    const bool hasLiveStream = liveStream != nullptr;
+    if (hasLiveStream) {
+        reserveStreamCloseEffects(*liveStream);
+    }
+    output_.reserveAdditional(kHttp2FrameHeaderBytes + 4);
     output_.appendRstStream(streamId, error);
-    if (findStream(streamId) != nullptr) {
+    hpackTransaction.commit();
+    http2ResetHeaderBlock(*discardedHeaderStream_);
+    if (hasLiveStream) {
         closeStream(streamId, Http2StreamCloseSource::kLocal, error);
     } else {
         closedStreams_.remember(streamId, Http2StreamCloseSource::kLocal);
     }
+    discardedHeaderStream_.reset();
+    discardedHeaderAction_ = DiscardedHeaderAction::kIgnore;
     return true;
 }
 
-HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream) {
-    Http2HeaderDecodeContext context{stream};
-    const auto result = role_ == Http2Role::kServer ? decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedRequestTrailer(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }) : decoder_.decode(stream.requestHeaderBlock(), &context, http2OnDecodedResponseTrailer);
-    http2ResetHeaderBlock(stream);
+HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction) {
+    // A successful trailer block publishes exactly one terminal event. Reserve
+    // it before HPACK/application-header decoding so a later vector growth cannot
+    // leave the decoded stream half-committed without its message end.
+    reserveEventSlots(1);
+    Http2HeaderDecodeContext context{stream, &streamTransaction};
+    const auto result = role_ == Http2Role::kServer ? decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedRequestTrailer(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction) : decoder_.decode(stream.requestHeaderBlock(), &context, http2OnDecodedResponseTrailer, hpackTransaction);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
@@ -167,13 +198,33 @@ HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream)
     return HeaderDecodeStatus::kOk;
 }
 
-bool Http2Connection::handleHeaderDecodeFailure(Http2StreamState& stream, HeaderDecodeStatus status) {
+void Http2Connection::reserveStreamCloseEffects(Http2StreamState& stream) {
+    reserveEventSlots(1);
+    if (const auto debt = stream.windowDebt(); debt != 0 && connectionReceiveCredit_.readyAfter(debt)) {
+        output_.reserveAdditional(kHttp2WindowUpdateFrameBytes);
+    }
+}
+
+bool Http2Connection::handleHeaderDecodeFailure(Http2StreamState& stream, HeaderDecodeStatus status, HpackDecoder::DecodeTransaction* hpackTransaction) {
     if (status == HeaderDecodeStatus::kCompressionError) {
         appendGoaway(Http2ErrorCode::kCompressionError, "invalid HPACK block");
+        http2ResetHeaderBlock(stream);
         return false;
     }
+    const bool hasLiveStream = findStream(stream.id()) == &stream;
+    if (hasLiveStream) {
+        reserveStreamCloseEffects(stream);
+    }
+    output_.reserveAdditional(kHttp2FrameHeaderBytes + 4);
     output_.appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
-    if (findStream(stream.id()) == &stream) {
+    if (hpackTransaction != nullptr && hpackTransaction->active()) {
+        hpackTransaction->commit();
+    }
+    // The error response is now fully reserved and appended. Only this point is
+    // safe to consume the compressed block: if either reservation above throws,
+    // the caller must be able to retry the exact field block and its HPACK state.
+    http2ResetHeaderBlock(stream);
+    if (hasLiveStream) {
         closeStream(stream.id(), Http2StreamCloseSource::kLocal,
             Http2ErrorCode::kProtocolError);  // emits a typed stream-closed event
     } else {
@@ -185,17 +236,11 @@ bool Http2Connection::handleHeaderDecodeFailure(Http2StreamState& stream, Header
 }
 
 void Http2Connection::emitRequestHeaders(Http2StreamState& stream) {
-    // RFC 9113 §8.1.1: a declared content-length must equal the summed DATA payload.
-    // A body-less HEADERS (END_STREAM set) with a nonzero content-length can never be
-    // satisfied -- reject it here so both END_STREAM routes stay consistent. Client
-    // role: HEAD responses and 204/304 are exempt (their content-length describes the
-    // body a GET would have had, RFC 9110 §8.6).
-    if (http2RemotePeerHalfClosed(stream) && !stream.remoteContent().terminalLengthValid()) {
-        output_.appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
-        closeStream(stream.id(), Http2StreamCloseSource::kLocal,
-            Http2ErrorCode::kProtocolError);  // remove, don't leak the slot
-        return;
-    }
+    // The head may be followed by one terminal event (message/tunnel end). Reserve
+    // exactly the events this branch will publish; retaining one unused slot on
+    // every non-terminal request would hide later allocation-failure retries.
+    const bool terminalEvent = http2RemotePeerHalfClosed(stream) && !(role_ == Http2Role::kServer && stream.tunnel().pending() != nullptr);
+    reserveEventSlots(terminalEvent ? 2 : 1);
     events_.push_back(Http2Event::messageHead(stream.id()));
     if (role_ == Http2Role::kServer && stream.tunnel().pending() != nullptr) {
         // CONNECT has no request content, but that fact alone says nothing about the

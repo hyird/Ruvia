@@ -11,7 +11,9 @@ inline constexpr std::size_t kCookieSignatureSize = 44;
 // Writes exactly kCookieSignatureSize characters to `output`. The cookie `name`
 // is bound into the MAC (length-framed together with `value`) so a value signed
 // for one cookie is not a valid signature for another under the same secret.
-// Throws std::invalid_argument on an empty secret.
+// Throws std::invalid_argument on an empty secret and std::length_error when
+// the secret or length-framed message cannot be represented by OpenSSL's HMAC
+// length parameters.
 void writeCookieSignature(char* output, std::string_view secret, std::string_view name, std::string_view value);
 
 // Constant-time comparison; signature strings are attacker-controlled.

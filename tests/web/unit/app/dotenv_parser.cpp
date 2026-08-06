@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <cstdint>
 #include <string_view>
 #include <utility>
 
@@ -173,4 +174,30 @@ RUVIA_TEST(dotenv_hash_is_literal_unless_space_preceded) {
     RUVIA_CHECK_EQ(std::string_view(entries[1].value), std::string_view("http://host/path#frag"));
     RUVIA_CHECK(entries[2].value.empty());  // '#' at the start comments out the whole value
     RUVIA_CHECK_EQ(std::string_view(entries[3].value), std::string_view("kept"));
+}
+
+RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
+    const auto path = writeTempEnv("ruvia_dotenv_typed.env", "PORT=8080\nBAD_PORT=not-a-port\nENABLED=maybe\n");
+    ruvia::Env env;
+    (void)ruvia::detail::loadEnvFromFile(env, path, {});
+    std::filesystem::remove(path);
+
+    RUVIA_CHECK(!env.get<std::uint16_t>("MISSING").has_value());
+    RUVIA_CHECK_EQ(env.get<std::uint16_t>("PORT").value_or(0), std::uint16_t{8080});
+
+    bool badPortThrew = false;
+    try {
+        (void)env.get<std::uint16_t>("BAD_PORT");
+    } catch (const std::invalid_argument& error) {
+        badPortThrew = std::string_view(error.what()).find("BAD_PORT") != std::string_view::npos;
+    }
+    RUVIA_CHECK(badPortThrew);
+
+    bool badBoolThrew = false;
+    try {
+        (void)env.get<bool>("ENABLED");
+    } catch (const std::invalid_argument& error) {
+        badBoolThrew = std::string_view(error.what()).find("ENABLED") != std::string_view::npos;
+    }
+    RUVIA_CHECK(badBoolThrew);
 }

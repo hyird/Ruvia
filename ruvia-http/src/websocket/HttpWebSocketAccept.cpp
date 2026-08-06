@@ -2,7 +2,10 @@
 
 #include <array>
 #include <bit>
+#include <cstdint>
+#include <limits>
 #include <span>
+#include <stdexcept>
 
 #include "ruvia/http/detail/util/HttpBase64.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -11,6 +14,7 @@ namespace ruvia::detail {
 namespace {
 
 constexpr std::string_view kWebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+constexpr std::uint64_t kMaxSha1MessageBytes = (std::numeric_limits<std::uint64_t>::max)() / 8;
 
 [[nodiscard]] std::array<std::uint8_t, 20> sha1(std::string_view first, std::string_view second) noexcept {
     std::uint32_t h0 = 0x67452301U;
@@ -104,6 +108,13 @@ constexpr std::string_view kWebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B1
 }  // namespace
 
 void encodeWebSocketAccept(WebSocketAcceptKey& output, std::string_view key) {
+    // Check the raw view before trimming: httpTrimOws() must inspect the last
+    // byte, and callers of this detail helper are not otherwise required to
+    // prove that a view's advertised size is backed by a full object. The
+    // SHA-1 length field is measured in bits and is only 64 bits wide.
+    if (key.size() > (std::numeric_limits<std::size_t>::max)() - kWebSocketGuid.size() || key.size() > kMaxSha1MessageBytes - kWebSocketGuid.size()) {
+        throw std::length_error("WebSocket accept input is too large");
+    }
     key = detail::httpTrimOws(key);
     const auto digest = sha1(key, kWebSocketGuid);
     encodeHttpBase64(output.data(), std::span<const std::uint8_t>(digest));

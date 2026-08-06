@@ -33,18 +33,24 @@ public:
         : asio::execution_context::service(context) {}
 
     [[nodiscard]] bool claim() noexcept {
-        bool expected = false;
-        return claimed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel, std::memory_order_acquire);
+        const std::lock_guard lock(mutex_);
+        if (claimed_) {
+            return false;
+        }
+        claimed_ = true;
+        return true;
     }
 
-    void release() noexcept {
-        claimed_.store(false, std::memory_order_release);
-    }
+    void releaseClaim() noexcept;
+    void retain(std::shared_ptr<detail::EventLoopState> state) noexcept;
+    void releaseState(detail::EventLoopState* state) noexcept;
 
 private:
-    void shutdown() override {}
+    void shutdown() override;
 
-    std::atomic_bool claimed_{false};
+    std::mutex mutex_;
+    bool claimed_{false};
+    std::shared_ptr<detail::EventLoopState> state_;
 };
 
 asio::execution_context::id ExternalContextAttachmentService::id;
@@ -59,7 +65,18 @@ public:
     }
 
     ~ExternalContextClaim() {
-        service_->release();
+        if (!retained_) {
+            service_->releaseClaim();
+        }
+    }
+
+    void retain(std::shared_ptr<detail::EventLoopState> state) noexcept {
+        service_->retain(std::move(state));
+        retained_ = true;
+    }
+
+    [[nodiscard]] ExternalContextAttachmentService* service() const noexcept {
+        return service_;
     }
 
     ExternalContextClaim(const ExternalContextClaim&) = delete;
@@ -67,6 +84,7 @@ public:
 
 private:
     ExternalContextAttachmentService* service_;
+    bool retained_{false};
 };
 
 // A stop callback runs during shutdown, after the last caller that could have
@@ -129,20 +147,20 @@ struct EventLoopState final {
 
     explicit EventLoopState(std::size_t mailboxCapacity)
         : contextOwnership(std::in_place_type<std::unique_ptr<asio::io_context>>, std::make_unique<asio::io_context>()),
-          ioContext(**std::get_if<std::unique_ptr<asio::io_context>>(&contextOwnership)),
-          work(asio::make_work_guard(ioContext)),
-          dispatcher(std::make_shared<WorkerDispatcher>(ioContext, mailboxCapacity)),
+          ioContext(std::addressof(**std::get_if<std::unique_ptr<asio::io_context>>(&contextOwnership))),
+          work(asio::make_work_guard(*ioContext)),
+          dispatcher(std::make_shared<WorkerDispatcher>(*ioContext, mailboxCapacity)),
           handle(WorkerHandleAccess::make(dispatcher)) {}
 
     EventLoopState(asio::io_context& externalContext, std::size_t mailboxCapacity)
         : contextOwnership(std::in_place_type<ExternalContextClaim>, externalContext),
-          ioContext(externalContext),
-          work(asio::make_work_guard(ioContext)),
+          ioContext(std::addressof(externalContext)),
+          work(asio::make_work_guard(*ioContext)),
           // WorkerDispatcher::Impl is the single authority that validates the
           // mailbox capacity: it throws std::invalid_argument for a zero
           // capacity while this member is constructed, before any body check
           // here could run. The owned-context constructor relies on the same.
-          dispatcher(std::make_shared<WorkerDispatcher>(ioContext, mailboxCapacity)),
+          dispatcher(std::make_shared<WorkerDispatcher>(*ioContext, mailboxCapacity)),
           handle(WorkerHandleAccess::make(dispatcher)) {}
 
     ~EventLoopState() {
@@ -151,21 +169,55 @@ struct EventLoopState final {
         dispatcher->detachContext();
     }
 
-    void stop(bool runtimeStarted) noexcept {
+    void retainExternalContext(const std::shared_ptr<EventLoopState>& self) noexcept {
+        if (auto* claim = std::get_if<ExternalContextClaim>(&contextOwnership)) {
+            claim->retain(self);
+        }
+    }
+
+    void stop(bool runtimeStarted, std::shared_ptr<EventLoopState> keepAlive) noexcept {
         if (stopping.exchange(true, std::memory_order_acq_rel)) {
             return;
         }
         dispatcher->close();
+        const bool externalContext = std::holds_alternative<ExternalContextClaim>(contextOwnership);
         if (!runtimeStarted || dispatcher->isCurrent()) {
             dispatcher->stopTimers();
+            if (externalContext) {
+                finishExternalStop();
+            }
+        } else if (externalContext) {
+            dispatcher->deferOrTerminate([keepAlive = std::move(keepAlive)] {
+                keepAlive->dispatcher->stopTimers();
+                keepAlive->finishExternalStop();
+            });
         } else {
             dispatcher->deferOrTerminate([dispatcher = dispatcher] { dispatcher->stopTimers(); });
         }
         work.reset();
     }
 
+    void finishExternalStop() noexcept {
+        if (!std::holds_alternative<ExternalContextClaim>(contextOwnership)) {
+            return;
+        }
+        dispatcher->detachContext();
+        ioContext = nullptr;
+        std::get<ExternalContextClaim>(contextOwnership).service()->releaseState(this);
+    }
+
+    void shutdownExternalContext() noexcept {
+        if (!std::holds_alternative<ExternalContextClaim>(contextOwnership)) {
+            return;
+        }
+        stopping.store(true, std::memory_order_release);
+        work.reset();
+        dispatcher->detachContext();
+        ioContext = nullptr;
+    }
+
     ContextOwnership contextOwnership;
-    asio::io_context& ioContext;
+    asio::io_context* ioContext;
     asio::executor_work_guard<asio::io_context::executor_type> work;
     std::shared_ptr<WorkerDispatcher> dispatcher;
     WorkerHandle handle;
@@ -177,6 +229,50 @@ struct EventLoopState final {
 };
 
 }  // namespace detail
+
+namespace {
+
+void ExternalContextAttachmentService::releaseClaim() noexcept {
+    const std::lock_guard lock(mutex_);
+    claimed_ = false;
+}
+
+void ExternalContextAttachmentService::retain(std::shared_ptr<detail::EventLoopState> state) noexcept {
+    const std::lock_guard lock(mutex_);
+    state_ = std::move(state);
+}
+
+void ExternalContextAttachmentService::releaseState(detail::EventLoopState* state) noexcept {
+    std::shared_ptr<detail::EventLoopState> abandoned;
+    {
+        const std::lock_guard lock(mutex_);
+        if (state_.get() != state) {
+            return;
+        }
+        abandoned = std::move(state_);
+        claimed_ = false;
+    }
+    abandoned.reset();
+}
+
+void ExternalContextAttachmentService::shutdown() {
+    std::shared_ptr<detail::EventLoopState> state;
+    {
+        const std::lock_guard lock(mutex_);
+        state = std::move(state_);
+        claimed_ = false;
+    }
+    if (state) {
+        // The context is entering Asio's service shutdown, so no new handler
+        // may be queued here. Retire the worker before the context destroys
+        // its scheduler. The state may still be held by EventLoop/Attachment;
+        // those handles become terminal and no longer expose a dangling
+        // io_context reference.
+        state->shutdownExternalContext();
+    }
+}
+
+}  // namespace
 
 EventLoopStopRegistration::EventLoopStopRegistration(std::shared_ptr<detail::WorkerShutdownListener> listener) noexcept
     : listener_(std::move(listener)) {}
@@ -209,10 +305,13 @@ WorkerId EventLoop::id() const noexcept {
 }
 
 asio::io_context& EventLoop::ioContext() const {
-    if (!state_) {
+    if (!state_ || state_->ioContext == nullptr) {
+        if (state_) {
+            throw std::logic_error("event loop execution context is detached");
+        }
         throw std::logic_error("cannot access a default-constructed event loop");
     }
-    return state_->ioContext;
+    return *state_->ioContext;
 }
 
 asio::io_context::executor_type EventLoop::executor() const {
@@ -252,12 +351,14 @@ EventLoop EventLoopAttachment::loop() const noexcept {
 
 void EventLoopAttachment::stop() noexcept {
     if (state_) {
-        state_->stop(true);
+        state_->stop(true, state_);
     }
 }
 
 EventLoopAttachment attachEventLoop(asio::io_context& ioContext, EventLoopAttachmentOptions options) {
-    return EventLoopAttachment(std::make_shared<detail::EventLoopState>(ioContext, options.mailboxCapacity));
+    auto state = std::make_shared<detail::EventLoopState>(ioContext, options.mailboxCapacity);
+    state->retainExternalContext(state);
+    return EventLoopAttachment(std::move(state));
 }
 
 struct EventLoopPool::Impl {
@@ -287,7 +388,7 @@ struct EventLoopPool::Impl {
             return;
         }
         for (const auto& loop : loops) {
-            loop->stop(runtimeStarted);
+            loop->stop(runtimeStarted, loop);
         }
     }
 

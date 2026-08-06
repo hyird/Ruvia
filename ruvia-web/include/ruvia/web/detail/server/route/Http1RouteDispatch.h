@@ -5,7 +5,9 @@
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/web/detail/server/response/HttpResponseCompression.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
@@ -28,6 +30,8 @@ struct Http1RouteDispatch final {
     WorkerMemory& memory;
     ConnectionScanner::Entry& scannerEntry;
     const Http1ServerRequestParseState& parsed;
+    HttpResponseCodingSelection responseCoding;
+    HttpResponseCodingAvailability responseCodingAvailability;
     const RouteTable& routes;
     RequestMemory& requestMemory;
     ContextServices baseRouteServices;

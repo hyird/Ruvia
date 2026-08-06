@@ -18,6 +18,13 @@ namespace ruvia::detail {
 // Throws std::invalid_argument if the loop is not usable.
 [[nodiscard]] EventLoop requireEventLoop(EventLoop loop);
 
+// Public configuration values may carry a caller-owned PMR resource. App
+// configuration keeps them until run(), so normalize every nested string into
+// the app/runtime resource before the value enters a long-lived definition.
+[[nodiscard]] DbConfig cloneDbConfig(const DbConfig& source, std::pmr::memory_resource* resource);
+
+[[nodiscard]] RedisConfig cloneRedisConfig(const RedisConfig& source, std::pmr::memory_resource* resource);
+
 [[nodiscard]] std::pmr::vector<DbDefinition> makeDatabaseDefinitions(const DataAccessOptions& options, std::pmr::memory_resource* resource);
 
 [[nodiscard]] std::pmr::vector<RedisDefinition> makeRedisDefinitions(const DataAccessOptions& options, std::pmr::memory_resource* resource);

@@ -61,7 +61,8 @@ struct AppRuntimeGraph final {
     std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>> documentRoot;
     // Declared before the workers so it is destroyed after them: a worker that
     // is still joining may hold a suspended handler whose task the pool owns.
-    // Destroying the pool stops it and joins its threads.
+    // Destroying the pool stops accepting work; its already-running callables
+    // continue on the detached shared state until they return.
     std::unique_ptr<BlockingPool, PmrObjectDeleter<BlockingPool>> blockingPool;
     std::pmr::vector<ControllerStore> controllers;
     std::pmr::vector<std::unique_ptr<Router, PmrObjectDeleter<Router>>> routers;
@@ -153,6 +154,7 @@ HttpServerStats App::httpStats() const {
         total.connectionFailures += stats.connectionFailures;
         total.acceptFailures += stats.acceptFailures;
         total.workerFailures += stats.workerFailures;
+        total.documentRootRefreshFailures += stats.documentRootRefreshFailures;
     }
     return total;
 }
@@ -251,6 +253,7 @@ void App::run() {
         if (state.documentRootConfig.has_value()) {
             const auto documentRootPath = detail::makePathFromNativePath(state.documentRootConfig->root);
             runtime->documentRoot = detail::makePmrObject<StaticRoot>(runtimeResource, documentRootPath, state.documentRootConfig->staticOptions);
+            preparedOptions.documentRoot.runtimeOptions = state.documentRootConfig->runtimeOptions;
         }
 
         if (state.blockingPool.has_value()) {

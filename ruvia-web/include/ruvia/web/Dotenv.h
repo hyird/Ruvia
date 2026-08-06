@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
@@ -61,8 +63,13 @@ public:
     [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const& noexcept;
     [[nodiscard]] std::optional<std::string_view> get(std::string_view) const&& = delete;
 
+    // Typed lookup distinguishes an absent variable from a malformed one:
+    // absence returns nullopt, while a present value that cannot be parsed as
+    // T throws std::invalid_argument. Falling back with value_or() is
+    // therefore safe for optional deployment settings, but cannot hide a
+    // misspelled port, limit, or boolean in the environment.
     template <typename T>
-    [[nodiscard]] std::optional<std::remove_cvref_t<T>> get(std::string_view name) const& noexcept;
+    [[nodiscard]] std::optional<std::remove_cvref_t<T>> get(std::string_view name) const&;
 
     template <typename T>
     [[nodiscard]] std::optional<std::remove_cvref_t<T>> get(std::string_view) const&& = delete;
@@ -92,12 +99,16 @@ private:
 };
 
 template <typename T>
-std::optional<std::remove_cvref_t<T>> Env::get(std::string_view name) const& noexcept {
+std::optional<std::remove_cvref_t<T>> Env::get(std::string_view name) const& {
     const auto value = get(name);
     if (!value.has_value()) {
         return std::nullopt;
     }
-    return parseTypedValue<T>(*value);
+    auto parsed = parseTypedValue<T>(*value);
+    if (!parsed.has_value()) {
+        throw std::invalid_argument("invalid value for environment variable '" + std::string(name) + "'");
+    }
+    return parsed;
 }
 
 template <typename T>

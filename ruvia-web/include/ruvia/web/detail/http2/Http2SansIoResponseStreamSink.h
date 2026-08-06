@@ -28,10 +28,12 @@
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
+#include "ruvia/web/detail/server/response/HttpStreamingResponseCompression.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/Task.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/http/detail/util/PmrString.h"
 
@@ -43,15 +45,17 @@ namespace ruvia::detail {
 
 class Http2SansIoResponseStreamSink final {
 public:
-    Http2SansIoResponseStreamSink(Http2Connection& connection, std::uint32_t streamId, ResponseStreamKind kind, const WorkerHandle& worker, WorkerSignal& writeSignal, Http2SansIoStreamSignal& streamSignal) noexcept
+    Http2SansIoResponseStreamSink(Http2Connection& connection, std::uint32_t streamId, ResponseStreamKind kind, const WorkerHandle& worker, WorkerSignal& writeSignal, Http2SansIoStreamSignal& streamSignal, std::pmr::memory_resource* resource, HttpKnownMethod requestMethod, HttpResponseCodingSelection responseCoding, HttpResponseCodingAvailability responseCodingAvailability) noexcept
         : connection_(connection),
           streamId_(streamId),
           kind_(kind),
           worker_(&worker),
           writeSignal_(writeSignal),
-          streamSignal_(streamSignal) {}
+          streamSignal_(streamSignal),
+          requestMethod_(requestMethod),
+          compression_(resource, responseCoding, responseCodingAvailability) {}
 
-    Http2SansIoResponseStreamSink(Http2Connection&, std::uint32_t, ResponseStreamKind, WorkerHandle&&, WorkerSignal&, Http2SansIoStreamSignal&) = delete;
+    Http2SansIoResponseStreamSink(Http2Connection&, std::uint32_t, ResponseStreamKind, WorkerHandle&&, WorkerSignal&, Http2SansIoStreamSignal&, std::pmr::memory_resource*, HttpKnownMethod, HttpResponseCodingSelection, HttpResponseCodingAvailability) = delete;
 
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
@@ -64,7 +68,7 @@ public:
 
     [[nodiscard]] bool aborted() const noexcept {
         auto* stream = connection_.stream(streamId_);
-        return stream == nullptr || stream->isAborted() || streamSignal_.terminated();
+        return state_.aborted() || stream == nullptr || stream->isAborted() || streamSignal_.terminated();
     }
 
     void bindContext(Context* context, ResponseStreamState::StreamingHeadThunk streamingHead) {
@@ -91,6 +95,24 @@ public:
             co_await Http2SansIoSleepAwaiter(*worker_, streamSignal_.termination(), std::chrono::steady_clock::duration(1));
         }
         state_.ensureBodyAllowed();
+        if (compression_.active()) {
+            if (compression_.write(chunk) == HttpContentEncodeStep::kFailure) {
+                state_.markAborted();
+                throw std::runtime_error("HTTP/2 response stream content encoding failed");
+            }
+            if (compression_.output().empty()) {
+                co_return;
+            }
+            co_await writeEncoded(compression_.output());
+            co_return;
+        }
+        co_await writeEncoded(chunk);
+    }
+
+    Task<void> writeEncoded(std::string_view chunk) {
+        if (chunk.empty()) {
+            co_return;
+        }
         for (;;) {
             const auto result = connection_.submitData(streamId_, chunk, Http2EndStream::kKeepOpen);
             wakeWriter();
@@ -98,19 +120,24 @@ public:
                 co_return;
             }
             if (result == Http2DataSubmitStatus::kClosed) {
+                state_.markAborted();
                 throw std::system_error(std::make_error_code(std::errc::connection_reset));
             }
             if (result == Http2DataSubmitStatus::kInvalidState) {
+                state_.markAborted();
                 throw std::logic_error("invalid HTTP/2 response stream DATA state");
             }
             if (result == Http2DataSubmitStatus::kContentLengthExceeded) {
+                state_.markAborted();
                 throw std::length_error("HTTP/2 response exceeds Content-Length");
             }
             if (result == Http2DataSubmitStatus::kContentLengthIncomplete) {
+                state_.markAborted();
                 throw std::length_error("HTTP/2 response ended before Content-Length");
             }
             const auto waitResult = co_await awaitHttp2SendWindow(connection_, streamId_, &streamSignal_);
             if (waitResult.aborted() != nullptr) {
+                state_.markAborted();
                 throw std::system_error(streamSignal_.terminated() ? streamSignal_.terminalError() : std::make_error_code(std::errc::connection_reset));
             }
             if (result == Http2DataSubmitStatus::kQueued) {
@@ -120,8 +147,8 @@ public:
         }
     }
 
-    Task<void> sleep(std::chrono::milliseconds duration) {
-        co_await Http2SansIoSleepAwaiter(*worker_, streamSignal_.termination(), duration);
+    Task<TimerSleepResult> sleep(std::chrono::milliseconds duration) {
+        co_return co_await Http2SansIoSleepAwaiter(*worker_, streamSignal_.termination(), duration);
     }
 
     Task<void> end(std::span<const HttpHeaderView> trailers) {
@@ -145,20 +172,31 @@ public:
         if (!trailerSection.empty()) {
             state_.ensureTrailersAllowed(ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
         }
+        if (compression_.active()) {
+            if (compression_.finish() != HttpContentEncodeStep::kFinished) {
+                state_.markAborted();
+                throw std::runtime_error("HTTP/2 response stream content encoding finalization failed");
+            }
+            co_await writeEncoded(compression_.output());
+        }
         const auto result = connection_.finishResponse(streamId_, trailerSection);
         wakeWriter();
         if (result == Http2FinishSubmitStatus::kClosed) {
+            state_.markAborted();
             throw std::system_error(std::make_error_code(std::errc::connection_reset));
         }
         if (result == Http2FinishSubmitStatus::kInvalidState) {
+            state_.markAborted();
             throw std::logic_error("invalid HTTP/2 response stream finish state");
         }
         if (result == Http2FinishSubmitStatus::kContentLengthIncomplete) {
+            state_.markAborted();
             throw std::length_error("HTTP/2 response ended before Content-Length");
         }
         if (result == Http2FinishSubmitStatus::kQueued) {
             const auto waitResult = co_await awaitHttp2SendWindow(connection_, streamId_, &streamSignal_);
             if (waitResult.aborted() != nullptr) {
+                state_.markAborted();
                 throw std::system_error(streamSignal_.terminated() ? streamSignal_.terminalError() : std::make_error_code(std::errc::connection_reset));
             }
         }
@@ -174,16 +212,28 @@ private:
             }
             co_return;
         }
-        const auto headResult = connection_.submitStreamingResponseHead(streamId_, state_.streamingHead(), kind_, trailerIntent);
-        const auto* submittedHead = headResult.submitted();
-        if (submittedHead == nullptr) {
-            if (headResult.failure()->peerClosed()) {
-                throw std::system_error(std::make_error_code(std::errc::connection_reset));
+        try {
+            auto response = state_.streamingHead();
+            compression_.prepare(requestMethod_, response, kind_);
+            const auto commitBodyPlan = httpResponseBodyPlan(requestMethod_, response.status());
+            compression_.activate(commitBodyPlan);
+            const auto headResult = connection_.submitStreamingResponseHead(streamId_, std::move(response), kind_, trailerIntent);
+            const auto* submittedHead = headResult.submitted();
+            if (submittedHead == nullptr) {
+                if (headResult.failure()->peerClosed()) {
+                    throw std::system_error(std::make_error_code(std::errc::connection_reset));
+                }
+                throw headResult.failure()->exception();
             }
-            throw headResult.failure()->exception();
+            state_.markCommitted(*submittedHead);
+            wakeWriter();
+        } catch (...) {
+            if (!state_.committed()) {
+                compression_.abort();
+                state_.markAborted();
+            }
+            throw;
         }
-        state_.markCommitted(*submittedHead);
-        wakeWriter();
     }
 
     // Wake the session's single writer so submitted bytes actually flush; without
@@ -208,6 +258,8 @@ private:
     const WorkerHandle* worker_;
     WorkerSignal& writeSignal_;
     Http2SansIoStreamSignal& streamSignal_;
+    HttpKnownMethod requestMethod_{HttpKnownMethod::kUnknown};
+    HttpStreamingResponseCompression compression_;
 };
 
 }  // namespace ruvia::detail

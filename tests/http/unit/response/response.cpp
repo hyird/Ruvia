@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -60,6 +61,42 @@ private:
     std::size_t allocations_{0};
 };
 
+class FailingAllocationResource final : public std::pmr::memory_resource {
+public:
+    void failAllocationAfterSuccessfulAllocations(std::size_t count) noexcept {
+        failAfter_ = count;
+    }
+
+    [[nodiscard]] std::size_t liveAllocations() const noexcept {
+        return liveAllocations_;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (failAfter_.has_value()) {
+            if (*failAfter_ == 0) {
+                failAfter_.reset();
+                throw std::bad_alloc();
+            }
+            --*failAfter_;
+        }
+        ++liveAllocations_;
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        --liveAllocations_;
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::optional<std::size_t> failAfter_;
+    std::size_t liveAllocations_{0};
+};
+
 static_assert(!std::is_constructible_v<ruvia::HttpInterimResponseHead::HeaderInit, std::array<ruvia::HttpHeaderView, 1>&&>);
 static_assert(!std::is_constructible_v<ruvia::HttpInterimResponseHead::HeaderInit, const std::vector<ruvia::HttpHeaderView>&>);
 static_assert(!std::is_constructible_v<ruvia::HttpInterimResponseHead::HeaderInit, std::initializer_list<ruvia::HttpHeaderView>>);
@@ -99,6 +136,80 @@ RUVIA_TEST(response_header_distinguishes_missing_from_present_empty) {
     const auto presentEmpty = response.header("x-empty");
     RUVIA_CHECK(presentEmpty.has_value());
     RUVIA_CHECK(presentEmpty.value_or("missing").empty());
+}
+
+RUVIA_TEST(response_header_spill_failure_releases_unpublished_header) {
+    FailingAllocationResource resource;
+    {
+        HttpResponse response(&resource);
+        constexpr const char* existingNames[] = {
+            "X-Ruvia-Existing-0",
+            "X-Ruvia-Existing-1",
+            "X-Ruvia-Existing-2",
+            "X-Ruvia-Existing-3",
+            "X-Ruvia-Existing-4",
+            "X-Ruvia-Existing-5",
+            "X-Ruvia-Existing-6",
+            "X-Ruvia-Existing-7",
+        };
+        for (const auto* name : existingNames) {
+            response.header(name, "value");
+        }
+        const auto liveBeforeFailure = resource.liveAllocations();
+
+        // The ninth header first owns its bytes, then asks the header table to
+        // spill. Reject that table allocation and verify the descriptor's
+        // already-owned bytes are not stranded by the failed append.
+        // Let the new descriptor allocate its owned bytes, then reject the
+        // following heap-table allocation.
+        resource.failAllocationAfterSuccessfulAllocations(1);
+        bool failed = false;
+        try {
+            response.header("X-Ruvia-New", "value");
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK_EQ(resource.liveAllocations(), liveBeforeFailure);
+        RUVIA_CHECK_EQ(response.headers().size(), std::size_t{8});
+
+        // The response remains usable after the failed publication. A retry
+        // must publish exactly one new header, not duplicate an inline entry or
+        // retain a dangling ownership copy from the aborted spill.
+        response.header("X-Ruvia-New", "value");
+        RUVIA_CHECK_EQ(response.headers().size(), std::size_t{9});
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+}
+
+RUVIA_TEST(response_header_rejects_unrepresentable_storage_before_scanning) {
+    auto response = makeResponse();
+    constexpr auto maxDescriptorSize = static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)());
+
+    // The view deliberately points at one byte but advertises the maximum
+    // representable name length. The setter must reject the aggregate before
+    // header-name grammar validation touches the view or allocates storage.
+    const std::string_view oversizedName("x", maxDescriptorSize);
+    bool rejected = false;
+    try {
+        response.header(oversizedName, "v");
+    } catch (const std::length_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK(response.headers().empty());
+
+    // The same guard applies to a value and to the append path, not only the
+    // first replacement insertion.
+    const std::string_view oversizedValue("x", maxDescriptorSize);
+    rejected = false;
+    try {
+        response.header("X-Large", oversizedValue, HttpResponse::HeaderOptions{true});
+    } catch (const std::length_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK(response.headers().empty());
 }
 
 RUVIA_TEST(response_move_assignment_transfers_one_resource_domain) {
@@ -269,6 +380,32 @@ RUVIA_TEST(response_appended_header_carries_append_flag) {
     }
     RUVIA_CHECK_EQ(linkCount, std::size_t{2});
     RUVIA_CHECK_EQ(appendMarked, std::size_t{2});
+}
+
+RUVIA_TEST(response_header_append_failure_does_not_mark_existing_header) {
+    FailingAllocationResource resource;
+    HttpResponse response(&resource);
+    response.header("Link", "</a>; rel=preload");
+
+    resource.failAllocationAfterSuccessfulAllocations(0);
+    bool failed = false;
+    try {
+        response.header("Link", "</b>; rel=preload", HttpResponse::HeaderOptions{true});
+    } catch (const std::bad_alloc&) {
+        failed = true;
+    }
+
+    RUVIA_CHECK(failed);
+    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{1});
+    RUVIA_CHECK(!ruvia::detail::responseHeaderAppend(*response.headers().begin()));
+
+    // The failed publication must be retryable, and a successful retry must
+    // mark both the retained and newly appended descriptors.
+    response.header("Link", "</b>; rel=preload", HttpResponse::HeaderOptions{true});
+    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{2});
+    for (const auto& header : response.headers()) {
+        RUVIA_CHECK(ruvia::detail::responseHeaderAppend(header));
+    }
 }
 
 RUVIA_TEST(response_header_remove_known_header_rebuilds_index) {

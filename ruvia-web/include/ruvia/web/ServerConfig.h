@@ -345,9 +345,31 @@ struct CorsConfig final {
     std::optional<CorsMaxAge> maxAge;
 };
 
+enum class DocumentRootRefreshMode : std::uint8_t {
+    kImmutable,
+    kPolling,
+};
+
+// Runtime behavior belongs to the server's document-root binding, not to the
+// immutable StaticRoot index. A standalone StaticRoot therefore cannot
+// accidentally advertise a refresh or compression policy that nobody runs.
+struct DocumentRootRuntimeOptions final {
+    DocumentRootRefreshMode refreshMode{DocumentRootRefreshMode::kImmutable};
+    std::chrono::milliseconds refreshInterval{std::chrono::seconds(1)};
+    // When an accepted coding has no sidecar, the Web runtime may compress a
+    // small complete file through the blocking pool. Zero disables this
+    // fallback; larger files remain identity unless a sidecar exists.
+    std::size_t onDemandCompressionMaxBytes{2u * 1024u * 1024u};
+    // Development-only browser refresh support. The Web runtime exposes a
+    // small version endpoint and a polling script; applications opt in by
+    // including the script in their HTML.
+    bool enableLiveReload{false};
+};
+
 struct DocumentRootConfig final {
     std::filesystem::path root;
     StaticRootOptions staticOptions;
+    DocumentRootRuntimeOptions runtimeOptions;
 };
 
 // One terminal response outcome with a committed final status, passed to the
@@ -488,6 +510,11 @@ struct HttpServerStats final {
     std::size_t acceptFailures{0};
     // Failures that escaped to the worker's io_context and stopped it.
     std::size_t workerFailures{0};
+    // Polling refreshes whose replacement index could not be built. The
+    // previous complete document-root snapshot remains active; this counter
+    // makes filesystem/permission failures observable without taking the
+    // worker down.
+    std::size_t documentRootRefreshFailures{0};
 };
 
 // A non-owning, allocation-free connection-failure listener. The bound object

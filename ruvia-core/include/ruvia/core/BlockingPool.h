@@ -41,6 +41,7 @@
 #include <ruvia/core/OneShot.h>
 #include <ruvia/core/Task.h>
 #include <ruvia/core/WorkerHandle.h>
+#include <ruvia/core/detail/worker/WorkerTimer.h>
 #include <ruvia/core/memory/ProcessResource.h>
 
 namespace ruvia {
@@ -77,8 +78,11 @@ struct BlockingPoolStats final {
     std::uint64_t discarded{0};
 };
 
-// Fixed threads, bounded queue. Construction starts the threads; destruction
-// stops and joins them. Copy and move are deleted: submitters hold a reference.
+// Fixed threads, bounded queue. Construction starts the threads. Destruction
+// stops accepting work, discards queued tasks, and detaches threads that are
+// already running a callable; those callables may finish after the pool object
+// is gone. Call join() explicitly when the owner must wait for every thread.
+// Copy and move are deleted: submitters hold a reference.
 class BlockingPool final {
 public:
     explicit BlockingPool(BlockingPoolOptions options = {});
@@ -103,13 +107,15 @@ public:
     // and safe from any thread.
     void stop() noexcept;
     // Waits for the threads to leave their loops. Call stop() first (or let the
-    // destructor do both); joining from a pool thread is a deadlock and is
-    // rejected instead.
+    // destructor do so); joining from a pool thread is a deadlock and is
+    // rejected instead. The destructor deliberately does not call join().
     void join() noexcept;
 
 private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    struct ThreadState;
+    std::shared_ptr<Impl> impl_;
+    std::unique_ptr<ThreadState> threads_;
 };
 
 enum class BlockingStatus : std::uint8_t {
@@ -329,7 +335,10 @@ template <typename Fn>
 // leases -- indefinitely.
 template <typename Rep, typename Period, typename Fn>
 [[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, std::chrono::duration<Rep, Period> timeout, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
-    return detail::runBlockingUntil(pool, std::move(worker), std::chrono::duration_cast<std::chrono::steady_clock::duration>(timeout), std::move(fn));
+    // duration_cast can overflow for a valid user duration such as hours::max(),
+    // turning a long deadline into an immediate timeout. Use the same saturating
+    // conversion as worker timers so all bounded waits share one interpretation.
+    return detail::runBlockingUntil(pool, std::move(worker), detail::workerTimerSaturatingDurationCast(timeout), std::move(fn));
 }
 
 }  // namespace ruvia

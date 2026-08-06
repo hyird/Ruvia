@@ -145,12 +145,17 @@ inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std:
     }
 
     auto& headerBlock = stream.responseHeaderBlock();
-    headerBlock.clear();
-    HpackEncoder::encodeStatus(headerBlock, response.status());
-    std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
-    std::pmr::string lowerNameScratch(headerBlock.get_allocator());
-    for (const auto& header : response.headers()) {
-        appendHttp2EncodedResponseHeader(headerBlock, header.name(), header.value(), classifyResponseHeaderName(header.name()), lowerNameStack, lowerNameScratch);
+    try {
+        headerBlock.clear();
+        HpackEncoder::encodeStatus(headerBlock, response.status());
+        std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
+        std::pmr::string lowerNameScratch(headerBlock.get_allocator());
+        for (const auto& header : response.headers()) {
+            appendHttp2EncodedResponseHeader(headerBlock, header.name(), header.value(), classifyResponseHeaderName(header.name()), lowerNameStack, lowerNameScratch);
+        }
+    } catch (...) {
+        headerBlock.clear();
+        throw;
     }
     return Http2InterimResponseHeaderEncodeStatus::kOk;
 }
@@ -198,24 +203,29 @@ inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std:
     }
 
     auto& headerBlock = stream.responseHeaderBlock();
-    headerBlock.clear();
-    HpackEncoder::encodeStatus(headerBlock, plan.bodyPlan().responseStatus());
-    std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
-    std::pmr::string lowerNameScratch(headerBlock.get_allocator());
-    for (const auto& header : response.headers()) {
-        const auto knownBit = responseHeaderKnownBit(header);
-        if (knownBit == kResponseHeaderContentLength) {
-            // Content-Length is emitted only from the prepared plan below, so
-            // HPACK cannot reinterpret raw application framing independently.
-            continue;
+    try {
+        headerBlock.clear();
+        HpackEncoder::encodeStatus(headerBlock, plan.bodyPlan().responseStatus());
+        std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
+        std::pmr::string lowerNameScratch(headerBlock.get_allocator());
+        for (const auto& header : response.headers()) {
+            const auto knownBit = responseHeaderKnownBit(header);
+            if (knownBit == kResponseHeaderContentLength) {
+                // Content-Length is emitted only from the prepared plan below, so
+                // HPACK cannot reinterpret raw application framing independently.
+                continue;
+            }
+            appendHttp2EncodedResponseHeader(headerBlock, header.name(), header.value(), knownBit, lowerNameStack, lowerNameScratch);
         }
-        appendHttp2EncodedResponseHeader(headerBlock, header.name(), header.value(), knownBit, lowerNameStack, lowerNameScratch);
-    }
-    if ((knownBits & kResponseHeaderDate) == 0) {
-        HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kDate, cachedDateValue());
-    }
-    if (!contentLengthValue.empty()) {
-        HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kContentLength, contentLengthValue);
+        if ((knownBits & kResponseHeaderDate) == 0) {
+            HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kDate, cachedDateValue());
+        }
+        if (!contentLengthValue.empty()) {
+            HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kContentLength, contentLengthValue);
+        }
+    } catch (...) {
+        headerBlock.clear();
+        throw;
     }
     return true;
 }

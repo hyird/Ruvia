@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbUtils.h"
+#include "ruvia/web/detail/integration/DataAccessDefinitions.h"
 
 #include <chrono>
 #include <memory>
@@ -9,6 +10,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 namespace ruvia {
 namespace {
@@ -98,19 +100,20 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_res
             throw std::invalid_argument("duplicate database alias");
         }
 
-        validateDbConfig(definition.config);
+        auto config = cloneDbConfig(definition.config, resource_);
+        validateDbConfig(config);
         PoolOwner owner;
         switch (definition.config.driver) {
             case DbDriver::kMariaDb:
 #ifdef RUVIA_ENABLE_MARIADB
-                owner = detail::makePmrObject<MariaDbPool>(resource_, ioContext, definition.config, resource_);
+                owner = detail::makePmrObject<MariaDbPool>(resource_, ioContext, std::move(config), resource_);
                 break;
 #else
                 throw std::invalid_argument("MariaDB support is not enabled");
 #endif
             case DbDriver::kPostgreSql:
 #ifdef RUVIA_ENABLE_POSTGRESQL
-                owner = detail::makePmrObject<PostgreSqlPool>(resource_, ioContext, definition.config, resource_);
+                owner = detail::makePmrObject<PostgreSqlPool>(resource_, ioContext, std::move(config), resource_);
                 break;
 #else
                 throw std::invalid_argument("PostgreSQL support is not enabled");

@@ -40,6 +40,7 @@
 #include <ruvia/http/detail/field/HeaderTokenUtils.h>
 #include <ruvia/http/detail/field/HttpByteRange.h>
 #include <ruvia/http/detail/coding/HttpContentCoding.h>
+#include <ruvia/http/detail/coding/HttpAcceptEncoding.h>
 #include <ruvia/http/detail/coding/HttpContentLength.h>
 #include <ruvia/http/detail/field/HttpEntityTag.h>
 #include <ruvia/http/detail/field/HttpExpectations.h>
@@ -110,6 +111,11 @@
 
 template <typename T>
 concept HasLegacyResponseBodyCopy = requires(T& response) { response.setBodyCopy(std::string_view{}); };
+
+static_assert(ruvia::detail::httpBorrowedCStringView(nullptr).empty());
+static_assert(ruvia::CookieOptions::BorrowedText(nullptr).empty());
+static_assert(ruvia::SseMessage::BorrowedText(nullptr).empty());
+static_assert(ruvia::HttpClientRequest::BorrowedText(nullptr).view().empty());
 
 struct MatchAnyHeaderToken final {
     [[nodiscard]] constexpr bool operator()(std::string_view) const noexcept {
@@ -557,6 +563,16 @@ concept AcceptsImplicitResponseFinish = requires(Connection& connection) { conne
 template <typename Connection>
 concept AcceptsRawResponseTrailerFinish = requires(Connection& connection, std::span<const ruvia::HttpHeaderView> trailers) { connection.finishResponse(std::uint32_t{}, trailers); };
 
+template <typename Headers>
+concept AcceptsResponseTrailerRange = requires(Headers&& headers) {
+    ruvia::detail::httpResponseTrailerSection(std::forward<Headers>(headers));
+};
+
+template <typename Headers>
+concept AcceptsValidatedResponseTrailerRange = requires(Headers&& headers) {
+    ruvia::detail::validatedResponseTrailerSection(std::forward<Headers>(headers));
+};
+
 template <typename T>
 concept HasResponseTrailerSectionAlternatives = requires(const T& result) {
     { result.section() } -> std::same_as<const ruvia::detail::HttpResponseTrailerSection*>;
@@ -921,6 +937,59 @@ concept HasResultKindDiscriminator = requires(const T& result) { result.kind(); 
 
 template <typename T>
 concept HasStaleHttp1ServerParseScalars = requires(const T& state) { state.phase(); } || requires(const T& state) { state.headerBytes; } || requires(const T& state) { state.messageBytes; } || requires(const T& state) { state.requiredTotalBytes; };
+
+template <typename T>
+concept HasLegacyResponseCodingField = requires(T& state) { state.responseCoding.has_value(); };
+
+template <typename T>
+concept HasRawResponseCodingSelector = requires(const T& qualities) {
+    httpSelectResponseCodingFromQualities(qualities);
+};
+
+template <typename T>
+concept HasRawResponseCodingScore = requires(const T& quality) {
+    httpAcceptedEncodingScore(quality);
+};
+
+template <typename T>
+concept HasRawResponseIdentityScore = requires(const T& quality) {
+    httpAcceptedIdentityScore(quality);
+};
+
+template <typename Selection>
+concept HasTypedResponseCodingSelector = requires(const ruvia::detail::HttpResponseCodingQualities& qualities) {
+    { Selection::select(qualities) } -> std::same_as<ruvia::detail::HttpResponseCodingSelectionResult>;
+};
+
+template <typename Selection>
+concept HasResponseCodingAcceptability = requires(const Selection& selection, ruvia::detail::HttpContentCoding coding) {
+    { selection.accepts(coding) } -> std::same_as<bool>;
+};
+
+template <typename Selection>
+concept HasLegacyOptionalResponseCodingSelector = requires(const ruvia::detail::HttpResponseCodingQualities& qualities) {
+    { Selection::select(qualities) } -> std::same_as<std::optional<Selection>>;
+};
+
+template <typename Result>
+concept HasTypedResponseCodingResult = requires(const Result& result) {
+    { result.selected() } -> std::same_as<const ruvia::detail::HttpResponseCodingSelection*>;
+    { result.failure() } -> std::same_as<const ruvia::detail::HttpResponseCodingSelectionFailure*>;
+};
+
+template <typename Candidates>
+concept HasTypedResponseCodingCandidates = requires(Candidates& candidates, ruvia::detail::HttpContentCoding coding) {
+    { Candidates::empty() } -> std::same_as<Candidates>;
+    { Candidates::identityOnly() } -> std::same_as<Candidates>;
+    { Candidates::all() } -> std::same_as<Candidates>;
+    { candidates.include(coding) } -> std::same_as<Candidates&>;
+    { candidates.contains(coding) } -> std::same_as<bool>;
+};
+
+template <typename Selection, typename Candidates>
+concept HasAvailableResponseCodingSelector = requires(const ruvia::detail::HttpResponseCodingQualities& qualities) {
+    { Selection::select(qualities, Candidates::identityOnly()) } -> std::same_as<ruvia::detail::HttpResponseCodingSelectionResult>;
+};
 
 template <typename T>
 concept HasStalePreparedStreamPolicy = requires(const T& prepared) { prepared.policy(); };
@@ -1421,6 +1490,20 @@ static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http1Serve
 static_assert(HasHttp1ServerParseAlternatives<ruvia::detail::Http1ServerRequestParseState>);
 static_assert(!HasAnyRvalueHttp1ServerParseAccessor<ruvia::detail::Http1ServerRequestParseState>);
 static_assert(!HasStaleHttp1ServerParseScalars<ruvia::detail::Http1ServerRequestParseState>);
+static_assert(!HasLegacyResponseCodingField<ruvia::detail::Http1ServerRequestParseState>);
+static_assert(!std::default_initializable<ruvia::detail::HttpResponseCodingSelection>);
+static_assert(!HasRawResponseCodingSelector<ruvia::detail::HttpResponseCodingQualities>);
+static_assert(!HasRawResponseCodingScore<ruvia::detail::HttpAcceptedEncodingQuality>);
+static_assert(!HasRawResponseIdentityScore<ruvia::detail::HttpAcceptedEncodingQuality>);
+static_assert(HasTypedResponseCodingSelector<ruvia::detail::HttpResponseCodingSelection>);
+static_assert(HasResponseCodingAcceptability<ruvia::detail::HttpResponseCodingSelection>);
+static_assert(!HasLegacyOptionalResponseCodingSelector<ruvia::detail::HttpResponseCodingSelection>);
+static_assert(!std::default_initializable<ruvia::detail::HttpResponseCodingSelectionResult>);
+static_assert(HasTypedResponseCodingResult<ruvia::detail::HttpResponseCodingSelectionResult>);
+static_assert(!std::default_initializable<ruvia::detail::HttpResponseCodingCandidates>);
+static_assert(HasTypedResponseCodingCandidates<ruvia::detail::HttpResponseCodingCandidates>);
+static_assert(HasAvailableResponseCodingSelector<ruvia::detail::HttpResponseCodingSelection, ruvia::detail::HttpResponseCodingCandidates>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http1ServerRequestParseState&>().responseCodingSelection()), ruvia::detail::HttpResponseCodingSelectionResult>);
 static_assert(HasHttp2RemoteContentAlternatives<ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasAnyRvalueHttp2RemoteContentAccessor<ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasStaleHttp2RemoteContentTuple<ruvia::detail::Http2RemoteContentState>);
@@ -1765,6 +1848,18 @@ static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&
 static_assert(!AcceptsStagedResponseTrailerSection<ruvia::detail::Http2Connection>);
 static_assert(!AcceptsImplicitResponseFinish<ruvia::detail::Http2Connection>);
 static_assert(!AcceptsRawResponseTrailerFinish<ruvia::detail::Http2Connection>);
+using ResponseTrailerHeaderArray = std::array<ruvia::HttpHeaderView, 1>;
+using ResponseTrailerHeaderVector = std::vector<ruvia::HttpHeaderView>;
+static_assert(AcceptsResponseTrailerRange<ResponseTrailerHeaderArray&>);
+static_assert(AcceptsResponseTrailerRange<const ResponseTrailerHeaderArray&>);
+static_assert(!AcceptsResponseTrailerRange<ResponseTrailerHeaderArray>);
+static_assert(!AcceptsResponseTrailerRange<ResponseTrailerHeaderVector>);
+static_assert(AcceptsResponseTrailerRange<std::span<const ruvia::HttpHeaderView>>);
+static_assert(AcceptsValidatedResponseTrailerRange<ResponseTrailerHeaderArray&>);
+static_assert(AcceptsValidatedResponseTrailerRange<const ResponseTrailerHeaderArray&>);
+static_assert(!AcceptsValidatedResponseTrailerRange<ResponseTrailerHeaderArray>);
+static_assert(!AcceptsValidatedResponseTrailerRange<ResponseTrailerHeaderVector>);
+static_assert(AcceptsValidatedResponseTrailerRange<std::span<const ruvia::HttpHeaderView>>);
 static_assert(HasResponseTrailerSectionAlternatives<ruvia::detail::HttpResponseTrailerSectionResult>);
 static_assert(!std::default_initializable<ruvia::detail::HttpResponseTrailerSection>);
 static_assert(!std::default_initializable<ruvia::detail::HttpResponseTrailerSectionFailure>);

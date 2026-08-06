@@ -49,7 +49,7 @@ public:
     template <typename... Paths>
         requires((std::convertible_to<Paths &&, std::string_view> && ...) && (!HttpTemporaryOwningCharString<Paths> && ...))
     constexpr explicit RuviaPathList(Paths&&... paths) noexcept
-        : paths_{std::string_view(std::forward<Paths>(paths))...},
+        : paths_{httpBorrowedView(paths)...},
           count_(sizeof...(Paths)) {
         static_assert(sizeof...(Paths) > 0, "RUVIA_ON requires at least one path");
     }
@@ -78,7 +78,9 @@ private:
 #define RUVIA_CONTROLLER_GROUP(prefix, ...)                                                                                 \
 private:                                                                                                                    \
     [[nodiscard]] static constexpr ::std::string_view ruviaControllerGroupPrefix() noexcept {                               \
-        return prefix;                                                                                                      \
+        static_assert(!::ruvia::detail::HttpTemporaryOwningCharString<decltype((prefix))>,                                  \
+                      "controller group prefixes must outlive route registration");                                       \
+        return ::ruvia::detail::httpBorrowedView(prefix);                                                                    \
     }                                                                                                                       \
     [[nodiscard]] static auto ruviaControllerGroupMiddlewares() {                                                           \
         return ::ruvia::detail::ControllerRegistrationAccess<RuviaControllerType>::template makeMiddlewares<__VA_ARGS__>(); \
@@ -137,7 +139,7 @@ private:                                                                        
 
 #define RUVIA_GROUP_BEGIN(prefix, ...)                                                                                                                           \
     {                                                                                                                                                            \
-        auto ruviaRouteGroup = RuviaControllerAccess::createRouteGroup(ruviaRouteScope, prefix, RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>()); \
+        auto ruviaRouteGroup = RuviaControllerAccess::createRouteGroup(ruviaRouteScope, ::ruvia::detail::httpBorrowedView(prefix), RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>()); \
         auto& ruviaRouteScope = ruviaRouteGroup;
 
 #define RUVIA_GROUP_END }

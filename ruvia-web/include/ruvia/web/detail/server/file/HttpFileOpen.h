@@ -78,6 +78,19 @@ public:
         return lastRead_;
     }
 
+    // Recheck the same native handle after a whole-file operation. Opening a
+    // descriptor validates replacement races, but an in-place write can alter
+    // bytes while that descriptor remains valid. The ctime/change-time token
+    // in ResponseFileIdentity makes that mutation visible to the runtime.
+    [[nodiscard]] bool matchesSnapshot(ResponseFileIdentity expected, std::uint64_t expectedSize) const noexcept {
+        if (!expected.requiresValidation()) {
+            return true;
+        }
+        std::error_code error;
+        const auto snapshot = snapshotNativeFileHandle(handle_.get(), error);
+        return !error && snapshot.identity == expected && snapshot.size == expectedSize;
+    }
+
 private:
     NativeFileHandle handle_;
     std::error_code error_;
@@ -111,6 +124,12 @@ public:
 
     [[nodiscard]] std::streamsize gcount() const noexcept {
         return input_.gcount();
+    }
+
+    [[nodiscard]] bool matchesSnapshot(ResponseFileIdentity expected, std::uint64_t) const noexcept {
+        // Checked identities are rejected by the portable fallback at open:
+        // there is no native handle to validate without reopening a path.
+        return !expected.requiresValidation();
     }
 
 private:

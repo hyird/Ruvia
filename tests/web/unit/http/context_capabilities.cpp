@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
@@ -95,8 +96,8 @@ ruvia::Task<void> endOutput(void*, std::span<const ruvia::HttpHeaderView>) {
     co_return;
 }
 
-ruvia::Task<void> sleepOutput(void*, std::chrono::milliseconds) {
-    co_return;
+ruvia::Task<ruvia::TimerSleepResult> sleepOutput(void*, std::chrono::milliseconds) {
+    co_return ruvia::TimerSleepResult::kElapsed;
 }
 
 void bindOutput(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}

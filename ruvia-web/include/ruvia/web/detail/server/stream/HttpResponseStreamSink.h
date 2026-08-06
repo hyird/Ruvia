@@ -10,6 +10,7 @@
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 #include "ruvia/web/detail/server/response/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/response/HttpStreamingResponseCompression.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/web/Context.h"
@@ -34,7 +35,7 @@ namespace ruvia::detail {
 template <typename Stream, typename ScannerEntry>
 class ResponseStreamSink final {
 public:
-    ResponseStreamSink(Stream& stream, WorkerMemory& memory, ResponseHeadBuffer& head, ScannerEntry& scannerEntry, const WorkerHandle& worker, ResponseStreamKind kind, Http1ResponseStreamPlan plan) noexcept
+    ResponseStreamSink(Stream& stream, WorkerMemory& memory, ResponseHeadBuffer& head, ScannerEntry& scannerEntry, const WorkerHandle& worker, ResponseStreamKind kind, Http1ResponseStreamPlan plan, HttpResponseCodingSelection responseCoding, HttpResponseCodingAvailability responseCodingAvailability) noexcept
         : stream_(stream),
           head_(head),
           trailers_(memory.resource()),
@@ -42,9 +43,10 @@ public:
           worker_(&worker),
           kind_(kind),
           plan_(plan),
-          connectionPlan_(plan.requestConnectionPlan().requireClose()) {}
+          connectionPlan_(plan.requestConnectionPlan().requireClose()),
+          compression_(memory.resource(), responseCoding, responseCodingAvailability) {}
 
-    ResponseStreamSink(Stream&, WorkerMemory&, ResponseHeadBuffer&, ScannerEntry&, WorkerHandle&&, ResponseStreamKind, Http1ResponseStreamPlan) = delete;
+    ResponseStreamSink(Stream&, WorkerMemory&, ResponseHeadBuffer&, ScannerEntry&, WorkerHandle&&, ResponseStreamKind, Http1ResponseStreamPlan, HttpResponseCodingSelection, HttpResponseCodingAvailability) = delete;
 
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
@@ -68,7 +70,7 @@ public:
     template <typename Sink>
     friend Task<void> responseStreamEndThunk(void*, std::span<const HttpHeaderView>);
     template <typename Sink>
-    friend Task<void> responseStreamSleepThunk(void*, std::chrono::milliseconds);
+    friend Task<TimerSleepResult> responseStreamSleepThunk(void*, std::chrono::milliseconds);
     template <typename Sink>
     friend void responseStreamBindContextThunk(void*, Context*, ResponseStreamState::StreamingHeadThunk);
     template <typename Sink>
@@ -91,25 +93,39 @@ private:
             co_return;
         }
 
-        auto prepareResult = prepareHttp1ResponseStreamHead(state_.streamingHead(), kind_, plan_, trailerIntent);
-        if (const auto* failure = prepareResult.failure()) {
-            throw failure->exception();
-        }
-        auto* prepared = prepareResult.prepared();
-        if (prepared == nullptr) {
-            throw std::logic_error("HTTP/1 stream preparation returned no terminal alternative");
-        }
-        auto streamHead = std::move(*prepared);
-        if (trailerIntent == ResponseTrailerIntent::kPresent && streamHead.commitPlan().trailerFraming() != ResponseStreamTrailerFraming::kHttp1Chunked) {
-            throw std::logic_error("response framing does not support trailers");
-        }
-        connectionPlan_ = streamHead.connectionPlan();
+        try {
+            auto response = state_.streamingHead();
+            compression_.prepare(plan_.requestMethod(), response, kind_);
+            auto prepareResult = prepareHttp1ResponseStreamHead(std::move(response), kind_, plan_, trailerIntent);
+            if (const auto* failure = prepareResult.failure()) {
+                throw failure->exception();
+            }
+            auto* prepared = prepareResult.prepared();
+            if (prepared == nullptr) {
+                throw std::logic_error("HTTP/1 stream preparation returned no terminal alternative");
+            }
+            auto streamHead = std::move(*prepared);
+            if (trailerIntent == ResponseTrailerIntent::kPresent && streamHead.commitPlan().trailerFraming() != ResponseStreamTrailerFraming::kHttp1Chunked) {
+                throw std::logic_error("response framing does not support trailers");
+            }
+            compression_.activate(streamHead.commitPlan().bodyPlan());
 
-        head_.reset();
-        appendResponseHead(streamHead.response(), head_, streamHead.responseHeadPlan());
-        // Mark committed before the write; a partial header flush must never be
-        // followed by the normal error-response path on the same socket.
-        state_.markCommitted(streamHead.commitPlan());
+            head_.reset();
+            appendResponseHead(streamHead.response(), head_, streamHead.responseHeadPlan());
+            connectionPlan_ = streamHead.connectionPlan();
+            // Mark committed before the write; a partial header flush must never be
+            // followed by the normal error-response path on the same socket.
+            state_.markCommitted(streamHead.commitPlan());
+        } catch (...) {
+            // Representation metadata and protocol framing are one pre-wire
+            // transaction. Once either side has failed, no handler retry may
+            // manufacture a second head from half-prepared compression state.
+            if (!state_.committed()) {
+                compression_.abort();
+                state_.markAborted();
+            }
+            throw;
+        }
         const auto writeCompletion = co_await asyncAsio([this, headView = head_.view()](auto handler) mutable { asio::async_write(stream_, asio::buffer(headView), std::move(handler)); });
         const auto ec = writeCompletion.errorCode();
         if (ec) {
@@ -119,9 +135,12 @@ private:
         scannerEntry_.touch();
     }
 
-    Task<void> sleep(std::chrono::milliseconds duration) {
-        static_cast<void>(co_await sleepFor(*worker_, duration));
-        scannerEntry_.touch();
+    Task<TimerSleepResult> sleep(std::chrono::milliseconds duration) {
+        const auto result = co_await sleepForBorrowed(*worker_, duration);
+        if (result == TimerSleepResult::kElapsed) {
+            scannerEntry_.touch();
+        }
+        co_return result;
     }
 
     Task<void> write(std::string_view chunk) {
@@ -137,9 +156,29 @@ private:
             // or 304) then yields the worker thread each pass instead of
             // hard-spinning the event loop with no suspension point. The minimal
             // positive delay is required because a zero duration is await_ready.
-            static_cast<void>(co_await sleepFor(*worker_, std::chrono::steady_clock::duration(1)));
+            static_cast<void>(co_await sleepForBorrowed(*worker_, std::chrono::steady_clock::duration(1)));
         }
         state_.ensureBodyAllowed();
+
+        if (compression_.active()) {
+            if (compression_.write(chunk) == HttpContentEncodeStep::kFailure) {
+                state_.markAborted();
+                throw std::runtime_error("HTTP response stream content encoding failed");
+            }
+            if (compression_.output().empty()) {
+                co_return;
+            }
+            co_await writeEncoded(compression_.output());
+            co_return;
+        }
+
+        co_await writeEncoded(chunk);
+    }
+
+    Task<void> writeEncoded(std::string_view chunk) {
+        if (chunk.empty()) {
+            co_return;
+        }
 
         if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {
             // No chunk framing: write the raw body bytes. The connection close
@@ -187,6 +226,13 @@ private:
         if (state_.ended()) {
             co_return;
         }
+        if (compression_.active()) {
+            if (compression_.finish() != HttpContentEncodeStep::kFinished) {
+                state_.markAborted();
+                throw std::runtime_error("HTTP response stream content encoding finalization failed");
+            }
+            co_await writeEncoded(compression_.output());
+        }
         if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {
             // No last-chunk terminator: the connection close delimits the body.
             state_.markEnded();
@@ -216,6 +262,7 @@ private:
     ResponseStreamKind kind_;
     Http1ResponseStreamPlan plan_;
     Http1ServerConnectionPlan connectionPlan_;
+    HttpStreamingResponseCompression compression_;
     ResponseStreamState state_;
 };
 

@@ -64,9 +64,13 @@ RUVIA_TEST(stream_table_apply_send_window_delta) {
     RUVIA_CHECK(table.applySendWindowDelta(50));
     RUVIA_CHECK_EQ(table.find(1)->sendWindow(), std::int32_t{150});
     RUVIA_CHECK_EQ(table.find(3)->sendWindow(), std::int32_t{250});
-    // A delta that pushes any stream window past 2^31-1 is rejected.
-    table.find(1)->setSendWindow(std::numeric_limits<std::int32_t>::max());
+    // A delta that pushes any stream window past 2^31-1 is rejected without
+    // partially applying the change to earlier streams.
+    table.find(1)->setSendWindow(100);
+    table.find(3)->setSendWindow(std::numeric_limits<std::int32_t>::max());
     RUVIA_CHECK(!table.applySendWindowDelta(1));
+    RUVIA_CHECK_EQ(table.find(1)->sendWindow(), std::int32_t{100});
+    RUVIA_CHECK_EQ(table.find(3)->sendWindow(), std::numeric_limits<std::int32_t>::max());
 }
 
 RUVIA_TEST(stream_table_apply_send_window_delta_reaches_overflow_streams) {

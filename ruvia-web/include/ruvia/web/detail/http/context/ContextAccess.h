@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http/static/StaticFileVariant.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/router/RouteLimits.h"
 
@@ -32,6 +33,7 @@ inline Context::Context(RequestMemory& memory, const HttpRequest& request, std::
       routes_(services.routes()),
       workerStates_(services.workerStates()),
       blockingPool_(services.blockingPool()),
+      deferredStaticFileCompression_(services.deferredStaticFileCompression()),
       routeRateLimitScope_(routeRateLimitScope),
       maxDecodedBodyBytes_(services.maxDecodedBodyBytes()),
       requestBodySource_(services.requestBodySource()),
@@ -60,6 +62,10 @@ struct ContextAccess final {
 
     [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, const std::string_view* paramNames, const std::string_view* paramValues, std::size_t paramCount, std::uintptr_t routeRateLimitScope, ContextServices services = {}) noexcept {
         return Context(memory, request, routePath, paramNames, paramValues, paramCount, routeRateLimitScope, services);
+    }
+
+    [[nodiscard]] static HttpResponse staticFileForDeferredCompression(Context& context, const StaticRoot& root, std::string_view relativePath, std::string_view contentType = {}) {
+        return context.staticFile(root, relativePath, contentType, StaticFileSelectionMode::kAllowDeferredCompression);
     }
 
     [[nodiscard]] static const HttpRequest& request(const Context& context) noexcept {

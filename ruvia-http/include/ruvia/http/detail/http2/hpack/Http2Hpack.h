@@ -108,13 +108,38 @@ class HpackDecoder final {
 public:
     using HeaderCallback = bool (*)(void*, std::string_view, std::string_view);
 
+    class DecodeTransaction final {
+    public:
+        DecodeTransaction(const DecodeTransaction&) = delete;
+        DecodeTransaction& operator=(const DecodeTransaction&) = delete;
+        DecodeTransaction(DecodeTransaction&&) = delete;
+        DecodeTransaction& operator=(DecodeTransaction&&) = delete;
+        ~DecodeTransaction();
+
+        void commit() noexcept;
+        void rollback() noexcept;
+        [[nodiscard]] bool active() const noexcept {
+            return active_;
+        }
+
+    private:
+        friend class HpackDecoder;
+
+        explicit DecodeTransaction(HpackDecoder& decoder) noexcept;
+
+        HpackDecoder* decoder_;
+        bool active_{true};
+    };
+
     explicit HpackDecoder(std::pmr::memory_resource* resource);
 
     HpackDecoder(const HpackDecoder&) = delete;
     HpackDecoder& operator=(const HpackDecoder&) = delete;
 
     void setMaxDynamicTableSize(std::size_t bytes);
+    [[nodiscard]] DecodeTransaction beginTransaction() noexcept;
     [[nodiscard]] HpackDecodeResult decode(std::string_view block, void* target, HeaderCallback callback);
+    [[nodiscard]] HpackDecodeResult decode(std::string_view block, void* target, HeaderCallback callback, DecodeTransaction& transaction);
 
 private:
     using StepResult = std::optional<HpackDecodeError>;
@@ -130,6 +155,7 @@ private:
     };
 
     [[nodiscard]] static std::size_t entrySize(std::string_view name, std::string_view value) noexcept;
+    [[nodiscard]] HpackDecodeResult decodeBlock(std::string_view block, void* target, HeaderCallback callback);
     [[nodiscard]] StepResult decodeInteger(const unsigned char*& cursor, const unsigned char* end, std::uint8_t prefixBits, std::uint32_t& value) const noexcept;
     [[nodiscard]] StepResult decodeString(const unsigned char*& cursor, const unsigned char* end, std::pmr::string& scratch, std::string_view& value);
     // `rejected` is an in/out latch: once a callback has returned false, no further
@@ -149,6 +175,9 @@ private:
     void evictDynamicToFit(std::size_t entrySize);
     void evictDynamic();
     void compactDynamic();
+    void beginDecodeTransaction() noexcept;
+    void commitDecodeTransaction() noexcept;
+    void rollbackDecodeTransaction() noexcept;
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> dynamic_;
@@ -158,13 +187,22 @@ private:
     std::size_t dynamicOffset_{0};
     std::size_t maxDynamicSize_{4096};
     std::size_t allowedDynamicSize_{4096};
+    bool decodeTransactionActive_{false};
+    std::size_t transactionDynamicSize_{0};
+    std::size_t transactionDynamicOffset_{0};
+    std::size_t transactionDynamicVectorSize_{0};
+    std::size_t transactionMaxDynamicSize_{0};
 };
 
 class HpackEncoder final {
 public:
     static void encodeIndexed(std::pmr::string& out, std::uint32_t index);
     static void encodeDynamicTableSizeUpdate(std::pmr::string& out, std::uint32_t maximum);
+    // Throws std::length_error before changing `out` when a literal name or value
+    // exceeds the uint32 length domain permitted by HPACK string literals.
     static void encodeHeader(std::pmr::string& out, std::string_view name, std::string_view value);
+    // Throws std::length_error before changing `out` when `value` is too large for
+    // the HPACK string length field.
     static void encodeHeaderWithNameIndex(std::pmr::string& out, std::uint32_t nameIndex, std::string_view value, bool neverIndexed = false);
     static void encodeStatus(std::pmr::string& out, HttpStatusCode status);
 

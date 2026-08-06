@@ -89,6 +89,7 @@ Task<void> detail::MariaDbPool::connectUnlocked(ConnectionSlot& slot) {
 
 Task<void> detail::MariaDbPool::runMysqlQuery(ConnectionSlot& slot, std::string_view sql, const OperationTimeout& deadline) {
     auto& connection = *slot.connection;
+    validateMariaDbSqlLength(sql.size());
     int queryResult = 0;
     int status = mysql_real_query_start(&queryResult, &connection, sql.data(), static_cast<unsigned long>(sql.size()));
     while (status != 0) {

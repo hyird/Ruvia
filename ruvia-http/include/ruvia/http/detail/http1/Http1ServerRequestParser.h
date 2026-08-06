@@ -7,6 +7,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
@@ -161,7 +162,12 @@ public:
     HttpRequest request{HttpRequestAccess::make()};
     Http1RequestBodyPlan bodyPlan{Http1RequestBodyPlan(HttpRequestExpectations{})};
     Http1ServerConnectionPlan connectionPlan{Http1ServerConnectionPlan::http11Close()};
-    HttpContentCoding responseCoding{HttpContentCoding::kIdentity};
+
+    // Parsed once from the request head. Representation policy consumes this
+    // complete client preference later, without rescanning Accept-Encoding.
+    [[nodiscard]] HttpResponseCodingSelectionResult responseCodingSelection() const noexcept {
+        return HttpResponseCodingSelection::select(responseCodingQualities);
+    }
 
 private:
     friend class Http1ServerRequestParser;
@@ -172,6 +178,7 @@ private:
     using Progress = std::variant<Http1ServerNeedRequestHead, Http1ServerRequestHeadReady, Http1ServerNeedRequestBody, Http1ServerRequestMessageReady, Http1ServerRequestParseFailure>;
 
     Progress progress_{Http1ServerNeedRequestHead{}};
+    HttpResponseCodingQualities responseCodingQualities;
 };
 
 class Http1ServerRequestParser final {

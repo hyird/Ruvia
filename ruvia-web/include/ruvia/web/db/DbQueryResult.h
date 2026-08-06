@@ -60,6 +60,8 @@ class DbStreamResult final : private detail::ScopedCapabilityNode {
 public:
     DbStreamResult(const DbStreamResult&) = delete;
     DbStreamResult& operator=(const DbStreamResult&) = delete;
+    // A pending read/close task captures this object. Moving it while that
+    // task is cold would leave the frame pointing at the moved-from object.
     DbStreamResult(DbStreamResult&& other) noexcept;
     DbStreamResult& operator=(DbStreamResult&&) = delete;
     ~DbStreamResult();

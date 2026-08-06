@@ -5,7 +5,11 @@
 #include <utility>
 
 #include "ruvia/web/StaticFiles.h"
+#include "ruvia/web/ServerConfig.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/util/HttpNumberFormat.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
 
 // Choosing what answers a request: the matched route, a 405 with Allow, the
@@ -27,9 +31,57 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
     return response;
 }
 
-[[nodiscard]] std::optional<HttpResponse> selectDocumentRootFallback(const StaticRoot* root, const HttpRequest& request, RequestMemory& memory) {
+[[nodiscard]] std::optional<HttpResponse> selectLiveReloadAsset(const detail::DocumentRootBinding& documentRoot, const HttpRequest& request, RequestMemory& memory) {
+    const auto* const root = documentRoot.root();
+    const auto* const runtime = documentRoot.runtimeOptions();
+    if (root == nullptr || runtime == nullptr || !runtime->enableLiveReload || (request.knownMethod() != HttpKnownMethod::kGet && request.knownMethod() != HttpKnownMethod::kHead)) {
+        return std::nullopt;
+    }
+
+    constexpr std::string_view kScriptPath = "/__ruvia/live-reload.js";
+    constexpr std::string_view kVersionPath = "/__ruvia/live-reload-version";
+    if (request.path() != kScriptPath && request.path() != kVersionPath) {
+        return std::nullopt;
+    }
+
+    HttpResponse response(memory.resource());
+    response.header("Cache-Control", "no-store");
+    if (request.path() == kScriptPath) {
+        constexpr std::string_view kScript = R"JS((() => {
+  let previous = null;
+  const poll = () => fetch('/__ruvia/live-reload-version', {cache: 'no-store'})
+    .then((response) => response.text())
+    .then((version) => {
+      if (previous !== null && version !== previous) {
+        window.location.reload();
+        return;
+      }
+      previous = version;
+    })
+    .catch(() => {})
+    .finally(() => window.setTimeout(poll, 500));
+  poll();
+})();
+)JS";
+        response.header("Content-Type", "application/javascript; charset=UTF-8");
+        detail::setResponseBodyStaticView(response, kScript);
+    } else {
+        std::pmr::string version(memory.resource());
+        detail::appendHttpFormattedNumber(version, detail::StaticRootAccess::revision(*root), "failed to format live reload version");
+        response.header("Content-Type", "text/plain; charset=UTF-8");
+        detail::setResponseBodyOwned(response, std::move(version));
+    }
+    return response;
+}
+
+[[nodiscard]] std::optional<HttpResponse> selectDocumentRootFallback(const detail::DocumentRootBinding& documentRoot, const HttpRequest& request, RequestMemory& memory, detail::StaticFileSelectionMode staticFileMode) {
+    const auto* const root = documentRoot.root();
     if (root == nullptr || (request.knownMethod() != HttpKnownMethod::kGet && request.knownMethod() != HttpKnownMethod::kHead)) {
         return std::nullopt;
+    }
+
+    if (auto liveReloadAsset = selectLiveReloadAsset(documentRoot, request, memory)) {
+        return liveReloadAsset;
     }
 
     auto relative = request.path();
@@ -39,9 +91,21 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
 
     auto context = detail::ContextAccess::make(memory, request);
     try {
+        if (staticFileMode == detail::StaticFileSelectionMode::kAllowDeferredCompression) {
+            return detail::ContextAccess::staticFileForDeferredCompression(context, *root, relative);
+        }
         return context.staticFile(*root, relative);
-    } catch (const HttpError&) {
-        return std::nullopt;
+    } catch (const HttpError& error) {
+        // A document-root miss is allowed to fall through to the router's
+        // normal not-found path. A real response error (for example 406 when
+        // every Accept-Encoding choice is forbidden, or 412 from a file
+        // precondition) must retain its status instead of being rewritten as
+        // 404 by the fallback probe.
+        const auto status = error.info().status();
+        if (status == ruvia::http_status::kForbidden || status == ruvia::http_status::kNotFound) {
+            return std::nullopt;
+        }
+        throw;
     }
 }
 
@@ -67,16 +131,17 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchWebSocket(const Ht
 }
 
 Task<HttpResponse> detail::RouteTable::dispatch(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services) const {
-    return dispatchRequest(request, resolution, memory, services, nullptr, DispatchFailure::kPropagate);
+    auto result = co_await dispatchRequest(request, resolution, memory, services, DocumentRootBinding::none(), DispatchFailure::kPropagate, StaticFileSelectionMode::kStrict);
+    co_return std::move(result).takeResponse();
 }
 
-Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services, const StaticRoot* documentRoot, DispatchFailure failure) const {
+Task<detail::BufferedResponseDispatchResult> detail::RouteTable::dispatchRequest(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services, DocumentRootBinding documentRoot, DispatchFailure failure, StaticFileSelectionMode staticFileMode) const {
     std::exception_ptr dispatchException;
     try {
         const auto* resolved = resolution.resolved();
         if (resolved == nullptr) {
-            if (auto documentResponse = selectDocumentRootFallback(documentRoot, request, memory)) {
-                co_return std::move(*documentResponse);
+            if (auto documentResponse = selectDocumentRootFallback(documentRoot, request, memory, staticFileMode)) {
+                co_return detail::BufferedResponseDispatchResult::makeDocumentRoot(std::move(*documentResponse));
             }
             // One handleError co_await serves both rejection kinds: each
             // co_await expression reserves its own slots for the call's
@@ -87,10 +152,10 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& reques
             if (request.knownMethod() == HttpKnownMethod::kUnknown) {
                 error = HttpErrorInfo(ruvia::http_status::kNotImplemented, {}, "method not implemented");
             } else if (request.knownMethod() == HttpKnownMethod::kOptions && request.path() == "*") {
-                co_return makeAllowNoContentResponse(memory, allowedMethodsForServer());
+                co_return detail::BufferedResponseDispatchResult::makeApplication(makeAllowNoContentResponse(memory, allowedMethodsForServer()));
             } else if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
                 if (request.knownMethod() == HttpKnownMethod::kOptions) {
-                    co_return makeAllowNoContentResponse(memory, methodNotAllowed->allowedMethods());
+                    co_return detail::BufferedResponseDispatchResult::makeApplication(makeAllowNoContentResponse(memory, methodNotAllowed->allowedMethods()));
                 }
                 error = HttpErrorInfo(ruvia::http_status::kMethodNotAllowed, {}, "method not allowed");
                 allowedMethods = methodNotAllowed->allowedMethods();
@@ -101,10 +166,10 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& reques
                 if (allowedMethods != 0) {
                     setAllowHeader(response, allowedMethods);
                 }
-                co_return response;
+                co_return detail::BufferedResponseDispatchResult::makeApplication(std::move(response));
             }
 
-            co_return co_await handleNotFound(request, memory, services);
+            co_return detail::BufferedResponseDispatchResult::makeApplication(co_await handleNotFound(request, memory, services));
         }
 
         auto context = makeRouteContext(memory, request, *resolved, withRouteHandlers(services, *this, errorHandlerFor(request.path()), notFoundHandlerFor(request.path())));
@@ -114,25 +179,25 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& reques
             if (route.endpoint().buffered() == nullptr) {
                 throw std::logic_error("streaming route requires its dedicated dispatch path");
             }
-            co_return co_await invokeRoute(route, context);
+            co_return detail::BufferedResponseDispatchResult::makeApplication(co_await invokeRoute(route, context));
         } catch (...) {
             exception = std::current_exception();
         }
-        co_return co_await handleException(context, exception);
+        co_return detail::BufferedResponseDispatchResult::makeApplication(co_await handleException(context, exception));
     } catch (...) {
         if (failure == DispatchFailure::kPropagate) {
             throw;
         }
         dispatchException = std::current_exception();
     }
-    co_return co_await handleException(request, memory, dispatchException, services);
+    co_return detail::BufferedResponseDispatchResult::makeApplication(co_await handleException(request, memory, dispatchException, services));
 }
 
-Task<HttpResponse> detail::RouteTable::dispatchBufferedResponse(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, const StaticRoot* documentRoot, ContextServices services) const {
+Task<detail::BufferedResponseDispatchResult> detail::RouteTable::dispatchBufferedResponse(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, DocumentRootBinding documentRoot, ContextServices services, StaticFileSelectionMode staticFileMode) const {
     // Plain forwarding, not a coroutine: document-root selection and the
     // failure policy live in the existing dispatch frame, so the unified
     // application entry adds no request-path allocation.
-    return dispatchRequest(request, resolution, memory, services, documentRoot, DispatchFailure::kRespond);
+    return dispatchRequest(request, resolution, memory, services, std::move(documentRoot), DispatchFailure::kRespond, staticFileMode);
 }
 
 }  // namespace ruvia

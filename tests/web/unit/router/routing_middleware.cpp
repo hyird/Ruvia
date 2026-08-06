@@ -81,6 +81,25 @@ RUVIA_TEST(middleware_chain_short_circuits_without_next) {
     RUVIA_CHECK(g_chainOrder == expected);
 }
 
+RUVIA_TEST(middleware_chain_rejects_next_after_response) {
+    g_chainOrder.clear();
+    const ControllerMiddlewareDescriptor mws[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwRespondThenNext>(),
+    };
+    const auto body = dispatchChain(std::span<const ControllerMiddlewareDescriptor>(mws, 1));
+
+    // respond() is terminal for the pre-next branch. The downstream handler
+    // must not run, and the misuse must not silently return the early body.
+    std::size_t handlerRuns = 0;
+    for (const int step : g_chainOrder) {
+        if (step == 0) {
+            ++handlerRuns;
+        }
+    }
+    RUVIA_CHECK_EQ(handlerRuns, std::size_t{0});
+    RUVIA_CHECK(body.find("next_called_after_response") != std::string::npos);
+}
+
 RUVIA_TEST(middleware_chain_rejects_calling_next_twice) {
     g_chainOrder.clear();
     const ControllerMiddlewareDescriptor mws[] = {

@@ -10,6 +10,7 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -37,6 +38,16 @@ bool throwsOn(Fn&& fn) {
         fn();
         return false;
     } catch (const std::exception&) {
+        return true;
+    }
+}
+
+template <typename Fn>
+bool throwsLength(Fn&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::length_error&) {
         return true;
     }
 }
@@ -164,6 +175,29 @@ RUVIA_TEST(db_interpolate_sql_requires_matching_placeholder_count) {
     RUVIA_CHECK(throwsOn([&] { (void)interp(mysql, "?", {DbValue(1), DbValue(2)}); }));
     // No placeholders and no params passes through unchanged.
     RUVIA_CHECK_EQ(interp(mysql, "SELECT 1", {}), std::string("SELECT 1"));
+
+    mysql_close(&mysql);
+}
+
+RUVIA_TEST(db_interpolate_sql_rejects_unrepresentable_lengths) {
+    MYSQL mysql;
+    RUVIA_CHECK(mysql_init(&mysql) != nullptr);
+
+    // The input is intentionally a non-dereferenced oversized view. The
+    // length guard must run before the escape library sees it or the size hint
+    // performs value.size() * 2.
+    const char sentinel = 'x';
+    constexpr auto tooLargeToEscape = (std::numeric_limits<unsigned long>::max)() / 2 + 1;
+    if constexpr (tooLargeToEscape <= (std::numeric_limits<std::size_t>::max)()) {
+        const auto oversized = std::string_view(&sentinel, static_cast<std::size_t>(tooLargeToEscape));
+        RUVIA_CHECK(throwsLength([&] { (void)interp(mysql, "VALUES (?)", {DbValue(oversized)}); }));
+    }
+
+    if constexpr ((std::numeric_limits<std::size_t>::max)() > (std::numeric_limits<unsigned long>::max)()) {
+        RUVIA_CHECK(throwsLength([&] {
+            ruvia::detail::validateMariaDbSqlLength(static_cast<std::size_t>((std::numeric_limits<unsigned long>::max)()) + 1);
+        }));
+    }
 
     mysql_close(&mysql);
 }

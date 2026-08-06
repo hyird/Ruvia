@@ -21,6 +21,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpOrigin.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpBrotliCodec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpContentCoding.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpContentEncoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpGzipCodec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpTransferCodingDecoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpZstdCodec.cpp

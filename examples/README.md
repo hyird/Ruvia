@@ -7,9 +7,9 @@ These examples are built when `RUVIA_BUILD_EXAMPLES` is enabled and double as co
 | `ruvia_example_basic_http` | `web/basic_http.cpp` | Controller/group macros, middleware, params, wildcard routes, query/header/cookie helpers, body reads, `urlFor` links, text/JSON/redirect/error responses, HEAD and OPTIONS, prefix-scoped `notFound`/`onError` fallbacks. |
 | `ruvia_example_bench_server` | `web/bench_server.cpp` | Benchmark server mirroring the hical bench endpoints for throughput comparisons. |
 | `ruvia_example_api_surface` | `web/api_surface.cpp` | Hono-like C++ context/request/response facades, discriminated HTTP/1 parse outcomes, route metadata, decoded paths, Accept checks, buffered multipart, explicit body discard, response cookies, manual `HttpResponse` body ownership, PUT/PATCH streaming, and the outbound client surface including same- and cross-origin redirect resolution. |
-| `ruvia_example_models_validation` | `web/models_validation.cpp` | Unified JSON models, form bodies, nested models, arrays, recursive lists, defaults, validation middleware and rules, non-throwing `jsonIf`/`formIf` fallbacks. |
+| `ruvia_example_models_validation` | `web/models_validation.cpp` | Unified JSON models, form bodies, nested models, arrays, recursive lists, defaults, validation middleware and rules, `jsonIf`/`formIf` fallbacks on media-type mismatch. |
 | `ruvia_example_streaming` | `web/streaming.cpp` | Streaming request bodies, typed multipart chunk phases, chunked response streaming and SSE. |
-| `ruvia_example_files_static` | `web/files_static.cpp` | `c.file(...)`, `c.staticFile(...)`, `StaticRoot`, document root, validators/ranges and gzip configuration. |
+| `ruvia_example_files_static` | `web/files_static.cpp` | `c.file(...)`, `c.staticFile(...)`, `StaticRoot`, immutable/polling document-root configuration, validators/ranges, live reload and gzip configuration. |
 | `ruvia_example_websocket` | `web/websocket.cpp` | WebSocket upgrade routes, subprotocol options, lifecycle timeouts, text/binary echo and RFC close handshake. |
 | `ruvia_example_ops` | `web/ops.cpp` | Security headers middleware, route-level per-IP rate limiting, and health/readiness response helpers wired through controller macros. |
 | `ruvia_example_middleware_next` | `web/middleware_next.cpp` | Middleware value `Next` and one-shot `co_await next()` signature coverage. |

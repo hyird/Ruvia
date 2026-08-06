@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <new>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -19,6 +20,31 @@ using ruvia::detail::Http2OutputConsumeStatus;
 using ruvia::detail::http2ParseFrameHeader;
 using ruvia::detail::http2Read32;
 using ruvia::detail::kHttp2FrameHeaderBytes;
+
+class ToggleRejectingMemoryResource final : public std::pmr::memory_resource {
+public:
+    void rejectAllocations() noexcept {
+        reject_ = true;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (reject_) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool reject_{false};
+};
 
 template <typename T>
 concept ExposesRvalueHttp2OutputBuffer = requires(T&& output) { std::move(output).pending(); };
@@ -84,4 +110,22 @@ RUVIA_TEST(http2_output_buffer_owns_reset_frame_serialization) {
     RUVIA_CHECK_EQ(header.length, std::uint32_t{4});
     RUVIA_CHECK_EQ(header.streamId, std::uint32_t{9});
     RUVIA_CHECK_EQ(http2Read32(bytes(pending.data()) + kHttp2FrameHeaderBytes), static_cast<std::uint32_t>(Http2ErrorCode::kCancel));
+}
+
+RUVIA_TEST(http2_output_buffer_frame_append_is_atomic_on_allocation_failure) {
+    ToggleRejectingMemoryResource resource;
+    Http2OutputBuffer output(&resource);
+    output.appendFrame(Http2FrameType::kHeaders, 0, 1, "seed");
+    const std::string before(output.pending());
+
+    resource.rejectAllocations();
+    bool allocationFailed = false;
+    try {
+        output.appendFrame(Http2FrameType::kData, 0, 1, std::string(128, 'x'));
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK_EQ(output.pending(), std::string_view(before));
 }

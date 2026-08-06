@@ -26,6 +26,7 @@
 #include "ruvia/web/detail/websocket/WebSocketAccess.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/Task.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/web/Streaming.h"
 
 namespace streaming_test {
@@ -145,8 +146,8 @@ inline ruvia::Task<void> endStream(void* target, std::span<const ruvia::HttpHead
     co_return;
 }
 
-inline ruvia::Task<void> sleepStream(void*, std::chrono::milliseconds) {
-    co_return;
+inline ruvia::Task<ruvia::TimerSleepResult> sleepStream(void*, std::chrono::milliseconds) {
+    co_return ruvia::TimerSleepResult::kElapsed;
 }
 
 inline void bindContext(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}

@@ -86,14 +86,13 @@ struct EventLoopAttachmentOptions final {
 
 // Binds a worker to an io_context the caller owns and drives with run(). The
 // attachment keeps the worker's endpoint valid for as long as it is alive.
+// stop() and destruction are safe while another thread is inside run(): the
+// external context service retains the worker state until its terminal cleanup
+// handler runs, or until the context itself is destroyed. The attachment never
+// calls io_context::stop() and does not join a context it does not own.
 //
-// Teardown contract: before destroying the attachment, stop the worker (stop(),
-// or let the context run dry) AND let run() return on every thread driving the
-// context. Destroying the attachment while a thread is still inside run() races
-// the worker's timer teardown -- this is the same ordering EventLoopPool
-// guarantees internally by joining its threads before tearing a loop down.
-// stop() is safe from any thread; the destructor does not (and cannot) join a
-// context it does not own, so it does not wait for run() to return.
+// If the external io_context is destroyed first, attached EventLoop handles
+// become terminal; ioContext() and executor() then throw std::logic_error.
 class EventLoopAttachment final {
 public:
     ~EventLoopAttachment();
@@ -101,8 +100,8 @@ public:
     EventLoopAttachment(const EventLoopAttachment&) = delete;
     EventLoopAttachment& operator=(const EventLoopAttachment&) = delete;
     // Move construction transfers one attachment without touching its context.
-    // Move assignment would have to tear down the target attachment, but only
-    // its external runtime owner can first wait for io_context::run() to return.
+    // Move assignment would implicitly stop the target attachment, so it stays
+    // deleted and ownership transfer remains explicit.
     EventLoopAttachment(EventLoopAttachment&& other) noexcept;
     EventLoopAttachment& operator=(EventLoopAttachment&& other) = delete;
 
@@ -118,8 +117,8 @@ private:
 };
 
 // Attach a Ruvia worker to a caller-owned io_context. The caller drives the
-// context with run() on exactly one thread. See EventLoopAttachment for the
-// teardown ordering the caller must honor before destroying the returned handle.
+// context with run() on exactly one thread and retains ownership of its
+// unrelated work and stop/restart policy.
 [[nodiscard]] EventLoopAttachment attachEventLoop(asio::io_context& ioContext, EventLoopAttachmentOptions options = {});
 
 struct EventLoopPoolOptions final {

@@ -14,7 +14,8 @@ namespace ruvia::detail {
 // Validates and fixes the exact Set-Cookie field-value shape before a runtime
 // allocates its output buffer. The plan borrows name, value, path and domain
 // until write() completes, so owning-string and CookieOptions temporaries are
-// rejected at construction.
+// rejected at construction. Construction throws std::length_error if the wire
+// length cannot be represented by std::size_t.
 class SetCookiePlan final {
 public:
     SetCookiePlan(std::string_view name, std::string_view value, const CookieOptions& options);

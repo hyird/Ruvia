@@ -39,6 +39,10 @@ public:
         return true;
     }
 
+    [[nodiscard]] std::int32_t receiveWindow() const noexcept {
+        return receiveWindow_;
+    }
+
     void restoreReceive(std::int32_t bytes) noexcept {
         receiveWindow_ += bytes;
     }

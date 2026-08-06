@@ -3,9 +3,12 @@
 #include <cstddef>
 #include <utility>
 
+#define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
+#undef ZSTD_STATIC_LINKING_ONLY
 #include <zstd_errors.h>
 
+#include "ruvia/http/detail/coding/PmrCodecAllocation.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
 // zstd (RFC 8878) with the mandatory 8 MiB HTTP window limit of RFC 9659.
@@ -20,7 +23,7 @@ inline constexpr int kHttpZstdWindowLogMax = 23;  // RFC 9659: 8 MiB
 
 ContentDecodeAttempt decodeZstdContent(std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    auto* stream = ZSTD_createDStream();
+    auto* stream = ZSTD_createDStream_advanced(ZSTD_customMem{&pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource()});
     if (stream == nullptr) {
         return HttpContentDecodeError::kDecoderFailure;
     }
@@ -64,7 +67,7 @@ ContentDecodeAttempt decodeZstdContent(std::string_view input, std::size_t maxDe
 
 ContentEncodeAttempt encodeZstdContent(std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    auto* context = ZSTD_createCCtx();
+    auto* context = ZSTD_createCCtx_advanced(ZSTD_customMem{&pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource()});
     if (context == nullptr) {
         return HttpContentEncodeError::kEncoderFailure;
     }

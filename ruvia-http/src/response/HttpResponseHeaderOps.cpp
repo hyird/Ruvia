@@ -106,6 +106,9 @@ void HttpResponse::header(std::string_view key, std::string_view value) {
 }
 
 void HttpResponse::header(std::string_view key, std::string_view value, HeaderOptions options) {
+    // Check the descriptor's representable storage before any grammar scan;
+    // callers may provide a view over a bounded buffer with a hostile length.
+    detail::validateResponseHeaderStorageSize(key.size(), value.size());
     if (!isValidHttpHeaderName(key)) {
         throw std::invalid_argument("invalid HTTP header name");
     }
@@ -135,6 +138,7 @@ void HttpResponse::header(std::string_view key, std::string_view value, HeaderOp
 }
 
 void HttpResponse::header(std::string_view key, std::nullopt_t) {
+    detail::validateResponseHeaderStorageSize(key.size(), 0);
     if (!isValidHttpHeaderName(key)) {
         throw std::invalid_argument("invalid HTTP header name");
     }
@@ -142,6 +146,7 @@ void HttpResponse::header(std::string_view key, std::nullopt_t) {
 }
 
 void HttpResponse::setHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit) {
+    detail::validateResponseHeaderStorageSize(key.size(), value.size());
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {
         const bool wasAppended = detail::responseHeaderAppend(*header);
         headers_.assign(*header, key, value, knownBit);
@@ -157,17 +162,25 @@ void HttpResponse::setHeaderValidated(std::string_view key, std::string_view val
 }
 
 void HttpResponse::appendHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit) {
+    detail::validateResponseHeaderStorageSize(key.size(), value.size());
     if (detail::responseHeaderAppendForbidden(knownBit)) {
         throw std::invalid_argument("HTTP response header cannot be appended");
     }
     // The index cache intentionally points at the first occurrence. Mark that
     // retained slot as plural too, so a later plain set can detect multiplicity
-    // in O(1) and collapse the field without scanning every normal update.
-    if (auto* const existing = findHeaderForUpdate(key, knownBit)) {
-        detail::setResponseHeaderAppend(*existing, true);
-    }
+    // in O(1) and collapse the field without scanning every normal update. Do
+    // not set it until the new descriptor has been published: headers_.add()
+    // owns bytes before it may allocate the backing table, and a failed append
+    // must leave the existing response exactly as it was.
+    const bool hadExisting = findHeaderForUpdate(key, knownBit) != nullptr;
     const auto index = headers_.size();
     auto& header = headers_.add(key, value, knownBit);
+    if (hadExisting) {
+        auto* const existing = findHeaderForUpdate(key, knownBit);
+        if (existing != nullptr) {
+            detail::setResponseHeaderAppend(*existing, true);
+        }
+    }
     // Mark the append flag so a later merge of this response keeps every appended
     // value instead of treating the field as single-valued and dropping all but the
     // first.
@@ -176,6 +189,7 @@ void HttpResponse::appendHeaderValidated(std::string_view key, std::string_view 
 }
 
 HttpResponseHeader& HttpResponse::appendHeaderUninitializedValue(std::string_view key, std::size_t valueSize, std::uint32_t knownBit) {
+    detail::validateResponseHeaderStorageSize(key.size(), valueSize);
     const auto index = headers_.size();
     auto& header = headers_.addUninitializedValue(key, valueSize, knownBit);
     detail::setResponseHeaderAppend(header, true);
@@ -241,6 +255,7 @@ bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t kno
 }
 
 void HttpResponse::setHeaderStableView(std::string_view key, std::string_view value) {
+    detail::validateResponseHeaderStorageSize(key.size(), value.size());
     const auto knownBit = detail::classifyResponseHeaderName(key);
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {
         const bool wasAppended = detail::responseHeaderAppend(*header);

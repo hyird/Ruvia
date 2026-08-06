@@ -8,9 +8,12 @@
 #include "ruvia/http/HttpHeader.h"
 
 #include <algorithm>
+#include <concepts>
 #include <exception>
+#include <ranges>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <variant>
 
 namespace ruvia::detail {
@@ -204,6 +207,19 @@ private:
     Value value_;
 };
 
+// A validated section retains the caller's header array until the synchronous
+// protocol submission completes.  Letting a temporary std::array/vector convert
+// to span here would return a proof object whose field storage had already died.
+template <typename Range>
+concept HttpTemporaryOwningResponseTrailerRange =
+    !std::is_lvalue_reference_v<Range&&> &&
+    std::ranges::contiguous_range<Range> &&
+    !std::ranges::borrowed_range<Range> &&
+    std::same_as<std::remove_cv_t<std::ranges::range_value_t<Range>>, HttpHeaderView>;
+
+template <HttpTemporaryOwningResponseTrailerRange Headers>
+HttpResponseTrailerSectionResult httpResponseTrailerSection(Headers&&) noexcept = delete;
+
 // Validate the whole section before head, encoder, output, or stream mutation.
 [[nodiscard]] inline HttpResponseTrailerSectionResult httpResponseTrailerSection(std::span<const HttpHeaderView> trailers) noexcept {
     if (trailers.size() > kMaxHttpHeaderFields) {
@@ -217,6 +233,9 @@ private:
     }
     return HttpResponseTrailerSectionResult(HttpResponseTrailerSection(trailers));
 }
+
+template <HttpTemporaryOwningResponseTrailerRange Headers>
+HttpResponseTrailerSectionResult validatedResponseTrailerSection(Headers&&) = delete;
 
 // Validate a caller's trailers, throwing the typed failure. The caller keeps the
 // returned result: the section it exposes borrows from it.

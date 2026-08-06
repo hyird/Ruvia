@@ -1,5 +1,7 @@
 #include "test_harness.h"
 
+#include "test_io_context.h"
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -9,12 +11,18 @@
 #include <fstream>
 #include <memory_resource>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
+
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
 
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -33,13 +41,156 @@
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/server/file/HttpFileOpen.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/server/response/HttpStaticFileCompression.h"
 
 namespace {
 
 using ruvia::HttpKnownMethod;
 using ruvia::HttpResponse;
 
+[[nodiscard]] ruvia::detail::HttpResponseCodingSelection gzipResponseCoding() {
+    ruvia::detail::HttpResponseCodingQualities qualities;
+    qualities.update("gzip");
+    const auto selection = ruvia::detail::HttpResponseCodingSelection::select(qualities);
+    const auto* selected = selection.selected();
+    if (selected == nullptr) {
+        throw std::logic_error("test Accept-Encoding did not select gzip");
+    }
+    return *selected;
+}
+
+class ReleasableMemoryResource final : public std::pmr::memory_resource {
+public:
+    void release() noexcept {
+        released_ = true;
+    }
+
+    [[nodiscard]] bool deallocatedAfterRelease() const noexcept {
+        return deallocatedAfterRelease_;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        deallocatedAfterRelease_ = deallocatedAfterRelease_ || released_;
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool released_{false};
+    bool deallocatedAfterRelease_{false};
+};
+
+template <typename Result>
+[[nodiscard]] Result runStaticCompressionTask(asio::io_context& context, ruvia::Task<Result> task) {
+    std::optional<Result> result;
+    std::exception_ptr exception;
+    asio::co_spawn(
+        context,
+        [task = std::move(task), &result, &exception]() mutable -> asio::awaitable<void> {
+            try {
+                result.emplace(co_await ruvia::detail::taskAsAwaitable(std::move(task)));
+            } catch (...) {
+                exception = std::current_exception();
+            }
+        },
+        asio::detached);
+    context.run();
+    if (exception != nullptr) {
+        std::rethrow_exception(exception);
+    }
+    if (!result.has_value()) {
+        throw std::logic_error("static compression task produced no result");
+    }
+    return std::move(*result);
+}
+
 }  // namespace
+
+RUVIA_TEST(static_root_rebinds_nested_mime_resources_to_its_process_resource) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "ruvia_static_mime_resource_dir";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    std::ofstream(dir / "payload.custom-resource") << "content";
+
+    ReleasableMemoryResource callerResource;
+    {
+        ruvia::StaticRootOptions options;
+        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        options.mimeTypes.push_back(ruvia::StaticMimeType{
+            .extension = std::pmr::string(".custom-resource", &callerResource),
+            .contentType = std::pmr::string("application/x-custom-resource-type", &callerResource),
+        });
+        ruvia::StaticRoot root(dir, std::move(options));
+        callerResource.release();
+    }
+
+    RUVIA_CHECK(!callerResource.deallocatedAfterRelease());
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_root_rejects_permission_errors_in_index) {
+#if defined(_WIN32)
+    // Windows ACLs are not expressible through std::filesystem::perms in a
+    // portable way; the runtime integration guard covers refresh failures.
+    return;
+#else
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "ruvia_static_permission_error";
+    const auto restricted = dir / "restricted";
+    fs::remove_all(dir);
+    fs::create_directories(restricted);
+    std::ofstream(restricted / "payload.txt") << "content";
+
+    std::error_code ec;
+    fs::permissions(restricted, fs::perms::none, fs::perm_options::replace, ec);
+    RUVIA_CHECK(!ec);
+    if (ec) {
+        fs::remove_all(dir);
+        return;
+    }
+
+    // Tests may run as a privileged user. Only assert the contract when the
+    // platform actually reports the permission failure to this process.
+    std::error_code probeEc;
+    fs::directory_iterator probe(restricted, probeEc);
+    const fs::directory_iterator end;
+    for (; !probeEc && probe != end; probe.increment(probeEc)) {
+    }
+    const bool permissionDenied = static_cast<bool>(probeEc);
+
+    if (!permissionDenied) {
+        fs::permissions(restricted, fs::perms::owner_all | fs::perms::group_all | fs::perms::others_all, fs::perm_options::replace, ec);
+        RUVIA_CHECK(!ec);
+        fs::remove_all(dir);
+        return;
+    }
+
+    ruvia::StaticRootOptions options;
+    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    bool rejected = false;
+    try {
+        ruvia::StaticRoot root(dir, std::move(options));
+    } catch (const fs::filesystem_error&) {
+        rejected = true;
+    }
+    fs::permissions(restricted, fs::perms::owner_all | fs::perms::group_all | fs::perms::others_all, fs::perm_options::replace, ec);
+    RUVIA_CHECK(!ec);
+    RUVIA_CHECK(rejected);
+    fs::remove_all(dir);
+#endif
+}
 
 // Serving a file: preconditions, ranges, precompressed variants, type policy
 // and the traversal-safe path resolution behind them.
@@ -47,6 +198,7 @@ using ruvia::HttpResponse;
 RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed) {
     namespace fs = std::filesystem;
     using ruvia::detail::ContextAccess;
+    using ruvia::detail::ContextServices;
     using ruvia::detail::HttpRequestAccess;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_local_root";
@@ -82,6 +234,430 @@ RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed)
     }
 
     fs::remove_all(dir);
+}
+
+RUVIA_TEST(response_file_input_rejects_in_place_mutation_after_open) {
+#if defined(__unix__) || defined(__APPLE__) || defined(_WIN32)
+    namespace fs = std::filesystem;
+    const auto path = fs::temp_directory_path() / "ruvia_static_in_place_mutation.bin";
+    fs::remove(path);
+    constexpr std::string_view oldContents = "old-static-body";
+    constexpr std::string_view newContents = "new-static-body";
+    static_assert(oldContents.size() == newContents.size());
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << oldContents;
+    }
+    // Some filesystems expose a coarse change-time token; separate the two
+    // writes so this test exercises the same identity signal the runtime uses.
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    std::error_code error;
+    const auto snapshot = ruvia::detail::snapshotResponseFile(path.c_str(), error);
+    RUVIA_CHECK(!error);
+    RUVIA_CHECK(snapshot.identity.requiresValidation());
+    if (error || !snapshot.identity.requiresValidation()) {
+        fs::remove(path);
+        return;
+    }
+
+    const auto file = ruvia::detail::ResponseFileBodyAccess::make(path.c_str(), snapshot.size, 0, snapshot.size, snapshot.identity);
+    auto input = ruvia::detail::openResponseFileInput(file);
+    RUVIA_CHECK(static_cast<bool>(input));
+    if (!input) {
+        fs::remove(path);
+        return;
+    }
+
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << newContents;
+    }
+    const auto changedSnapshot = ruvia::detail::snapshotResponseFile(path.c_str(), error);
+    RUVIA_CHECK(!error);
+    RUVIA_CHECK(changedSnapshot.identity != snapshot.identity);
+    RUVIA_CHECK(!input.matchesSnapshot(snapshot.identity, snapshot.size));
+    fs::remove(path);
+#endif
+}
+
+RUVIA_TEST(static_file_without_sidecar_uses_bounded_blocking_compression) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "ruvia_static_runtime_compression";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const std::string original(4096, 'c');
+    {
+        std::ofstream output(dir / "payload.txt", std::ios::binary | std::ios::trunc);
+        output << original;
+    }
+    std::string incompressible(8192, '\0');
+    std::uint32_t state = 0x9e3779b9U;
+    for (auto& byte : incompressible) {
+        state = state * 1664525U + 1013904223U;
+        byte = static_cast<char>(state >> 24U);
+    }
+    {
+        std::ofstream output(dir / "incompressible.bin", std::ios::binary | std::ios::trunc);
+        output.write(incompressible.data(), static_cast<std::streamsize>(incompressible.size()));
+    }
+    {
+        std::ofstream output(dir / "empty.txt", std::ios::binary | std::ios::trunc);
+    }
+
+    ruvia::StaticRootOptions options;
+    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    ruvia::DocumentRootRuntimeOptions runtimeOptions;
+    runtimeOptions.onDemandCompressionMaxBytes = 8192;
+    ruvia::StaticRoot root(dir, std::move(options));
+
+    ruvia::WorkerMemory workerMemory;
+    ruvia::RequestMemory requestMemory(workerMemory);
+    auto request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
+    ruvia::detail::HttpRequestAccess::setResource(request, requestMemory.resource());
+    ruvia::detail::HttpRequestAccess::addHeader(request, ruvia::HttpHeaderView{"Accept-Encoding", "gzip"}, ruvia::detail::HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kAcceptEncoding));
+    auto context = ruvia::detail::ContextAccess::make(requestMemory, request);
+
+    ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1});
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
+    const auto workerHandle = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    const auto responseCoding = gzipResponseCoding();
+
+    auto belowMinResponse = context.staticFile(root, "payload.txt", "text/plain");
+    const auto skipped = runStaticCompressionTask(io, ruvia::detail::tryCompressStaticFileResponse(belowMinResponse, responseCoding, ruvia::HttpKnownMethod::kGet, ruvia::CompressionConfig{.minBytes = original.size() + 1}, runtimeOptions.onDemandCompressionMaxBytes, &pool, workerHandle));
+    RUVIA_CHECK(skipped.notApplicable());
+    RUVIA_CHECK_EQ(skipped.status(), ruvia::detail::HttpStaticFileCompressionStatus::kNotApplicable);
+    RUVIA_CHECK(ruvia::detail::responseBody(belowMinResponse).file().has_value());
+
+    auto noTransformResponse = context.staticFile(root, "payload.txt", "text/plain");
+    noTransformResponse.header("Cache-Control", "no-transform");
+    const auto beforePolicySkip = pool.stats();
+    io.restart();
+    const auto policySkipped = runStaticCompressionTask(io, ruvia::detail::tryCompressStaticFileResponse(noTransformResponse, responseCoding, ruvia::HttpKnownMethod::kGet, ruvia::CompressionConfig{.minBytes = 1024}, runtimeOptions.onDemandCompressionMaxBytes, &pool, workerHandle));
+    const auto afterPolicySkip = pool.stats();
+    RUVIA_CHECK(policySkipped.notApplicable());
+    RUVIA_CHECK(ruvia::detail::responseBody(noTransformResponse).file().has_value());
+    RUVIA_CHECK_EQ(afterPolicySkip.completed, beforePolicySkip.completed);
+    RUVIA_CHECK_EQ(afterPolicySkip.rejected, beforePolicySkip.rejected);
+
+    io.restart();
+    auto response = context.staticFile(root, "payload.txt", "text/plain");
+    const auto compressed = runStaticCompressionTask(io, ruvia::detail::tryCompressStaticFileResponse(response, responseCoding, ruvia::HttpKnownMethod::kGet, ruvia::CompressionConfig{.minBytes = 1024}, runtimeOptions.onDemandCompressionMaxBytes, &pool, workerHandle));
+
+    RUVIA_CHECK(compressed.compressed());
+    RUVIA_CHECK_EQ(compressed.status(), ruvia::detail::HttpStaticFileCompressionStatus::kCompressed);
+    RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
+    RUVIA_CHECK(ruvia::detail::responseBody(response).file() == std::nullopt);
+    const auto decoded = ruvia::detail::decodeHttpContent(ruvia::detail::HttpContentCoding::kGzip, ruvia::detail::responseBody(response).bytes(), original.size(), std::pmr::get_default_resource());
+    RUVIA_CHECK(decoded.decoded() != nullptr);
+    if (const auto* content = decoded.decoded()) {
+        RUVIA_CHECK_EQ(content->bytes(), std::string_view(original));
+    }
+
+    // An incompressible representation is a valid policy miss. The encoder
+    // must not turn that expected outcome into the 500 path used for I/O or
+    // codec failures.
+    auto directEncoding = ruvia::detail::encodeHttpContent(
+        ruvia::detail::HttpContentCoding::kGzip,
+        incompressible,
+        incompressible.size() - 1,
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(directEncoding.failure() != nullptr);
+    if (const auto* failure = directEncoding.failure()) {
+        RUVIA_CHECK_EQ(failure->error(), ruvia::detail::HttpContentEncodeError::kEncodedSizeExceeded);
+    }
+
+    auto notSmallerResponse = context.staticFile(root, "incompressible.bin", "application/octet-stream");
+    io.restart();
+    const auto notSmaller = runStaticCompressionTask(io, ruvia::detail::tryCompressStaticFileResponse(notSmallerResponse, responseCoding, ruvia::HttpKnownMethod::kGet, ruvia::CompressionConfig{.minBytes = 1024}, runtimeOptions.onDemandCompressionMaxBytes, &pool, workerHandle));
+    RUVIA_CHECK(notSmaller.notApplicable());
+    RUVIA_CHECK_EQ(notSmaller.status(), ruvia::detail::HttpStaticFileCompressionStatus::kNotApplicable);
+    RUVIA_CHECK(ruvia::detail::responseBody(notSmallerResponse).file().has_value());
+
+    // An empty file is a valid identity representation. With identity
+    // forbidden, compression is simply not applicable because every coding
+    // has non-zero framing overhead; it must not become an I/O/codec failure.
+    auto emptyResponse = context.staticFile(root, "empty.txt", "text/plain");
+    io.restart();
+    const auto empty = runStaticCompressionTask(io, ruvia::detail::tryCompressStaticFileResponse(emptyResponse, responseCoding, ruvia::HttpKnownMethod::kGet, ruvia::CompressionConfig{.minBytes = 0}, runtimeOptions.onDemandCompressionMaxBytes, &pool, workerHandle));
+    RUVIA_CHECK(empty.notApplicable());
+    RUVIA_CHECK_EQ(empty.status(), ruvia::detail::HttpStaticFileCompressionStatus::kNotApplicable);
+    RUVIA_CHECK(ruvia::detail::responseBody(emptyResponse).file().has_value());
+
+    // A file that disappears after routing is an internal serving failure, not
+    // a negotiation miss. The typed outcome keeps that distinction available to
+    // the protocol driver (which maps it to 500 when identity is forbidden).
+    auto failedResponse = context.staticFile(root, "payload.txt", "text/plain");
+    fs::remove(dir / "payload.txt");
+    io.restart();
+    const auto failed = runStaticCompressionTask(io, ruvia::detail::tryCompressStaticFileResponse(failedResponse, responseCoding, ruvia::HttpKnownMethod::kGet, ruvia::CompressionConfig{.minBytes = 1024}, runtimeOptions.onDemandCompressionMaxBytes, &pool, workerHandle));
+    RUVIA_CHECK(failed.failed());
+    RUVIA_CHECK_EQ(failed.status(), ruvia::detail::HttpStaticFileCompressionStatus::kFailed);
+
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_file_document_root_can_defer_identity_for_runtime_compression) {
+    namespace fs = std::filesystem;
+    using ruvia::HttpHeaderView;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::ContextServices;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::RequestKnownHeader;
+    using ruvia::detail::StaticFileSelectionMode;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_deferred_compression";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const std::string original(4096, 'd');
+    {
+        std::ofstream output(dir / "payload.txt", std::ios::binary | std::ios::trunc);
+        output << original;
+    }
+
+    StaticRootOptions options;
+    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    ruvia::DocumentRootRuntimeOptions runtimeOptions;
+    runtimeOptions.onDemandCompressionMaxBytes = original.size();
+    StaticRoot root(dir, std::move(options));
+
+    ruvia::WorkerMemory workerMemory;
+    ruvia::RequestMemory requestMemory(workerMemory);
+    auto request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setMethod(request, "GET");
+    HttpRequestAccess::setTarget(request, "/payload.txt");
+    HttpRequestAccess::setPath(request, "/payload.txt");
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Accept-Encoding", "gzip, identity;q=0"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kAcceptEncoding));
+
+    // Public Context::staticFile remains strict: a direct handler call must
+    // not temporarily return identity bytes that violate the request.
+    auto context = ContextAccess::make(requestMemory, request);
+    bool rejected = false;
+    try {
+        static_cast<void>(context.staticFile(root, "payload.txt", "text/plain"));
+    } catch (const ruvia::HttpError& error) {
+        rejected = error.info().status() == ruvia::http_status::kNotAcceptable;
+    }
+    RUVIA_CHECK(rejected);
+
+    // A server that owns the deferred-compression policy gives handler-produced
+    // static files the same placeholder semantics as its document-root
+    // fallback. The final session stage is responsible for replacing this file
+    // body with the selected coding before it commits the wire plan.
+    auto configuredContext = ContextAccess::make(requestMemory, request, ContextServices{}.withDeferredStaticFileCompression());
+    auto configuredResponse = configuredContext.staticFile(root, "payload.txt", "text/plain");
+    RUVIA_CHECK(configuredResponse.header("Vary").value_or("").find("Accept-Encoding") != std::string_view::npos);
+    RUVIA_CHECK(ruvia::detail::responseBody(configuredResponse).file().has_value());
+
+    auto configuredFileResponse = configuredContext.file(dir / "payload.txt", "text/plain");
+    RUVIA_CHECK(configuredFileResponse.header("Vary").value_or("").find("Accept-Encoding") != std::string_view::npos);
+    RUVIA_CHECK(ruvia::detail::responseBody(configuredFileResponse).file().has_value());
+
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    ruvia::detail::RouteTable routes(requestMemory.resource());
+    const auto resolution = routes.resolve(request);
+    auto bufferedResult = runStaticCompressionTask(
+        io,
+        routes.dispatchBufferedResponse(
+            request,
+            resolution,
+            requestMemory,
+            ruvia::detail::DocumentRootBinding::configured(root, runtimeOptions),
+            {},
+            StaticFileSelectionMode::kAllowDeferredCompression));
+    RUVIA_CHECK(bufferedResult.documentRoot() != nullptr);
+    auto response = std::move(bufferedResult).takeResponse();
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK(ruvia::detail::responseBody(response).file().has_value());
+
+    ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1});
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
+    const auto workerHandle = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    const auto responseCoding = gzipResponseCoding();
+    io.restart();
+    const auto compressionResult = runStaticCompressionTask(
+        io,
+        ruvia::detail::tryCompressStaticFileResponse(
+            response,
+            responseCoding,
+            ruvia::HttpKnownMethod::kGet,
+            ruvia::CompressionConfig{.minBytes = 1024},
+            runtimeOptions.onDemandCompressionMaxBytes,
+            &pool,
+            workerHandle));
+    RUVIA_CHECK(compressionResult.compressed());
+    RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
+    RUVIA_CHECK(!ruvia::detail::responseBody(response).file().has_value());
+    const auto decoded = ruvia::detail::decodeHttpContent(
+        ruvia::detail::HttpContentCoding::kGzip,
+        ruvia::detail::responseBody(response).bytes(),
+        original.size(),
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(decoded.decoded() != nullptr);
+    if (const auto* content = decoded.decoded()) {
+        RUVIA_CHECK_EQ(content->bytes(), std::string_view(original));
+    }
+
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(document_root_runtime_options_control_live_reload_assets) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "ruvia_static_live_reload";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    std::ofstream(dir / "index.html") << "<html></html>";
+
+    ruvia::StaticRootOptions options;
+    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    ruvia::DocumentRootRuntimeOptions runtimeOptions;
+    runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
+    runtimeOptions.refreshInterval = std::chrono::milliseconds(37);
+    runtimeOptions.onDemandCompressionMaxBytes = 12345;
+    runtimeOptions.enableLiveReload = true;
+    ruvia::StaticRoot root(dir, std::move(options));
+
+    auto equivalentOptions = ruvia::detail::StaticRootAccess::options(root);
+    ruvia::StaticRoot equivalentRoot(dir, std::move(equivalentOptions));
+    RUVIA_CHECK(ruvia::detail::StaticRootAccess::sameSnapshot(root, equivalentRoot));
+    RUVIA_CHECK(ruvia::detail::StaticRootAccess::revision(root) != ruvia::detail::StaticRootAccess::revision(equivalentRoot));
+
+    auto clonedOptions = ruvia::detail::StaticRootAccess::options(root);
+    RUVIA_CHECK(clonedOptions.fileTypes.kind() == ruvia::StaticFileTypePolicy::Kind::kAll);
+
+    std::ofstream(dir / "new-file.txt") << "published on the next poll";
+    ruvia::StaticRoot refreshed(dir, std::move(clonedOptions));
+    RUVIA_CHECK(ruvia::detail::StaticRootAccess::fingerprint(root) != ruvia::detail::StaticRootAccess::fingerprint(refreshed));
+
+    struct AssetResult final {
+        ruvia::HttpStatusCode status;
+        std::string contentType;
+        std::string cacheControl;
+        std::string body;
+    };
+    const auto fetch = [&root](std::string_view path, const ruvia::DocumentRootRuntimeOptions* runtime) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        auto request = ruvia::detail::HttpRequestAccess::make();
+        ruvia::detail::HttpRequestAccess::reset(request);
+        ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
+        ruvia::detail::HttpRequestAccess::setTarget(request, path);
+        ruvia::detail::HttpRequestAccess::setPath(request, path);
+        ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+        ruvia::detail::RouteTable routes(memory.resource());
+        auto resolution = routes.resolve(request);
+        asio::io_context io;
+        auto binding = runtime == nullptr ? ruvia::detail::DocumentRootBinding::standalone(root) : ruvia::detail::DocumentRootBinding::configured(root, *runtime);
+        auto bufferedResult = runStaticCompressionTask(io, routes.dispatchBufferedResponse(request, resolution, memory, std::move(binding)));
+        if ((runtime != nullptr) != (bufferedResult.documentRoot() != nullptr)) {
+            throw std::logic_error("buffered dispatch returned an incorrect response origin");
+        }
+        auto response = std::move(bufferedResult).takeResponse();
+        return AssetResult{
+            response.status(),
+            std::string(response.header("Content-Type").value_or("")),
+            std::string(response.header("Cache-Control").value_or("")),
+            std::string(ruvia::detail::responseBody(response).bytes()),
+        };
+    };
+
+    const auto standaloneScript = fetch("/__ruvia/live-reload.js", nullptr);
+    RUVIA_CHECK_EQ(standaloneScript.status, ruvia::http_status::kNotFound);
+
+    const auto script = fetch("/__ruvia/live-reload.js", &runtimeOptions);
+    RUVIA_CHECK_EQ(script.status, ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(script.contentType, std::string("application/javascript; charset=UTF-8"));
+    RUVIA_CHECK_EQ(script.cacheControl, std::string("no-store"));
+    RUVIA_CHECK(script.body.find("/__ruvia/live-reload-version") != std::string::npos);
+
+    const auto version = fetch("/__ruvia/live-reload-version", &runtimeOptions);
+    RUVIA_CHECK_EQ(version.status, ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(version.contentType, std::string("text/plain; charset=UTF-8"));
+    RUVIA_CHECK_EQ(version.cacheControl, std::string("no-store"));
+    RUVIA_CHECK_EQ(version.body, std::to_string(ruvia::detail::StaticRootAccess::revision(root)));
+
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(document_root_binding_is_a_move_only_request_snapshot_lease) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "ruvia_static_binding_lease";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    std::ofstream(dir / "payload.txt") << "payload";
+
+    ruvia::StaticRootOptions options;
+    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    ruvia::StaticRoot root(dir, std::move(options));
+    ruvia::DocumentRootRuntimeOptions runtimeOptions;
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
+    ruvia::detail::HttpRequestAccess::setTarget(request, "/payload.txt");
+    ruvia::detail::HttpRequestAccess::setPath(request, "/payload.txt");
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+
+    ruvia::detail::RouteTable routes(memory.resource());
+    const auto resolution = routes.resolve(request);
+    auto binding = ruvia::detail::DocumentRootBinding::configured(root, runtimeOptions);
+    auto task = routes.dispatchBufferedResponse(request, resolution, memory, std::move(binding));
+    RUVIA_CHECK(ruvia::detail::StaticRootAccess::hasActiveBindings(root));
+    asio::io_context io;
+    auto result = runStaticCompressionTask(io, std::move(task));
+    RUVIA_CHECK(result.documentRoot() != nullptr);
+    RUVIA_CHECK(!ruvia::detail::StaticRootAccess::hasActiveBindings(root));
+
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(document_root_binding_counts_belong_to_the_bound_snapshot) {
+    namespace fs = std::filesystem;
+    const auto firstDir = fs::temp_directory_path() / "ruvia_static_binding_first";
+    const auto secondDir = fs::temp_directory_path() / "ruvia_static_binding_second";
+    fs::remove_all(firstDir);
+    fs::remove_all(secondDir);
+    fs::create_directories(firstDir);
+    fs::create_directories(secondDir);
+    std::ofstream(firstDir / "payload.txt") << "first";
+    std::ofstream(secondDir / "payload.txt") << "second";
+
+    ruvia::StaticRootOptions firstOptions;
+    firstOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
+    ruvia::StaticRoot first(firstDir, std::move(firstOptions));
+    ruvia::StaticRootOptions secondOptions;
+    secondOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
+    ruvia::StaticRoot second(secondDir, std::move(secondOptions));
+    ruvia::DocumentRootRuntimeOptions runtimeOptions;
+
+    {
+        auto firstBinding = ruvia::detail::DocumentRootBinding::configured(first, runtimeOptions);
+        RUVIA_CHECK(ruvia::detail::StaticRootAccess::hasActiveBindings(first));
+        RUVIA_CHECK(!ruvia::detail::StaticRootAccess::hasActiveBindings(second));
+        {
+            auto secondBinding = ruvia::detail::DocumentRootBinding::configured(second, runtimeOptions);
+            RUVIA_CHECK(ruvia::detail::StaticRootAccess::hasActiveBindings(first));
+            RUVIA_CHECK(ruvia::detail::StaticRootAccess::hasActiveBindings(second));
+        }
+        RUVIA_CHECK(!ruvia::detail::StaticRootAccess::hasActiveBindings(second));
+        RUVIA_CHECK(ruvia::detail::StaticRootAccess::hasActiveBindings(first));
+    }
+
+    RUVIA_CHECK(!ruvia::detail::StaticRootAccess::hasActiveBindings(first));
+    RUVIA_CHECK(!ruvia::detail::StaticRootAccess::hasActiveBindings(second));
+    fs::remove_all(firstDir);
+    fs::remove_all(secondDir);
 }
 
 RUVIA_TEST(static_file_replacement_cannot_reuse_indexed_metadata) {
@@ -906,6 +1482,14 @@ RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
         const std::string content(40, 'z');
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
+    {
+        std::ofstream out(dir / "gzip-only.txt", std::ios::binary | std::ios::trunc);
+        out << "identity";
+    }
+    {
+        std::ofstream out(dir / "gzip-only.txt.gz", std::ios::binary | std::ios::trunc);
+        out << "gzip";
+    }
     StaticRootOptions options;
     options.fileTypes = ruvia::StaticFileTypePolicy::all();
     StaticRoot root(dir, std::move(options));
@@ -915,7 +1499,7 @@ RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
         std::string vary;
         std::uint64_t size{0};
     };
-    const auto serve = [&root](std::string_view acceptEncoding) {
+    const auto serve = [&root](std::string_view relative, std::string_view acceptEncoding) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
@@ -926,45 +1510,106 @@ RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
             HttpRequestAccess::addHeader(request, HttpHeaderView{"Accept-Encoding", acceptEncoding}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kAcceptEncoding));
         }
         auto context = ContextAccess::make(memory, request);
-        const auto response = context.staticFile(root, "data.txt", "text/plain");
+        const auto response = context.staticFile(root, relative, "text/plain");
         const auto file = ruvia::detail::responseBody(response).file();
         return ServedRepresentation{.contentEncoding = std::string(response.header("Content-Encoding").value_or("")), .vary = std::string(response.header("Vary").value_or("")), .size = file.has_value() ? file->length() : 0};
     };
 
     // Accept-Encoding: gzip with a .gz sidecar present serves the gzip variant,
     // marked Content-Encoding: gzip and Vary: Accept-Encoding so a cache keys on it.
-    const auto gz = serve("gzip");
+    const auto gz = serve("data.txt", "gzip");
     RUVIA_CHECK_EQ(gz.contentEncoding, std::string("gzip"));
     RUVIA_CHECK_EQ(gz.size, std::uint64_t{20});
     RUVIA_CHECK(gz.vary.find("Accept-Encoding") != std::string_view::npos);
 
-    const auto br = serve("br");
+    const auto br = serve("data.txt", "br");
     RUVIA_CHECK_EQ(br.contentEncoding, std::string("br"));
     RUVIA_CHECK_EQ(br.size, std::uint64_t{30});
 
-    const auto zstd = serve("zstd");
+    const auto zstd = serve("data.txt", "zstd");
     RUVIA_CHECK_EQ(zstd.contentEncoding, std::string("zstd"));
     RUVIA_CHECK_EQ(zstd.size, std::uint64_t{40});
 
     // Equal quality uses the one canonical server preference order.
-    const auto tied = serve("gzip, zstd, br");
+    const auto tied = serve("data.txt", "gzip, zstd, br");
     RUVIA_CHECK_EQ(tied.contentEncoding, std::string("br"));
     RUVIA_CHECK_EQ(tied.size, std::uint64_t{30});
 
-    const auto prefersGzip = serve("gzip;q=1, br;q=0.5, zstd;q=0.25");
+    const auto prefersGzip = serve("data.txt", "gzip;q=1, br;q=0.5, zstd;q=0.25");
     RUVIA_CHECK_EQ(prefersGzip.contentEncoding, std::string("gzip"));
     RUVIA_CHECK_EQ(prefersGzip.size, std::uint64_t{20});
 
     // identity is implicitly q=1. A lower-quality gzip preference must leave
     // the original representation selected even when a sidecar exists.
-    const auto prefersIdentity = serve("gzip;q=0.5");
+    const auto prefersIdentity = serve("data.txt", "gzip;q=0.5");
     RUVIA_CHECK(prefersIdentity.contentEncoding.empty());
     RUVIA_CHECK_EQ(prefersIdentity.size, std::uint64_t{100});
 
     // Without Accept-Encoding the plain file is served, with no Content-Encoding.
-    const auto plain = serve("");
+    const auto plain = serve("data.txt", "");
     RUVIA_CHECK(plain.contentEncoding.empty());
     RUVIA_CHECK_EQ(plain.size, std::uint64_t{100});
+
+    // When the best client preference is unavailable on disk, the selector
+    // must choose the best existing sidecar rather than reimplementing q-value
+    // ranking in the static-file layer.
+    const auto missingBrotli = serve("gzip-only.txt", "br, gzip, identity;q=0");
+    RUVIA_CHECK_EQ(missingBrotli.contentEncoding, std::string("gzip"));
+    RUVIA_CHECK_EQ(missingBrotli.size, std::uint64_t{4});
+
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_file_rejects_a_stale_precompressed_sidecar) {
+    namespace fs = std::filesystem;
+    using ruvia::HttpHeaderView;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::RequestKnownHeader;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_stale_sidecar_dir";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    {
+        std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
+        out << "current identity";
+    }
+    {
+        std::ofstream out(dir / "data.txt.gz", std::ios::binary | std::ios::trunc);
+        out << "old gzip bytes";
+    }
+
+    std::error_code ec;
+    const auto identityTime = fs::last_write_time(dir / "data.txt", ec);
+    RUVIA_CHECK(!ec);
+    fs::last_write_time(dir / "data.txt.gz", identityTime - std::chrono::seconds(10), ec);
+    RUVIA_CHECK(!ec);
+
+    StaticRootOptions options;
+    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    StaticRoot root(dir, std::move(options));
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setMethod(request, "GET");
+    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Accept-Encoding", "gzip"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kAcceptEncoding));
+    auto context = ContextAccess::make(memory, request);
+    const auto response = context.staticFile(root, "data.txt", "text/plain");
+    const auto file = ruvia::detail::responseBody(response).file();
+
+    // The stale sidecar is not a representation of the current identity file;
+    // negotiation must fall back to the current file instead of serving old
+    // bytes under Content-Encoding: gzip.
+    RUVIA_CHECK(!response.header("Content-Encoding").has_value());
+    RUVIA_CHECK(file.has_value());
+    if (file.has_value()) {
+        RUVIA_CHECK_EQ(file->length(), std::uint64_t{std::string_view("current identity").size()});
+    }
 
     fs::remove_all(dir);
 }
@@ -1058,6 +1703,52 @@ RUVIA_TEST(static_root_rejects_empty_custom_mime_type) {
         rejected = true;
     }
     RUVIA_CHECK(rejected);
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_file_rejects_an_empty_accept_encoding_set) {
+    namespace fs = std::filesystem;
+    using ruvia::HttpHeaderView;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::RequestKnownHeader;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_no_acceptable_coding_dir";
+    fs::create_directories(dir);
+    std::ofstream(dir / "data.txt") << "content";
+    std::ofstream(dir / "data.txt.gz") << "compressed-content";
+    StaticRootOptions options;
+    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    StaticRoot root(dir, std::move(options));
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setMethod(request, "GET");
+    HttpRequestAccess::setTarget(request, "/data.txt");
+    HttpRequestAccess::setPath(request, "/data.txt");
+    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Accept-Encoding", "identity;q=0, *;q=0"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kAcceptEncoding));
+    auto context = ContextAccess::make(memory, request);
+
+    bool rejected = false;
+    try {
+        static_cast<void>(context.staticFile(root, "data.txt", "text/plain"));
+    } catch (const ruvia::HttpError& error) {
+        rejected = error.info().status() == ruvia::http_status::kNotAcceptable;
+    }
+    RUVIA_CHECK(rejected);
+
+    asio::io_context io;
+    ruvia::detail::RouteTable routes(memory.resource());
+    const auto resolution = routes.resolve(request);
+    auto routedResult = runStaticCompressionTask(io, routes.dispatchBufferedResponse(request, resolution, memory, ruvia::detail::DocumentRootBinding::standalone(root)));
+    RUVIA_CHECK(routedResult.application() != nullptr);
+    auto routed = std::move(routedResult).takeResponse();
+    RUVIA_CHECK_EQ(routed.status(), ruvia::http_status::kNotAcceptable);
     fs::remove_all(dir);
 }
 

@@ -12,7 +12,6 @@ EventLoop requireEventLoop(EventLoop loop) {
     return loop;
 }
 
-#ifdef RUVIA_ENABLE_DATABASE
 [[nodiscard]] DbConfig cloneDbConfig(const DbConfig& source, std::pmr::memory_resource* resource) {
     return DbConfig{
         .driver = source.driver,
@@ -28,7 +27,6 @@ EventLoop requireEventLoop(EventLoop loop) {
         .acquireTimeout = source.acquireTimeout,
     };
 }
-#endif
 
 std::pmr::vector<DbDefinition> makeDatabaseDefinitions(const DataAccessOptions& options, std::pmr::memory_resource* resource) {
     std::pmr::vector<DbDefinition> definitions(resource);
@@ -43,7 +41,6 @@ std::pmr::vector<DbDefinition> makeDatabaseDefinitions(const DataAccessOptions& 
     return definitions;
 }
 
-#ifdef RUVIA_ENABLE_REDIS
 [[nodiscard]] RedisConfig cloneRedisConfig(const RedisConfig& source, std::pmr::memory_resource* resource) {
     return RedisConfig{
         .host = std::pmr::string(source.host, resource),
@@ -61,7 +58,6 @@ std::pmr::vector<DbDefinition> makeDatabaseDefinitions(const DataAccessOptions& 
         .keepAlive = source.keepAlive,
     };
 }
-#endif
 
 std::pmr::vector<RedisDefinition> makeRedisDefinitions(const DataAccessOptions& options, std::pmr::memory_resource* resource) {
     std::pmr::vector<RedisDefinition> definitions(resource);

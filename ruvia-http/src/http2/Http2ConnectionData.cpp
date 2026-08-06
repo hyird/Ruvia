@@ -1,6 +1,8 @@
 #include "ruvia/http/detail/http2/Http2Connection.h"
 
 #include <algorithm>
+#include <exception>
+#include <stdexcept>
 #include <utility>
 
 #include "ruvia/http/detail/http2/flow/Http2FlowControl.h"
@@ -30,34 +32,57 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         appendGoaway(Http2ErrorCode::kProtocolError, "invalid DATA padding");
         return false;
     }
+
     const auto flowBytes = static_cast<std::int32_t>(payload.size());
-    if (http2DebitConnectionReceiveWindow(connectionReceiveWindow_, flowBytes) == Http2ReceiveWindowDebitStatus::kExceeded) {
+    // Feed retries the complete frame when a PMR allocation throws. Do not debit the
+    // connection window until the selected branch has reserved all of its output and
+    // event capacity; otherwise a retry would observe a half-processed DATA frame.
+    if (flowBytes > connectionReceiveWindow_) {
         appendGoaway(Http2ErrorCode::kFlowControlError, "connection flow-control window exceeded");
         return false;
     }
 
+    const bool endStream = (header.flags & kHttp2FlagEndStream) != 0;
+    const auto reserveEvents = [this](std::size_t count) {
+        reserveEventSlots(count);
+    };
+    const auto reserveConsumedCredit = [this](Http2StreamState* creditStream, std::uint32_t bytes) {
+        if (bytes == 0) {
+            return;
+        }
+        const bool streamCanReceive = creditStream != nullptr && !http2RemotePeerHalfClosed(*creditStream) && !creditStream->isAborted();
+        const auto connectionReady = connectionReceiveCredit_.readyAfter(bytes);
+        const auto streamReady = streamCanReceive && creditStream->receiveWindowCredit().readyAfter(bytes);
+        const auto frameCount = static_cast<std::size_t>(connectionReady) + static_cast<std::size_t>(streamReady);
+        if (frameCount != 0) {
+            output_.reserveAdditional(frameCount * kHttp2WindowUpdateFrameBytes);
+        }
+    };
+    const auto reserveStreamError = [this, &reserveEvents]() {
+        reserveEvents(1);
+        // RST_STREAM plus at most one WINDOW_UPDATE from closeStream's flushed
+        // stream debt and one from this frame's dropped connection credit.
+        output_.reserveAdditional(kHttp2FrameHeaderBytes + 4 + 2 * kHttp2WindowUpdateFrameBytes);
+    };
+    const auto debitConnection = [this, flowBytes]() noexcept {
+        connectionReceiveWindow_ -= flowBytes;
+    };
+
     auto* stream = findStream(header.streamId);
     if (wasClosedByPeerReset(header.streamId, stream)) {
-        // This peer's RST_STREAM and later DATA are ordered on the same
-        // connection. Unlike DATA that was already in flight when WE sent a
-        // reset, this cannot be a state-view race. Do not answer with another
-        // stream frame; use the same strict closed-state verdict for retained
-        // (pinned) and already-released storage.
+        // This peer's RST_STREAM and later DATA are ordered on the same connection.
+        // Unlike DATA that was already in flight when we sent a reset, this cannot be
+        // a state-view race; keep the strict closed-state verdict.
         appendGoaway(Http2ErrorCode::kStreamClosed, "DATA after peer RST_STREAM");
         return false;
     }
     if (stream == nullptr) {
         const auto closeSource = closedStreams_.source(header.streamId);
-        if (closeSource == Http2StreamCloseSource::kPeerGoaway) {
-            releaseDroppedDataConnectionWindow(flowBytes);
-            return true;
-        }
-        if (!isIdleStreamId(header.streamId)) {
-            // A locally reset stream can receive DATA that was already in flight.
-            // Minimal processing still debits connection flow control, then drops
-            // it without manufacturing an illegal second stream frame. Applying
-            // this tolerant rule to released closed streams also avoids coupling
-            // wire behavior to the bounded close-history lifetime.
+        if (closeSource == Http2StreamCloseSource::kPeerGoaway || !isIdleStreamId(header.streamId)) {
+            // A dropped DATA frame still consumes connection flow control, but has no
+            // stream window or application event to publish.
+            reserveConsumedCredit(nullptr, static_cast<std::uint32_t>(flowBytes));
+            debitConnection();
             releaseDroppedDataConnectionWindow(flowBytes);
             return true;
         }
@@ -65,123 +90,159 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         return false;
     }
     if (http2StreamIsClosed(*stream)) {
+        reserveConsumedCredit(nullptr, static_cast<std::uint32_t>(flowBytes));
+        debitConnection();
         releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }
+
+    const auto resetStream = [&](Http2ErrorCode error, bool debitStreamWindow) {
+        reserveStreamError();
+        debitConnection();
+        if (debitStreamWindow) {
+            (void)stream->consumeReceiveWindow(flowBytes);
+        }
+        output_.appendRstStream(header.streamId, error);
+        closeStream(header.streamId, Http2StreamCloseSource::kLocal, error);
+        releaseDroppedDataConnectionWindow(flowBytes);
+    };
+
     const auto& remote = stream->remoteReceive();
     if (remote.headPending() != nullptr || remote.headEndStreamPending() != nullptr) {
-        output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-        closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
-        releaseDroppedDataConnectionWindow(flowBytes);
+        resetStream(Http2ErrorCode::kProtocolError, false);
         return true;
     }
     if (remote.endStream() != nullptr || remote.connectPendingEndStream() != nullptr) {
-        // END_STREAM closes only the peer's send half. The opposite half of an
-        // accepted CONNECT tunnel remains usable, but another DATA frame from this
-        // peer is a frame on a half-closed (remote) stream (RFC 9113 5.1/8.5).
-        output_.appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-        closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kStreamClosed);
-        releaseDroppedDataConnectionWindow(flowBytes);
+        // END_STREAM closes only the peer's send half. Another DATA frame from this
+        // peer is nevertheless a frame on a half-closed (remote) stream.
+        resetStream(Http2ErrorCode::kStreamClosed, false);
         return true;
     }
+
     const bool pendingConnectControl = remote.connectPending() != nullptr;
     const bool rejectedConnectTerminal = remote.connectRejectedAwaitingEndStream() != nullptr;
     const bool tunnelData = remote.tunnelOpen() != nullptr;
     const bool contentData = remote.contentOpen() != nullptr;
     const bool metadataOnlyContent = contentData && (stream->remoteContent().metadataOnlyWithoutLength() != nullptr || stream->remoteContent().metadataOnlyKnownLength() != nullptr);
     if (!pendingConnectControl && !rejectedConnectTerminal && !tunnelData && !contentData) {
-        output_.appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-        closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kStreamClosed);
-        releaseDroppedDataConnectionWindow(flowBytes);
+        resetStream(Http2ErrorCode::kStreamClosed, false);
         return true;
     }
 
-    if (http2DebitStreamReceiveWindow(*stream, flowBytes) == Http2ReceiveWindowDebitStatus::kExceeded) {
-        output_.appendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
-        closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kFlowControlError);
-        releaseDroppedDataConnectionWindow(flowBytes);
+    // Check the stream window without mutating it so a flow-control reset can be
+    // fully reserved before either receive window is consumed.
+    if (flowBytes > stream->receiveWindow()) {
+        resetStream(Http2ErrorCode::kFlowControlError, false);
         return true;
     }
 
     if (pendingConnectControl || rejectedConnectTerminal) {
-        // RFC 9110 §9.3.6 says CONNECT has no request content, while RFC 9113 §8.1
-        // still requires a final frame carrying END_STREAM. Empty DATA is therefore
-        // framing-only both before a decision and after rejection; never surface it
-        // as tunnel/content bytes. Padding remains flow-controlled.
+        // CONNECT has no request content. Empty DATA remains framing-only until its
+        // END_STREAM, while padding still consumes both flow-control windows.
         if (!data.empty()) {
-            output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
-            releaseDroppedDataConnectionWindow(flowBytes);
+            resetStream(Http2ErrorCode::kProtocolError, true);
             return true;
         }
+        reserveConsumedCredit(endStream ? nullptr : stream, static_cast<std::uint32_t>(flowBytes));
+        debitConnection();
+        (void)stream->consumeReceiveWindow(flowBytes);
         if (flowBytes > 0) {
-            queueConsumedDataCredit((header.flags & kHttp2FlagEndStream) == 0 ? stream : nullptr, static_cast<std::uint32_t>(flowBytes));
+            queueConsumedDataCredit(endStream ? nullptr : stream, static_cast<std::uint32_t>(flowBytes));
         }
-        if ((header.flags & kHttp2FlagEndStream) == 0) {
+        if (!endStream) {
             return true;
         }
         const bool remoteFinished = pendingConnectControl ? stream->finishRemotePendingConnect() : stream->finishRemoteRejectedConnect();
         if (!remoteFinished) {
-            output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
-            return true;
+            // The selected remote alternative is exclusive and the transition is
+            // noexcept; reaching this branch means an internal invariant failed.
+            std::terminate();
         }
         releaseLocalRequestStreamIfClosed(*stream);
         return true;
     }
 
+    // Evaluate content accounting on a detached state first. A rejected DATA frame
+    // must reserve its reset before the live content counter is changed.
+    Http2RemoteContentAccountingResult contentAccounting = Http2RemoteContentAccountingResult::kAccepted;
+    Http2RemoteContentState candidateContent = stream->remoteContent();
     if (contentData) {
-        switch (stream->accountRemoteContent(data.size())) {
-            case Http2RemoteContentAccountingResult::kAccepted:
-                break;
-            case Http2RemoteContentAccountingResult::kCounterOverflow:
-                output_.appendRstStream(header.streamId, Http2ErrorCode::kCancel);
-                closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kCancel);
-                releaseDroppedDataConnectionWindow(flowBytes);
-                return true;
-            case Http2RemoteContentAccountingResult::kDeclaredLengthExceeded:
-            case Http2RemoteContentAccountingResult::kContentForbidden:
-                output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-                closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
-                releaseDroppedDataConnectionWindow(flowBytes);
-                return true;
+        contentAccounting = candidateContent.account(data.size());
+        if (contentAccounting == Http2RemoteContentAccountingResult::kCounterOverflow) {
+            resetStream(Http2ErrorCode::kCancel, true);
+            return true;
         }
-    }
-    const bool deliverData = !metadataOnlyContent && !data.empty();
-    if (flowBytes > 0) {
-        if (deliverData) {
-            // The receiver advertises new capacity only after the event owner has
-            // consumed or copied these bytes. This applies equally to HTTP content
-            // and CONNECT tunnel DATA; immediate credit would disable backpressure
-            // before the external runtime can select its storage policy.
-            stream->addWindowDebt(static_cast<std::uint32_t>(flowBytes));
-        } else {
-            // Empty DATA (including padding-only DATA) gives the owner no content to
-            // retain. Metadata-only empty frames likewise need no application ack,
-            // but their credit is still batched to prevent per-frame amplification.
-            queueConsumedDataCredit((header.flags & kHttp2FlagEndStream) == 0 ? stream : nullptr, static_cast<std::uint32_t>(flowBytes));
+        if (contentAccounting != Http2RemoteContentAccountingResult::kAccepted) {
+            resetStream(Http2ErrorCode::kProtocolError, true);
+            return true;
+        }
+        if (endStream && !candidateContent.terminalLengthValid()) {
+            // Preserve the already-received body chunk before reporting the
+            // Content-Length mismatch. The body event and the close event are one
+            // pre-reserved publication batch; the close path flushes the matching
+            // receive debt, so this branch must not return the same bytes again via
+            // releaseDroppedDataConnectionWindow().
+            reserveStreamError();
+            if (!data.empty()) {
+                reserveEvents(1);
+            } else if (flowBytes > 0) {
+                reserveConsumedCredit(nullptr, static_cast<std::uint32_t>(flowBytes));
+            }
+            debitConnection();
+            (void)stream->consumeReceiveWindow(flowBytes);
+            (void)stream->accountRemoteContent(data.size());
+            if (flowBytes > 0) {
+                if (!data.empty()) {
+                    stream->addWindowDebt(static_cast<std::uint32_t>(flowBytes));
+                    events_.push_back(Http2Event::messageBodyChunk(header.streamId, data));
+                } else {
+                    queueConsumedDataCredit(nullptr, static_cast<std::uint32_t>(flowBytes));
+                }
+            }
+            output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
+            return true;
         }
     }
 
-    // sans-I/O: hand only actual body bytes to the owner. Empty and padding-only
-    // DATA frames still participate in framing, END_STREAM, and flow control, but
-    // exposing them as empty chunks would create no-progress queue wakeups and let
-    // a frame flood allocate one application event per nine wire octets.
-    // Buffered vs streaming delivery and product size limits remain owner policy.
+    const bool deliverData = !metadataOnlyContent && !data.empty();
+    if (deliverData) {
+        reserveEvents(endStream ? 2 : 1);
+    } else if (endStream) {
+        reserveEvents(1);
+    }
+    if (!deliverData && flowBytes > 0) {
+        reserveConsumedCredit(endStream ? nullptr : stream, static_cast<std::uint32_t>(flowBytes));
+    }
+
+    debitConnection();
+    (void)stream->consumeReceiveWindow(flowBytes);
+    if (contentData) {
+        (void)stream->accountRemoteContent(data.size());
+    }
+    if (flowBytes > 0) {
+        if (deliverData) {
+            // Advertise new capacity only after the owner has consumed or copied the
+            // borrowed event bytes; this preserves backpressure for content and tunnel
+            // data alike.
+            stream->addWindowDebt(static_cast<std::uint32_t>(flowBytes));
+        } else {
+            // Empty/padding-only DATA has no application event, so its credit is
+            // returned immediately in the same bounded batch.
+            queueConsumedDataCredit(endStream ? nullptr : stream, static_cast<std::uint32_t>(flowBytes));
+        }
+    }
+
+    // Hand only actual body bytes to the owner. Empty and padding-only DATA still
+    // participate in framing, END_STREAM, and flow control without creating a
+    // no-progress event for every tiny wire frame.
     if (deliverData) {
         events_.push_back(tunnelData ? Http2Event::tunnelData(header.streamId, data) : Http2Event::messageBodyChunk(header.streamId, data));
     }
-    if ((header.flags & kHttp2FlagEndStream) != 0) {
-        if (contentData && !stream->remoteContent().terminalLengthValid()) {
-            output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
-            return true;
-        }
+    if (endStream) {
         const bool remoteFinished = tunnelData ? stream->finishRemoteTunnel() : stream->finishRemoteContent();
         if (!remoteFinished) {
-            output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
-            return true;
+            std::terminate();
         }
         events_.push_back(tunnelData ? Http2Event::tunnelEnd(header.streamId) : Http2Event::messageEnd(header.streamId));
         releaseLocalRequestStreamIfClosed(*stream);

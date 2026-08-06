@@ -280,13 +280,20 @@ HttpResponse Context::file(const std::filesystem::path& path, std::string_view c
             .precomputedEtag = {},
             .precomputedLastModified = {},
             .contentCoding = detail::HttpContentCoding::kIdentity,
-            // Context::file serves one path with no Accept-Encoding negotiation.
-            .negotiatesEncoding = false,
+            // A server-enabled static-file policy may transform this file in
+            // the protocol session after the handler returns. Standalone
+            // Context::file keeps its historical byte-for-byte behavior.
+            .negotiatesEncoding = deferredStaticFileCompression_,
         },
         applyState);
 }
 
 HttpResponse Context::staticFile(const StaticRoot& root, std::string_view relativePath, std::string_view contentType) const {
+    const auto mode = deferredStaticFileCompression_ ? detail::StaticFileSelectionMode::kAllowDeferredCompression : detail::StaticFileSelectionMode::kStrict;
+    return staticFile(root, relativePath, contentType, mode);
+}
+
+HttpResponse Context::staticFile(const StaticRoot& root, std::string_view relativePath, std::string_view contentType, detail::StaticFileSelectionMode mode) const {
     // Percent-decode the request path before matching it against the static index,
     // whose keys are the real (decoded) on-disk names -- so a file whose name holds
     // an encoded octet (a space "%20", UTF-8, parentheses, ...) resolves instead of
@@ -326,8 +333,11 @@ HttpResponse Context::staticFile(const StaticRoot& root, std::string_view relati
 
     // Serve a precompressed sidecar when the client accepts one; the bytes and
     // validators come from the variant, the Content-Type from the base entry.
-    const auto served = selectStaticFileRepresentation(root, relative, request_, resource(), baseEntry);
-    const auto& servedEntry = served.entry();
+    const auto served = selectStaticFileRepresentation(root, relative, request_, resource(), baseEntry, mode);
+    if (!served.has_value()) {
+        throw HttpError(ruvia::http_status::kNotAcceptable, "not_acceptable", "no acceptable response content coding");
+    }
+    const auto& servedEntry = served->entry();
 
     const auto applyState = [this](HttpResponse& response, std::optional<HttpStatusCode> statusCode) { applyResponseState(response, statusCode); };
     return makeFileResponse(*this, request_,
@@ -342,7 +352,7 @@ HttpResponse Context::staticFile(const StaticRoot& root, std::string_view relati
             .enableValidators = baseEntry.validatorsEnabled(),
             .precomputedEtag = servedEntry.etag(),
             .precomputedLastModified = servedEntry.lastModified(),
-            .contentCoding = served.contentCoding(),
+            .contentCoding = served->contentCoding(),
             // staticFile negotiates the representation by Accept-Encoding.
             .negotiatesEncoding = true,
         },

@@ -7,6 +7,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <system_error>
 
@@ -24,8 +25,6 @@ SetCookiePlan::SetCookiePlan(std::string_view name, std::string_view value, cons
       httpOnly_(options.httpOnly),
       secure_(options.secure),
       partitioned_(options.partitioned) {
-    validateCookie(name, value, options);
-
     if (options.expires.has_value()) {
         const auto expiresTime = std::chrono::system_clock::to_time_t(*options.expires);
         const auto utc = httpUtcTm(expiresTime);
@@ -36,34 +35,56 @@ SetCookiePlan::SetCookiePlan(std::string_view name, std::string_view value, cons
         maxAgeSize_ = httpUnsignedDecimalSize(maxAgeValue_);
     }
 
-    size_ = prefixText_.size() + name_.size() + 1 + value_.size();
+    const auto addSize = [this](std::size_t amount) {
+        if (amount > std::numeric_limits<std::size_t>::max() - size_) {
+            throw std::length_error("Set-Cookie value is too large");
+        }
+        size_ += amount;
+    };
+
+    // Compute the complete wire length before validating the borrowed views.
+    // This keeps a hostile oversized view from reaching a grammar scan and
+    // prevents the later uninitialized response-header write from receiving a
+    // wrapped length.
+    addSize(prefixText_.size());
+    addSize(name_.size());
+    addSize(1);
+    addSize(value_.size());
     if (!path_.empty()) {
-        size_ += std::string_view("; Path=").size() + path_.size();
+        addSize(std::string_view("; Path=").size());
+        addSize(path_.size());
     }
     if (!domain_.empty()) {
-        size_ += std::string_view("; Domain=").size() + domain_.size();
+        addSize(std::string_view("; Domain=").size());
+        addSize(domain_.size());
     }
     if (hasMaxAge_) {
-        size_ += std::string_view("; Max-Age=").size() + maxAgeSize_;
+        addSize(std::string_view("; Max-Age=").size());
+        addSize(maxAgeSize_);
     }
     if (expiresSize_ != 0) {
-        size_ += std::string_view("; Expires=").size() + expiresSize_;
+        addSize(std::string_view("; Expires=").size());
+        addSize(expiresSize_);
     }
     if (httpOnly_) {
-        size_ += std::string_view("; HttpOnly").size();
+        addSize(std::string_view("; HttpOnly").size());
     }
     if (secure_) {
-        size_ += std::string_view("; Secure").size();
+        addSize(std::string_view("; Secure").size());
     }
     if (!sameSiteText_.empty()) {
-        size_ += std::string_view("; SameSite=").size() + sameSiteText_.size();
+        addSize(std::string_view("; SameSite=").size());
+        addSize(sameSiteText_.size());
     }
     if (!priorityText_.empty()) {
-        size_ += std::string_view("; Priority=").size() + priorityText_.size();
+        addSize(std::string_view("; Priority=").size());
+        addSize(priorityText_.size());
     }
     if (partitioned_) {
-        size_ += std::string_view("; Partitioned").size();
+        addSize(std::string_view("; Partitioned").size());
     }
+
+    validateCookie(name, value, options);
 }
 
 void SetCookiePlan::write(char* cursor) const {

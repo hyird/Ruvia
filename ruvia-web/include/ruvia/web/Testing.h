@@ -176,6 +176,10 @@ public:
 
     TestApp& onError(HttpErrorHandler handler);
     TestApp& notFound(HttpNotFoundHandler handler);
+    // Prefixes use the same segment and trailing-slash normalization as App;
+    // duplicate normalized registrations throw std::invalid_argument rather
+    // than allowing production and in-memory tests to choose different
+    // handlers by call order.
     TestApp& onError(std::string_view prefix, HttpErrorHandler handler);
     TestApp& notFound(std::string_view prefix, HttpNotFoundHandler handler);
 
