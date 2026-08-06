@@ -27,11 +27,11 @@ class RedisZScanResult;
 
 struct RedisConfig {
     // Host name or unbracketed address only; keep the port in port.
-    std::pmr::string host{"127.0.0.1"};
+    std::string host{"127.0.0.1"};
     // Must be non-zero.
     std::uint16_t port{6379};
-    std::pmr::string username;
-    std::pmr::string password;
+    std::string username;
+    std::string password;
     std::uint32_t database{0};
     // Must be greater than zero.
     std::size_t poolSizePerWorker{4};
@@ -97,20 +97,70 @@ struct RedisSetOptions final {
     bool returnPrevious{false};
 };
 
-struct RedisScanOptions {
-    // A scan options value may be retained before the command copies its
-    // arguments. Keep MATCH zero-copy while rejecting owning-string rvalues
-    // that would leave a saved options value with an already-dangling view.
-    std::uint64_t cursor{0};
-    ::ruvia::BorrowedText match;
-    std::optional<std::uint64_t> count;
-};
-
 namespace detail {
 
 struct RedisTypesAccess;
 
 }  // namespace detail
+
+class RedisScanCursor final {
+public:
+    constexpr RedisScanCursor() noexcept = default;
+    explicit constexpr RedisScanCursor(std::uint64_t value) noexcept
+        : value_(value) {}
+
+    [[nodiscard]] static constexpr RedisScanCursor start() noexcept {
+        return RedisScanCursor{};
+    }
+
+    [[nodiscard]] constexpr std::uint64_t value() const noexcept {
+        return value_;
+    }
+
+    [[nodiscard]] constexpr bool finished() const noexcept {
+        return value_ == 0;
+    }
+
+    friend constexpr bool operator==(RedisScanCursor, RedisScanCursor) noexcept = default;
+
+private:
+    std::uint64_t value_{0};
+};
+
+enum class RedisTtlState : std::uint8_t {
+    kMissing,
+    kPersistent,
+    kExpiring,
+};
+
+class RedisTtl final {
+public:
+    [[nodiscard]] constexpr RedisTtlState state() const noexcept {
+        return state_;
+    }
+
+    [[nodiscard]] constexpr std::optional<std::chrono::milliseconds> remaining() const noexcept {
+        return remaining_;
+    }
+
+private:
+    friend struct detail::RedisTypesAccess;
+
+    constexpr RedisTtl(RedisTtlState state, std::optional<std::chrono::milliseconds> remaining) noexcept
+        : state_(state), remaining_(remaining) {}
+
+    RedisTtlState state_;
+    std::optional<std::chrono::milliseconds> remaining_;
+};
+
+struct RedisScanOptions {
+    // A scan options value may be retained before the command copies its
+    // arguments. Keep MATCH zero-copy while rejecting owning-string rvalues
+    // that would leave a saved options value with an already-dangling view.
+    RedisScanCursor cursor;
+    ::ruvia::BorrowedText match;
+    std::optional<std::uint64_t> count;
+};
 
 class RedisKeyValue final {
 public:
@@ -175,7 +225,7 @@ private:
 
 class RedisScanResult final {
 public:
-    [[nodiscard]] std::uint64_t cursor() const noexcept {
+    [[nodiscard]] RedisScanCursor cursor() const noexcept {
         return cursor_;
     }
 
@@ -190,13 +240,13 @@ private:
     explicit RedisScanResult(std::pmr::memory_resource* resource)
         : values_(detail::pmrResourceOrDefault(resource)) {}
 
-    std::uint64_t cursor_{0};
+    RedisScanCursor cursor_;
     std::pmr::vector<std::pmr::string> values_;
 };
 
 class RedisHashScanResult final {
 public:
-    [[nodiscard]] std::uint64_t cursor() const noexcept {
+    [[nodiscard]] RedisScanCursor cursor() const noexcept {
         return cursor_;
     }
 
@@ -211,13 +261,13 @@ private:
     explicit RedisHashScanResult(std::pmr::memory_resource* resource)
         : entries_(detail::pmrResourceOrDefault(resource)) {}
 
-    std::uint64_t cursor_{0};
+    RedisScanCursor cursor_;
     std::pmr::vector<RedisKeyValue> entries_;
 };
 
 class RedisZScanResult final {
 public:
-    [[nodiscard]] std::uint64_t cursor() const noexcept {
+    [[nodiscard]] RedisScanCursor cursor() const noexcept {
         return cursor_;
     }
 
@@ -232,18 +282,13 @@ private:
     explicit RedisZScanResult(std::pmr::memory_resource* resource)
         : entries_(detail::pmrResourceOrDefault(resource)) {}
 
-    std::uint64_t cursor_{0};
+    RedisScanCursor cursor_;
     std::pmr::vector<RedisScoredValue> entries_;
 };
 
 namespace detail {
 
 inline constexpr std::string_view kDefaultRedisAlias = "default";
-
-struct RedisDefinition final {
-    std::pmr::string alias;
-    RedisConfig config;
-};
 
 class RedisPool;
 class RedisRegistry;

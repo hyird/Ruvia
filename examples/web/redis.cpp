@@ -19,7 +19,7 @@
 
 namespace {
 
-void assignIfPresent(std::pmr::string& target, std::optional<std::string_view> value) {
+void assignIfPresent(std::string& target, std::optional<std::string_view> value) {
     if (value) {
         target.assign(value->data(), value->size());
     }
@@ -53,6 +53,21 @@ void appendSigned(std::pmr::string& output, std::int64_t value) {
 
 void appendBool(std::pmr::string& output, bool value) {
     output.append(value ? "true" : "false");
+}
+
+void appendTtl(std::pmr::string& output, const ruvia::RedisTtl& ttl) {
+    switch (ttl.state()) {
+        case ruvia::RedisTtlState::kMissing:
+            output.append("missing");
+            break;
+        case ruvia::RedisTtlState::kPersistent:
+            output.append("persistent");
+            break;
+        case ruvia::RedisTtlState::kExpiring:
+            appendSigned(output, ttl.remaining()->count());
+            output.append("ms");
+            break;
+    }
 }
 
 class RedisController final : public ruvia::Controller<RedisController> {
@@ -123,9 +138,9 @@ public:
         body.append("\ntype=");
         body.append(type);
         body.append("\nttl=");
-        appendSigned(body, ttl);
+        appendTtl(body, ttl);
         body.append("\npttl=");
-        appendSigned(body, pttl);
+        appendTtl(body, pttl);
         body.append("\npersisted=");
         appendBool(body, persisted);
         body.push_back('\n');
@@ -418,5 +433,5 @@ int main() {
     auto& app = ruvia::app();
     app.loadDotenv();
     auto config = redisConfig(app.env());
-    app.useRedis(config).useRedis("cache", std::move(config)).setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))).setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setSignalShutdown(true).run();
+    app.useRedis(config).useRedis("cache", std::move(config)).setListenAddress("0.0.0.0").setListeners({ruvia::ListenerConfig::http(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))}).setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setSignalShutdown(true).run();
 }

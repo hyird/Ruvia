@@ -53,10 +53,10 @@ public:
     ScopedOperation<void> rename(std::string_view key, std::string_view newKey) const;
     ScopedOperation<bool> renameNx(std::string_view key, std::string_view newKey) const;
     ScopedOperation<bool> expire(std::string_view key, std::chrono::seconds ttl) const;
-    ScopedOperation<bool> expireAt(std::string_view key, std::chrono::seconds unixTime) const;
+    ScopedOperation<bool> expireAt(std::string_view key, std::chrono::system_clock::time_point expiresAt) const;
     ScopedOperation<bool> persist(std::string_view key) const;
-    ScopedOperation<std::int64_t> ttl(std::string_view key) const;
-    ScopedOperation<std::int64_t> pttl(std::string_view key) const;
+    ScopedOperation<RedisTtl> ttl(std::string_view key) const;
+    ScopedOperation<RedisTtl> pttl(std::string_view key) const;
     ScopedOperation<std::int64_t> incr(std::string_view key) const;
     ScopedOperation<std::optional<std::pmr::string>> hget(std::string_view key, std::string_view field) const;
     ScopedOperation<std::int64_t> hset(std::string_view key, std::string_view field, std::string_view value) const;

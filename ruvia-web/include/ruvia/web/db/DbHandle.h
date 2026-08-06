@@ -20,10 +20,10 @@ public:
     DbHandle(const DbHandle& other) noexcept;
     DbHandle& operator=(const DbHandle&) = delete;
 
-    ScopedOperation<DbQueryResult> query(std::string_view sql, std::span<const DbValue> params = {}) const;
-    ScopedOperation<DbQueryResult> query(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
-    ScopedOperation<DbQueryResult> execute(std::string_view sql, std::span<const DbValue> params = {}) const;
-    ScopedOperation<DbQueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
+    ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {}) const;
+    ScopedOperation<DbRows> query(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
+    ScopedOperation<DbExecResult> execute(std::string_view sql, std::span<const DbValue> params = {}) const;
+    ScopedOperation<DbExecResult> execute(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
     ScopedOperation<DbStreamResult> queryStream(std::string_view sql, std::span<const DbValue> params = {}) const;
     ScopedOperation<DbStreamResult> queryStream(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
 
@@ -37,14 +37,14 @@ public:
     // span instead; a span cannot construct a DbValue, so it never reaches here.
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbQueryResult> query(std::string_view sql, Params&&... params) const {
+    [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, Params&&... params) const {
         const DbValue values[]{DbValue(std::forward<Params>(params))...};
         return query(sql, std::span<const DbValue>(values));
     }
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbQueryResult> execute(std::string_view sql, Params&&... params) const {
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, Params&&... params) const {
         const DbValue values[]{DbValue(std::forward<Params>(params))...};
         return execute(sql, std::span<const DbValue>(values));
     }
@@ -61,11 +61,11 @@ public:
     // alone, so the error names the offending call.
     template <typename... Params>
         requires detail::DbTemporaryOwningParameterPack<Params...>
-    ScopedOperation<DbQueryResult> query(std::string_view, Params&&...) const = delete;
+    ScopedOperation<DbRows> query(std::string_view, Params&&...) const = delete;
 
     template <typename... Params>
         requires detail::DbTemporaryOwningParameterPack<Params...>
-    ScopedOperation<DbQueryResult> execute(std::string_view, Params&&...) const = delete;
+    ScopedOperation<DbExecResult> execute(std::string_view, Params&&...) const = delete;
 
     template <typename... Params>
         requires detail::DbTemporaryOwningParameterPack<Params...>
@@ -77,7 +77,8 @@ private:
     friend class detail::DbRegistry;
 
     DbHandle(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;
-    static Task<DbQueryResult> executePrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
+    static Task<DbRows> queryPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
+    static Task<DbExecResult> executePrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     static Task<DbStreamResult> queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope);
     static Task<DbTransaction> beginTransactionPrepared(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope);
 

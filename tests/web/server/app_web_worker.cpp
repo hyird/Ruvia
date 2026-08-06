@@ -78,7 +78,7 @@ int main() {
     std::vector<ruvia::WebWorkerHandle> workers;
 
     app.setListenAddress("127.0.0.1")
-        .setServerTopology(ruvia::ServerTopology::http(availablePort()))
+        .setListeners({ruvia::ListenerConfig::http(availablePort())})
         .setWorkersPerListener(2)
         .setWorkerMailboxCapacity(8)
         .onStop([&] {

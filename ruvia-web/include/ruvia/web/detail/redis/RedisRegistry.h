@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/redis/Redis.h"
+#include "ruvia/web/detail/redis/RedisConfigStorage.h"
 
 #ifndef RUVIA_ENABLE_REDIS
 
@@ -74,7 +75,7 @@ inline constexpr std::size_t kRedisReadBufferBytes = 8192;
 
 class RedisPool final {
 public:
-    RedisPool(asio::io_context& ioContext, RedisConfig config, std::pmr::memory_resource* resource = nullptr);
+    RedisPool(asio::io_context& ioContext, RedisConfigStorage config, std::pmr::memory_resource* resource = nullptr);
     ~RedisPool();
 
     RedisPool(const RedisPool&) = delete;
@@ -146,7 +147,7 @@ private:
     Task<std::error_code> asyncSocketWrite(Connection& connection, const OperationTimeout& timeout);
     Task<AsioCompletion<std::size_t>> asyncSocketReadSome(Connection& connection, std::span<char> buffer, const OperationTimeout& timeout);
     asio::io_context& ioContext_;
-    RedisConfig config_;
+    RedisConfigStorage config_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Connection> connections_;
     PoolLeaseScheduler scheduler_;

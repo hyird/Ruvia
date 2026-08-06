@@ -203,38 +203,30 @@ DbRow::OwnedFields& DbRow::ownedFields() noexcept {
     return std::get<OwnedFields>(storage_);
 }
 
-DbQueryResult::DbQueryResult(std::pmr::memory_resource* resource)
-    : DbQueryResult(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+DbRows::DbRows(std::pmr::memory_resource* resource)
+    : DbRows(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
 
-DbQueryResult::DbQueryResult(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+DbRows::DbRows(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
     : rows_(resource),
       fields_(resource) {}
 
-DbQueryResult::DbQueryResult(DbQueryResult&& other) noexcept
+DbRows::DbRows(DbRows&& other) noexcept
     : rows_(std::move(other.rows_)),
       fields_(std::move(other.fields_)),
       affectedRows_(std::exchange(other.affectedRows_, 0)),
-      lastInsertId_(std::exchange(other.lastInsertId_, 0)),
+      lastInsertId_(std::exchange(other.lastInsertId_, std::nullopt)),
       rawResult_(std::move(other.rawResult_)) {
     other.rawResult_.template emplace<NoRawResult>();
 }
 
-DbQueryResult::~DbQueryResult() {
+DbRows::~DbRows() {
     if (const auto* owned = std::get_if<OwnedRawResult>(&rawResult_)) {
         owned->release(owned->value);
     }
 }
 
-std::span<const DbRow> DbQueryResult::rows() const& noexcept {
+std::span<const DbRow> DbRows::rows() const& noexcept {
     return rows_;
-}
-
-std::uint64_t DbQueryResult::affectedRows() const noexcept {
-    return affectedRows_;
-}
-
-std::uint64_t DbQueryResult::lastInsertId() const noexcept {
-    return lastInsertId_;
 }
 
 DbMigrationReport::DbMigrationReport(std::pmr::memory_resource* resource)

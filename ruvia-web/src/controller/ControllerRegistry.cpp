@@ -2,6 +2,7 @@
 
 #include <memory_resource>
 #include <mutex>
+#include <stdexcept>
 #include <utility>
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
@@ -49,14 +50,15 @@ struct ControllerLifetime final {
     }
 };
 
-std::pmr::vector<ControllerRegistrar>& controllerRegistrars() {
-    static std::pmr::vector<ControllerRegistrar> registrars{registrationResource()};
-    return registrars;
-}
+struct ControllerRegistryState final {
+    std::mutex mutex;
+    std::pmr::vector<ControllerRegistrar> registrars{registrationResource()};
+    bool sealed{false};
+};
 
-std::mutex& controllerRegistrarsMutex() {
-    static std::mutex mutex;
-    return mutex;
+ControllerRegistryState& controllerRegistry() {
+    static ControllerRegistryState state;
+    return state;
 }
 
 }  // namespace
@@ -95,15 +97,29 @@ void ControllerStore::addLifetime(void* target, Destroy destroy, std::pmr::memor
 }
 
 bool addControllerRegistrar(ControllerRegistrar registrar) {
-    std::lock_guard lock(controllerRegistrarsMutex());
-    controllerRegistrars().push_back(registrar);
+    if (registrar == nullptr) {
+        throw std::invalid_argument("controller registrar must not be null");
+    }
+    auto& state = controllerRegistry();
+    std::lock_guard lock(state.mutex);
+    if (state.sealed) {
+        throw std::logic_error("controller registration is sealed; load every controller module before App::run() or TestApp::request()");
+    }
+    for (const auto existing : state.registrars) {
+        if (existing == registrar) {
+            return true;
+        }
+    }
+    state.registrars.push_back(registrar);
     return true;
 }
 
-std::pmr::vector<ControllerRegistrar> snapshotControllerRegistrars() {
+std::pmr::vector<ControllerRegistrar> sealControllerRegistrars() {
     std::pmr::vector<ControllerRegistrar> registrars{registrationResource()};
-    std::lock_guard lock(controllerRegistrarsMutex());
-    registrars = controllerRegistrars();
+    auto& state = controllerRegistry();
+    std::lock_guard lock(state.mutex);
+    state.sealed = true;
+    registrars = state.registrars;
     return registrars;
 }
 

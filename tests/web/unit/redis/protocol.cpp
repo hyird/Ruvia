@@ -232,7 +232,7 @@ RUVIA_TEST(redis_parse_scan_result_reads_cursor_and_values) {
     redisReply* root[] = {&cursor, &inner};
     const auto reply = arrayReply(root, 2);
     const auto scan = parseRedisScanResult(hiredisReplyToValue(reply, 0, 32, resource), resource);
-    RUVIA_CHECK_EQ(scan.cursor(), std::uint64_t{10});
+    RUVIA_CHECK_EQ(scan.cursor(), ruvia::RedisScanCursor{10});
     RUVIA_CHECK_EQ(scan.values().size(), std::size_t{2});
     RUVIA_CHECK_EQ(scan.values()[0], std::string_view("key1"));
     RUVIA_CHECK_EQ(scan.values()[1], std::string_view("key2"));
@@ -262,7 +262,7 @@ RUVIA_TEST(redis_parse_hash_scan_result_reads_field_value_pairs) {
     redisReply* root[] = {&cursor, &inner};
     const auto reply = arrayReply(root, 2);
     const auto hscan = parseRedisHashScanResult(hiredisReplyToValue(reply, 0, 32, resource), resource);
-    RUVIA_CHECK_EQ(hscan.cursor(), std::uint64_t{7});
+    RUVIA_CHECK_EQ(hscan.cursor(), ruvia::RedisScanCursor{7});
     RUVIA_CHECK_EQ(hscan.entries().size(), std::size_t{2});
     RUVIA_CHECK_EQ(hscan.entries()[0].key(), std::string_view("field1"));
     RUVIA_CHECK_EQ(hscan.entries()[0].value(), std::string_view("value1"));

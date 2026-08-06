@@ -20,7 +20,7 @@ void freePostgreSqlResult(void* result) noexcept {
     return status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK || status == PGRES_EMPTY_QUERY;
 }
 
-void materializeBorrowedResult(DbQueryResult& output, PGresult& result, std::pmr::memory_resource* resource) {
+void materializeBorrowedResult(DbRows& output, PGresult& result, std::pmr::memory_resource* resource) {
     const auto rowCount = static_cast<std::size_t>(PQntuples(&result));
     const auto fieldCount = static_cast<std::size_t>(PQnfields(&result));
     auto& rows = DbResultAccess::rows(output);
@@ -60,11 +60,11 @@ void materializeBorrowedResult(DbQueryResult& output, PGresult& result, std::pmr
 
 }  // namespace
 
-Task<DbQueryResult> PostgreSqlPool::execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbRows> PostgreSqlPool::execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     return executeDbQuery(*this, std::move(sql), std::move(params), resource);
 }
 
-Task<DbQueryResult> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbRows> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource* resource) {
     if (!slot.connected) {
         co_await connectUnlocked(slot);
     }
@@ -191,7 +191,7 @@ Task<void> PostgreSqlPool::executeControl(ConnectionSlot& slot, std::string_view
     (void)co_await executeOnSlot(slot, command, {}, resource);
 }
 
-Task<DbQueryResult> PostgreSqlPool::executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbRows> PostgreSqlPool::executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     return executeOnDbTransactionSlot(*this, slot, std::move(sql), std::move(params), resource);
 }
 

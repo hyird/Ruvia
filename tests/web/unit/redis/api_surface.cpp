@@ -20,6 +20,13 @@
 
 namespace {
 
+[[nodiscard]] ruvia::detail::RedisDefinition redisDefinition(std::string_view alias, const ruvia::RedisConfig& config = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource()) {
+    return {
+        std::pmr::string(alias, resource),
+        ruvia::detail::RedisConfigStorage(config, resource),
+    };
+}
+
 class RejectingMemoryResource final : public std::pmr::memory_resource {
 public:
     void rejectAllocations(bool value = true) noexcept {
@@ -215,6 +222,11 @@ static_assert(!HasLegacyRedisSetOptionBooleans<ruvia::RedisSetOptions>);
 static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().condition), std::optional<ruvia::RedisSetCondition>>);
 static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().expiration), std::optional<ruvia::RedisSetExpiration>>);
 static_assert(!std::default_initializable<ruvia::RedisSetExpiration>);
+static_assert(std::same_as<decltype(ruvia::RedisScanOptions{}.cursor), ruvia::RedisScanCursor>);
+static_assert(ruvia::RedisScanCursor::start().finished());
+static_assert(!ruvia::RedisScanCursor{1}.finished());
+static_assert(ruvia::RedisScanCursor{7}.value() == 7);
+static_assert(std::same_as<decltype(std::declval<const ruvia::RedisTtl&>().remaining()), std::optional<std::chrono::milliseconds>>);
 static_assert(std::same_as<decltype(ruvia::RedisScanOptions{}.count), std::optional<std::uint64_t>>);
 static_assert(std::is_aggregate_v<ruvia::RedisScanOptions>);
 constexpr ruvia::RedisScanOptions kLiteralRedisScanOptions{
@@ -243,8 +255,8 @@ RUVIA_TEST(redis_api_surface_uses_span_args_without_initializer_list_overloads) 
 RUVIA_TEST(redis_registry_derives_default_pool_from_owned_entry_index) {
     asio::io_context ioContext;
     const std::array<ruvia::detail::RedisDefinition, 2> definitions{{
-        {std::pmr::string("cache"), ruvia::RedisConfig{}},
-        {std::pmr::string("default"), ruvia::RedisConfig{}},
+        redisDefinition("cache"),
+        redisDefinition("default"),
     }};
     ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
@@ -271,14 +283,14 @@ RUVIA_TEST(redis_registry_owns_nested_pmr_configuration) {
     asio::io_context ioContext;
     std::optional<ruvia::detail::RedisDefinition> definition;
     ruvia::RedisConfig config{
-        .host = std::pmr::string(80, 'h', &sourceResource),
+        .host = std::string(80, 'h'),
         .port = 6379,
-        .username = std::pmr::string(80, 'u', &sourceResource),
-        .password = std::pmr::string(80, 'p', &sourceResource),
+        .username = std::string(80, 'u'),
+        .password = std::string(80, 'p'),
         .database = 0,
         .poolSizePerWorker = 1,
     };
-    definition.emplace(std::pmr::string("default", &sourceResource), std::move(config));
+    definition.emplace(redisDefinition("default", config, &sourceResource));
 
     std::optional<ruvia::detail::RedisRegistry> registry;
     registry.emplace(ioContext, &targetResource, std::span<const ruvia::detail::RedisDefinition>(&*definition, 1));
@@ -291,7 +303,7 @@ RUVIA_TEST(redis_registry_owns_nested_pmr_configuration) {
 
 RUVIA_TEST(redis_request_capabilities_reject_after_parent_scope_closes) {
     asio::io_context ioContext;
-    const std::array definitions{ruvia::detail::RedisDefinition{std::pmr::string("default"), ruvia::RedisConfig{}}};
+    const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
     auto handle = registry.get(std::pmr::get_default_resource(), operationScope);

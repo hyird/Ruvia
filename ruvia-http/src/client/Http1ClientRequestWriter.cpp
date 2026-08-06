@@ -13,7 +13,7 @@
 #include "ruvia/http/detail/client/Http1ClientRequestHeaders.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/detail/client/HttpOrigin.h"
+#include "ruvia/http/detail/client/HttpOriginView.h"
 
 namespace ruvia::detail {
 
@@ -54,7 +54,7 @@ constexpr std::string_view kContentLengthPrefix = "Content-Length: ";
 constexpr std::string_view kExpectPrefix = "Expect: ";
 constexpr std::string_view kConnectionClose = "Connection: close\r\n";
 
-[[nodiscard]] std::size_t authorityLength(const HttpOrigin& origin, bool forcePort) noexcept {
+[[nodiscard]] std::size_t authorityLength(const HttpOriginView& origin, bool forcePort) noexcept {
     return origin.host().size() + ((forcePort || !detail::httpOriginUsesDefaultPort(origin)) ? 1 + decimalDigits(origin.port()) : 0);
 }
 
@@ -73,7 +73,7 @@ void appendUnsigned(char*& cursor, std::size_t value) noexcept {
     }
 }
 
-void appendAuthority(char*& cursor, const HttpOrigin& origin, bool forcePort) noexcept {
+void appendAuthority(char*& cursor, const HttpOriginView& origin, bool forcePort) noexcept {
     appendView(cursor, origin.host());
     if (forcePort || !detail::httpOriginUsesDefaultPort(origin)) {
         *cursor++ = ':';
@@ -90,7 +90,7 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     }
 }
 
-[[nodiscard]] Http1ClientRequestPrepareResult prepareRequest(const HttpOrigin& origin, std::string_view method, std::string_view target, bool connect, std::span<const HttpHeaderView> headers, HttpClientRequestContent content, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) noexcept {
+[[nodiscard]] Http1ClientRequestPrepareResult prepareRequest(const HttpOriginView& origin, std::string_view method, std::string_view target, bool connect, std::span<const HttpHeaderView> headers, HttpClientRequestContentView content, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) noexcept {
     RequestHeaderFacts headerFacts;
     Http1ClientRequestPrepareError error = Http1ClientRequestPrepareError::kInvalidHeader;
     const auto* contentBytes = content.borrowedBytes();
@@ -214,7 +214,7 @@ std::string_view http1ClientRequestPrepareErrorMessage(Http1ClientRequestPrepare
     return "invalid HTTP/1 client request";
 }
 
-Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOrigin& origin, const HttpClientRequest& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const noexcept {
+Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOriginView& origin, const HttpClientRequestView& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const noexcept {
     if (!isValidHttpMethodToken(request.method)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidMethod);
     }
@@ -227,11 +227,11 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOrig
     return prepareRequest(origin, request.method, request.target, false, static_cast<std::span<const HttpHeaderView>>(request.headers), request.content, headBuffer, policy);
 }
 
-Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(const HttpOrigin& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const noexcept {
+Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const noexcept {
     if (tunnelOrigin.port() == 0) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidConnectOrigin);
     }
-    return prepareRequest(tunnelOrigin, "CONNECT", {}, true, headers, HttpClientRequestContent::none(), headBuffer, policy);
+    return prepareRequest(tunnelOrigin, "CONNECT", {}, true, headers, HttpClientRequestContentView::none(), headBuffer, policy);
 }
 
 }  // namespace ruvia

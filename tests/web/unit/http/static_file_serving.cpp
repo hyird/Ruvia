@@ -63,34 +63,6 @@ using ruvia::HttpResponse;
     return *selected;
 }
 
-class ReleasableMemoryResource final : public std::pmr::memory_resource {
-public:
-    void release() noexcept {
-        released_ = true;
-    }
-
-    [[nodiscard]] bool deallocatedAfterRelease() const noexcept {
-        return deallocatedAfterRelease_;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        deallocatedAfterRelease_ = deallocatedAfterRelease_ || released_;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    bool released_{false};
-    bool deallocatedAfterRelease_{false};
-};
-
 template <typename Result>
 [[nodiscard]] Result runStaticCompressionTask(asio::io_context& context, ruvia::Task<Result> task) {
     std::optional<Result> result;
@@ -117,26 +89,23 @@ template <typename Result>
 
 }  // namespace
 
-RUVIA_TEST(static_root_rebinds_nested_mime_resources_to_its_process_resource) {
+RUVIA_TEST(static_root_copies_public_mime_configuration_into_owned_storage) {
     namespace fs = std::filesystem;
     const auto dir = fs::temp_directory_path() / "ruvia_static_mime_resource_dir";
     fs::remove_all(dir);
     fs::create_directories(dir);
     std::ofstream(dir / "payload.custom-resource") << "content";
 
-    ReleasableMemoryResource callerResource;
     {
         ruvia::StaticRootOptions options;
         options.fileTypes = ruvia::StaticFileTypePolicy::all();
         options.mimeTypes.push_back(ruvia::StaticMimeType{
-            .extension = std::pmr::string(".custom-resource", &callerResource),
-            .contentType = std::pmr::string("application/x-custom-resource-type", &callerResource),
+            .extension = ".custom-resource",
+            .contentType = "application/x-custom-resource-type",
         });
         ruvia::StaticRoot root(dir, std::move(options));
-        callerResource.release();
     }
 
-    RUVIA_CHECK(!callerResource.deallocatedAfterRelease());
     fs::remove_all(dir);
 }
 

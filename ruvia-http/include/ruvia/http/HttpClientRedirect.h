@@ -125,7 +125,7 @@ public:
     }
 
 private:
-    friend HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequest&, HttpStatusCode, std::pmr::memory_resource*);
+    friend HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequestView&, HttpStatusCode, std::pmr::memory_resource*);
 
     HttpClientRedirectRequestPlan(std::string_view method, HttpClientRedirectContentDisposition contentDisposition, std::pmr::memory_resource* resource);
 
@@ -133,7 +133,7 @@ private:
     HttpClientRedirectContentDisposition contentDisposition_;
 };
 
-[[nodiscard]] HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequest& request, HttpStatusCode status, std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequestView& request, HttpStatusCode status, std::pmr::memory_resource* resource = nullptr);
 
 // This classification has no alternative-specific payload, so an enum is the
 // complete result rather than a status coupled to unrelated fields.
@@ -143,7 +143,7 @@ enum class HttpClientOriginAuthorityStatus : std::uint8_t {
     kInvalidAuthority,
 };
 
-[[nodiscard]] HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(const HttpOrigin& origin, std::string_view authority) noexcept;
+[[nodiscard]] HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(const HttpOriginView& origin, std::string_view authority) noexcept;
 
 enum class HttpClientRedirectTargetError : std::uint8_t {
     kInvalidCurrentTarget,
@@ -210,7 +210,7 @@ public:
     const HttpClientRedirectTargetFailure* failure() const&& = delete;
 
 private:
-    friend HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(const HttpOrigin&, std::string_view, std::string_view, std::pmr::memory_resource*);
+    friend HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(const HttpOriginView&, std::string_view, std::string_view, std::pmr::memory_resource*);
 
     using Value = std::variant<HttpClientRedirectTarget, HttpClientRedirectTargetFailure>;
 
@@ -231,7 +231,7 @@ private:
     Value value_;
 };
 
-[[nodiscard]] HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(const HttpOrigin& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource = nullptr);
 
 enum class HttpClientRedirectResolutionError : std::uint8_t {
     kInvalidCurrentTarget,
@@ -267,7 +267,7 @@ public:
     }
 
     // RFC 3986 uri-host of the destination; IP literals keep their brackets,
-    // matching the HttpOrigin factory contract.
+    // matching the HttpOriginView factory contract.
     [[nodiscard]] std::string_view host() const& noexcept {
         return host_;
     }
@@ -283,8 +283,8 @@ public:
 
     // Borrows host() storage: the returned origin is valid only while this
     // resolved redirect is alive.
-    [[nodiscard]] HttpOrigin origin() const&;
-    HttpOrigin origin() const&& = delete;
+    [[nodiscard]] HttpOriginView origin() const&;
+    HttpOriginView origin() const&& = delete;
 
 private:
     friend class HttpClientRedirectResolutionResult;
@@ -341,7 +341,7 @@ public:
     const HttpClientRedirectResolutionFailure* failure() const&& = delete;
 
 private:
-    friend HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOrigin&, std::string_view, std::string_view, std::pmr::memory_resource*);
+    friend HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOriginView&, std::string_view, std::string_view, std::pmr::memory_resource*);
 
     using Value = std::variant<HttpClientResolvedRedirect, HttpClientRedirectResolutionFailure>;
 
@@ -362,6 +362,6 @@ private:
     Value value_;
 };
 
-[[nodiscard]] HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOrigin& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource = nullptr);
 
 }  // namespace ruvia

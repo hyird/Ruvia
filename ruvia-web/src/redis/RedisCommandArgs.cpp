@@ -31,9 +31,9 @@ std::pmr::string redisMillisecondsString(std::chrono::milliseconds ttl, std::pmr
     return output;
 }
 
-std::pmr::string redisCursorString(std::uint64_t cursor, std::pmr::memory_resource* resource) {
+std::pmr::string redisCursorString(RedisScanCursor cursor, std::pmr::memory_resource* resource) {
     std::pmr::string output(resource);
-    appendRedisNumber(output, cursor);
+    appendRedisNumber(output, cursor.value());
     return output;
 }
 

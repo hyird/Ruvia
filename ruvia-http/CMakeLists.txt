@@ -18,7 +18,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseHead.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponsePlan.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpOrigin.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpOriginView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpBrotliCodec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpContentCoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpContentEncoder.cpp

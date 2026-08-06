@@ -23,7 +23,7 @@ struct RedisTypesAccess final {
         return RedisScanResult(resource);
     }
 
-    [[nodiscard]] static std::uint64_t& cursor(RedisScanResult& result) noexcept {
+    [[nodiscard]] static RedisScanCursor& cursor(RedisScanResult& result) noexcept {
         return result.cursor_;
     }
 
@@ -35,7 +35,7 @@ struct RedisTypesAccess final {
         return RedisHashScanResult(resource);
     }
 
-    [[nodiscard]] static std::uint64_t& cursor(RedisHashScanResult& result) noexcept {
+    [[nodiscard]] static RedisScanCursor& cursor(RedisHashScanResult& result) noexcept {
         return result.cursor_;
     }
 
@@ -47,12 +47,16 @@ struct RedisTypesAccess final {
         return RedisZScanResult(resource);
     }
 
-    [[nodiscard]] static std::uint64_t& cursor(RedisZScanResult& result) noexcept {
+    [[nodiscard]] static RedisScanCursor& cursor(RedisZScanResult& result) noexcept {
         return result.cursor_;
     }
 
     [[nodiscard]] static std::pmr::vector<RedisScoredValue>& entries(RedisZScanResult& result) noexcept {
         return result.entries_;
+    }
+
+    [[nodiscard]] static constexpr RedisTtl ttl(RedisTtlState state, std::optional<std::chrono::milliseconds> remaining = std::nullopt) noexcept {
+        return RedisTtl(state, remaining);
     }
 
     [[nodiscard]] static RedisValue nullValue(std::pmr::memory_resource* resource) {

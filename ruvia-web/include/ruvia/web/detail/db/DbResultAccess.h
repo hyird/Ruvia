@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/db/DbQueryResult.h"
+#include "ruvia/web/db/DbRows.h"
 
 #include <exception>
 #include <memory_resource>
@@ -12,31 +12,35 @@ namespace ruvia::detail {
 // them through this single internal access point instead of accumulating one
 // friend declaration per driver.
 struct DbResultAccess final {
-    [[nodiscard]] static DbQueryResult makeResult(std::pmr::memory_resource* resource) {
-        return DbQueryResult(resource);
+    [[nodiscard]] static DbRows makeResult(std::pmr::memory_resource* resource) {
+        return DbRows(resource);
     }
 
-    static void setAffectedRows(DbQueryResult& result, std::uint64_t value) noexcept {
+    static void setAffectedRows(DbRows& result, std::uint64_t value) noexcept {
         result.affectedRows_ = value;
     }
 
-    static void setLastInsertId(DbQueryResult& result, std::uint64_t value) noexcept {
+    static void setLastInsertId(DbRows& result, std::uint64_t value) noexcept {
         result.lastInsertId_ = value;
     }
 
-    [[nodiscard]] static std::pmr::vector<DbRow>& rows(DbQueryResult& result) noexcept {
+    [[nodiscard]] static DbExecResult makeExecResult(const DbRows& result) noexcept {
+        return DbExecResult(result.affectedRows_, result.lastInsertId_);
+    }
+
+    [[nodiscard]] static std::pmr::vector<DbRow>& rows(DbRows& result) noexcept {
         return result.rows_;
     }
 
-    [[nodiscard]] static std::pmr::vector<DbField>& fields(DbQueryResult& result) noexcept {
+    [[nodiscard]] static std::pmr::vector<DbField>& fields(DbRows& result) noexcept {
         return result.fields_;
     }
 
-    static void ownRawResult(DbQueryResult& result, void* raw, void (*release)(void*) noexcept) noexcept {
-        if (raw == nullptr || release == nullptr || std::holds_alternative<DbQueryResult::OwnedRawResult>(result.rawResult_)) {
+    static void ownRawResult(DbRows& result, void* raw, void (*release)(void*) noexcept) noexcept {
+        if (raw == nullptr || release == nullptr || std::holds_alternative<DbRows::OwnedRawResult>(result.rawResult_)) {
             std::terminate();
         }
-        result.rawResult_.template emplace<DbQueryResult::OwnedRawResult>(raw, release);
+        result.rawResult_.template emplace<DbRows::OwnedRawResult>(raw, release);
     }
 
     [[nodiscard]] static DbField nullField(std::pmr::memory_resource* resource) {

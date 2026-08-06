@@ -67,7 +67,7 @@ public:
 
 int main() {
     ruvia::app()
-        .setServerTopology(ruvia::ServerTopology::http(8080))
+        .setListeners({ruvia::ListenerConfig::http(8080)})
         .setSignalShutdown(true)
         .run();
 }
@@ -94,7 +94,11 @@ responses through `Context`. Set response metadata through `c.status()`,
 HTTP status APIs use `ruvia::HttpStatusCode`: prefer named values such as
 `ruvia::http_status::kCreated`, and use `HttpStatusCode::fromValue()` only for
 validated extension codes.
-`ServerTopology` atomically selects HTTP, HTTPS, dual-listener, or redirect operation; HTTPS requires a validated `TlsIdentity`, and `setWorkersPerListener()` makes dual-listener topologies own twice the configured workers.
+`setListeners()` atomically installs any number of `ListenerConfig::http(...)`, `https(...)`, and `redirectHttpToHttps(...)` listeners. Redirect targets must name an HTTPS listener in the same list, ports must be unique, and total workers equal the listener count multiplied by `setWorkersPerListener()`.
+Public startup configuration uses ordinary C++ values (`std::string`,
+`std::vector`, paths, durations, and spans); callers never choose a PMR
+resource. Ruvia copies retained configuration into process-owned storage before
+workers start.
 Default rate limiting is worker-local via `setDefaultRateLimitPerWorker()`; `setRateLimitSlotsPerWorker()` selects its power-of-two startup capacity (`kDefaultRateLimitSlotsPerWorker` by default), and workers with neither a default nor route-specific rule allocate no table.
 
 Connection metadata is deliberately separate from the HTTP request model:
@@ -493,6 +497,11 @@ and so on; MariaDB parameters use `?`. A `?` inside a string literal, a quoted
 identifier or a comment is data, not a placeholder. For generated PostgreSQL
 keys, use `INSERT ... RETURNING id` and read the returned row.
 
+`query()` returns `DbRows`, which exposes only the row set. `execute()` returns
+`DbExecResult`, which exposes `affectedRows()` and an optional
+`lastInsertId()`; the latter is present only when the backend supplies that
+concept. Use `query()` for PostgreSQL statements with `RETURNING`.
+
 `DbConfig`'s timeouts are enforced by the client: an expired `queryTimeout`
 fails the operation and drops the connection, whatever the server is still
 doing with the statement. A timeout left unset is disabled, so a stalled
@@ -597,10 +606,19 @@ install components.
 
 ## Web API Shape
 
-Controllers use CRTP and register themselves at startup when their route macro
-block is declared; applications do not maintain a separate controller list.
-`ruvia::app()` is the process-level configuration and lifecycle entry point,
-while every worker owns its controller instances and finalized route graph.
+Ruvia intentionally uses one application per process. `ruvia::app()` is the
+only configuration and lifecycle entry point; applications do not construct
+additional `App` instances. Controllers use CRTP and register themselves at
+startup when their route macro block is declared, so there is no separate
+controller list or `useController()` step. Every controller translation unit
+retained in the final executable contributes to this process-wide registry;
+controllers supplied by a static library must therefore be linked into the
+executable, and dynamically loaded modules must be present before `run()`.
+The first `App::run()` or `TestApp::request()` seals and deduplicates that
+registry. Loading a controller-bearing module after sealing is a startup error,
+so every worker observes the same controller set.
+Each worker then creates its own controller instances and finalized route graph
+from that startup registry.
 Routes and schemas use these macros:
 
 | Concern | Macros |
@@ -631,6 +649,17 @@ be monitored by polling instead of by installing callbacks.
 is the full contract: what each layer raises, which failures are isolated where,
 and the three kinds of callback contract.
 
+Self-contained callbacks passed to App are owned and destroyed with the App;
+request dispatch retains only allocation-free borrowed call targets. The
+explicit `AccessLogCallback::bind()` and `ConnectionFailureCallback::bind()`
+forms remain non-owning and require the bound observer to outlive `run()`.
+
+Redis time APIs avoid exposing wire-level sentinel values in application code:
+`expireAt()` accepts `std::chrono::system_clock::time_point`, `ttl()` and
+`pttl()` return `RedisTtl` (`missing`, `persistent`, or an expiring duration),
+and scan options/results exchange a `RedisScanCursor` whose `finished()` method
+identifies the terminal cursor.
+
 Models are ordinary structs with one schema for JSON parsing, validation, and
 serialization. They support nested models and arrays; `RUVIA_FIELD` is required
 and `RUVIA_OPTIONAL_FIELD` may be absent. Route middleware keeps the Hono-style
@@ -654,6 +683,12 @@ TLS, connection pool, runtime timeout, static-root policy, DB, Redis, or JWT
 integration. Content-Encoding parsing distinguishes identity, one supported
 coding, and an unsupported coding stack; Web request decoding reports the
 latter as HTTP 415.
+
+Borrowed outbound-client models say so in their names: `HttpOriginView`,
+`HttpClientRequestView`, `HttpClientRequestContentView`, and
+`HttpClientRequestBytesView`. Their referenced storage must remain alive until
+the external sans-I/O driver finishes using it; response-head values remain
+owned PMR results.
 
 ## License
 

@@ -3,8 +3,10 @@
 #include <chrono>
 #include <concepts>
 #include <exception>
+#include <memory>
 #include <memory_resource>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -262,20 +264,21 @@ RUVIA_TEST(validate_server_options_requires_redirect_https_port) {
     RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
 }
 
-RUVIA_TEST(server_topology_rejects_invalid_listener_and_tls_states_at_construction) {
+RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_construction) {
     static_assert(!std::is_default_constructible_v<ruvia::TlsIdentity>);
     static_assert(!std::is_default_constructible_v<ruvia::TlsClientCertificatePolicy>);
     static_assert(!std::is_default_constructible_v<ruvia::TlsConfig>);
-    static_assert(!std::is_aggregate_v<ruvia::ServerTopology>);
+    static_assert(!std::is_default_constructible_v<ruvia::ListenerConfig>);
+    static_assert(!std::is_aggregate_v<ruvia::ListenerConfig>);
 
     RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsIdentity::fromFiles({}, "key.pem"); }));
     RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsIdentity::fromFiles("cert.pem", {}); }));
     RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsClientCertificatePolicy::required({}); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ServerTopology::http(0); }));
-    RUVIA_CHECK(throwsInvalid([] {
-        auto tls = ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles("cert.pem", "key.pem"));
-        (void)ruvia::ServerTopology::httpAndHttps(8443, 8443, std::move(tls));
-    }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ListenerConfig::http(0); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ListenerConfig::redirectHttpToHttps(8443, 8443); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::http(8080), ruvia::ListenerConfig::http(8080)}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::redirectHttpToHttps(8080, 8443)}); }));
 }
 
 RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {
@@ -285,13 +288,66 @@ RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {
     RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity("example.COM", ruvia::TlsIdentity::fromFiles("third.pem", "third.key")); }));
 }
 
-RUVIA_TEST(tls_identity_rebinds_password_storage_to_process_resource) {
+RUVIA_TEST(tls_identity_owns_password_independently_of_caller_resource) {
     ReleasableMemoryResource callerResource;
+    const std::string expected(80, 's');
+    std::optional<ruvia::TlsIdentity> identity;
     {
-        auto password = std::pmr::string("secret", &callerResource);
-        auto identity = ruvia::TlsIdentity::fromFiles("cert.pem", "key.pem", std::move(password));
-        callerResource.release();
-        RUVIA_CHECK_EQ(identity.privateKeyPassword(), std::string_view("secret"));
+        const std::pmr::string password(expected, &callerResource);
+        identity.emplace(ruvia::TlsIdentity::fromFiles("cert.pem", "key.pem", password));
     }
+    callerResource.release();
+    RUVIA_CHECK_EQ(identity->privateKeyPassword(), std::string_view(expected));
+    identity.reset();
     RUVIA_CHECK(!callerResource.deallocatedAfterRelease());
+}
+
+RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
+    std::weak_ptr<int> accessState;
+    {
+        auto state = std::make_shared<int>(1);
+        accessState = state;
+        ruvia::AccessLogCallback callback([state](const ruvia::AccessLogRecord&) noexcept { (void)state; });
+        auto copy = callback;
+        state.reset();
+        RUVIA_CHECK(!accessState.expired());
+        (void)copy;
+    }
+    RUVIA_CHECK(accessState.expired());
+
+    std::weak_ptr<int> failureState;
+    {
+        auto state = std::make_shared<int>(1);
+        failureState = state;
+        ruvia::ConnectionFailureCallback callback([state](const ruvia::ConnectionFailureRecord&) noexcept { (void)state; });
+        state.reset();
+        RUVIA_CHECK(!failureState.expired());
+    }
+    RUVIA_CHECK(failureState.expired());
+
+    std::weak_ptr<int> errorState;
+    {
+        auto state = std::make_shared<int>(1);
+        errorState = state;
+        ruvia::HttpErrorHandler callback([state](ruvia::Context&, ruvia::HttpErrorInfo) -> ruvia::Task<ruvia::HttpResponse> {
+            (void)state;
+            co_return ruvia::HttpResponse{};
+        });
+        state.reset();
+        RUVIA_CHECK(!errorState.expired());
+    }
+    RUVIA_CHECK(errorState.expired());
+
+    std::weak_ptr<int> notFoundState;
+    {
+        auto state = std::make_shared<int>(1);
+        notFoundState = state;
+        ruvia::HttpNotFoundHandler callback([state](ruvia::Context&) -> ruvia::Task<ruvia::HttpResponse> {
+            (void)state;
+            co_return ruvia::HttpResponse{};
+        });
+        state.reset();
+        RUVIA_CHECK(!notFoundState.expired());
+    }
+    RUVIA_CHECK(notFoundState.expired());
 }

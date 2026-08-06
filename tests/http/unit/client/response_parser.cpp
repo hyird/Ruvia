@@ -98,10 +98,10 @@ RUVIA_TEST(http_client_response_parser_owns_exact_head_boundary) {
 
 RUVIA_TEST(http_client_response_parser_failure_is_typed_and_allocation_free) {
     CountingMemoryResource counting;
-    ruvia::HttpClientRequest request;
+    ruvia::HttpClientRequestView request;
     request.method = "GET";
     std::array<char, 512> requestHead;
-    const auto preparedResult = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOrigin::https("example.test"), request, requestHead);
+    const auto preparedResult = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https("example.test"), request, requestHead);
     const auto* prepared = preparedResult.prepared();
     RUVIA_CHECK(prepared != nullptr);
     if (prepared == nullptr) {

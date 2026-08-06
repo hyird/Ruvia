@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/db/DbQueryResult.h"
+#include "ruvia/web/db/DbRows.h"
 #include "ruvia/web/ScopedOperation.h"
 #include "ruvia/web/detail/db/DbParameterPack.h"
 
@@ -28,34 +28,34 @@ public:
     ~DbTransaction();
 
     [[nodiscard]] bool active() const noexcept;
-    ScopedOperation<DbQueryResult> query(std::string_view sql, std::span<const DbValue> params = {});
-    ScopedOperation<DbQueryResult> query(std::string_view sql, std::initializer_list<DbValue> params) = delete;
-    ScopedOperation<DbQueryResult> execute(std::string_view sql, std::span<const DbValue> params = {});
-    ScopedOperation<DbQueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params) = delete;
+    ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {});
+    ScopedOperation<DbRows> query(std::string_view sql, std::initializer_list<DbValue> params) = delete;
+    ScopedOperation<DbExecResult> execute(std::string_view sql, std::span<const DbValue> params = {});
+    ScopedOperation<DbExecResult> execute(std::string_view sql, std::initializer_list<DbValue> params) = delete;
 
     // Bound parameters as ordinary arguments, with the same synchronous cloning
     // and the same temporary-safety as DbHandle::query()/execute().
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbQueryResult> query(std::string_view sql, Params&&... params) {
+    [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, Params&&... params) {
         const DbValue values[]{DbValue(std::forward<Params>(params))...};
         return query(sql, std::span<const DbValue>(values));
     }
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbQueryResult> execute(std::string_view sql, Params&&... params) {
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, Params&&... params) {
         const DbValue values[]{DbValue(std::forward<Params>(params))...};
         return execute(sql, std::span<const DbValue>(values));
     }
 
     template <typename... Params>
         requires detail::DbTemporaryOwningParameterPack<Params...>
-    ScopedOperation<DbQueryResult> query(std::string_view, Params&&...) = delete;
+    ScopedOperation<DbRows> query(std::string_view, Params&&...) = delete;
 
     template <typename... Params>
         requires detail::DbTemporaryOwningParameterPack<Params...>
-    ScopedOperation<DbQueryResult> execute(std::string_view, Params&&...) = delete;
+    ScopedOperation<DbExecResult> execute(std::string_view, Params&&...) = delete;
 
     ScopedOperation<void> commit();
     ScopedOperation<void> rollback();
@@ -74,7 +74,8 @@ private:
     };
 
     DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource) noexcept;
-    Task<DbQueryResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
+    Task<DbRows> queryPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
+    Task<DbExecResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
     Task<void> commitTask();
     Task<void> rollbackTask();
     void reset() noexcept;

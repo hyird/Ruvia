@@ -14,8 +14,8 @@
 namespace ruvia::detail {
 
 // Sort and de-duplicate configured values so lookups can binary-search them.
-void normalizeMimeTypes(std::pmr::vector<StaticMimeType>& mimeTypes);
-void normalizeFileTypes(std::pmr::vector<std::pmr::string>& fileTypes);
+void normalizeMimeTypes(std::vector<StaticMimeType>& mimeTypes);
+void normalizeFileTypes(std::vector<std::string>& fileTypes);
 
 [[nodiscard]] bool fileTypeAllowed(std::string_view extension, const StaticRootOptions& options);
 

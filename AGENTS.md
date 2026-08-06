@@ -159,6 +159,8 @@ target，只有跨 target 的通用支撑保留在独立目录。
 
 `ruvia-http` 拥有 wire/message/framing/connection 语义，以及跨 server/client/runtime 复用的 sans-I/O 状态机和纯协议 helper。HTTP/1、HTTP/2、WebSocket、SSE、multipart、content-coding 等协议实现留在 `ruvia-http`。
 
+outbound client 中借用调用方存储的公开类型必须以 `View` 结尾；当前契约是 `HttpOriginView`、`HttpClientRequestView`、`HttpClientRequestContentView`、`HttpClientRequestBytesView`，不得恢复不表达生命周期的旧名或兼容别名。
+
 `ruvia-web` 拥有 HTTP 之上的 App、Context、Router、middleware、controller、validation、session、CSRF、JWT、rate limit、CORS、安全头、静态文件产品策略、AutoHTTPS、DB/Redis 和 WebSocket route 绑定。读取或设置 HTTP header 不等于拥有协议语义。
 
 AutoHTTPS 只构造重定向响应并向 HTTP/1 runtime 提交外部关闭策略；不得直接设置 `Connection`，最终连接字段和复用判定必须由解析所得 connection plan 经 `requireClose()` 后统一提交。
@@ -195,7 +197,8 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - worker 线程只跑事件循环，不得阻塞。同步、阻塞、CPU 密集的调用必须经 `BlockingPool` 卸载到独立线程；卸载的可调用体在外部线程运行，只能按值/移动捕获自有数据，不得捕获 `Context`、请求内存或任何 worker 私有状态。停机不等待仍在运行的卸载任务：挂起的协程立即以 `kWorkerStopping` 恢复，池线程的结果被丢弃。
 - 池归 `App` 进程级所有并被所有 worker 共享，线程在 `App::run()` 一次性建立并常驻至停机，不得按调用创建线程；队列必须有界，满时向调用方回报拒绝，不得无界排队。
 - 卸载是上一条 handle 借用规则的唯一豁免：结果可能比发起它的请求活得久，`runBlocking` 因此复制一次 `WorkerHandle` 取得所有权。豁免仅限此路径，不得据此在其他请求期代码复制 handle。
-- `App::setWorkersPerListener()` 配置每个 listener 的 worker 数；双 listener topology 的总 worker 数是其两倍，禁止恢复含糊的总线程数命名。
+- `App::setWorkersPerListener()` 配置每个 listener 的 worker 数；总 worker 数是 listener 数乘以该值，禁止恢复含糊的总线程数命名。
+- listener 通过 `App::setListeners(std::vector<ListenerConfig>)` 原子配置；端口必须唯一，HTTP→HTTPS redirect 必须指向同一列表中的 HTTPS listener，不恢复固定单/双 listener topology 类型。
 - `App::run()` 创建 acceptor/server/thread per worker。
 - 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。
 - shutdown 只能在各 worker 自己的 `io_context` 上直接关闭 acceptor、活跃 socket 和 worker 资源；不等待请求优雅排空。
@@ -207,6 +210,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 - 框架内部拥有动态内存的对象默认使用 PMR 容器。
 - 公开 API 输入优先使用 `std::string_view`、`std::span`、`std::filesystem::path` 或值类型配置。
+- 公开启动配置的拥有型字段使用标准 `std::string`/`std::vector`，不得要求调用方提供 PMR allocator；App/worker 留存时再复制到所属 PMR 存储。
 - 请求热路径 PMR 容器使用请求 arena；Worker 层容器使用 `WorkerMemory`。
 - `RequestMemory` 只提供 arena resource，不拥有任意 C++ 对象的 erased cleanup 链；非平凡惰性对象必须由其职责明确的持有者通过 typed RAII 统一拥有和析构。
 - 启动期容器使用进程级同步 PMR pool。
@@ -226,10 +230,16 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 ## 路由和中间件
 
+- Web 应用模型固定为一个进程一个 `App`：`ruvia::app()` 是唯一配置与生命周期入口，`App` 构造保持非公开；禁止增加可并存的 App 实例、显式 application builder 或实例级 controller 清单。
+- Controller 保持 CRTP + route macro 自动注册。声明 `RUVIA_ROUTES_BEGIN` / `RUVIA_ROUTES_END` 的 controller 必须在启动期自动进入进程级注册表；禁止增加 `useController<T>()`、手工 registrar 列表或要求使用者重复列举 controller。
+- controller registrar 按函数地址去重，并在首次生产或测试路由构建时封存；封存后注册必须硬错误，禁止不同 worker/TestApp 观察到不同 controller 集合。
+- 自动注册只覆盖最终程序实际保留并在 `App::run()` 前加载的 controller 翻译单元。静态库和动态模块的构建、加载约束必须在面向使用者的文档中明确，不得用请求期动态发现补救链接或加载问题。
+- 生产 `App` 与 `TestApp` 使用同一份进程级 controller 注册集合；需要不同 controller 集合的测试应拆成不同测试二进制，不得给 `TestApp` 增加实例级筛选旁路。
 - 路由注册只允许通过 controller/group/route 宏完成。
 - 不暴露直接 `Router::addRoute(...)` 或 `Router::group(...)` API。
 - 路由表、中间件链、controller factory 在 worker 启动前构建完成。
 - 请求期不得重建 route index、middleware chain 或 `std::function` 链。
+- App 注册的自包含 callback 必须由 App RAII 拥有并析构；worker、router 和请求服务只保存无分配借用视图。显式 `bind(lvalue)` callback 保持非拥有并要求调用方覆盖 `run()` 生命周期。
 - 重复 method + path 或等价动态 route shape 必须启动期报错。
 - 无显式 HEAD route 时 fallback 到普通 GET；streaming GET 不参与隐式 HEAD fallback。
 - middleware API 保持 CRTP + async `handle(Context&, Next&)`；`next()` 是 single-shot。
@@ -244,6 +254,8 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 响应 metadata 走 `c.status(...)`、`c.header(...)`、`c.setCookie(...)`。
 - 响应构造走 `c.body(...)`、`c.text(...)`、`c.html(...)`、`c.json(...)`、`c.file(...)`、`c.staticFile(...)`、`c.redirect(...)`、`c.error(...)`。
 - 一个公开操作只保留一个名字，不新增别名。
+- 数据库 `query()` 返回只暴露行集的 `DbRows`，`execute()` 返回 `DbExecResult`；后者的 insert id 必须是可选值，禁止把 backend 不支持伪装为 `0`。
+- Redis `expireAt()` 使用 `system_clock::time_point`，TTL/PTTL 使用状态化 `RedisTtl`，SCAN 游标使用 `RedisScanCursor`；公开 API 不暴露 Redis 的 `-1/-2` TTL 哨兵或裸整数游标。
 
 ## Model 和校验
 

@@ -25,8 +25,42 @@ App& App::setListenAddress(std::string_view address) {
     });
 }
 
-App& App::setServerTopology(ServerTopology topology) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change server topology while app is running", [&topology](detail::AppState& state) { state.topology = std::move(topology); });
+App& App::setListeners(std::vector<ListenerConfig> listeners) {
+    if (listeners.empty()) {
+        throw std::invalid_argument("listener list must not be empty");
+    }
+
+    const auto portOf = [](const ListenerConfig& listener) {
+        return std::visit([](const auto& config) { return config.port; }, listener.listener_);
+    };
+    for (std::size_t i = 0; i < listeners.size(); ++i) {
+        const auto port = portOf(listeners[i]);
+        for (std::size_t j = i + 1; j < listeners.size(); ++j) {
+            if (port == portOf(listeners[j])) {
+                throw std::invalid_argument("listener ports must be unique");
+            }
+        }
+        if (const auto* redirect = std::get_if<ListenerConfig::RedirectHttpToHttps>(&listeners[i].listener_); redirect != nullptr) {
+            bool targetExists = false;
+            for (const auto& candidate : listeners) {
+                if (const auto* https = std::get_if<ListenerConfig::Https>(&candidate.listener_); https != nullptr && https->port == redirect->targetHttpsPort) {
+                    targetExists = true;
+                    break;
+                }
+            }
+            if (!targetExists) {
+                throw std::invalid_argument("HTTP redirect target must name an HTTPS listener");
+            }
+        }
+    }
+
+    return detail::mutateStoppedApp(*this, *state_, "cannot change listeners while app is running", [&listeners](detail::AppState& state) {
+        state.listeners.clear();
+        state.listeners.reserve(listeners.size());
+        for (auto& listener : listeners) {
+            state.listeners.push_back(std::move(listener));
+        }
+    });
 }
 
 App& App::setWorkersPerListener(std::size_t workersPerListener) {
@@ -152,11 +186,17 @@ App& App::setRateLimitSlotsPerWorker(std::size_t slotsPerWorker) {
 }
 
 App& App::onAccess(AccessLogCallback callback) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot register access-log hook while app is running", [callback](detail::AppState& state) { state.options.accessLog.callback = callback; });
+    return detail::mutateStoppedApp(*this, *state_, "cannot register access-log hook while app is running", [callback = std::move(callback)](detail::AppState& state) mutable {
+        state.accessLogCallback = std::move(callback);
+        state.options.accessLog.callback = state.accessLogCallback.borrow();
+    });
 }
 
 App& App::onConnectionFailure(ConnectionFailureCallback callback) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot register connection-failure hook while app is running", [callback](detail::AppState& state) { state.options.connectionFailure.callback = callback; });
+    return detail::mutateStoppedApp(*this, *state_, "cannot register connection-failure hook while app is running", [callback = std::move(callback)](detail::AppState& state) mutable {
+        state.connectionFailureCallback = std::move(callback);
+        state.options.connectionFailure.callback = state.connectionFailureCallback.borrow();
+    });
 }
 
 }  // namespace ruvia

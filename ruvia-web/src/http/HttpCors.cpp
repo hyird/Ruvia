@@ -100,15 +100,15 @@ CorsOrigin CorsOrigin::serialized(std::string_view value) {
     if (!detail::isValidHttpSerializedOrigin(value)) {
         throw std::invalid_argument("CORS origin must be a WHATWG serialized origin");
     }
-    return CorsOrigin(std::pmr::string(value));
+    return CorsOrigin(std::string(value));
 }
 
 CorsOrigin CorsOrigin::opaque() {
-    return CorsOrigin(std::pmr::string("null"));
+    return CorsOrigin(std::string("null"));
 }
 
 CorsHeaderNames CorsHeaderNames::of(std::span<const std::string_view> names) {
-    std::pmr::string value;
+    std::string value;
     for (const auto name : names) {
         if (!isValidHttpHeaderName(name)) {
             throw std::invalid_argument("CORS header names must be valid HTTP field names");

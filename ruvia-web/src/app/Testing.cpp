@@ -33,7 +33,7 @@ namespace {
 template <typename Handlers, typename Handler>
 void appendPrefixHandler(Handlers& handlers, std::string_view prefix, Handler handler) {
     const auto normalized = detail::validateFallbackPrefix(handlers, prefix, handler);
-    handlers.emplace_back(std::string(normalized), handler);
+    handlers.emplace_back(std::string(normalized), std::move(handler));
 }
 
 }  // namespace
@@ -70,16 +70,16 @@ struct TestApp::Impl final {
         }
         finalized = true;
 
-        const auto controllerRegistrars = detail::snapshotControllerRegistrars();
+        const auto controllerRegistrars = detail::sealControllerRegistrars();
         detail::registerControllers(router, controllers, controllerRegistrars);
         auto& routes = detail::RouterImpl::from(router);
-        routes.setErrorHandler(errorHandler);
-        routes.setNotFoundHandler(notFoundHandler);
+        routes.setErrorHandler(errorHandler.borrow());
+        routes.setNotFoundHandler(notFoundHandler.borrow());
         if (!prefixErrorHandlers.empty()) {
             std::pmr::vector<detail::HttpPrefixErrorHandler> views(detail::registrationResource());
             views.reserve(prefixErrorHandlers.size());
             for (const auto& [prefix, handler] : prefixErrorHandlers) {
-                views.push_back({std::string_view(prefix), handler});
+                views.push_back({std::string_view(prefix), handler.borrow()});
             }
             routes.setPrefixErrorHandlers(views);
         }
@@ -87,7 +87,7 @@ struct TestApp::Impl final {
             std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(detail::registrationResource());
             views.reserve(prefixNotFoundHandlers.size());
             for (const auto& [prefix, handler] : prefixNotFoundHandlers) {
-                views.push_back({std::string_view(prefix), handler});
+                views.push_back({std::string_view(prefix), handler.borrow()});
             }
             routes.setPrefixNotFoundHandlers(views);
         }
@@ -107,25 +107,25 @@ TestApp::~TestApp() = default;
 
 TestApp& TestApp::onError(HttpErrorHandler handler) {
     impl_->requireConfigurable();
-    impl_->errorHandler = handler;
+    impl_->errorHandler = std::move(handler);
     return *this;
 }
 
 TestApp& TestApp::onNotFound(HttpNotFoundHandler handler) {
     impl_->requireConfigurable();
-    impl_->notFoundHandler = handler;
+    impl_->notFoundHandler = std::move(handler);
     return *this;
 }
 
 TestApp& TestApp::onError(std::string_view prefix, HttpErrorHandler handler) {
     impl_->requireConfigurable();
-    appendPrefixHandler(impl_->prefixErrorHandlers, prefix, handler);
+    appendPrefixHandler(impl_->prefixErrorHandlers, prefix, std::move(handler));
     return *this;
 }
 
 TestApp& TestApp::onNotFound(std::string_view prefix, HttpNotFoundHandler handler) {
     impl_->requireConfigurable();
-    appendPrefixHandler(impl_->prefixNotFoundHandlers, prefix, handler);
+    appendPrefixHandler(impl_->prefixNotFoundHandlers, prefix, std::move(handler));
     return *this;
 }
 

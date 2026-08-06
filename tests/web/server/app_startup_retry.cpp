@@ -1,7 +1,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <memory_resource>
 #include <stdexcept>
 
 #include <asio/ip/address.hpp>
@@ -26,34 +25,6 @@ private:
 };
 
 namespace {
-
-class ReleasableMemoryResource final : public std::pmr::memory_resource {
-public:
-    void release() noexcept {
-        released_ = true;
-    }
-
-    [[nodiscard]] bool deallocatedAfterRelease() const noexcept {
-        return deallocatedAfterRelease_;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        deallocatedAfterRelease_ = deallocatedAfterRelease_ || released_;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    bool released_{false};
-    bool deallocatedAfterRelease_{false};
-};
 
 std::uint16_t availablePort() {
     asio::io_context context;
@@ -81,22 +52,19 @@ int main() {
     std::filesystem::remove_all(staticRootPath);
     std::filesystem::create_directories(staticRootPath);
     std::ofstream(staticRootPath / "index.html") << "ok";
-    ReleasableMemoryResource callerResource;
     ruvia::DocumentRootConfig documentRoot;
     documentRoot.root = staticRootPath;
     documentRoot.staticOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
-    documentRoot.staticOptions.mimeTypes = std::pmr::vector<ruvia::StaticMimeType>(&callerResource);
     documentRoot.staticOptions.mimeTypes.push_back(ruvia::StaticMimeType{
-        .extension = std::pmr::string(".custom", &callerResource),
-        .contentType = std::pmr::string("text/x-custom", &callerResource),
+        .extension = ".custom",
+        .contentType = "text/x-custom",
     });
     app.setDocumentRoot(std::move(documentRoot));
-    callerResource.release();
 
     bool started = false;
     std::size_t stopCalls = 0;
     app.setListenAddress("127.0.0.1")
-        .setServerTopology(ruvia::ServerTopology::http(availablePort()))
+        .setListeners({ruvia::ListenerConfig::http(availablePort())})
         .setMemoryPoolConfig({.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes * 2})
         .onStart([&] {
             started = true;
@@ -105,7 +73,6 @@ int main() {
         .onStop([&] { ++stopCalls; });
     app.run();
 
-    const bool configDidNotRetainCallerResource = !callerResource.deallocatedAfterRelease();
     std::filesystem::remove_all(staticRootPath);
-    return started && stopCalls == 1 && configDidNotRetainCallerResource ? 0 : 2;
+    return started && stopCalls == 1 ? 0 : 2;
 }

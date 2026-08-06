@@ -121,10 +121,10 @@ int main() {
 
     const char* tlsCert = std::getenv("TLS_CERT");
     const char* tlsKey = std::getenv("TLS_KEY");
-    const auto topology = (tlsCert != nullptr && tlsKey != nullptr) ? ruvia::ServerTopology::https(port, ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles(tlsCert, tlsKey))) : ruvia::ServerTopology::http(port);
+    const auto topology = (tlsCert != nullptr && tlsKey != nullptr) ? ruvia::ListenerConfig::https(port, ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles(tlsCert, tlsKey))) : ruvia::ListenerConfig::http(port);
 
     auto& app = ruvia::app();
-    app.setListenAddress("0.0.0.0").setServerTopology(topology).setWorkersPerListener(4).setSignalShutdown(true).setKeepaliveRequests(1u << 30).setMaxConnectionsPerWorker(20000);
+    app.setListenAddress("0.0.0.0").setListeners({topology}).setWorkersPerListener(4).setSignalShutdown(true).setKeepaliveRequests(1u << 30).setMaxConnectionsPerWorker(20000);
 
     // Response compression is on by default. Set NO_COMPRESSION=1 for an
     // apples-to-apples comparison against servers that ship it off (so the

@@ -52,7 +52,7 @@ void runTask(Factory&& factory) {
 
 ruvia::Task<void> withDatabase(asio::io_context& ioContext, ruvia::DbConfig config, bool cleanupOnly) {
     auto* resource = std::pmr::get_default_resource();
-    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource), config}};
+    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(config, resource)}};
     ruvia::detail::DbRegistry registry(ioContext, resource, definitions);
     co_await registry.connect();
     ruvia::detail::ScopedOperationScope operationScope;

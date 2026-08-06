@@ -16,16 +16,44 @@
 #include "ruvia/web/detail/app/AppResource.h"
 #include "ruvia/core/detail/util/NativePath.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/DbTypes.h"
+#include "ruvia/web/detail/db/DbConfigStorage.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/RedisTypes.h"
+#include "ruvia/web/detail/redis/RedisConfigStorage.h"
 #endif
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 
 namespace ruvia::detail {
 
 struct AppRuntimeGraph;
+
+struct AppStaticMimeType final {
+    explicit AppStaticMimeType(std::pmr::memory_resource* resource)
+        : extension(resource),
+          contentType(resource) {}
+
+    std::pmr::string extension;
+    std::pmr::string contentType;
+};
+
+struct AppStaticRootOptions final {
+    explicit AppStaticRootOptions(std::pmr::memory_resource* resource)
+        : cacheControl(resource),
+          indexFile(resource),
+          defaultContentType("application/octet-stream", resource),
+          mimeTypes(resource),
+          fileTypeExtensions(resource) {}
+
+    std::pmr::string cacheControl;
+    std::pmr::string indexFile;
+    std::pmr::string defaultContentType;
+    std::pmr::vector<AppStaticMimeType> mimeTypes;
+    StaticFileTypePolicy::Kind fileTypeKind{StaticFileTypePolicy::Kind::kDefaults};
+    std::pmr::vector<std::pmr::string> fileTypeExtensions;
+    bool enableRanges{true};
+    bool enableValidators{true};
+    bool serveDotfiles{false};
+};
 
 // App::stop() may cross an arbitrary user hook while borrowing raw worker
 // pointers from AppRuntimeGraph. The App mutex closes acquisition against graph
@@ -66,10 +94,11 @@ private:
 
 struct AppDocumentRootConfig final {
     explicit AppDocumentRootConfig(std::pmr::memory_resource* resource)
-        : root(resource) {}
+        : root(resource),
+          staticOptions(resource) {}
 
     NativePathString root;
-    StaticRootOptions staticOptions;
+    AppStaticRootOptions staticOptions;
     DocumentRootRuntimeOptions runtimeOptions;
 };
 
@@ -78,9 +107,11 @@ struct AppState final {
     ~AppState();
 
     std::pmr::string listenAddress{appResource()};
-    ServerTopology topology;
+    std::pmr::vector<ListenerConfig> listeners{appResource()};
     std::size_t workersPerListener;
     bool signalShutdown{false};
+    AccessLogCallback accessLogCallback;
+    ConnectionFailureCallback connectionFailureCallback;
     HttpServerOptions options{};
     std::optional<AppDocumentRootConfig> documentRootConfig;
     HttpErrorHandler errorHandler{nullptr};

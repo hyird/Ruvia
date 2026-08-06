@@ -88,5 +88,5 @@ private:
 };
 
 int main() {
-    ruvia::app().setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(8082)).setWorkersPerListener(2).setSignalShutdown(true).setMaxBufferedBodyBytes(16 * 1024 * 1024).setMaxStreamBodyBytes(std::nullopt).run();
+    ruvia::app().setListenAddress("0.0.0.0").setListeners({ruvia::ListenerConfig::http(8082)}).setWorkersPerListener(2).setSignalShutdown(true).setMaxBufferedBodyBytes(16 * 1024 * 1024).setMaxStreamBodyBytes(std::nullopt).run();
 }

@@ -9,13 +9,13 @@
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] std::uint64_t parseRedisCursor(std::string_view value) {
+[[nodiscard]] RedisScanCursor parseRedisCursor(std::string_view value) {
     std::uint64_t cursor = 0;
     const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), cursor);
     if (ec != std::errc{} || ptr != value.data() + value.size()) {
         throw RedisError(RedisError::Code::kProtocolError, "invalid redis scan cursor");
     }
-    return cursor;
+    return RedisScanCursor(cursor);
 }
 
 }  // namespace

@@ -114,7 +114,10 @@ private:
 };
 
 [[nodiscard]] bool addControllerRegistrar(ControllerRegistrar registrar);
-[[nodiscard]] std::pmr::vector<ControllerRegistrar> snapshotControllerRegistrars();
+// Static controller discovery is complete before main. The first App/TestApp
+// build seals this registry; loading a controller-bearing module afterwards is
+// a startup contract error instead of silently changing only later workers.
+[[nodiscard]] std::pmr::vector<ControllerRegistrar> sealControllerRegistrars();
 void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes, std::span<const ControllerRegistrar> registrars);
 
 }  // namespace ruvia::detail

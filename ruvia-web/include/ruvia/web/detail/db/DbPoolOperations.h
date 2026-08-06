@@ -18,7 +18,7 @@
 #include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
-#include "ruvia/web/db/DbQueryResult.h"
+#include "ruvia/web/db/DbRows.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbHostResolution.h"
 
@@ -76,7 +76,8 @@ void releaseDbSlot(Pool& pool, std::size_t slot) noexcept {
 // Whether any operation on this pool can time out, and therefore whether the
 // pool needs the deadline scanner running at all. Every timeout DbConfig can
 // carry is listed here, so adding one is a single edit.
-[[nodiscard]] inline bool dbConfigHasAnyTimeout(const DbConfig& config) noexcept {
+template <typename Config>
+[[nodiscard]] inline bool dbConfigHasAnyTimeout(const Config& config) noexcept {
     return config.connectTimeout.has_value() || config.queryTimeout.has_value() || config.readTimeout.has_value() || config.writeTimeout.has_value() || config.acquireTimeout.has_value();
 }
 
@@ -107,7 +108,7 @@ Task<void> finishDbTransaction(Pool& pool, std::size_t slot, std::string_view co
 // connection and gives the slot back, because a transaction whose statement
 // failed mid-protocol cannot continue on it.
 template <typename Pool>
-Task<DbQueryResult> executeOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbRows> executeOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     if (slot >= pool.slots_.size()) {
         throw std::logic_error("database transaction slot is invalid");
     }
@@ -125,7 +126,7 @@ Task<DbQueryResult> executeOnDbTransactionSlot(Pool& pool, std::size_t slot, std
 // and close the connection if the statement throws -- a slot whose statement
 // failed mid-protocol cannot be reused. The guard releases the slot either way.
 template <typename Pool>
-Task<DbQueryResult> executeDbQuery(Pool& pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbRows> executeDbQuery(Pool& pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }

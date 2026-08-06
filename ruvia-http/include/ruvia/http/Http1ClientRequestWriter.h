@@ -323,16 +323,16 @@ private:
 // authority-form target cannot be confused with an origin-form path.
 class Http1ClientRequestWriter final {
 public:
-    [[nodiscard]] Http1ClientRequestPrepareResult prepare(const HttpOrigin& origin, const HttpClientRequest& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy::withoutExpectation()) const noexcept;
+    [[nodiscard]] Http1ClientRequestPrepareResult prepare(const HttpOriginView& origin, const HttpClientRequestView& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy::withoutExpectation()) const noexcept;
 
-    [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(const HttpOrigin& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy::withoutExpectation()) const noexcept;
+    [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy::withoutExpectation()) const noexcept;
 
     // The prepared response context retains the header table through the final
     // response or protocol-switch decision. A temporary owning contiguous
     // range would be destroyed as prepareConnect() returns; borrowed ranges
     // such as std::span remain valid inputs.
     template <detail::HttpTemporaryOwningHeaderRange Headers>
-    Http1ClientRequestPrepareResult prepareConnect(const HttpOrigin&, Headers&&, std::span<char>, Http1ClientRequestWirePolicy = Http1ClientRequestWirePolicy::withoutExpectation()) const = delete;
+    Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView&, Headers&&, std::span<char>, Http1ClientRequestWirePolicy = Http1ClientRequestWirePolicy::withoutExpectation()) const = delete;
 };
 
 }  // namespace ruvia

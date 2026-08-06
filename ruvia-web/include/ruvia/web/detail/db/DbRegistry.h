@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/detail/db/DbPoolOperations.h"
+#include "ruvia/web/detail/db/DbConfigStorage.h"
 
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbBackend.h"
@@ -73,7 +74,7 @@ struct DbSlotSocket;
 
 class MariaDbPool final {
 public:
-    MariaDbPool(asio::io_context& ioContext, DbConfig config, std::pmr::memory_resource* resource = nullptr);
+    MariaDbPool(asio::io_context& ioContext, DbConfigStorage config, std::pmr::memory_resource* resource = nullptr);
     ~MariaDbPool();
 
     MariaDbPool(const MariaDbPool&) = delete;
@@ -88,11 +89,11 @@ public:
     template <typename Pool>
     friend Task<void> finishDbTransaction(Pool&, std::size_t, std::string_view, std::pmr::memory_resource*);
     template <typename Pool>
-    friend Task<DbQueryResult> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
+    friend Task<DbRows> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
     template <typename Pool, typename Slot>
     friend Task<DbResolvedAddresses> resolveDbHost(Pool&, Slot&, const OperationTimeout&, std::string_view);
     template <typename Pool>
-    friend Task<DbQueryResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
+    friend Task<DbRows> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
     template <typename Pool>
     friend Task<std::size_t> acquireDbSlot(Pool&);
     template <typename Pool>
@@ -139,14 +140,14 @@ public:
     Task<int> waitForMysql(ConnectionSlot& slot, int status, const OperationTimeout& deadline);
     Task<void> runMysqlQuery(ConnectionSlot& slot, std::string_view sql, const OperationTimeout& deadline);
     Task<st_mysql_res*> storeMysqlResult(ConnectionSlot& slot, const OperationTimeout& deadline);
-    Task<DbQueryResult> executeOnSlot(ConnectionSlot& slot, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
+    Task<DbRows> executeOnSlot(ConnectionSlot& slot, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
     Task<void> executeControl(ConnectionSlot& slot, std::string_view sql, std::pmr::memory_resource* resource);
-    Task<DbQueryResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
+    Task<DbRows> execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     Task<DbStreamResult> stream(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     Task<std::optional<DbRow>> readStreamRow(std::size_t slot, void* result, std::pmr::memory_resource* resource);
     Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource);
     void abortStream(std::size_t slot, void* result) noexcept;
-    Task<DbQueryResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
+    Task<DbRows> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource);
     Task<void> commitTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     Task<void> rollbackTransaction(std::size_t slot, std::pmr::memory_resource* resource);
@@ -154,7 +155,7 @@ public:
 
 private:
     asio::io_context& ioContext_;
-    DbConfig config_;
+    DbConfigStorage config_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<ConnectionSlot> slots_;
     PoolLeaseScheduler scheduler_;
@@ -166,7 +167,7 @@ private:
 
 class PostgreSqlPool final {
 public:
-    PostgreSqlPool(asio::io_context& ioContext, DbConfig config, std::pmr::memory_resource* resource = nullptr);
+    PostgreSqlPool(asio::io_context& ioContext, DbConfigStorage config, std::pmr::memory_resource* resource = nullptr);
     ~PostgreSqlPool();
 
     PostgreSqlPool(const PostgreSqlPool&) = delete;
@@ -181,11 +182,11 @@ private:
     template <typename Pool>
     friend Task<void> finishDbTransaction(Pool&, std::size_t, std::string_view, std::pmr::memory_resource*);
     template <typename Pool>
-    friend Task<DbQueryResult> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
+    friend Task<DbRows> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
     template <typename Pool, typename Slot>
     friend Task<DbResolvedAddresses> resolveDbHost(Pool&, Slot&, const OperationTimeout&, std::string_view);
     template <typename Pool>
-    friend Task<DbQueryResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
+    friend Task<DbRows> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
     template <typename Pool>
     friend Task<std::size_t> acquireDbSlot(Pool&);
     template <typename Pool>
@@ -227,14 +228,14 @@ public:
     Task<void> flushOutput(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<void> waitUntilResultReady(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<void> sendQuery(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, const OperationTimeout& deadline, bool singleRow);
-    Task<DbQueryResult> executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
+    Task<DbRows> executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
     Task<void> executeControl(ConnectionSlot& slot, std::string_view sql, std::pmr::memory_resource* resource);
-    Task<DbQueryResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
+    Task<DbRows> execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     Task<DbStreamResult> stream(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     Task<std::optional<DbRow>> readStreamRow(std::size_t slot, void* result, std::pmr::memory_resource* resource);
     Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource);
     void abortStream(std::size_t slot, void* result) noexcept;
-    Task<DbQueryResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
+    Task<DbRows> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
     Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource);
     Task<void> commitTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     Task<void> rollbackTransaction(std::size_t slot, std::pmr::memory_resource* resource);
@@ -242,7 +243,7 @@ public:
 
 private:
     asio::io_context& ioContext_;
-    DbConfig config_;
+    DbConfigStorage config_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<ConnectionSlot> slots_;
     PoolLeaseScheduler scheduler_;

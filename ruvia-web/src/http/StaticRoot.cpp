@@ -185,15 +185,14 @@ bool detail::StaticRootAccess::isIndexedDirectory(const StaticRoot& root, std::s
 StaticRootOptions detail::StaticRootAccess::options(const StaticRoot& root) {
     const auto& state = *root.state_;
     StaticRootOptions result;
-    result.cacheControl = std::pmr::string(state.cacheControl, detail::processResource());
-    result.indexFile = std::pmr::string(state.indexFile, detail::processResource());
-    result.defaultContentType = std::pmr::string(state.defaultContentType, detail::processResource());
-    result.mimeTypes = std::pmr::vector<StaticMimeType>(detail::processResource());
+    result.cacheControl = state.cacheControl;
+    result.indexFile = state.indexFile;
+    result.defaultContentType = state.defaultContentType;
     result.mimeTypes.reserve(state.mimeTypes.size());
     for (const auto& mime : state.mimeTypes) {
         result.mimeTypes.push_back(StaticMimeType{
-            .extension = std::pmr::string(mime.extension, detail::processResource()),
-            .contentType = std::pmr::string(mime.contentType, detail::processResource()),
+            .extension = std::string(mime.extension),
+            .contentType = std::string(mime.contentType),
         });
     }
     switch (state.fileTypeKind) {
@@ -204,12 +203,12 @@ StaticRootOptions detail::StaticRootAccess::options(const StaticRoot& root) {
             result.fileTypes = StaticFileTypePolicy::all();
             break;
         case StaticFileTypePolicy::Kind::kOnly: {
-            std::pmr::vector<std::pmr::string> extensions(detail::processResource());
+            std::vector<std::string> extensions;
             extensions.reserve(state.fileTypeExtensions.size());
             for (const auto& extension : state.fileTypeExtensions) {
                 extensions.emplace_back(extension);
             }
-            std::pmr::vector<std::string_view> views(detail::processResource());
+            std::vector<std::string_view> views;
             views.reserve(extensions.size());
             for (const auto& extension : extensions) {
                 views.push_back(extension);
@@ -296,14 +295,11 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
     state.defaultContentType = std::move(options.defaultContentType);
     state.mimeTypes.reserve(options.mimeTypes.size());
     for (auto& mime : options.mimeTypes) {
-        // StaticMimeType is an aggregate containing nested pmr strings; its
-        // implicit move constructor cannot receive the destination vector's
-        // allocator. Rebuild both strings explicitly so the long-lived index
-        // never retains a caller-owned resource.
-        state.mimeTypes.push_back(StaticMimeType{
-            .extension = std::pmr::string(mime.extension, upstream),
-            .contentType = std::pmr::string(mime.contentType, upstream),
-        });
+        // Public configuration uses ordinary strings. Rebuild it in the
+        // process-owned PMR storage retained by the immutable index.
+        auto& stored = state.mimeTypes.emplace_back(upstream);
+        stored.extension = mime.extension;
+        stored.contentType = mime.contentType;
     }
     state.fileTypeKind = options.fileTypes.kind();
     if (state.fileTypeKind == StaticFileTypePolicy::Kind::kOnly) {

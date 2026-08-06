@@ -1,6 +1,5 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
-#include "ruvia/core/memory/ProcessResource.h"
 
 #include <cstddef>
 #include <stdexcept>
@@ -28,24 +27,16 @@ namespace {
     return true;
 }
 
-void validateDualListenerPorts(std::uint16_t httpPort, std::uint16_t httpsPort) {
-    detail::ensureNonZeroPort(httpPort, "HTTP listen port must not be zero");
-    detail::ensureNonZeroPort(httpsPort, "HTTPS listen port must not be zero");
-    if (httpPort == httpsPort) {
-        throw std::invalid_argument("HTTP and HTTPS listen ports must be different");
-    }
-}
-
 }  // namespace
 
-TlsIdentity TlsIdentity::fromFiles(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::pmr::string privateKeyPassword) {
+TlsIdentity TlsIdentity::fromFiles(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::string_view privateKeyPassword) {
     if (certificateChainFile.empty()) {
         throw std::invalid_argument("TLS certificate chain file must not be empty");
     }
     if (privateKeyFile.empty()) {
         throw std::invalid_argument("TLS private key file must not be empty");
     }
-    return TlsIdentity(std::move(certificateChainFile), std::move(privateKeyFile), std::pmr::string(privateKeyPassword, detail::processResource()));
+    return TlsIdentity(std::move(certificateChainFile), std::move(privateKeyFile), std::string(privateKeyPassword));
 }
 
 TlsClientCertificatePolicy TlsClientCertificatePolicy::optional(std::filesystem::path verifyFile) {
@@ -76,28 +67,27 @@ TlsConfig& TlsConfig::addSniIdentity(std::string_view host, TlsIdentity identity
             throw std::invalid_argument("SNI hosts must be unique");
         }
     }
-    sniIdentities_.push_back(TlsSniIdentity(std::pmr::string(host), std::move(identity)));
+    sniIdentities_.push_back(TlsSniIdentity(std::string(host), std::move(identity)));
     return *this;
 }
 
-ServerTopology ServerTopology::http(std::uint16_t port) {
+ListenerConfig ListenerConfig::http(std::uint16_t port) {
     detail::ensureNonZeroPort(port, "HTTP listen port must not be zero");
-    return ServerTopology(Http{port});
+    return ListenerConfig(Http{port});
 }
 
-ServerTopology ServerTopology::https(std::uint16_t port, TlsConfig tls) {
+ListenerConfig ListenerConfig::https(std::uint16_t port, TlsConfig tls) {
     detail::ensureNonZeroPort(port, "HTTPS listen port must not be zero");
-    return ServerTopology(Https{port, std::move(tls)});
+    return ListenerConfig(Https{port, std::move(tls)});
 }
 
-ServerTopology ServerTopology::httpAndHttps(std::uint16_t httpPort, std::uint16_t httpsPort, TlsConfig tls) {
-    validateDualListenerPorts(httpPort, httpsPort);
-    return ServerTopology(HttpAndHttps{httpPort, httpsPort, std::move(tls)});
-}
-
-ServerTopology ServerTopology::redirectHttpToHttps(std::uint16_t httpPort, std::uint16_t httpsPort, TlsConfig tls) {
-    validateDualListenerPorts(httpPort, httpsPort);
-    return ServerTopology(RedirectHttpToHttps{httpPort, httpsPort, std::move(tls)});
+ListenerConfig ListenerConfig::redirectHttpToHttps(std::uint16_t port, std::uint16_t targetHttpsPort) {
+    detail::ensureNonZeroPort(port, "HTTP redirect listen port must not be zero");
+    detail::ensureNonZeroPort(targetHttpsPort, "HTTPS redirect target port must not be zero");
+    if (port == targetHttpsPort) {
+        throw std::invalid_argument("HTTP redirect and HTTPS target ports must be different");
+    }
+    return ListenerConfig(RedirectHttpToHttps{port, targetHttpsPort});
 }
 
 }  // namespace ruvia

@@ -25,7 +25,7 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/auth/Jwt.h"
 #include "ruvia/web/db/DbMigration.h"
-#include "ruvia/web/db/DbQueryResult.h"
+#include "ruvia/web/db/DbRows.h"
 #include "ruvia/web/db/DbTransaction.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/Controller.h"
@@ -659,5 +659,5 @@ private:
 };
 
 int main() {
-    ruvia::app().setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(8088)).setWorkersPerListener(2).setSignalShutdown(true).onNotFound(&surfaceNotFound).run();
+    ruvia::app().setListenAddress("0.0.0.0").setListeners({ruvia::ListenerConfig::http(8088)}).setWorkersPerListener(2).setSignalShutdown(true).onNotFound(&surfaceNotFound).run();
 }

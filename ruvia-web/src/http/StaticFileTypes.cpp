@@ -44,7 +44,7 @@ inline constexpr std::string_view kDefaultStaticFileTypes[] = {
     "xsl",
 };
 
-const StaticMimeType* findStaticMimeType(const std::pmr::vector<StaticMimeType>& mimeTypes, std::string_view extension) noexcept {
+const StaticMimeType* findStaticMimeType(const std::vector<StaticMimeType>& mimeTypes, std::string_view extension) noexcept {
     if (mimeTypes.size() <= kStaticRootLinearLookupLimit) {
         for (const auto& mime : mimeTypes) {
             if (mime.extension == extension) {
@@ -92,7 +92,7 @@ StaticFileTypePolicy StaticFileTypePolicy::only(std::span<const std::string_view
 
 namespace detail {
 
-void normalizeMimeTypes(std::pmr::vector<StaticMimeType>& mimeTypes) {
+void normalizeMimeTypes(std::vector<StaticMimeType>& mimeTypes) {
     for (auto& mime : mimeTypes) {
         if (!mime.extension.starts_with('.')) {
             mime.extension.insert(mime.extension.begin(), '.');
@@ -106,7 +106,7 @@ void normalizeMimeTypes(std::pmr::vector<StaticMimeType>& mimeTypes) {
     std::ranges::sort(mimeTypes, [](const StaticMimeType& left, const StaticMimeType& right) { return left.extension < right.extension; });
 }
 
-void normalizeFileTypes(std::pmr::vector<std::pmr::string>& fileTypes) {
+void normalizeFileTypes(std::vector<std::string>& fileTypes) {
     for (auto& fileType : fileTypes) {
         if (fileType.starts_with('.')) {
             fileType.erase(fileType.begin());

@@ -19,18 +19,16 @@ struct st_mysql_res;
 
 namespace ruvia {
 
-class DbQueryResult final {
+class DbRows final {
 public:
-    DbQueryResult(const DbQueryResult&) = delete;
-    DbQueryResult& operator=(const DbQueryResult&) = delete;
-    DbQueryResult(DbQueryResult&& other) noexcept;
-    DbQueryResult& operator=(DbQueryResult&&) = delete;
-    ~DbQueryResult();
+    DbRows(const DbRows&) = delete;
+    DbRows& operator=(const DbRows&) = delete;
+    DbRows(DbRows&& other) noexcept;
+    DbRows& operator=(DbRows&&) = delete;
+    ~DbRows();
 
     [[nodiscard]] std::span<const DbRow> rows() const& noexcept;
     [[nodiscard]] std::span<const DbRow> rows() const&& = delete;
-    [[nodiscard]] std::uint64_t affectedRows() const noexcept;
-    [[nodiscard]] std::uint64_t lastInsertId() const noexcept;
 
 private:
     friend struct detail::DbResultAccess;
@@ -46,14 +44,37 @@ private:
         void (*release)(void*) noexcept;
     };
 
-    explicit DbQueryResult(std::pmr::memory_resource* resource = nullptr);
-    DbQueryResult(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
+    explicit DbRows(std::pmr::memory_resource* resource = nullptr);
+    DbRows(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
 
     std::pmr::vector<DbRow> rows_;
     std::pmr::vector<DbField> fields_;
     std::uint64_t affectedRows_{0};
-    std::uint64_t lastInsertId_{0};
+    std::optional<std::uint64_t> lastInsertId_;
     std::variant<NoRawResult, OwnedRawResult> rawResult_;
+};
+
+// Result of a statement whose contract is side effects rather than a row set.
+// PostgreSQL does not expose a portable connection-level insert id, so that
+// value is present only when the selected backend supplied one.
+class DbExecResult final {
+public:
+    [[nodiscard]] constexpr std::uint64_t affectedRows() const noexcept {
+        return affectedRows_;
+    }
+
+    [[nodiscard]] constexpr std::optional<std::uint64_t> lastInsertId() const noexcept {
+        return lastInsertId_;
+    }
+
+private:
+    friend struct detail::DbResultAccess;
+
+    constexpr DbExecResult(std::uint64_t affectedRows, std::optional<std::uint64_t> lastInsertId) noexcept
+        : affectedRows_(affectedRows), lastInsertId_(lastInsertId) {}
+
+    std::uint64_t affectedRows_{0};
+    std::optional<std::uint64_t> lastInsertId_;
 };
 
 class DbStreamResult final : private detail::ScopedCapabilityNode {

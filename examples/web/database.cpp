@@ -17,7 +17,7 @@
 
 namespace {
 
-void assignIfPresent(std::pmr::string& target, std::optional<std::string_view> value) {
+void assignIfPresent(std::string& target, std::optional<std::string_view> value) {
     if (value) {
         target.assign(value->data(), value->size());
     }
@@ -107,8 +107,8 @@ private:
     }
 
     static ruvia::Task<void> insertUser(ruvia::Context& c, std::string_view name, std::uint64_t& id) {
-        auto result = co_await c.db().execute(driver_ == ruvia::DbDriver::kPostgreSql ? "INSERT INTO users(name) VALUES ($1) RETURNING id" : "INSERT INTO users(name) VALUES (?)", name);
         if (driver_ == ruvia::DbDriver::kPostgreSql) {
+            auto result = co_await c.db().query("INSERT INTO users(name) VALUES ($1) RETURNING id", name);
             const auto rows = result.rows();
             if (rows.empty() || rows.front().empty()) {
                 throw std::runtime_error("PostgreSQL INSERT did not return an id");
@@ -119,7 +119,8 @@ private:
                 throw std::runtime_error("PostgreSQL returned an invalid id");
             }
         } else {
-            id = result.lastInsertId();
+            const auto result = co_await c.db().execute("INSERT INTO users(name) VALUES (?)", name);
+            id = result.lastInsertId().value_or(0);
         }
         co_return;
     }
@@ -181,5 +182,5 @@ int main() {
         app.useDb(config);
     }
 
-    app.setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(8086)).setWorkersPerListener(2).setSignalShutdown(true).run();
+    app.setListenAddress("0.0.0.0").setListeners({ruvia::ListenerConfig::http(8086)}).setWorkersPerListener(2).setSignalShutdown(true).run();
 }
