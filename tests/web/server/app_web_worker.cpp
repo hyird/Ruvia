@@ -74,6 +74,7 @@ int main() {
     bool accepted = false;
     bool startHookFinished = false;
     bool stopHookAfterStart = false;
+    bool stopHookSawWorkersStopping = false;
     std::size_t stopCalls = 0;
     std::vector<ruvia::WebWorkerHandle> workers;
 
@@ -83,6 +84,10 @@ int main() {
         .onStop([&] {
             ++stopCalls;
             stopHookAfterStart = startHookFinished;
+            stopHookSawWorkersStopping = !workers.empty();
+            for (const auto& worker : workers) {
+                stopHookSawWorkersStopping = stopHookSawWorkersStopping && !worker.accepting();
+            }
         })
         .onStart([&] {
             workers = app.workers();
@@ -106,7 +111,7 @@ int main() {
         propagated = std::string_view(error.what()) == "app worker task failed";
     }
 
-    if (!rejectedZeroCapacity || !stableSelection || !accepted || !propagated || !stopHookAfterStart || stopCalls != 1) {
+    if (!rejectedZeroCapacity || !stableSelection || !accepted || !propagated || !stopHookAfterStart || !stopHookSawWorkersStopping || stopCalls != 1) {
         return 1;
     }
     if (!isolatedInstances) {
