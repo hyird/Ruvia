@@ -52,7 +52,7 @@ void runTask(Factory&& factory) {
 
 ruvia::Task<void> withDatabase(asio::io_context& ioContext, ruvia::DbConfig config, bool cleanupOnly) {
     auto* resource = std::pmr::get_default_resource();
-    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource), config}};
+    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(config, resource)}};
     ruvia::detail::DbRegistry registry(ioContext, resource, definitions);
     co_await registry.connect();
     ruvia::detail::ScopedOperationScope operationScope;
@@ -72,6 +72,15 @@ ruvia::Task<void> withDatabase(asio::io_context& ioContext, ruvia::DbConfig conf
     dbRequire(typed.rows()[0][1].text() == "-42", "integer binding failed");
     dbRequire(typed.rows()[0][2].text() == "t", "boolean binding failed");
     dbRequire(typed.rows()[0][3].text() == "t", "NULL binding failed");
+
+    // The same bindings passed as ordinary arguments must reach the server in
+    // the same order and with the same types as the prepared span above.
+    auto variadic = co_await db.query("SELECT $1::text, $2::bigint, $3::boolean, $4::text IS NULL", "hello", -42, true, nullptr);
+    dbRequire(variadic.rows().size() == 1 && variadic.rows()[0].size() == 4, "variadic PostgreSQL query returned the wrong shape");
+    dbRequire(variadic.rows()[0][0].text() == "hello", "variadic text binding failed");
+    dbRequire(variadic.rows()[0][1].text() == "-42", "variadic integer binding failed");
+    dbRequire(variadic.rows()[0][2].text() == "t", "variadic boolean binding failed");
+    dbRequire(variadic.rows()[0][3].text() == "t", "variadic NULL binding failed");
 
     {
         auto transaction = co_await db.beginTransaction();

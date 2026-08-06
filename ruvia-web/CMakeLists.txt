@@ -214,12 +214,14 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         PATTERN "DbTypes.h" EXCLUDE)
     ruvia_install_public_headers(web
         include/ruvia/web/detail/db/DbBackend.h
+        include/ruvia/web/detail/db/DbConfigStorage.h
         include/ruvia/web/detail/db/DbConfigValidation.h
         include/ruvia/web/detail/db/DbHostResolution.h
         include/ruvia/web/detail/db/DbRegistry.h
         include/ruvia/web/detail/db/DbMigrationChecksum.h
         include/ruvia/web/detail/db/DbMigrationValidation.h
         include/ruvia/web/detail/db/DbOperationState.h
+        include/ruvia/web/detail/db/DbParameterPack.h
         include/ruvia/web/detail/db/DbPoolOperations.h
         include/ruvia/web/detail/db/DbResultAccess.h
         include/ruvia/web/detail/db/DbSlotSocket.h

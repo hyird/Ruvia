@@ -9,6 +9,8 @@
 #include <memory_resource>
 #include <mutex>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -23,6 +25,43 @@
 
 namespace ruvia {
 namespace {
+
+[[nodiscard]] StaticRootOptions makeStaticRootOptions(const detail::AppStaticRootOptions& source) {
+    StaticRootOptions result;
+    result.cacheControl.assign(source.cacheControl);
+    result.indexFile.assign(source.indexFile);
+    result.defaultContentType.assign(source.defaultContentType);
+    result.mimeTypes.reserve(source.mimeTypes.size());
+    for (const auto& mimeType : source.mimeTypes) {
+        result.mimeTypes.push_back(StaticMimeType{
+            .extension = std::string(mimeType.extension),
+            .contentType = std::string(mimeType.contentType),
+        });
+    }
+
+    switch (source.fileTypeKind) {
+        case StaticFileTypePolicy::Kind::kDefaults:
+            result.fileTypes = StaticFileTypePolicy::defaults();
+            break;
+        case StaticFileTypePolicy::Kind::kAll:
+            result.fileTypes = StaticFileTypePolicy::all();
+            break;
+        case StaticFileTypePolicy::Kind::kOnly: {
+            std::vector<std::string_view> extensions;
+            extensions.reserve(source.fileTypeExtensions.size());
+            for (const auto& extension : source.fileTypeExtensions) {
+                extensions.emplace_back(extension);
+            }
+            result.fileTypes = StaticFileTypePolicy::only(extensions);
+            break;
+        }
+    }
+
+    result.enableRanges = source.enableRanges;
+    result.enableValidators = source.enableValidators;
+    result.serveDotfiles = source.serveDotfiles;
+    return result;
+}
 
 void addShutdownSignals(asio::signal_set& signals) {
     signals.add(SIGINT);
@@ -65,14 +104,14 @@ struct AppRuntimeGraph final {
     // continue on the detached shared state until they return.
     std::unique_ptr<BlockingPool, PmrObjectDeleter<BlockingPool>> blockingPool;
     std::pmr::vector<ControllerStore> controllers;
-    std::pmr::vector<std::unique_ptr<Router, PmrObjectDeleter<Router>>> routers;
+    std::pmr::vector<std::unique_ptr<detail::Router, PmrObjectDeleter<detail::Router>>> routers;
     std::pmr::vector<std::unique_ptr<HttpServer, PmrObjectDeleter<HttpServer>>> workers;
 };
 
 AppState::AppState()
     : workersPerListener(std::max(1U, std::thread::hardware_concurrency())),
       runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{detail::appResource()}) {
-    listenAddress.assign("0.0.0.0");
+    listeners.emplace_back(detail::appResource(), "0.0.0.0", 8080, HttpServerOptions::PlainHttp{});
 }
 
 AppState::~AppState() = default;
@@ -201,17 +240,17 @@ namespace {
 // then every handler the app was configured with -- error, not-found, their
 // prefix-scoped variants, and the global middlewares -- and finalize. Each worker
 // builds its own so a router is never shared across event loops.
-[[nodiscard]] std::unique_ptr<Router, detail::PmrObjectDeleter<Router>> buildWorkerRouter(const detail::AppState& state, std::pmr::memory_resource* runtimeResource, detail::ControllerStore& controllers, std::span<const detail::ControllerRegistrar> controllerRegistrars) {
-    auto router = detail::makePmrObject<Router>(runtimeResource);
+[[nodiscard]] std::unique_ptr<detail::Router, detail::PmrObjectDeleter<detail::Router>> buildWorkerRouter(const detail::AppState& state, std::pmr::memory_resource* runtimeResource, detail::ControllerStore& controllers, std::span<const detail::ControllerRegistrar> controllerRegistrars) {
+    auto router = detail::makePmrObject<detail::Router>(runtimeResource);
     detail::registerControllers(*router, controllers, controllerRegistrars);
     auto& routes = detail::RouterImpl::from(*router);
-    routes.setErrorHandler(state.errorHandler);
-    routes.setNotFoundHandler(state.notFoundHandler);
+    routes.setErrorHandler(detail::CallbackAccess::ref(state.errorHandler));
+    routes.setNotFoundHandler(detail::CallbackAccess::ref(state.notFoundHandler));
     if (!state.prefixErrorHandlers.empty()) {
         std::pmr::vector<detail::HttpPrefixErrorHandler> views(runtimeResource);
         views.reserve(state.prefixErrorHandlers.size());
         for (const auto& [prefix, handler] : state.prefixErrorHandlers) {
-            views.push_back({std::string_view(prefix), handler});
+            views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
         }
         routes.setPrefixErrorHandlers(views);
     }
@@ -219,7 +258,7 @@ namespace {
         std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(runtimeResource);
         views.reserve(state.prefixNotFoundHandlers.size());
         for (const auto& [prefix, handler] : state.prefixNotFoundHandlers) {
-            views.push_back({std::string_view(prefix), handler});
+            views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
         }
         routes.setPrefixNotFoundHandlers(views);
     }
@@ -235,7 +274,7 @@ namespace {
 void App::run() {
     auto& state = *state_;
     auto* runtimeResource = detail::appResource();
-    const auto controllerRegistrars = detail::snapshotControllerRegistrars();
+    const auto controllerRegistrars = detail::sealControllerRegistrars();
     std::pmr::vector<detail::HttpServer*> startedWorkers(runtimeResource);
     auto runtime = detail::makePmrObject<detail::AppRuntimeGraph>(runtimeResource, runtimeResource);
 
@@ -252,7 +291,7 @@ void App::run() {
 
         if (state.documentRootConfig.has_value()) {
             const auto documentRootPath = detail::makePathFromNativePath(state.documentRootConfig->root);
-            runtime->documentRoot = detail::makePmrObject<StaticRoot>(runtimeResource, documentRootPath, state.documentRootConfig->staticOptions);
+            runtime->documentRoot = detail::makePmrObject<StaticRoot>(runtimeResource, documentRootPath, makeStaticRootOptions(state.documentRootConfig->staticOptions));
             preparedOptions.documentRoot.runtimeOptions = state.documentRootConfig->runtimeOptions;
         }
 
@@ -264,16 +303,14 @@ void App::run() {
             preparedOptions.blockingPool = runtime->blockingPool.get();
         }
 
-        const auto address = asio::ip::make_address(state.listenAddress);
-        const auto hasTwoListeners = std::visit([]<typename Topology>(const Topology&) { return std::is_same_v<Topology, ServerTopology::HttpAndHttps> || std::is_same_v<Topology, ServerTopology::RedirectHttpToHttps>; }, state.topology.topology_);
-        const auto workerCount = state.workersPerListener * (hasTwoListeners ? 2 : 1);
+        const auto workerCount = state.workersPerListener * state.listeners.size();
         runtime->controllers.reserve(workerCount);
         runtime->routers.reserve(workerCount);
         runtime->workers.reserve(workerCount);
 
-        const auto addWorkers = [&state, &address, &runtime, &controllerRegistrars, &preparedOptions, runtimeResource](std::uint16_t port, detail::HttpServerOptions::ListenerTransport transport) {
-            const asio::ip::tcp::endpoint endpoint(address, port);
-            auto listenerOptions = detail::makeListenerOptions(preparedOptions, std::move(transport), runtime->documentRoot.get());
+        const auto addWorkers = [&state, &runtime, &controllerRegistrars, &preparedOptions, runtimeResource](const detail::AppListenerConfig& listener) {
+            const asio::ip::tcp::endpoint endpoint(asio::ip::make_address(std::string_view(listener.address)), listener.port);
+            auto listenerOptions = detail::makeListenerOptions(preparedOptions, listener.transport, runtime->documentRoot.get());
             for (std::size_t i = 0; i < state.workersPerListener; ++i) {
                 auto workerOptions = i + 1 == state.workersPerListener ? std::move(listenerOptions) : listenerOptions;  // NOLINT(bugprone-use-after-move): moved only on
                                                                                                                         // the final iteration
@@ -298,21 +335,9 @@ void App::run() {
             }
         };
 
-        std::visit(
-            [&]<typename Topology>(const Topology& topology) {
-                if constexpr (std::is_same_v<Topology, ServerTopology::Http>) {
-                    addWorkers(topology.port, detail::HttpServerOptions::PlainHttp{});
-                } else if constexpr (std::is_same_v<Topology, ServerTopology::Https>) {
-                    addWorkers(topology.port, detail::makeTlsOptions(topology.tls));
-                } else if constexpr (std::is_same_v<Topology, ServerTopology::HttpAndHttps>) {
-                    addWorkers(topology.httpPort, detail::HttpServerOptions::PlainHttp{});
-                    addWorkers(topology.httpsPort, detail::makeTlsOptions(topology.tls));
-                } else {
-                    addWorkers(topology.httpPort, detail::HttpServerOptions::RedirectHttpToHttps{topology.httpsPort});
-                    addWorkers(topology.httpsPort, detail::makeTlsOptions(topology.tls));
-                }
-            },
-            state.topology.topology_);
+        for (const auto& listener : state.listeners) {
+            addWorkers(listener);
+        }
 
         // All fallible startup preparation is complete. Memory configuration is
         // already copied into each worker; no process-global state is committed.

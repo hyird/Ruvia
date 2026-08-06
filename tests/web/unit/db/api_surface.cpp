@@ -22,6 +22,13 @@
 
 namespace {
 
+[[nodiscard]] ruvia::detail::DbDefinition dbDefinition(std::string_view alias, const ruvia::DbConfig& config, std::pmr::memory_resource* resource = std::pmr::get_default_resource()) {
+    return {
+        std::pmr::string(alias, resource),
+        ruvia::detail::DbConfigStorage(config, resource),
+    };
+}
+
 class RejectingMemoryResource final : public std::pmr::memory_resource {
 public:
     void rejectAllocations(bool value = true) noexcept {
@@ -128,8 +135,9 @@ concept ExposesDbValueInspection = requires(const T& value) {
 static_assert(!ExposesDbValueInspection<ruvia::DbValue>);
 static_assert(std::is_move_constructible_v<ruvia::DbMigrationReport>);
 static_assert(!std::is_move_assignable_v<ruvia::DbMigrationReport>);
-static_assert(std::is_move_constructible_v<ruvia::QueryResult>);
-static_assert(!std::is_move_assignable_v<ruvia::QueryResult>);
+static_assert(std::is_move_constructible_v<ruvia::DbRows>);
+static_assert(!std::is_move_assignable_v<ruvia::DbRows>);
+static_assert(std::is_trivially_copyable_v<ruvia::DbExecResult>);
 static_assert(std::is_move_constructible_v<ruvia::DbStreamResult>);
 static_assert(!std::is_move_assignable_v<ruvia::DbStreamResult>);
 static_assert(std::is_move_constructible_v<ruvia::DbTransaction>);
@@ -141,7 +149,7 @@ concept ExposesAnyRvalueDbOwnedView = requires(T&& value) { std::move(value).tex
 static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbValue>);
 static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbField>);
 static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbRow>);
-static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::QueryResult>);
+static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbRows>);
 static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbMigrationReport>);
 
 template <typename T>
@@ -190,9 +198,46 @@ static_assert(HasDbTransactionDefaultParams<ruvia::DbTransaction>);
 static_assert(HasDbTransactionSpanParams<ruvia::DbTransaction>);
 static_assert(!HasDbTransactionInitializerListParams<ruvia::DbTransaction>);
 
+// Bound parameters passed as ordinary arguments.
+template <typename T>
+concept HasVariadicParams = requires(T& handle) {
+    handle.query(std::string_view{}, 1, std::string_view{});
+    handle.execute(std::string_view{}, 1, std::string_view{});
+};
+
+// A prepared sequence must keep selecting the span overload rather than being
+// absorbed as a single bound parameter, which would send the wrong argument.
+template <typename T>
+concept VariadicParamsRejectSequences = !requires(T& handle, std::span<const ruvia::DbValue> params) {
+    { handle.query(std::string_view{}, params) } -> std::same_as<void>;
+} && !std::constructible_from<ruvia::DbValue, std::span<const ruvia::DbValue>> && !std::constructible_from<ruvia::DbValue, std::array<ruvia::DbValue, 2>>;
+
+// An owning-string temporary would leave the borrowed text dangling.
+template <typename T>
+concept HasVariadicOwningTemporaryParams = requires(T& handle) { handle.query(std::string_view{}, std::string("owned")); };
+
+static_assert(HasVariadicParams<ruvia::DbHandle>);
+static_assert(HasVariadicParams<ruvia::DbTransaction>);
+static_assert(VariadicParamsRejectSequences<ruvia::DbHandle>);
+static_assert(VariadicParamsRejectSequences<ruvia::DbTransaction>);
+static_assert(!HasVariadicOwningTemporaryParams<ruvia::DbHandle>);
+static_assert(!HasVariadicOwningTemporaryParams<ruvia::DbTransaction>);
+
+// An lvalue string is fine: it outlives the call, which is all the synchronous
+// parameter cloning requires.
+template <typename T>
+concept HasVariadicOwningLvalueParams = requires(T& handle, std::string owned) { handle.query(std::string_view{}, owned); };
+
+static_assert(HasVariadicOwningLvalueParams<ruvia::DbHandle>);
+static_assert(HasVariadicOwningLvalueParams<ruvia::DbTransaction>);
+
 }  // namespace
 
 RUVIA_TEST(db_api_surface_uses_span_params_without_initializer_list_overloads) {
+    RUVIA_CHECK(true);
+}
+
+RUVIA_TEST(db_api_surface_accepts_variadic_params_without_absorbing_sequences) {
     RUVIA_CHECK(true);
 }
 
@@ -293,15 +338,17 @@ RUVIA_TEST(db_value_and_result_storage_have_one_live_alternative) {
     RUVIA_CHECK_EQ(movedField.text(), std::string_view("borrowed"));
 }
 
-RUVIA_TEST(db_query_result_move_transfers_direct_raii_ownership) {
+RUVIA_TEST(db_query_rows_and_execution_metadata_have_independent_storage) {
     int releases = 0;
     {
         auto result = ruvia::detail::DbResultAccess::makeResult(nullptr);
-        ruvia::detail::DbResultAccess::setAffectedRows(result, 7);
         ruvia::detail::DbResultAccess::ownRawResult(result, &releases, [](void* value) noexcept { ++*static_cast<int*>(value); });
+        const auto execution = ruvia::detail::DbResultAccess::makeExecResult(7);
 
         auto moved = std::move(result);
-        RUVIA_CHECK_EQ(moved.affectedRows(), std::uint64_t{7});
+        RUVIA_CHECK_EQ(execution.affectedRows(), std::uint64_t{7});
+        RUVIA_CHECK(!execution.lastInsertId().has_value());
+        RUVIA_CHECK(moved.rows().empty());
         RUVIA_CHECK_EQ(releases, 0);
     }
     RUVIA_CHECK_EQ(releases, 1);
@@ -315,8 +362,8 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
     const auto config = ruvia::DbConfig::postgreSql();
 #endif
     const std::array<ruvia::detail::DbDefinition, 2> definitions{{
-        {std::pmr::string("analytics"), config},
-        {std::pmr::string("default"), config},
+        dbDefinition("analytics", config),
+        dbDefinition("default", config),
     }};
     ruvia::detail::DbRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
@@ -344,11 +391,11 @@ RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
     std::optional<ruvia::detail::DbDefinition> definition;
     ruvia::DbConfig config{
         .driver = ruvia::DbDriver::kMariaDb,
-        .host = std::pmr::string(80, 'h', &sourceResource),
+        .host = std::string(80, 'h'),
         .port = 3306,
-        .username = std::pmr::string(80, 'u', &sourceResource),
-        .password = std::pmr::string(80, 'p', &sourceResource),
-        .database = std::pmr::string(80, 'd', &sourceResource),
+        .username = std::string(80, 'u'),
+        .password = std::string(80, 'p'),
+        .database = std::string(80, 'd'),
     };
 #ifdef RUVIA_ENABLE_POSTGRESQL
 #ifndef RUVIA_ENABLE_MARIADB
@@ -356,7 +403,7 @@ RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
     config.port = 5432;
 #endif
 #endif
-    definition.emplace(std::pmr::string("default", &sourceResource), std::move(config));
+    definition.emplace(dbDefinition("default", config, &sourceResource));
 
     std::optional<ruvia::detail::DbRegistry> registry;
     registry.emplace(ioContext, &targetResource, std::span<const ruvia::detail::DbDefinition>(&*definition, 1));
@@ -374,7 +421,7 @@ RUVIA_TEST(db_handle_copy_rejects_after_parent_scope_closes) {
 #else
     const auto config = ruvia::DbConfig::postgreSql();
 #endif
-    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default"), config}};
+    const std::array definitions{dbDefinition("default", config)};
     ruvia::detail::DbRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
     auto handle = registry.get(std::pmr::get_default_resource(), operationScope);
@@ -426,27 +473,26 @@ RUVIA_TEST(db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_co
     RUVIA_CHECK(rejected);
 }
 
-RUVIA_TEST(db_migrator_owns_pmr_configuration) {
-    TrackingResource sourceResource;
+RUVIA_TEST(db_migrator_copies_public_configuration) {
     std::pmr::unsynchronized_pool_resource targetResource;
+    std::optional<ruvia::DbMigrator> migrator;
     {
         ruvia::DbConfig config{
             .driver = ruvia::DbDriver::kMariaDb,
-            .host = std::pmr::string(80, 'h', &sourceResource),
+            .host = std::string(80, 'h'),
             .port = 3306,
-            .username = std::pmr::string(80, 'u', &sourceResource),
-            .password = std::pmr::string(80, 'p', &sourceResource),
-            .database = std::pmr::string(80, 'd', &sourceResource),
+            .username = std::string(80, 'u'),
+            .password = std::string(80, 'p'),
+            .database = std::string(80, 'd'),
         };
         ruvia::DbMigrationOptions options{
-            .table = std::pmr::string(80, 't', &sourceResource),
+            .table = std::string(80, 't'),
             .lockTimeout = std::chrono::seconds(30),
         };
-        ruvia::DbMigrator migrator(std::move(config), std::move(options), &targetResource);
-
-        sourceResource.release();
+        migrator.emplace(config, options, &targetResource);
     }
-    RUVIA_CHECK(!sourceResource.deallocatedAfterRelease());
+    migrator.reset();
+    RUVIA_CHECK(true);
 }
 
 RUVIA_TEST(db_result_value_move_assignment_propagates_allocator_failure) {

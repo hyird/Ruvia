@@ -59,7 +59,7 @@ template <typename T>
 concept ExposesRvalueFixedStringView = requires { std::declval<const T&&>().view(); };
 
 template <typename T>
-concept ExposesAnyRvalueModelListBorrow = requires { std::declval<const T&&>()[std::size_t{}]; } || requires { std::declval<const T&&>().front(); } || requires { std::declval<const T&&>().begin(); } || requires { std::declval<const T&&>().end(); } || requires { std::declval<T&&>().emplace(1); } || requires { std::declval<T&&>().emplaceMove(typename T::value_type{}); };
+concept ExposesAnyRvalueModelBoxedArrayBorrow = requires { std::declval<const T&&>()[std::size_t{}]; } || requires { std::declval<const T&&>().front(); } || requires { std::declval<const T&&>().begin(); } || requires { std::declval<const T&&>().end(); } || requires { std::declval<T&&>().emplace(1); } || requires { std::declval<T&&>().emplaceMove(typename T::value_type{}); };
 
 template <typename T>
 concept ExposesAnyRvalueGeneratedMessageMember = requires { std::declval<const T&&>().message(); } || requires { std::declval<T&&>().messageEnsure(); } || requires { std::declval<T&&>().message(std::string_view{}); };
@@ -103,7 +103,7 @@ static_assert(!HasModelPublicJsonWriterHooks<ClonePayload>);
 static_assert(!HasModelPublicFieldStateHook<ClonePayload>);
 static_assert(!ExposesAnyRvalueModelStringBorrow<ruvia::String>);
 static_assert(!ExposesRvalueFixedStringView<ruvia::FixedString<6>>);
-static_assert(!ExposesAnyRvalueModelListBorrow<ruvia::List<ruvia::Int32>>);
+static_assert(!ExposesAnyRvalueModelBoxedArrayBorrow<ruvia::BoxedArray<ruvia::Int32>>);
 static_assert(!ExposesAnyRvalueGeneratedMessageMember<ClonePayload>);
 static_assert(!ExposesAnyRvalueGeneratedMessageMember<SurfaceJsonResponse>);
 static_assert(CanConstructRequiredRule<std::string_view>);

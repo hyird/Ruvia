@@ -4,6 +4,7 @@
 
 namespace {
 
+#if !defined(_MSC_VER)
 class ToggleRejectingMemoryResource final : public std::pmr::memory_resource {
 public:
     void rejectAllocations(bool value = true) noexcept {
@@ -37,6 +38,7 @@ private:
     bool reject_{false};
     std::size_t rejectedSize_{0};
 };
+#endif  // !_MSC_VER
 
 }  // namespace
 
@@ -59,6 +61,9 @@ RUVIA_TEST(http2_connection_feed_connection_window_update_ok) {
     RUVIA_CHECK(conn.pendingOutput().empty());
 }
 
+#if !defined(_MSC_VER)
+// These fault-injection paths include PMR string growth. MSVC's debug
+// pmr::string does not complete when its resource throws during growth.
 RUVIA_TEST(http2_connection_lifecycle_output_transitions_are_retryable_on_allocation_failure) {
     {
         ToggleRejectingMemoryResource resource;
@@ -671,6 +676,7 @@ RUVIA_TEST(http2_connection_peer_goaway_publication_is_retryable_on_allocation_f
     RUVIA_CHECK(conn.draining());
     RUVIA_CHECK(conn.nextEvent().has_value());
 }
+#endif  // !_MSC_VER
 
 // A zero-increment connection WINDOW_UPDATE is a protocol error (GOAWAY).
 
@@ -802,6 +808,7 @@ RUVIA_TEST(http2_connection_consumed_data_batches_window_updates_at_half_window)
     RUVIA_CHECK_EQ(ruvia::detail::http2WindowUpdateIncrement(updates.substr(ruvia::detail::kHttp2WindowUpdateFrameBytes + 9, 4)), threshold);
 }
 
+#if !defined(_MSC_VER)
 RUVIA_TEST(http2_connection_receive_window_update_is_transactional_on_allocation_failure) {
     ToggleRejectingMemoryResource resource;
     Http2Connection conn(&resource);
@@ -847,6 +854,7 @@ RUVIA_TEST(http2_connection_receive_window_update_is_transactional_on_allocation
     conn.releaseReceivedData(1);
     RUVIA_CHECK_EQ(conn.pendingOutput().size(), std::size_t{2 * ruvia::detail::kHttp2WindowUpdateFrameBytes});
 }
+#endif  // !_MSC_VER
 
 // A body larger than the send window is partially sent and the remainder queued. The
 // core owns that remainder; a second submission is rejected without growing output.
@@ -908,6 +916,7 @@ RUVIA_TEST(http2_connection_submit_data_blocks_then_drains_on_window) {
     RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{10});
 }
 
+#if !defined(_MSC_VER)
 RUVIA_TEST(http2_connection_submit_data_reserves_output_before_accepting_state) {
     ToggleRejectingMemoryResource resource;
     Http2Connection conn(&resource);
@@ -981,6 +990,7 @@ RUVIA_TEST(http2_connection_window_update_drain_is_transactional_on_allocation_f
     RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{5000});
     RUVIA_CHECK_EQ(conn.takeDrainedDataStreams().size(), std::size_t{1});
 }
+#endif  // !_MSC_VER
 
 RUVIA_TEST(http2_connection_goaway_rejects_unprocessed_requests_in_core) {
     std::pmr::monotonic_buffer_resource resource;

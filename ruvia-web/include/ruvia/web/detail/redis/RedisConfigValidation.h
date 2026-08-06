@@ -7,7 +7,8 @@
 
 namespace ruvia::detail {
 
-inline void validateRedisConfig(const RedisConfig& config) {
+template <typename Config>
+inline void validateRedisConfig(const Config& config) {
     ensureConfigHost(config.host, "redis host must not be empty", "redis host is invalid", kSeparatedPortHostRules);
     ensureNonZeroPort(config.port, "redis port must not be zero");
     ensurePositiveSize(config.poolSizePerWorker, "redis pool size must be greater than zero");

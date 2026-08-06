@@ -303,7 +303,7 @@ RUVIA_TEST(json_string_value_failure_preserves_input_cursor) {
 RUVIA_TEST(json_sequence_failure_preserves_input_cursor) {
     auto* const resource = std::pmr::get_default_resource();
     using ArrayT = ruvia::Array<ruvia::Int32>;
-    using ListT = ruvia::List<ruvia::Int32>;
+    using ListT = ruvia::BoxedArray<ruvia::Int32>;
 
     std::string_view malformedArray = R"([1,2,"bad"] tail)";
     const auto originalArray = malformedArray;

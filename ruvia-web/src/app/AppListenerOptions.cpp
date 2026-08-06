@@ -36,18 +36,18 @@ HttpServerOptions makeListenerOptions(const HttpServerOptions& base, HttpServerO
     return options;
 }
 
-HttpServerOptions::Tls makeTlsOptions(const TlsConfig& config) {
-    HttpServerOptions::Tls tls;
+HttpServerOptions::Tls makeTlsOptions(const TlsConfig& config, std::pmr::memory_resource* resource) {
+    HttpServerOptions::Tls tls(resource);
     assignTlsFileName(tls.identity.certificateChainFile, config.identity().certificateChainFile());
     assignTlsFileName(tls.identity.privateKeyFile, config.identity().privateKeyFile());
     tls.identity.privateKeyPassword = config.identity().privateKeyPassword();
     if (config.clientCertificatePolicy().has_value()) {
-        auto& policy = tls.clientCertificates.emplace(std::pmr::string{}, config.clientCertificatePolicy()->requirement());
+        auto& policy = tls.clientCertificates.emplace(resource, config.clientCertificatePolicy()->requirement());
         assignTlsFileName(policy.verifyFile, config.clientCertificatePolicy()->verifyFile());
     }
     tls.sniIdentities.reserve(config.sniIdentities().size());
     for (const auto& configured : config.sniIdentities()) {
-        auto& sni = tls.sniIdentities.emplace_back();
+        auto& sni = tls.sniIdentities.emplace_back(resource);
         sni.host = configured.host();
         assignTlsFileName(sni.identity.certificateChainFile, configured.identity().certificateChainFile());
         assignTlsFileName(sni.identity.privateKeyFile, configured.identity().privateKeyFile());

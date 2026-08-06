@@ -19,34 +19,6 @@ using ruvia::detail::ensurePositiveSize;
 using ruvia::detail::isValidConfigHost;
 using ruvia::detail::kSeparatedPortHostRules;
 
-class TrackingResource final : public std::pmr::memory_resource {
-public:
-    void release() noexcept {
-        released_ = true;
-    }
-
-    [[nodiscard]] bool deallocatedAfterRelease() const noexcept {
-        return deallocatedAfterRelease_;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        deallocatedAfterRelease_ = deallocatedAfterRelease_ || released_;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    bool released_{false};
-    bool deallocatedAfterRelease_{false};
-};
-
 // Returns the invalid_argument message a call throws, or empty if it does not.
 template <typename Fn>
 std::string caughtMessage(Fn&& fn) {
@@ -116,19 +88,18 @@ RUVIA_TEST(config_ensure_host_throws_distinct_messages) {
     RUVIA_CHECK(caughtMessage([] { ensureConfigHost("example.com", "was-empty", "was-invalid"); }).empty());
 }
 
-RUVIA_TEST(data_access_config_clones_nested_pmr_strings) {
-    TrackingResource sourceResource;
+RUVIA_TEST(data_access_config_clones_public_strings_into_internal_pmr_storage) {
     std::pmr::unsynchronized_pool_resource targetResource;
-    std::optional<ruvia::DbConfig> database;
-    std::optional<ruvia::RedisConfig> redis;
+    std::optional<ruvia::detail::DbConfigStorage> database;
+    std::optional<ruvia::detail::RedisConfigStorage> redis;
     {
         ruvia::DbConfig source{
             .driver = ruvia::DbDriver::kMariaDb,
-            .host = std::pmr::string(80, 'h', &sourceResource),
+            .host = std::string(80, 'h'),
             .port = 3306,
-            .username = std::pmr::string(80, 'u', &sourceResource),
-            .password = std::pmr::string(80, 'p', &sourceResource),
-            .database = std::pmr::string(80, 'd', &sourceResource),
+            .username = std::string(80, 'u'),
+            .password = std::string(80, 'p'),
+            .database = std::string(80, 'd'),
         };
         database.emplace(ruvia::detail::cloneDbConfig(source, &targetResource));
         RUVIA_CHECK(database->host.get_allocator().resource() == &targetResource);
@@ -137,10 +108,10 @@ RUVIA_TEST(data_access_config_clones_nested_pmr_strings) {
         RUVIA_CHECK(database->database.get_allocator().resource() == &targetResource);
 
         ruvia::RedisConfig sourceRedis{
-            .host = std::pmr::string(80, 'r', &sourceResource),
+            .host = std::string(80, 'r'),
             .port = 6379,
-            .username = std::pmr::string(80, 'x', &sourceResource),
-            .password = std::pmr::string(80, 'y', &sourceResource),
+            .username = std::string(80, 'x'),
+            .password = std::string(80, 'y'),
         };
         redis.emplace(ruvia::detail::cloneRedisConfig(sourceRedis, &targetResource));
         RUVIA_CHECK(redis->host.get_allocator().resource() == &targetResource);
@@ -148,8 +119,6 @@ RUVIA_TEST(data_access_config_clones_nested_pmr_strings) {
         RUVIA_CHECK(redis->password.get_allocator().resource() == &targetResource);
     }
 
-    // The source configuration can now be destroyed/released independently;
-    // long-lived app definitions must not retain its PMR allocator.
-    sourceResource.release();
-    RUVIA_CHECK(!sourceResource.deallocatedAfterRelease());
+    RUVIA_CHECK_EQ(std::string(database->host), std::string(80, 'h'));
+    RUVIA_CHECK_EQ(std::string(redis->host), std::string(80, 'r'));
 }

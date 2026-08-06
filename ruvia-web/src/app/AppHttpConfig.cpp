@@ -11,36 +11,24 @@ namespace ruvia {
 
 namespace {
 
-[[nodiscard]] StaticRootOptions copyStaticRootOptionsToAppResource(const StaticRootOptions& source) {
+[[nodiscard]] detail::AppStaticRootOptions copyStaticRootOptionsToAppResource(const StaticRootOptions& source) {
     auto* const resource = detail::appResource();
-    StaticRootOptions result;
+    detail::AppStaticRootOptions result(resource);
     result.cacheControl = source.cacheControl;
     result.indexFile = source.indexFile;
     result.defaultContentType = source.defaultContentType;
-    result.mimeTypes = std::pmr::vector<StaticMimeType>(resource);
     result.mimeTypes.reserve(source.mimeTypes.size());
     for (const auto& mime : source.mimeTypes) {
-        result.mimeTypes.push_back(StaticMimeType{
-            .extension = std::pmr::string(mime.extension, resource),
-            .contentType = std::pmr::string(mime.contentType, resource),
-        });
+        auto& stored = result.mimeTypes.emplace_back(resource);
+        stored.extension = mime.extension;
+        stored.contentType = mime.contentType;
     }
 
-    switch (source.fileTypes.kind()) {
-        case StaticFileTypePolicy::Kind::kDefaults:
-            result.fileTypes = StaticFileTypePolicy::defaults();
-            break;
-        case StaticFileTypePolicy::Kind::kAll:
-            result.fileTypes = StaticFileTypePolicy::all();
-            break;
-        case StaticFileTypePolicy::Kind::kOnly: {
-            std::pmr::vector<std::string_view> extensions(resource);
-            extensions.reserve(source.fileTypes.extensions().size());
-            for (const auto& extension : source.fileTypes.extensions()) {
-                extensions.push_back(extension);
-            }
-            result.fileTypes = StaticFileTypePolicy::only(extensions);
-            break;
+    result.fileTypeKind = source.fileTypes.kind();
+    if (result.fileTypeKind == StaticFileTypePolicy::Kind::kOnly) {
+        result.fileTypeExtensions.reserve(source.fileTypes.extensions().size());
+        for (const auto& extension : source.fileTypes.extensions()) {
+            result.fileTypeExtensions.push_back(std::pmr::string(extension, resource));
         }
     }
     result.enableRanges = source.enableRanges;
@@ -56,7 +44,13 @@ App& App::setCompression(std::optional<CompressionConfig> config) {
 }
 
 App& App::setCors(std::optional<CorsConfig> config) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change CORS config while app is running", [&config](detail::AppState& state) { state.options.cors = std::move(config); });
+    return detail::mutateStoppedApp(*this, *state_, "cannot change CORS config while app is running", [&config](detail::AppState& state) {
+        if (!config.has_value()) {
+            state.options.cors.reset();
+            return;
+        }
+        state.options.cors = detail::makeCorsOptions(*config, detail::appResource());
+    });
 }
 
 App& App::setDocumentRoot(DocumentRootConfig config) {
@@ -107,41 +101,31 @@ App& App::useWorkerStateDefinition(detail::WorkerStateDefinition definition) {
 }
 
 App& App::onError(HttpErrorHandler handler) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [handler](detail::AppState& state) { state.errorHandler = handler; });
+    return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [handler = std::move(handler)](detail::AppState& state) mutable { state.errorHandler = std::move(handler); });
 }
 
-App& App::notFound(HttpNotFoundHandler handler) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [handler](detail::AppState& state) { state.notFoundHandler = handler; });
+App& App::onNotFound(HttpNotFoundHandler handler) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [handler = std::move(handler)](detail::AppState& state) mutable { state.notFoundHandler = std::move(handler); });
 }
 
 namespace {
 
-// Shared registration shape for both prefix-scoped fallback kinds. Prefix-less
-// setters are explicit single slots and may be overwritten; a scoped fallback
-// is a route-like registration and duplicate normalized scopes are a config
-// error rather than an order-dependent last-wins mutation.
-template <typename Handler>
-void appendPrefixHandler(std::pmr::vector<std::pair<std::pmr::string, Handler>>& handlers, std::string_view prefix, Handler handler) {
-    if (handler == nullptr) {
-        throw std::invalid_argument("fallback handler must not be null");
-    }
-    prefix = detail::normalizeFallbackPrefix(prefix);
-    for (const auto& existing : handlers) {
-        if (std::string_view(existing.first) == prefix) {
-            throw std::invalid_argument("duplicate fallback prefix");
-        }
-    }
-    handlers.emplace_back(std::pmr::string(prefix, detail::appResource()), handler);
+// Storage differs from TestApp's -- these live on the app resource -- but the
+// rule that decides what is accepted is shared.
+template <typename Handlers, typename Handler>
+void appendPrefixHandler(Handlers& handlers, std::string_view prefix, Handler handler) {
+    const auto normalized = detail::validateFallbackPrefix(handlers, prefix, handler);
+    handlers.emplace_back(std::pmr::string(normalized, detail::appResource()), std::move(handler));
 }
 
 }  // namespace
 
 App& App::onError(std::string_view prefix, HttpErrorHandler handler) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [prefix, handler](detail::AppState& state) { appendPrefixHandler(state.prefixErrorHandlers, prefix, handler); });
+    return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [prefix, handler = std::move(handler)](detail::AppState& state) mutable { appendPrefixHandler(state.prefixErrorHandlers, prefix, std::move(handler)); });
 }
 
-App& App::notFound(std::string_view prefix, HttpNotFoundHandler handler) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [prefix, handler](detail::AppState& state) { appendPrefixHandler(state.prefixNotFoundHandlers, prefix, handler); });
+App& App::onNotFound(std::string_view prefix, HttpNotFoundHandler handler) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [prefix, handler = std::move(handler)](detail::AppState& state) mutable { appendPrefixHandler(state.prefixNotFoundHandlers, prefix, std::move(handler)); });
 }
 
 }  // namespace ruvia

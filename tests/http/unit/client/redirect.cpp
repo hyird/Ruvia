@@ -17,8 +17,8 @@ using ruvia::classifyHttpClientOriginAuthority;
 using ruvia::HttpClientOriginAuthorityStatus;
 using ruvia::HttpClientRedirectContentDisposition;
 using ruvia::HttpClientRedirectTargetError;
-using ruvia::HttpClientRequest;
-using ruvia::HttpOrigin;
+using ruvia::HttpClientRequestView;
+using ruvia::HttpOriginView;
 using ruvia::HttpScheme;
 using ruvia::isHttpClientRedirectStatus;
 using ruvia::lookupUniqueHttpClientResponseHeader;
@@ -71,11 +71,11 @@ static_assert(!HasRedirectTargetError<ruvia::HttpClientRedirectTarget>);
 static_assert(HasRedirectTargetError<ruvia::HttpClientRedirectTargetFailure>);
 static_assert(!HasRedirectStatus<ruvia::HttpClientRedirectTargetResult>);
 
-HttpOrigin originFor(std::string_view host, std::uint16_t port, HttpScheme scheme = HttpScheme::kHttp) {
-    return scheme == HttpScheme::kHttps ? HttpOrigin::https(host, port) : HttpOrigin::http(host, port);
+HttpOriginView originFor(std::string_view host, std::uint16_t port, HttpScheme scheme = HttpScheme::kHttp) {
+    return scheme == HttpScheme::kHttps ? HttpOriginView::https(host, port) : HttpOriginView::http(host, port);
 }
 
-void checkResolvedTarget(ruvia::testing::TestContext& ruvia_ctx, const HttpOrigin& origin, std::string_view currentTarget, std::string_view location, std::string_view expected) {
+void checkResolvedTarget(ruvia::testing::TestContext& ruvia_ctx, const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, std::string_view expected) {
     const auto result = resolveHttpClientSameOriginRedirectTarget(origin, currentTarget, location, std::pmr::get_default_resource());
     RUVIA_CHECK(result.target() != nullptr);
     RUVIA_CHECK(result.failure() == nullptr);
@@ -84,7 +84,7 @@ void checkResolvedTarget(ruvia::testing::TestContext& ruvia_ctx, const HttpOrigi
     }
 }
 
-void checkRedirectTargetFailure(ruvia::testing::TestContext& ruvia_ctx, const HttpOrigin& origin, std::string_view currentTarget, std::string_view location, HttpClientRedirectTargetError expected) {
+void checkRedirectTargetFailure(ruvia::testing::TestContext& ruvia_ctx, const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, HttpClientRedirectTargetError expected) {
     const auto result = resolveHttpClientSameOriginRedirectTarget(origin, currentTarget, location, std::pmr::get_default_resource());
     RUVIA_CHECK(result.target() == nullptr);
     RUVIA_CHECK(result.failure() != nullptr);
@@ -108,15 +108,15 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
     // 303 selects a retrieval request. HEAD remains HEAD; every other method
     // becomes GET. The representation and content-specific fields are dropped.
     {
-        HttpClientRequest request;
+        HttpClientRequestView request;
         request.method = "PUT";
-        request.content = ruvia::HttpClientRequestContent::bytes("payload");
+        request.content = ruvia::HttpClientRequestContentView::bytes("payload");
         const auto plan = planHttpClientRedirectRequest(request, ruvia::http_status::kSeeOther);
         RUVIA_CHECK_EQ(plan.method(), std::string_view("GET"));
         RUVIA_CHECK(plan.contentDisposition() == HttpClientRedirectContentDisposition::kDrop);
     }
     {
-        HttpClientRequest request;
+        HttpClientRequestView request;
         request.method = "HEAD";
         const auto plan = planHttpClientRedirectRequest(request, ruvia::http_status::kSeeOther);
         RUVIA_CHECK_EQ(plan.method(), std::string_view("HEAD"));
@@ -126,17 +126,17 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
     // RFC 9110 permits the historical POST-to-GET rewrite for 301/302. Other
     // methods are not aliases for POST and retain both method and content.
     {
-        HttpClientRequest request;
+        HttpClientRequestView request;
         request.method = "POST";
-        request.content = ruvia::HttpClientRequestContent::bytes("payload");
+        request.content = ruvia::HttpClientRequestContentView::bytes("payload");
         const auto plan = planHttpClientRedirectRequest(request, ruvia::http_status::kFound);
         RUVIA_CHECK_EQ(plan.method(), std::string_view("GET"));
         RUVIA_CHECK(plan.contentDisposition() == HttpClientRedirectContentDisposition::kDrop);
     }
     {
-        HttpClientRequest request;
+        HttpClientRequestView request;
         request.method = "PUT";
-        request.content = ruvia::HttpClientRequestContent::bytes("payload");
+        request.content = ruvia::HttpClientRequestContentView::bytes("payload");
         const auto plan = planHttpClientRedirectRequest(request, ruvia::http_status::kMovedPermanently);
         RUVIA_CHECK_EQ(plan.method(), std::string_view("PUT"));
         RUVIA_CHECK(plan.contentDisposition() == HttpClientRedirectContentDisposition::kPreserve);
@@ -144,7 +144,7 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
 
     // Method tokens are case-sensitive: lowercase "post" is a distinct method.
     {
-        HttpClientRequest request;
+        HttpClientRequestView request;
         request.method = "post";
         const auto plan = planHttpClientRedirectRequest(request, ruvia::http_status::kMovedPermanently);
         RUVIA_CHECK_EQ(plan.method(), std::string_view("post"));
@@ -153,9 +153,9 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
 
     // 307/308 never change method or content.
     for (const ruvia::HttpStatusCode status : {ruvia::http_status::kTemporaryRedirect, ruvia::http_status::kPermanentRedirect}) {
-        HttpClientRequest request;
+        HttpClientRequestView request;
         request.method = "POST";
-        request.content = ruvia::HttpClientRequestContent::bytes("payload");
+        request.content = ruvia::HttpClientRequestContentView::bytes("payload");
         const auto plan = planHttpClientRedirectRequest(request, status);
         RUVIA_CHECK_EQ(plan.method(), std::string_view("POST"));
         RUVIA_CHECK(plan.contentDisposition() == HttpClientRedirectContentDisposition::kPreserve);
@@ -164,7 +164,7 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
 
 RUVIA_TEST(http_client_redirect_request_plan_owns_preserved_method) {
     std::string method = "PROPFIND";
-    HttpClientRequest request;
+    HttpClientRequestView request;
     request.method = method;
 
     const auto plan = planHttpClientRedirectRequest(request, ruvia::http_status::kTemporaryRedirect);
@@ -202,7 +202,7 @@ RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) 
 
 RUVIA_TEST(http_client_authority_matches_typed_origin) {
     const auto nonDefault = originFor("example.com", 8080);
-    const auto is = [](const HttpOrigin& origin, std::string_view authority) { return classifyHttpClientOriginAuthority(origin, authority); };
+    const auto is = [](const HttpOriginView& origin, std::string_view authority) { return classifyHttpClientOriginAuthority(origin, authority); };
     RUVIA_CHECK(is(nonDefault, "example.com:8080") == HttpClientOriginAuthorityStatus::kSameOrigin);
     for (const std::string_view different : {"example.com", "example.com:9090", "other.com:8080", "example.com:0", "example.com:"}) {
         RUVIA_CHECK(is(nonDefault, different) == HttpClientOriginAuthorityStatus::kDifferentOrigin);
@@ -210,25 +210,25 @@ RUVIA_TEST(http_client_authority_matches_typed_origin) {
     RUVIA_CHECK(is(nonDefault, "user@example.com:8080") == HttpClientOriginAuthorityStatus::kInvalidAuthority);
     RUVIA_CHECK(is(nonDefault, "example.com:99999") == HttpClientOriginAuthorityStatus::kInvalidAuthority);
 
-    RUVIA_CHECK(is(HttpOrigin::http("example.com"), "example.com") == HttpClientOriginAuthorityStatus::kSameOrigin);
-    RUVIA_CHECK(is(HttpOrigin::http("example.com"), "EXAMPLE.com:") == HttpClientOriginAuthorityStatus::kSameOrigin);
-    RUVIA_CHECK(is(HttpOrigin::http("example.com"), "exa%6dple.com") == HttpClientOriginAuthorityStatus::kSameOrigin);
-    RUVIA_CHECK(is(HttpOrigin::http("!example"), "%21example") == HttpClientOriginAuthorityStatus::kDifferentOrigin);
-    RUVIA_CHECK(is(HttpOrigin::https("example.com"), "example.com") == HttpClientOriginAuthorityStatus::kSameOrigin);
-    RUVIA_CHECK(is(HttpOrigin::http("example.com", 0), "example.com:0") == HttpClientOriginAuthorityStatus::kSameOrigin);
-    RUVIA_CHECK(is(HttpOrigin::http("example.com", 0), "example.com") == HttpClientOriginAuthorityStatus::kDifferentOrigin);
+    RUVIA_CHECK(is(HttpOriginView::http("example.com"), "example.com") == HttpClientOriginAuthorityStatus::kSameOrigin);
+    RUVIA_CHECK(is(HttpOriginView::http("example.com"), "EXAMPLE.com:") == HttpClientOriginAuthorityStatus::kSameOrigin);
+    RUVIA_CHECK(is(HttpOriginView::http("example.com"), "exa%6dple.com") == HttpClientOriginAuthorityStatus::kSameOrigin);
+    RUVIA_CHECK(is(HttpOriginView::http("!example"), "%21example") == HttpClientOriginAuthorityStatus::kDifferentOrigin);
+    RUVIA_CHECK(is(HttpOriginView::https("example.com"), "example.com") == HttpClientOriginAuthorityStatus::kSameOrigin);
+    RUVIA_CHECK(is(HttpOriginView::http("example.com", 0), "example.com:0") == HttpClientOriginAuthorityStatus::kSameOrigin);
+    RUVIA_CHECK(is(HttpOriginView::http("example.com", 0), "example.com") == HttpClientOriginAuthorityStatus::kDifferentOrigin);
 
     const auto v6 = originFor("[::1]", 8080);
     RUVIA_CHECK(is(v6, "[::1]:8080") == HttpClientOriginAuthorityStatus::kSameOrigin);
     RUVIA_CHECK(is(v6, "[::2]:8080") == HttpClientOriginAuthorityStatus::kDifferentOrigin);
     RUVIA_CHECK(is(v6, "[::1]:") == HttpClientOriginAuthorityStatus::kDifferentOrigin);
 
-    const auto future = HttpOrigin::http("[v1.future]");
+    const auto future = HttpOriginView::http("[v1.future]");
     RUVIA_CHECK(is(future, "[V1.FUTURE]:") == HttpClientOriginAuthorityStatus::kSameOrigin);
 }
 
 RUVIA_TEST(http_client_same_origin_redirect_resolves_uri_references) {
-    const auto origin = HttpOrigin::http("example.com");
+    const auto origin = HttpOriginView::http("example.com");
     constexpr std::string_view current = "/base/dir/page?old=1";
 
     checkResolvedTarget(ruvia_ctx, origin, current, "/new/path", "/new/path");
@@ -245,7 +245,7 @@ RUVIA_TEST(http_client_same_origin_redirect_resolves_uri_references) {
 }
 
 RUVIA_TEST(http_client_same_origin_redirect_reports_rejection_reason) {
-    const auto origin = HttpOrigin::http("example.com");
+    const auto origin = HttpOriginView::http("example.com");
 
     checkRedirectTargetFailure(ruvia_ctx, origin, "/current", "http://evil.com/next", HttpClientRedirectTargetError::kNotSameOrigin);
     checkRedirectTargetFailure(ruvia_ctx, origin, "/current", "https://example.com/next", HttpClientRedirectTargetError::kNotSameOrigin);
@@ -256,12 +256,12 @@ RUVIA_TEST(http_client_same_origin_redirect_reports_rejection_reason) {
 }
 
 RUVIA_TEST(http_client_same_origin_redirect_supports_ipvfuture) {
-    const auto origin = HttpOrigin::http("[v1.future]");
+    const auto origin = HttpOriginView::http("[v1.future]");
     checkResolvedTarget(ruvia_ctx, origin, "/current", "http://[V1.FUTURE]:/next", "/next");
 }
 
 RUVIA_TEST(http_client_redirect_relative_resolution_matches_rfc3986_examples) {
-    const auto origin = HttpOrigin::http("a");
+    const auto origin = HttpOriginView::http("a");
     constexpr std::string_view current = "/b/c/d;p?q";
 
     struct Example final {
@@ -315,7 +315,7 @@ struct ExpectedResolvedRedirect final {
     bool crossOrigin;
 };
 
-void checkResolvedRedirect(ruvia::testing::TestContext& ruvia_ctx, const HttpOrigin& origin, std::string_view currentTarget, std::string_view location, const ExpectedResolvedRedirect& expected) {
+void checkResolvedRedirect(ruvia::testing::TestContext& ruvia_ctx, const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, const ExpectedResolvedRedirect& expected) {
     const auto result = resolveHttpClientRedirectTarget(origin, currentTarget, location, std::pmr::get_default_resource());
     RUVIA_CHECK(result.failure() == nullptr);
     RUVIA_CHECK(result.resolved() != nullptr);
@@ -328,7 +328,7 @@ void checkResolvedRedirect(ruvia::testing::TestContext& ruvia_ctx, const HttpOri
     }
 }
 
-void checkRedirectResolutionFailure(ruvia::testing::TestContext& ruvia_ctx, const HttpOrigin& origin, std::string_view currentTarget, std::string_view location, HttpClientRedirectResolutionError expected) {
+void checkRedirectResolutionFailure(ruvia::testing::TestContext& ruvia_ctx, const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, HttpClientRedirectResolutionError expected) {
     const auto result = resolveHttpClientRedirectTarget(origin, currentTarget, location, std::pmr::get_default_resource());
     RUVIA_CHECK(result.resolved() == nullptr);
     RUVIA_CHECK(result.failure() != nullptr);
@@ -359,7 +359,7 @@ RUVIA_TEST(http_client_redirect_resolution_classifies_cross_origin) {
     checkResolvedRedirect(ruvia_ctx, origin, "/a/b", "//other.example/p", {HttpScheme::kHttp, "other.example", 80, "/p", true});
     // Path normalization and fragment stripping apply across origins too.
     checkResolvedRedirect(ruvia_ctx, origin, "/a/b", "https://other.example/a/../b#frag", {HttpScheme::kHttps, "other.example", 443, "/b", true});
-    // IPv6 literals keep their brackets, matching the HttpOrigin contract.
+    // IPv6 literals keep their brackets, matching the HttpOriginView contract.
     checkResolvedRedirect(ruvia_ctx, origin, "/a/b", "http://[::1]:8080/x", {HttpScheme::kHttp, "[::1]", 8080, "/x", true});
 }
 

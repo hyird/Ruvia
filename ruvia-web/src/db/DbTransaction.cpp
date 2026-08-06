@@ -4,6 +4,7 @@
 #include <utility>
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbPreparedStatement.h"
+#include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbUtils.h"
 
 // An open transaction: it owns a pooled connection until commit, rollback, or
@@ -13,7 +14,21 @@
 namespace ruvia {
 namespace {
 
-Task<QueryResult> executeTransactionPool(detail::DbPoolRef pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbRows> queryTransactionPool(detail::DbPoolRef pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+#ifdef RUVIA_ENABLE_MARIADB
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+        return (*client)->queryOnTransactionSlot(slot, std::move(sql), std::move(params), resource);
+    }
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+        return (*client)->queryOnTransactionSlot(slot, std::move(sql), std::move(params), resource);
+    }
+#endif
+    detail::throwUnavailableDbBackend();
+}
+
+Task<DbExecResult> executeTransactionPool(detail::DbPoolRef pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
         return (*client)->executeOnTransactionSlot(slot, std::move(sql), std::move(params), resource);
@@ -108,11 +123,13 @@ void DbTransaction::expireCapability(detail::ScopedCapabilityNode& capability) n
     transaction.reset();
 }
 
-ScopedOperation<QueryResult> DbTransaction::query(std::string_view sql, std::span<const DbValue> params) {
-    return execute(sql, params);
+ScopedOperation<DbRows> DbTransaction::query(std::string_view sql, std::span<const DbValue> params) {
+    requireActive();
+    auto statement = prepareDbStatement(sql, params, state_.activePayload().resource);
+    return detail::makeScopedOperation(operationScope_, queryPrepared(std::move(statement.sql), std::move(statement.params)));
 }
 
-ScopedOperation<QueryResult> DbTransaction::execute(std::string_view sql, std::span<const DbValue> params) {
+ScopedOperation<DbExecResult> DbTransaction::execute(std::string_view sql, std::span<const DbValue> params) {
     // executePrepared performs the authoritative admission check when its lazy
     // task starts. Preparing parameters only needs the transaction's stable
     // request memory domain while the lease is idle.
@@ -121,7 +138,15 @@ ScopedOperation<QueryResult> DbTransaction::execute(std::string_view sql, std::s
     return detail::makeScopedOperation(operationScope_, executePrepared(std::move(statement.sql), std::move(statement.params)));
 }
 
-Task<QueryResult> DbTransaction::executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) {
+Task<DbRows> DbTransaction::queryPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) {
+    OperationGuard operation(*this);
+    auto& lease = operation.lease();
+    auto result = co_await queryTransactionPool(lease.client, lease.slot, std::move(sql), std::move(params), lease.resource);
+    operation.finishActive();
+    co_return result;
+}
+
+Task<DbExecResult> DbTransaction::executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) {
     OperationGuard operation(*this);
     auto& lease = operation.lease();
     auto result = co_await executeTransactionPool(lease.client, lease.slot, std::move(sql), std::move(params), lease.resource);

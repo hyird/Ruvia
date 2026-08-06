@@ -25,7 +25,7 @@
 #include <zlib.h>
 
 #include "ruvia/web/Context.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/server/HttpServer.h"
@@ -114,7 +114,7 @@ ruvia::Task<void> noTransformStreamHandler(void*, ruvia::Context& context) {
 }  // namespace
 
 int main() {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     std::pmr::string eventsPath("/events", std::pmr::get_default_resource());
     std::pmr::string ssePath("/sse", std::pmr::get_default_resource());

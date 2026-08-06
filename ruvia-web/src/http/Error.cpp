@@ -192,7 +192,7 @@ HttpResponse detail::makeDefaultErrorResponse(std::pmr::memory_resource* resourc
 // is none. A handler that throws is answered with the default response too:
 // transport output stays deterministic and no exception detail reaches the
 // client.
-Task<HttpResponse> detail::invokeErrorHandler(Context& context, HttpErrorInfo error, HttpErrorHandler handler) {
+Task<HttpResponse> detail::invokeErrorHandler(Context& context, HttpErrorInfo error, HttpErrorHandlerRef handler) {
     error = normalizeHttpErrorInfo(error);
 
     if (handler != nullptr) {

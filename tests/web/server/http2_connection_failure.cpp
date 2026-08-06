@@ -34,7 +34,7 @@
 #include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
@@ -82,7 +82,7 @@ std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId,
 }  // namespace
 
 int main() {
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     std::pmr::string boomPath("/boom", std::pmr::get_default_resource());
     impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(boomPath), ruvia::detail::RouteStreamHandler(nullptr, &failingStreamHandler), {}, {});
@@ -101,7 +101,7 @@ int main() {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::test::Http2SansIoSessionFixture fixture;
-            fixture.options.connectionFailure.callback = ruvia::ConnectionFailureCallback::bind(observation);
+            fixture.options.connectionFailure.callback = ruvia::detail::CallbackAccess::bind<void(const ruvia::ConnectionFailureRecord&) noexcept>(observation);
             auto dispatcher = std::make_shared<WorkerDispatcher>(io, 64);
             const auto workerHandle = WorkerHandleAccess::make(dispatcher);
             co_await taskAsAwaitable(runHttp2SansIoSession(sock, routes, worker, fixture.context(ContextServices{}.withPlainTransport("127.0.0.1").withWorker(workerHandle))));

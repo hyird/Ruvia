@@ -11,6 +11,14 @@
 namespace ruvia::detail {
 
 struct RedisTypesAccess final {
+    [[nodiscard]] static constexpr RedisScanCursor scanCursor(std::uint64_t value) noexcept {
+        return RedisScanCursor(value);
+    }
+
+    [[nodiscard]] static constexpr std::uint64_t cursorValue(RedisScanCursor cursor) noexcept {
+        return cursor.value_;
+    }
+
     [[nodiscard]] static RedisKeyValue keyValue(std::string_view key, std::string_view value, std::pmr::memory_resource* resource) {
         return RedisKeyValue(key, value, resource);
     }
@@ -23,8 +31,8 @@ struct RedisTypesAccess final {
         return RedisScanResult(resource);
     }
 
-    [[nodiscard]] static std::uint64_t& cursor(RedisScanResult& result) noexcept {
-        return result.cursor_;
+    [[nodiscard]] static std::optional<RedisScanCursor>& nextCursor(RedisScanResult& result) noexcept {
+        return result.nextCursor_;
     }
 
     [[nodiscard]] static std::pmr::vector<std::pmr::string>& values(RedisScanResult& result) noexcept {
@@ -35,8 +43,8 @@ struct RedisTypesAccess final {
         return RedisHashScanResult(resource);
     }
 
-    [[nodiscard]] static std::uint64_t& cursor(RedisHashScanResult& result) noexcept {
-        return result.cursor_;
+    [[nodiscard]] static std::optional<RedisScanCursor>& nextCursor(RedisHashScanResult& result) noexcept {
+        return result.nextCursor_;
     }
 
     [[nodiscard]] static std::pmr::vector<RedisKeyValue>& entries(RedisHashScanResult& result) noexcept {
@@ -47,12 +55,16 @@ struct RedisTypesAccess final {
         return RedisZScanResult(resource);
     }
 
-    [[nodiscard]] static std::uint64_t& cursor(RedisZScanResult& result) noexcept {
-        return result.cursor_;
+    [[nodiscard]] static std::optional<RedisScanCursor>& nextCursor(RedisZScanResult& result) noexcept {
+        return result.nextCursor_;
     }
 
     [[nodiscard]] static std::pmr::vector<RedisScoredValue>& entries(RedisZScanResult& result) noexcept {
         return result.entries_;
+    }
+
+    [[nodiscard]] static constexpr RedisTtl ttl(RedisTtlState state, std::optional<std::chrono::milliseconds> remaining = std::nullopt) noexcept {
+        return RedisTtl(state, remaining);
     }
 
     [[nodiscard]] static RedisValue nullValue(std::pmr::memory_resource* resource) {

@@ -12,7 +12,7 @@
 
 namespace {
 
-void assignIfPresent(std::pmr::string& target, std::optional<std::string_view> value) {
+void assignIfPresent(std::string& target, std::optional<std::string_view> value) {
     if (value) {
         target.assign(value->data(), value->size());
     }
@@ -71,23 +71,30 @@ int main() {
         config.maxAge.emplace(std::chrono::seconds(600));
     }
 
-    app.setListenAddress("0.0.0.0").setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setKeepaliveTimeout(std::chrono::seconds(75)).setConnectionScanInterval(std::chrono::seconds(1)).setClientHeaderTimeout(std::chrono::seconds(60)).setClientBodyTimeout(std::chrono::seconds(60)).setSendTimeout(std::chrono::seconds(60)).setMaxConnectionsPerWorker(10000).setKeepaliveRequests(1000).setMaxBufferedBodyBytes(16 * 1024 * 1024).setMaxStreamBodyBytes(std::nullopt).setMaxWebSocketMessageBytes(16 * 1024 * 1024).setMemoryPoolConfig(memory).setCompression(std::move(compression)).setCors(std::move(cors));
+    app.setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setKeepaliveTimeout(std::chrono::seconds(75)).setConnectionScanInterval(std::chrono::seconds(1)).setClientHeaderTimeout(std::chrono::seconds(60)).setClientBodyTimeout(std::chrono::seconds(60)).setSendTimeout(std::chrono::seconds(60)).setMaxConnectionsPerWorker(10000).setKeepaliveRequests(1000).setMaxBufferedBodyBytes(16 * 1024 * 1024).setMaxStreamBodyBytes(std::nullopt).setMaxWebSocketMessageBytes(16 * 1024 * 1024).setMemoryPoolConfig(memory).setCompression(std::move(compression)).setCors(std::move(cors));
 
     const auto cert = pathOrEmpty(app.env().get("RUVIA_TLS_CERT"));
     const auto key = pathOrEmpty(app.env().get("RUVIA_TLS_KEY"));
     if (!cert.empty() && !key.empty()) {
-        std::pmr::string password;
+        std::string password;
         assignIfPresent(password, app.env().get("RUVIA_TLS_PASSWORD"));
-        ruvia::TlsConfig tls(ruvia::TlsIdentity::fromFiles(cert, key, std::move(password)));
+        ruvia::TlsConfig tls(ruvia::TlsIdentity::fromFiles(cert, key, password));
         const auto verifyFile = pathOrEmpty(app.env().get("RUVIA_TLS_VERIFY_FILE"));
         if (!verifyFile.empty()) {
             tls.setClientCertificatePolicy(ruvia::TlsClientCertificatePolicy::optional(verifyFile));
         }
         const auto httpsPort = app.env().get<std::uint16_t>("RUVIA_HTTPS_PORT").value_or(8443);
-        const auto topology = app.env().get<bool>("RUVIA_AUTO_HTTPS").value_or(false) ? ruvia::ServerTopology::redirectHttpToHttps(httpPort, httpsPort, std::move(tls)) : ruvia::ServerTopology::httpAndHttps(httpPort, httpsPort, std::move(tls));
-        app.setServerTopology(std::move(topology));
+        std::vector<ruvia::ListenerConfig> listeners;
+        listeners.reserve(2);
+        if (app.env().get<bool>("RUVIA_AUTO_HTTPS").value_or(false)) {
+            listeners.push_back(ruvia::ListenerConfig::redirectHttpToHttps("0.0.0.0", httpPort, httpsPort));
+        } else {
+            listeners.push_back(ruvia::ListenerConfig::http("0.0.0.0", httpPort));
+        }
+        listeners.push_back(ruvia::ListenerConfig::https("0.0.0.0", httpsPort, std::move(tls)));
+        app.setListeners(std::move(listeners));
     } else {
-        app.setServerTopology(ruvia::ServerTopology::http(httpPort));
+        app.setListeners({ruvia::ListenerConfig::http("0.0.0.0", httpPort)});
     }
 
     app.setSignalShutdown(true).run();

@@ -29,7 +29,7 @@ struct ModelJsonAccess final {
 template <typename ValueT>
 [[nodiscard]] std::size_t jsonSizeHintValue(const ValueT& value) {
     using T = std::remove_cvref_t<ValueT>;
-    if constexpr (isRuviaScalar<T>) {
+    if constexpr (isWrappedModelScalar<T>) {
         return jsonSizeHintValue(value.value);
     } else if constexpr (std::is_same_v<T, bool>) {
         return value ? 4 : 5;
@@ -41,7 +41,7 @@ template <typename ValueT>
         return jsonStringSizeHint(value.view());
     } else if constexpr (isResponseModel<T>) {
         return ModelJsonAccess::sizeHint(value);
-    } else if constexpr (isRuviaArray<T> || isRuviaList<T>) {
+    } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
         std::size_t size = 2;
         bool first = true;
         for (const auto& item : value) {
@@ -77,7 +77,7 @@ void appendJsonSequence(std::pmr::string& output, const SequenceT& value) {
 template <typename ValueT>
 void appendJsonValue(std::pmr::string& output, const ValueT& value) {
     using T = std::remove_cvref_t<ValueT>;
-    if constexpr (isRuviaScalar<T>) {
+    if constexpr (isWrappedModelScalar<T>) {
         appendJsonValue(output, value.value);
     } else if constexpr (std::is_same_v<T, bool>) {
         output.append(value ? "true" : "false");
@@ -100,7 +100,7 @@ void appendJsonValue(std::pmr::string& output, const ValueT& value) {
         appendJsonString(output, value.view());
     } else if constexpr (isResponseModel<T>) {
         ModelJsonAccess::append(output, value);
-    } else if constexpr (isRuviaArray<T> || isRuviaList<T>) {
+    } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
         appendJsonSequence(output, value);
     } else {
         static_assert(alwaysFalse<T>, "JSON output must use Ruvia scalar types or RUVIA_MODEL");

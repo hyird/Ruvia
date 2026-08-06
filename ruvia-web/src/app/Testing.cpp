@@ -19,7 +19,7 @@
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/Dotenv.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
@@ -30,24 +30,16 @@ namespace ruvia {
 
 namespace {
 
-template <typename Handler>
-void appendPrefixHandler(std::vector<std::pair<std::string, Handler>>& handlers, std::string_view prefix, Handler handler) {
-    if (handler == nullptr) {
-        throw std::invalid_argument("fallback handler must not be null");
-    }
-    prefix = detail::normalizeFallbackPrefix(prefix);
-    for (const auto& existing : handlers) {
-        if (std::string_view(existing.first) == prefix) {
-            throw std::invalid_argument("duplicate fallback prefix");
-        }
-    }
-    handlers.emplace_back(std::string(prefix), handler);
+template <typename Handlers, typename Handler>
+void appendPrefixHandler(Handlers& handlers, std::string_view prefix, Handler handler) {
+    const auto normalized = detail::validateFallbackPrefix(handlers, prefix, handler);
+    handlers.emplace_back(std::string(normalized), std::move(handler));
 }
 
 }  // namespace
 
 struct TestApp::Impl final {
-    Router router;
+    detail::Router router;
     detail::ControllerStore controllers;
     WorkerMemory memory;
     Env env;
@@ -78,16 +70,16 @@ struct TestApp::Impl final {
         }
         finalized = true;
 
-        const auto controllerRegistrars = detail::snapshotControllerRegistrars();
+        const auto controllerRegistrars = detail::sealControllerRegistrars();
         detail::registerControllers(router, controllers, controllerRegistrars);
         auto& routes = detail::RouterImpl::from(router);
-        routes.setErrorHandler(errorHandler);
-        routes.setNotFoundHandler(notFoundHandler);
+        routes.setErrorHandler(detail::CallbackAccess::ref(errorHandler));
+        routes.setNotFoundHandler(detail::CallbackAccess::ref(notFoundHandler));
         if (!prefixErrorHandlers.empty()) {
             std::pmr::vector<detail::HttpPrefixErrorHandler> views(detail::registrationResource());
             views.reserve(prefixErrorHandlers.size());
             for (const auto& [prefix, handler] : prefixErrorHandlers) {
-                views.push_back({std::string_view(prefix), handler});
+                views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
             }
             routes.setPrefixErrorHandlers(views);
         }
@@ -95,7 +87,7 @@ struct TestApp::Impl final {
             std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(detail::registrationResource());
             views.reserve(prefixNotFoundHandlers.size());
             for (const auto& [prefix, handler] : prefixNotFoundHandlers) {
-                views.push_back({std::string_view(prefix), handler});
+                views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
             }
             routes.setPrefixNotFoundHandlers(views);
         }
@@ -115,25 +107,25 @@ TestApp::~TestApp() = default;
 
 TestApp& TestApp::onError(HttpErrorHandler handler) {
     impl_->requireConfigurable();
-    impl_->errorHandler = handler;
+    impl_->errorHandler = std::move(handler);
     return *this;
 }
 
-TestApp& TestApp::notFound(HttpNotFoundHandler handler) {
+TestApp& TestApp::onNotFound(HttpNotFoundHandler handler) {
     impl_->requireConfigurable();
-    impl_->notFoundHandler = handler;
+    impl_->notFoundHandler = std::move(handler);
     return *this;
 }
 
 TestApp& TestApp::onError(std::string_view prefix, HttpErrorHandler handler) {
     impl_->requireConfigurable();
-    appendPrefixHandler(impl_->prefixErrorHandlers, prefix, handler);
+    appendPrefixHandler(impl_->prefixErrorHandlers, prefix, std::move(handler));
     return *this;
 }
 
-TestApp& TestApp::notFound(std::string_view prefix, HttpNotFoundHandler handler) {
+TestApp& TestApp::onNotFound(std::string_view prefix, HttpNotFoundHandler handler) {
     impl_->requireConfigurable();
-    appendPrefixHandler(impl_->prefixNotFoundHandlers, prefix, handler);
+    appendPrefixHandler(impl_->prefixNotFoundHandlers, prefix, std::move(handler));
     return *this;
 }
 

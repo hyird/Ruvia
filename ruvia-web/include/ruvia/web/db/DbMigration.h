@@ -75,7 +75,7 @@ private:
 };
 
 struct DbMigrationOptions final {
-    std::pmr::string table{"ruvia_schema_migrations"};
+    std::string table{"ruvia_schema_migrations"};
     std::chrono::seconds lockTimeout{30};
 };
 
@@ -124,11 +124,11 @@ public:
     // The configuration and migration-table name are copied into resource;
     // their source PMR storage may be released after construction. The
     // supplied resource itself must outlive this migrator.
-    explicit DbMigrator(DbConfig config, DbMigrationOptions options = {}, std::pmr::memory_resource* resource = nullptr);
+    explicit DbMigrator(const DbConfig& config, const DbMigrationOptions& options = {}, std::pmr::memory_resource* resource = nullptr);
 
     [[nodiscard]] DbMigrationReport migrate(std::span<const DbMigration> migrations) const;
 
-    [[nodiscard]] static DbMigrationReport migrate(DbConfig config, std::span<const DbMigration> migrations, DbMigrationOptions options = {}, std::pmr::memory_resource* resource = nullptr);
+    [[nodiscard]] static DbMigrationReport migrate(const DbConfig& config, std::span<const DbMigration> migrations, const DbMigrationOptions& options = {}, std::pmr::memory_resource* resource = nullptr);
 
 private:
     DbConfig config_;

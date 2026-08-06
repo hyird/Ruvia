@@ -237,6 +237,11 @@ RUVIA_TEST(http_content_encoder_rejects_writes_after_finish) {
     }
 }
 
+#if !defined(_MSC_VER)
+// MSVC's debug pmr::string does not complete a growth operation when
+// null_memory_resource throws. The same standard-library limitation is
+// already accounted for by the response-head spill probe; keep this exact
+// output-allocation failure contract on the other standard libraries.
 RUVIA_TEST(http_content_encoder_failure_is_terminal) {
     HttpContentEncoder encoder(HttpContentCoding::kIdentity, std::pmr::get_default_resource());
     std::pmr::string output(std::pmr::null_memory_resource());
@@ -245,6 +250,7 @@ RUVIA_TEST(http_content_encoder_failure_is_terminal) {
     RUVIA_CHECK(encoder.finish(output) == HttpContentEncodeStep::kFailure);
     RUVIA_CHECK(encoder.write("retry", output) == HttpContentEncodeStep::kFailure);
 }
+#endif  // !_MSC_VER
 
 RUVIA_TEST(http_content_encoder_flushes_each_incremental_chunk) {
     const std::string input(4096, 's');

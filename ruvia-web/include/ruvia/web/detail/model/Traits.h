@@ -34,15 +34,15 @@ template <typename T>
 inline constexpr bool isRuviaArray = RuviaArrayTraits<std::remove_cvref_t<T>>::value;
 
 template <typename T>
-struct RuviaListTraits : std::false_type {};
+struct RuviaBoxedArrayTraits : std::false_type {};
 
 template <typename ValueT>
-struct RuviaListTraits<List<ValueT>> : std::true_type {
+struct RuviaBoxedArrayTraits<BoxedArray<ValueT>> : std::true_type {
     using value_type = ValueT;
 };
 
 template <typename T>
-inline constexpr bool isRuviaList = RuviaListTraits<std::remove_cvref_t<T>>::value;
+inline constexpr bool isRuviaBoxedArray = RuviaBoxedArrayTraits<std::remove_cvref_t<T>>::value;
 
 template <typename T>
 struct RuviaScalarTraits : std::false_type {};
@@ -76,14 +76,46 @@ struct RuviaScalarTraits<UInt64> : std::true_type {
     using value_type = std::uint64_t;
 };
 
+// The wrapper types (ruvia::Int32 and friends) carry the value in a .value
+// member; a field declared with the plain type holds it directly. Both are
+// model scalars, and the parse, validation, and serialization layers work off
+// the two traits below rather than naming either form.
 template <typename T>
-inline constexpr bool isRuviaScalar = RuviaScalarTraits<std::remove_cvref_t<T>>::value;
+inline constexpr bool isWrappedModelScalar = RuviaScalarTraits<std::remove_cvref_t<T>>::value;
+
+// The standard types a field may be declared with. Deliberately an explicit
+// list rather than std::is_arithmetic: char and the sized character types carry
+// text, not numbers, and admitting them would silently parse a string field as
+// an integer.
+template <typename T>
+inline constexpr bool isPlainModelScalar =
+    std::is_same_v<std::remove_cvref_t<T>, bool> || std::is_same_v<std::remove_cvref_t<T>, float> || std::is_same_v<std::remove_cvref_t<T>, double> ||
+    std::is_same_v<std::remove_cvref_t<T>, std::int32_t> || std::is_same_v<std::remove_cvref_t<T>, std::uint32_t> ||
+    std::is_same_v<std::remove_cvref_t<T>, std::int64_t> || std::is_same_v<std::remove_cvref_t<T>, std::uint64_t>;
+
+template <typename T>
+inline constexpr bool isRuviaScalar = isWrappedModelScalar<T> || isPlainModelScalar<T>;
+
+// The arithmetic type a model scalar parses into and validates against: the
+// wrapper's value_type, or the plain type itself.
+template <typename T, bool Wrapped = isWrappedModelScalar<T>>
+struct ModelScalarValue {
+    using type = std::remove_cvref_t<T>;
+};
+
+template <typename T>
+struct ModelScalarValue<T, true> {
+    using type = typename RuviaScalarTraits<std::remove_cvref_t<T>>::value_type;
+};
+
+template <typename T>
+using ModelScalarValueT = typename ModelScalarValue<T>::type;
 
 template <typename T>
 inline constexpr bool isFormField = isRuviaString<T> || isRuviaScalar<T>;
 
 template <typename T>
-inline constexpr bool isRequestModelField = isRuviaString<T> || isRuviaArray<T> || isRuviaList<T> || JsonBody<std::remove_cvref_t<T>>::value || isRuviaScalar<T>;
+inline constexpr bool isRequestModelField = isRuviaString<T> || isRuviaArray<T> || isRuviaBoxedArray<T> || JsonBody<std::remove_cvref_t<T>>::value || isRuviaScalar<T>;
 
 template <typename T>
 inline constexpr bool isRequestModel = JsonBody<std::remove_cvref_t<T>>::value;
@@ -92,7 +124,7 @@ template <typename T>
 inline constexpr bool isResponseModel = JsonBody<std::remove_cvref_t<T>>::value;
 
 template <typename T>
-inline constexpr bool isResponseModelField = isRuviaString<T> || isRuviaArray<T> || isRuviaList<T> || isResponseModel<T> || isRuviaScalar<T>;
+inline constexpr bool isResponseModelField = isRuviaString<T> || isRuviaArray<T> || isRuviaBoxedArray<T> || isResponseModel<T> || isRuviaScalar<T>;
 
 template <typename T>
 [[nodiscard]] T makeRequestValue(ResolvedPmrResourceTag, std::pmr::memory_resource* resource) {
@@ -101,8 +133,8 @@ template <typename T>
     } else if constexpr (isRuviaArray<T>) {
         using ValueT = typename RuviaArrayTraits<std::remove_cvref_t<T>>::value_type;
         return T(std::pmr::polymorphic_allocator<ValueT>(resource));
-    } else if constexpr (isRuviaList<T>) {
-        return ModelValueFactory::makeList<T>(resource);
+    } else if constexpr (isRuviaBoxedArray<T>) {
+        return ModelValueFactory::makeBoxedArray<T>(resource);
     } else if constexpr (JsonBody<std::remove_cvref_t<T>>::value) {
         return T(resource);
     } else {
@@ -113,7 +145,7 @@ template <typename T>
 
 template <typename T>
 [[nodiscard]] T makeRequestValue(std::pmr::memory_resource* resource) {
-    if constexpr (isRuviaString<T> || isRuviaArray<T> || isRuviaList<T> || JsonBody<std::remove_cvref_t<T>>::value) {
+    if constexpr (isRuviaString<T> || isRuviaArray<T> || isRuviaBoxedArray<T> || JsonBody<std::remove_cvref_t<T>>::value) {
         return makeRequestValue<T>(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource));
     } else {
         (void)resource;

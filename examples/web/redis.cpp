@@ -19,7 +19,7 @@
 
 namespace {
 
-void assignIfPresent(std::pmr::string& target, std::optional<std::string_view> value) {
+void assignIfPresent(std::string& target, std::optional<std::string_view> value) {
     if (value) {
         target.assign(value->data(), value->size());
     }
@@ -53,6 +53,21 @@ void appendSigned(std::pmr::string& output, std::int64_t value) {
 
 void appendBool(std::pmr::string& output, bool value) {
     output.append(value ? "true" : "false");
+}
+
+void appendTtl(std::pmr::string& output, const ruvia::RedisTtl& ttl) {
+    switch (ttl.state()) {
+        case ruvia::RedisTtlState::kMissing:
+            output.append("missing");
+            break;
+        case ruvia::RedisTtlState::kPersistent:
+            output.append("persistent");
+            break;
+        case ruvia::RedisTtlState::kExpiring:
+            appendSigned(output, ttl.remaining()->count());
+            output.append("ms");
+            break;
+    }
 }
 
 class RedisController final : public ruvia::Controller<RedisController> {
@@ -123,9 +138,9 @@ public:
         body.append("\ntype=");
         body.append(type);
         body.append("\nttl=");
-        appendSigned(body, ttl);
+        appendTtl(body, ttl);
         body.append("\npttl=");
-        appendSigned(body, pttl);
+        appendTtl(body, pttl);
         body.append("\npersisted=");
         appendBool(body, persisted);
         body.push_back('\n');
@@ -135,12 +150,6 @@ public:
     ruvia::Task<ruvia::HttpResponse> strings(ruvia::Context& c) {
         const auto key = c.req().param("key").value_or("");
         const auto value = co_await c.req().text();
-        const std::array<std::pair<std::string_view, std::string_view>, 2> items{{
-            {"ruvia:example:mset:a", "one"},
-            {"ruvia:example:mset:b", "two"},
-        }};
-        const std::array<std::string_view, 2> keys{items[0].first, items[1].first};
-
         co_await c.redis().set(key, value);
         ruvia::RedisSetOptions setOptions;
         setOptions.returnPrevious = true;
@@ -151,8 +160,8 @@ public:
         const auto appended = co_await c.redis().append(key, "+tail");
         const auto length = co_await c.redis().strlen(key);
         auto deleted = co_await c.redis().getDel("ruvia:example:nx");
-        co_await c.redis().mset(items);
-        auto values = co_await c.redis().mget(keys);
+        co_await c.redis().mset("ruvia:example:mset:a", "one", "ruvia:example:mset:b", "two");
+        auto values = co_await c.redis().mget("ruvia:example:mset:a", "ruvia:example:mset:b");
         const auto decremented = co_await c.redis().decr(key);
         const auto decrementedBy = co_await c.redis().decrBy(key, 2);
         const auto incrementedBy = co_await c.redis().incrBy(key, 3);
@@ -184,17 +193,11 @@ public:
 
     ruvia::Task<ruvia::HttpResponse> hashes(ruvia::Context& c) {
         const auto key = c.req().param("key").value_or("");
-        const std::array<std::pair<std::string_view, std::string_view>, 2> fields{{
-            {"name", "ruvia"},
-            {"kind", "framework"},
-        }};
-        const std::array<std::string_view, 2> names{"name", "kind"};
-
-        const auto changed = co_await c.redis().hset(key, fields);
+        const auto changed = co_await c.redis().hset(key, "name", "ruvia", "kind", "framework");
         const auto extra = co_await c.redis().hset(key, "count", "1");
         const auto count = co_await c.redis().hincrBy(key, "count", 1);
         auto name = co_await c.redis().hget(key, "name");
-        auto values = co_await c.redis().hmget(key, names);
+        auto values = co_await c.redis().hmget(key, "name", "kind");
         auto all = co_await c.redis().hgetAll(key);
         auto keys = co_await c.redis().hkeys(key);
         auto hvals = co_await c.redis().hvals(key);
@@ -269,6 +272,8 @@ public:
         const auto size = co_await c.redis().scard(key);
         const auto member = co_await c.redis().sismember(key, "one");
         auto random = co_await c.redis().srandMember(key);
+        // Three commands over the same key set: a prepared sequence still passes
+        // as a span, while one-off calls read better as plain arguments.
         const std::array<std::string_view, 2> keys{key, "ruvia:example:set:other"};
         auto intersection = co_await c.redis().sinter(keys);
         auto unionValues = co_await c.redis().sunion(keys);
@@ -356,9 +361,8 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> pipeline(ruvia::Context& c) {
-        const std::array<std::string_view, 2> typeCommand{"TYPE", "ruvia:example:pipeline"};
         auto pipeline = c.redis().pipeline();
-        pipeline.set("ruvia:example:pipeline", "1").get("ruvia:example:pipeline").incr("ruvia:example:pipeline").hset("ruvia:example:pipeline:hash", "field", "value").hget("ruvia:example:pipeline:hash", "field").lpush("ruvia:example:pipeline:list", "item").sadd("ruvia:example:pipeline:set", "member").zadd("ruvia:example:pipeline:zset", 1.0, "member").command(typeCommand);
+        pipeline.set("ruvia:example:pipeline", "1").get("ruvia:example:pipeline").incr("ruvia:example:pipeline").hset("ruvia:example:pipeline:hash", "field", "value").hget("ruvia:example:pipeline:hash", "field").lpush("ruvia:example:pipeline:list", "item").sadd("ruvia:example:pipeline:set", "member").zadd("ruvia:example:pipeline:zset", 1.0, "member").command("TYPE", "ruvia:example:pipeline");
         auto results = co_await std::move(pipeline).exec();
 
         std::pmr::string body(c.allocator<char>());
@@ -369,9 +373,8 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> transaction(ruvia::Context& c) {
-        const std::array<std::string_view, 1> watched{"ruvia:example:tx"};
         auto tx = c.redis().transaction();
-        tx.watch(watched).set("ruvia:example:tx", "1").incr("ruvia:example:tx").get("ruvia:example:tx");
+        tx.watch("ruvia:example:tx").set("ruvia:example:tx", "1").incr("ruvia:example:tx").get("ruvia:example:tx");
         auto results = co_await std::move(tx).exec();
 
         std::pmr::string body(c.allocator<char>());
@@ -386,8 +389,7 @@ public:
         const std::array<std::string_view, 1> args{"hello"};
         auto value = co_await c.redis().eval(script, {}, args);
         auto sha = co_await c.redis().scriptLoad(script);
-        const std::array<std::string_view, 1> shas{sha};
-        auto exists = co_await c.redis().scriptExists(shas);
+        auto exists = co_await c.redis().scriptExists(sha);
         auto shaValue = co_await c.redis().evalSha(sha, {}, args);
 
         std::pmr::string body(c.allocator<char>());
@@ -431,5 +433,5 @@ int main() {
     auto& app = ruvia::app();
     app.loadDotenv();
     auto config = redisConfig(app.env());
-    app.useRedis(config).useRedis("cache", std::move(config)).setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))).setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setSignalShutdown(true).run();
+    app.useRedis(config).useRedis("cache", std::move(config)).setListeners({ruvia::ListenerConfig::http("0.0.0.0", app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))}).setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setSignalShutdown(true).run();
 }

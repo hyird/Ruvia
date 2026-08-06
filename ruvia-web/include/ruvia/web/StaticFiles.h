@@ -5,7 +5,6 @@
 #include <filesystem>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <span>
 #include <string_view>
 #include <string>
@@ -16,8 +15,8 @@ namespace ruvia {
 class StaticRoot;
 
 struct StaticMimeType final {
-    std::pmr::string extension;
-    std::pmr::string contentType;
+    std::string extension;
+    std::string contentType;
 };
 
 class StaticFileTypePolicy final {
@@ -39,24 +38,24 @@ public:
         return kind_;
     }
 
-    [[nodiscard]] constexpr std::span<const std::pmr::string> extensions() const& noexcept {
+    [[nodiscard]] constexpr std::span<const std::string> extensions() const& noexcept {
         return extensions_;
     }
-    std::span<const std::pmr::string> extensions() const&& = delete;
+    std::span<const std::string> extensions() const&& = delete;
 
 private:
     explicit StaticFileTypePolicy(Kind kind)
         : kind_(kind) {}
 
     Kind kind_;
-    std::pmr::vector<std::pmr::string> extensions_;
+    std::vector<std::string> extensions_;
 };
 
 struct StaticRootOptions final {
-    std::pmr::string cacheControl;
-    std::pmr::string indexFile;
-    std::pmr::string defaultContentType{"application/octet-stream"};
-    std::pmr::vector<StaticMimeType> mimeTypes;
+    std::string cacheControl;
+    std::string indexFile;
+    std::string defaultContentType{"application/octet-stream"};
+    std::vector<StaticMimeType> mimeTypes;
     StaticFileTypePolicy fileTypes{StaticFileTypePolicy::defaults()};
     bool enableRanges{true};
     bool enableValidators{true};

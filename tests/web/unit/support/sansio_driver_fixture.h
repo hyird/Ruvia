@@ -47,7 +47,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 
 namespace sansio_driver_test {
 

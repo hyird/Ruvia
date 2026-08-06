@@ -98,7 +98,7 @@ template <typename T>
         }
         return decoded;
     } else if constexpr (isRuviaScalar<FieldT>) {
-        using ScalarT = typename RuviaScalarTraits<FieldT>::value_type;
+        using ScalarT = ModelScalarValueT<FieldT>;
         if constexpr (std::is_same_v<ScalarT, bool>) {
             const auto parsed = parseFormBool(decoded);
             if (!parsed.has_value()) {

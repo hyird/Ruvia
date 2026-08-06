@@ -18,6 +18,7 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ServerConfig.h"
+#include "ruvia/web/detail/http/CorsOptions.h"
 #include "ruvia/web/detail/server/DocumentRootBinding.h"
 
 namespace ruvia {
@@ -27,10 +28,10 @@ class Env;
 namespace ruvia::detail {
 
 struct AccessLogSink final {
-    AccessLogCallback callback;
+    AccessLogCallbackRef callback;
 
     void invoke(const AccessLogRecord& record) const noexcept {
-        callback.invoke(record);
+        callback(record);
     }
 };
 
@@ -44,7 +45,7 @@ struct ConnectionFailureRecordAccess final {
 // failure goes to the shared last-resort reporter rather than being dropped
 // with the connection that produced it.
 struct ConnectionFailureSink final {
-    ConnectionFailureCallback callback;
+    ConnectionFailureCallbackRef callback;
     // Owned by the HttpServer this sink was configured for; null before one
     // claims it. Counting here rather than at each reporting site keeps the
     // count and the callback from drifting apart as new sites are added.
@@ -58,7 +59,7 @@ struct ConnectionFailureSink final {
             counter->fetch_add(1, std::memory_order_relaxed);
         }
         if (callback) {
-            callback.invoke(ConnectionFailureRecordAccess::make(remoteAddress, std::move(exception)));
+            callback(ConnectionFailureRecordAccess::make(remoteAddress, std::move(exception)));
             return;
         }
         reportUnhandledFailure("web connection", std::move(exception));
@@ -82,12 +83,18 @@ struct WorkerFailureSink final {
 // with ServerConfig.h values; only the Web runtime constructs this state.
 struct HttpServerOptions final {
     struct TlsIdentity final {
+        explicit TlsIdentity(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+            : certificateChainFile(resource), privateKeyFile(resource), privateKeyPassword(resource) {}
+
         std::pmr::string certificateChainFile;
         std::pmr::string privateKeyFile;
         std::pmr::string privateKeyPassword;
     };
 
     struct TlsClientCertificatePolicy final {
+        explicit TlsClientCertificatePolicy(std::pmr::memory_resource* resource = std::pmr::get_default_resource(), ruvia::TlsClientCertificateRequirement configuredRequirement = ruvia::TlsClientCertificateRequirement::kOptional)
+            : verifyFile(resource), requirement(configuredRequirement) {}
+
         std::pmr::string verifyFile;
         ruvia::TlsClientCertificateRequirement requirement{ruvia::TlsClientCertificateRequirement::kOptional};
     };
@@ -95,9 +102,15 @@ struct HttpServerOptions final {
     struct Tls final {
         // An additional certificate selected by SNI server name (RFC 6066).
         struct SniIdentity final {
+            explicit SniIdentity(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+                : host(resource), identity(resource) {}
+
             std::pmr::string host;
             TlsIdentity identity;
         };
+
+        explicit Tls(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+            : identity(resource), sniIdentities(resource) {}
 
         TlsIdentity identity;
         std::optional<TlsClientCertificatePolicy> clientCertificates;
@@ -153,7 +166,7 @@ struct HttpServerOptions final {
     // Presence enables the policy; absence bypasses it without retaining an
     // inactive configuration state.
     std::optional<CompressionConfig> compression{std::in_place};
-    std::optional<CorsConfig> cors;
+    std::optional<CorsOptions> cors;
     DocumentRoot documentRoot;
     AccessLogSink accessLog;
     const Env* env{nullptr};

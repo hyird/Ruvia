@@ -2,6 +2,7 @@
 
 #include "ruvia/web/detail/redis/RedisHandleCommandOps.h"
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
+#include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
@@ -10,6 +11,34 @@
 #include <utility>
 
 namespace ruvia {
+
+namespace {
+
+Task<RedisTtl> redisTtlCommand(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource, bool secondsPrecision) {
+    const auto value = co_await detail::redisIntegerCommand(pool, std::move(args), resource);
+    if (value == -2) {
+        co_return detail::RedisTypesAccess::ttl(RedisTtlState::kMissing);
+    }
+    if (value == -1) {
+        co_return detail::RedisTypesAccess::ttl(RedisTtlState::kPersistent);
+    }
+    if (value < 0) {
+        throw RedisError(RedisError::Code::kProtocolError, "invalid redis TTL reply");
+    }
+
+    using Milliseconds = std::chrono::milliseconds;
+    auto milliseconds = value;
+    if (secondsPrecision) {
+        constexpr auto kScale = Milliseconds(std::chrono::seconds(1)).count();
+        if (value > Milliseconds::max().count() / kScale) {
+            throw RedisError(RedisError::Code::kProtocolError, "redis TTL reply exceeds milliseconds range");
+        }
+        milliseconds *= kScale;
+    }
+    co_return detail::RedisTypesAccess::ttl(RedisTtlState::kExpiring, Milliseconds(milliseconds));
+}
+
+}  // namespace
 
 RedisHandle::RedisHandle(detail::RedisPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept
     : detail::ScopedCapabilityNode(operationScope, &RedisHandle::expireCapability),
@@ -157,9 +186,9 @@ ScopedOperation<bool> RedisHandle::expire(std::string_view key, std::chrono::sec
     return scoped(detail::executeRedisIntegerBool(*pool_, detail::ownRedisArgs({"EXPIRE", key, std::string_view(ttlValue)}, resource_), resource_));
 }
 
-ScopedOperation<bool> RedisHandle::expireAt(std::string_view key, std::chrono::seconds unixTime) const {
+ScopedOperation<bool> RedisHandle::expireAt(std::string_view key, std::chrono::system_clock::time_point expiresAt) const {
     requireActive();
-    auto value = detail::redisSecondsString(unixTime, resource_);
+    auto value = detail::redisSecondsString(std::chrono::floor<std::chrono::seconds>(expiresAt.time_since_epoch()), resource_);
     return scoped(detail::executeRedisIntegerBool(*pool_, detail::ownRedisArgs({"EXPIREAT", key, std::string_view(value)}, resource_), resource_));
 }
 
@@ -168,14 +197,14 @@ ScopedOperation<bool> RedisHandle::persist(std::string_view key) const {
     return scoped(detail::executeRedisIntegerBool(*pool_, detail::ownRedisArgs({"PERSIST", key}, resource_), resource_));
 }
 
-ScopedOperation<std::int64_t> RedisHandle::ttl(std::string_view key) const {
+ScopedOperation<RedisTtl> RedisHandle::ttl(std::string_view key) const {
     requireActive();
-    return scoped(detail::redisIntegerCommand(*pool_, detail::ownRedisArgs({"TTL", key}, resource_), resource_));
+    return scoped(redisTtlCommand(*pool_, detail::ownRedisArgs({"TTL", key}, resource_), resource_, true));
 }
 
-ScopedOperation<std::int64_t> RedisHandle::pttl(std::string_view key) const {
+ScopedOperation<RedisTtl> RedisHandle::pttl(std::string_view key) const {
     requireActive();
-    return scoped(detail::redisIntegerCommand(*pool_, detail::ownRedisArgs({"PTTL", key}, resource_), resource_));
+    return scoped(redisTtlCommand(*pool_, detail::ownRedisArgs({"PTTL", key}, resource_), resource_, false));
 }
 
 ScopedOperation<std::int64_t> RedisHandle::incr(std::string_view key) const {

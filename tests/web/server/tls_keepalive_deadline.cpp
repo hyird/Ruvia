@@ -36,7 +36,7 @@
 #include <openssl/x509.h>
 
 #include "ruvia/web/Context.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/util/CallableRef.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/server/HttpServer.h"
@@ -153,7 +153,7 @@ int main() {
     writeFile(certPath, pem.cert);
     writeFile(keyPath, pem.key);
 
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
     // Consuming the body drives the kReadingPayload phase (clientBodyTimeout),
     // then echoes it so the client can confirm the whole upload was received.

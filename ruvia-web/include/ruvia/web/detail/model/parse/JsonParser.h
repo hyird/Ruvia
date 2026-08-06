@@ -40,10 +40,10 @@ struct JsonSequenceValueTraits<std::pmr::vector<ValueT>> {
 };
 
 template <typename ValueT>
-struct JsonSequenceValueTraits<List<ValueT>> {
+struct JsonSequenceValueTraits<BoxedArray<ValueT>> {
     using value_type = ValueT;
 
-    static void emplace(List<ValueT>& value, ValueT&& element) {
+    static void emplace(BoxedArray<ValueT>& value, ValueT&& element) {
         value.emplaceMove(std::move(element));
     }
 };
@@ -122,7 +122,7 @@ template <typename T>
         }
         input = remaining;
         return parsed->raw();
-    } else if constexpr (isRuviaArray<FieldT> || isRuviaList<FieldT>) {
+    } else if constexpr (isRuviaArray<FieldT> || isRuviaBoxedArray<FieldT>) {
         auto parsed = parseJsonSequenceValue<FieldT>(remaining, resource, depth, stringStorage);
         if (!parsed.has_value()) {
             return std::nullopt;
@@ -130,7 +130,7 @@ template <typename T>
         input = remaining;
         return parsed;
     } else if constexpr (isRuviaScalar<FieldT>) {
-        using ScalarT = typename RuviaScalarTraits<FieldT>::value_type;
+        using ScalarT = ModelScalarValueT<FieldT>;
         ScalarT parsed{};
         if constexpr (std::is_same_v<ScalarT, bool>) {
             if (consumeJsonLiteral(remaining, "true")) {

@@ -16,11 +16,11 @@ namespace ruvia::detail {
     return scheme == HttpScheme::kHttps ? std::uint16_t{443} : std::uint16_t{80};
 }
 
-[[nodiscard]] inline bool httpOriginUsesDefaultPort(const HttpOrigin& origin) noexcept {
+[[nodiscard]] inline bool httpOriginUsesDefaultPort(const HttpOriginView& origin) noexcept {
     return origin.port() == httpSchemeDefaultPort(origin.scheme());
 }
 
-[[nodiscard]] inline std::pmr::string makeHttpOriginAuthority(const HttpOrigin& origin, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::pmr::string makeHttpOriginAuthority(const HttpOriginView& origin, std::pmr::memory_resource* resource) {
     auto* const targetResource = httpPmrResourceOrDefault(resource);
     const auto host = origin.host();
     const bool includePort = !httpOriginUsesDefaultPort(origin);

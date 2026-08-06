@@ -26,7 +26,7 @@
 
 #include "ruvia/core/BlockingPool.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/Router.h"
+#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/server/HttpServer.h"
 
@@ -153,7 +153,7 @@ int main() {
         rc = code;
     };
 
-    ruvia::Router router;
+    ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     registerRoute(impl, "/hold", &holdHandler);
     registerRoute(impl, "/slow", &slowHandler);

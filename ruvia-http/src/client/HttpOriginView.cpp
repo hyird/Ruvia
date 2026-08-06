@@ -18,14 +18,14 @@ void validateOriginHost(std::string_view host) {
 
 }  // namespace
 
-HttpOrigin HttpOrigin::http(std::string_view host, std::uint16_t port) {
+HttpOriginView HttpOriginView::http(std::string_view host, std::uint16_t port) {
     validateOriginHost(host);
-    return HttpOrigin(HttpScheme::kHttp, host, port);
+    return HttpOriginView(HttpScheme::kHttp, host, port);
 }
 
-HttpOrigin HttpOrigin::https(std::string_view host, std::uint16_t port) {
+HttpOriginView HttpOriginView::https(std::string_view host, std::uint16_t port) {
     validateOriginHost(host);
-    return HttpOrigin(HttpScheme::kHttps, host, port);
+    return HttpOriginView(HttpScheme::kHttps, host, port);
 }
 
 }  // namespace ruvia

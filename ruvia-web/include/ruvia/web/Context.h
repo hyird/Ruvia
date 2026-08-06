@@ -33,6 +33,8 @@
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/model/rule/ValidatedValues.h"
+#include "ruvia/web/detail/integration/BlockingCapability.h"
+#include "ruvia/web/detail/integration/WorkerStateCapability.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/http/context/ContextCapabilities.h"
 #include "ruvia/web/detail/http/context/ContextResponseState.h"
@@ -69,7 +71,7 @@ class ContextServices;
 struct SessionAccess;
 }  // namespace detail
 
-class Context final {
+class Context final : public detail::BlockingCapability<Context>, public detail::WorkerStateCapability<Context> {
 private:
     friend class ContextRequest;
     friend struct detail::ContextAccess;
@@ -149,50 +151,6 @@ public:
     // mismatch, and std::logic_error when the context carries no route table
     // (for example a hand-built test context).
     [[nodiscard]] std::pmr::string urlFor(std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
-
-    // This worker's instance of an App::useWorkerState<T>() registration.
-    // The reference is worker-local: it stays valid for the worker's lifetime
-    // but must never be handed to another worker. Throws std::logic_error for
-    // a type that was not registered before App::run().
-    template <typename T>
-    [[nodiscard]] T& workerState() const {
-        return *static_cast<T*>(workerStateInstance(detail::workerStateTypeKey<T>()));
-    }
-
-    // Runs blocking work on App::setBlockingPool()'s threads and resumes this
-    // handler on its own worker with the result, so the worker keeps serving
-    // its other connections meanwhile. Without this, a blocking call inside a
-    // handler freezes every connection the worker owns.
-    //
-    // `fn` runs on a foreign thread and must own everything it touches: capture
-    // by value or move, and never capture the Context, the request, its arena,
-    // or any worker-owned state. The worker does not wait for a task that is
-    // still running when it stops.
-    //
-    // Rethrows whatever `fn` threw. Throws BlockingOperationRejected when the
-    // pool is saturated or stopped, which the default error path answers with
-    // 503; use tryRunBlocking() to shed load yourself instead. Throws
-    // std::logic_error when no pool was configured.
-    template <typename Fn>
-    [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(Fn fn) const;
-
-    // With a deadline on the wait: a callable that has not returned within
-    // `timeout` stops holding this request, and BlockingOperationRejected is
-    // thrown instead. The callable itself keeps running on its pool thread --
-    // a blocking call cannot be interrupted -- so its captured data must stay
-    // self-owned exactly as above.
-    template <typename Rep, typename Period, typename Fn>
-    [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const;
-
-    // runBlocking() without the exceptions: the result carries the status, so
-    // an overloaded pool can be answered with a cheaper response instead of an
-    // error. Still throws std::logic_error when no pool was configured -- that
-    // is a missing App::setBlockingPool(), not a runtime condition.
-    template <typename Fn>
-    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(Fn fn) const;
-
-    template <typename Rep, typename Period, typename Fn>
-    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const;
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
@@ -331,7 +289,12 @@ private:
     }
     [[nodiscard]] HttpResponse takeResponse();
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
+    friend class detail::BlockingCapability<Context>;
+    friend class detail::WorkerStateCapability<Context>;
     [[nodiscard]] BlockingPool& blockingPool() const;
+    [[nodiscard]] const WorkerHandle& blockingWorker() const noexcept {
+        return worker_;
+    }
 
     RequestMemory& memory_;
     const HttpRequest& request_;
@@ -347,8 +310,8 @@ private:
     [[maybe_unused]] detail::RedisRegistry* redis_{nullptr};
     detail::RateLimiter* rateLimiter_{nullptr};
     const Env* env_{nullptr};
-    HttpErrorHandler errorHandler_{nullptr};
-    HttpNotFoundHandler notFoundHandler_{nullptr};
+    detail::HttpErrorHandlerRef errorHandler_{nullptr};
+    detail::HttpNotFoundHandlerRef notFoundHandler_{nullptr};
     const detail::RouteTable* routes_{nullptr};
     const detail::WorkerStateRegistry* workerStates_{nullptr};
     BlockingPool* blockingPool_{nullptr};

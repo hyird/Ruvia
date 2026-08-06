@@ -252,7 +252,8 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
-            routes.setNotFoundHandler(&largeHeaderNotFoundHandler);
+            auto handler = &largeHeaderNotFoundHandler;
+            routes.setNotFoundHandler(ruvia::detail::CallbackAccess::bind<ruvia::Task<ruvia::HttpResponse>(ruvia::Context&)>(handler));
             co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
@@ -381,7 +382,7 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(ruvia::Task<ruvia::HttpR
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
-            routes.setNotFoundHandler(handler);
+            routes.setNotFoundHandler(ruvia::detail::CallbackAccess::bind<ruvia::Task<ruvia::HttpResponse>(ruvia::Context&)>(handler));
             co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
