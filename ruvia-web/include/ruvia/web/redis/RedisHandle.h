@@ -2,8 +2,11 @@
 
 #include "ruvia/web/redis/RedisTransaction.h"
 #include "ruvia/web/ScopedOperation.h"
+#include "ruvia/web/detail/redis/RedisArgumentPack.h"
 
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <memory_resource>
@@ -110,10 +113,98 @@ public:
     ScopedOperation<std::optional<RedisKeyValue>> blpop(std::span<const std::string_view> keys, std::chrono::seconds timeout) const;
     ScopedOperation<std::optional<RedisKeyValue>> brpop(std::span<const std::string_view> keys, std::chrono::seconds timeout) const;
 
+    // Multi-argument commands as ordinary arguments: mget(a, b, c) instead of a
+    // hand-built array plus a span. Every span overload above clones its
+    // arguments into owned storage before returning -- the command is built
+    // synchronously and only the owned copy is moved into the coroutine -- so the
+    // temporary array each of these creates only has to outlive the call.
+    //
+    // A span argument is not convertible to string_view and therefore never
+    // selects one of these; a caller that already holds a sequence keeps using
+    // the span overload unchanged.
+    template <typename... Args>
+        requires detail::RedisArgumentPack<Args...>
+    [[nodiscard]] ScopedOperation<RedisValue> command(Args&&... args) const {
+        const std::string_view views[]{std::string_view(args)...};
+        return command(std::span<const std::string_view>(views));
+    }
+
+    template <typename... Keys>
+        requires detail::RedisArgumentPack<Keys...>
+    [[nodiscard]] ScopedOperation<std::pmr::vector<std::optional<std::pmr::string>>> mget(Keys&&... keys) const {
+        const std::string_view views[]{std::string_view(keys)...};
+        return mget(std::span<const std::string_view>(views));
+    }
+
+    // Alternating key/value arguments: mset(k1, v1, k2, v2).
+    template <typename... Args>
+        requires detail::RedisPairArgumentPack<Args...>
+    [[nodiscard]] ScopedOperation<void> mset(Args&&... args) const {
+        const auto items = pairArguments(std::string_view(args)...);
+        return mset(std::span<const std::pair<std::string_view, std::string_view>>(items));
+    }
+
+    // Four or more arguments; hset(key, field, value) stays on the single-field
+    // overload above rather than routing one pair through the batch path.
+    template <typename... Args>
+        requires(detail::RedisPairArgumentPack<Args...> && sizeof...(Args) >= 4)
+    [[nodiscard]] ScopedOperation<std::int64_t> hset(std::string_view key, Args&&... args) const {
+        const auto fields = pairArguments(std::string_view(args)...);
+        return hset(key, std::span<const std::pair<std::string_view, std::string_view>>(fields));
+    }
+
+    template <typename... Fields>
+        requires detail::RedisArgumentPack<Fields...>
+    [[nodiscard]] ScopedOperation<std::pmr::vector<std::optional<std::pmr::string>>> hmget(std::string_view key, Fields&&... fields) const {
+        const std::string_view views[]{std::string_view(fields)...};
+        return hmget(key, std::span<const std::string_view>(views));
+    }
+
+    template <typename... Keys>
+        requires detail::RedisArgumentPack<Keys...>
+    [[nodiscard]] ScopedOperation<std::pmr::vector<std::pmr::string>> sinter(Keys&&... keys) const {
+        const std::string_view views[]{std::string_view(keys)...};
+        return sinter(std::span<const std::string_view>(views));
+    }
+
+    template <typename... Keys>
+        requires detail::RedisArgumentPack<Keys...>
+    [[nodiscard]] ScopedOperation<std::pmr::vector<std::pmr::string>> sunion(Keys&&... keys) const {
+        const std::string_view views[]{std::string_view(keys)...};
+        return sunion(std::span<const std::string_view>(views));
+    }
+
+    template <typename... Keys>
+        requires detail::RedisArgumentPack<Keys...>
+    [[nodiscard]] ScopedOperation<std::pmr::vector<std::pmr::string>> sdiff(Keys&&... keys) const {
+        const std::string_view views[]{std::string_view(keys)...};
+        return sdiff(std::span<const std::string_view>(views));
+    }
+
+    template <typename... Sha1s>
+        requires detail::RedisArgumentPack<Sha1s...>
+    [[nodiscard]] ScopedOperation<std::pmr::vector<bool>> scriptExists(Sha1s&&... sha1s) const {
+        const std::string_view views[]{std::string_view(sha1s)...};
+        return scriptExists(std::span<const std::string_view>(views));
+    }
+
     [[nodiscard]] RedisPipeline pipeline() const;
     [[nodiscard]] RedisTransaction transaction() const;
 
 private:
+    // Reassembles a flat alternating argument list into the pair sequence the
+    // span overloads take.
+    template <typename... Args>
+    [[nodiscard]] static constexpr auto pairArguments(Args... args) {
+        static_assert(sizeof...(Args) % 2 == 0);
+        const std::string_view flat[]{args...};
+        std::array<std::pair<std::string_view, std::string_view>, sizeof...(Args) / 2> pairs{};
+        for (std::size_t index = 0; index < pairs.size(); ++index) {
+            pairs[index] = {flat[2 * index], flat[2 * index + 1]};
+        }
+        return pairs;
+    }
+
     friend class detail::RedisRegistry;
 
     RedisHandle(detail::RedisPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;

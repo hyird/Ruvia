@@ -2,6 +2,7 @@
 
 #include "ruvia/web/db/DbQueryResult.h"
 #include "ruvia/web/ScopedOperation.h"
+#include "ruvia/web/detail/db/DbParameterPack.h"
 
 #include <cstddef>
 #include <initializer_list>
@@ -9,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -30,6 +32,31 @@ public:
     ScopedOperation<QueryResult> query(std::string_view sql, std::initializer_list<DbValue> params) = delete;
     ScopedOperation<QueryResult> execute(std::string_view sql, std::span<const DbValue> params = {});
     ScopedOperation<QueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params) = delete;
+
+    // Bound parameters as ordinary arguments, with the same synchronous cloning
+    // and the same temporary-safety as DbHandle::query()/execute().
+    template <typename... Params>
+        requires detail::DbParameterPack<Params...>
+    [[nodiscard]] ScopedOperation<QueryResult> query(std::string_view sql, Params&&... params) {
+        const DbValue values[]{DbValue(std::forward<Params>(params))...};
+        return query(sql, std::span<const DbValue>(values));
+    }
+
+    template <typename... Params>
+        requires detail::DbParameterPack<Params...>
+    [[nodiscard]] ScopedOperation<QueryResult> execute(std::string_view sql, Params&&... params) {
+        const DbValue values[]{DbValue(std::forward<Params>(params))...};
+        return execute(sql, std::span<const DbValue>(values));
+    }
+
+    template <typename... Params>
+        requires detail::DbTemporaryOwningParameterPack<Params...>
+    ScopedOperation<QueryResult> query(std::string_view, Params&&...) = delete;
+
+    template <typename... Params>
+        requires detail::DbTemporaryOwningParameterPack<Params...>
+    ScopedOperation<QueryResult> execute(std::string_view, Params&&...) = delete;
+
     ScopedOperation<void> commit();
     ScopedOperation<void> rollback();
 

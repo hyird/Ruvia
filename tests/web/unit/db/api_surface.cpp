@@ -190,9 +190,46 @@ static_assert(HasDbTransactionDefaultParams<ruvia::DbTransaction>);
 static_assert(HasDbTransactionSpanParams<ruvia::DbTransaction>);
 static_assert(!HasDbTransactionInitializerListParams<ruvia::DbTransaction>);
 
+// Bound parameters passed as ordinary arguments.
+template <typename T>
+concept HasVariadicParams = requires(T& handle) {
+    handle.query(std::string_view{}, 1, std::string_view{});
+    handle.execute(std::string_view{}, 1, std::string_view{});
+};
+
+// A prepared sequence must keep selecting the span overload rather than being
+// absorbed as a single bound parameter, which would send the wrong argument.
+template <typename T>
+concept VariadicParamsRejectSequences = !requires(T& handle, std::span<const ruvia::DbValue> params) {
+    { handle.query(std::string_view{}, params) } -> std::same_as<void>;
+} && !std::constructible_from<ruvia::DbValue, std::span<const ruvia::DbValue>> && !std::constructible_from<ruvia::DbValue, std::array<ruvia::DbValue, 2>>;
+
+// An owning-string temporary would leave the borrowed text dangling.
+template <typename T>
+concept HasVariadicOwningTemporaryParams = requires(T& handle) { handle.query(std::string_view{}, std::string("owned")); };
+
+static_assert(HasVariadicParams<ruvia::DbHandle>);
+static_assert(HasVariadicParams<ruvia::DbTransaction>);
+static_assert(VariadicParamsRejectSequences<ruvia::DbHandle>);
+static_assert(VariadicParamsRejectSequences<ruvia::DbTransaction>);
+static_assert(!HasVariadicOwningTemporaryParams<ruvia::DbHandle>);
+static_assert(!HasVariadicOwningTemporaryParams<ruvia::DbTransaction>);
+
+// An lvalue string is fine: it outlives the call, which is all the synchronous
+// parameter cloning requires.
+template <typename T>
+concept HasVariadicOwningLvalueParams = requires(T& handle, std::string owned) { handle.query(std::string_view{}, owned); };
+
+static_assert(HasVariadicOwningLvalueParams<ruvia::DbHandle>);
+static_assert(HasVariadicOwningLvalueParams<ruvia::DbTransaction>);
+
 }  // namespace
 
 RUVIA_TEST(db_api_surface_uses_span_params_without_initializer_list_overloads) {
+    RUVIA_CHECK(true);
+}
+
+RUVIA_TEST(db_api_surface_accepts_variadic_params_without_absorbing_sequences) {
     RUVIA_CHECK(true);
 }
 

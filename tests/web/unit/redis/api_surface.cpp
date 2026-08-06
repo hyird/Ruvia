@@ -154,12 +154,54 @@ concept AcceptsRedisScanMatch = requires(Match&& match) { ruvia::RedisScanOption
 template <typename Match>
 concept AssignsRedisScanMatch = requires(ruvia::RedisScanOptions& options, Match&& match) { options.match = std::forward<Match>(match); };
 
+// Command arguments passed as ordinary arguments rather than a prepared span.
+template <typename T>
+concept HasRedisHandleVariadicArgs = requires(const T& handle, std::string_view key) {
+    handle.command("TYPE", key);
+    handle.mget(key, key);
+    handle.mset(key, key, key, key);
+    handle.hset(key, key, key, key, key);
+    handle.hmget(key, key, key);
+    handle.sinter(key, key);
+    handle.sunion(key, key);
+    handle.sdiff(key, key);
+    handle.scriptExists(key);
+};
+
+// Alternating name/value commands need complete pairs.
+template <typename T>
+concept HasRedisHandleOddPairArgs = requires(const T& handle, std::string_view key) { handle.mset(key, key, key); };
+
+// An owning-string temporary would leave the borrowed argument dangling; unlike
+// DbValue there is no deleted constructor to catch it, so the concept must.
+template <typename T>
+concept HasRedisHandleOwningTemporaryArgs = requires(const T& handle, std::string_view key) { handle.mget(key, std::string("owned")); };
+
+template <typename T>
+concept HasRedisHandleOwningLvalueArgs = requires(const T& handle, std::string_view key, std::string owned) { handle.mget(key, owned); };
+
+template <typename T>
+concept HasRedisPipelineVariadicCommand = requires(T& pipeline, std::string_view key) { pipeline.command("TYPE", key); };
+
+template <typename T>
+concept HasRedisTransactionVariadicCommand = requires(T& transaction, std::string_view key) { transaction.command("TYPE", key); };
+
+template <typename T>
+concept HasRedisTransactionVariadicWatch = requires(T& transaction, std::string_view key) { transaction.watch(key, key); };
+
 static_assert(HasRedisHandleSpanArgs<ruvia::RedisHandle>);
 static_assert(!HasRedisHandleInitializerListArgs<ruvia::RedisHandle>);
+static_assert(HasRedisHandleVariadicArgs<ruvia::RedisHandle>);
+static_assert(!HasRedisHandleOddPairArgs<ruvia::RedisHandle>);
+static_assert(!HasRedisHandleOwningTemporaryArgs<ruvia::RedisHandle>);
+static_assert(HasRedisHandleOwningLvalueArgs<ruvia::RedisHandle>);
 static_assert(HasRedisPipelineSpanCommand<ruvia::RedisPipeline>);
 static_assert(!HasRedisPipelineInitializerListCommand<ruvia::RedisPipeline>);
+static_assert(HasRedisPipelineVariadicCommand<ruvia::RedisPipeline>);
 static_assert(HasRedisTransactionSpanCommand<ruvia::RedisTransaction>);
 static_assert(!HasRedisTransactionInitializerListCommand<ruvia::RedisTransaction>);
+static_assert(HasRedisTransactionVariadicCommand<ruvia::RedisTransaction>);
+static_assert(HasRedisTransactionVariadicWatch<ruvia::RedisTransaction>);
 static_assert(!HasRedisTransactionDiscard<ruvia::RedisTransaction>);
 static_assert(!HasLvalueRedisExec<ruvia::RedisPipeline>);
 static_assert(HasRvalueRedisExec<ruvia::RedisPipeline>);

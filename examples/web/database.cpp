@@ -90,8 +90,7 @@ private:
     }
 
     static ruvia::Task<void> loadUserFound(ruvia::Context& c, bool& found) {
-        std::array<ruvia::DbValue, 1> params{ruvia::DbValue{c.req().param("id").value_or("")}};
-        auto result = co_await c.db().query(driver_ == ruvia::DbDriver::kPostgreSql ? "SELECT id, name FROM users WHERE id = $1" : "SELECT id, name FROM users WHERE id = ?", std::span<const ruvia::DbValue>(params));
+        auto result = co_await c.db().query(driver_ == ruvia::DbDriver::kPostgreSql ? "SELECT id, name FROM users WHERE id = $1" : "SELECT id, name FROM users WHERE id = ?", c.req().param("id").value_or(""));
         found = !result.rows().empty();
         co_return;
     }
@@ -108,8 +107,7 @@ private:
     }
 
     static ruvia::Task<void> insertUser(ruvia::Context& c, std::string_view name, std::uint64_t& id) {
-        std::array<ruvia::DbValue, 1> params{ruvia::DbValue{name}};
-        auto result = co_await c.db().execute(driver_ == ruvia::DbDriver::kPostgreSql ? "INSERT INTO users(name) VALUES ($1) RETURNING id" : "INSERT INTO users(name) VALUES (?)", std::span<const ruvia::DbValue>(params));
+        auto result = co_await c.db().execute(driver_ == ruvia::DbDriver::kPostgreSql ? "INSERT INTO users(name) VALUES ($1) RETURNING id" : "INSERT INTO users(name) VALUES (?)", name);
         if (driver_ == ruvia::DbDriver::kPostgreSql) {
             const auto rows = result.rows();
             if (rows.empty() || rows.front().empty()) {
@@ -128,10 +126,8 @@ private:
 
     static ruvia::Task<void> transferFunds(ruvia::Context& c) {
         auto tx = co_await c.db().beginTransaction();
-        std::array<ruvia::DbValue, 2> debitParams{ruvia::DbValue{100}, ruvia::DbValue{1}};
-        (void)co_await tx.execute(driver_ == ruvia::DbDriver::kPostgreSql ? "UPDATE accounts SET balance = balance - $1 WHERE id = $2" : "UPDATE accounts SET balance = balance - ? WHERE id = ?", std::span<const ruvia::DbValue>(debitParams));
-        std::array<ruvia::DbValue, 2> creditParams{ruvia::DbValue{100}, ruvia::DbValue{2}};
-        (void)co_await tx.execute(driver_ == ruvia::DbDriver::kPostgreSql ? "UPDATE accounts SET balance = balance + $1 WHERE id = $2" : "UPDATE accounts SET balance = balance + ? WHERE id = ?", std::span<const ruvia::DbValue>(creditParams));
+        (void)co_await tx.execute(driver_ == ruvia::DbDriver::kPostgreSql ? "UPDATE accounts SET balance = balance - $1 WHERE id = $2" : "UPDATE accounts SET balance = balance - ? WHERE id = ?", 100, 1);
+        (void)co_await tx.execute(driver_ == ruvia::DbDriver::kPostgreSql ? "UPDATE accounts SET balance = balance + $1 WHERE id = $2" : "UPDATE accounts SET balance = balance + ? WHERE id = ?", 100, 2);
         co_await tx.commit();
         co_return;
     }

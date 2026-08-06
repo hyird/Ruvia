@@ -3,6 +3,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/web/redis/RedisTypes.h"
 #include "ruvia/web/ScopedOperation.h"
+#include "ruvia/web/detail/redis/RedisArgumentPack.h"
 
 #include <functional>
 #include <initializer_list>
@@ -27,6 +28,17 @@ public:
 
     RedisPipeline& command(std::span<const std::string_view> args);
     RedisPipeline& command(std::initializer_list<std::string_view> args) = delete;
+
+    // Command words as ordinary arguments: command("TYPE", key). Each queued
+    // command owns its arguments (makeCommand copies them into the batch before
+    // returning), so the temporary array does not outlive this call.
+    template <typename... Args>
+        requires detail::RedisArgumentPack<Args...>
+    RedisPipeline& command(Args&&... args) {
+        const std::string_view views[]{std::string_view(args)...};
+        return command(std::span<const std::string_view>(views));
+    }
+
     RedisPipeline& get(std::string_view key);
     RedisPipeline& set(std::string_view key, std::string_view value);
     RedisPipeline& getDel(std::string_view key);
