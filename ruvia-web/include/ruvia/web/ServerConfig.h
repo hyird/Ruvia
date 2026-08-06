@@ -424,7 +424,7 @@ public:
 
     template <typename Listener>
         requires(!std::is_function_v<Listener> && std::is_nothrow_invocable_r_v<void, Listener&, const AccessLogRecord&>)
-    [[nodiscard]] static constexpr AccessLogCallback bind(Listener& listener) noexcept {
+    [[nodiscard]] static AccessLogCallback bind(Listener& listener) noexcept {
         return AccessLogCallback(std::addressof(listener), [](void* target, const AccessLogRecord& record) noexcept { (*static_cast<Listener*>(target))(record); });
     }
 
@@ -604,7 +604,7 @@ public:
 
     template <typename Listener>
         requires(!std::is_function_v<Listener> && std::is_nothrow_invocable_r_v<void, Listener&, const ConnectionFailureRecord&>)
-    [[nodiscard]] static constexpr ConnectionFailureCallback bind(Listener& listener) noexcept {
+    [[nodiscard]] static ConnectionFailureCallback bind(Listener& listener) noexcept {
         return ConnectionFailureCallback(std::addressof(listener), [](void* target, const ConnectionFailureRecord& record) noexcept { (*static_cast<Listener*>(target))(record); });
     }
 
