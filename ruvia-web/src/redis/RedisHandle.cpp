@@ -83,8 +83,8 @@ ScopedOperation<RedisValue> RedisHandle::command(std::span<const std::string_vie
     detail::validateRedisOperationOptions(options);
     const bool blocking = detail::validateRedisPooledCommand(args, true);
     auto& selectedPool = blocking ? *blockingPool_ : *pool_;
-    if (blocking && !options.stopToken.stoppable() && !options.timeout.has_value() && !selectedPool.hasCommandTimeout()) {
-        throw std::invalid_argument("raw blocking redis command requires a StopToken or finite command timeout");
+    if (blocking && !options.stopToken.stoppable() && !options.timeout.has_value()) {
+        throw std::invalid_argument("raw blocking redis command requires a StopToken or finite operation timeout");
     }
     return scoped(detail::executeOwnedRedisCommand(selectedPool, detail::ownRedisArgs(args, resource_), std::move(options), resource_));
 }

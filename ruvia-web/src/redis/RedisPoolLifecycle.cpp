@@ -86,8 +86,4 @@ bool RedisPool::needsDeadlineScan() const noexcept {
     return worker_ == nullptr;
 }
 
-bool RedisPool::hasCommandTimeout() const noexcept {
-    return config_.commandTimeout.has_value();
-}
-
 }  // namespace ruvia::detail

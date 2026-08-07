@@ -569,6 +569,59 @@ private:
     std::thread thread_;
 };
 
+class DelayedRedisBlockReplyServer final {
+public:
+    DelayedRedisBlockReplyServer()
+        : acceptor_(ioContext_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+          thread_([this] { run(); }) {}
+
+    ~DelayedRedisBlockReplyServer() {
+        std::error_code ignored;
+        acceptor_.close(ignored);
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+
+private:
+    [[nodiscard]] static bool readExact(asio::ip::tcp::socket& socket, std::size_t size) {
+        std::vector<char> input(size);
+        std::error_code error;
+        (void)asio::read(socket, asio::buffer(input), error);
+        return !error;
+    }
+
+    void run() noexcept {
+        try {
+            // Registry startup eagerly connects the ordinary pool. The typed
+            // blocking command then lazily opens the isolated pool socket.
+            asio::ip::tcp::socket ordinarySocket(ioContext_);
+            acceptor_.accept(ordinarySocket);
+
+            asio::ip::tcp::socket blockedSocket(ioContext_);
+            acceptor_.accept(blockedSocket);
+            constexpr std::string_view xread = "*8\r\n$10\r\nXREADGROUP\r\n$5\r\nGROUP\r\n$1\r\ng\r\n$1\r\nc\r\n$5\r\nBLOCK\r\n$3\r\n250\r\n$7\r\nSTREAMS\r\n$6\r\nevents\r\n$1\r\n>\r\n";
+            if (!readExact(blockedSocket, xread.size())) {
+                return;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            constexpr std::string_view nil = "*-1\r\n";
+            std::error_code writeError;
+            (void)asio::write(blockedSocket, asio::buffer(nil), writeError);
+        } catch (...) {
+        }
+    }
+
+    asio::io_context ioContext_;
+    asio::ip::tcp::acceptor acceptor_;
+    std::thread thread_;
+};
+
 int testStopWhileRedisConnectWaits() {
     StalledTcpServer server;
     auto redis = ruvia::RedisConfig{};
@@ -789,6 +842,54 @@ int testRedisCancellationDiscardsSocketAndReconnects() {
     return result;
 }
 
+int testRedisBlockingPoolDoesNotInheritOrdinaryCommandTimeout() {
+    DelayedRedisBlockReplyServer server;
+    auto redis = ruvia::RedisConfig{};
+    redis.host = "127.0.0.1";
+    redis.port = server.port();
+    redis.poolSizePerWorker = 1;
+    redis.blockingPoolSizePerWorker = 1;
+    // The fake Redis reply arrives after this ordinary-pool deadline but well
+    // before the typed BLOCK duration plus its client-side protocol grace.
+    redis.commandTimeout = std::chrono::milliseconds(25);
+
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 4});
+    auto options = ruvia::DataAccessOptions{};
+    options.redis.push_back(ruvia::DataAccessRedisConfig{"default", std::move(redis)});
+    ruvia::DataAccessService service(loops.loop(0), std::move(options));
+
+    auto ready = service.connect();
+    loops.start();
+    ready.get();
+
+    std::promise<int> completed;
+    auto completedFuture = completed.get_future();
+    const auto posted = service.post([&completed](ruvia::DataAccessContext& context) -> ruvia::Task<void> {
+        try {
+            const std::array streams{ruvia::RedisStreamReadView{.stream = "events", .id = ">"}};
+            auto redisHandle = context.redis();
+            const auto result = co_await redisHandle.xreadGroup(
+                "g",
+                "c",
+                streams,
+                {.block = ruvia::RedisBlockWait::forDuration(std::chrono::milliseconds(250))});
+            completed.set_value(result.has_value() ? 1 : 0);
+        } catch (...) {
+            completed.set_value(2);
+        }
+    });
+    if (!posted.accepted()) {
+        loops.stop();
+        loops.join();
+        return 3;
+    }
+
+    const auto result = completedFuture.get();
+    loops.stop();
+    loops.join();
+    return result;
+}
+
 int testRedisConnectTimeoutIncludesStartupCommands() {
     DelayedRedisStartupServer server;
     auto redis = ruvia::RedisConfig{};
@@ -922,8 +1023,11 @@ int main() {
         if (const auto result = testRedisCancellationDiscardsSocketAndReconnects(); result != 0) {
             return 98 + result;
         }
-        if (const auto result = testRedisConnectTimeoutIncludesStartupCommands(); result != 0) {
+        if (const auto result = testRedisBlockingPoolDoesNotInheritOrdinaryCommandTimeout(); result != 0) {
             return 99 + result;
+        }
+        if (const auto result = testRedisConnectTimeoutIncludesStartupCommands(); result != 0) {
+            return 100 + result;
         }
 #endif
         return 0;

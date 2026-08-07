@@ -90,7 +90,6 @@ public:
     Task<RedisValue> executeOwned(std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource, RedisOperationOptions options = {});
     Task<std::pmr::vector<RedisValue>> executePipeline(std::span<const RedisPipeline::Command> commands, RedisOperationOptions options, std::pmr::memory_resource* resource);
     Task<std::pmr::vector<RedisValue>> executePipeline(std::span<const RedisCommandArgsView> commands, RedisOperationOptions options, std::pmr::memory_resource* resource);
-    [[nodiscard]] bool hasCommandTimeout() const noexcept;
 
 private:
     friend class ::ruvia::RedisHandle;

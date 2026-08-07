@@ -4,6 +4,7 @@
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/integration/DataAccessDefinitions.h"
 #include <algorithm>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <utility>
@@ -28,6 +29,12 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
         validateRedisConfig(generalConfig);
         const auto generalSize = generalConfig.poolSizePerWorker;
         const auto blockingSize = generalConfig.blockingPoolSizePerWorker;
+        // Redis blocking commands own their wait semantics. Typed finite waits
+        // install a per-operation deadline with protocol grace, while infinite
+        // waits require an explicit StopToken or operation timeout. Inheriting
+        // the ordinary pool's command timeout would cut long waits short and
+        // repeatedly discard/reconnect BLOCK 0 sockets.
+        blockingConfig.commandTimeout = std::nullopt;
         auto general = makePmrObject<RedisPool>(resource_, ioContext, std::move(generalConfig), generalSize, resource_, worker);
         auto blocking = makePmrObject<RedisPool>(resource_, ioContext, std::move(blockingConfig), blockingSize, resource_, worker);
         pools_.push_back(Entry{std::pmr::string(definition.alias, resource_), std::move(general), std::move(blocking)});

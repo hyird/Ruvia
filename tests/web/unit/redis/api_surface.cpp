@@ -267,10 +267,10 @@ RUVIA_TEST(redis_api_surface_uses_span_args_without_initializer_list_overloads) 
     RUVIA_CHECK(true);
 }
 
-RUVIA_TEST(redis_blocking_commands_route_to_an_internal_pool_and_require_a_cancellation_bound) {
+RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_a_cancellation_bound) {
     asio::io_context ioContext;
     ruvia::RedisConfig config;
-    config.commandTimeout = std::nullopt;
+    config.commandTimeout = std::chrono::milliseconds(1);
     const std::array definitions{redisDefinition("default", config)};
     ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope generalScope;
@@ -303,18 +303,32 @@ RUVIA_TEST(redis_blocking_commands_route_to_an_internal_pool_and_require_a_cance
         statefulRejected = true;
     }
 
-    bool infiniteRejected = false;
+    bool infiniteStreamRejected = false;
+    bool infinitePopRejected = false;
+    bool unboundedRawRejected = false;
     try {
         (void)redis.xreadGroup("workers", "consumer", streams, {.block = ruvia::RedisBlockWait::indefinitely()});
     } catch (const std::invalid_argument&) {
-        infiniteRejected = true;
+        infiniteStreamRejected = true;
+    }
+    try {
+        (void)redis.blpop(keys, std::chrono::seconds::zero());
+    } catch (const std::invalid_argument&) {
+        infinitePopRejected = true;
+    }
+    try {
+        (void)redis.command("BLPOP", "queue", "0");
+    } catch (const std::invalid_argument&) {
+        unboundedRawRejected = true;
     }
 
     RUVIA_CHECK(finitePopAccepted);
     RUVIA_CHECK(finiteStreamAccepted);
     RUVIA_CHECK(finiteRawAccepted);
     RUVIA_CHECK(statefulRejected);
-    RUVIA_CHECK(infiniteRejected);
+    RUVIA_CHECK(infiniteStreamRejected);
+    RUVIA_CHECK(infinitePopRejected);
+    RUVIA_CHECK(unboundedRawRejected);
 }
 
 RUVIA_TEST(redis_registry_derives_default_pool_from_owned_entry_index) {

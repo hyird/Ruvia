@@ -66,9 +66,9 @@ void constrainOperationTimeout(RedisOperationOptions& options, std::optional<std
     return timeout + grace;
 }
 
-void requireCancelableInfiniteBlock(const detail::RedisPool& pool, const RedisOperationOptions& options) {
-    if (!options.stopToken.stoppable() && !options.timeout.has_value() && !pool.hasCommandTimeout()) {
-        throw std::invalid_argument("infinite redis block requires a StopToken or finite command timeout");
+void requireCancelableInfiniteBlock(const RedisOperationOptions& options) {
+    if (!options.stopToken.stoppable() && !options.timeout.has_value()) {
+        throw std::invalid_argument("infinite redis block requires a StopToken or finite operation timeout");
     }
 }
 
@@ -140,7 +140,7 @@ ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::blpop(std::span<const
     options = detail::mergeRedisOperationOptions(operationOptions_, std::move(options));
     detail::validateRedisOperationOptions(options);
     if (timeout == std::chrono::seconds::zero()) {
-        requireCancelableInfiniteBlock(*blockingPool_, options);
+        requireCancelableInfiniteBlock(options);
     }
     return scoped(executeRedisBlockingPop(*blockingPool_, detail::redisBlockingPopArgs("BLPOP", keys, timeout, resource_), timeout, std::move(options), resource_));
 }
@@ -150,7 +150,7 @@ ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::brpop(std::span<const
     options = detail::mergeRedisOperationOptions(operationOptions_, std::move(options));
     detail::validateRedisOperationOptions(options);
     if (timeout == std::chrono::seconds::zero()) {
-        requireCancelableInfiniteBlock(*blockingPool_, options);
+        requireCancelableInfiniteBlock(options);
     }
     return scoped(executeRedisBlockingPop(*blockingPool_, detail::redisBlockingPopArgs("BRPOP", keys, timeout, resource_), timeout, std::move(options), resource_));
 }
@@ -166,7 +166,7 @@ ScopedOperation<std::optional<RedisXReadGroupResult>> RedisHandle::xreadGroup(st
         if (const auto duration = options.block->duration(); duration.has_value()) {
             constrainOperationTimeout(options.operation, redisBlockClientTimeout(*duration));
         } else {
-            requireCancelableInfiniteBlock(*selectedPool, options.operation);
+            requireCancelableInfiniteBlock(options.operation);
         }
     }
     return scoped(executeRedisXReadGroup(*selectedPool, std::move(args), std::move(options.operation), resource_));

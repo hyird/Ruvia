@@ -43,9 +43,12 @@ struct RedisConfig {
     std::size_t blockingPoolSizePerWorker{1};
     // Absence explicitly disables the corresponding timeout. connectTimeout is one
     // deadline shared by DNS resolution, TCP establishment, AUTH, and SELECT.
-    // commandTimeout bounds a whole logical command or pipeline, including
-    // write and every reply read, rather than restarting for each I/O wait;
-    // startup commands honor the earlier of both deadlines.
+    // commandTimeout bounds a whole logical command or pipeline on the ordinary
+    // pool, including write and every reply read, rather than restarting for
+    // each I/O wait; startup commands honor the earlier of both deadlines.
+    // The isolated blocking pool does not inherit this timeout: typed finite
+    // waits derive a per-operation deadline from their Redis wait, and infinite
+    // waits require an explicit StopToken or operation timeout.
     std::optional<std::chrono::milliseconds> connectTimeout{std::chrono::seconds(5)};
     std::optional<std::chrono::milliseconds> commandTimeout{std::chrono::seconds(30)};
     std::optional<std::chrono::milliseconds> acquireTimeout{std::chrono::seconds(5)};
