@@ -1,110 +1,75 @@
 #pragma once
 
-#include <algorithm>
-#include <atomic>
 #include <exception>
-#include <memory>
-#include <mutex>
+#include <optional>
+#include <stop_token>
 #include <utility>
-#include <vector>
 
 #include <ruvia/core/MoveOnlyFunction.h>
 
 namespace ruvia {
 
 namespace detail {
-class StopCallbackState final {
+
+class StopCallback final {
 public:
-    explicit StopCallbackState(MoveOnlyFunction<void()> callback)
+    explicit StopCallback(MoveOnlyFunction<void()> callback) noexcept
         : callback_(std::move(callback)) {}
 
-    void run() noexcept {
-        MoveOnlyFunction<void()> callback;
-        {
-            std::lock_guard lock(mutex_);
-            if (!active_) {
-                return;
-            }
-            active_ = false;
-            callback = std::move(callback_);
-        }
+    void operator()() noexcept {
         try {
-            if (callback) {
-                callback();
+            if (callback_) {
+                callback_();
             }
         } catch (...) {
             std::terminate();
         }
     }
 
-    void cancel() noexcept {
-        std::lock_guard lock(mutex_);
-        active_ = false;
-        callback_ = nullptr;
-    }
-
 private:
-    std::mutex mutex_;
     MoveOnlyFunction<void()> callback_;
-    bool active_{true};
-};
-
-struct StopState final {
-    std::atomic_bool requested{false};
-    mutable std::mutex mutex;
-    mutable std::vector<std::shared_ptr<StopCallbackState>> callbacks;
 };
 
 class StopSource;
+
 }  // namespace detail
 
 class StopRegistration final {
 public:
     StopRegistration() noexcept = default;
-    ~StopRegistration() {
-        reset();
-    }
+    ~StopRegistration() = default;
 
     StopRegistration(const StopRegistration&) = delete;
     StopRegistration& operator=(const StopRegistration&) = delete;
-    StopRegistration(StopRegistration&& other) noexcept
-        : state_(std::move(other.state_)),
-          callback_(std::move(other.callback_)) {}
-    StopRegistration& operator=(StopRegistration&& other) noexcept {
-        if (this != &other) {
-            reset();
-            state_ = std::move(other.state_);
-            callback_ = std::move(other.callback_);
-        }
-        return *this;
-    }
+    StopRegistration(StopRegistration&&) = delete;
+    StopRegistration& operator=(StopRegistration&&) = delete;
 
     void reset() noexcept {
-        auto state = std::move(state_);
-        auto callback = std::move(callback_);
-        if (callback == nullptr) {
-            return;
-        }
-        if (state != nullptr) {
-            std::lock_guard lock(state->mutex);
-            std::erase(state->callbacks, callback);
-        }
-        callback->cancel();
+        callback_.reset();
+        registered_ = false;
     }
 
     [[nodiscard]] bool registered() const noexcept {
-        return callback_ != nullptr;
+        return registered_;
     }
 
 private:
     friend class StopToken;
 
-    StopRegistration(std::shared_ptr<detail::StopState> state, std::shared_ptr<detail::StopCallbackState> callback) noexcept
-        : state_(std::move(state)),
-          callback_(std::move(callback)) {}
+    StopRegistration(std::stop_token token, MoveOnlyFunction<void()> callback) {
+        if (!token.stop_possible() || !callback) {
+            return;
+        }
+        if (token.stop_requested()) {
+            detail::StopCallback(std::move(callback))();
+            return;
+        }
+        callback_.emplace(std::move(token), detail::StopCallback(std::move(callback)));
+        registered_ = true;
+    }
 
-    std::shared_ptr<detail::StopState> state_;
-    std::shared_ptr<detail::StopCallbackState> callback_;
+    std::optional<std::stop_callback<detail::StopCallback>> callback_;
+    bool registered_{false};
 };
 
 class StopToken final {
@@ -112,78 +77,55 @@ public:
     StopToken() noexcept = default;
 
     [[nodiscard]] bool stopRequested() const noexcept {
-        return state_ != nullptr && state_->requested.load(std::memory_order_acquire);
+        return token_.stop_requested();
     }
 
     [[nodiscard]] bool stoppable() const noexcept {
-        return state_ != nullptr;
+        return token_.stop_possible();
     }
 
-    // Registers one callback while stop remains unrequested. requestStop() may
-    // run on any thread and invokes callbacks on that requesting thread, so a
-    // callback that touches worker-affine state must only enqueue work onto its
-    // owner. Destroying/resetting the registration suppresses a callback that
-    // has not begun; an already-running callback is allowed to finish.
+    // std::stop_callback embeds its registration node in StopRegistration, so
+    // registering a cancellation callback performs no callback-state allocation.
+    // requestStop() may invoke the callback on the requesting thread; callbacks
+    // that affect worker-owned state must post only an id/generation to that
+    // worker and let the owner validate it there.
     [[nodiscard]] StopRegistration registerCallback(MoveOnlyFunction<void()> callback) const {
-        if (state_ == nullptr || !callback) {
-            return {};
-        }
-        auto registered = std::make_shared<detail::StopCallbackState>(std::move(callback));
-        {
-            std::lock_guard lock(state_->mutex);
-            if (!state_->requested.load(std::memory_order_acquire)) {
-                state_->callbacks.push_back(registered);
-                return StopRegistration(std::const_pointer_cast<detail::StopState>(state_), std::move(registered));
-            }
-        }
-        registered->run();
-        return {};
+        return StopRegistration(token_, std::move(callback));
     }
 
 private:
     friend class detail::StopSource;
 
-    explicit StopToken(std::shared_ptr<detail::StopState> state) noexcept
-        : state_(std::move(state)) {}
+    explicit StopToken(std::stop_token token) noexcept
+        : token_(std::move(token)) {}
 
-    std::shared_ptr<const detail::StopState> state_;
+    std::stop_token token_;
 };
 
 namespace detail {
 
 class StopSource final {
 public:
-    StopSource()
-        : state_(std::make_shared<StopState>()) {}
+    StopSource() = default;
     StopSource(const StopSource&) = delete;
     StopSource& operator=(const StopSource&) = delete;
     StopSource(StopSource&&) = delete;
     StopSource& operator=(StopSource&&) = delete;
 
     void requestStop() noexcept {
-        std::vector<std::shared_ptr<StopCallbackState>> callbacks;
-        {
-            std::lock_guard lock(state_->mutex);
-            if (state_->requested.exchange(true, std::memory_order_acq_rel)) {
-                return;
-            }
-            callbacks.swap(state_->callbacks);
-        }
-        for (const auto& callback : callbacks) {
-            callback->run();
-        }
+        (void)source_.request_stop();
     }
 
     [[nodiscard]] bool stopRequested() const noexcept {
-        return state_->requested.load(std::memory_order_acquire);
+        return source_.stop_requested();
     }
 
     [[nodiscard]] StopToken token() const noexcept {
-        return StopToken(state_);
+        return StopToken(source_.get_token());
     }
 
 private:
-    std::shared_ptr<StopState> state_;
+    std::stop_source source_;
 };
 
 }  // namespace detail

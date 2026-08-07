@@ -49,7 +49,8 @@ void RedisPool::ensureReader(Connection& connection) {
     connection.replyBytes = 0;
 }
 
-bool RedisPool::armDeadline(Connection& connection, const OperationTimeout& timeout, Connection::DeadlineKind kind) noexcept {
+bool RedisPool::armDeadline(Connection& connection, const OperationTimeout& timeout, Connection::DeadlineKind kind) {
+    connection.deadlineTimer->cancel();
     const auto remaining = timeout.remaining();
     if (!remaining.has_value()) {
         connection.deadline.reset();
@@ -59,11 +60,30 @@ bool RedisPool::armDeadline(Connection& connection, const OperationTimeout& time
         connection.deadline.reset();
         return false;
     }
-    connection.deadline.arm(workerTimerDeadlineAfter(*remaining), kind);
+    const auto deadline = workerTimerDeadlineAfter(*remaining);
+    connection.deadline.arm(deadline, kind);
+    if (worker_ != nullptr && worker_->valid()) {
+        WorkerHandleAccess::scheduleTimer(*worker_, *connection.deadlineTimer, deadline, [&connection](WorkerTimerOutcome outcome) noexcept {
+            if (outcome != WorkerTimerOutcome::kExpired) {
+                return;
+            }
+            const auto expiredKind = connection.deadline.expire(std::chrono::steady_clock::now());
+            if (!expiredKind.has_value()) {
+                return;
+            }
+            std::error_code ignored;
+            if (*expiredKind == Connection::DeadlineKind::kResolve) {
+                connection.resolver.cancel();
+            } else {
+                connection.socket.cancel(ignored);
+            }
+        });
+    }
     return true;
 }
 
 bool RedisPool::clearDeadline(Connection& connection) noexcept {
+    connection.deadlineTimer->cancel();
     return connection.deadline.clear();
 }
 

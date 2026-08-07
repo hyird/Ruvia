@@ -20,13 +20,6 @@ namespace {
 
 }  // namespace
 
-struct RedisPool::OperationCancellation final {
-    RedisPool* pool{nullptr};
-    std::size_t index{0};
-    std::uint64_t generation{0};
-    bool active{true};
-};
-
 Task<RedisValue> RedisPool::executeOwned(std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource, RedisOperationOptions options) {
     return executeWithTimeoutImpl(std::move(args), std::move(options), resource);
 }
@@ -39,10 +32,19 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(ArgSource args, RedisOperatio
     auto& connection = guard.connection();
     connection.abortReason = Connection::AbortReason::kNone;
     const auto generation = ++connection.operationGeneration;
-    auto [cancellation, stopRegistration] = registerCancellation(index, generation, std::move(options.stopToken));
+    auto stopRegistration = options.stopToken.registerCallback([pool = this, index, generation] {
+        WorkerHandleAccess::deferOrTerminate(*pool->worker_, [pool, index, generation] {
+            pool->cancelOperation(index, generation);
+        });
+    });
+    if (options.stopToken.stopRequested()) {
+        cancelOperation(index, generation);
+    }
     auto finishCancellation = [&]() noexcept {
-        if (cancellation != nullptr) {
-            cancellation->active = false;
+        if (connection.operationGeneration == generation) {
+            if (++connection.operationGeneration == 0) {
+                ++connection.operationGeneration;
+            }
         }
         stopRegistration.reset();
     };
@@ -78,7 +80,7 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(ArgSource args, RedisOperatio
 }
 
 template <typename CommandSource>
-Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(CommandSource commands, std::pmr::memory_resource* resource) {
+Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(CommandSource commands, RedisOperationOptions options, std::pmr::memory_resource* resource) {
     const auto resolved = detail::pmrResourceOrDefault(resource);
     std::pmr::vector<RedisValue> replies(resolved);
     replies.reserve(commands.size());
@@ -86,14 +88,33 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(CommandSource 
         co_return replies;
     }
 
-    const OperationTimeout operationTimeout(std::nullopt);
-    const auto index = co_await acquire(operationTimeout, {});
+    const OperationTimeout operationTimeout(options.timeout);
+    const auto index = co_await acquire(operationTimeout, options.stopToken);
     ConnectionGuard guard(*this, index);
     auto& connection = guard.connection();
+    connection.abortReason = Connection::AbortReason::kNone;
+    const auto generation = ++connection.operationGeneration;
+    auto stopRegistration = options.stopToken.registerCallback([pool = this, index, generation] {
+        WorkerHandleAccess::deferOrTerminate(*pool->worker_, [pool, index, generation] {
+            pool->cancelOperation(index, generation);
+        });
+    });
+    if (options.stopToken.stopRequested()) {
+        cancelOperation(index, generation);
+    }
+    auto finishCancellation = [&]() noexcept {
+        if (connection.operationGeneration == generation) {
+            if (++connection.operationGeneration == 0) {
+                ++connection.operationGeneration;
+            }
+        }
+        stopRegistration.reset();
+    };
     try {
         if (!connection.connected) {
-            co_await connect(connection);
+            co_await connect(connection, &operationTimeout);
         }
+        throwIfCancelled(connection);
 
         connection.writeBuffer.clear();
         std::size_t serializedBytes = 0;
@@ -111,8 +132,9 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(CommandSource 
             appendRespCommand(connection.writeBuffer, args);
         }
 
-        const OperationTimeout deadline(config_.commandTimeout);
+        const auto deadline = operationTimeout.constrainedBy(config_.commandTimeout);
         const auto writeEc = co_await asyncSocketWrite(connection, deadline);
+        throwIfCancelled(connection);
         if (writeEc) {
             if (writeEc == asio::error::timed_out) {
                 throw RedisError(RedisError::Code::kTimeout, "redis command timed out");
@@ -122,35 +144,16 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(CommandSource 
 
         while (replies.size() < commands.size()) {
             replies.emplace_back(co_await readReply(connection, deadline, resolved));
+            throwIfCancelled(connection);
         }
 
+        finishCancellation();
         co_return replies;
     } catch (...) {
+        finishCancellation();
         guard.discard();
         throw;
     }
-}
-
-std::pair<std::shared_ptr<RedisPool::OperationCancellation>, StopRegistration> RedisPool::registerCancellation(std::size_t index, std::uint64_t generation, StopToken stopToken) {
-    if (!stopToken.stoppable()) {
-        return {};
-    }
-    if (worker_ == nullptr || !worker_->valid()) {
-        throw std::logic_error("cancellable redis operation requires a valid worker");
-    }
-
-    auto cancellation = std::make_shared<OperationCancellation>(OperationCancellation{this, index, generation, true});
-    auto registration = stopToken.registerCallback([worker = worker_, cancellation] {
-        WorkerHandleAccess::deferOrTerminate(*worker, [cancellation] {
-            if (cancellation->active) {
-                cancellation->pool->cancelOperation(cancellation->index, cancellation->generation);
-            }
-        });
-    });
-    if (stopToken.stopRequested()) {
-        cancelOperation(index, generation);
-    }
-    return {std::move(cancellation), std::move(registration)};
 }
 
 void RedisPool::cancelOperation(std::size_t index, std::uint64_t generation) noexcept {
@@ -171,12 +174,12 @@ void RedisPool::throwIfCancelled(const Connection& connection) const {
     }
 }
 
-Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(std::span<const RedisPipeline::Command> commands, std::pmr::memory_resource* resource) {
-    return executePipelineImpl(commands, resource);
+Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(std::span<const RedisPipeline::Command> commands, RedisOperationOptions options, std::pmr::memory_resource* resource) {
+    return executePipelineImpl(commands, std::move(options), resource);
 }
 
-Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(std::span<const RedisCommandArgsView> commands, std::pmr::memory_resource* resource) {
-    return executePipelineImpl(commands, resource);
+Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(std::span<const RedisCommandArgsView> commands, RedisOperationOptions options, std::pmr::memory_resource* resource) {
+    return executePipelineImpl(commands, std::move(options), resource);
 }
 
 }  // namespace detail

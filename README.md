@@ -662,14 +662,18 @@ and scan options accept an optional continuation cursor. Scan results expose
 `done()` and `nextCursor()`, so Redis's wire-level zero sentinel never doubles
 as both an initial and terminal application state.
 
-Redis blocking commands use an explicitly isolated alias configured with
-`RedisPoolUsage::kBlocking`; ordinary pools reject `BLPOP`/`BRPOP` and commands
-such as `XREADGROUP ... BLOCK`. `RedisHandle::command()` accepts
-`RedisOperationOptions` for an end-to-end per-command timeout and `StopToken`,
-while typed `xreadGroup()` accepts `RedisXReadGroupOptions`. Cancelling an active
-operation discards its socket, and that pool slot reconnects before its next
-command. An infinite block therefore requires either a stoppable token or a
-finite command timeout.
+Each Redis alias owns an ordinary pool plus a lazy blocking pool. Typed blocking
+commands (`blpop()`, `brpop()`, and blocking `xreadGroup()`) and blocking raw
+commands are routed to the isolated pool automatically, so application code does
+not maintain a second alias. `RedisHandle::withOptions()` applies an end-to-end
+timeout and `StopToken` to typed commands and is inherited by pipelines and
+transactions; `exec(options)` can refine one batch. Redis defaults bound connect,
+pool acquisition, and command execution, while `std::nullopt` explicitly disables
+an individual default. Deadlines use worker timers rather than maintenance-scan
+granularity. Cancelling active I/O closes and discards only its socket, and that
+pool slot reconnects before its next command. An infinite block therefore
+requires either a stoppable token or a finite command timeout. A request handler
+can pass `c.stopToken()` to stop work when its server worker shuts down.
 
 Models are ordinary structs with one schema for JSON parsing, validation, and
 serialization. They support nested models and arrays; `RUVIA_FIELD` is required

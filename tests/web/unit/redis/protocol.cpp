@@ -352,7 +352,8 @@ RUVIA_TEST(redis_config_validation_checks_every_field) {
     // A default config is valid; absent timeouts are disabled explicitly.
     RUVIA_CHECK(!throwsOn([] { validateRedisConfig(RedisConfig{}); }));
 
-    // Host, port, pool size and max array depth each have a required-value guard.
+    // Host, port, both pool sizes and max array depth each have a
+    // required-value guard.
     RUVIA_CHECK(throwsOn([] {
         RedisConfig c;
         c.host.clear();
@@ -366,6 +367,11 @@ RUVIA_TEST(redis_config_validation_checks_every_field) {
     RUVIA_CHECK(throwsOn([] {
         RedisConfig c;
         c.poolSizePerWorker = 0;
+        validateRedisConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        RedisConfig c;
+        c.blockingPoolSizePerWorker = 0;
         validateRedisConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {

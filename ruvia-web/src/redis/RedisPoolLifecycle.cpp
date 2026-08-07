@@ -17,22 +17,22 @@ RedisPool::Connection::Connection(asio::io_context& ioContext, std::pmr::memory_
     : socket(ioContext),
       resolver(ioContext),
       writeBuffer(detail::pmrResourceOrDefault(resource)),
-      reader(redisReaderCreate()) {}
+      reader(redisReaderCreate()),
+      deadlineTimer(makePmrObject<WorkerTimerRegistration>(resource)) {}
 
 RedisPool::Connection::~Connection() = default;
 
 RedisPool::Connection::Connection(Connection&&) noexcept = default;
 RedisPool::Connection& RedisPool::Connection::operator=(Connection&&) noexcept = default;
 
-RedisPool::RedisPool(asio::io_context& ioContext, RedisConfigStorage config, std::pmr::memory_resource* resource, const WorkerHandle* worker)
+RedisPool::RedisPool(asio::io_context& ioContext, RedisConfigStorage config, std::size_t poolSize, std::pmr::memory_resource* resource, const WorkerHandle* worker)
     : ioContext_(ioContext),
       worker_(worker),
       config_(std::move(config)),
       resource_(detail::pmrResourceOrDefault(resource)),
       connections_(resource_),
-      scheduler_(config_.poolSizePerWorker, resource_) {
+      scheduler_(poolSize, resource_) {
     validateRedisConfig(config_);
-    const auto poolSize = config_.poolSizePerWorker;
     connections_.reserve(poolSize);
     for (std::size_t i = 0; i < poolSize; ++i) {
         connections_.emplace_back(ioContext_, resource_);
@@ -70,6 +70,7 @@ void RedisPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcep
             continue;
         }
         std::error_code ignored;
+        connection.deadlineTimer->cancel();
         if (*kind == Connection::DeadlineKind::kResolve) {
             connection.resolver.cancel();
         } else if (*kind == Connection::DeadlineKind::kSocket) {
@@ -78,14 +79,11 @@ void RedisPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcep
     }
 }
 
-bool RedisPool::hasAnyTimeout() const noexcept {
-    // A command may supply its own deadline even when the pool defaults do
-    // not. Keep the worker maintenance hook registered for every Redis pool.
-    return true;
-}
-
-RedisPoolUsage RedisPool::usage() const noexcept {
-    return config_.usage;
+bool RedisPool::needsDeadlineScan() const noexcept {
+    // Production pools have a WorkerHandle and arm exact timers for both
+    // configured and per-operation deadlines. A standalone pool without a
+    // worker retains the explicit scanDeadlines() fallback.
+    return worker_ == nullptr;
 }
 
 bool RedisPool::hasCommandTimeout() const noexcept {

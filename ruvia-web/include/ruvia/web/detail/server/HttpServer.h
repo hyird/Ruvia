@@ -88,6 +88,8 @@ private:
     asio::io_context ioContext_;
     std::shared_ptr<WorkerDispatcher> workerDispatcher_;
     WorkerHandle workerHandle_;
+    StopSource stopSource_;
+    StopToken stopToken_{stopSource_.token()};
     asio::ip::tcp::acceptor acceptor_;
     std::optional<asio::ssl::context> tlsContext_;
     asio::ip::tcp::endpoint endpoint_;

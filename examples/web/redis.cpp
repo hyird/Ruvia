@@ -39,6 +39,9 @@ ruvia::RedisConfig redisConfig(const ruvia::Env& env) {
     if (const auto poolSize = env.get<std::uint32_t>("RUVIA_REDIS_POOL_SIZE_PER_WORKER")) {
         config.poolSizePerWorker = *poolSize;
     }
+    if (const auto poolSize = env.get<std::uint32_t>("RUVIA_REDIS_BLOCKING_POOL_SIZE_PER_WORKER")) {
+        config.blockingPoolSizePerWorker = *poolSize;
+    }
     return config;
 }
 
@@ -94,7 +97,7 @@ public:
     RUVIA_ROUTES_END
 
     ruvia::Task<ruvia::HttpResponse> ping(ruvia::Context& c) {
-        co_await c.redis().ping();
+        co_await c.redis().withOptions({.timeout = std::chrono::seconds(2), .stopToken = c.stopToken()}).ping();
         auto message = co_await c.redis().ping("hello");
         co_return c.text(std::move(message));
     }
@@ -405,8 +408,8 @@ public:
 
     ruvia::Task<ruvia::HttpResponse> blockingPop(ruvia::Context& c) {
         const std::array<std::string_view, 1> keys{"ruvia:example:blocking"};
-        auto left = co_await c.redis("blocking").blpop(keys, std::chrono::seconds(1));
-        auto right = co_await c.redis("blocking").brpop(keys, std::chrono::seconds(1));
+        auto left = co_await c.redis().blpop(keys, std::chrono::seconds(1));
+        auto right = co_await c.redis().brpop(keys, std::chrono::seconds(1));
 
         std::pmr::string body(c.allocator<char>());
         body.append("left=");
@@ -433,7 +436,5 @@ int main() {
     auto& app = ruvia::app();
     app.loadDotenv();
     auto config = redisConfig(app.env());
-    auto blocking = config;
-    blocking.usage = ruvia::RedisPoolUsage::kBlocking;
-    app.useRedis(config).useRedis("cache", config).useRedis("blocking", std::move(blocking)).setListeners({ruvia::ListenerConfig::http("0.0.0.0", app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))}).setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setSignalShutdown(true).run();
+    app.useRedis(config).useRedis("cache", config).setListeners({ruvia::ListenerConfig::http("0.0.0.0", app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))}).setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setSignalShutdown(true).run();
 }

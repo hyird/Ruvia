@@ -150,6 +150,9 @@ template <typename T>
 concept HasRvalueRedisExec = requires(T& batch) { std::move(batch).exec(); };
 
 template <typename T>
+concept HasRvalueRedisExecOptions = requires(T& batch) { std::move(batch).exec(ruvia::RedisOperationOptions{}); };
+
+template <typename T>
 concept HasLegacyRedisSetOptionBooleans = requires(T& options) {
     options.ttl;
     options.nx;
@@ -215,8 +218,10 @@ static_assert(HasRedisTransactionVariadicWatch<ruvia::RedisTransaction>);
 static_assert(!HasRedisTransactionDiscard<ruvia::RedisTransaction>);
 static_assert(!HasLvalueRedisExec<ruvia::RedisPipeline>);
 static_assert(HasRvalueRedisExec<ruvia::RedisPipeline>);
+static_assert(HasRvalueRedisExecOptions<ruvia::RedisPipeline>);
 static_assert(!HasLvalueRedisExec<ruvia::RedisTransaction>);
 static_assert(HasRvalueRedisExec<ruvia::RedisTransaction>);
+static_assert(HasRvalueRedisExecOptions<ruvia::RedisTransaction>);
 static_assert(std::move_constructible<ruvia::RedisPipeline>);
 static_assert(!std::assignable_from<ruvia::RedisPipeline&, ruvia::RedisPipeline&&>);
 static_assert(std::move_constructible<ruvia::RedisTransaction>);
@@ -232,7 +237,13 @@ static_assert(std::same_as<decltype(ruvia::RedisScanOptions{}.count), std::optio
 static_assert(std::is_aggregate_v<ruvia::RedisScanOptions>);
 static_assert(std::is_aggregate_v<ruvia::RedisOperationOptions>);
 static_assert(std::is_aggregate_v<ruvia::RedisXReadGroupOptions>);
-static_assert(std::same_as<decltype(ruvia::RedisConfig{}.usage), ruvia::RedisPoolUsage>);
+static_assert(std::same_as<decltype(ruvia::RedisConfig{}.blockingPoolSizePerWorker), std::size_t>);
+static_assert(ruvia::RedisConfig{}.connectTimeout.has_value());
+static_assert(ruvia::RedisConfig{}.commandTimeout.has_value());
+static_assert(ruvia::RedisConfig{}.acquireTimeout.has_value());
+static_assert(ruvia::RedisConfig{}.connectTimeout == std::chrono::seconds(5));
+static_assert(ruvia::RedisConfig{}.commandTimeout == std::chrono::seconds(30));
+static_assert(ruvia::RedisConfig{}.acquireTimeout == std::chrono::seconds(5));
 constexpr ruvia::RedisScanOptions kLiteralRedisScanOptions{
     .match = "session:*",
 };
@@ -256,57 +267,52 @@ RUVIA_TEST(redis_api_surface_uses_span_args_without_initializer_list_overloads) 
     RUVIA_CHECK(true);
 }
 
-RUVIA_TEST(redis_blocking_commands_require_an_isolated_pool_and_cancellation_bound) {
+RUVIA_TEST(redis_blocking_commands_route_to_an_internal_pool_and_require_a_cancellation_bound) {
     asio::io_context ioContext;
-    ruvia::RedisConfig generalConfig;
-    const std::array generalDefinitions{redisDefinition("default", generalConfig)};
-    ruvia::detail::RedisRegistry generalRegistry(ioContext, std::pmr::get_default_resource(), generalDefinitions);
+    ruvia::RedisConfig config;
+    config.commandTimeout = std::nullopt;
+    const std::array definitions{redisDefinition("default", config)};
+    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope generalScope;
-    auto general = generalRegistry.get(std::pmr::get_default_resource(), generalScope);
+    auto redis = registry.get(std::pmr::get_default_resource(), generalScope);
     const std::array<std::string_view, 1> keys{"queue"};
     const std::array streams{ruvia::RedisStreamReadView{.stream = "events", .id = ">"}};
 
-    bool popRejected = false;
-    bool streamRejected = false;
-    bool rawRejected = false;
+    bool finitePopAccepted = true;
+    bool finiteStreamAccepted = true;
+    bool finiteRawAccepted = true;
     bool statefulRejected = false;
     try {
-        (void)general.blpop(keys, std::chrono::seconds(1));
-    } catch (const std::invalid_argument&) {
-        popRejected = true;
+        (void)redis.blpop(keys, std::chrono::seconds(1));
+    } catch (...) {
+        finitePopAccepted = false;
     }
     try {
-        (void)general.xreadGroup("workers", "consumer", streams, {.block = ruvia::RedisBlockWait::forDuration(std::chrono::milliseconds(10))});
-    } catch (const std::invalid_argument&) {
-        streamRejected = true;
+        (void)redis.xreadGroup("workers", "consumer", streams, {.block = ruvia::RedisBlockWait::forDuration(std::chrono::milliseconds(10))});
+    } catch (...) {
+        finiteStreamAccepted = false;
     }
     try {
-        (void)general.command("BLPOP", "queue", "1");
-    } catch (const std::invalid_argument&) {
-        rawRejected = true;
+        (void)redis.command(ruvia::RedisOperationOptions{.timeout = std::chrono::seconds(1)}, "BLPOP", "queue", "1");
+    } catch (...) {
+        finiteRawAccepted = false;
     }
     try {
-        (void)general.command("SELECT", "1");
+        (void)redis.command("SELECT", "1");
     } catch (const std::invalid_argument&) {
         statefulRejected = true;
     }
 
-    ruvia::RedisConfig blockingConfig;
-    blockingConfig.usage = ruvia::RedisPoolUsage::kBlocking;
-    const std::array blockingDefinitions{redisDefinition("default", blockingConfig)};
-    ruvia::detail::RedisRegistry blockingRegistry(ioContext, std::pmr::get_default_resource(), blockingDefinitions);
-    ruvia::detail::ScopedOperationScope blockingScope;
-    auto blocking = blockingRegistry.get(std::pmr::get_default_resource(), blockingScope);
     bool infiniteRejected = false;
     try {
-        (void)blocking.xreadGroup("workers", "consumer", streams, {.block = ruvia::RedisBlockWait::indefinitely()});
+        (void)redis.xreadGroup("workers", "consumer", streams, {.block = ruvia::RedisBlockWait::indefinitely()});
     } catch (const std::invalid_argument&) {
         infiniteRejected = true;
     }
 
-    RUVIA_CHECK(popRejected);
-    RUVIA_CHECK(streamRejected);
-    RUVIA_CHECK(rawRejected);
+    RUVIA_CHECK(finitePopAccepted);
+    RUVIA_CHECK(finiteStreamAccepted);
+    RUVIA_CHECK(finiteRawAccepted);
     RUVIA_CHECK(statefulRejected);
     RUVIA_CHECK(infiniteRejected);
 }

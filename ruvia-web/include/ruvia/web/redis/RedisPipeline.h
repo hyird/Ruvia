@@ -81,6 +81,7 @@ public:
     // Consumes the batch before returning the lazy Task, so the coroutine frame
     // owns every command and never borrows this builder through `this`.
     ScopedOperation<std::pmr::vector<RedisValue>> exec() &&;
+    ScopedOperation<std::pmr::vector<RedisValue>> exec(RedisOperationOptions options) &&;
 
 private:
     friend class RedisHandle;
@@ -96,8 +97,8 @@ private:
     static void appendCommand(std::pmr::vector<Command>& target, std::pmr::memory_resource* resource, std::span<const std::string_view> args);
     static void appendCommand(std::pmr::vector<Command>& target, std::pmr::memory_resource* resource, std::string_view first, std::span<const std::string_view> rest = {});
 
-    RedisPipeline(detail::RedisPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;
-    [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(detail::RedisPool& pool, std::pmr::vector<Command> commands, std::pmr::memory_resource* resource);
+    RedisPipeline(detail::RedisPool& pool, RedisOperationOptions options, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;
+    [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(detail::RedisPool& pool, RedisOperationOptions options, std::pmr::vector<Command> commands, std::pmr::memory_resource* resource);
     void requireActive() const;
     [[nodiscard]] detail::RedisPool& consumePool();
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
@@ -113,6 +114,7 @@ private:
     struct Consumed final {};
 
     std::variant<Ready, Consumed> state_;
+    RedisOperationOptions operationOptions_;
     std::pmr::vector<Command> commands_;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 };

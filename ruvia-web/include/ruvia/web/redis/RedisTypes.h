@@ -27,11 +27,6 @@ class RedisHashScanResult;
 class RedisZScanResult;
 class RedisXReadGroupResult;
 
-enum class RedisPoolUsage : std::uint8_t {
-    kGeneral,
-    kBlocking,
-};
-
 struct RedisConfig {
     // Host name or unbracketed address only; keep the port in port.
     std::string host{"127.0.0.1"};
@@ -42,17 +37,18 @@ struct RedisConfig {
     std::uint32_t database{0};
     // Must be greater than zero.
     std::size_t poolSizePerWorker{4};
-    // Long-running BLOCK commands must use a dedicated pool so they cannot
-    // consume every ordinary request/reply connection on a worker.
-    RedisPoolUsage usage{RedisPoolUsage::kGeneral};
-    // Absence disables the corresponding timeout. connectTimeout is one
+    // Blocking commands are routed to a separate lazy-connect pool under the
+    // same alias, so they cannot consume ordinary request/reply connections.
+    // Must be greater than zero.
+    std::size_t blockingPoolSizePerWorker{1};
+    // Absence explicitly disables the corresponding timeout. connectTimeout is one
     // deadline shared by DNS resolution, TCP establishment, AUTH, and SELECT.
     // commandTimeout bounds a whole logical command or pipeline, including
     // write and every reply read, rather than restarting for each I/O wait;
     // startup commands honor the earlier of both deadlines.
-    std::optional<std::chrono::milliseconds> connectTimeout;
-    std::optional<std::chrono::milliseconds> commandTimeout;
-    std::optional<std::chrono::milliseconds> acquireTimeout;
+    std::optional<std::chrono::milliseconds> connectTimeout{std::chrono::seconds(5)};
+    std::optional<std::chrono::milliseconds> commandTimeout{std::chrono::seconds(30)};
+    std::optional<std::chrono::milliseconds> acquireTimeout{std::chrono::seconds(5)};
     // Absence disables the reply byte limit.
     std::optional<std::size_t> maxReplyBytes{64 * 1024 * 1024};
     // Must be greater than zero.
@@ -428,6 +424,7 @@ namespace detail {
 inline constexpr std::string_view kDefaultRedisAlias = "default";
 
 class RedisPool;
+struct RedisCommandExecutor;
 class RedisRegistry;
 
 }  // namespace detail

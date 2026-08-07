@@ -20,6 +20,7 @@ inline Context::Context(RequestMemory& memory, const HttpRequest& request, std::
       request_(request),
       connInfo_(services.connInfo()),
       worker_(services.worker()),
+      stopToken_(services.stopToken()),
       routePath_(routePath),
       paramNames_(paramNames),
       paramValues_(paramValues),

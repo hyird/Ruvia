@@ -85,12 +85,13 @@ public:
     // A transaction is a single-use command batch. Its commands are transferred
     // into the returned coroutine frame before this builder may be destroyed.
     ScopedOperation<std::pmr::vector<RedisValue>> exec() &&;
+    ScopedOperation<std::pmr::vector<RedisValue>> exec(RedisOperationOptions options) &&;
 
 private:
     friend class RedisHandle;
 
     explicit RedisTransaction(RedisPipeline pipeline) noexcept;
-    [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(detail::RedisPool& pool, std::pmr::memory_resource* resource, std::pmr::vector<RedisPipeline::Command> watches, std::pmr::vector<RedisPipeline::Command> commands);
+    [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(detail::RedisPool& pool, RedisOperationOptions options, std::pmr::memory_resource* resource, std::pmr::vector<RedisPipeline::Command> watches, std::pmr::vector<RedisPipeline::Command> commands);
 
     RedisPipeline pipeline_;
     std::pmr::vector<RedisPipeline::Command> watches_;

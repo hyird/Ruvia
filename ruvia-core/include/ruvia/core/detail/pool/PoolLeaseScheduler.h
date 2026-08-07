@@ -11,7 +11,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -87,14 +86,11 @@ private:
         PoolLeaseScheduler* scheduler_;
     };
 
-    struct AcquireCancellation final {
-        PoolWaiterQueue* queue{nullptr};
-        PoolWaiter* waiter{nullptr};
-        bool active{true};
-    };
-
     [[nodiscard]] static Task<PoolWaiterResult> acquireReserved(AcquireReservation reservation, std::optional<std::chrono::milliseconds> timeout, StopToken stopToken, const WorkerHandle* worker) {
         auto& scheduler = reservation.scheduler();
+        if (stopToken.stoppable() && (worker == nullptr || !worker->valid())) {
+            throw std::logic_error("cancellable pool acquire requires a valid worker");
+        }
         if (scheduler.closing_) {
             co_return PoolWaiterResult::makeClosed();
         }
@@ -109,7 +105,11 @@ private:
         }
 
         const auto deadline = timeout.has_value() ? workerTimerDeadlineAfter(*timeout) : std::chrono::steady_clock::time_point::max();
-        PoolWaiter waiter(deadline);
+        auto waiterId = ++scheduler.nextWaiterId_;
+        if (waiterId == 0) {
+            waiterId = ++scheduler.nextWaiterId_;
+        }
+        PoolWaiter waiter(deadline, waiterId);
         scheduler.waiters_.enqueue(waiter);
         struct WaiterGuard final {
             PoolWaiterQueue& queue;
@@ -120,29 +120,28 @@ private:
             }
         } guard{scheduler.waiters_, waiter};
 
-        std::shared_ptr<AcquireCancellation> cancellation;
-        StopRegistration stopRegistration;
-        if (stopToken.stoppable()) {
-            if (worker == nullptr || !worker->valid()) {
-                throw std::logic_error("cancellable pool acquire requires a valid worker");
-            }
-            cancellation = std::make_shared<AcquireCancellation>(AcquireCancellation{&scheduler.waiters_, &waiter, true});
-            stopRegistration = stopToken.registerCallback([worker, cancellation] {
-                WorkerHandleAccess::deferOrTerminate(*worker, [cancellation] {
-                    if (cancellation->active) {
-                        (void)cancellation->queue->cancel(*cancellation->waiter);
-                    }
-                });
+        WorkerTimerRegistration deadlineTimer;
+        if (timeout.has_value() && worker != nullptr) {
+            WorkerHandleAccess::scheduleTimer(*worker, deadlineTimer, deadline, [queue = &scheduler.waiters_, waiterId](WorkerTimerOutcome outcome) noexcept {
+                if (outcome == WorkerTimerOutcome::kExpired) {
+                    (void)queue->expire(waiterId);
+                }
             });
+        }
+
+        auto stopRegistration = stopToken.registerCallback([worker, queue = &scheduler.waiters_, waiterId] {
+            WorkerHandleAccess::deferOrTerminate(*worker, [queue, waiterId] {
+                (void)queue->cancel(waiterId);
+            });
+        });
+        if (stopToken.stoppable()) {
             if (stopToken.stopRequested()) {
-                (void)scheduler.waiters_.cancel(waiter);
+                (void)scheduler.waiters_.cancel(waiterId);
             }
         }
 
         auto result = co_await waiter;
-        if (cancellation != nullptr) {
-            cancellation->active = false;
-        }
+        deadlineTimer.cancel();
         stopRegistration.reset();
         co_return result;
     }
@@ -185,6 +184,7 @@ private:
     std::pmr::vector<std::uint8_t> busy_;
     PoolWaiterQueue waiters_;
     std::size_t reservedAcquires_{0};
+    std::uint64_t nextWaiterId_{0};
     bool closing_{false};
 };
 

@@ -23,10 +23,14 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
         if (std::ranges::any_of(pools_, [&definition](const Entry& entry) { return std::string_view(entry.alias) == std::string_view(definition.alias); })) {
             throw std::invalid_argument("duplicate redis alias");
         }
-        auto config = cloneRedisConfig(definition.config, resource_);
-        validateRedisConfig(config);
-        auto pool = makePmrObject<RedisPool>(resource_, ioContext, std::move(config), resource_, worker);
-        pools_.push_back(Entry{std::pmr::string(definition.alias, resource_), std::move(pool)});
+        auto generalConfig = cloneRedisConfig(definition.config, resource_);
+        auto blockingConfig = cloneRedisConfig(definition.config, resource_);
+        validateRedisConfig(generalConfig);
+        const auto generalSize = generalConfig.poolSizePerWorker;
+        const auto blockingSize = generalConfig.blockingPoolSizePerWorker;
+        auto general = makePmrObject<RedisPool>(resource_, ioContext, std::move(generalConfig), generalSize, resource_, worker);
+        auto blocking = makePmrObject<RedisPool>(resource_, ioContext, std::move(blockingConfig), blockingSize, resource_, worker);
+        pools_.push_back(Entry{std::pmr::string(definition.alias, resource_), std::move(general), std::move(blocking)});
         if (std::string_view(pools_.back().alias) == kDefaultRedisAlias) {
             defaultPoolIndex_ = pools_.size() - 1;
         }
@@ -42,14 +46,18 @@ RedisRegistry::~RedisRegistry() = default;
 
 Task<void> RedisRegistry::connect() {
     for (auto& entry : pools_) {
-        co_await entry.pool->connect();
+        // The ordinary pool is startup-validated eagerly. Blocking slots stay
+        // disconnected until first use so the isolated capacity has no idle
+        // server-connection cost for applications that never block.
+        co_await entry.general->connect();
     }
     co_return;
 }
 
 void RedisRegistry::closeNow() noexcept {
     for (auto& entry : pools_) {
-        entry.pool->closeNow();
+        entry.general->closeNow();
+        entry.blocking->closeNow();
     }
 }
 
@@ -57,21 +65,23 @@ bool RedisRegistry::empty() const noexcept {
     return pools_.empty();
 }
 
-bool RedisRegistry::hasAnyTimeout() const noexcept {
-    return std::ranges::any_of(pools_, [](const Entry& entry) { return entry.pool->hasAnyTimeout(); });
+bool RedisRegistry::needsDeadlineScan() const noexcept {
+    return std::ranges::any_of(pools_, [](const Entry& entry) { return entry.general->needsDeadlineScan() || entry.blocking->needsDeadlineScan(); });
 }
 
 RedisHandle RedisRegistry::get(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
     if (!defaultPoolIndex_.has_value()) {
         throw RedisError(RedisError::Code::kNotConfigured, "default redis is not configured");
     }
-    return RedisHandle(*pools_[*defaultPoolIndex_].pool, resource, operationScope);
+    auto& entry = pools_[*defaultPoolIndex_];
+    return RedisHandle(*entry.general, *entry.blocking, resource, operationScope);
 }
 
 RedisHandle RedisRegistry::get(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
     const auto match = std::ranges::lower_bound(aliasIndex_, alias, {}, [this](std::size_t index) -> std::string_view { return pools_[index].alias; });
     if (match != aliasIndex_.end() && std::string_view(pools_[*match].alias) == alias) {
-        return RedisHandle(*pools_[*match].pool, resource, operationScope);
+        auto& entry = pools_[*match];
+        return RedisHandle(*entry.general, *entry.blocking, resource, operationScope);
     }
     throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
 }
@@ -79,7 +89,8 @@ RedisHandle RedisRegistry::get(std::string_view alias, std::pmr::memory_resource
 void RedisRegistry::scanDeadlines() noexcept {
     const auto now = std::chrono::steady_clock::now();
     for (auto& entry : pools_) {
-        entry.pool->scanDeadlines(now);
+        entry.general->scanDeadlines(now);
+        entry.blocking->scanDeadlines(now);
     }
 }
 
