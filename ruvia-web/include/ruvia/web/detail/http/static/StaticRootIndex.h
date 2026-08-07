@@ -58,9 +58,11 @@ struct StaticRootState final {
     bool enableRanges{true};
     bool enableValidators{true};
     bool serveDotfiles{false};
-    // Request leases are charged to this immutable snapshot, not to the server
-    // globally. The refresh loop can therefore reclaim unrelated retired
-    // snapshots while a long request still holds an older one.
+    // Polling request leases are charged to this worker-owned snapshot, not to
+    // the server globally. The refresh loop can therefore reclaim unrelated
+    // retired snapshots while a long request still holds an older one.
+    // Application-owned immutable roots outlive all workers and never touch
+    // this counter from their concurrent request paths.
     std::size_t activeBindings{0};
     std::uint64_t fingerprint{0};
     std::uint64_t revision{0};
