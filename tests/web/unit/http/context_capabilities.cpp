@@ -63,6 +63,8 @@ static_assert(std::is_same_v<decltype(std::declval<const ruvia::detail::ContextS
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::detail::ContextServices&>().responseOutput()), const ruvia::detail::ContextResponseOutput&>);
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::detail::ContextServices&>().worker()), const ruvia::WorkerHandle&>);
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::Context&>().worker()), const ruvia::WorkerHandle&>);
+static_assert(std::is_same_v<decltype(std::declval<const ruvia::detail::ContextServices&>().stopToken()), const ruvia::StopToken&>);
+static_assert(std::is_same_v<decltype(std::declval<const ruvia::Context&>().stopToken()), ruvia::StopToken>);
 static_assert(std::is_nothrow_copy_constructible_v<ruvia::detail::ContextRequestBodySource>);
 static_assert(std::is_nothrow_copy_assignable_v<ruvia::detail::ContextRequestBodySource>);
 static_assert(std::is_nothrow_copy_constructible_v<ruvia::detail::ContextResponseOutput>);
@@ -207,6 +209,21 @@ RUVIA_TEST(context_services_borrows_address_stable_worker) {
     const auto derived = services.withPlainTransport("127.0.0.1");
     RUVIA_CHECK(&services.worker() == &handle);
     RUVIA_CHECK(&derived.worker() == &handle);
+}
+
+RUVIA_TEST(context_exposes_the_server_shutdown_stop_token) {
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = makeRequest(memory.resource());
+    ruvia::detail::StopSource source;
+    const auto token = source.token();
+    const auto services = ruvia::detail::ContextServices{}.withStopToken(token);
+    const auto context = ruvia::detail::ContextAccess::make(memory, request, services);
+
+    RUVIA_CHECK(context.stopToken().stoppable());
+    RUVIA_CHECK(!context.stopToken().stopRequested());
+    source.requestStop();
+    RUVIA_CHECK(context.stopToken().stopRequested());
 }
 
 RUVIA_TEST(context_response_output_has_one_active_alternative) {

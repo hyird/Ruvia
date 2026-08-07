@@ -1,9 +1,13 @@
 #include "test_harness.h"
 
 #include <atomic>
+#include <type_traits>
 #include <thread>
 
 #include "ruvia/core/StopToken.h"
+
+static_assert(!std::is_move_constructible_v<ruvia::StopRegistration>);
+static_assert(!std::is_copy_constructible_v<ruvia::StopRegistration>);
 
 RUVIA_TEST(stop_token_registration_runs_once) {
     ruvia::detail::StopSource source;

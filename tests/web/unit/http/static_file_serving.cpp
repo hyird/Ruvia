@@ -558,7 +558,7 @@ RUVIA_TEST(document_root_runtime_options_control_live_reload_assets) {
     fs::remove_all(dir);
 }
 
-RUVIA_TEST(document_root_binding_is_a_move_only_request_snapshot_lease) {
+RUVIA_TEST(polling_document_root_binding_is_a_move_only_request_snapshot_lease) {
     namespace fs = std::filesystem;
     const auto dir = fs::temp_directory_path() / "ruvia_static_binding_lease";
     fs::remove_all(dir);
@@ -569,6 +569,7 @@ RUVIA_TEST(document_root_binding_is_a_move_only_request_snapshot_lease) {
     options.fileTypes = ruvia::StaticFileTypePolicy::all();
     ruvia::StaticRoot root(dir, std::move(options));
     ruvia::DocumentRootRuntimeOptions runtimeOptions;
+    runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
     auto request = ruvia::detail::HttpRequestAccess::make();
@@ -591,7 +592,7 @@ RUVIA_TEST(document_root_binding_is_a_move_only_request_snapshot_lease) {
     fs::remove_all(dir);
 }
 
-RUVIA_TEST(document_root_binding_counts_belong_to_the_bound_snapshot) {
+RUVIA_TEST(polling_document_root_binding_counts_belong_to_the_bound_snapshot) {
     namespace fs = std::filesystem;
     const auto firstDir = fs::temp_directory_path() / "ruvia_static_binding_first";
     const auto secondDir = fs::temp_directory_path() / "ruvia_static_binding_second";
@@ -609,6 +610,7 @@ RUVIA_TEST(document_root_binding_counts_belong_to_the_bound_snapshot) {
     secondOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
     ruvia::StaticRoot second(secondDir, std::move(secondOptions));
     ruvia::DocumentRootRuntimeOptions runtimeOptions;
+    runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
 
     {
         auto firstBinding = ruvia::detail::DocumentRootBinding::configured(first, runtimeOptions);
@@ -627,6 +629,43 @@ RUVIA_TEST(document_root_binding_counts_belong_to_the_bound_snapshot) {
     RUVIA_CHECK(!ruvia::detail::StaticRootAccess::hasActiveBindings(second));
     fs::remove_all(firstDir);
     fs::remove_all(secondDir);
+}
+
+RUVIA_TEST(immutable_document_root_bindings_do_not_share_request_lease_state) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "ruvia_static_immutable_bindings";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    std::ofstream(dir / "payload.txt") << "payload";
+
+    ruvia::StaticRootOptions options;
+    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    ruvia::StaticRoot root(dir, std::move(options));
+    ruvia::DocumentRootRuntimeOptions runtimeOptions;
+
+    {
+        auto binding = ruvia::detail::DocumentRootBinding::configured(root, runtimeOptions);
+        RUVIA_CHECK_EQ(binding.root(), &root);
+        RUVIA_CHECK_EQ(binding.runtimeOptions(), &runtimeOptions);
+        RUVIA_CHECK(!ruvia::detail::StaticRootAccess::hasActiveBindings(root));
+    }
+
+    constexpr std::size_t kWorkerCount = 4;
+    constexpr std::size_t kBindingsPerWorker = 10'000;
+    std::array<std::thread, kWorkerCount> workers;
+    for (auto& worker : workers) {
+        worker = std::thread([&root, &runtimeOptions]() {
+            for (std::size_t index = 0; index < kBindingsPerWorker; ++index) {
+                auto binding = ruvia::detail::DocumentRootBinding::configured(root, runtimeOptions);
+            }
+        });
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+
+    RUVIA_CHECK(!ruvia::detail::StaticRootAccess::hasActiveBindings(root));
+    fs::remove_all(dir);
 }
 
 RUVIA_TEST(static_file_replacement_cannot_reuse_indexed_metadata) {

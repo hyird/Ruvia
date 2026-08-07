@@ -19,14 +19,16 @@ RedisPipeline& appendCommandArgs(RedisPipeline& pipeline, Args&&... args) {
 
 }  // namespace
 
-RedisPipeline::RedisPipeline(detail::RedisPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept
+RedisPipeline::RedisPipeline(detail::RedisPool& pool, RedisOperationOptions options, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept
     : detail::ScopedCapabilityNode(operationScope, &RedisPipeline::expireCapability),
       state_(std::in_place_type<Ready>, pool),
+      operationOptions_(std::move(options)),
       commands_(detail::pmrResourceOrDefault(resource)) {}
 
 RedisPipeline::RedisPipeline(RedisPipeline&& other) noexcept
     : detail::ScopedCapabilityNode(std::move(other)),
       state_(std::move(other.state_)),
+      operationOptions_(std::move(other.operationOptions_)),
       commands_(std::move(other.commands_)) {
     other.state_.template emplace<Consumed>();
 }
@@ -41,6 +43,7 @@ void RedisPipeline::requireActive() const {
 void RedisPipeline::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
     auto& pipeline = static_cast<RedisPipeline&>(capability);
     pipeline.state_.template emplace<Consumed>();
+    pipeline.operationOptions_ = {};
     std::pmr::vector<Command> empty(pipeline.commands_.get_allocator().resource());
     pipeline.commands_.swap(empty);
 }
@@ -92,7 +95,7 @@ void RedisPipeline::appendCommand(std::pmr::vector<Command>& target, std::pmr::m
 
 RedisPipeline& RedisPipeline::command(std::span<const std::string_view> args) {
     requireActive();
-    detail::validateRedisPooledCommand(std::get<Ready>(state_).pool.get(), args, false);
+    (void)detail::validateRedisPooledCommand(args, false);
     appendCommand(commands_, resource(), args);
     return *this;
 }
@@ -261,15 +264,21 @@ RedisPipeline& RedisPipeline::zcard(std::string_view key) {
     return appendCommandArgs(*this, "ZCARD", key);
 }
 
-Task<std::pmr::vector<RedisValue>> RedisPipeline::executeOwned(detail::RedisPool& pool, std::pmr::vector<Command> commands, std::pmr::memory_resource* resource) {
-    co_return co_await pool.executePipeline(std::span<const Command>(commands), resource);
+Task<std::pmr::vector<RedisValue>> RedisPipeline::executeOwned(detail::RedisPool& pool, RedisOperationOptions options, std::pmr::vector<Command> commands, std::pmr::memory_resource* resource) {
+    co_return co_await pool.executePipeline(std::span<const Command>(commands), std::move(options), resource);
 }
 
 ScopedOperation<std::pmr::vector<RedisValue>> RedisPipeline::exec() && {
+    return std::move(*this).exec(RedisOperationOptions{});
+}
+
+ScopedOperation<std::pmr::vector<RedisValue>> RedisPipeline::exec(RedisOperationOptions options) && {
     requireActive();
+    detail::validateRedisOperationOptions(options);
+    options = detail::mergeRedisOperationOptions(operationOptions_, std::move(options));
     auto* commandResource = resource();
     auto& pool = consumePool();
-    return detail::makeScopedOperation(operationScope(), executeOwned(pool, std::move(commands_), commandResource));
+    return detail::makeScopedOperation(operationScope(), executeOwned(pool, std::move(options), std::move(commands_), commandResource));
 }
 
 }  // namespace ruvia

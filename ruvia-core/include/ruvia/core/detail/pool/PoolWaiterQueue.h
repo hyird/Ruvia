@@ -3,6 +3,7 @@
 #include <chrono>
 #include <coroutine>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <utility>
 #include <variant>
@@ -111,8 +112,8 @@ struct PoolWaiterQueued final {};
 // resumes the coroutine, so callers never coordinate external readiness flags.
 class PoolWaiter final {
 public:
-    explicit PoolWaiter(std::chrono::steady_clock::time_point deadline) noexcept
-        : deadline_(deadline) {}
+    explicit PoolWaiter(std::chrono::steady_clock::time_point deadline, std::uint64_t id = 0) noexcept
+        : deadline_(deadline), id_(id) {}
 
     PoolWaiter(const PoolWaiter&) = delete;
     PoolWaiter& operator=(const PoolWaiter&) = delete;
@@ -170,6 +171,7 @@ private:
 
     State state_;
     std::chrono::steady_clock::time_point deadline_{};
+    std::uint64_t id_{0};
     std::coroutine_handle<> handle_{};
     PoolWaiter* previous_{nullptr};
     PoolWaiter* next_{nullptr};
@@ -241,6 +243,22 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool cancel(std::uint64_t id) noexcept {
+        auto* waiter = find(id);
+        return waiter != nullptr && cancel(*waiter);
+    }
+
+    [[nodiscard]] bool expire(std::uint64_t id) noexcept {
+        auto* waiter = find(id);
+        if (waiter == nullptr || !std::holds_alternative<PoolWaiterQueued>(waiter->state_)) {
+            return false;
+        }
+        remove(*waiter);
+        waiter->completeTimedOut();
+        waiter->resume();
+        return true;
+    }
+
     // Commit closure for the entire current queue before resuming any waiter.
     // A resumed coroutine can re-enter the queue, so draining one waiter at a
     // time would let that continuation acquire a slot on behalf of a waiter
@@ -305,6 +323,17 @@ public:
     }
 
 private:
+    [[nodiscard]] PoolWaiter* find(std::uint64_t id) const noexcept {
+        auto* waiter = head_;
+        while (waiter != nullptr) {
+            if (waiter->id_ == id) {
+                return waiter;
+            }
+            waiter = waiter->next_;
+        }
+        return nullptr;
+    }
+
     PoolWaiter* head_{nullptr};
     PoolWaiter* tail_{nullptr};
 };

@@ -5,6 +5,7 @@
 #include "ruvia/web/detail/http/context/ContextCapabilities.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/StopToken.h"
 
 #include <cstddef>
 #include <string>
@@ -78,6 +79,21 @@ public:
         return services;
     }
     ContextServices withWorker(WorkerHandle&&) const = delete;
+
+    [[nodiscard]] const StopToken& stopToken() const noexcept {
+        if (stopToken_ != nullptr) {
+            return *stopToken_;
+        }
+        static const StopToken unstoppable;
+        return unstoppable;
+    }
+
+    [[nodiscard]] ContextServices withStopToken(const StopToken& value) const noexcept {
+        auto services = *this;
+        services.stopToken_ = &value;
+        return services;
+    }
+    ContextServices withStopToken(StopToken&&) const = delete;
 
     [[nodiscard]] HttpErrorHandlerRef errorHandler() const noexcept {
         return errorHandler_;
@@ -210,6 +226,7 @@ private:
     // Request/session services borrow the address-stable server-owned handle.
     // Every derived ContextServices value stays inside that server's dispatch.
     const WorkerHandle* worker_{nullptr};
+    const StopToken* stopToken_{nullptr};
     HttpErrorHandlerRef errorHandler_{nullptr};
     HttpNotFoundHandlerRef notFoundHandler_{nullptr};
     const RouteTable* routes_{nullptr};

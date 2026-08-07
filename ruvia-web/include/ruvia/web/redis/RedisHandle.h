@@ -24,6 +24,10 @@ public:
     RedisHandle(const RedisHandle& other) noexcept;
     RedisHandle& operator=(const RedisHandle&) = delete;
 
+    // Returns a request-scoped view whose policy is applied to every typed
+    // command and inherited by pipelines and transactions created from it.
+    [[nodiscard]] RedisHandle withOptions(RedisOperationOptions options) const;
+
     ScopedOperation<RedisValue> command(std::span<const std::string_view> args, RedisOperationOptions options = {}) const;
     ScopedOperation<RedisValue> command(std::initializer_list<std::string_view> args) const = delete;
 
@@ -215,7 +219,7 @@ private:
 
     friend class detail::RedisRegistry;
 
-    RedisHandle(detail::RedisPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;
+    RedisHandle(detail::RedisPool& generalPool, detail::RedisPool& blockingPool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;
 
     template <typename T>
     [[nodiscard]] ScopedOperation<T> scoped(ruvia::Task<T> task) const {
@@ -223,8 +227,12 @@ private:
     }
 
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
+    [[nodiscard]] detail::RedisCommandExecutor executor() const;
+    [[nodiscard]] detail::RedisCommandExecutor executor(detail::RedisPool& pool) const;
     detail::RedisPool* pool_;
+    detail::RedisPool* blockingPool_;
     std::pmr::memory_resource* resource_;
+    RedisOperationOptions operationOptions_;
 };
 
 }  // namespace ruvia
