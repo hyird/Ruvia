@@ -21,7 +21,7 @@ public:
         if (databases.hasAnyTimeout()) {
             scanner.registerWorkerMaintenance(databaseDeadlineCheck, &databases, [](void* target) noexcept { static_cast<DbRegistry*>(target)->scanDeadlines(); });
         }
-        if (redis.hasAnyTimeout()) {
+        if (redis.needsDeadlineScan()) {
             scanner.registerWorkerMaintenance(redisDeadlineCheck, &redis, [](void* target) noexcept { static_cast<RedisRegistry*>(target)->scanDeadlines(); });
         }
     }
@@ -57,7 +57,7 @@ void DataAccessState::closeNow() noexcept {
 }
 
 bool DataAccessState::hasMaintenance() const noexcept {
-    return impl_->databases.hasAnyTimeout() || impl_->redis.hasAnyTimeout();
+    return impl_->databases.hasAnyTimeout() || impl_->redis.needsDeadlineScan();
 }
 
 DbRegistry& DataAccessState::databases() noexcept {

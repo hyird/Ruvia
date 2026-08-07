@@ -37,6 +37,7 @@ inline Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) 
             assignRemoteAddress(remoteAddress, remoteEndpoint.address());
         }
         ContextServices baseServices = ContextServices(&dataAccess_.databases(), &dataAccess_.redis(), &rateLimiter_, options_.maxBufferedBodyBytes, &workerHandle_)
+            .withStopToken(stopToken_)
             .withWorkerStates(workerStates_)
             .withBlockingPool(options_.blockingPool)
             .withDeferredStaticFileCompression(options_.compression.has_value() && options_.documentRoot.root != nullptr);

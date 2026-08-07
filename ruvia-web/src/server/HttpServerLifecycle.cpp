@@ -351,6 +351,7 @@ void HttpServer::stopOnContext() noexcept {
     }
 
     workerState_ = HttpServerWorkerState::kStopped;
+    stopSource_.requestStop();
     webWorkerDispatch_->close();
     workerDispatcher_->close();
     std::error_code ignored;

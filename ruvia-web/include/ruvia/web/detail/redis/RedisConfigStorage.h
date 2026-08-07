@@ -19,7 +19,7 @@ struct RedisConfigStorage final {
           password(source.password, resource),
           database(source.database),
           poolSizePerWorker(source.poolSizePerWorker),
-          usage(source.usage),
+          blockingPoolSizePerWorker(source.blockingPoolSizePerWorker),
           connectTimeout(source.connectTimeout),
           commandTimeout(source.commandTimeout),
           acquireTimeout(source.acquireTimeout),
@@ -35,7 +35,7 @@ struct RedisConfigStorage final {
           password(source.password, resource),
           database(source.database),
           poolSizePerWorker(source.poolSizePerWorker),
-          usage(source.usage),
+          blockingPoolSizePerWorker(source.blockingPoolSizePerWorker),
           connectTimeout(source.connectTimeout),
           commandTimeout(source.commandTimeout),
           acquireTimeout(source.acquireTimeout),
@@ -50,7 +50,7 @@ struct RedisConfigStorage final {
     std::pmr::string password;
     std::uint32_t database{0};
     std::size_t poolSizePerWorker{4};
-    RedisPoolUsage usage{RedisPoolUsage::kGeneral};
+    std::size_t blockingPoolSizePerWorker{1};
     std::optional<std::chrono::milliseconds> connectTimeout;
     std::optional<std::chrono::milliseconds> commandTimeout;
     std::optional<std::chrono::milliseconds> acquireTimeout;

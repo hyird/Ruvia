@@ -4,23 +4,24 @@
 #include <exception>
 #include <utility>
 
+#include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 
 namespace ruvia {
 
 class StaticRoot;
-struct DocumentRootRuntimeOptions;
 
 namespace detail {
 
 // A request-time view of one document-root binding. The object is deliberately
 // not default-constructible or aggregate-initializable: callers must choose
 // between no root, a standalone immutable root, and a server-configured root
-// with its runtime policy. It is move-only because a configured binding is
-// also the request's lifetime lease for the immutable root snapshot. A server
-// retires the old snapshot until this lease is destroyed; copying the view
-// would make that ownership boundary ambiguous and could reintroduce a
-// dangling StaticRoot during live refresh.
+// with its runtime policy. It is move-only because a polling binding is also
+// the request's lifetime lease for its worker-owned immutable root snapshot.
+// A server retires the old snapshot until this lease is destroyed; copying the
+// view would make that ownership boundary ambiguous and could reintroduce a
+// dangling StaticRoot during live refresh. An application-owned immutable root
+// outlives every worker and therefore does not acquire a shared request lease.
 class DocumentRootBinding final {
 public:
     [[nodiscard]] static DocumentRootBinding none() noexcept {
@@ -64,17 +65,21 @@ public:
     }
 
 private:
+    [[nodiscard]] bool tracksSnapshot() const noexcept {
+        return root_ != nullptr && runtimeOptions_ != nullptr && runtimeOptions_->refreshMode == DocumentRootRefreshMode::kPolling;
+    }
+
     explicit DocumentRootBinding(const StaticRoot* root, const DocumentRootRuntimeOptions* runtimeOptions) noexcept
         : root_(root),
           runtimeOptions_(runtimeOptions) {
-        if (root_ != nullptr && runtimeOptions_ != nullptr) {
+        if (tracksSnapshot()) {
             StaticRootAccess::acquireBinding(*root_);
         }
     }
 
     void reset() noexcept {
         const auto* const root = root_;
-        const bool tracked = root != nullptr && runtimeOptions_ != nullptr;
+        const bool tracked = tracksSnapshot();
         root_ = nullptr;
         runtimeOptions_ = nullptr;
         if (tracked) {

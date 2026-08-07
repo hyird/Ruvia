@@ -18,6 +18,7 @@
 
 #include "ruvia/core/BlockingPool.h"
 #include "ruvia/core/Task.h"
+#include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/http/Cookies.h"
 #include "ruvia/http/HttpRequest.h"
@@ -114,6 +115,14 @@ public:
     // the handler; the copy owns a terminal-safe dispatcher endpoint.
     [[nodiscard]] const WorkerHandle& worker() const noexcept {
         return worker_;
+    }
+
+    // Requested when this Context's worker begins stopping. HTTP/1 cannot
+    // observe a peer FIN while a handler is suspended without a concurrent
+    // transport read, so this is a worker-lifecycle token rather than a promise
+    // of immediate client-disconnect detection.
+    [[nodiscard]] StopToken stopToken() const noexcept {
+        return stopToken_;
     }
 
     // Server-side session blob (persisted by a SessionMiddleware via Redis; the
@@ -302,6 +311,7 @@ private:
     // Context cannot escape request dispatch and therefore borrows the stable
     // server-owned handle without touching its shared ownership count.
     const WorkerHandle& worker_;
+    const StopToken& stopToken_;
     std::string_view routePath_;
     const std::string_view* paramNames_{nullptr};
     const std::string_view* paramValues_{nullptr};
