@@ -84,7 +84,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     const auto send1 = sender.send(1);
     const auto send2 = sender.send(2);
     const auto send3 = sender.send(99);
-    if (!send1.sent() || !send2.sent() || send3.status() != ruvia::ChannelSendStatus::kFull || send3.rejected() == nullptr || *send3.rejected() != 99) {
+    if (!send1.accepted() || !send2.accepted() || send3.status() != ruvia::ChannelSendStatus::kFull || send3.rejected() == nullptr || *send3.rejected() != 99) {
         co_return;
     }
 
@@ -100,7 +100,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
 
     ruvia::TaskScope scope(worker);
     scope.spawn(receiveLast(activeReceiver, success));
-    if (!sender.send(3).sent()) {
+    if (!sender.send(3).accepted()) {
         co_return;
     }
     sender.close();
@@ -136,7 +136,7 @@ int main() {
         const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
         const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
         auto [sender, receiver] = ruvia::makeChannel<int>(worker, 1);
-        if (!sender.send(9).sent()) {
+        if (!sender.send(9).accepted()) {
             return 1;
         }
         asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(receiveQueuedThenStopping(receiver, workerStopping)), asio::detached);
@@ -168,7 +168,7 @@ int main() {
                 moveFailed = true;
             }
             ThrowingMove::throwOnMove.store(false, std::memory_order_relaxed);
-            recoveredSend = sender.send(ThrowingMove(6)).sent();
+            recoveredSend = sender.send(ThrowingMove(6)).accepted();
         });
         ioContext.run();
         sendingThread.join();

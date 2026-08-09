@@ -27,6 +27,7 @@ inline Context::Context(RequestMemory& memory, const HttpRequest& request, std::
       paramCount_(paramCount < detail::kMaxRouteParams ? paramCount : detail::kMaxRouteParams),
       db_(services.db()),
       redis_(services.redis()),
+      httpClients_(services.httpClients()),
       rateLimiter_(services.rateLimiter()),
       env_(services.env()),
       errorHandler_(services.errorHandler()),

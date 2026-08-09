@@ -59,13 +59,21 @@ public:
         return consumedBytes_;
     }
 
+    [[nodiscard]] constexpr std::string_view trailers() const& noexcept {
+        return trailers_;
+    }
+    std::string_view trailers() const&& = delete;
+
 private:
     friend class Http1ChunkDecodeResult;
 
-    explicit constexpr Http1ChunkDecodeComplete(std::size_t consumedBytes) noexcept
-        : consumedBytes_(consumedBytes) {}
+    explicit constexpr Http1ChunkDecodeComplete(
+        std::size_t consumedBytes,
+        std::string_view trailers) noexcept
+        : consumedBytes_(consumedBytes), trailers_(trailers) {}
 
     std::size_t consumedBytes_;
+    std::string_view trailers_;
 };
 
 enum class Http1ChunkDecodeError : std::uint8_t {
@@ -150,8 +158,10 @@ private:
         return Http1ChunkDecodeResult(Http1ChunkDecodeBodyChunk(consumedBytes, bytes));
     }
 
-    [[nodiscard]] static Http1ChunkDecodeResult makeComplete(std::size_t consumedBytes) noexcept {
-        return Http1ChunkDecodeResult(Http1ChunkDecodeComplete(consumedBytes));
+    [[nodiscard]] static Http1ChunkDecodeResult makeComplete(
+        std::size_t consumedBytes,
+        std::string_view trailers = {}) noexcept {
+        return Http1ChunkDecodeResult(Http1ChunkDecodeComplete(consumedBytes, trailers));
     }
 
     [[nodiscard]] static Http1ChunkDecodeResult makeFailure(std::size_t consumedBytes, Http1ChunkDecodeError error) noexcept {
@@ -267,7 +277,9 @@ public:
                         return fail(cursor, *error);
                     }
                     state_ = ProgressState::kComplete;
-                    return Http1ChunkDecodeResult::makeComplete(cursor + trailerBytes);
+                    return Http1ChunkDecodeResult::makeComplete(
+                        cursor + trailerBytes,
+                        trailers.substr(0, trailerEnd));
                 }
                 case ProgressState::kComplete:
                     return Http1ChunkDecodeResult::makeComplete(cursor);

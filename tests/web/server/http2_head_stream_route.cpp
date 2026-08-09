@@ -1,10 +1,8 @@
-// HEAD of a streaming GET route over HTTP/2 must answer the streaming head
+// An explicit HEAD streaming route over HTTP/2 must answer the streaming head
 // with END_STREAM on the HEADERS frame and zero DATA frames, while GET on the
-// same route still streams its body. The auto HEAD shadow used to skip
-// response-stream routes entirely (HEAD answered 404 over every protocol), and
-// without the head-only completion signal a shadowed handler would try to
-// stream DATA into a content-forbidden h2 stream. Drives the real sans-I/O h2
-// server session over a socket pair.
+// same route still streams its body. Streaming GET routes do not receive
+// implicit HEAD shadows; this drives the real sans-I/O h2 server session over a
+// socket pair.
 
 #include "http2_sansio_session_fixture.h"
 
@@ -99,7 +97,8 @@ int main() {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     std::pmr::string eventsPath("/events", std::pmr::get_default_resource());
-    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(eventsPath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string(eventsPath, std::pmr::get_default_resource()), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kHead, std::move(eventsPath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
     auto emptyHandler = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
         context.status(ruvia::http_status::kNoContent);
         co_return context.body(nullptr);
@@ -217,15 +216,15 @@ int main() {
         return 3;
     }
     if (headStream.status != "200") {
-        std::fprintf(stderr, "HEAD of a streaming route over HTTP/2 was not 200: status='%s'\n", headStream.status.c_str());
+        std::fprintf(stderr, "explicit HEAD of a streaming route over HTTP/2 was not 200: status='%s'\n", headStream.status.c_str());
         return 4;
     }
     if (headStream.contentEncoding != "gzip") {
-        std::fprintf(stderr, "HEAD of a streaming route over HTTP/2 lost gzip: '%s'\n", headStream.contentEncoding.c_str());
+        std::fprintf(stderr, "explicit HEAD of a streaming route over HTTP/2 lost gzip: '%s'\n", headStream.contentEncoding.c_str());
         return 5;
     }
     if (headStream.sawData || !headStream.body.empty()) {
-        std::fprintf(stderr, "HEAD of a streaming route over HTTP/2 must send no DATA, got '%s'\n", headStream.body.c_str());
+        std::fprintf(stderr, "explicit HEAD of a streaming route over HTTP/2 must send no DATA, got '%s'\n", headStream.body.c_str());
         return 6;
     }
     if (rejectedStream.status != "406") {

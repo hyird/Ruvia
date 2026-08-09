@@ -4,6 +4,7 @@
 #include "ruvia/web/redis/RedisTypes.h"
 #include "ruvia/web/ScopedOperation.h"
 #include "ruvia/web/detail/redis/RedisArgumentPack.h"
+#include "ruvia/web/detail/redis/RedisCommandBatchMixin.h"
 
 #include <functional>
 #include <initializer_list>
@@ -19,7 +20,7 @@ namespace ruvia {
 class RedisHandle;
 class RedisTransaction;
 
-class RedisPipeline final : private detail::ScopedCapabilityNode {
+class RedisPipeline final : private detail::ScopedCapabilityNode, public detail::RedisCommandBatchMixin<RedisPipeline> {
 public:
     RedisPipeline(const RedisPipeline&) = delete;
     RedisPipeline& operator=(const RedisPipeline&) = delete;
@@ -39,44 +40,8 @@ public:
         return command(std::span<const std::string_view>(views));
     }
 
-    RedisPipeline& get(std::string_view key);
-    RedisPipeline& set(std::string_view key, std::string_view value);
-    RedisPipeline& getDel(std::string_view key);
-    RedisPipeline& getSet(std::string_view key, std::string_view value);
-    RedisPipeline& append(std::string_view key, std::string_view value);
-    RedisPipeline& strlen(std::string_view key);
-    RedisPipeline& del(std::string_view key);
-    RedisPipeline& unlink(std::string_view key);
-    RedisPipeline& exists(std::string_view key);
-    RedisPipeline& touch(std::string_view key);
-    RedisPipeline& type(std::string_view key);
-    RedisPipeline& rename(std::string_view key, std::string_view newKey);
-    RedisPipeline& renameNx(std::string_view key, std::string_view newKey);
-    RedisPipeline& incr(std::string_view key);
-    RedisPipeline& incrBy(std::string_view key, std::int64_t value);
-    RedisPipeline& decr(std::string_view key);
-    RedisPipeline& decrBy(std::string_view key, std::int64_t value);
-    RedisPipeline& hget(std::string_view key, std::string_view field);
-    RedisPipeline& hset(std::string_view key, std::string_view field, std::string_view value);
-    RedisPipeline& hdel(std::string_view key, std::string_view field);
-    RedisPipeline& hexists(std::string_view key, std::string_view field);
-    RedisPipeline& hlen(std::string_view key);
-    RedisPipeline& hgetAll(std::string_view key);
-    RedisPipeline& lpush(std::string_view key, std::string_view value);
-    RedisPipeline& rpush(std::string_view key, std::string_view value);
-    RedisPipeline& lpop(std::string_view key);
-    RedisPipeline& rpop(std::string_view key);
-    RedisPipeline& llen(std::string_view key);
-    RedisPipeline& lrange(std::string_view key, std::int64_t start, std::int64_t stop);
-    RedisPipeline& sadd(std::string_view key, std::string_view member);
-    RedisPipeline& srem(std::string_view key, std::string_view member);
-    RedisPipeline& smembers(std::string_view key);
-    RedisPipeline& scard(std::string_view key);
-    RedisPipeline& zadd(std::string_view key, double score, std::string_view member);
-    RedisPipeline& zrem(std::string_view key, std::string_view member);
-    RedisPipeline& zrange(std::string_view key, std::int64_t start, std::int64_t stop);
-    RedisPipeline& zscore(std::string_view key, std::string_view member);
-    RedisPipeline& zcard(std::string_view key);
+    // Typed command words (get/set/hget/...) are shared with RedisTransaction
+    // through detail::RedisCommandBatchMixin.
 
     // Consumes the batch before returning the lazy Task, so the coroutine frame
     // owns every command and never borrows this builder through `this`.
@@ -87,6 +52,7 @@ private:
     friend class RedisHandle;
     friend class RedisTransaction;
     friend class detail::RedisPool;
+    friend class detail::RedisCommandBatchMixin<RedisPipeline>;
 
     struct Command final {
         std::pmr::vector<std::pmr::string> args;

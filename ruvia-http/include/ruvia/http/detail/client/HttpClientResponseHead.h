@@ -36,6 +36,7 @@ struct Http1ClientParsedResponseHead final {
     bool contentLengthFieldPresent{false};
     bool contentTypeFieldPresent{false};
     bool sawTransferEncoding{false};
+    bool nonEmptyTrailerHeaderPresent{false};
     HttpConnectionOptions connectionOptions;
     HttpUpgradeProtocols upgradeProtocols;
     HttpContentLengthState contentLength;

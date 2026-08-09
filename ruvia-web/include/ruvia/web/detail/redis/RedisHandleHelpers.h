@@ -17,6 +17,7 @@ namespace ruvia::detail {
 // protocol condition the caller catches via RedisError, not a program bug.
 [[nodiscard]] std::string_view redisValueString(const RedisValue& value);
 [[nodiscard]] std::int64_t redisValueInteger(const RedisValue& value);
+[[nodiscard]] bool redisValueIntegerBool(const RedisValue& value);
 [[nodiscard]] std::span<const RedisValue> redisValueArray(const RedisValue& value);
 void throwIfRedisError(const RedisValue& value);
 void validateRedisOperationOptions(const RedisOperationOptions& options);

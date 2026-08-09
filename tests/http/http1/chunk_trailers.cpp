@@ -11,6 +11,7 @@ namespace {
 using ruvia::HttpParseError;
 using ruvia::httpParseProtocolError;
 using ruvia::detail::HttpChunkScanError;
+using ruvia::detail::HttpChunkTrailerParser;
 using ruvia::detail::validateHttpChunkTrailers;
 
 }  // namespace
@@ -22,6 +23,24 @@ RUVIA_TEST(chunk_trailers_accept_valid) {
     RUVIA_CHECK(!validateHttpChunkTrailers("X-Checksum: abc123\r\n").has_value());
     // A final line without a trailing CRLF is still complete.
     RUVIA_CHECK(!validateHttpChunkTrailers("X-Trace: v").has_value());
+}
+
+RUVIA_TEST(chunk_trailer_parser_exposes_validated_borrowed_fields) {
+    HttpChunkTrailerParser parser("X-Trace: first\r\nServer-Timing:\tdb;dur=4  ");
+    const auto first = parser.next();
+    RUVIA_CHECK(first.field() != nullptr);
+    if (const auto* field = first.field()) {
+        RUVIA_CHECK_EQ(field->name(), std::string_view("X-Trace"));
+        RUVIA_CHECK_EQ(field->value(), std::string_view("first"));
+    }
+    const auto second = parser.next();
+    RUVIA_CHECK(second.field() != nullptr);
+    if (const auto* field = second.field()) {
+        RUVIA_CHECK_EQ(field->name(), std::string_view("Server-Timing"));
+        RUVIA_CHECK_EQ(field->value(), std::string_view("db;dur=4"));
+    }
+    const auto terminal = parser.next();
+    RUVIA_CHECK(terminal.end() != nullptr);
 }
 
 RUVIA_TEST(chunk_trailers_reject_malformed) {

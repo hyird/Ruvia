@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <new>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -60,6 +61,32 @@ WebSocketFrameView frame(WebSocketOpcode opcode, std::string_view payload, bool 
 ProtocolByteLimit byteLimit(std::size_t bytes) {
     return ProtocolByteLimit::limited(bytes);
 }
+
+class FailNextAllocationResource final : public std::pmr::memory_resource {
+public:
+    void failNext() noexcept {
+        failNext_ = true;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (failNext_) {
+            failNext_ = false;
+            throw std::bad_alloc();
+        }
+        return std::pmr::get_default_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* p, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::get_default_resource()->deallocate(p, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool failNext_{false};
+};
 
 // The RFC 6455 §7.4.1 close code the violation must be reported with (0 if none).
 std::uint16_t acceptCloseCode(WebSocketInboundAssembler& assembler, const WebSocketFrameView& f, ProtocolByteLimit messageLimit) {
@@ -162,6 +189,27 @@ RUVIA_TEST(ws_assembler_fragmented_message) {
     const auto complete = assembler.accept(frame(WebSocketOpcode::kText, "world", true, true), byteLimit(1000));
     RUVIA_CHECK(complete.message() != nullptr);
     RUVIA_CHECK_EQ(complete.message()->message().payload(), std::string_view("hello world"));
+}
+
+RUVIA_TEST(ws_assembler_first_fragment_allocation_failure_is_retryable) {
+    FailNextAllocationResource resource;
+    WebSocketInboundAssembler assembler(&resource);
+    const std::string payload(128, 'x');
+
+    resource.failNext();
+    bool threw = false;
+    try {
+        (void)assembler.accept(frame(WebSocketOpcode::kText, payload, false), byteLimit(1000));
+    } catch (const std::bad_alloc&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
+
+    const auto retried = assembler.accept(frame(WebSocketOpcode::kText, payload, false), byteLimit(1000));
+    RUVIA_CHECK(retried.continueReading() != nullptr);
+    const auto complete = assembler.accept(frame(WebSocketOpcode::kText, "done", true, true), byteLimit(1000));
+    RUVIA_CHECK(complete.message() != nullptr);
+    RUVIA_CHECK_EQ(complete.message()->message().payload().size(), payload.size() + std::string_view("done").size());
 }
 
 RUVIA_TEST(ws_assembler_control_frame_interleaved_in_fragments) {

@@ -83,6 +83,10 @@ RUVIA_TEST(db_migration_list_validation_enforces_integrity) {
     RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(emptyId, 1)); }));
     const DbMigration emptySql[] = {{"001", ""}};
     RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(emptySql, 1)); }));
+    const DbMigration blankSql[] = {{"001", " \n\t\r"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(blankSql, 1)); }));
+    const DbMigration commentOnlySql[] = {{"001", "/* no statement */\n-- still none\n;"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(commentOnlySql, 1)); }));
     // An id longer than the 190-byte schema column is rejected.
     const std::string longId(191, 'x');
     const DbMigration tooLong[] = {{longId, "SQL"}};
@@ -111,6 +115,7 @@ RUVIA_TEST(db_migration_list_validation_enforces_integrity) {
 }
 
 RUVIA_TEST(db_migration_list_validation_enforces_one_statement) {
+    using ruvia::DbDriver;
     using ruvia::DbMigration;
     using ruvia::detail::validateMigrationList;
 
@@ -126,6 +131,10 @@ RUVIA_TEST(db_migration_list_validation_enforces_one_statement) {
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(trailing, 1)); }));
     const DbMigration trailingSpace[] = {{"001", "CREATE TABLE a(id INT);\n  "}};
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(trailingSpace, 1)); }));
+    const DbMigration trailingLineComment[] = {{"001", "CREATE TABLE a(id INT); -- one statement\n"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(trailingLineComment, 1)); }));
+    const DbMigration trailingBlockComment[] = {{"001", "CREATE TABLE a(id INT); /* one; statement */"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(trailingBlockComment, 1)); }));
 
     // A ';' that is data -- inside a default value, a quoted identifier or a
     // comment -- is not a statement separator.
@@ -141,6 +150,30 @@ RUVIA_TEST(db_migration_list_validation_enforces_one_statement) {
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(dollarQuoted, 1)); }));
     const DbMigration tagged[] = {{"001", "DO $schema$ BEGIN EXECUTE $body$ SELECT 1; SELECT 2 $body$; END $schema$;"}};
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(tagged, 1)); }));
+
+    // PostgreSQL ordinary strings and quoted identifiers do not use a
+    // backslash to escape the closing delimiter. These are therefore two
+    // statements to PostgreSQL even though MariaDB-style scanning used to
+    // consume everything up to the final quote and miss the separator.
+    const DbMigration pgBackslashStringSplit[] = {{"001", R"(SELECT 'a\'; SELECT 2; --')"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(pgBackslashStringSplit, 1), DbDriver::kPostgreSql); }));
+    const DbMigration pgBackslashIdentifierSplit[] = {{"001", R"(SELECT "a\"; SELECT 2; --")"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(pgBackslashIdentifierSplit, 1), DbDriver::kPostgreSql); }));
+    const DbMigration pgHashOperatorSplit[] = {{"001", "SELECT 1 # 2; SELECT 3"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(pgHashOperatorSplit, 1), DbDriver::kPostgreSql); }));
+
+    // The MariaDB validator still accepts the constructs that are data there:
+    // backslash-escaped quotes inside strings and '#' line comments.
+    const DbMigration mariaBackslashString[] = {{"001", R"(SELECT 'a\'; SELECT 2; --')"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(mariaBackslashString, 1), DbDriver::kMariaDb); }));
+    const DbMigration mariaHashComment[] = {{"001", "SELECT 1 # one; two\n"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(mariaHashComment, 1), DbDriver::kMariaDb); }));
+    const DbMigration mariaTrailingHashComment[] = {{"001", "SELECT 1; # one statement\n"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(mariaTrailingHashComment, 1), DbDriver::kMariaDb); }));
+    const DbMigration mariaDashNoWhitespace[] = {{"001", "SELECT 1; --not a MariaDB comment"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(mariaDashNoWhitespace, 1), DbDriver::kMariaDb); }));
+    const DbMigration pgTrailingHashText[] = {{"001", "SELECT 1; # not a PostgreSQL comment"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(pgTrailingHashText, 1), DbDriver::kPostgreSql); }));
 }
 
 RUVIA_TEST(db_migration_checksum_pins_the_recorded_text) {
@@ -178,6 +211,15 @@ RUVIA_TEST(db_migration_carries_its_atomicity) {
     RUVIA_CHECK(concurrent.atomicity() == DbMigrationAtomicity::kUnwrapped);
 }
 
+RUVIA_TEST(db_migration_list_rejects_invalid_atomicity) {
+    using ruvia::DbMigration;
+    using ruvia::DbMigrationAtomicity;
+    using ruvia::detail::validateMigrationList;
+
+    const std::array migrations{DbMigration{"001", "CREATE TABLE a(id INT)", static_cast<DbMigrationAtomicity>(42)}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(migrations)); }));
+}
+
 RUVIA_TEST(db_sql_scan_steps_over_opaque_constructs) {
     using ruvia::detail::findPostgreSqlSyntaxByte;
     using ruvia::detail::findSqlSyntaxByte;
@@ -191,6 +233,7 @@ RUVIA_TEST(db_sql_scan_steps_over_opaque_constructs) {
     RUVIA_CHECK_EQ(skipSqlAtom("'a''b'x", 0), std::size_t{6});
     RUVIA_CHECK_EQ(skipSqlAtom("`a``b`x", 0), std::size_t{6});
     RUVIA_CHECK_EQ(skipSqlAtom("-- c\nx", 0), std::size_t{5});
+    RUVIA_CHECK_EQ(skipSqlAtom("--not comment", 0), std::size_t{1});
     RUVIA_CHECK_EQ(skipSqlAtom("/* c */x", 0), std::size_t{7});
     // A backslash escapes inside quotes but never inside a quoted identifier,
     // where MariaDB treats it as an ordinary byte.
@@ -208,6 +251,7 @@ RUVIA_TEST(db_sql_scan_steps_over_opaque_constructs) {
     RUVIA_CHECK_EQ(findSqlSyntaxByte("'a;b'", ';'), std::string_view::npos);
     RUVIA_CHECK_EQ(findSqlSyntaxByte("'a;b';", ';'), std::size_t{5});
     RUVIA_CHECK_EQ(findSqlSyntaxByte("x", '?'), std::string_view::npos);
+    RUVIA_CHECK_EQ(findSqlSyntaxByte("SELECT 1--?", '?'), std::size_t{10});
 
     RUVIA_CHECK_EQ(skipPostgreSqlDollarQuotedAtom("$$a;b$$x", 0), std::size_t{7});
     RUVIA_CHECK_EQ(skipPostgreSqlDollarQuotedAtom("$tag$a;b$tag$x", 0), std::size_t{13});
@@ -215,4 +259,11 @@ RUVIA_TEST(db_sql_scan_steps_over_opaque_constructs) {
     RUVIA_CHECK_EQ(findPostgreSqlSyntaxByte("DO $tag$a;b$tag$; SELECT 2", ';'), std::size_t{16});
     // A positional parameter is not a dollar-quote opener.
     RUVIA_CHECK_EQ(findPostgreSqlSyntaxByte("SELECT $1; SELECT 2", ';'), std::size_t{9});
+    // PostgreSQL's standard quoted strings and quoted identifiers do not make
+    // a backslash escape the delimiter; E'...' strings do.
+    RUVIA_CHECK_EQ(findPostgreSqlSyntaxByte(R"(SELECT 'a\'; SELECT 2; --')", ';'), std::size_t{11});
+    RUVIA_CHECK_EQ(findPostgreSqlSyntaxByte(R"(SELECT "a\"; SELECT 2; --")", ';'), std::size_t{11});
+    RUVIA_CHECK_EQ(findPostgreSqlSyntaxByte(R"(SELECT E'a\';b'; SELECT 2)", ';'), std::size_t{15});
+    RUVIA_CHECK_EQ(findPostgreSqlSyntaxByte("SELECT 1 # 2; SELECT 3", ';'), std::size_t{12});
+    RUVIA_CHECK_EQ(findSqlSyntaxByte("SELECT 1 # one; two\nSELECT 2", ';'), std::string_view::npos);
 }

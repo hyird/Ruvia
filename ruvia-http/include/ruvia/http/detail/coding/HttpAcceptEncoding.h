@@ -66,6 +66,9 @@ struct HttpAcceptedEncodingQuality {
 };
 
 [[nodiscard]] inline bool httpAcceptsEncoding(std::string_view acceptEncoding, std::string_view coding) noexcept {
+    if (acceptEncoding.empty()) {
+        return httpAsciiEqualsIgnoreCase(coding, "identity");
+    }
     HttpAcceptedEncodingQuality quality;
     quality.update(acceptEncoding, coding);
     return quality.accepts();
@@ -73,7 +76,8 @@ struct HttpAcceptedEncodingQuality {
 
 struct HttpResponseCodingQualities final {
     // A missing field and an explicitly empty field have different RFC 9110
-    // semantics: absence accepts any coding, while an empty value accepts none.
+    // semantics: absence accepts any coding, while an empty value accepts only
+    // the identity/no-encoding representation.
     bool fieldPresent{false};
     bool hasNonEmptyItem{false};
     HttpAcceptedEncodingQuality gzip;
@@ -116,7 +120,7 @@ private:
         switch (coding) {
             case HttpContentCoding::kIdentity:
                 if (fieldPresent && !hasNonEmptyItem) {
-                    return -1;
+                    return 1000;
                 }
                 if (identity.explicitQuality >= 0) {
                     return identity.explicitQuality > 0 ? identity.explicitQuality : -1;
@@ -125,10 +129,19 @@ private:
                 // default. A wildcard only excludes it when q=0.
                 return identity.wildcardQuality == 0 ? -1 : 1000;
             case HttpContentCoding::kGzip:
+                if (!fieldPresent) {
+                    return 999;
+                }
                 return gzip.accepts() ? (gzip.explicitQuality >= 0 ? gzip.explicitQuality : gzip.wildcardQuality) : -1;
             case HttpContentCoding::kBrotli:
+                if (!fieldPresent) {
+                    return 999;
+                }
                 return brotli.accepts() ? (brotli.explicitQuality >= 0 ? brotli.explicitQuality : brotli.wildcardQuality) : -1;
             case HttpContentCoding::kZstd:
+                if (!fieldPresent) {
+                    return 999;
+                }
                 return zstd.accepts() ? (zstd.explicitQuality >= 0 ? zstd.explicitQuality : zstd.wildcardQuality) : -1;
         }
         return -1;

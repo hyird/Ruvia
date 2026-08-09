@@ -22,7 +22,11 @@ class Http1ServerRequestParseFailure;
 enum class Http1ServerRequestParseFailureSource : std::uint8_t { kRequestLine, kMessage };
 
 struct Http1RequestParseResultAccess final {
-    [[nodiscard]] static Http1RequestParseResult needMore(std::optional<std::size_t> requiredTotalBytes) noexcept {
+    [[nodiscard]] static Http1RequestParseResult needMore() noexcept {
+        return Http1RequestParseResult(Http1RequestNeedMore());
+    }
+
+    [[nodiscard]] static Http1RequestParseResult needMore(std::size_t requiredTotalBytes) noexcept {
         return Http1RequestParseResult(Http1RequestNeedMore(requiredTotalBytes));
     }
 
@@ -73,7 +77,14 @@ public:
 private:
     friend class Http1ServerRequestParser;
 
-    constexpr Http1ServerNeedRequestBody(std::size_t headerBytes, std::optional<std::size_t> requiredTotalBytes) noexcept
+    explicit constexpr Http1ServerNeedRequestBody(std::size_t headerBytes) noexcept
+        : headerBytes_(headerBytes) {
+        if (headerBytes_ == 0) {
+            std::terminate();
+        }
+    }
+
+    constexpr Http1ServerNeedRequestBody(std::size_t headerBytes, std::size_t requiredTotalBytes) noexcept
         : headerBytes_(headerBytes),
           requiredTotalBytes_(requiredTotalBytes) {
         if (headerBytes_ == 0 || (requiredTotalBytes_ && *requiredTotalBytes_ <= headerBytes_)) {
@@ -82,7 +93,7 @@ private:
     }
 
     std::size_t headerBytes_;
-    std::optional<std::size_t> requiredTotalBytes_;
+    std::optional<std::size_t> requiredTotalBytes_{};
 };
 
 class Http1ServerRequestMessageReady final {

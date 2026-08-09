@@ -149,6 +149,22 @@ void Http2SansIoSessionEngine::terminate(std::error_code error) noexcept {
     writeSignal_.notify();
 }
 
+void Http2SansIoSessionEngine::resetStreamNoThrow(std::uint32_t streamId, Http2ErrorCode error) noexcept {
+    try {
+        (void)connection_.submitReset(streamId, error);
+    } catch (...) {
+        terminate(std::make_error_code(std::errc::not_enough_memory));
+    }
+}
+
+void Http2SansIoSessionEngine::unpinStreamNoThrow(std::uint32_t streamId) noexcept {
+    try {
+        connection_.unpinStream(streamId);
+    } catch (...) {
+        terminate(std::make_error_code(std::errc::not_enough_memory));
+    }
+}
+
 std::pmr::memory_resource* Http2SansIoSessionEngine::workerResource() const noexcept {
     return worker_->resource();
 }
@@ -169,13 +185,13 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
     }
     auto* streamRuntime = streamRuntimes_.find(streamId);
     if (streamRuntime == nullptr) {
-        (void)connection_.submitReset(streamId, Http2ErrorCode::kInternalError);
+        resetStreamNoThrow(streamId, Http2ErrorCode::kInternalError);
         wakeWriter();
         co_return;
     }
     auto* selectedRoute = streamRuntime->selectedRoute();
     if (selectedRoute == nullptr) {
-        (void)connection_.submitReset(streamId, Http2ErrorCode::kInternalError);
+        resetStreamNoThrow(streamId, Http2ErrorCode::kInternalError);
         wakeWriter();
         co_return;
     }
@@ -184,7 +200,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
     const auto* bufferedBody = requestBody.buffered();
     auto* streamSignal = streamRuntime->signal();
     if (streamSignal == nullptr) {
-        (void)connection_.submitReset(streamId, Http2ErrorCode::kInternalError);
+        resetStreamNoThrow(streamId, Http2ErrorCode::kInternalError);
         wakeWriter();
         co_return;
     }
@@ -223,17 +239,6 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
     }
     const auto responseCodingAvailability = options.compression.has_value() ? HttpResponseCodingAvailability::kIdentityAndCompression : HttpResponseCodingAvailability::kIdentityOnly;
     do {
-        if (responseCodingPolicy.selection() == nullptr) {
-            response = co_await routes_->handleError(
-                request,
-                requestMemory,
-                HttpErrorInfo(
-                    ruvia::http_status::kNotAcceptable,
-                    "not_acceptable",
-                    "no acceptable response content coding"),
-                baseServices);
-            break;
-        }
         const auto expectationPlan =
             streamState->expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
         if (const auto* rejection = expectationPlan.rejection()) {
@@ -275,9 +280,10 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
             resolved == nullptr ? nullptr : resolved->route().endpoint().webSocket();
         const auto* responseStreamEndpoint =
             resolved == nullptr ? nullptr : resolved->route().endpoint().responseStream();
-        if (responseCodingPolicy.negotiationFailed() && (webSocketEndpoint != nullptr || responseStreamEndpoint != nullptr)) {
-            // Streaming and upgrade routes commit before a buffered response
-            // status can be inspected, so retain the pre-commit 406 boundary.
+        if (responseCodingPolicy.negotiationFailed() && responseStreamEndpoint != nullptr) {
+            // Streaming routes commit before a buffered response status can be
+            // inspected. WebSocket Extended CONNECT does not select an HTTP
+            // response representation.
             response = co_await routes_->handleError(
                 request,
                 requestMemory,
@@ -293,8 +299,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 validateHttp2WebSocketHandshake(*streamState, request);
             if (handshakeValidation.accepted() != nullptr) {
                 if (streamingBody == nullptr) {
-                    (void)connection_.submitReset(
-                        streamId, Http2ErrorCode::kInternalError);
+                    resetStreamNoThrow(streamId, Http2ErrorCode::kInternalError);
                     wakeWriter();
                     co_return;
                 }
@@ -404,8 +409,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
             }
             if (const auto committedStatus = result.committedStatus()) {
                 if (const auto* failed = result.failedAfterCommit()) {
-                    (void)connection_.submitReset(
-                        streamId, Http2ErrorCode::kInternalError);
+                    resetStreamNoThrow(streamId, Http2ErrorCode::kInternalError);
                     wakeWriter();
                     options.connectionFailure.invoke(
                         remoteAddress_, failed->exception());
@@ -438,20 +442,23 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         }
 
         if (baseServices.deferredStaticFileCompression() && responseBody(response).file().has_value()) {
-            const auto compressionResult = co_await tryCompressStaticFileResponse(
-                response,
-                *responseCodingPolicy.selection(),
-                request.knownMethod(),
-                *options.compression,
-                options.documentRoot.runtimeOptions.onDemandCompressionMaxBytes,
-                options.blockingPool,
-                baseServices.worker());
-            if (!compressionResult.compressed() && httpResponseNeedsNotAcceptable(responseCodingPolicy, request, response) && responseBody(response).file().has_value()) {
-                response = co_await routes_->handleError(
-                    request,
-                    requestMemory,
-                    httpStaticFileCompressionError(compressionResult),
-                    baseServices);
+            const auto* const responseCodingSelection = responseCodingPolicy.selection();
+            if (responseCodingSelection != nullptr) {
+                const auto compressionResult = co_await tryCompressStaticFileResponse(
+                    response,
+                    *responseCodingSelection,
+                    request.knownMethod(),
+                    *options.compression,
+                    options.documentRoot.runtimeOptions.onDemandCompressionMaxBytes,
+                    options.blockingPool,
+                    baseServices.worker());
+                if (!compressionResult.compressed() && httpResponseNeedsNotAcceptable(responseCodingPolicy, request, response) && responseBody(response).file().has_value()) {
+                    response = co_await routes_->handleError(
+                        request,
+                        requestMemory,
+                        httpStaticFileCompressionError(compressionResult),
+                        baseServices);
+                }
             }
         }
     } while (false);
@@ -492,11 +499,11 @@ Task<void> Http2SansIoSessionEngine::dispatchOne(std::uint32_t streamId) {
     } catch (...) {
         auto* live = connection_.stream(streamId);
         if (live != nullptr && !live->isAborted()) {
-            (void)connection_.submitReset(streamId, Http2ErrorCode::kInternalError);
+            resetStreamNoThrow(streamId, Http2ErrorCode::kInternalError);
         }
     }
     (void)streamRuntimes_.remove(streamId);
-    connection_.unpinStream(streamId);
+    unpinStreamNoThrow(streamId);
     wakeWriter();
 }
 
@@ -506,9 +513,13 @@ bool Http2SansIoSessionEngine::admitStream(std::uint32_t streamId) {
     if (signal == nullptr) {
         return false;
     }
-    connection_.pinStream(streamId);
-    ++activeHandlerTasks_;
+    bool pinned = false;
+    bool counted = false;
     try {
+        connection_.pinStream(streamId);
+        pinned = true;
+        ++activeHandlerTasks_;
+        counted = true;
         asio::co_spawn(
             executor_,
             taskAsAwaitable(dispatchOne(streamId)),
@@ -526,8 +537,12 @@ bool Http2SansIoSessionEngine::admitStream(std::uint32_t streamId) {
                     writeSignal_.notify();
                 }));
     } catch (...) {
-        --activeHandlerTasks_;
-        connection_.unpinStream(streamId);
+        if (counted) {
+            --activeHandlerTasks_;
+        }
+        if (pinned) {
+            unpinStreamNoThrow(streamId);
+        }
         (void)streamRuntimes_.remove(streamId);
         return false;
     }
@@ -563,7 +578,7 @@ void Http2SansIoSessionEngine::drainEvents() {
     const auto resetEventStream = [&](std::uint32_t streamId, Http2ErrorCode error) {
         unmarkBufferedBodyCopied(streamId);
         auto* signal = streamRuntimes_.signalFor(streamId);
-        (void)connection_.submitReset(streamId, error);
+        resetStreamNoThrow(streamId, error);
         if (signal != nullptr) {
             signal->wake();
         } else {

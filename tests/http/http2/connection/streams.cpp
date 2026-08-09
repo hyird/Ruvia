@@ -1,6 +1,39 @@
 #include "http2_connection_fixture.h"
 
+#include <new>
+
 // Http2Connection: the stream table: admission, PRIORITY, RST_STREAM and close.
+
+namespace {
+
+#if !defined(_MSC_VER)
+class ToggleRejectingMemoryResource final : public std::pmr::memory_resource {
+public:
+    void rejectAllocations(bool value = true) noexcept {
+        reject_ = value;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (reject_) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool reject_{false};
+};
+#endif  // !_MSC_VER
+
+}  // namespace
 
 RUVIA_TEST(http2_connection_peer_stream_limit_waits_for_both_half_closes) {
     std::pmr::monotonic_buffer_resource resource;
@@ -344,6 +377,46 @@ RUVIA_TEST(http2_connection_unpin_incomplete_stream_emits_cancel_reset) {
     RUVIA_CHECK_EQ(reset.streamId, static_cast<std::uint32_t>(1));
     RUVIA_CHECK_EQ(ruvia::detail::http2Read32(reinterpret_cast<const unsigned char*>(out.data() + 9)), static_cast<std::uint32_t>(Http2ErrorCode::kCancel));
 }
+
+#if !defined(_MSC_VER)
+RUVIA_TEST(http2_connection_unpin_keeps_pin_when_owner_reset_allocation_fails) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveGetRequest(conn, &resource);
+    conn.pinStream(1);
+
+    const std::string largeHint(4096, 'x');
+    const std::array<ruvia::HttpHeaderView, 1> headers{ruvia::HttpHeaderView{"Link", largeHint}};
+    const ruvia::HttpInterimResponseHead earlyHints(ruvia::http_status::kEarlyHints, headers);
+    RUVIA_CHECK(conn.submitInterimResponseHead(1, earlyHints) == Http2SubmitStatus::kAccepted);
+
+    resource.rejectAllocations();
+    bool allocationFailed = false;
+    try {
+        conn.unpinStream(1);
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(conn.stream(1) != nullptr);
+    RUVIA_CHECK(!conn.stream(1)->isAborted());
+
+    resource.rejectAllocations(false);
+    char rst[9 + 4];
+    ruvia::detail::http2EncodeFrameHeader(rst, 4, Http2FrameType::kRstStream, 0, 1);
+    ruvia::detail::http2Write32(rst + 9, static_cast<std::uint32_t>(Http2ErrorCode::kCancel));
+    RUVIA_CHECK(conn.feed(std::string_view(rst, sizeof(rst))) == ruvia::detail::Http2FeedResult::kAccepted);
+
+    auto* retained = conn.stream(1);
+    RUVIA_CHECK(retained != nullptr);
+    if (retained != nullptr) {
+        RUVIA_CHECK(retained->isAborted());
+    }
+    conn.unpinStream(1);
+    RUVIA_CHECK(conn.stream(1) == nullptr);
+}
+#endif  // !_MSC_VER
 
 // RFC 9110 Section 15.3.6 requires every 205 response to have zero-length
 // content. Unlike HEAD/204/304, 205 still has an ordinary content phase, but a

@@ -26,8 +26,14 @@ struct HttpResponseHeaderStateAccess final {
         response.appendHeaderValidated(key, value, knownBit);
     }
 
-    [[nodiscard]] static HttpResponseHeader& upsertSetCookieUninitializedValue(HttpResponse& response, std::string_view wirePrefix, std::string_view cookieName, std::size_t valueSize) {
-        return response.upsertSetCookieHeaderUninitializedValue(wirePrefix, cookieName, valueSize);
+    [[nodiscard]] static HttpResponseHeader& upsertSetCookieUninitializedValue(
+        HttpResponse& response,
+        std::string_view wirePrefix,
+        std::string_view cookieName,
+        std::string_view path,
+        std::string_view domain,
+        std::size_t valueSize) {
+        return response.upsertSetCookieHeaderUninitializedValue(wirePrefix, cookieName, path, domain, valueSize);
     }
 
     static void upsertSetCookieValidated(HttpResponse& response, std::string_view value) {
@@ -87,8 +93,14 @@ inline void appendResponseHeaderValidated(HttpResponse& response, std::string_vi
     HttpResponseHeaderStateAccess::appendValidated(response, key, value, knownBit);
 }
 
-[[nodiscard]] inline HttpResponseHeader& upsertResponseSetCookieUninitializedValue(HttpResponse& response, std::string_view wirePrefix, std::string_view cookieName, std::size_t valueSize) {
-    return HttpResponseHeaderStateAccess::upsertSetCookieUninitializedValue(response, wirePrefix, cookieName, valueSize);
+[[nodiscard]] inline HttpResponseHeader& upsertResponseSetCookieUninitializedValue(
+    HttpResponse& response,
+    std::string_view wirePrefix,
+    std::string_view cookieName,
+    std::string_view path,
+    std::string_view domain,
+    std::size_t valueSize) {
+    return HttpResponseHeaderStateAccess::upsertSetCookieUninitializedValue(response, wirePrefix, cookieName, path, domain, valueSize);
 }
 
 inline void upsertResponseSetCookieValidated(HttpResponse& response, std::string_view value) {

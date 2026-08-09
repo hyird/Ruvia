@@ -59,7 +59,7 @@ struct BlockingPoolOptions final {
 enum class BlockingSubmitStatus : std::uint8_t {
     kAccepted,
     kQueueFull,
-    kStopped,
+    kPoolStopped,
 };
 
 struct BlockingPoolStats final {
@@ -321,8 +321,10 @@ template <typename Fn>
 // moved into the pool and runs on a foreign thread: it must own everything it
 // uses (see the file header).
 //
-// Never throws for a rejection; the status says what happened. Use .value() to
-// turn a rejection into an exception and to rethrow the callable's own.
+// Never throws for a rejection; the status says what happened. Use
+// std::move(result).value() to turn a rejection into an exception and to
+// rethrow the callable's own exception; value() is rvalue-only because it
+// consumes the result.
 template <typename Fn>
 [[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
     return detail::runBlockingUntil(pool, std::move(worker), std::nullopt, std::move(fn));

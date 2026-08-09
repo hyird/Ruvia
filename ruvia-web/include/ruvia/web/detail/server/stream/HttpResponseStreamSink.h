@@ -136,7 +136,7 @@ private:
     }
 
     Task<TimerSleepResult> sleep(std::chrono::milliseconds duration) {
-        const auto result = co_await sleepForBorrowed(*worker_, duration);
+        const auto result = co_await sleepFor(*worker_, duration);
         if (result == TimerSleepResult::kElapsed) {
             scannerEntry_.touch();
         }
@@ -156,7 +156,7 @@ private:
             // or 304) then yields the worker thread each pass instead of
             // hard-spinning the event loop with no suspension point. The minimal
             // positive delay is required because a zero duration is await_ready.
-            static_cast<void>(co_await sleepForBorrowed(*worker_, std::chrono::steady_clock::duration(1)));
+            static_cast<void>(co_await sleepFor(*worker_, std::chrono::steady_clock::duration(1)));
         }
         state_.ensureBodyAllowed();
 

@@ -13,6 +13,7 @@
 #include <exception>
 #include <memory_resource>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 
 namespace {
@@ -99,6 +100,17 @@ ruvia::Task<void> withDatabase(asio::io_context& ioContext, ruvia::DbConfig conf
     dbRequire(committedCount.rows()[0][0].text() == "1", "commit did not persist state");
     auto updated = co_await db.execute("UPDATE ruvia_pg_integration_items SET value = $1", std::span<const ruvia::DbValue>(params.data(), 1));
     dbRequire(updated.affectedRows() == 1, "affected-row count is incorrect");
+
+    bool rejectedCommandStream = false;
+    try {
+        auto commandStream = co_await db.queryStream("UPDATE ruvia_pg_integration_items SET value = value WHERE value = 'missing'");
+        (void)co_await commandStream.read();
+    } catch (const std::invalid_argument&) {
+        rejectedCommandStream = true;
+    }
+    dbRequire(rejectedCommandStream, "queryStream accepted non-row-producing SQL");
+    auto afterRejectedStream = co_await db.query("SELECT 1");
+    dbRequire(afterRejectedStream.rows()[0][0].text() == "1", "pool was not reusable after a rejected stream query");
 
     auto stream = co_await db.queryStream("SELECT generate_series(1, 128)");
     std::size_t streamed = 0;

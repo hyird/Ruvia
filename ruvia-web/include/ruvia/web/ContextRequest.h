@@ -151,11 +151,11 @@ public:
         }
         [[nodiscard]] std::span<const std::pmr::string> path() const&& = delete;
 
-        [[nodiscard]] bool file() const noexcept {
+        [[nodiscard]] bool isFile() const noexcept {
             return file_;
         }
 
-        [[nodiscard]] bool array() const noexcept {
+        [[nodiscard]] bool isArray() const noexcept {
             return array_;
         }
 
@@ -220,7 +220,7 @@ public:
                 return size() == 0;
             }
 
-            [[nodiscard]] bool array() const noexcept {
+            [[nodiscard]] bool isArray() const noexcept {
                 return array_ || multiple();
             }
 
@@ -251,7 +251,7 @@ public:
 
             void add(const RequestFormField& field) {
                 fields_.push_back(&field);
-                array_ = array_ || field.array();
+                array_ = array_ || field.isArray();
             }
 
             std::string_view name_;
@@ -285,8 +285,8 @@ public:
                 return entry_ != nullptr && entry_->multiple();
             }
 
-            [[nodiscard]] bool array() const noexcept {
-                return entry_ != nullptr && entry_->array();
+            [[nodiscard]] bool isArray() const noexcept {
+                return entry_ != nullptr && entry_->isArray();
             }
 
             [[nodiscard]] std::optional<std::string_view> value() const noexcept {
@@ -561,10 +561,10 @@ public:
     [[nodiscard]] ScopedOperation<std::optional<T>> formIf() const;
 
     template <typename T>
-    [[nodiscard]] const T& valid() const;
+    [[nodiscard]] const T& validated() const;
 
     template <typename T>
-    [[nodiscard]] ValidatedJson<T> validJson() const;
+    [[nodiscard]] ValidatedJson<T> validatedJson() const;
 
     [[nodiscard]] ScopedOperation<std::pmr::vector<MultipartPart>> multipart() const;
 

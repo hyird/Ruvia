@@ -13,7 +13,9 @@
 
 namespace ruvia::detail {
 
-// Methods covered by RUVIA_ALL; HEAD is served by the implicit GET fallback.
+// Methods covered by RUVIA_ALL. HEAD is intentionally omitted: buffered GET
+// routes receive an implicit HEAD shadow during route-table build, while
+// streaming/SSE/WebSocket routes require an explicit HEAD route.
 inline constexpr std::array kRuviaAllRouteMethods = {HttpKnownMethod::kGet, HttpKnownMethod::kPost, HttpKnownMethod::kPut, HttpKnownMethod::kPatch, HttpKnownMethod::kDelete, HttpKnownMethod::kOptions};
 
 // Startup-only holder for the RUVIA_ON method list; the macro pastes the
@@ -25,6 +27,7 @@ public:
         : methods_{methods...},
           count_(sizeof...(Methods)) {
         static_assert(sizeof...(Methods) > 0, "RUVIA_ON requires at least one method");
+        static_assert(sizeof...(Methods) <= 9, "RUVIA_ON supports at most 9 methods");
     }
 
     [[nodiscard]] constexpr const HttpKnownMethod* begin() const& noexcept {
@@ -52,6 +55,7 @@ public:
         : paths_{httpBorrowedView(paths)...},
           count_(sizeof...(Paths)) {
         static_assert(sizeof...(Paths) > 0, "RUVIA_ON requires at least one path");
+        static_assert(sizeof...(Paths) <= 8, "RUVIA_ON supports at most 8 paths");
     }
 
     template <typename... Paths>
@@ -149,6 +153,7 @@ private:                                                                        
 
 #define RUVIA_GROUP_BEGIN(prefix, ...)                                                                                                                                                              \
     {                                                                                                                                                                                               \
+        static_assert(!::ruvia::detail::HttpTemporaryOwningCharString<decltype((prefix))>, "route group prefixes must outlive route registration"); \
         auto ruviaRouteGroup = RuviaControllerAccess::createRouteGroup(ruviaRouteScope, ::ruvia::detail::httpBorrowedView(prefix), RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>()); \
         auto& ruviaRouteScope = ruviaRouteGroup;
 

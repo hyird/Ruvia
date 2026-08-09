@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
+
 #include <stdexcept>
 #include <string_view>
 
@@ -14,6 +16,9 @@ namespace ruvia::detail {
 [[nodiscard]] inline std::string_view normalizeFallbackPrefix(std::string_view prefix) {
     if (prefix.empty() || prefix.front() != '/') {
         throw std::invalid_argument("fallback prefix must start with '/'");
+    }
+    if (prefix.find('?') != std::string_view::npos || !isValidOriginFormTarget(prefix)) {
+        throw std::invalid_argument("fallback prefix must be an origin-form path without query");
     }
     while (prefix.size() > 1 && prefix.back() == '/') {
         prefix.remove_suffix(1);

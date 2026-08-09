@@ -83,13 +83,6 @@ void validateRule(const ValueT& value, std::string_view path, ValidatorT& valida
     }
 }
 
-template <typename ValueT, typename ValidatorT, typename PredicateT>
-void validateRule(const ValueT& value, std::string_view path, ValidatorT& validator, const Match<PredicateT>& rule) {
-    if (!rule.predicate(modelString(value))) {
-        validator.add(path, "match", rule.message);
-    }
-}
-
 template <typename ValueT, typename ValidatorT, typename ValidationSchemaT>
 void validateRule(const ValueT& value, std::string_view path, ValidatorT& validator, const Nested<ValidationSchemaT>&) {
     static_assert(

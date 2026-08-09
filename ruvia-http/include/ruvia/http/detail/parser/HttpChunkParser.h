@@ -7,9 +7,98 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/detail/util/BorrowedView.h"
+
 namespace ruvia::detail {
 
 enum class HttpChunkScanError : std::uint8_t { kInvalidSize, kSizeOverflow, kInvalidExtension, kInvalidCrlf, kInvalidTrailer, kTooLarge };
+
+class HttpChunkTrailerField final {
+public:
+    [[nodiscard]] constexpr std::string_view name() const& noexcept { return name_; }
+    std::string_view name() const&& = delete;
+    [[nodiscard]] constexpr std::string_view value() const& noexcept { return value_; }
+    std::string_view value() const&& = delete;
+
+private:
+    friend class HttpChunkTrailerParseResult;
+    friend class HttpChunkTrailerParser;
+
+    constexpr HttpChunkTrailerField(std::string_view name, std::string_view value) noexcept
+        : name_(name), value_(value) {}
+
+    std::string_view name_;
+    std::string_view value_;
+};
+
+class HttpChunkTrailerEnd final {
+private:
+    friend class HttpChunkTrailerParseResult;
+    friend class HttpChunkTrailerParser;
+    constexpr HttpChunkTrailerEnd() noexcept = default;
+};
+
+class HttpChunkTrailerFailure final {
+public:
+    [[nodiscard]] constexpr HttpChunkScanError error() const noexcept { return error_; }
+
+private:
+    friend class HttpChunkTrailerParseResult;
+    friend class HttpChunkTrailerParser;
+
+    explicit constexpr HttpChunkTrailerFailure(HttpChunkScanError error) noexcept
+        : error_(error) {}
+
+    HttpChunkScanError error_;
+};
+
+class HttpChunkTrailerParseResult final {
+public:
+    [[nodiscard]] const HttpChunkTrailerField* field() const& noexcept {
+        return std::get_if<HttpChunkTrailerField>(&value_);
+    }
+    const HttpChunkTrailerField* field() const&& = delete;
+    [[nodiscard]] const HttpChunkTrailerEnd* end() const& noexcept {
+        return std::get_if<HttpChunkTrailerEnd>(&value_);
+    }
+    const HttpChunkTrailerEnd* end() const&& = delete;
+    [[nodiscard]] const HttpChunkTrailerFailure* failure() const& noexcept {
+        return std::get_if<HttpChunkTrailerFailure>(&value_);
+    }
+    const HttpChunkTrailerFailure* failure() const&& = delete;
+
+private:
+    friend class HttpChunkTrailerParser;
+    using Value = std::variant<HttpChunkTrailerField, HttpChunkTrailerEnd, HttpChunkTrailerFailure>;
+
+    template <typename Result>
+    explicit constexpr HttpChunkTrailerParseResult(Result result) noexcept
+        : value_(result) {}
+
+    Value value_;
+};
+
+// Iterates a validated-or-untrusted trailer block without allocation. Field
+// views borrow the block passed to the constructor and remain valid until that
+// storage is mutated.
+class HttpChunkTrailerParser final {
+public:
+    explicit constexpr HttpChunkTrailerParser(std::string_view trailers) noexcept
+        : trailers_(trailers) {}
+
+    template <HttpTemporaryOwningCharString Trailers>
+    explicit HttpChunkTrailerParser(Trailers&&) = delete;
+
+    [[nodiscard]] HttpChunkTrailerParseResult next() noexcept;
+
+private:
+    [[nodiscard]] HttpChunkTrailerParseResult fail(HttpChunkScanError error) noexcept;
+
+    std::string_view trailers_;
+    std::size_t cursor_{0};
+    std::size_t fieldCount_{0};
+    std::optional<HttpChunkScanError> failure_;
+};
 
 class HttpChunkScanNeedMore final {
 private:

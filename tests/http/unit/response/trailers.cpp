@@ -150,6 +150,10 @@ RUVIA_TEST(response_trailer_field_combined_rule) {
     RUVIA_CHECK(responseTrailerFieldValid("Accept-Ranges", "bytes"));
     // Invalid value.
     RUVIA_CHECK(!responseTrailerFieldValid("X-Trace-Id", std::string_view("a\r\nb", 4)));
+    RUVIA_CHECK(!responseTrailerFieldValid("X-Trace-Id", " abc"));
+    RUVIA_CHECK(!responseTrailerFieldValid("X-Trace-Id", "abc "));
+    RUVIA_CHECK(!responseTrailerFieldValid("X-Trace-Id", "\tabc"));
+    RUVIA_CHECK(!responseTrailerFieldValid("X-Trace-Id", "abc\t"));
 }
 
 RUVIA_TEST(response_trailer_section_validation_is_all_fields_or_none) {

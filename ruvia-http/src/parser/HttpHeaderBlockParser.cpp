@@ -4,6 +4,8 @@
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/field/HttpTeFields.h"
+#include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 #include <algorithm>
@@ -102,12 +104,17 @@ namespace {
             break;
         }
         case RequestHeaderKind::kConnection: {
-            if (block.connectionOptions.parseField(value, HttpFieldListRole::kRecipient) != HttpFieldListParseStatus::kOk) {
+            if (block.connectionOptions.parseField(value, HttpFieldListRole::kRecipient, [](std::string_view option) noexcept {
+                    return !httpConnectionOptionConflictsWithManagedField(option);
+                }) != HttpFieldListParseStatus::kOk) {
                 return HttpParseError::kInvalidConnection;
             }
             break;
         }
         case RequestHeaderKind::kExpect: {
+            if (!isValidReceivedHttpExpectFieldValue(value)) {
+                return HttpParseError::kInvalidHeader;
+            }
             block.expectations.parseField(value);
             break;
         }
@@ -226,6 +233,21 @@ namespace {
 
         const auto name = buffer.substr(nameStart, nameEnd - nameStart);
         const auto value = buffer.substr(valueStart, valueEnd - valueStart);
+
+        if (httpAsciiEqualsIgnoreCase(name, "Trailer")) {
+            if (!isValidHttpRequestTrailerFieldValue(value, HttpFieldListRole::kRecipient)) {
+                return HttpParseError::kInvalidHeader;
+            }
+            if (!httpFindHeaderToken(value, [](std::string_view) noexcept { return true; }).empty()) {
+                block.nonEmptyTrailerHeaderPresent = true;
+            }
+        }
+        if (httpAsciiEqualsIgnoreCase(name, "TE")) {
+            if (!isValidReceivedHttpTeFieldValue(value)) {
+                return HttpParseError::kInvalidHeader;
+            }
+            block.teHeaderPresent = true;
+        }
 
         const auto kind = classifyRequestHeader(name);
         if (const auto error = applyRequestHeader(kind, value, ignoreUpgrade, block)) {

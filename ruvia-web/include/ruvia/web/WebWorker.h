@@ -14,6 +14,7 @@
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/ScopedOperation.h"
+#include "ruvia/web/HttpClient.h"
 #include "ruvia/web/detail/integration/BlockingCapability.h"
 #include "ruvia/web/detail/integration/WorkerStateCapability.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
@@ -31,6 +32,7 @@ namespace ruvia {
 namespace detail {
 class DbRegistry;
 class HttpServer;
+class HttpClientRegistry;
 class RedisRegistry;
 class WebWorkerDispatch;
 class WorkerStateRegistry;
@@ -56,11 +58,13 @@ public:
     [[nodiscard]] RedisHandle redis() const;
     [[nodiscard]] RedisHandle redis(std::string_view alias) const;
 #endif
+    [[nodiscard]] HttpClient httpClient() const;
+    [[nodiscard]] HttpClient httpClient(std::string_view alias) const;
 
 private:
     friend class detail::WebWorkerDispatch;
 
-    WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource, detail::DbRegistry* databases, detail::RedisRegistry* redis, const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool, StopToken stopToken) noexcept;
+    WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource, detail::DbRegistry* databases, detail::RedisRegistry* redis, detail::HttpClientRegistry* httpClients, const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool, StopToken stopToken) noexcept;
 
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
     friend class detail::BlockingCapability<WebWorkerContext>;
@@ -74,6 +78,7 @@ private:
     std::pmr::memory_resource* resource_;
     [[maybe_unused]] detail::DbRegistry* databases_;
     [[maybe_unused]] detail::RedisRegistry* redis_;
+    detail::HttpClientRegistry* httpClients_;
     const detail::WorkerStateRegistry* workerStates_;
     BlockingPool* blockingPool_;
     StopToken stopToken_;

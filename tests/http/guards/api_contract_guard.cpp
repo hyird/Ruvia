@@ -549,7 +549,7 @@ concept HasResponseHeadErrorAccessor = requires(const T& result) { result.error(
 template <typename T>
 concept HasResponseHeadFailureContract = requires(const T& failure) {
     { failure.peerClosed() } -> std::same_as<bool>;
-    { failure.exception() } -> std::same_as<ruvia::detail::Http2ResponseHeadSubmitError>;
+    { failure.error() } -> std::same_as<ruvia::detail::Http2ResponseHeadSubmitError>;
 };
 
 template <typename Connection>
@@ -791,11 +791,6 @@ concept HasMultipartProtocolError = requires(const T& result) {
 template <typename T>
 concept HasHttpClientHeaderValue = requires(const T& result) {
     { result.value() } -> std::same_as<std::string_view>;
-};
-
-template <typename T>
-concept HasHttpClientRedirectError = requires(const T& result) {
-    { result.error() } -> std::same_as<ruvia::HttpClientRedirectTargetError>;
 };
 
 template <typename T>
@@ -1754,8 +1749,8 @@ concept HasHttp1ClientResponseTransferCodings = requires(const T& framing) {
 };
 
 template <typename T>
-concept HasHttp1ClientResponsePersistence = requires(const T& framing) {
-    { framing.persistence() } -> std::same_as<ruvia::Http1ClientResponsePersistence>;
+concept HasHttp1ClosePolicy = requires(const T& framing) {
+    { framing.persistence() } -> std::same_as<ruvia::Http1ClosePolicy>;
 };
 
 static_assert(HasHttp1ClientResponsePlanAlternatives<ruvia::Http1ClientResponsePlan>);
@@ -1768,11 +1763,11 @@ static_assert(!HasHttp1ClientResponseContentLength<ruvia::Http1ClientChunkedResp
 static_assert(HasHttp1ClientResponseTransferCodings<ruvia::Http1ClientChunkedResponse>);
 static_assert(HasHttp1ClientResponseTransferCodings<ruvia::Http1ClientCloseDelimitedResponse>);
 static_assert(!HasHttp1ClientResponseTransferCodings<ruvia::Http1ClientKnownLengthResponse>);
-static_assert(HasHttp1ClientResponsePersistence<ruvia::Http1ClientInformationalResponse>);
-static_assert(HasHttp1ClientResponsePersistence<ruvia::Http1ClientResponseWithoutContent>);
-static_assert(HasHttp1ClientResponsePersistence<ruvia::Http1ClientKnownLengthResponse>);
-static_assert(HasHttp1ClientResponsePersistence<ruvia::Http1ClientChunkedResponse>);
-static_assert(!HasHttp1ClientResponsePersistence<ruvia::Http1ClientCloseDelimitedResponse>);
+static_assert(HasHttp1ClosePolicy<ruvia::Http1ClientInformationalResponse>);
+static_assert(HasHttp1ClosePolicy<ruvia::Http1ClientResponseWithoutContent>);
+static_assert(HasHttp1ClosePolicy<ruvia::Http1ClientKnownLengthResponse>);
+static_assert(HasHttp1ClosePolicy<ruvia::Http1ClientChunkedResponse>);
+static_assert(!HasHttp1ClosePolicy<ruvia::Http1ClientCloseDelimitedResponse>);
 static_assert(!std::default_initializable<ruvia::Http1ClientResponsePlan>);
 static_assert(!std::default_initializable<ruvia::Http1ClientInformationalResponse>);
 static_assert(!std::default_initializable<ruvia::Http1ClientResponseWithoutContent>);
@@ -1915,9 +1910,9 @@ static_assert(HasValueSemanticResponseWritePolicy<ruvia::detail::HttpResponseBod
 static_assert(HasValueSemanticResponseWritePolicy<ruvia::detail::HttpBufferedResponseWritePlan>);
 static_assert(!AcceptsLooseResponseStreamBodyPlan<ruvia::detail::HttpResponseBodyPlan>);
 static_assert(!AcceptsLooseBufferedResponseBodyPlan<ruvia::detail::HttpResponseBodyPlan>);
-static_assert(!HasResponseHeadErrorAccessor<ruvia::detail::Http2ResponseHeadSubmitFailure>);
+static_assert(HasResponseHeadErrorAccessor<ruvia::detail::Http2ResponseHeadSubmitFailure>);
 static_assert(HasResponseHeadFailureContract<ruvia::detail::Http2ResponseHeadSubmitFailure>);
-static_assert(std::derived_from<ruvia::detail::Http2ResponseHeadSubmitError, std::exception>);
+static_assert(!std::derived_from<ruvia::detail::Http2ResponseHeadSubmitError, std::exception>);
 static_assert(std::is_trivially_copyable_v<ruvia::detail::Http2ResponseHeadSubmitFailure>);
 static_assert(sizeof(ruvia::detail::Http2ResponseHeadSubmitFailure) <= 1);
 static_assert(!HasResponseHeadPlanAccessor<ruvia::detail::Http2ResponseHeadSubmitFailure>);
@@ -2172,18 +2167,6 @@ static_assert(!ExposesAnyRvalueHttpClientOwnedView<ruvia::HttpClientRedirectRequ
 static_assert(!HasHttpClientHeaderValue<ruvia::HttpClientResponseHeaderAbsent>);
 static_assert(HasHttpClientHeaderValue<ruvia::HttpClientResponseHeaderFound>);
 static_assert(!HasHttpClientHeaderValue<ruvia::HttpClientResponseHeaderRepeated>);
-static_assert(std::same_as<decltype(ruvia::resolveHttpClientSameOriginRedirectTarget(std::declval<const ruvia::HttpOriginView&>(), std::string_view{}, std::string_view{}, std::declval<std::pmr::memory_resource*>())), ruvia::HttpClientRedirectTargetResult>);
-static_assert(!std::default_initializable<ruvia::HttpClientRedirectTargetResult>);
-static_assert(!std::copy_constructible<ruvia::HttpClientRedirectTargetResult>);
-static_assert(std::move_constructible<ruvia::HttpClientRedirectTargetResult>);
-static_assert(!std::assignable_from<ruvia::HttpClientRedirectTargetResult&, ruvia::HttpClientRedirectTargetResult&&>);
-static_assert(!HasAnyRvalueHttpClientRedirectTargetAccessor<ruvia::HttpClientRedirectTargetResult>);
-static_assert(!ExposesAnyRvalueHttpClientOwnedView<ruvia::HttpClientRedirectTarget>);
-static_assert(std::move_constructible<ruvia::HttpClientRedirectTarget>);
-static_assert(!std::assignable_from<ruvia::HttpClientRedirectTarget&, ruvia::HttpClientRedirectTarget&&>);
-static_assert(!HasHttpClientRedirectStatus<ruvia::HttpClientRedirectTargetResult>);
-static_assert(!HasHttpClientRedirectError<ruvia::HttpClientRedirectTarget>);
-static_assert(HasHttpClientRedirectError<ruvia::HttpClientRedirectTargetFailure>);
 static_assert(std::same_as<decltype(ruvia::detail::responseBody(std::declval<const ruvia::HttpResponse&>())), const ruvia::detail::HttpResponseBody&>);
 static_assert(!std::copy_constructible<ruvia::detail::HttpResponseBody>);
 static_assert(std::is_nothrow_move_constructible_v<ruvia::detail::HttpResponseBody>);

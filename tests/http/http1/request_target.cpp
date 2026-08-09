@@ -278,9 +278,9 @@ RUVIA_TEST(parse_request_target_absolute_form) {
 RUVIA_TEST(parse_request_target_absolute_empty_path_preserves_method_semantics) {
     RequestTargetView out;
 
-    // RFC 9110 section 4.2.3 excludes OPTIONS from the HTTP(S) empty-path to
-    // "/" normalization. RFC 9112 section 3.2.4 turns the no-query form into
-    // server-wide asterisk-form at the final hop.
+    // RFC 9112 section 3.2.4 turns the no-query OPTIONS form into server-wide
+    // asterisk-form at the final hop. With a query, the target remains an
+    // HTTP(S) URI resource target and its empty path normalizes to "/".
     RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kOptions, "http://example.com", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("*"));
     RUVIA_CHECK(out.query.empty());
@@ -288,7 +288,7 @@ RUVIA_TEST(parse_request_target_absolute_empty_path_preserves_method_semantics) 
     RUVIA_CHECK(out.form == HttpRequestTargetForm::kAbsolute);
 
     RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kOptions, "http://example.com?scope=all", out));
-    RUVIA_CHECK(out.path.empty());
+    RUVIA_CHECK_EQ(out.path, std::string_view("/"));
     RUVIA_CHECK_EQ(out.query, std::string_view("scope=all"));
 
     // Generic URI schemes have no HTTP(S) rule that rewrites an empty path.

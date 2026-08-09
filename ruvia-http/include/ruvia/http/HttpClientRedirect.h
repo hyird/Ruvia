@@ -145,94 +145,6 @@ enum class HttpClientOriginAuthorityStatus : std::uint8_t {
 
 [[nodiscard]] HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(const HttpOriginView& origin, std::string_view authority) noexcept;
 
-enum class HttpClientRedirectTargetError : std::uint8_t {
-    kInvalidCurrentTarget,
-    kInvalidLocation,
-    kNotSameOrigin,
-};
-
-class HttpClientRedirectTargetResult;
-
-class HttpClientRedirectTarget final {
-public:
-    HttpClientRedirectTarget(const HttpClientRedirectTarget&) = delete;
-    HttpClientRedirectTarget& operator=(const HttpClientRedirectTarget&) = delete;
-    HttpClientRedirectTarget(HttpClientRedirectTarget&&) noexcept = default;
-    HttpClientRedirectTarget& operator=(HttpClientRedirectTarget&&) = delete;
-
-    [[nodiscard]] std::string_view value() const& noexcept {
-        return value_;
-    }
-    [[nodiscard]] std::string_view value() const&& = delete;
-
-private:
-    friend class HttpClientRedirectTargetResult;
-
-    explicit HttpClientRedirectTarget(std::pmr::string value) noexcept
-        : value_(std::move(value)) {}
-
-    std::pmr::string value_;
-};
-
-class HttpClientRedirectTargetFailure final {
-public:
-    [[nodiscard]] constexpr HttpClientRedirectTargetError error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class HttpClientRedirectTargetResult;
-
-    explicit constexpr HttpClientRedirectTargetFailure(HttpClientRedirectTargetError error) noexcept
-        : error_(error) {}
-
-    HttpClientRedirectTargetError error_;
-};
-
-// Resolution either owns one PMR target or reports one typed failure. There is
-// no output parameter whose previous contents can accidentally survive a failed
-// resolution.
-class HttpClientRedirectTargetResult final {
-public:
-    HttpClientRedirectTargetResult(const HttpClientRedirectTargetResult&) = delete;
-    HttpClientRedirectTargetResult& operator=(const HttpClientRedirectTargetResult&) = delete;
-    HttpClientRedirectTargetResult(HttpClientRedirectTargetResult&&) noexcept = default;
-    HttpClientRedirectTargetResult& operator=(HttpClientRedirectTargetResult&&) = delete;
-
-    [[nodiscard]] const HttpClientRedirectTarget* target() const& noexcept {
-        return std::get_if<HttpClientRedirectTarget>(&value_);
-    }
-    const HttpClientRedirectTarget* target() const&& = delete;
-
-    [[nodiscard]] constexpr const HttpClientRedirectTargetFailure* failure() const& noexcept {
-        return std::get_if<HttpClientRedirectTargetFailure>(&value_);
-    }
-    const HttpClientRedirectTargetFailure* failure() const&& = delete;
-
-private:
-    friend HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(const HttpOriginView&, std::string_view, std::string_view, std::pmr::memory_resource*);
-
-    using Value = std::variant<HttpClientRedirectTarget, HttpClientRedirectTargetFailure>;
-
-    explicit HttpClientRedirectTargetResult(HttpClientRedirectTarget target) noexcept
-        : value_(std::move(target)) {}
-
-    explicit constexpr HttpClientRedirectTargetResult(HttpClientRedirectTargetFailure failure) noexcept
-        : value_(failure) {}
-
-    [[nodiscard]] static HttpClientRedirectTargetResult makeTarget(std::pmr::string target) noexcept {
-        return HttpClientRedirectTargetResult(HttpClientRedirectTarget(std::move(target)));
-    }
-
-    [[nodiscard]] static constexpr HttpClientRedirectTargetResult makeFailure(HttpClientRedirectTargetError error) noexcept {
-        return HttpClientRedirectTargetResult(HttpClientRedirectTargetFailure(error));
-    }
-
-    Value value_;
-};
-
-[[nodiscard]] HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource = nullptr);
-
 enum class HttpClientRedirectResolutionError : std::uint8_t {
     kInvalidCurrentTarget,
     kInvalidLocation,
@@ -319,10 +231,10 @@ private:
 };
 
 // Cross-origin-capable resolution: either one owned followable destination or
-// one typed failure. Unlike resolveHttpClientSameOriginRedirectTarget, a
-// different http/https origin is a success alternative here; the I/O owner
-// applies its own cross-origin policy (credential strip, TLS-downgrade
-// refusal) on top of the classified destination.
+// one typed failure. A different http/https origin is a success alternative
+// classified by crossOrigin(); the I/O owner applies its own cross-origin
+// policy (credential strip, TLS-downgrade refusal) on top of the classified
+// destination.
 class HttpClientRedirectResolutionResult final {
 public:
     HttpClientRedirectResolutionResult(const HttpClientRedirectResolutionResult&) = delete;

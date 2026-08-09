@@ -68,6 +68,16 @@ void serializeRespCommand(std::pmr::string& output, const Args& args, std::size_
     }
 }
 
+[[nodiscard]] std::string_view redisReplyStringView(const redisReply& reply) {
+    if (reply.str == nullptr) {
+        if (reply.len != 0) {
+            throw RedisError(RedisError::Code::kProtocolError, "invalid redis string reply");
+        }
+        return {};
+    }
+    return std::string_view(reply.str, reply.len);
+}
+
 }  // namespace
 
 void appendRespCommand(std::pmr::string& output, std::span<const std::string_view> args) {
@@ -106,16 +116,16 @@ RedisValue hiredisReplyToValue(const redisReply& reply, std::size_t depth, std::
 #ifdef REDIS_REPLY_VERB
         case REDIS_REPLY_VERB:
 #endif
-            return RedisTypesAccess::stringValue(std::string_view(reply.str == nullptr ? "" : reply.str, reply.len), resource);
+            return RedisTypesAccess::stringValue(redisReplyStringView(reply), resource);
         case REDIS_REPLY_ERROR:
-            return RedisTypesAccess::errorValue(std::string_view(reply.str == nullptr ? "" : reply.str, reply.len), resource);
+            return RedisTypesAccess::errorValue(redisReplyStringView(reply), resource);
         case REDIS_REPLY_INTEGER:
             return RedisTypesAccess::integerValue(static_cast<std::int64_t>(reply.integer), resource);
         case REDIS_REPLY_NIL:
             return RedisTypesAccess::nullValue(resource);
 #ifdef REDIS_REPLY_DOUBLE
         case REDIS_REPLY_DOUBLE:
-            return RedisTypesAccess::stringValue(std::string_view(reply.str == nullptr ? "" : reply.str, reply.len), resource);
+            return RedisTypesAccess::stringValue(redisReplyStringView(reply), resource);
 #endif
 #ifdef REDIS_REPLY_BOOL
         case REDIS_REPLY_BOOL:

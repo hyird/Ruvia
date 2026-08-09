@@ -289,7 +289,7 @@ EventLoop::EventLoop(std::shared_ptr<detail::EventLoopState> state) noexcept
     : state_(std::move(state)) {}
 
 bool EventLoop::valid() const noexcept {
-    return state_ != nullptr;
+    return state_ && state_->handle.valid();
 }
 
 bool EventLoop::accepting() const noexcept {

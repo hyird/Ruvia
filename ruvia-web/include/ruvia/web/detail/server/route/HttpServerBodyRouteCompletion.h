@@ -69,7 +69,7 @@ inline Task<Http1SessionRequestCompletion> completeFailedHttpBodyRoute(Connectio
 template <typename TakePipeline>
 [[nodiscard]] inline Http1SessionRequestCompletion completeSuccessfulHttpBodyRoute(ConnectionScanner::Entry& scannerEntry, HttpResponse& response, Http1ServerConnectionPlan connectionPlan, Http1RequestSequence& requestSequence, Http1RequestBodyConsumption bodyConsumption, std::pmr::string& pipelineStash, TakePipeline takePipeline) {
     connectionPlan = finalizeBodyRouteResponse(response, connectionPlan, requestSequence, bodyConsumption);
-    if (connectionPlan.disposition() == Http1ConnectionDisposition::kReuse) {
+    if (connectionPlan.disposition() == Http1ClosePolicy::kAllowReuse) {
         takePipeline(pipelineStash);
         scannerEntry.touch();
         return Http1SessionRequestCompletion::makeBufferedPipelineRestore(connectionPlan, std::string_view(pipelineStash));

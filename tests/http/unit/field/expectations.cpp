@@ -21,6 +21,8 @@ using ruvia::detail::HttpRequestContentIndication;
 using ruvia::detail::HttpRequestExpectations;
 using ruvia::detail::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::HttpUpgradeProtocols;
+using ruvia::detail::isValidHttpExpectFieldValue;
+using ruvia::detail::isValidReceivedHttpExpectFieldValue;
 
 }  // namespace
 
@@ -63,4 +65,23 @@ RUVIA_TEST(expectations_preserve_unsupported_extensions_as_semantics) {
     expectations.ignoreContinue();
     RUVIA_CHECK(!expectations.hasContinue());
     RUVIA_CHECK(expectations.hasUnsupported());
+}
+
+RUVIA_TEST(expect_field_value_validates_sender_syntax) {
+    for (const std::string_view valid : {"100-continue", "custom=value", R"(custom="a,b")", R"(custom="quoted\"value"; name=token)", R"(custom = "x" ; name = "y")"}) {
+        RUVIA_CHECK(isValidHttpExpectFieldValue(valid));
+    }
+
+    for (const std::string_view invalid : {"", ",100-continue", "100-continue,", "bad value", "custom=", "custom=bad value", R"(custom="unterminated)", R"(custom="bad\)", "custom; name=value", "custom=value; bad-param"}) {
+        RUVIA_CHECK(!isValidHttpExpectFieldValue(invalid));
+    }
+}
+
+RUVIA_TEST(received_expect_field_value_tolerates_empty_list_members_only) {
+    RUVIA_CHECK(isValidReceivedHttpExpectFieldValue(" , 100-continue, custom-feature, "));
+    RUVIA_CHECK(isValidReceivedHttpExpectFieldValue(""));
+
+    for (const std::string_view invalid : {"bad value", "custom=", "custom=bad value", R"(custom="unterminated)", "custom; name=value"}) {
+        RUVIA_CHECK(!isValidReceivedHttpExpectFieldValue(invalid));
+    }
 }

@@ -134,12 +134,22 @@ RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
     auto valid = makeStream();
     valid.setProtocol("websocket");
     RUVIA_CHECK(valid.beginExtendedConnect());
+    RUVIA_CHECK(valid.finalizeRemoteConnectHead());
     RUVIA_CHECK(acceptsWebSocketHandshake(valid, request));
+
+    // The complete HTTP/2 field section must be decoded before the helper can
+    // validate WebSocket-specific request headers. A synthetically pending
+    // CONNECT is not yet a complete opening handshake.
+    auto unfinalized = makeStream();
+    unfinalized.setProtocol("websocket");
+    RUVIA_CHECK(unfinalized.beginExtendedConnect());
+    RUVIA_CHECK(rejectsWebSocketHandshake(unfinalized, request));
 
     // A completed/rejected CONNECT is no longer an opening handshake.
     auto openTunnel = makeStream();
     openTunnel.setProtocol("websocket");
     RUVIA_CHECK(openTunnel.beginExtendedConnect());
+    RUVIA_CHECK(openTunnel.finalizeRemoteConnectHead());
     RUVIA_CHECK(openTunnel.acceptConnect());
     RUVIA_CHECK(rejectsWebSocketHandshake(openTunnel, request));
 
@@ -152,14 +162,27 @@ RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
     auto withContentLength = makeStream();
     withContentLength.setProtocol("websocket");
     RUVIA_CHECK(withContentLength.beginExtendedConnect());
+    RUVIA_CHECK(withContentLength.finalizeRemoteConnectHead());
     RUVIA_CHECK(withContentLength.declareRemoteContentLength(5));
     RUVIA_CHECK(rejectsWebSocketHandshake(withContentLength, request));
+
+    // A WebSocket opening handshake must leave the client-to-server send half
+    // open for WebSocket frames. A CONNECT head that already carried END_STREAM
+    // is a half-closed CONNECT decision, not an admissible WebSocket tunnel start.
+    auto halfClosed = makeStream();
+    halfClosed.setProtocol("websocket");
+    RUVIA_CHECK(halfClosed.recordRemoteHeadEndStream());
+    RUVIA_CHECK(halfClosed.beginExtendedConnect());
+    RUVIA_CHECK(halfClosed.finalizeRemoteConnectHead());
+    RUVIA_CHECK(halfClosed.remoteReceive().connectPendingEndStream() != nullptr);
+    RUVIA_CHECK(rejectsWebSocketHandshake(halfClosed, request));
 
     // The Sec-WebSocket-Version must be exactly 13.
     const auto badVersion = requestWithBadVersion();
     auto stream = makeStream();
     stream.setProtocol("websocket");
     RUVIA_CHECK(stream.beginExtendedConnect());
+    RUVIA_CHECK(stream.finalizeRemoteConnectHead());
     const auto unsupportedVersion = validateHttp2WebSocketHandshake(stream, badVersion);
     RUVIA_CHECK(unsupportedVersion.failure() != nullptr);
     if (const auto* failure = unsupportedVersion.failure()) {
@@ -182,6 +205,7 @@ RUVIA_TEST(websocket_subprotocol_offers_are_validated_for_extended_connect) {
     auto malformedStream = makeStream();
     malformedStream.setProtocol("websocket");
     RUVIA_CHECK(malformedStream.beginExtendedConnect());
+    RUVIA_CHECK(malformedStream.finalizeRemoteConnectHead());
     RUVIA_CHECK(rejectsWebSocketHandshake(malformedStream, malformed));
 
     const auto duplicate = parseRequest(
@@ -194,6 +218,7 @@ RUVIA_TEST(websocket_subprotocol_offers_are_validated_for_extended_connect) {
     auto duplicateStream = makeStream();
     duplicateStream.setProtocol("websocket");
     RUVIA_CHECK(duplicateStream.beginExtendedConnect());
+    RUVIA_CHECK(duplicateStream.finalizeRemoteConnectHead());
     RUVIA_CHECK(rejectsWebSocketHandshake(duplicateStream, duplicate));
 }
 
@@ -207,6 +232,7 @@ RUVIA_TEST(websocket_extension_offers_are_validated_for_extended_connect) {
     auto stream = makeStream();
     stream.setProtocol("websocket");
     RUVIA_CHECK(stream.beginExtendedConnect());
+    RUVIA_CHECK(stream.finalizeRemoteConnectHead());
     RUVIA_CHECK(rejectsWebSocketHandshake(stream, malformed));
 }
 

@@ -15,6 +15,8 @@
 #include <utility>
 
 #include "ruvia/web/db/Db.h"
+#include "ruvia/web/detail/db/DbConfigValidation.h"
+#include "ruvia/web/detail/db/DbPreparedStatement.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbOperationState.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
@@ -81,6 +83,16 @@ private:
     bool released_{false};
     bool deallocatedAfterRelease_{false};
 };
+
+template <typename Fn>
+bool throwsOn(Fn&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::exception&) {
+        return true;
+    }
+}
 
 static_assert(std::is_move_assignable_v<ruvia::DbField>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbField>);
@@ -241,6 +253,14 @@ RUVIA_TEST(db_api_surface_accepts_variadic_params_without_absorbing_sequences) {
     RUVIA_CHECK(true);
 }
 
+RUVIA_TEST(db_prepared_statement_rejects_blank_sql_before_io) {
+    RUVIA_CHECK(throwsOn([] { (void)ruvia::prepareDbStatement("", {}, std::pmr::get_default_resource()); }));
+    RUVIA_CHECK(throwsOn([] { (void)ruvia::prepareDbStatement(" \n\t\r", {}, std::pmr::get_default_resource()); }));
+
+    const auto statement = ruvia::prepareDbStatement("SELECT 1", {}, std::pmr::get_default_resource());
+    RUVIA_CHECK_EQ(std::string_view(statement.sql), std::string_view("SELECT 1"));
+}
+
 RUVIA_TEST(database_operation_state_rejects_overlap_and_failed_reuse) {
     struct Lease final {
         int value;
@@ -382,6 +402,18 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
     }
     RUVIA_CHECK(defaultResolved);
     RUVIA_CHECK(aliasResolved);
+}
+
+RUVIA_TEST(db_config_rejects_invalid_driver_enum) {
+    ruvia::DbConfig config;
+    config.driver = static_cast<ruvia::DbDriver>(0xFF);
+    bool rejected = false;
+    try {
+        ruvia::detail::validateDbConfig(config);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
 }
 
 RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {

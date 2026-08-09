@@ -8,6 +8,7 @@
 #include "ruvia/http/detail/field/HttpExpectations.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
@@ -52,7 +53,11 @@ struct Http2OutboundRequestHeaderFacts final {
         if (kind == RequestHeaderKind::kContentLength) {
             return false;
         }
-        if (!allowTrailers && (header.name() == "te" || header.name() == "trailer")) {
+        if (header.name() == "trailer") {
+            if (!allowTrailers || !isValidHttpRequestTrailerFieldValue(header.value(), HttpFieldListRole::kSender)) {
+                return false;
+            }
+        } else if (!allowTrailers && header.name() == "te") {
             return false;
         }
         if (kind == RequestHeaderKind::kHost) {
@@ -71,6 +76,9 @@ struct Http2OutboundRequestHeaderFacts final {
             return false;
         }
         if (kind == RequestHeaderKind::kExpect) {
+            if (!isValidHttpExpectFieldValue(header.value())) {
+                return false;
+            }
             expectations.parseField(header.value());
         }
         if (const auto bit = singletonRequestHeaderBit(kind); bit != 0) {
@@ -90,7 +98,7 @@ struct Http2OutboundRequestHeaderFacts final {
 }
 
 [[nodiscard]] bool http2IsValidOutboundRegularRequestHead(std::string_view method, std::string_view scheme, std::optional<std::string_view> authority, std::string_view path, std::span<const HttpHeaderView> headers, bool explicitContent, HttpRequestContentIndication contentIndication, std::string_view contentLengthValue) noexcept {
-    if (!http2IsValidOutboundMethod(method) || !isValidUriScheme(scheme) || (authority.has_value() && !http2IsValidRequestAuthority(scheme, *authority)) || !http2IsValidRegularRequestPath(classifyHttpMethod(method), scheme, path) || (path == "*" && authority.has_value()) || (!authority.has_value() && http2RegularRequestRequiresAuthority(scheme, path))) {
+    if (!http2IsValidOutboundMethod(method) || !isValidUriScheme(scheme) || (authority.has_value() && !http2IsValidRequestAuthority(scheme, *authority)) || !http2IsValidRegularRequestPath(classifyHttpMethod(method), scheme, path) || (!authority.has_value() && http2RegularRequestRequiresAuthority(scheme, path))) {
         return false;
     }
     const auto defaultPort = httpUriSchemeDefaultPort(scheme);

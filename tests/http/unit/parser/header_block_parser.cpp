@@ -40,6 +40,7 @@ struct Parsed final {
     std::size_t contentLength;
     std::size_t transferCodingCount;
     ruvia::detail::HttpTransferCoding firstTransferCoding;
+    bool hasTe;
 };
 
 Parsed parse(std::string_view head) {
@@ -56,7 +57,7 @@ Parsed parse(std::string_view head) {
     } else if (nonChunked != nullptr) {
         transferCodings = nonChunked->transferCodings();
     }
-    return {error, block.hostHeaderIndex >= 0, finalChunked != nullptr, contentLength.has_value(), contentLength.value_or(0), transferCodings.count, transferCodings.values[0]};
+    return {error, block.hostHeaderIndex >= 0, finalChunked != nullptr, contentLength.has_value(), contentLength.value_or(0), transferCodings.count, transferCodings.values[0], block.teHeaderPresent};
 }
 
 RUVIA_TEST(content_length_field_updates_are_transactional) {
@@ -162,9 +163,26 @@ RUVIA_TEST(header_block_uses_recipient_connection_and_upgrade_list_rules) {
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: x\r\n"
                       "Connection: close;invalid\r\n\r\n")
                     .error == HttpParseError::kInvalidConnection);
+    for (const std::string_view option : {"Authorization", "Cookie", "Range"}) {
+        const auto result = parse(std::string("GET / HTTP/1.1\r\nHost: x\r\nConnection: ") + std::string(option) + "\r\n\r\n");
+        RUVIA_CHECK(result.error == HttpParseError::kInvalidConnection);
+    }
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: x\r\n"
                       "Upgrade: websocket/\r\n\r\n")
                     .error == HttpParseError::kInvalidUpgrade);
+}
+
+RUVIA_TEST(header_block_validates_te_field_values) {
+    for (const std::string_view valid : {"", "trailers", "gzip", "deflate;q=0.5", "deflate;Q=0.5", "x-gzip ; q=1.000", "custom;level=\"a,b\";q=0"}) {
+        const auto result = parse(std::string("GET / HTTP/1.1\r\nHost: x\r\nTE: ") + std::string(valid) + "\r\n\r\n");
+        RUVIA_CHECK(!result.error.has_value());
+        RUVIA_CHECK(result.hasTe);
+    }
+
+    for (const std::string_view invalid : {",trailers", "trailers,", "trailers,,gzip", "chunked", "trailers;q=0.5", "gzip;q=1.001", "gzip;q=\"0.5\"", "gzip;q =0.5", "gzip;q= 0.5", "gzip; q = 0.5", "gzip;level=1", "gzip;q=0.5;level=1", "gzip; q", "gzip:q=0.5", "bad token"}) {
+        const auto result = parse(std::string("GET / HTTP/1.1\r\nHost: x\r\nTE: ") + std::string(invalid) + "\r\n\r\n");
+        RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+    }
 }
 
 RUVIA_TEST(header_block_rejects_duplicate_content_type) {
@@ -185,6 +203,25 @@ RUVIA_TEST(header_block_rejects_duplicate_range) {
         "Range: bytes=0-99\r\n"
         "Range: bytes=200-299\r\n\r\n");
     RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+}
+
+RUVIA_TEST(header_block_validates_trailer_field_names) {
+    RUVIA_CHECK(!parse("POST / HTTP/1.1\r\n"
+                       "Host: x\r\n"
+                       "Trailer: X-Checksum, X-Signature\r\n\r\n")
+                     .error.has_value());
+    RUVIA_CHECK(!parse("POST / HTTP/1.1\r\n"
+                       "Host: x\r\n"
+                       "Trailer: ,\r\n\r\n")
+                     .error.has_value());
+    RUVIA_CHECK(parse("POST / HTTP/1.1\r\n"
+                      "Host: x\r\n"
+                      "Trailer: X-Checksum, bad field\r\n\r\n")
+                    .error == HttpParseError::kInvalidHeader);
+    RUVIA_CHECK(parse("POST / HTTP/1.1\r\n"
+                      "Host: x\r\n"
+                      "Trailer: Content-Length\r\n\r\n")
+                    .error == HttpParseError::kInvalidHeader);
 }
 
 RUVIA_TEST(header_block_accepts_repeated_etag_list_fields) {

@@ -78,7 +78,7 @@ StaticFileTypePolicy StaticFileTypePolicy::only(std::span<const std::string_view
     StaticFileTypePolicy result(Kind::kOnly);
     result.extensions_.reserve(extensions.size());
     for (const auto extension : extensions) {
-        if (extension.empty() || extension.find('/') != std::string_view::npos || extension.find('\\') != std::string_view::npos) {
+        if (!detail::isValidStaticFileExtension(extension)) {
             throw std::invalid_argument("invalid static file type");
         }
         result.extensions_.emplace_back(extension);
@@ -91,6 +91,19 @@ StaticFileTypePolicy StaticFileTypePolicy::only(std::span<const std::string_view
 }
 
 namespace detail {
+
+bool isValidStaticFileExtension(std::string_view extension) noexcept {
+    if (extension.empty() || extension.find('/') != std::string_view::npos || extension.find('\\') != std::string_view::npos) {
+        return false;
+    }
+    if (extension == "." || extension == "..") {
+        return false;
+    }
+    if (extension.front() == '.') {
+        extension.remove_prefix(1);
+    }
+    return !extension.empty();
+}
 
 void normalizeMimeTypes(std::vector<StaticMimeType>& mimeTypes) {
     for (auto& mime : mimeTypes) {

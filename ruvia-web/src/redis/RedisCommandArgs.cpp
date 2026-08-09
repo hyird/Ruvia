@@ -39,6 +39,9 @@ std::pmr::string redisCursorString(std::optional<RedisScanCursor> cursor, std::p
 }
 
 std::pmr::vector<std::pmr::string> redisCommandWithKeys(std::string_view command, std::span<const std::string_view> keys, std::pmr::memory_resource* resource) {
+    if (keys.empty()) {
+        throw std::invalid_argument("redis command requires at least one key");
+    }
     std::pmr::vector<std::pmr::string> args(resource);
     args.reserve(keys.size() + 1);
     emplaceRedisString(args, command);
@@ -82,6 +85,8 @@ std::pmr::vector<std::pmr::string> redisSetArgs(std::string_view key, std::strin
             case RedisSetCondition::kIfPresent:
                 emplaceRedisString(args, "XX");
                 break;
+            default:
+                throw std::invalid_argument("redis set condition is invalid");
         }
     }
     if (options.returnPrevious) {

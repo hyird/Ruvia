@@ -4,7 +4,9 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/cookie/SetCookiePlan.h"
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <chrono>
 #include <memory_resource>
 #include <string_view>
@@ -26,6 +28,52 @@ struct SessionAccess final {
         return context.sessionState_;
     }
 };
+
+enum class SessionPersistenceStep : std::uint8_t {
+    kPersistCurrent,
+    kDeleteOld,
+};
+
+struct SessionPersistencePlan final {
+    std::array<SessionPersistenceStep, 2> steps{};
+    std::size_t count{0};
+};
+
+[[nodiscard]] constexpr SessionPersistencePlan sessionPersistencePlan(std::string_view currentId, std::string_view oldIdToDelete) noexcept {
+    SessionPersistencePlan plan;
+    if (!currentId.empty()) {
+        plan.steps[plan.count++] = SessionPersistenceStep::kPersistCurrent;
+    }
+    if (!oldIdToDelete.empty()) {
+        plan.steps[plan.count++] = SessionPersistenceStep::kDeleteOld;
+    }
+    return plan;
+}
+
+enum class SessionCommitStep : std::uint8_t {
+    kPersistCurrent,
+    kDeleteOld,
+    kPublishCurrentCookie,
+};
+
+struct SessionCommitPlan final {
+    std::array<SessionCommitStep, 3> steps{};
+    std::size_t count{0};
+};
+
+[[nodiscard]] constexpr SessionCommitPlan sessionCommitPlan(std::string_view currentId, std::string_view oldIdToDelete, bool publishCurrentCookie) noexcept {
+    SessionCommitPlan plan;
+    if (!currentId.empty()) {
+        plan.steps[plan.count++] = SessionCommitStep::kPersistCurrent;
+    }
+    if (!oldIdToDelete.empty()) {
+        plan.steps[plan.count++] = SessionCommitStep::kDeleteOld;
+    }
+    if (publishCurrentCookie && !currentId.empty()) {
+        plan.steps[plan.count++] = SessionCommitStep::kPublishCurrentCookie;
+    }
+    return plan;
+}
 
 [[nodiscard]] inline bool isValidSessionId(std::string_view id) noexcept {
     if (id.empty() || id.size() > 128) {

@@ -2,6 +2,8 @@
 
 // Routing: registering routes and matching a request to one.
 
+RUVIA_ROUTE_RATE_LIMIT(TestRouteRateLimit, 1, 1000);
+
 RUVIA_TEST(route_rejects_duplicate_validated_model_types_at_registration) {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
@@ -29,7 +31,7 @@ RUVIA_TEST(finalized_route_table_records_route_rate_limit_usage) {
     {
         ruvia::detail::Router router;
         auto& impl = ruvia::detail::RouterImpl::from(router);
-        const auto rateLimit = ruvia::detail::makeMiddlewareDescriptor<ruvia::RouteRateLimit<1, 1000>>();
+        const auto rateLimit = ruvia::detail::makeMiddlewareDescriptor<TestRouteRateLimit>();
         impl.registerRoute(HttpKnownMethod::kGet, path("/limited"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span(&rateLimit, std::size_t{1}));
         impl.finalize();
         RUVIA_CHECK(impl.routeTable().hasRouteRateLimit());
@@ -253,6 +255,26 @@ RUVIA_TEST(routing_rejects_duplicate_route_registration) {
     addRoute(r.impl, HttpKnownMethod::kPost, "/x");
     r.finalize();
     RUVIA_CHECK(r.matches("/x"));
+}
+
+RUVIA_TEST(routing_rejects_invalid_route_paths_at_registration) {
+    const auto rejects = [](std::string_view route) {
+        ruvia::detail::Router router;
+        auto& impl = ruvia::detail::RouterImpl::from(router);
+        try {
+            addRoute(impl, HttpKnownMethod::kGet, route);
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+
+    RUVIA_CHECK(rejects(""));
+    RUVIA_CHECK(rejects("relative"));
+    RUVIA_CHECK(rejects("*"));
+    RUVIA_CHECK(rejects("/x?debug=1"));
+    RUVIA_CHECK(rejects("/bad path"));
+    RUVIA_CHECK(rejects("/x#fragment"));
 }
 
 RUVIA_TEST(routing_rejects_registration_after_finalize) {

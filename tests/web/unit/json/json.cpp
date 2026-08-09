@@ -278,6 +278,26 @@ RUVIA_TEST(json_decode_invalid_surrogates) {
     RUVIA_CHECK(!decodeJson("\\ud83d\\ud83d").has_value());  // high followed by high
 }
 
+RUVIA_TEST(json_string_token_rejects_invalid_surrogate_escapes) {
+    const auto rejects = [&](std::string_view raw) {
+        std::string_view in = raw;
+        const auto original = in;
+        RUVIA_CHECK(!ruvia::detail::parseJsonString(in).has_value());
+        RUVIA_CHECK_EQ(in, original);
+    };
+
+    rejects(R"("\ud83d")");         // lone high surrogate
+    rejects(R"("\ude00")");         // lone low surrogate
+    rejects(R"("\ud83dx")");        // high not followed by \u
+    rejects(R"("\ud83d\ud83d")");  // high followed by high
+
+    std::string_view valid = R"("\ud83d\ude00" tail)";
+    const auto parsed = ruvia::detail::parseJsonString(valid);
+    RUVIA_CHECK(parsed.has_value());
+    RUVIA_CHECK_EQ(parsed->raw(), std::string_view(R"(\ud83d\ude00)"));
+    RUVIA_CHECK_EQ(valid, std::string_view(" tail"));
+}
+
 RUVIA_TEST(json_decode_rejects_bad_escapes) {
     RUVIA_CHECK(!decodeJson("\\x").has_value());         // unknown escape
     RUVIA_CHECK(!decodeJson("\\u12").has_value());       // truncated \u

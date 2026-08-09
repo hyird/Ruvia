@@ -139,7 +139,7 @@ public:
 
 private:
     ruvia::Task<ruvia::HttpResponse> registerUser(ruvia::Context& c) {
-        const auto& request = c.req().valid<RegisterRequest>();
+        const auto& request = c.req().validated<RegisterRequest>();
 
         RegisterResponse response(c);
         const auto& username = request.username();
@@ -177,7 +177,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> contact(ruvia::Context& c) {
-        const auto& form = c.req().valid<ContactForm>();
+        const auto& form = c.req().validated<ContactForm>();
         std::pmr::string body(c.allocator<char>());
         body.append("message from ");
         const auto& name = form.name();
@@ -187,7 +187,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> search(ruvia::Context& c) {
-        const auto& query = c.req().valid<SearchQuery>();
+        const auto& query = c.req().validated<SearchQuery>();
         const auto requestQuery = c.req().query("q");
         std::pmr::string body(c.allocator<char>());
         body.append("search=");
@@ -216,7 +216,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> categoryById(ruvia::Context& c) {
-        const auto& params = c.req().valid<CategoryParams>();
+        const auto& params = c.req().validated<CategoryParams>();
         std::pmr::string body(c.allocator<char>());
         body.append("category=");
         const auto& id = params.id();
@@ -226,7 +226,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> headers(ruvia::Context& c) {
-        const auto& headers = c.req().valid<RequestHeaders>();
+        const auto& headers = c.req().validated<RequestHeaders>();
         std::pmr::string body(c.allocator<char>());
         body.append("request-id=");
         const auto& requestId = headers.requestId();
@@ -236,7 +236,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> cookies(ruvia::Context& c) {
-        const auto& cookies = c.req().valid<PreferencesCookie>();
+        const auto& cookies = c.req().validated<PreferencesCookie>();
         std::pmr::string body(c.allocator<char>());
         body.append("theme=");
         const auto& theme = cookies.theme();

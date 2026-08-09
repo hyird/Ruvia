@@ -277,10 +277,13 @@ RUVIA_TEST(h2_headers_pseudo_after_regular_rejected) {
 RUVIA_TEST(h2_headers_invalid_regular_header_rejected) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
-    // Uppercase name and connection-specific headers are malformed in HTTP/2.
+    // Uppercase name, connection-specific headers, and field values with
+    // leading/trailing SP/HTAB are malformed in HTTP/2.
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "Accept", "text/html"));
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "connection", "close"));
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "transfer-encoding", "chunked"));
+    RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "x-test", " value"));
+    RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "x-test", "value\t"));
 }
 
 RUVIA_TEST(h2_headers_connection_specific_and_te_rules) {
@@ -419,6 +422,20 @@ RUVIA_TEST(h2_headers_content_length_and_cookie) {
     Http2StreamState stream2(1, res());
     Http2HeaderDecodeContext ctx2{stream2};
     RUVIA_CHECK(http2OnDecodedInitialHeader(ctx2, "content-length", "42"));
+    RUVIA_CHECK(http2OnDecodedInitialHeader(ctx2, "content-length", "42"));
+    Http2StreamState listLength(3, res());
+    Http2HeaderDecodeContext listLengthCtx{listLength};
+    RUVIA_CHECK(http2OnDecodedInitialHeader(listLengthCtx, "content-length", "42, 42"));
+
+    Http2StreamState conflictingLength(5, res());
+    Http2HeaderDecodeContext conflictingLengthCtx{conflictingLength};
+    RUVIA_CHECK(!http2OnDecodedInitialHeader(conflictingLengthCtx, "content-length", "42, 43"));
+
+    Http2StreamState repeatedConflict(7, res());
+    Http2HeaderDecodeContext repeatedConflictCtx{repeatedConflict};
+    RUVIA_CHECK(http2OnDecodedInitialHeader(repeatedConflictCtx, "content-length", "42"));
+    RUVIA_CHECK(!http2OnDecodedInitialHeader(repeatedConflictCtx, "content-length", "43"));
+
     // Split Cookie headers accumulate on the stream.
     RUVIA_CHECK(http2OnDecodedInitialHeader(ctx2, "cookie", "a=1"));
     RUVIA_CHECK(http2OnDecodedInitialHeader(ctx2, "cookie", "b=2"));
@@ -476,6 +493,12 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
     RUVIA_CHECK(extensionPlan.rejection() != nullptr);
     RUVIA_CHECK(extension.requestExpectations().hasContinue());
     RUVIA_CHECK(extension.requestExpectations().hasUnsupported());
+
+    Http2StreamState malformed(5, res());
+    Http2HeaderDecodeContext malformedContext{malformed};
+    RUVIA_CHECK(!http2OnDecodedInitialHeader(malformedContext, "expect", "bad value"));
+    RUVIA_CHECK(!malformed.requestExpectations().hasContinue());
+    RUVIA_CHECK(!malformed.requestExpectations().hasUnsupported());
 }
 
 RUVIA_TEST(h2_headers_trailer_rejects_pseudo_and_invalid) {
@@ -492,6 +515,24 @@ RUVIA_TEST(h2_headers_trailer_rejects_pseudo_and_invalid) {
     RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "origin", "https://app.example"));
     RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "access-control-request-method", "POST"));
     RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "access-control-request-headers", "x-one"));
+}
+
+RUVIA_TEST(h2_headers_validate_initial_trailer_field_names) {
+    Http2StreamState valid(1, res());
+    Http2HeaderDecodeContext validContext{valid};
+    RUVIA_CHECK(http2OnDecodedInitialHeader(validContext, "trailer", "x-checksum, x-signature"));
+
+    Http2StreamState empty(3, res());
+    Http2HeaderDecodeContext emptyContext{empty};
+    RUVIA_CHECK(http2OnDecodedInitialHeader(emptyContext, "trailer", ","));
+
+    Http2StreamState malformed(5, res());
+    Http2HeaderDecodeContext malformedContext{malformed};
+    RUVIA_CHECK(!http2OnDecodedInitialHeader(malformedContext, "trailer", "x-checksum, bad field"));
+
+    Http2StreamState forbidden(7, res());
+    Http2HeaderDecodeContext forbiddenContext{forbidden};
+    RUVIA_CHECK(!http2OnDecodedInitialHeader(forbiddenContext, "trailer", "Content-Length"));
 }
 
 RUVIA_TEST(h2_headers_trailer_enforces_field_count_without_storing_fields) {

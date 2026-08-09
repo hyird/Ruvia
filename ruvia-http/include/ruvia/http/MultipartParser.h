@@ -36,6 +36,10 @@ public:
     }
     [[nodiscard]] std::string_view filename() const&& = delete;
 
+    [[nodiscard]] bool hasFilename() const noexcept {
+        return filenamePresent_;
+    }
+
     [[nodiscard]] std::string_view contentType() const noexcept {
         return contentType_;
     }
@@ -47,16 +51,18 @@ public:
 private:
     friend struct detail::MultipartPartAccess;
 
-    MultipartPart(std::pmr::string name, std::pmr::string filename, std::string_view contentType, std::string_view body) noexcept
+    MultipartPart(std::pmr::string name, std::pmr::string filename, std::string_view contentType, std::string_view body, bool filenamePresent) noexcept
         : name_(std::move(name)),
           filename_(std::move(filename)),
           contentType_(contentType),
-          body_(body) {}
+          body_(body),
+          filenamePresent_(filenamePresent) {}
 
     std::pmr::string name_;
     std::pmr::string filename_;
     std::string_view contentType_;
     std::string_view body_;
+    bool filenamePresent_{false};
 };
 
 // RFC 2046 multipart boundary value. The validated bytes are stored inline so
@@ -71,12 +77,25 @@ public:
         assign(value);
     }
 
+    // Validation-only entry for parsing paths that must report failure as a
+    // value rather than drive control flow through the throwing constructor.
+    [[nodiscard]] static std::optional<MultipartBoundary> tryCreate(std::string_view value) noexcept {
+        if (!valid(value)) {
+            return std::nullopt;
+        }
+        MultipartBoundary boundary;
+        boundary.assign(value);
+        return boundary;
+    }
+
     [[nodiscard]] constexpr std::string_view value() const& noexcept {
         return std::string_view(bytes_.data(), size_);
     }
     [[nodiscard]] std::string_view value() const&& = delete;
 
 private:
+    constexpr MultipartBoundary() noexcept = default;
+
     static constexpr std::size_t kMaxSize = 70;
 
     [[nodiscard]] static constexpr bool nonSpaceChar(char value) noexcept {
@@ -118,6 +137,10 @@ public:
         return filename_;
     }
 
+    [[nodiscard]] constexpr bool hasFilename() const noexcept {
+        return filenamePresent_;
+    }
+
     [[nodiscard]] std::string_view contentType() const noexcept {
         return contentType_;
     }
@@ -133,18 +156,20 @@ public:
 private:
     friend struct detail::MultipartStreamPartAccess;
 
-    constexpr MultipartStreamPart(std::string_view name, std::string_view filename, std::string_view contentType, std::string_view body, MultipartChunkPhase phase) noexcept
+    constexpr MultipartStreamPart(std::string_view name, std::string_view filename, std::string_view contentType, std::string_view body, MultipartChunkPhase phase, bool filenamePresent) noexcept
         : name_(name),
           filename_(filename),
           contentType_(contentType),
           body_(body),
-          phase_(phase) {}
+          phase_(phase),
+          filenamePresent_(filenamePresent) {}
 
     std::string_view name_;
     std::string_view filename_;
     std::string_view contentType_;
     std::string_view body_;
     MultipartChunkPhase phase_{MultipartChunkPhase::kMiddle};
+    bool filenamePresent_{false};
 };
 
 class MultipartPollNeedInput final {
@@ -435,6 +460,7 @@ private:
     std::size_t pendingEraseBytes_{0};
     bool nextChunkIsFirst_{false};
     bool firstBoundary_{true};
+    bool currentFilenamePresent_{false};
 };
 
 // Parses a complete multipart/form-data body without I/O. Returned part bodies

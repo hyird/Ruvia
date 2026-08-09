@@ -37,7 +37,9 @@ RUVIA_TEST(model_json_parser_keeps_field_errors_separate_from_document_errors) {
 RUVIA_TEST(model_json_parser_fully_validates_unknown_and_duplicate_values) {
     std::pmr::monotonic_buffer_resource resource;
     RUVIA_CHECK(!ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":"ready","unknown":[1,]})", &resource).has_value());
+    RUVIA_CHECK(!ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":"ready","unknown":"\ud83d"})", &resource).has_value());
     RUVIA_CHECK(!ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":"first","message":{"broken":}})", &resource).has_value());
+    RUVIA_CHECK(!ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":"first","message":"\ud83d"})", &resource).has_value());
 
     const auto duplicate = ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":"first","message":"second"})", &resource);
     RUVIA_CHECK(duplicate.has_value());

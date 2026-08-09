@@ -324,10 +324,10 @@ namespace {
         // must use asterisk-form. Expose that route semantic directly even
         // when this parser itself is the origin-facing recipient.
         output.path = "*";
-    } else if (path.empty() && httpScheme && method != HttpKnownMethod::kOptions) {
+    } else if (path.empty() && httpScheme) {
         // RFC 9110 section 4.2.3 permits this normalization only for HTTP(S)
-        // targets that are not OPTIONS. Generic schemes retain their exact
-        // empty path, and an OPTIONS target with a query remains distinct.
+        // targets. Generic schemes retain their exact empty path, while an
+        // OPTIONS target with a query remains distinct from server-wide "*".
         output.path = "/";
     } else {
         output.path = path;

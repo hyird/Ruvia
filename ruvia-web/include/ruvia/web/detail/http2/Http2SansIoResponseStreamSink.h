@@ -152,13 +152,16 @@ public:
     }
 
     Task<void> end(std::span<const HttpHeaderView> trailers) {
-        throwIfTerminated();
+        // An empty terminal call is idempotent once our END_STREAM is already
+        // committed locally; a later session/stream termination must not turn
+        // dispatch cleanup into a transport failure.
         if (state_.ended()) {
             if (!trailers.empty()) {
                 throw std::logic_error("response stream is already ended");
             }
             co_return;
         }
+        throwIfTerminated();
 
         const auto trailerResult = validatedResponseTrailerSection(trailers);
         const auto& trailerSection = *trailerResult.section();
@@ -223,7 +226,7 @@ private:
                 if (headResult.failure()->peerClosed()) {
                     throw std::system_error(std::make_error_code(std::errc::connection_reset));
                 }
-                throw headResult.failure()->exception();
+                throw std::logic_error(std::string(ruvia::detail::http2ResponseHeadSubmitErrorMessage(headResult.failure()->error())));
             }
             state_.markCommitted(*submittedHead);
             wakeWriter();

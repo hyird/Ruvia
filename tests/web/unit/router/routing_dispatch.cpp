@@ -68,25 +68,32 @@ RUVIA_TEST(head_only_stream_completion_is_success_not_error) {
     RUVIA_CHECK(!g_headOnlyHandlerResumedPastFirstWrite);
 }
 
-RUVIA_TEST(streaming_get_routes_gain_head_shadow) {
+RUVIA_TEST(streaming_get_routes_do_not_gain_head_shadow) {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerRoute(HttpKnownMethod::kGet, path("/page"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, {}, {});
     impl.registerResponseStreamRoute(HttpKnownMethod::kGet, path("/events"), ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), {}, {});
     impl.registerSseRoute(HttpKnownMethod::kGet, path("/sse"), ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), {}, {});
     impl.registerWebSocketRoute(HttpKnownMethod::kGet, path("/ws"), ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), {}, {});
     impl.finalize();
     const auto& table = impl.routeTable();
 
-    // Streaming and SSE GET routes answer HEAD via an auto shadow, like
-    // buffered GET routes do.
+    // Buffered GET routes still receive the ordinary implicit HEAD fallback.
+    const auto page = table.resolve(HttpKnownMethod::kHead, "/page");
+    RUVIA_CHECK(page.resolved() != nullptr);
+
+    // Streaming/SSE routes have explicit stream lifecycles and must not be
+    // entered by an implicit HEAD shadow. WebSocket remains GET-only too.
     const auto events = table.resolve(HttpKnownMethod::kHead, "/events");
-    RUVIA_CHECK(events.resolved() != nullptr);
-    if (const auto* resolved = events.resolved()) {
-        RUVIA_CHECK(resolved->route().endpoint().responseStream() != nullptr);
+    RUVIA_CHECK(events.resolved() == nullptr);
+    RUVIA_CHECK(events.methodNotAllowed() != nullptr);
+    if (const auto* methodNotAllowed = events.methodNotAllowed()) {
+        const auto bit = [](HttpKnownMethod method) { return 1U << static_cast<unsigned>(method); };
+        RUVIA_CHECK((methodNotAllowed->allowedMethods() & bit(HttpKnownMethod::kGet)) != 0);
+        RUVIA_CHECK((methodNotAllowed->allowedMethods() & bit(HttpKnownMethod::kHead)) == 0);
     }
     const auto sse = table.resolve(HttpKnownMethod::kHead, "/sse");
-    RUVIA_CHECK(sse.resolved() != nullptr);
-    // A WebSocket handshake is GET-only; no HEAD shadow may reach it.
+    RUVIA_CHECK(sse.resolved() == nullptr);
     const auto ws = table.resolve(HttpKnownMethod::kHead, "/ws");
     RUVIA_CHECK(ws.resolved() == nullptr);
 }

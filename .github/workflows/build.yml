@@ -40,8 +40,9 @@ concurrency:
   group: build-${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: true
 
-# Linux builds with GCC 13, macOS with the image's stock Apple Clang, and
-# Windows with MSVC. Every job enables all optional features.
+# The primary platform jobs exercise the complete feature set. Linux also runs
+# live database drivers, component-only configurations, sanitizers, and a
+# Release benchmark record so those contracts cannot silently become opt-in.
 jobs:
   linux_build:
     name: Linux
@@ -56,6 +57,34 @@ jobs:
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
       VCPKG_COMMIT: 4bca8fd8654e5ba76f92661db7bfe954768ad8ef
       BUILD_TYPE: Debug
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ruvia
+          POSTGRES_PASSWORD: ruvia
+          POSTGRES_DB: ruvia
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ruvia -d ruvia"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_USER: ruvia
+          MARIADB_PASSWORD: ruvia
+          MARIADB_DATABASE: ruvia
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout ruvia
         uses: actions/checkout@v6
@@ -115,7 +144,133 @@ jobs:
         run: cmake --build build/test --config "$BUILD_TYPE"
 
       - name: Test
+        env:
+          RUVIA_RUN_POSTGRESQL_INTEGRATION: 1
+          RUVIA_TEST_PG_PORT: 5432
+          RUVIA_RUN_MARIADB_INTEGRATION: 1
         run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
+
+  linux_quality:
+    name: Linux / ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: core-only
+            build_dir: core
+            build_type: Debug
+            options: >-
+              -DRUVIA_BUILD_CORE=ON
+              -DRUVIA_BUILD_HTTP=OFF
+              -DRUVIA_BUILD_WEB=OFF
+              -DRUVIA_BUILD_TESTS=ON
+          - name: http-only
+            build_dir: http
+            build_type: Debug
+            options: >-
+              -DRUVIA_BUILD_CORE=OFF
+              -DRUVIA_BUILD_HTTP=ON
+              -DRUVIA_BUILD_WEB=OFF
+              -DRUVIA_BUILD_TESTS=ON
+          - name: asan-ubsan
+            build_dir: sanitizers
+            build_type: Debug
+            ctest_args: -E ^ruvia_guard_package_install_consumer$
+            options: >-
+              -DRUVIA_BUILD_TESTS=ON
+              -DCMAKE_CXX_FLAGS=-fsanitize=address,undefined\ -fno-omit-frame-pointer
+              -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined
+              -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address,undefined
+          - name: release-benchmark
+            build_dir: benchmark
+            build_type: Release
+            options: >-
+              -DRUVIA_BUILD_TESTS=ON
+              -DRUVIA_BUILD_BENCHMARKS=ON
+            benchmark: true
+    env:
+      CC: gcc-13
+      CXX: g++-13
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: init.defaultBranch
+      GIT_CONFIG_VALUE_0: main
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
+      VCPKG_COMMIT: 4bca8fd8654e5ba76f92661db7bfe954768ad8ef
+    steps:
+      - name: Checkout ruvia
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build curl zip unzip tar
+
+      - name: Restore vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ matrix.build_dir }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
+          restore-keys: |
+            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ matrix.build_dir }}-${{ env.VCPKG_COMMIT }}-
+            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ env.VCPKG_COMMIT }}-
+
+      - name: Bootstrap vcpkg
+        run: |
+          set -euo pipefail
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+          git init "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
+          git -C "$VCPKG_ROOT" fetch --depth 1 origin "$VCPKG_COMMIT"
+          git -C "$VCPKG_ROOT" checkout --detach FETCH_HEAD
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Configure
+        run: |
+          cmake -S . -B "build/${{ matrix.build_dir }}" -G Ninja \
+            -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" \
+            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            ${{ matrix.options }}
+
+      - name: Save vcpkg binary cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+
+      - name: Build
+        run: cmake --build "build/${{ matrix.build_dir }}"
+
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: >-
+          ctest --test-dir "build/${{ matrix.build_dir }}"
+          --output-on-failure ${{ matrix.ctest_args }}
+
+      - name: Record Release benchmark
+        if: ${{ matrix.benchmark }}
+        run: |
+          "build/${{ matrix.build_dir }}/tests/http/benchmarks/ruvia_benchmark_http_hot_paths" \
+            --warmup-ms 20 \
+            --duration-ms 100 \
+            --output "build/${{ matrix.build_dir }}/http-hot-paths.json"
+
+      - name: Upload benchmark record
+        if: ${{ matrix.benchmark }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: http-hot-paths-linux-gcc13-release
+          path: build/${{ matrix.build_dir }}/http-hot-paths.json
+          if-no-files-found: error
 
   macos_build:
     name: macOS
@@ -255,7 +410,7 @@ jobs:
 
   cleanup:
     name: Prune old runs
-    needs: [linux_build, macos_build, windows_build]
+    needs: [linux_build, linux_quality, macos_build, windows_build]
     # Run after all builds regardless of their result, but never on pull
     # requests (a fork's token is read-only and must not prune main's history).
     if: ${{ always() && github.event_name != 'pull_request' }}

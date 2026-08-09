@@ -18,8 +18,8 @@ struct TaskScope::Node {
     Node* next{nullptr};
 };
 
-TaskScope::TaskScope(WorkerHandle worker, std::pmr::memory_resource* resource)
-    : worker_(std::move(worker)),
+TaskScope::TaskScope(const WorkerHandle& worker, std::pmr::memory_resource* resource)
+    : worker_(worker),
       resource_(detail::pmrResourceOrDefault(resource)) {
     if (!worker_.valid()) {
         throw std::invalid_argument("task scope requires a valid worker");
@@ -40,7 +40,7 @@ void TaskScope::spawn(Task<void> task) {
         throw std::logic_error("cannot spawn a task after task scope join started");
     }
     if (task.handle_ == nullptr) {
-        throw std::invalid_argument("cannot spawn an empty ruvia::Task");
+        throw std::logic_error("cannot spawn an empty ruvia::Task");
     }
 
     std::pmr::polymorphic_allocator<Node> allocator(resource_);

@@ -114,11 +114,7 @@ private:
         }
     }
 
-    try {
-        return MultipartBoundary(std::string_view(decoded.data(), size));
-    } catch (const std::invalid_argument&) {
-        return std::nullopt;
-    }
+    return MultipartBoundary::tryCreate(std::string_view(decoded.data(), size));
 }
 
 [[nodiscard]] inline HttpMultipartBoundaryParseResult httpParseMultipartBoundary(std::string_view contentType) {

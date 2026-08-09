@@ -39,6 +39,7 @@ class Http2StreamState final {
     Http2ReceiveWindowCredit receiveWindowCredit_;
     Http2StreamHeaderBlocks headerBlocks_;
     Http2StreamRequestData requestData_;
+    std::optional<std::size_t> responseHeaderCount_;
 
 public:
     explicit Http2StreamState(std::uint32_t streamId, std::pmr::memory_resource* resource)
@@ -378,6 +379,16 @@ public:
         return requestData_.appendHeader(name, value, kind);
     }
 
+    [[nodiscard]] std::optional<std::size_t> responseHeaderCount() const noexcept {
+        return responseHeaderCount_;
+    }
+
+    [[nodiscard]] bool setResponseHeaderCount(std::size_t count) noexcept {
+        if (responseHeaderCount_) return false;
+        responseHeaderCount_ = count;
+        return true;
+    }
+
     [[nodiscard]] bool hasMethod() const noexcept {
         return !requestMethod().empty();
     }
@@ -536,6 +547,7 @@ public:
           expectations_(stream.expectations_),
           requestState_(stream.requestState_),
           tunnelState_(stream.tunnelState_),
+          responseHeaderCount_(stream.responseHeaderCount_),
           isolateRequestData_(isolateRequestData),
           requestHeadersCheckpoint_(stream.requestData_.headerCheckpoint()) {
         if (isolateRequestData_) {
@@ -571,6 +583,7 @@ public:
         stream_->expectations_ = expectations_;
         stream_->requestState_ = requestState_;
         stream_->tunnelState_ = tunnelState_;
+        stream_->responseHeaderCount_ = responseHeaderCount_;
         active_ = false;
     }
 
@@ -583,6 +596,7 @@ private:
     HttpRequestExpectations expectations_;
     Http2StreamRequestState requestState_;
     Http2TunnelState tunnelState_;
+    std::optional<std::size_t> responseHeaderCount_;
     bool isolateRequestData_;
     Http2StreamRequestData::HeaderCheckpoint requestHeadersCheckpoint_;
     bool active_{true};

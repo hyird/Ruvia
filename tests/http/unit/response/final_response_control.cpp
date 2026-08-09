@@ -90,12 +90,16 @@ RUVIA_TEST(final_response_control_failure_never_exposes_protocol_alternative) {
     missingUpgrade.status(ruvia::http_status::kUpgradeRequired);
     RUVIA_CHECK(isHttp1Failure(missingUpgrade, Http1FinalResponseControlPlanError::kUpgradeRequired));
     RUVIA_CHECK(isHttp2Failure(missingUpgrade, Http2FinalResponseControlPlanError::kUpgradeUnavailable));
+
+    HttpResponse teResponseField(std::pmr::get_default_resource());
+    addUncheckedHeader(teResponseField, "TE", "trailers");
+    RUVIA_CHECK(isHttp1Failure(teResponseField, Http1FinalResponseControlPlanError::kTeFieldForbidden));
 }
 
 RUVIA_TEST(final_response_control_rejects_end_to_end_connection_options) {
     for (const std::string_view option : {"content-length", "DATE", "Set-Cookie"}) {
         HttpResponse response(std::pmr::get_default_resource());
-        response.header("Connection", option);
+        addUncheckedHeader(response, "Connection", option);
         RUVIA_CHECK(isHttp1Failure(response, Http1FinalResponseControlPlanError::kInvalidConnectionField));
     }
 }
@@ -111,7 +115,11 @@ RUVIA_TEST(final_response_control_rejects_every_http2_connection_specific_field)
     };
     for (const auto& [name, value] : fields) {
         HttpResponse response(std::pmr::get_default_resource());
-        response.header(name, value);
+        if (name == "TE") {
+            addUncheckedHeader(response, name, value);
+        } else {
+            response.header(name, value);
+        }
         RUVIA_CHECK(isHttp2Failure(response, Http2FinalResponseControlPlanError::kConnectionSpecificFieldForbidden));
     }
 }

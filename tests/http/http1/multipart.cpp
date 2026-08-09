@@ -422,6 +422,7 @@ RUVIA_TEST(multipart_part_header_result_is_discriminated) {
     if (headers != nullptr) {
         RUVIA_CHECK_EQ(headers->name(), std::string_view("field"));
         RUVIA_CHECK_EQ(headers->filename(), std::string_view("f.txt"));
+        RUVIA_CHECK(headers->hasFilename());
         RUVIA_CHECK_EQ(headers->contentType(), std::string_view("text/plain"));
     }
 
@@ -439,6 +440,54 @@ RUVIA_TEST(multipart_part_header_result_is_discriminated) {
         if (result.failure() != nullptr) {
             RUVIA_CHECK(result.failure()->parseError() == ruvia::MultipartParseError::kInvalidContentDisposition);
         }
+    }
+}
+
+RUVIA_TEST(multipart_part_preserves_empty_filename_parameter_presence) {
+    using ruvia::detail::httpParseMultipartPartHeaders;
+
+    const auto headersOnly = httpParseMultipartPartHeaders("Content-Disposition: form-data; name=\"upload\"; filename=\"\"");
+    const auto* headers = headersOnly.headers();
+    RUVIA_CHECK(headers != nullptr);
+    if (headers != nullptr) {
+        RUVIA_CHECK(headers->hasFilename());
+        RUVIA_CHECK_EQ(headers->filename(), std::string_view());
+    }
+
+    const auto noFilename = httpParseMultipartPartHeaders("Content-Disposition: form-data; name=\"upload\"");
+    const auto* noFilenameHeaders = noFilename.headers();
+    RUVIA_CHECK(noFilenameHeaders != nullptr);
+    if (noFilenameHeaders != nullptr) {
+        RUVIA_CHECK(!noFilenameHeaders->hasFilename());
+        RUVIA_CHECK_EQ(noFilenameHeaders->filename(), std::string_view());
+    }
+
+    const std::string body =
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"upload\"; filename=\"\"\r\n"
+        "\r\n"
+        "data\r\n"
+        "--BOUNDARY--\r\n";
+    const auto complete = ruvia::parseMultipartBody(body, ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    RUVIA_CHECK(complete.failure() == nullptr);
+    if (complete.body() != nullptr) {
+        const auto& parts = complete.body()->parts();
+        RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
+        if (!parts.empty()) {
+            RUVIA_CHECK(parts[0].hasFilename());
+            RUVIA_CHECK_EQ(parts[0].filename(), std::string_view());
+        }
+    }
+
+    ruvia::MultipartParser parser(ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    parser.feed(body);
+    parser.finishInput();
+    const auto streamed = parser.poll();
+    const auto* part = streamed.part();
+    RUVIA_CHECK(part != nullptr);
+    if (part != nullptr) {
+        RUVIA_CHECK(part->hasFilename());
+        RUVIA_CHECK_EQ(part->filename(), std::string_view());
     }
 }
 

@@ -38,7 +38,6 @@ enum class Http1ClientRequestContentPhase : std::uint8_t {
 // For an informational response, kReuse means the same exchange can await its
 // final response; it does not make the connection poolable before that final.
 // Close-delimited responses, tunnels, and upgrades are separate alternatives.
-enum class Http1ClientResponsePersistence : std::uint8_t { kReuse, kClose };
 
 // Request-content lifecycle signal. It is deliberately separate from wait
 // duration: an external I/O runtime owns the finite Expect timeout policy. A
@@ -62,32 +61,32 @@ enum class Http1ClientRequestContentCompletionStatus : std::uint8_t {
 
 class Http1ClientInformationalResponse final {
 public:
-    [[nodiscard]] constexpr Http1ClientResponsePersistence persistence() const noexcept {
+    [[nodiscard]] constexpr Http1ClosePolicy persistence() const noexcept {
         return persistence_;
     }
 
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    explicit constexpr Http1ClientInformationalResponse(Http1ClientResponsePersistence persistence) noexcept
+    explicit constexpr Http1ClientInformationalResponse(Http1ClosePolicy persistence) noexcept
         : persistence_(persistence) {}
 
-    Http1ClientResponsePersistence persistence_;
+    Http1ClosePolicy persistence_;
 };
 
 class Http1ClientResponseWithoutContent final {
 public:
-    [[nodiscard]] constexpr Http1ClientResponsePersistence persistence() const noexcept {
+    [[nodiscard]] constexpr Http1ClosePolicy persistence() const noexcept {
         return persistence_;
     }
 
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    explicit constexpr Http1ClientResponseWithoutContent(Http1ClientResponsePersistence persistence) noexcept
+    explicit constexpr Http1ClientResponseWithoutContent(Http1ClosePolicy persistence) noexcept
         : persistence_(persistence) {}
 
-    Http1ClientResponsePersistence persistence_;
+    Http1ClosePolicy persistence_;
 };
 
 class Http1ClientKnownLengthResponse final {
@@ -100,19 +99,19 @@ public:
         return contentLength_ != 0;
     }
 
-    [[nodiscard]] constexpr Http1ClientResponsePersistence persistence() const noexcept {
+    [[nodiscard]] constexpr Http1ClosePolicy persistence() const noexcept {
         return persistence_;
     }
 
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    constexpr Http1ClientKnownLengthResponse(std::size_t contentLength, Http1ClientResponsePersistence persistence) noexcept
+    constexpr Http1ClientKnownLengthResponse(std::size_t contentLength, Http1ClosePolicy persistence) noexcept
         : contentLength_(contentLength),
           persistence_(persistence) {}
 
     std::size_t contentLength_;
-    Http1ClientResponsePersistence persistence_;
+    Http1ClosePolicy persistence_;
 };
 
 class Http1ClientChunkedResponse final {
@@ -123,19 +122,19 @@ public:
         return transferCodings_;
     }
 
-    [[nodiscard]] constexpr Http1ClientResponsePersistence persistence() const noexcept {
+    [[nodiscard]] constexpr Http1ClosePolicy persistence() const noexcept {
         return persistence_;
     }
 
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    constexpr Http1ClientChunkedResponse(detail::HttpTransferCodings transferCodings, Http1ClientResponsePersistence persistence) noexcept
+    constexpr Http1ClientChunkedResponse(detail::HttpTransferCodings transferCodings, Http1ClosePolicy persistence) noexcept
         : transferCodings_(transferCodings),
           persistence_(persistence) {}
 
     detail::HttpTransferCodings transferCodings_;
-    Http1ClientResponsePersistence persistence_;
+    Http1ClosePolicy persistence_;
 };
 
 class Http1ClientCloseDelimitedResponse final {
@@ -267,7 +266,9 @@ private:
 };
 
 // Protocol failures are typed and allocation-free. Resource exhaustion can
-// still throw while materializing a successful owning response.
+// still throw while materializing a successful owning response. Exchange
+// termination is NOT a parse error: parsing after the exchange completed or
+// failed is reported through Http1ClientResponseParseTerminal instead.
 enum class Http1ClientResponseParseError : std::uint8_t {
     kHeaderTooLarge,
     kInvalidStatusLine,
@@ -286,8 +287,6 @@ enum class Http1ClientResponseParseError : std::uint8_t {
     kContentLengthAndTransferEncoding,
     kInvalidProtocolSwitch,
     kTooManyInformationalResponses,
-    kExchangeComplete,
-    kExchangeFailed,
 };
 
 [[nodiscard]] std::string_view http1ClientResponseParseErrorMessage(Http1ClientResponseParseError error) noexcept;
@@ -355,6 +354,28 @@ private:
     Http1ClientResponseParseError error_;
 };
 
+// Parsing after the exchange already completed or failed is not a wire error;
+// it is a state-machine termination report. completed() names the outcome that
+// ended the exchange.
+class Http1ClientResponseParseTerminal final {
+public:
+    [[nodiscard]] constexpr bool completed() const noexcept {
+        return completed_;
+    }
+
+    [[nodiscard]] constexpr bool failed() const noexcept {
+        return !completed_;
+    }
+
+private:
+    friend struct detail::Http1ClientResponseParseResultAccess;
+
+    explicit constexpr Http1ClientResponseParseTerminal(bool completed) noexcept
+        : completed_(completed) {}
+
+    bool completed_;
+};
+
 class Http1ClientResponseParseResult final {
 public:
     Http1ClientResponseParseResult(const Http1ClientResponseParseResult&) = delete;
@@ -382,6 +403,13 @@ public:
     }
     const Http1ClientResponseParseFailure* failure() const&& = delete;
 
+    // Non-null when the exchange already completed or failed and parsing
+    // stopped; a driver must not feed more input to this parser.
+    [[nodiscard]] const Http1ClientResponseParseTerminal* terminal() const& noexcept {
+        return std::get_if<Http1ClientResponseParseTerminal>(&state_);
+    }
+    const Http1ClientResponseParseTerminal* terminal() const&& = delete;
+
 private:
     friend struct detail::Http1ClientResponseParseResultAccess;
 
@@ -394,7 +422,10 @@ private:
     explicit Http1ClientResponseParseResult(Http1ClientResponseParseFailure state) noexcept
         : state_(std::move(state)) {}
 
-    std::variant<Http1ClientResponseNeedMore, Http1ParsedClientResponseHead, Http1ClientResponseParseFailure> state_;
+    explicit Http1ClientResponseParseResult(Http1ClientResponseParseTerminal state) noexcept
+        : state_(std::move(state)) {}
+
+    std::variant<Http1ClientResponseNeedMore, Http1ParsedClientResponseHead, Http1ClientResponseParseFailure, Http1ClientResponseParseTerminal> state_;
 };
 
 // Per-request HTTP/1 response-head state machine. Construction is bound to one

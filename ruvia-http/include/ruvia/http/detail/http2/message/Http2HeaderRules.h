@@ -31,11 +31,18 @@ namespace ruvia::detail {
     return httpAsciiEqualsIgnoreCase(name, "connection") || httpAsciiEqualsIgnoreCase(name, "keep-alive") || httpAsciiEqualsIgnoreCase(name, "proxy-connection") || httpAsciiEqualsIgnoreCase(name, "te") || httpAsciiEqualsIgnoreCase(name, "transfer-encoding") || httpAsciiEqualsIgnoreCase(name, "upgrade");
 }
 
+[[nodiscard]] inline bool http2FieldValueHasLeadingOrTrailingWhitespace(std::string_view value) noexcept {
+    const auto asciiWhitespace = [](char ch) noexcept {
+        return ch == ' ' || ch == '\t';
+    };
+    return !value.empty() && (asciiWhitespace(value.front()) || asciiWhitespace(value.back()));
+}
+
 [[nodiscard]] inline bool http2IsValidRegularHeader(std::string_view name, std::string_view value) noexcept {
     if (name.empty() || name.front() == ':') {
         return false;
     }
-    if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value)) {
+    if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) || http2FieldValueHasLeadingOrTrailingWhitespace(value)) {
         return false;
     }
     if (http2HeaderNameHasUppercase(name)) {
@@ -44,7 +51,10 @@ namespace ruvia::detail {
     if (http2IsForbiddenConnectionHeader(name)) {
         return false;
     }
-    return name != "te" || value == "trailers";
+    // `trailers` is an unprefixed ABNF literal in RFC 9110 Section 10.1.4,
+    // hence it is case-insensitive (RFC 7405 Section 2.1). HTTP/2 restricts TE
+    // to that sole value, but does not make the field-value keyword lowercase.
+    return name != "te" || httpAsciiEqualsIgnoreCase(value, "trailers");
 }
 
 // Decoded HTTP/2 field names are already required to be lowercase. The TE

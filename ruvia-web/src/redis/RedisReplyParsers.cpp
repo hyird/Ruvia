@@ -5,6 +5,7 @@
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
 #include <charconv>
+#include <cmath>
 #include <utility>
 
 namespace ruvia::detail {
@@ -26,7 +27,7 @@ namespace {
 
 double parseRedisDouble(std::string_view value, std::string_view context) {
     double output = 0;
-    if (!parseDecimalNumber(value, output)) {
+    if (!parseDecimalNumber(value, output) || !std::isfinite(output)) {
         throw RedisError(RedisError::Code::kProtocolError, context);
     }
     return output;

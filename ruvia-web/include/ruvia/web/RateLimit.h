@@ -49,15 +49,11 @@ private:
     }
 };
 
-template <std::size_t MaxRequests, std::int64_t WindowMs>
-class RouteRateLimit final : public RouteRateLimitMiddleware<RouteRateLimit<MaxRequests, WindowMs>> {
-public:
-    static constexpr std::size_t ruviaRateLimitMaxRequests = MaxRequests;
-    static constexpr std::int64_t ruviaRateLimitWindowMs = WindowMs;
-};
-
 }  // namespace ruvia
 
+// The only named entry point for a per-route rate limit. Derived middleware
+// declares its own name (RUVIA_ROUTE_RATE_LIMIT(ReadyRateLimit, 10, 1000)) so
+// it can be registered like any other middleware type.
 #define RUVIA_ROUTE_RATE_LIMIT(name, max_requests, window_ms)                    \
     class name final : public ::ruvia::RouteRateLimitMiddleware<name> {          \
     public:                                                                      \

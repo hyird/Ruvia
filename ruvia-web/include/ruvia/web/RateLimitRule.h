@@ -30,6 +30,9 @@ public:
         if (window.count() <= 0) {
             throw std::invalid_argument("rate limit window must be greater than zero");
         }
+        if (overflowPolicy != RateLimitOverflowPolicy::kDeny && overflowPolicy != RateLimitOverflowPolicy::kAllow) {
+            throw std::invalid_argument("rate limit overflow policy is invalid");
+        }
         return RateLimitRule(maxRequests, window, overflowPolicy);
     }
 

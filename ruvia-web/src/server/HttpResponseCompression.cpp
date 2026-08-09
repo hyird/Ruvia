@@ -163,7 +163,7 @@ bool prepareStreamingResponseCompression(const HttpResponseCodingSelection& sele
 
     // The encoded length is not known until finish(), so a handler-provided
     // identity Content-Length cannot survive selecting a coding.
-    response.header("Content-Length", std::nullopt);
+    response.removeHeader("Content-Length");
     setResponseHeaderStableView(response, "Content-Encoding", httpContentCodingToken(selection.coding()));
     weakenStrongResponseEtag(response);
     return true;

@@ -215,8 +215,13 @@ public:
                 }
                 return WebSocketInboundResult::makeMessage(message, WebSocketInboundContentEncoding::kIdentity);
             }
-            state_.template emplace<WebSocketInboundFragmented>(opcode, frame.compressed() ? WebSocketInboundContentEncoding::kPerMessageDeflate : WebSocketInboundContentEncoding::kIdentity);
-            message_.assign(frame.payload().data(), frame.payload().size());
+            std::pmr::string staged(message_.get_allocator());
+            staged.assign(frame.payload().data(), frame.payload().size());
+            message_.swap(staged);
+            state_.template emplace<WebSocketInboundFragmented>(
+                opcode,
+                frame.compressed() ? WebSocketInboundContentEncoding::kPerMessageDeflate
+                                   : WebSocketInboundContentEncoding::kIdentity);
         }
         return WebSocketInboundResult::makeContinue();
     }

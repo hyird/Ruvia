@@ -1,6 +1,8 @@
 #include "test_harness.h"
 
 #include <memory_resource>
+#include <optional>
+#include <string>
 #include <string_view>
 
 #include "ruvia/web/detail/http/SessionAccess.h"
@@ -12,6 +14,35 @@ namespace {
 ruvia::HttpResponse makeResponse() {
     return ruvia::HttpResponse(std::pmr::new_delete_resource());
 }
+
+class FailingAllocationResource final : public std::pmr::memory_resource {
+public:
+    void failAllocationAfterSuccessfulAllocations(std::size_t count) noexcept {
+        failAfter_ = count;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (failAfter_.has_value()) {
+            if (*failAfter_ == 0) {
+                failAfter_.reset();
+                throw std::bad_alloc();
+            }
+            --*failAfter_;
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::optional<std::size_t> failAfter_;
+};
 
 }  // namespace
 
@@ -41,6 +72,54 @@ RUVIA_TEST(session_cookie_secure_flag_appended_for_secure_requests) {
     const auto it = headers.begin();
     RUVIA_CHECK_EQ(it->name(), std::string_view("Set-Cookie"));
     RUVIA_CHECK_EQ(it->value(), std::string_view("sid=abcdef; Path=/; HttpOnly; Secure; SameSite=Lax"));
+}
+
+RUVIA_TEST(session_persistence_plan_persists_replacement_before_deleting_old_id) {
+    using ruvia::detail::SessionPersistenceStep;
+    using ruvia::detail::sessionPersistencePlan;
+
+    const auto fresh = sessionPersistencePlan("newid", {});
+    RUVIA_CHECK_EQ(fresh.count, std::size_t{1});
+    RUVIA_CHECK(fresh.steps[0] == SessionPersistenceStep::kPersistCurrent);
+
+    const auto cleared = sessionPersistencePlan({}, "oldid");
+    RUVIA_CHECK_EQ(cleared.count, std::size_t{1});
+    RUVIA_CHECK(cleared.steps[0] == SessionPersistenceStep::kDeleteOld);
+
+    // Rotation must write the replacement blob before deleting the old one.
+    // Otherwise a Redis SETEX failure after DEL would log the user out by
+    // destroying the recognized session before its successor exists.
+    const auto rotated = sessionPersistencePlan("newid", "oldid");
+    RUVIA_CHECK_EQ(rotated.count, std::size_t{2});
+    RUVIA_CHECK(rotated.steps[0] == SessionPersistenceStep::kPersistCurrent);
+    RUVIA_CHECK(rotated.steps[1] == SessionPersistenceStep::kDeleteOld);
+}
+
+RUVIA_TEST(session_commit_plan_publishes_new_cookie_after_storage_succeeds) {
+    using ruvia::detail::SessionCommitStep;
+    using ruvia::detail::sessionCommitPlan;
+
+    const auto fresh = sessionCommitPlan("newid", {}, true);
+    RUVIA_CHECK_EQ(fresh.count, std::size_t{2});
+    RUVIA_CHECK(fresh.steps[0] == SessionCommitStep::kPersistCurrent);
+    RUVIA_CHECK(fresh.steps[1] == SessionCommitStep::kPublishCurrentCookie);
+
+    const auto existing = sessionCommitPlan("sameid", {}, false);
+    RUVIA_CHECK_EQ(existing.count, std::size_t{1});
+    RUVIA_CHECK(existing.steps[0] == SessionCommitStep::kPersistCurrent);
+
+    // Rotation is the strictest ordering: write the replacement, delete the old
+    // blob, then publish the new cookie. Any Redis failure before the final step
+    // must leave the client's previous cookie untouched.
+    const auto rotated = sessionCommitPlan("newid", "oldid", true);
+    RUVIA_CHECK_EQ(rotated.count, std::size_t{3});
+    RUVIA_CHECK(rotated.steps[0] == SessionCommitStep::kPersistCurrent);
+    RUVIA_CHECK(rotated.steps[1] == SessionCommitStep::kDeleteOld);
+    RUVIA_CHECK(rotated.steps[2] == SessionCommitStep::kPublishCurrentCookie);
+
+    const auto noCurrent = sessionCommitPlan({}, "oldid", true);
+    RUVIA_CHECK_EQ(noCurrent.count, std::size_t{1});
+    RUVIA_CHECK(noCurrent.steps[0] == SessionCommitStep::kDeleteOld);
 }
 
 RUVIA_TEST(session_state_makes_persistence_decisions_exclusive) {
@@ -127,6 +206,53 @@ RUVIA_TEST(session_clear_then_set_rotates_instead_of_orphaning) {
     RUVIA_CHECK(absent.rotate() == nullptr);
     if (absent.persistNew() != nullptr) {
         RUVIA_CHECK_EQ(absent.persistNew()->data, std::string_view("user=4"));
+    }
+}
+
+RUVIA_TEST(session_set_allocation_failure_preserves_old_id_state) {
+    FailingAllocationResource resource;
+    const std::string oldId(80, 'a');
+    const std::string oldData(80, 'u');
+    const std::string newData(4096, 'n');
+
+    ruvia::detail::ContextSessionState loaded(&resource);
+    loaded.observePresentedId(oldId);
+    loaded.loadRecognized(oldData);
+    RUVIA_CHECK(loaded.loaded() != nullptr);
+
+    resource.failAllocationAfterSuccessfulAllocations(0);
+    bool persistFailed = false;
+    try {
+        loaded.set(newData);
+    } catch (const std::bad_alloc&) {
+        persistFailed = true;
+    }
+    RUVIA_CHECK(persistFailed);
+    RUVIA_CHECK(loaded.loaded() != nullptr);
+    if (loaded.loaded() != nullptr) {
+        RUVIA_CHECK_EQ(loaded.loaded()->id, std::string_view(oldId));
+        RUVIA_CHECK_EQ(loaded.loaded()->data, std::string_view(oldData));
+    }
+
+    ruvia::detail::ContextSessionState cleared(&resource);
+    cleared.observePresentedId(oldId);
+    cleared.loadRecognized(oldData);
+    cleared.clear();
+    RUVIA_CHECK(cleared.cleared() != nullptr);
+
+    resource.failAllocationAfterSuccessfulAllocations(0);
+    bool rotateFailed = false;
+    try {
+        cleared.set(newData);
+    } catch (const std::bad_alloc&) {
+        rotateFailed = true;
+    }
+    RUVIA_CHECK(rotateFailed);
+    RUVIA_CHECK(cleared.cleared() != nullptr);
+    if (cleared.cleared() != nullptr && cleared.cleared()->oldId.has_value()) {
+        RUVIA_CHECK_EQ(*cleared.cleared()->oldId, std::string_view(oldId));
+    } else {
+        RUVIA_CHECK(false);
     }
 }
 

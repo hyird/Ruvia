@@ -71,6 +71,10 @@ public:
         return filename_;
     }
 
+    [[nodiscard]] constexpr bool hasFilename() const noexcept {
+        return filenamePresent_;
+    }
+
     [[nodiscard]] constexpr std::string_view contentType() const noexcept {
         return contentType_;
     }
@@ -78,14 +82,16 @@ public:
 private:
     friend class HttpMultipartPartHeaderParseResult;
 
-    constexpr HttpMultipartPartHeaders(std::string_view name, std::string_view filename, std::string_view contentType) noexcept
+    constexpr HttpMultipartPartHeaders(std::string_view name, std::string_view filename, std::string_view contentType, bool filenamePresent) noexcept
         : name_(name),
           filename_(filename),
-          contentType_(contentType) {}
+          contentType_(contentType),
+          filenamePresent_(filenamePresent) {}
 
     std::string_view name_;
     std::string_view filename_;
     std::string_view contentType_;
+    bool filenamePresent_{false};
 };
 
 class HttpMultipartPartHeaderParseFailure final {
@@ -126,8 +132,8 @@ private:
     explicit constexpr HttpMultipartPartHeaderParseResult(HttpMultipartPartHeaderParseFailure failure) noexcept
         : value_(failure) {}
 
-    [[nodiscard]] static constexpr HttpMultipartPartHeaderParseResult makeHeaders(std::string_view name, std::string_view filename, std::string_view contentType) noexcept {
-        return HttpMultipartPartHeaderParseResult(HttpMultipartPartHeaders(name, filename, contentType));
+    [[nodiscard]] static constexpr HttpMultipartPartHeaderParseResult makeHeaders(std::string_view name, std::string_view filename, std::string_view contentType, bool filenamePresent) noexcept {
+        return HttpMultipartPartHeaderParseResult(HttpMultipartPartHeaders(name, filename, contentType, filenamePresent));
     }
 
     [[nodiscard]] static constexpr HttpMultipartPartHeaderParseResult makeFailure(MultipartParseError error) noexcept {
@@ -212,7 +218,7 @@ private:
         return HttpMultipartPartHeaderParseResult::makeFailure(MultipartParseError::kMissingFieldName);
     }
 
-    return HttpMultipartPartHeaderParseResult::makeHeaders(*name, filename.value_or(std::string_view{}), contentType.value_or(std::string_view{}));
+    return HttpMultipartPartHeaderParseResult::makeHeaders(*name, filename.value_or(std::string_view{}), contentType.value_or(std::string_view{}), filename.has_value());
 }
 
 }  // namespace ruvia::detail

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
@@ -28,14 +29,20 @@ namespace ruvia::detail {
     return std::ranges::all_of(name, [](char ch) noexcept { return isHttpTokenChar(static_cast<unsigned char>(ch)); });
 }
 
+[[nodiscard]] inline bool responseTrailerValueHasLeadingOrTrailingWhitespace(std::string_view value) noexcept {
+    const auto whitespace = [](char ch) noexcept {
+        return ch == ' ' || ch == '\t';
+    };
+    return !value.empty() && (whitespace(value.front()) || whitespace(value.back()));
+}
+
 // A trailer value must be a valid HTTP field value (RFC 9110 §5.5): field-vchar
-// (VCHAR / obs-text) plus HTAB, and nothing else. Rejecting NUL/CR/LF alone left
-// the other control bytes (0x01-0x08, VT, FF, 0x0E-0x1F, DEL) able to reach the
-// wire verbatim on the HTTP/1.1 chunked-trailer path, emitting a non-conformant
-// field-value. Enforce the shared field-value rule so this matches the request
-// trailer path and every other header-value check (isHttpFieldValueChar).
+// (VCHAR / obs-text) plus HTAB, and nothing else. The public API value also
+// represents the parsed field value, not field-line OWS; rejecting leading and
+// trailing SP/HTAB keeps the HTTP/1 chunked-trailer and HTTP/2 trailing-HEADERS
+// sinks on the same normalized contract.
 [[nodiscard]] inline bool isValidResponseTrailerValue(std::string_view value) noexcept {
-    return std::ranges::all_of(value, [](char ch) noexcept { return isHttpFieldValueChar(static_cast<unsigned char>(ch)); });
+    return !responseTrailerValueHasLeadingOrTrailingWhitespace(value) && std::ranges::all_of(value, [](char ch) noexcept { return isHttpFieldValueChar(static_cast<unsigned char>(ch)); });
 }
 
 // Fields that must never appear in a trailer section because they govern message
@@ -123,6 +130,12 @@ namespace ruvia::detail {
         default:
             return false;
     }
+}
+
+[[nodiscard]] inline bool isValidHttpResponseTrailerFieldValue(std::string_view value, HttpFieldListRole role) noexcept {
+    return isValidHttpTrailerFieldValue(value, role, [](std::string_view name) noexcept {
+        return isForbiddenResponseTrailerName(name);
+    });
 }
 
 // True if (name, value) is an acceptable response trailer field. Shared by the

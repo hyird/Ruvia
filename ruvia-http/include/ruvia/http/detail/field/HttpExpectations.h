@@ -1,17 +1,132 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 #include <type_traits>
 
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 namespace ruvia::detail {
 
 // The standardized Expect field member is defined once so parsers and writers
 // cannot drift on its wire spelling.
 inline constexpr std::string_view kHttpContinueExpectationToken = "100-continue";
+
+[[nodiscard]] inline bool httpExpectationToken(std::string_view token) noexcept {
+    if (token.empty()) {
+        return false;
+    }
+    for (const auto ch : token) {
+        if (!isHttpTokenChar(static_cast<unsigned char>(ch))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] inline bool httpExpectationQuotedString(std::string_view value) noexcept {
+    if (value.size() < 2 || value.front() != '"' || value.back() != '"') {
+        return false;
+    }
+    for (std::size_t i = 1; i + 1 < value.size(); ++i) {
+        auto ch = static_cast<unsigned char>(value[i]);
+        if (ch == '\\') {
+            ++i;
+            if (i + 1 >= value.size()) {
+                return false;
+            }
+            ch = static_cast<unsigned char>(value[i]);
+        } else if (ch == '"') {
+            return false;
+        }
+        if (!isHttpFieldValueChar(ch)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] inline bool httpExpectationValue(std::string_view value) noexcept {
+    return httpExpectationToken(value) || httpExpectationQuotedString(value);
+}
+
+[[nodiscard]] inline bool httpExpectationItem(std::string_view item) noexcept {
+    item = httpTrimOws(item);
+    if (item.empty()) {
+        return false;
+    }
+
+    const auto parametersStart = httpFindUnquotedDelimiter(item, 0, ';');
+    const auto leading = httpTrimOws(item.substr(0, parametersStart));
+    const auto equals = leading.find('=');
+    if (equals == std::string_view::npos) {
+        return parametersStart == item.size() && httpExpectationToken(leading);
+    }
+
+    const auto name = httpTrimOws(leading.substr(0, equals));
+    const auto value = httpTrimOws(leading.substr(equals + 1));
+    if (!httpExpectationToken(name) || !httpExpectationValue(value)) {
+        return false;
+    }
+
+    std::size_t start = parametersStart;
+    while (start < item.size()) {
+        ++start;
+        const auto end = httpFindUnquotedDelimiter(item, start, ';');
+        const auto parameter = httpTrimOws(item.substr(start, end - start));
+        const auto parameterEquals = parameter.find('=');
+        if (parameterEquals == std::string_view::npos) {
+            return false;
+        }
+        const auto parameterName = httpTrimOws(parameter.substr(0, parameterEquals));
+        const auto parameterValue = httpTrimOws(parameter.substr(parameterEquals + 1));
+        if (!httpExpectationToken(parameterName) || !httpExpectationValue(parameterValue)) {
+            return false;
+        }
+        start = end;
+    }
+    return true;
+}
+
+// Sender-side Expect grammar. Recipients may apply a looser parsing policy for
+// empty list members and unsupported extensions; a client must not generate
+// syntactically invalid expectation values.
+[[nodiscard]] inline bool isValidHttpExpectFieldValue(std::string_view value) noexcept {
+    bool valid = true;
+    bool sawItem = false;
+    httpVisitCommaSeparatedQuotedItems(value, [&valid, &sawItem](std::string_view item) noexcept {
+        sawItem = true;
+        if (!httpExpectationItem(item)) {
+            valid = false;
+            return false;
+        }
+        return true;
+    });
+    return valid && sawItem;
+}
+
+// Recipient-side Expect grammar. Empty list members are tolerated by the generic
+// field-list parser, but every non-empty member still has to be a syntactically
+// valid expectation before product policy decides whether unsupported extensions
+// are rejected with 417 or ignored.
+[[nodiscard]] inline bool isValidReceivedHttpExpectFieldValue(std::string_view value) noexcept {
+    bool valid = true;
+    httpVisitCommaSeparatedQuotedItems(value, [&valid](std::string_view item) noexcept {
+        item = httpTrimOws(item);
+        if (item.empty()) {
+            return true;
+        }
+        if (!httpExpectationItem(item)) {
+            valid = false;
+            return false;
+        }
+        return true;
+    });
+    return valid;
+}
 
 // Whether the framing/lifecycle owner has established that request content will
 // follow the initial head. Keep this typed: HTTP/1 derives it from its body plan,

@@ -22,14 +22,14 @@
 
 namespace http_client_response_test {
 
-using ruvia::Http1ClientRequestClosePolicy;
+using ruvia::Http1ClosePolicy;
 using ruvia::Http1ClientRequestContentCompletionStatus;
 using ruvia::Http1ClientRequestContentSignal;
 using ruvia::Http1ClientRequestWirePolicy;
 using ruvia::Http1ClientResponseParseError;
 using ruvia::Http1ClientResponseParser;
 using ruvia::Http1ClientResponseParseResult;
-using ruvia::Http1ClientResponsePersistence;
+using ruvia::Http1ClosePolicy;
 using ruvia::Http1ParsedClientResponseHead;
 using ruvia::HttpClientResponseHead;
 using ruvia::HttpProtocolVersion;
@@ -54,7 +54,7 @@ concept CanMutateHttpClientResponseHeadStatus = requires(HttpClientResponseHead&
 
 static_assert(!CanMutateHttpClientResponseHeadStatus<ruvia::detail::HttpClientResponseHeadAccess>);
 
-inline Http1ClientResponseParseResult parseWire(std::string_view method, std::string_view wire, Http1ClientRequestClosePolicy closePolicy = Http1ClientRequestClosePolicy::kAllowReuse, std::span<const ruvia::HttpHeaderView> requestHeaders = {}, std::pmr::memory_resource* resource = nullptr) {
+inline Http1ClientResponseParseResult parseWire(std::string_view method, std::string_view wire, Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse, std::span<const ruvia::HttpHeaderView> requestHeaders = {}, std::pmr::memory_resource* resource = nullptr) {
     std::array<char, 2048> requestHead;
     const auto origin = ruvia::HttpOriginView::https("example.test");
     ruvia::HttpClientRequestView request;
@@ -69,13 +69,13 @@ inline Http1ClientResponseParseResult parseWire(std::string_view method, std::st
     return parser.parse(wire);
 }
 
-inline Http1ClientResponseParseResult parseResult(std::string_view method, std::string_view headerSection, Http1ClientRequestClosePolicy closePolicy = Http1ClientRequestClosePolicy::kAllowReuse, std::span<const ruvia::HttpHeaderView> requestHeaders = {}, std::pmr::memory_resource* resource = nullptr) {
+inline Http1ClientResponseParseResult parseResult(std::string_view method, std::string_view headerSection, Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse, std::span<const ruvia::HttpHeaderView> requestHeaders = {}, std::pmr::memory_resource* resource = nullptr) {
     std::string wire(headerSection);
     wire.append("\r\n\r\n");
     return parseWire(method, wire, closePolicy, requestHeaders, resource);
 }
 
-inline Http1ParsedClientResponseHead parseHead(std::string_view method, std::string_view headerSection, Http1ClientRequestClosePolicy closePolicy = Http1ClientRequestClosePolicy::kAllowReuse, std::span<const ruvia::HttpHeaderView> requestHeaders = {}) {
+inline Http1ParsedClientResponseHead parseHead(std::string_view method, std::string_view headerSection, Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse, std::span<const ruvia::HttpHeaderView> requestHeaders = {}) {
     auto result = parseResult(method, headerSection, closePolicy, requestHeaders);
     auto* parsed = result.parsed();
     if (parsed == nullptr) {
@@ -93,7 +93,7 @@ inline ParsedResponse parseResponse(std::string_view method, std::string_view he
     return ParsedResponse{std::move(head).takeHead()};
 }
 
-inline bool parseFails(std::string_view method, std::string_view headerSection, Http1ClientRequestClosePolicy closePolicy = Http1ClientRequestClosePolicy::kAllowReuse, std::span<const ruvia::HttpHeaderView> requestHeaders = {}) {
+inline bool parseFails(std::string_view method, std::string_view headerSection, Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse, std::span<const ruvia::HttpHeaderView> requestHeaders = {}) {
     const auto result = parseResult(method, headerSection, closePolicy, requestHeaders);
     return result.failure() != nullptr;
 }
@@ -143,7 +143,7 @@ inline std::size_t activePlanAlternativeCount(const ruvia::Http1ClientResponsePl
 }
 
 inline Http1ClientResponseParseError parseFailureError(std::string_view method, std::string_view headerSection, std::span<const ruvia::HttpHeaderView> requestHeaders = {}) {
-    const auto result = parseResult(method, headerSection, Http1ClientRequestClosePolicy::kAllowReuse, requestHeaders);
+    const auto result = parseResult(method, headerSection, Http1ClosePolicy::kAllowReuse, requestHeaders);
     const auto* failure = result.failure();
     if (failure == nullptr) {
         throw std::runtime_error("test expected an HTTP/1 response parse failure");

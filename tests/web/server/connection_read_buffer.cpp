@@ -28,7 +28,7 @@ using ruvia::detail::compactConnectionReadBuffer;
 using ruvia::detail::growReadBuffer;
 using ruvia::detail::Http1BufferedResponseReady;
 using ruvia::detail::Http1CommittedStreamResponse;
-using ruvia::detail::Http1ConnectionDisposition;
+using ruvia::Http1ClosePolicy;
 using ruvia::detail::Http1RequestBufferCompaction;
 using ruvia::detail::Http1RequestBufferCompletion;
 using ruvia::detail::Http1RequestBufferDiscarded;
@@ -108,7 +108,7 @@ RUVIA_TEST(http1_session_request_completion_owns_wire_and_buffer_outcome) {
     const auto buffered = Http1SessionRequestCompletion::makeBufferedUnrestored(reusablePlan, 12);
     RUVIA_CHECK(buffered.bufferedResponse() != nullptr);
     RUVIA_CHECK(buffered.committedStream() == nullptr);
-    RUVIA_CHECK(buffered.connectionPlan().disposition() == Http1ConnectionDisposition::kReuse);
+    RUVIA_CHECK(buffered.connectionPlan().disposition() == Http1ClosePolicy::kAllowReuse);
     RUVIA_CHECK(buffered.bufferCompletion().compaction() != nullptr);
     RUVIA_CHECK_EQ(buffered.bufferCompletion().compaction()->consumedBytes(), std::size_t{12});
     RUVIA_CHECK(buffered.bufferCompletion().discarded() == nullptr);
@@ -125,7 +125,7 @@ RUVIA_TEST(http1_session_request_completion_discriminates_close_and_restore) {
     const auto closePlan = ruvia::detail::Http1ServerConnectionPlan::http11Close();
     const auto closing = Http1SessionRequestCompletion::makeBufferedClosing(closePlan);
     RUVIA_CHECK(closing.bufferedResponse() != nullptr);
-    RUVIA_CHECK(closing.connectionPlan().disposition() == Http1ConnectionDisposition::kClose);
+    RUVIA_CHECK(closing.connectionPlan().disposition() == Http1ClosePolicy::kCloseAfterResponse);
     RUVIA_CHECK(closing.bufferCompletion().discarded() != nullptr);
     RUVIA_CHECK(closing.bufferCompletion().compaction() == nullptr);
     RUVIA_CHECK(closing.bufferCompletion().pipelineRestore() == nullptr);

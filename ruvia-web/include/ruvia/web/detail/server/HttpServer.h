@@ -29,6 +29,7 @@
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
 #include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
+#include "ruvia/web/detail/client/HttpClientRegistry.h"
 namespace ruvia::detail {
 
 using TcpSocket = asio::ip::tcp::socket;
@@ -47,6 +48,7 @@ public:
     HttpServer(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases = {}, HttpServerOptions options = {});
     HttpServer(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, HttpServerOptions options = {});
     HttpServer(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, HttpServerOptions options = {});
+    HttpServer(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, std::span<const HttpClientDefinition> httpClients, HttpServerOptions options = {});
     ~HttpServer();
 
     HttpServer(const HttpServer&) = delete;
@@ -70,7 +72,7 @@ private:
     struct ValidatedOptionsTag final {};
     using DocumentRootPtr = std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>>;
 
-    HttpServer(ValidatedOptionsTag, asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, HttpServerOptions validatedOptions);
+    HttpServer(ValidatedOptionsTag, asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, std::span<const HttpClientDefinition> httpClients, HttpServerOptions validatedOptions);
 
     void configureAcceptor();
     void configureTlsContext();
@@ -105,6 +107,7 @@ private:
     HttpServerOptions options_;
     ConnectionScanner connectionScanner_;
     DataAccessState dataAccess_;
+    HttpClientRegistry httpClients_;
     WorkerStateRegistry workerStates_;
     std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
     RateLimiter rateLimiter_;

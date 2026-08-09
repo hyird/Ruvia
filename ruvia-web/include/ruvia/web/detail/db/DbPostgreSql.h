@@ -21,6 +21,7 @@ struct PostgreSqlParams final {
 
     std::pmr::vector<std::pmr::string> encoded;
     std::pmr::vector<const char*> values;
+    std::pmr::vector<int> lengths;
 };
 
 [[nodiscard]] PostgreSqlParams encodePostgreSqlParams(std::span<const DbValue> params, std::pmr::memory_resource* resource);

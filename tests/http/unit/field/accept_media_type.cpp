@@ -29,6 +29,7 @@ RUVIA_TEST(parse_quality_value_rfc7231_grammar) {
 
     // Invalid qvalues yield -1: greater than 1, a non-zero fraction on 1.x, more
     // than three fraction digits, an out-of-range integer, and non-numeric input.
+    RUVIA_CHECK_EQ(httpParseQualityValue("1.0000"), -1);
     RUVIA_CHECK_EQ(httpParseQualityValue("1.5"), -1);
     RUVIA_CHECK_EQ(httpParseQualityValue("1.1"), -1);
     RUVIA_CHECK_EQ(httpParseQualityValue("0.1234"), -1);

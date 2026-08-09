@@ -114,6 +114,11 @@ template <typename Visitor>
     }
 }
 
+// Visit every non-empty "name=value" pair (name alone for a segment without
+// '='). Returns true when the visitor saw every pair; false when the visitor
+// requested an early stop (a bool-returning visitor returns false to stop).
+// Malformed percent escapes are not checked here; callers that need strict
+// validation use validateUrlEncoding() or decodeUrlComponent() first.
 template <typename Visitor>
 [[nodiscard]] bool visitUrlEncodedPairs(std::string_view input, Visitor&& visitor) {
     auto& visitorRef = visitor;
@@ -128,7 +133,7 @@ template <typename Visitor>
             const auto name = equals == std::string_view::npos ? pair : pair.substr(0, equals);
             const auto value = equals == std::string_view::npos ? std::string_view{} : pair.substr(equals + 1);
             if (!dispatchUrlEncodedPairVisitor(visitorRef, name, value)) {
-                return true;
+                return false;
             }
         }
 
@@ -140,6 +145,11 @@ template <typename Visitor>
     return true;
 }
 
+// Returns the raw (still percent-encoded) value view of the LAST pair whose
+// name matches `decodedName` after decoding, or no value. Later pairs override
+// earlier ones (query parameters share the last-match convention of repeated
+// header fields); the scan therefore always runs to the end. The returned view
+// borrows `input` and must be percent-decoded by the caller before use.
 [[nodiscard]] inline std::optional<std::string_view> findUrlEncodedValue(std::string_view input, std::string_view decodedName, UrlDecodeMode mode) {
     std::optional<std::string_view> result;
     (void)visitUrlEncodedPairs(input, [&](std::string_view name, std::string_view value) {

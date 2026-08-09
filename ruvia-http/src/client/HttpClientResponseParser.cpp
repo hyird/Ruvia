@@ -21,6 +21,10 @@ struct Http1ClientResponseParseResultAccess final {
         return Http1ClientResponseParseResult(Http1ClientResponseParseFailure(error));
     }
 
+    [[nodiscard]] static Http1ClientResponseParseResult terminal(bool completed) noexcept {
+        return Http1ClientResponseParseResult(Http1ClientResponseParseTerminal(completed));
+    }
+
     [[nodiscard]] static Http1ClientResponseParseResult parsed(HttpClientResponseHead head, Http1ClientResponsePlan plan, std::size_t consumedBytes) noexcept {
         return Http1ClientResponseParseResult(Http1ParsedClientResponseHead(std::move(head), std::move(plan), consumedBytes));
     }
@@ -86,20 +90,16 @@ std::string_view http1ClientResponseParseErrorMessage(Http1ClientResponseParseEr
             return "invalid Switching Protocols response";
         case Http1ClientResponseParseError::kTooManyInformationalResponses:
             return "too many informational responses";
-        case Http1ClientResponseParseError::kExchangeComplete:
-            return "HTTP/1 client exchange is already complete";
-        case Http1ClientResponseParseError::kExchangeFailed:
-            return "HTTP/1 client exchange has already failed";
     }
     return "invalid HTTP/1 response";
 }
 
 Http1ClientResponseParseResult Http1ClientResponseParser::parse(std::string_view buffer) {
     if (phase_ == Phase::kComplete) {
-        return detail::Http1ClientResponseParseResultAccess::failure(Http1ClientResponseParseError::kExchangeComplete);
+        return detail::Http1ClientResponseParseResultAccess::terminal(true);
     }
     if (phase_ == Phase::kFailed) {
-        return detail::Http1ClientResponseParseResultAccess::failure(Http1ClientResponseParseError::kExchangeFailed);
+        return detail::Http1ClientResponseParseResultAccess::terminal(false);
     }
     const auto fail = [this](Http1ClientResponseParseError error) noexcept {
         phase_ = Phase::kFailed;
@@ -133,7 +133,7 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(std::string_view
     auto plan = std::get<Http1ClientResponsePlan>(std::move(planning));
     const auto* const informationalPlan = plan.informational();
     const bool informational = informationalPlan != nullptr;
-    const bool closingInformational = informational && informationalPlan->persistence() == Http1ClientResponsePersistence::kClose;
+    const bool closingInformational = informational && informationalPlan->persistence() == Http1ClosePolicy::kCloseAfterResponse;
     if (informational && informationalResponseCount_ >= detail::kMaxHttpClientInterimResponses) {
         return fail(Http1ClientResponseParseError::kTooManyInformationalResponses);
     }

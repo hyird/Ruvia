@@ -22,6 +22,16 @@ HttpResponse::HttpResponse(std::pmr::memory_resource* resource)
 HttpResponse::HttpResponse(detail::HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource)
     : headers_(detail::HttpResolvedPmrResourceTag{}, resource) {}
 
+HttpResponse::HttpResponse(HttpResponse&& other) noexcept
+    : statusCode_(other.statusCode_),
+      knownHeaderBits_(other.knownHeaderBits_),
+      knownHeaderIndexes_(other.knownHeaderIndexes_),
+      headers_(std::move(other.headers_)),
+      body_(std::move(other.body_)) {
+    other.knownHeaderBits_ = 0;
+    other.knownHeaderIndexes_.fill(0);
+}
+
 HttpResponse& HttpResponse::operator=(HttpResponse&& other) noexcept {
     if (this == &other) {
         return *this;

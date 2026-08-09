@@ -42,7 +42,7 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream, 
         if (!stream.beginStandardConnect()) {
             return HeaderDecodeStatus::kProtocolError;
         }
-    } else if (!stream.hasScheme() || !stream.hasPath() || (stream.hasAuthority() && !http2IsValidRequestAuthority(stream.requestScheme(), stream.requestAuthority())) || !http2IsValidRegularRequestPath(stream.requestKnownMethod(), stream.requestScheme(), stream.requestPath()) || (stream.requestPath() == "*" && stream.hasAuthority()) || (!stream.hasAuthority() && http2RegularRequestRequiresAuthority(stream.requestScheme(), stream.requestPath()))) {
+    } else if (!stream.hasScheme() || !stream.hasPath() || (stream.hasAuthority() && !http2IsValidRequestAuthority(stream.requestScheme(), stream.requestAuthority())) || !http2IsValidRegularRequestPath(stream.requestKnownMethod(), stream.requestScheme(), stream.requestPath()) || (!stream.hasAuthority() && http2RegularRequestRequiresAuthority(stream.requestScheme(), stream.requestPath()))) {
         return HeaderDecodeStatus::kProtocolError;
     }
     if (role_ == Http2Role::kServer && stream.requestKnownMethod() != HttpKnownMethod::kConnect) {

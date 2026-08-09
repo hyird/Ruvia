@@ -41,9 +41,9 @@ struct RequestHeaderFacts final {
 // Accumulate head bytes, refusing to exceed the header-section ceiling.
 [[nodiscard]] bool addHeadBytes(std::size_t& total, std::size_t bytes) noexcept;
 
-// A client TE field may only offer "trailers" (RFC 9110 section 10.1.4); a
-// transfer coding there would ask the origin for a framing this client does not
-// implement.
+// A client TE field may only offer trailers or response transfer codings this
+// client can decode. "chunked" is never listed because every HTTP/1.1 recipient
+// already accepts it as message framing.
 [[nodiscard]] bool isValidClientTeField(std::string_view value) noexcept;
 
 // Validate every field and collect the facts the encoder needs. Returns false

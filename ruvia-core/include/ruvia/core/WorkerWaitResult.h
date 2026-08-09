@@ -70,6 +70,17 @@ public:
     }
     [[nodiscard]] const WorkerWaitTimedOut* timedOut() const&& = delete;
 
+    // Consumes the value alternative, matching the takeRejected() pattern of
+    // the channel/one-shot results. Only the value outcome carries a payload;
+    // any other outcome makes this a programming error.
+    [[nodiscard]] T takeValue() && noexcept(std::is_nothrow_move_constructible_v<T>) {
+        auto* result = std::get_if<detail::WorkerWaitValue<T>>(&result_);
+        if (result == nullptr) {
+            std::terminate();
+        }
+        return std::move(result->value_);
+    }
+
 private:
     friend struct detail::WorkerWaitResultAccess;
 

@@ -5,6 +5,14 @@
 // Unified JSON model body for a normal C++ struct. A model owns one PMR
 // resource, parses JSON/form inputs, preserves per-field validation state, and
 // serializes through the same schema.
+//
+// Contract: every RUVIA_FIELD / RUVIA_OPTIONAL_FIELD declared inside the struct
+// MUST be re-listed in the RUVIA_MODEL(T, ...) field list. A field declared but
+// not listed is absent from the schema -- it is not parsed, validated, or
+// serialized, and no diagnostic fires (C++ has no reflection to compare the
+// declaration set against the list). When adding a field, add it to both
+// places; the compile-time static_assert below only verifies that every listed
+// field is a real member, never the reverse.
 
 #define RUVIA_MODEL(T, ...)                                                                                                                      \
 public:                                                                                                                                          \

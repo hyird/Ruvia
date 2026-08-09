@@ -115,14 +115,6 @@ struct Custom final {
     PredicateT predicate;
 };
 
-template <typename PredicateT>
-struct Match final {
-    using RuviaValidationRuleMarker = void;
-
-    BorrowedText message{"does not match"};
-    PredicateT predicate;
-};
-
 template <typename ValidatorT>
 struct Nested final {
     using RuviaValidationRuleMarker = void;
