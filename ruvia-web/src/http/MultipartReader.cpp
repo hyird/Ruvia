@@ -7,7 +7,20 @@
 namespace ruvia {
 
 ScopedOperation<std::optional<MultipartStreamPart>> MultipartReader::read() {
+    requireActive();
     return detail::makeScopedOperation(operationScope_, readTask());
+}
+
+BodyReader& MultipartReader::bodyReader() const {
+    requireActive();
+    return *bodyReader_;
+}
+
+void MultipartReader::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
+    auto& reader = static_cast<MultipartReader&>(capability);
+    reader.operationScope_.close();
+    reader.bodyReader_ = nullptr;
+    reader.state_ = State::kFailed;
 }
 
 Task<std::optional<MultipartStreamPart>> MultipartReader::readTask() {
@@ -32,13 +45,13 @@ Task<std::optional<MultipartStreamPart>> MultipartReader::readTask() {
             // RFC 2046 permits an epilogue after the closing delimiter. It is
             // semantically ignored but the HTTP body still has to be consumed
             // before the connection can be reused.
-            while (co_await bodyReader_.read()) {
+            while (co_await bodyReader().read()) {
             }
             readGuard.commit(State::kFinished);
             co_return std::nullopt;
         }
         if (result.needInput() != nullptr) {
-            auto chunk = co_await bodyReader_.read();
+            auto chunk = co_await bodyReader().read();
             if (!chunk) {
                 parser_.finishInput();
             } else {

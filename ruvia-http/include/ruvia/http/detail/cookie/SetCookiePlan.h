@@ -39,6 +39,14 @@ public:
         return prefixText_;
     }
 
+    [[nodiscard]] std::string_view path() const noexcept {
+        return path_;
+    }
+
+    [[nodiscard]] std::string_view domain() const noexcept {
+        return domain_;
+    }
+
     void write(char* output) const;
 
 private:

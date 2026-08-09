@@ -320,6 +320,10 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(std::uint32_t strea
     if (headPlan == nullptr) {
         return Http2SubmitStatus::kInvalidMessage;
     }
+    const bool terminalRemoteHalf = http2RemotePeerHalfClosed(*stream);
+    if (terminalRemoteHalf) {
+        reserveEventSlots(1);
+    }
     if (!appendHttp2ResponseHeaders(*stream, response, *headPlan, *http2Control)) {
         return Http2SubmitStatus::kInvalidMessage;
     }
@@ -328,7 +332,7 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(std::uint32_t strea
     stream->beginLocalContentUnbounded();
     (void)stream->openLocalConnectTunnel();
     http2ReleaseResponseHeaderBlock(*stream);
-    if (http2RemotePeerHalfClosed(*stream)) {
+    if (terminalRemoteHalf) {
         events_.push_back(Http2Event::tunnelEnd(streamId));
     }
     return Http2SubmitStatus::kAccepted;
@@ -339,8 +343,12 @@ Http2WebSocketHandshakeSubmitResult Http2Connection::submitWebSocketHandshake(st
     if (stream == nullptr || stream->isAborted()) {
         return Http2WebSocketHandshakeSubmitResult::makeFailure(Http2WebSocketHandshakeSubmitError::kClosed);
     }
-    if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) || stream->localSend().headPending() == nullptr || !http2IsPendingWebSocketConnect(*stream)) {
+    if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) || http2RemotePeerHalfClosed(*stream) || stream->localSend().headPending() == nullptr || !http2IsPendingWebSocketConnect(*stream)) {
         return Http2WebSocketHandshakeSubmitResult::makeFailure(Http2WebSocketHandshakeSubmitError::kInvalidState);
+    }
+    const bool terminalRemoteHalf = http2RemotePeerHalfClosed(*stream);
+    if (terminalRemoteHalf) {
+        reserveEventSlots(1);
     }
     http2EncodeWebSocketHandshakeHeaders(stream->responseHeaderBlock(), negotiation);
     appendResponseHeaderFrames(*stream, std::string_view(stream->responseHeaderBlock()), Http2EndStream::kKeepOpen);
@@ -348,7 +356,7 @@ Http2WebSocketHandshakeSubmitResult Http2Connection::submitWebSocketHandshake(st
     stream->beginLocalContentUnbounded();
     (void)stream->openLocalConnectTunnel();
     http2ReleaseResponseHeaderBlock(*stream);
-    if (http2RemotePeerHalfClosed(*stream)) {
+    if (terminalRemoteHalf) {
         events_.push_back(Http2Event::tunnelEnd(streamId));
     }
     return Http2WebSocketHandshakeSubmitResult::makeSubmitted(std::move(negotiation));
@@ -419,8 +427,14 @@ Http2SubmitStatus Http2Connection::submitReset(std::uint32_t streamId, Http2Erro
     if ((role_ == Http2Role::kClient && stream->localSend().headPending() != nullptr) || (role_ == Http2Role::kServer && !http2RemoteFinalHeadDecoded(*stream)) || http2StreamIsClosed(*stream)) {
         return Http2SubmitStatus::kInvalidState;
     }
-    output_.appendRstStream(streamId, error);
-    return closeStreamByOwner(streamId) ? Http2SubmitStatus::kAccepted : Http2SubmitStatus::kClosed;
+    const auto outputCheckpoint = output_.checkpoint();
+    try {
+        output_.appendRstStream(streamId, error);
+        return closeStreamByOwner(streamId) ? Http2SubmitStatus::kAccepted : Http2SubmitStatus::kClosed;
+    } catch (...) {
+        output_.rollbackTo(outputCheckpoint);
+        throw;
+    }
 }
 
 }  // namespace ruvia::detail

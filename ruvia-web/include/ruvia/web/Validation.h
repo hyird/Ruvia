@@ -179,7 +179,7 @@ public:
     template <typename OptionalT>
     Validator& minLength(const OptionalT& value, std::string_view field, std::size_t min, std::string_view message = "is too short") & {
         if (value && detail::validationStringView(*value).size() < min) {
-            add(field, "min_length", message);
+            add(field, "too_small", message);
         }
         return *this;
     }
@@ -187,15 +187,19 @@ public:
     template <typename OptionalT>
     Validator& maxLength(const OptionalT& value, std::string_view field, std::size_t max, std::string_view message = "is too long") & {
         if (value && detail::validationStringView(*value).size() > max) {
-            add(field, "max_length", message);
+            add(field, "too_big", message);
         }
         return *this;
     }
 
     template <typename OptionalT, typename MinT, typename MaxT>
     Validator& range(const OptionalT& value, std::string_view field, MinT min, MaxT max, std::string_view message = "is out of range") & {
-        if (value && (*value < min || *value > max)) {
-            add(field, "range", message);
+        if (value) {
+            if (*value < min) {
+                add(field, "too_small", message);
+            } else if (*value > max) {
+                add(field, "too_big", message);
+            }
         }
         return *this;
     }
@@ -284,10 +288,6 @@ private:
 #define RUVIA_CUSTOM(message, predicate) \
     ::ruvia::detail::model::Custom {     \
         message, predicate               \
-    }
-#define RUVIA_MATCH(message, predicate) \
-    ::ruvia::detail::model::Match {     \
-        message, predicate              \
     }
 #define RUVIA_NESTED(validator_type) \
     ::ruvia::detail::model::Nested<validator_type> {}

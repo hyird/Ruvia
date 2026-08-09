@@ -328,7 +328,7 @@ void App::run() {
                         state.redis
 #endif
                     },
-                    state.workerStates, std::move(workerOptions));
+                    state.workerStates, state.httpClients, std::move(workerOptions));
                 runtime->controllers.push_back(std::move(controllers));
                 runtime->routers.push_back(std::move(router));
                 runtime->workers.push_back(std::move(worker));

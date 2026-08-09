@@ -62,8 +62,16 @@ RUVIA_TEST(http_serialized_origin_matches_fetch_wire_grammar) {
     using ruvia::detail::isValidHttpSerializedOrigin;
 
     RUVIA_CHECK(isValidHttpSerializedOrigin("https://example.com"));
+    RUVIA_CHECK(isValidHttpSerializedOrigin("https://example.com."));
+    RUVIA_CHECK(isValidHttpSerializedOrigin("https://sub.example.com.:8443"));
+    RUVIA_CHECK(isValidHttpSerializedOrigin("https://exa_mple.com"));
+    RUVIA_CHECK(isValidHttpSerializedOrigin("https://-example.com"));
+    RUVIA_CHECK(isValidHttpSerializedOrigin("https://example..com"));
+    RUVIA_CHECK(isValidHttpSerializedOrigin("https://."));
     RUVIA_CHECK(isValidHttpSerializedOrigin("http://127.0.0.1:8080"));
+    RUVIA_CHECK(isValidHttpSerializedOrigin("https://[::]"));
     RUVIA_CHECK(isValidHttpSerializedOrigin("https://[::1]"));
+    RUVIA_CHECK(isValidHttpSerializedOrigin("https://[0:0:1::1]"));
     RUVIA_CHECK(isValidHttpSerializedOrigin("custom+scheme://sub-domain.example:65535"));
     RUVIA_CHECK(isValidHttpSerializedOrigin("custom+scheme://sub-domain.example:0"));
 
@@ -73,10 +81,17 @@ RUVIA_TEST(http_serialized_origin_matches_fetch_wire_grammar) {
     RUVIA_CHECK(!isValidHttpSerializedOrigin("https://EXAMPLE.com"));
     RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.com/"));
     RUVIA_CHECK(!isValidHttpSerializedOrigin("https://exa%6dple.com"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://123"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://1.2.3"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://127.0.0.1."));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.123"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.0x10"));
     RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[v1.future]"));
     RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[::A]"));
     RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[::0001]"));
     RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[1:2:3:4:5:6:7::]"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[1::0:0:1]"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[0:0:1::1:1:1]"));
     RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.com:"));
     RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.com:0443"));
     RUVIA_CHECK(!isValidHttpSerializedOrigin("http://example.com:80"));

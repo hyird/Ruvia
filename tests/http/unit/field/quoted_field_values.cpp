@@ -37,6 +37,8 @@ RUVIA_TEST(accept_quality_quoted_semicolon_param) {
 
 RUVIA_TEST(accept_encoding_quality_unquoted_unchanged) {
     using ruvia::detail::httpAcceptsEncoding;
+    RUVIA_CHECK(httpAcceptsEncoding("", "identity"));
+    RUVIA_CHECK(!httpAcceptsEncoding("", "gzip"));
     RUVIA_CHECK(httpAcceptsEncoding("gzip;q=0.5, br", "br"));
     RUVIA_CHECK(httpAcceptsEncoding("gzip;q=0.5, br", "gzip"));
     RUVIA_CHECK(!httpAcceptsEncoding("gzip;q=0", "gzip"));

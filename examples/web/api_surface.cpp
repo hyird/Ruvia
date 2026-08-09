@@ -101,7 +101,7 @@ class SurfaceContextMiddleware final : public ruvia::Middleware<SurfaceContextMi
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         co_await next();
-        if (c.error()) {
+        if (c.exception()) {
             const auto* downstreamResponse = c.response();
             const bool hadDownstreamErrorResponse = downstreamResponse != nullptr;
             const bool downstreamWasInternalError = downstreamResponse != nullptr && downstreamResponse->status() == ruvia::http_status::kInternalServerError;
@@ -254,7 +254,7 @@ private:
         response.header("X-Response-Remove", "drop");
         response.body("response slot\n");
         response.header("X-Response-Slot", "true", {.append = true});
-        response.header("X-Response-Remove", std::nullopt);
+        response.removeHeader("X-Response-Remove");
         co_return response;
     }
 
@@ -290,8 +290,8 @@ private:
         c.header("X-Remove-Me", "drop");
         c.header("X-Remove-Too", "drop");
         c.header("X-Keep-Me", "keep");
-        c.header("X-Remove-Me", std::nullopt);
-        c.header("X-Remove-Too", std::nullopt);
+        c.removeHeader("X-Remove-Me");
+        c.removeHeader("X-Remove-Too");
         co_return c.text("header remove\n");
     }
 
@@ -338,7 +338,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> removeBufferedResponse(ruvia::Context& c) {
         c.header("X-Remove-Buffered", "drop");
-        c.header("X-Remove-Buffered", std::nullopt);
+        c.removeHeader("X-Remove-Buffered");
         co_return c.body("removed buffered response\n");
     }
 
@@ -386,7 +386,7 @@ private:
         body.append("\nvalues=");
         appendUnsigned(body, form.fields().size());
         body.append("\nfirst-value-file=");
-        body.append(!form.fields().empty() && form.fields().front().file() ? "true" : "false");
+        body.append(!form.fields().empty() && form.fields().front().isFile() ? "true" : "false");
         body.append("\nhas-title=");
         body.append(static_cast<bool>(form.get("title")) ? "true" : "false");
         const auto title = form.get("title");
@@ -413,9 +413,9 @@ private:
         body.append("\ntag-array-values=");
         appendUnsigned(body, form.get("tag[]").size());
         body.append("\ntag-array=");
-        body.append(form.get("tag[]").array() ? "true" : "false");
+        body.append(form.get("tag[]").isArray() ? "true" : "false");
         body.append("\ntag-is-array=");
-        body.append(form.get("tag").array() ? "true" : "false");
+        body.append(form.get("tag").isArray() ? "true" : "false");
         const auto nestedObject = form.object("obj");
         const auto nested = nestedObject.get("key1");
         if (auto nestedText = nested.value()) {
@@ -434,13 +434,13 @@ private:
         body.append("\nobj.key1-exact-all=");
         appendUnsigned(body, exactNested.size());
         body.append("\nobj.key1-exact-array=");
-        body.append(exactNested.array() ? "true" : "false");
+        body.append(exactNested.isArray() ? "true" : "false");
         body.append("\nobj.key1-all=");
         appendUnsigned(body, nestedObject.count("key1"));
         body.append("\nobj.key1-values=");
         appendUnsigned(body, nestedObject.count("key1"));
         body.append("\nobj.key1-array=");
-        body.append(nestedObject.get("key1").array() ? "true" : "false");
+        body.append(nestedObject.get("key1").isArray() ? "true" : "false");
         body.append("\nobj.key-count=");
         appendUnsigned(body, nestedObject.count("key1"));
         body.append("\nobj.entries=");
@@ -457,7 +457,7 @@ private:
             body.append(field.name());
             body.push_back('=');
             body.append(field.value());
-            if (field.file()) {
+            if (field.isFile()) {
                 const auto blob = field.blob();
                 body.append(";filename=");
                 body.append(field.filename());
@@ -483,7 +483,7 @@ private:
             body.append(";values=");
             appendUnsigned(body, group.size());
             body.append(";array=");
-            body.append(group.array() ? "true" : "false");
+            body.append(group.isArray() ? "true" : "false");
         }
         body.push_back('\n');
         co_return c.text(std::move(body));

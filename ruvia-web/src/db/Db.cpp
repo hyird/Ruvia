@@ -26,6 +26,7 @@ Task<DbStreamResult> detail::MariaDbPool::stream(std::pmr::string sql, std::pmr:
     }
 
     const auto slotIndex = co_await acquireSlot();
+    bool slotReleased = false;
     try {
         auto& slot = slots_[slotIndex];
         if (!slot.connected) {
@@ -46,13 +47,16 @@ Task<DbStreamResult> detail::MariaDbPool::stream(std::pmr::string sql, std::pmr:
                 throw mysqlError(*slot.connection, "mysql_use_result");
             }
             releaseSlot(slotIndex);
-            co_return DbStreamResult();
+            slotReleased = true;
+            throw std::invalid_argument("queryStream() requires row-producing SQL");
         }
 
         co_return DbStreamResult(DbPoolRef{this}, slotIndex, rawResult, resource);
     } catch (...) {
-        closeSlot(slots_[slotIndex]);
-        releaseSlot(slotIndex);
+        if (!slotReleased) {
+            closeSlot(slots_[slotIndex]);
+            releaseSlot(slotIndex);
+        }
         throw;
     }
 }
@@ -71,29 +75,31 @@ Task<std::optional<DbRow>> detail::MariaDbPool::readStreamRow(std::size_t slot, 
             status = mysql_fetch_row_cont(&row, rawResult, co_await waitForMysql(slots_[slot], status, deadline));
         }
 
-        if (row == nullptr) {
-            co_await closeStream(slot, result, resource);
-            co_return std::nullopt;
-        }
-
-        const auto fieldCount = static_cast<std::size_t>(mysql_num_fields(rawResult));
-        const auto* lengths = mysql_fetch_lengths(rawResult);
-        auto outputRow = DbResultAccess::ownedRow(resource);
-        auto& outputFields = DbResultAccess::ownedFields(outputRow);
-        outputFields.reserve(fieldCount);
-        for (std::size_t i = 0; i < fieldCount; ++i) {
-            if (row[i] == nullptr) {
-                outputFields.push_back(DbResultAccess::nullField(resource));
-                continue;
+        if (row != nullptr) {
+            const auto fieldCount = static_cast<std::size_t>(mysql_num_fields(rawResult));
+            const auto* lengths = mysql_fetch_lengths(rawResult);
+            auto outputRow = DbResultAccess::ownedRow(resource);
+            auto& outputFields = DbResultAccess::ownedFields(outputRow);
+            outputFields.reserve(fieldCount);
+            for (std::size_t i = 0; i < fieldCount; ++i) {
+                if (row[i] == nullptr) {
+                    outputFields.push_back(DbResultAccess::nullField(resource));
+                    continue;
+                }
+                outputFields.push_back(DbResultAccess::ownedField(std::string_view(row[i], lengths[i]), resource));
             }
-            outputFields.push_back(DbResultAccess::ownedField(std::string_view(row[i], lengths[i]), resource));
+            co_return outputRow;
         }
-        co_return outputRow;
     } catch (...) {
         closeSlot(slots_[slot]);
         releaseSlot(slot);
         throw;
     }
+
+    // EOF is not a read failure. The close path owns slot release, including
+    // its own failure path, so it must run outside the read-error guard.
+    co_await closeStream(slot, result, resource);
+    co_return std::nullopt;
 }
 
 Task<void> detail::MariaDbPool::closeStream(std::size_t slot, void* result, std::pmr::memory_resource*) {

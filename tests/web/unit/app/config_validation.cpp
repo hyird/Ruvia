@@ -6,7 +6,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
+#include "ruvia/web/App.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
 #include "ruvia/web/detail/integration/DataAccessDefinitions.h"
 
@@ -17,6 +19,7 @@ using ruvia::detail::ensureNonZeroPort;
 using ruvia::detail::ensurePositiveDuration;
 using ruvia::detail::ensurePositiveSize;
 using ruvia::detail::isValidConfigHost;
+using ruvia::detail::isValidSniHost;
 using ruvia::detail::kSeparatedPortHostRules;
 
 // Returns the invalid_argument message a call throws, or empty if it does not.
@@ -67,6 +70,21 @@ RUVIA_TEST(config_host_validation_separated_port_rules) {
     RUVIA_CHECK(isValidConfigHost("::1", kSeparatedPortHostRules));       // two colons is not "single"
 }
 
+RUVIA_TEST(sni_host_validation_accepts_dns_name_only) {
+    RUVIA_CHECK(isValidSniHost("localhost"));
+    RUVIA_CHECK(isValidSniHost("Example.com"));
+    RUVIA_CHECK(isValidSniHost("xn--bcher-kva.example"));
+    RUVIA_CHECK(!isValidSniHost(""));
+    RUVIA_CHECK(!isValidSniHost("example.com."));
+    RUVIA_CHECK(!isValidSniHost("example.com:443"));
+    RUVIA_CHECK(!isValidSniHost("[::1]"));
+    RUVIA_CHECK(!isValidSniHost("127.0.0.1"));
+    RUVIA_CHECK(!isValidSniHost("bad host"));
+    RUVIA_CHECK(!isValidSniHost("-bad.example"));
+    RUVIA_CHECK(!isValidSniHost("bad-.example"));
+    RUVIA_CHECK(!isValidSniHost("bad..example"));
+}
+
 RUVIA_TEST(config_size_port_duration_guards) {
     RUVIA_CHECK(throwsInvalid([] { ensurePositiveSize(0, "size"); }));
     RUVIA_CHECK(!throwsInvalid([] { ensurePositiveSize(1, "size"); }));
@@ -86,6 +104,14 @@ RUVIA_TEST(config_ensure_host_throws_distinct_messages) {
     RUVIA_CHECK_EQ(caughtMessage([] { ensureConfigHost("", "was-empty", "was-invalid"); }), std::string("was-empty"));
     RUVIA_CHECK_EQ(caughtMessage([] { ensureConfigHost("bad host", "was-empty", "was-invalid"); }), std::string("was-invalid"));
     RUVIA_CHECK(caughtMessage([] { ensureConfigHost("example.com", "was-empty", "was-invalid"); }).empty());
+}
+
+RUVIA_TEST(app_document_root_rejects_invalid_static_options_at_configuration) {
+    ruvia::DocumentRootConfig config;
+    config.root = "public";
+    config.staticOptions.cacheControl = " private";
+
+    RUVIA_CHECK(throwsInvalid([&config] { ruvia::app().setDocumentRoot(std::move(config)); }));
 }
 
 RUVIA_TEST(data_access_config_clones_public_strings_into_internal_pmr_storage) {

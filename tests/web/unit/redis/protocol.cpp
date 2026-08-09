@@ -35,9 +35,11 @@ using ruvia::detail::parseRedisScanResult;
 using ruvia::detail::parseRedisScoredArray;
 using ruvia::detail::RedisTypesAccess;
 using ruvia::detail::redisValueArray;
+using ruvia::detail::redisValueIntegerBool;
 using ruvia::detail::redisValueInteger;
 using ruvia::detail::redisValueString;
 using ruvia::detail::respCommandSerializedSize;
+using ruvia::detail::validateRedisPooledCommand;
 
 RedisValue toNilValue() {
     return RedisTypesAccess::nullValue(std::pmr::get_default_resource());
@@ -143,6 +145,12 @@ RUVIA_TEST(redis_set_options_build_one_valid_command_shape) {
     }
 }
 
+RUVIA_TEST(redis_set_options_reject_invalid_condition) {
+    ruvia::RedisSetOptions options;
+    options.condition = static_cast<ruvia::RedisSetCondition>(42);
+    RUVIA_CHECK(throwsOn([&] { (void)ruvia::detail::redisSetArgs("key", "value", options, std::pmr::get_default_resource()); }));
+}
+
 RUVIA_TEST(resp_serialized_size_matches_written_output) {
     // The size hint is used to reserve buffer space, so it must exactly equal the
     // bytes appendRespCommand writes -- including multi-digit length prefixes and
@@ -219,6 +227,12 @@ RUVIA_TEST(redis_parse_scored_array_parses_scores_and_rejects_odd_length) {
     redisReply badScore = stringReply("notanumber");
     redisReply* bad[] = {&m1, &badScore};
     RUVIA_CHECK(throwsOn([&] { (void)parseRedisScoredArray(toValue(bad, 2), resource); }));
+    redisReply infiniteScore = stringReply("inf");
+    redisReply* infinite[] = {&m1, &infiniteScore};
+    RUVIA_CHECK(throwsOn([&] { (void)parseRedisScoredArray(toValue(infinite, 2), resource); }));
+    redisReply nanScore = stringReply("nan");
+    redisReply* nan[] = {&m1, &nanScore};
+    RUVIA_CHECK(throwsOn([&] { (void)parseRedisScoredArray(toValue(nan, 2), resource); }));
 }
 
 RUVIA_TEST(redis_parse_scan_result_reads_cursor_and_values) {
@@ -453,6 +467,29 @@ RUVIA_TEST(redis_wrong_reply_type_throws_RedisError_not_logic_error) {
     RUVIA_CHECK(!throwsRedisError([&] { (void)redisValueString(str); }));
 }
 
+RUVIA_TEST(hiredis_reply_to_value_rejects_nonempty_null_string_storage) {
+    redisReply reply{};
+    reply.type = REDIS_REPLY_STRING;
+    reply.str = nullptr;
+    reply.len = 1;
+
+    RUVIA_CHECK(throwsRedisError([&] { (void)hiredisReplyToValue(reply, 0, 32, std::pmr::get_default_resource()); }));
+
+    reply.len = 0;
+    const auto empty = hiredisReplyToValue(reply, 0, 32, std::pmr::get_default_resource());
+    RUVIA_CHECK_EQ(empty.string(), std::string_view{});
+}
+
+RUVIA_TEST(redis_integer_bool_rejects_non_boolean_integers) {
+    auto* resource = std::pmr::get_default_resource();
+
+    RUVIA_CHECK(!redisValueIntegerBool(RedisTypesAccess::integerValue(0, resource)));
+    RUVIA_CHECK(redisValueIntegerBool(RedisTypesAccess::integerValue(1, resource)));
+
+    RUVIA_CHECK(throwsRedisError([&] { (void)redisValueIntegerBool(RedisTypesAccess::integerValue(2, resource)); }));
+    RUVIA_CHECK(throwsRedisError([&] { (void)redisValueIntegerBool(RedisTypesAccess::integerValue(-1, resource)); }));
+}
+
 RUVIA_TEST(redis_blocking_pop_timeout_is_saturating_and_nonnegative) {
     using ruvia::detail::redisBlockingPopArgs;
     using ruvia::detail::redisBlockingPopClientTimeout;
@@ -489,6 +526,25 @@ RUVIA_TEST(redis_xreadgroup_builds_group_block_and_parallel_stream_arguments) {
     options.block = ruvia::RedisBlockWait::indefinitely();
     const auto infinite = ruvia::detail::redisXReadGroupArgs("workers", "consumer-1", streams, options, resource);
     RUVIA_CHECK_EQ(std::string_view(infinite[7]), std::string_view("0"));
+}
+
+RUVIA_TEST(redis_raw_xreadgroup_block_detection_skips_group_and_consumer_names) {
+    constexpr std::array<std::string_view, 7> groupNamedBlock{
+        "XREADGROUP", "GROUP", "BLOCK", "consumer", "STREAMS", "orders", ">",
+    };
+    RUVIA_CHECK(!validateRedisPooledCommand(groupNamedBlock, true));
+
+    constexpr std::array<std::string_view, 7> consumerNamedBlock{
+        "XREADGROUP", "GROUP", "workers", "BLOCK", "STREAMS", "orders", ">",
+    };
+    RUVIA_CHECK(!validateRedisPooledCommand(consumerNamedBlock, true));
+    RUVIA_CHECK(!throwsOn([&] { (void)validateRedisPooledCommand(consumerNamedBlock, false); }));
+
+    constexpr std::array<std::string_view, 9> blocking{
+        "XREADGROUP", "GROUP", "workers", "consumer", "BLOCK", "0", "STREAMS", "orders", ">",
+    };
+    RUVIA_CHECK(validateRedisPooledCommand(blocking, true));
+    RUVIA_CHECK(throwsOn([&] { (void)validateRedisPooledCommand(blocking, false); }));
 }
 
 RUVIA_TEST(redis_xreadgroup_parser_owns_nested_stream_entries) {

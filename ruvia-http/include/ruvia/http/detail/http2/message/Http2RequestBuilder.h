@@ -165,7 +165,7 @@ public:
         // A non-HTTP target can carry RFC 3986 userinfo or another authority
         // value that is not legal Host syntax. Never manufacture an invalid
         // regular field from that distinct pseudo-header grammar.
-        if (!stream.hasHost() && isValidHostHeader(authority)) {
+        if (!stream.hasHost() && stream.hasAuthority() && isValidHostHeader(authority)) {
             if (!addHeader(request, "host", authority, RequestHeaderKind::kHost)) {
                 return Http2RequestBuildResult::makeFailure(Http2RequestBuildFailure::Kind::kTooManyHeaders);
             }

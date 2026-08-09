@@ -3,6 +3,7 @@
 #include "ruvia/web/detail/app/AppListenerOptions.h"
 
 #include <bit>
+#include <memory_resource>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -47,21 +48,23 @@ App& App::setListeners(std::vector<ListenerConfig> listeners) {
     }
 
     return detail::mutateStoppedApp(*this, *state_, "cannot change listeners while app is running", [&listeners](detail::AppState& state) {
-        state.listeners.clear();
-        state.listeners.reserve(listeners.size());
+        auto* const resource = detail::appResource();
+        std::pmr::vector<detail::AppListenerConfig> replacement(resource);
+        replacement.reserve(listeners.size());
         for (const auto& listener : listeners) {
             std::visit(
-                [&state]<typename Listener>(const Listener& config) {
+                [&replacement, resource]<typename Listener>(const Listener& config) {
                     if constexpr (std::is_same_v<Listener, ListenerConfig::Http>) {
-                        state.listeners.emplace_back(detail::appResource(), config.address, config.port, detail::HttpServerOptions::PlainHttp{});
+                        replacement.emplace_back(resource, config.address, config.port, detail::HttpServerOptions::PlainHttp{});
                     } else if constexpr (std::is_same_v<Listener, ListenerConfig::Https>) {
-                        state.listeners.emplace_back(detail::appResource(), config.address, config.port, detail::makeTlsOptions(config.tls, detail::appResource()));
+                        replacement.emplace_back(resource, config.address, config.port, detail::makeTlsOptions(config.tls, resource));
                     } else {
-                        state.listeners.emplace_back(detail::appResource(), config.address, config.port, detail::HttpServerOptions::RedirectHttpToHttps{config.targetHttpsPort});
+                        replacement.emplace_back(resource, config.address, config.port, detail::HttpServerOptions::RedirectHttpToHttps{config.targetHttpsPort});
                     }
                 },
                 listener.listener_);
         }
+        state.listeners = std::move(replacement);
     });
 }
 

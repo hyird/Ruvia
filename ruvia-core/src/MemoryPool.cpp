@@ -10,11 +10,18 @@ namespace ruvia {
 namespace detail {
 
 std::pmr::memory_resource* processResource() noexcept {
-    // Explicit process-lifetime storage for startup metadata. It is never
-    // installed as std::pmr's default resource: embedding Ruvia must not alter
-    // unrelated PMR allocations in the host process.
-    static std::pmr::synchronized_pool_resource resource;
-    return &resource;
+    // Explicit process-lifetime storage for startup metadata and shutdown
+    // cross-thread completions. It is never installed as std::pmr's default
+    // resource: embedding Ruvia must not alter unrelated PMR allocations in the
+    // host process.
+    //
+    // This resource intentionally has no C++ static destructor. BlockingPool
+    // destructors may detach already-running callables, and those callables can
+    // still destroy PMR-backed completion state while the process is leaving
+    // main(). A function-local static resource would be released during static
+    // teardown before those detached threads necessarily finish.
+    static auto* const resource = new std::pmr::synchronized_pool_resource;
+    return resource;
 }
 
 namespace {

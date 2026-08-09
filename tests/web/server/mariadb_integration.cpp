@@ -26,6 +26,7 @@
 #include <exception>
 #include <memory_resource>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 
 namespace {
@@ -108,6 +109,16 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, unsigned& ticks) {
     auto variadicUpdate = co_await db.execute("UPDATE ruvia_mariadb_integration_items SET n = ? WHERE name = ?", std::int64_t{-43}, std::string_view("a'b?c"));
     dbRequire(variadicUpdate.affectedRows() == 1, "variadic update affected-row count is incorrect");
     (void)co_await db.execute("UPDATE ruvia_mariadb_integration_items SET n = ? WHERE name = ?", std::int64_t{-42}, std::string_view("a'b?c"));
+
+    bool rejectedCommandStream = false;
+    try {
+        (void)co_await db.queryStream("UPDATE ruvia_mariadb_integration_items SET n = n WHERE name = 'missing'");
+    } catch (const std::invalid_argument&) {
+        rejectedCommandStream = true;
+    }
+    dbRequire(rejectedCommandStream, "queryStream accepted non-row-producing SQL");
+    auto afterRejectedStream = co_await db.query("SELECT 1");
+    dbRequire(afterRejectedStream.rows()[0][0].text() == "1", "pool was not reusable after a rejected stream query");
 
     // Larger than one socket read, so the async path has to suspend and resume
     // several times to assemble the result.

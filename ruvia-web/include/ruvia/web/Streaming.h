@@ -26,6 +26,7 @@ struct StreamingAccess;
 class BodyReader final {
 private:
     friend struct detail::StreamingAccess;
+    friend class MultipartReader;
 
     struct Token final {};
 
@@ -57,9 +58,19 @@ public:
     /// Writes one body chunk. write(), writeln(), and end() share one linear
     /// output lane; starting another output operation before the current one
     /// completes throws std::logic_error.
+    ///
+    /// write()/writeln() copy the chunk into process-owned PMR storage before
+    /// returning. Hot-path producers that already hold a buffer in request-owned
+    /// storage should build it with the request arena and move it in through
+    /// writeOwned() to skip that copy.
     ScopedOperation<void> write(std::string_view chunk);
 
     ScopedOperation<void> writeln(std::string_view chunk);
+
+    /// Zero-copy write: takes ownership of an already-allocated chunk and
+    /// transfers it into the output lane without copying. Build the chunk with
+    /// a request-owned arena (Context::resource()) for hot-path streaming.
+    ScopedOperation<void> writeOwned(std::pmr::string chunk);
 
     /// Suspends the stream producer. The result is kElapsed for a normal
     /// delay, or kWorkerStopping when the owning worker is shutting down.
@@ -115,6 +126,12 @@ private:
         releaseContext_(target_);
     }
 
+    void requireActive() const {
+        if (!operationScope_.active()) {
+            throw std::logic_error("response stream lifetime has expired");
+        }
+    }
+
     [[nodiscard]] bool committed() const noexcept {
         return committed_(target_);
     }
@@ -131,17 +148,21 @@ private:
     detail::ScopedOperationScope operationScope_;
 
     friend class SseWriter;
-    ScopedOperation<void> writeOwned(std::pmr::string chunk);
 };
 
-class SseWriter final {
+class SseWriter final : private detail::ScopedCapabilityNode {
 public:
+    SseWriter(const SseWriter& other) noexcept;
+    SseWriter& operator=(const SseWriter&) = delete;
+    SseWriter(SseWriter&& other) noexcept;
+    SseWriter& operator=(SseWriter&&) = delete;
+
     ScopedOperation<void> write(const SseMessage& message);
 
     ScopedOperation<TimerSleepResult> sleep(std::chrono::milliseconds duration);
 
     [[nodiscard]] bool aborted() const noexcept {
-        return writer_.aborted();
+        return writer_ == nullptr || writer_->aborted();
     }
 
     ScopedOperation<void> end(std::span<const HttpHeaderView> trailers = {});
@@ -150,10 +171,11 @@ private:
     friend class Context;
     friend struct detail::StreamingAccess;
 
-    explicit SseWriter(ResponseStreamWriter& writer) noexcept
-        : writer_(writer) {}
+    explicit SseWriter(ResponseStreamWriter& writer) noexcept;
+    [[nodiscard]] ResponseStreamWriter& writer() const;
+    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
-    ResponseStreamWriter& writer_;
+    ResponseStreamWriter* writer_;
 };
 
 }  // namespace ruvia

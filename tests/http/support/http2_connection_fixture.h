@@ -131,7 +131,7 @@ concept HasResponseHeadErrorAccessor = requires(const T& result) { result.error(
 template <typename T>
 concept HasResponseHeadFailureContract = requires(const T& failure) {
     { failure.peerClosed() } -> std::same_as<bool>;
-    { failure.exception() } -> std::same_as<Http2ResponseHeadSubmitError>;
+    { failure.error() } -> std::same_as<Http2ResponseHeadSubmitError>;
 };
 
 template <typename T>
@@ -224,9 +224,9 @@ static_assert(!HasResponseHeadStatusAccessor<Http2BufferedResponseHeadSubmitResu
 static_assert(!HasResponseHeadAcceptedAccessor<Http2BufferedResponseHeadSubmitResult>);
 static_assert(!HasResponseHeadPlanAccessor<Http2BufferedResponseHeadSubmitResult>);
 static_assert(!HasResponseHeadErrorAccessor<Http2BufferedResponseHeadSubmitResult>);
-static_assert(!HasResponseHeadErrorAccessor<Http2ResponseHeadSubmitFailure>);
+static_assert(HasResponseHeadErrorAccessor<Http2ResponseHeadSubmitFailure>);
 static_assert(HasResponseHeadFailureContract<Http2ResponseHeadSubmitFailure>);
-static_assert(std::derived_from<Http2ResponseHeadSubmitError, std::exception>);
+static_assert(!std::derived_from<Http2ResponseHeadSubmitError, std::exception>);
 static_assert(std::is_trivially_copyable_v<Http2ResponseHeadSubmitFailure>);
 static_assert(sizeof(Http2ResponseHeadSubmitFailure) <= 1);
 static_assert(!HasResponseHeadPlanAccessor<Http2ResponseHeadSubmitFailure>);
@@ -261,7 +261,7 @@ inline bool responseHeadSubmitted(const Result& result) {
 template <typename Result>
 inline std::string_view responseHeadSubmitFailureMessage(const Result& result) {
     if (const auto* failure = result.failure()) {
-        return failure->exception().what();
+        return http2ResponseHeadSubmitErrorMessage(failure->error());
     }
     throw std::runtime_error("HTTP/2 response head did not fail");
 }

@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/field/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
@@ -94,13 +95,15 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
     if (responseKnownBit == kResponseHeaderContentEncoding && !isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kRecipient)) {
         return false;
     }
+    if (name == "trailer" && !isValidHttpResponseTrailerFieldValue(value, HttpFieldListRole::kRecipient)) {
+        return false;
+    }
     if (responseKnownBit == kResponseHeaderContentLength) {
-        std::size_t parsed = 0;
-        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
-        if (ec != std::errc{} || ptr != value.data() + value.size()) {
+        HttpContentLengthState contentLength;
+        if (contentLength.parseField(value) != HttpContentLengthParseStatus::kOk) {
             return false;
         }
-        if (!stream.declareRemoteContentLength(parsed)) {
+        if (!stream.declareRemoteContentLength(*contentLength.value())) {
             return false;
         }
     }
@@ -120,7 +123,8 @@ bool http2OnDecodedResponseTrailer(void* target, std::string_view name, std::str
     // trailer sections, after applying HTTP/2's lowercase and connection-field
     // rules. In particular, Accept-Ranges and ETag are explicitly trailer-safe,
     // while response controls such as Date and Location are not.
-    return context.acceptRegularField() && http2IsValidDecodedResponseHeader(name, value) && !isForbiddenResponseTrailerName(name);
+    return context.acceptRegularField() && http2IsValidDecodedResponseHeader(name, value) &&
+        !isForbiddenResponseTrailerName(name) && context.stream.appendRequestHeader(name, value, classifyRequestHeader(name));
 }
 
 HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction) {
@@ -178,6 +182,9 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
         return HeaderDecodeStatus::kProtocolError;
     }
     if (http2RemotePeerHalfClosed(stream) && !stream.remoteContent().terminalLengthValid()) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
+    if (!stream.setResponseHeaderCount(stream.requestHeaderCount())) {
         return HeaderDecodeStatus::kProtocolError;
     }
     return HeaderDecodeStatus::kOk;

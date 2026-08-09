@@ -42,6 +42,14 @@ concept HasConsumedBytes = requires(const T& result) {
 };
 
 template <typename T>
+concept HasTrailers = requires(const T& result) {
+    { result.trailers() } -> std::same_as<std::string_view>;
+};
+
+template <typename T>
+concept HasRvalueTrailers = requires(T&& result) { std::move(result).trailers(); };
+
+template <typename T>
 concept HasAnyRvalueHttp1ChunkDecodeAccessor = requires(T&& result) { std::move(result).needMore(); } || requires(T&& result) { std::move(result).bodyChunk(); } || requires(T&& result) { std::move(result).complete(); } || requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
@@ -59,6 +67,11 @@ static_assert(!HasChunkBytes<Http1ChunkDecodeNeedMore>);
 static_assert(HasChunkBytes<Http1ChunkDecodeBodyChunk>);
 static_assert(!HasChunkBytes<Http1ChunkDecodeComplete>);
 static_assert(!HasChunkBytes<Http1ChunkDecodeFailure>);
+static_assert(!HasTrailers<Http1ChunkDecodeNeedMore>);
+static_assert(!HasTrailers<Http1ChunkDecodeBodyChunk>);
+static_assert(HasTrailers<Http1ChunkDecodeComplete>);
+static_assert(!HasTrailers<Http1ChunkDecodeFailure>);
+static_assert(!HasRvalueTrailers<Http1ChunkDecodeComplete>);
 static_assert(!HasRawDecodeError<Http1ChunkDecodeFailure>);
 static_assert(std::same_as<decltype(std::declval<const Http1ChunkDecodeFailure&>().protocolError()), ruvia::HttpProtocolError>);
 
@@ -158,7 +171,8 @@ RUVIA_TEST(chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) {
             body.append(bodyChunk->bytes());
             continue;
         }
-        if (result.complete() != nullptr) {
+        if (const auto* complete = result.complete()) {
+            RUVIA_CHECK_EQ(complete->trailers(), std::string_view("X-Trace: abc"));
             break;
         }
         RUVIA_CHECK(result.needMore() == nullptr);
@@ -214,7 +228,7 @@ RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
 }
 
 RUVIA_TEST(chunked_body_decoder_caps_each_size_line) {
-    Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(ruvia::kMaxHttpBodyBytes));
+    Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(ruvia::kDefaultMaxBufferedBodyBytes));
     std::string oversized = "1;x=";
     oversized.append(ruvia::kMaxHttpHeaderBytes, 'a');
     oversized.append("\r\n");
@@ -225,7 +239,7 @@ RUVIA_TEST(chunked_body_decoder_caps_each_size_line) {
         RUVIA_CHECK_EQ(failure->protocolError().status(), ruvia::http_status::kContentTooLarge);
     }
 
-    Http1ChunkedBodyDecoder boundary(ProtocolByteLimit::limited(ruvia::kMaxHttpBodyBytes));
+    Http1ChunkedBodyDecoder boundary(ProtocolByteLimit::limited(ruvia::kDefaultMaxBufferedBodyBytes));
     std::string accepted = "1;x=";
     // Reserve two bytes for the data delimiter and five for the terminal chunk.
     accepted.append(ruvia::kMaxHttpHeaderBytes - 7 - accepted.size() - 2, 'a');

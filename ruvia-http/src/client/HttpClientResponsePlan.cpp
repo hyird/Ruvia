@@ -33,7 +33,7 @@ namespace {
 
 [[nodiscard]] bool requestAllowsProtocolSwitch(const Http1ClientRequestContext& request, const Http1ClientParsedResponseHead& response, Http1ClientRequestContentPhase requestContentPhase) noexcept {
     const bool requestContentAllowsSwitch = requestContentPhase == Http1ClientRequestContentPhase::kContentComplete || requestContentPhase == Http1ClientRequestContentPhase::kContinueReceivedContentComplete;
-    if (request.closePolicy() == Http1ClientRequestClosePolicy::kCloseAfterResponse || !requestContentAllowsSwitch) {
+    if (request.closePolicy() == Http1ClosePolicy::kCloseAfterResponse || !requestContentAllowsSwitch) {
         return false;
     }
     if (!request.connectionOptions().upgrade() || response.connectionOptions.close() || !response.connectionOptions.upgrade() || !response.upgradeProtocols.hasProtocol()) {
@@ -74,19 +74,19 @@ namespace {
     return std::nullopt;
 }
 
-[[nodiscard]] Http1ClientResponsePersistence responsePersistence(const Http1ClientParsedResponseHead& response) noexcept {
+[[nodiscard]] Http1ClosePolicy responsePersistence(const Http1ClientParsedResponseHead& response) noexcept {
     if (response.connectionOptions.close()) {
-        return Http1ClientResponsePersistence::kClose;
+        return Http1ClosePolicy::kCloseAfterResponse;
     }
     if (response.protocolVersion == HttpProtocolVersion::kHttp11 || response.connectionOptions.keepAlive()) {
-        return Http1ClientResponsePersistence::kReuse;
+        return Http1ClosePolicy::kAllowReuse;
     }
-    return Http1ClientResponsePersistence::kClose;
+    return Http1ClosePolicy::kCloseAfterResponse;
 }
 
-[[nodiscard]] Http1ClientResponsePersistence finalResponsePersistence(const Http1ClientRequestContext& request, const Http1ClientParsedResponseHead& response) noexcept {
-    if (request.closePolicy() == Http1ClientRequestClosePolicy::kCloseAfterResponse) {
-        return Http1ClientResponsePersistence::kClose;
+[[nodiscard]] Http1ClosePolicy finalResponsePersistence(const Http1ClientRequestContext& request, const Http1ClientParsedResponseHead& response) noexcept {
+    if (request.closePolicy() == Http1ClosePolicy::kCloseAfterResponse) {
+        return Http1ClosePolicy::kCloseAfterResponse;
     }
     return responsePersistence(response);
 }
@@ -96,19 +96,19 @@ namespace {
 struct Http1ClientResponsePlanAccess final {
     using RequestContentSignal = std::optional<Http1ClientRequestContentSignal>;
 
-    [[nodiscard]] static Http1ClientResponsePlan informational(Http1ClientResponsePersistence persistence, RequestContentSignal requestContentSignal) noexcept {
+    [[nodiscard]] static Http1ClientResponsePlan informational(Http1ClosePolicy persistence, RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientInformationalResponse(persistence)), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan withoutContent(Http1ClientResponsePersistence persistence, RequestContentSignal requestContentSignal) noexcept {
+    [[nodiscard]] static Http1ClientResponsePlan withoutContent(Http1ClosePolicy persistence, RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientResponseWithoutContent(persistence)), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan zeroContentKnownLength(Http1ClientResponsePersistence persistence, RequestContentSignal requestContentSignal) noexcept {
+    [[nodiscard]] static Http1ClientResponsePlan zeroContentKnownLength(Http1ClosePolicy persistence, RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientResponseWithZeroContent(Http1ClientResponseWithZeroContent::Framing(Http1ClientKnownLengthResponse(0, persistence)))), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan zeroContentChunked(HttpTransferCodings transferCodings, Http1ClientResponsePersistence persistence, RequestContentSignal requestContentSignal) noexcept {
+    [[nodiscard]] static Http1ClientResponsePlan zeroContentChunked(HttpTransferCodings transferCodings, Http1ClosePolicy persistence, RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientResponseWithZeroContent(Http1ClientResponseWithZeroContent::Framing(Http1ClientChunkedResponse(transferCodings, persistence)))), requestContentSignal);
     }
 
@@ -116,11 +116,11 @@ struct Http1ClientResponsePlanAccess final {
         return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientResponseWithZeroContent(Http1ClientResponseWithZeroContent::Framing(Http1ClientCloseDelimitedResponse(transferCodings)))), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan knownLength(std::size_t contentLength, Http1ClientResponsePersistence persistence, RequestContentSignal requestContentSignal) noexcept {
+    [[nodiscard]] static Http1ClientResponsePlan knownLength(std::size_t contentLength, Http1ClosePolicy persistence, RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientKnownLengthResponse(contentLength, persistence)), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan chunked(HttpTransferCodings transferCodings, Http1ClientResponsePersistence persistence, RequestContentSignal requestContentSignal) noexcept {
+    [[nodiscard]] static Http1ClientResponsePlan chunked(HttpTransferCodings transferCodings, Http1ClosePolicy persistence, RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientChunkedResponse(transferCodings, persistence)), requestContentSignal);
     }
 
@@ -148,7 +148,7 @@ Http1ClientResponsePlanningResult planHttp1ClientResponse(const Http1ClientReque
     }
     if (contentSemantics == HttpResponseContentSemantics::kInformational) {
         const auto persistence = responsePersistence(response);
-        return Http1ClientResponsePlanAccess::informational(persistence, requestContentSignal(requestContentPhase, response.statusCode, persistence == Http1ClientResponsePersistence::kClose));
+        return Http1ClientResponsePlanAccess::informational(persistence, requestContentSignal(requestContentPhase, response.statusCode, persistence == Http1ClosePolicy::kCloseAfterResponse));
     }
     if (contentSemantics == HttpResponseContentSemantics::kConnectTunnel) {
         return Http1ClientResponsePlanAccess::connectTunnel(std::nullopt);
@@ -161,7 +161,7 @@ Http1ClientResponsePlanningResult planHttp1ClientResponse(const Http1ClientReque
     }
 
     const auto persistence = finalResponsePersistence(request, response);
-    const auto persistentContentSignal = requestContentSignal(requestContentPhase, response.statusCode, persistence == Http1ClientResponsePersistence::kClose);
+    const auto persistentContentSignal = requestContentSignal(requestContentPhase, response.statusCode, persistence == Http1ClosePolicy::kCloseAfterResponse);
     if (contentSemantics == HttpResponseContentSemantics::kWithoutContent) {
         return Http1ClientResponsePlanAccess::withoutContent(persistence, persistentContentSignal);
     }

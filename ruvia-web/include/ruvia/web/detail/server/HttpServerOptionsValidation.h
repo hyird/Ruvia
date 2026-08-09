@@ -66,9 +66,7 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
         }
         for (std::size_t i = 0; i < tls->sniIdentities.size(); ++i) {
             const auto& sni = tls->sniIdentities[i];
-            if (sni.host.empty()) {
-                throw std::invalid_argument("SNI host must not be empty");
-            }
+            ensureSniHost(sni.host, "SNI host must not be empty", "SNI host is invalid");
             validateHttpServerTlsIdentity(sni.identity);
             for (std::size_t j = 0; j < i; ++j) {
                 if (httpAsciiEqualsIgnoreCase(tls->sniIdentities[j].host, sni.host)) {

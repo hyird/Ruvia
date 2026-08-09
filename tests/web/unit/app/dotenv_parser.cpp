@@ -177,7 +177,7 @@ RUVIA_TEST(dotenv_hash_is_literal_unless_space_preceded) {
 }
 
 RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
-    const auto path = writeTempEnv("ruvia_dotenv_typed.env", "PORT=8080\nBAD_PORT=not-a-port\nENABLED=maybe\n");
+    const auto path = writeTempEnv("ruvia_dotenv_typed.env", "PORT=8080\nBAD_PORT=not-a-port\nENABLED=maybe\nBAD_DOUBLE=nan\nBAD_INF=inf\n");
     ruvia::Env env;
     (void)ruvia::detail::loadEnvFromFile(env, path, {});
     std::filesystem::remove(path);
@@ -200,4 +200,20 @@ RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
         badBoolThrew = std::string_view(error.what()).find("ENABLED") != std::string_view::npos;
     }
     RUVIA_CHECK(badBoolThrew);
+
+    bool badDoubleThrew = false;
+    try {
+        (void)env.get<double>("BAD_DOUBLE");
+    } catch (const std::invalid_argument& error) {
+        badDoubleThrew = std::string_view(error.what()).find("BAD_DOUBLE") != std::string_view::npos;
+    }
+    RUVIA_CHECK(badDoubleThrew);
+
+    bool badInfThrew = false;
+    try {
+        (void)env.get<double>("BAD_INF");
+    } catch (const std::invalid_argument& error) {
+        badInfThrew = std::string_view(error.what()).find("BAD_INF") != std::string_view::npos;
+    }
+    RUVIA_CHECK(badInfThrew);
 }

@@ -27,6 +27,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/HttpZstdCodec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/coding/ZlibPmrAllocation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/cookie/Cookies.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cookie/HttpSetCookie.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/field/HttpCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/field/HttpFieldSyntax.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/field/HttpMethod.cpp
@@ -113,10 +114,12 @@ ruvia_install_public_headers(http
     include/ruvia/http/HttpProtocolVersion.h
     include/ruvia/http/Http1ClientRequestWriter.h
     include/ruvia/http/Http1ClientResponseParser.h
+    include/ruvia/http/Http1ClosePolicy.h
     include/ruvia/http/Http1RequestParser.h
     include/ruvia/http/HttpRequest.h
     include/ruvia/http/HttpResponse.h
     include/ruvia/http/HttpStatus.h
+    include/ruvia/http/HttpSetCookie.h
     include/ruvia/http/MultipartParser.h
     include/ruvia/http/Sse.h
     include/ruvia/http/UrlEncoding.h

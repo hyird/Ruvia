@@ -80,6 +80,16 @@ private:
     bool deallocatedAfterRelease_{false};
 };
 
+template <typename Fn>
+bool throwsInvalidArgument(Fn&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::invalid_argument&) {
+        return true;
+    }
+}
+
 static_assert(std::is_move_assignable_v<ruvia::RedisKeyValue>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisKeyValue>);
 static_assert(std::is_move_assignable_v<ruvia::RedisScoredValue>);
@@ -282,6 +292,9 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_
     bool finiteStreamAccepted = true;
     bool finiteRawAccepted = true;
     bool statefulRejected = false;
+    bool clientStateRejected = false;
+    bool helloRejected = false;
+    bool askingRejected = false;
     try {
         (void)redis.blpop(keys, std::chrono::seconds(1));
     } catch (...) {
@@ -301,6 +314,21 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_
         (void)redis.command("SELECT", "1");
     } catch (const std::invalid_argument&) {
         statefulRejected = true;
+    }
+    try {
+        (void)redis.command("CLIENT", "REPLY", "OFF");
+    } catch (const std::invalid_argument&) {
+        clientStateRejected = true;
+    }
+    try {
+        (void)redis.command("HELLO", "3");
+    } catch (const std::invalid_argument&) {
+        helloRejected = true;
+    }
+    try {
+        (void)redis.command("ASKING");
+    } catch (const std::invalid_argument&) {
+        askingRejected = true;
     }
 
     bool infiniteStreamRejected = false;
@@ -326,6 +354,9 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_
     RUVIA_CHECK(finiteStreamAccepted);
     RUVIA_CHECK(finiteRawAccepted);
     RUVIA_CHECK(statefulRejected);
+    RUVIA_CHECK(clientStateRejected);
+    RUVIA_CHECK(helloRejected);
+    RUVIA_CHECK(askingRejected);
     RUVIA_CHECK(infiniteStreamRejected);
     RUVIA_CHECK(infinitePopRejected);
     RUVIA_CHECK(unboundedRawRejected);
@@ -442,6 +473,76 @@ RUVIA_TEST(redis_set_expiration_cannot_represent_conflicting_modes) {
         zeroRejected = true;
     }
     RUVIA_CHECK(zeroRejected);
+
+    bool negativeRejected = false;
+    try {
+        (void)ruvia::RedisSetExpiration::expiresAfter(std::chrono::milliseconds(-1));
+    } catch (const std::invalid_argument&) {
+        negativeRejected = true;
+    }
+    RUVIA_CHECK(negativeRejected);
+}
+
+RUVIA_TEST(redis_setex_rejects_non_positive_ttl_before_io) {
+    asio::io_context ioContext;
+    const std::array definitions{redisDefinition("default")};
+    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
+    ruvia::detail::ScopedOperationScope operationScope;
+    auto redis = registry.get(std::pmr::get_default_resource(), operationScope);
+
+    bool zeroRejected = false;
+    try {
+        (void)redis.setEx("key", std::chrono::seconds(0), "value");
+    } catch (const std::invalid_argument&) {
+        zeroRejected = true;
+    }
+    RUVIA_CHECK(zeroRejected);
+
+    bool negativeRejected = false;
+    try {
+        (void)redis.setEx("key", std::chrono::seconds(-1), "value");
+    } catch (const std::invalid_argument&) {
+        negativeRejected = true;
+    }
+    RUVIA_CHECK(negativeRejected);
+}
+
+RUVIA_TEST(redis_expire_rejects_non_positive_ttl_before_io) {
+    asio::io_context ioContext;
+    const std::array definitions{redisDefinition("default")};
+    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
+    ruvia::detail::ScopedOperationScope operationScope;
+    auto redis = registry.get(std::pmr::get_default_resource(), operationScope);
+
+    bool zeroRejected = false;
+    try {
+        (void)redis.expire("key", std::chrono::seconds(0));
+    } catch (const std::invalid_argument&) {
+        zeroRejected = true;
+    }
+    RUVIA_CHECK(zeroRejected);
+
+    bool negativeRejected = false;
+    try {
+        (void)redis.expire("key", std::chrono::seconds(-1));
+    } catch (const std::invalid_argument&) {
+        negativeRejected = true;
+    }
+    RUVIA_CHECK(negativeRejected);
+}
+
+RUVIA_TEST(redis_multi_key_commands_reject_empty_key_spans_before_io) {
+    asio::io_context ioContext;
+    const std::array definitions{redisDefinition("default")};
+    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
+    ruvia::detail::ScopedOperationScope operationScope;
+    auto redis = registry.get(std::pmr::get_default_resource(), operationScope);
+    const std::span<const std::string_view> noKeys;
+
+    RUVIA_CHECK(throwsInvalidArgument([&] { (void)redis.mget(noKeys); }));
+    RUVIA_CHECK(throwsInvalidArgument([&] { (void)redis.sinter(noKeys); }));
+    RUVIA_CHECK(throwsInvalidArgument([&] { (void)redis.sunion(noKeys); }));
+    RUVIA_CHECK(throwsInvalidArgument([&] { (void)redis.sdiff(noKeys); }));
 }
 
 RUVIA_TEST(redis_value_move_assignment_propagates_allocator_failure) {

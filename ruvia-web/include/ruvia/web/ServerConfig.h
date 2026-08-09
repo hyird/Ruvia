@@ -27,6 +27,7 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/StaticFiles.h"
+#include "ruvia/web/detail/Callback.h"
 #include "ruvia/web/detail/CallbackRef.h"
 
 namespace ruvia {
@@ -425,103 +426,7 @@ using AccessLogCallbackRef = CallbackRef<void(const AccessLogRecord&) noexcept>;
 
 // App-owned access-log listener. Request dispatch receives only an internal,
 // allocation-free CallbackRef and never participates in this owner's lifetime.
-class AccessLogCallback final {
-public:
-    constexpr AccessLogCallback() noexcept = default;
-    template <typename Listener, typename Stored = std::decay_t<Listener>>
-        requires(!std::is_same_v<Stored, AccessLogCallback> && !std::is_lvalue_reference_v<Listener> && std::is_nothrow_invocable_r_v<void, Stored&, const AccessLogRecord&> && std::is_copy_constructible_v<Stored>)
-    AccessLogCallback(Listener&& listener)
-        : target_(detail::constructPmrObject<Stored>(detail::processResource(), std::forward<Listener>(listener))),
-          invoke_([](void* target, const AccessLogRecord& record) noexcept { (*static_cast<Stored*>(target))(record); }),
-          destroy_([](void* target, std::pmr::memory_resource* resource) noexcept { detail::destroyPmrObject(static_cast<Stored*>(target), resource); }),
-          clone_([](const void* target, std::pmr::memory_resource* resource) -> void* { return detail::constructPmrObject<Stored>(resource, *static_cast<const Stored*>(target)); }),
-          resource_(detail::processResource()) {}
-
-    AccessLogCallback(const AccessLogCallback& other) {
-        copyFrom(other);
-    }
-
-    AccessLogCallback& operator=(const AccessLogCallback& other) {
-        if (this != &other) {
-            AccessLogCallback copy(other);
-            swap(copy);
-        }
-        return *this;
-    }
-
-    AccessLogCallback(AccessLogCallback&& other) noexcept {
-        moveFrom(other);
-    }
-
-    AccessLogCallback& operator=(AccessLogCallback&& other) noexcept {
-        if (this != &other) {
-            reset();
-            moveFrom(other);
-        }
-        return *this;
-    }
-
-    ~AccessLogCallback() {
-        reset();
-    }
-
-    [[nodiscard]] constexpr explicit operator bool() const noexcept {
-        return invoke_ != nullptr;
-    }
-
-private:
-    friend struct detail::CallbackAccess;
-    friend struct detail::AccessLogRecordAccess;
-
-    using Invoke = void (*)(void*, const AccessLogRecord&) noexcept;
-    using Destroy = void (*)(void*, std::pmr::memory_resource*) noexcept;
-    using Clone = void* (*)(const void*, std::pmr::memory_resource*);
-
-    [[nodiscard]] constexpr detail::AccessLogCallbackRef callbackRef() const noexcept {
-        return detail::CallbackAccess::make<void(const AccessLogRecord&) noexcept>(target_, invoke_);
-    }
-
-    void copyFrom(const AccessLogCallback& other) {
-        target_ = other.clone_ == nullptr ? other.target_ : other.clone_(other.target_, other.resource_);
-        invoke_ = other.invoke_;
-        destroy_ = other.destroy_;
-        clone_ = other.clone_;
-        resource_ = other.resource_;
-    }
-
-    void moveFrom(AccessLogCallback& other) noexcept {
-        target_ = std::exchange(other.target_, nullptr);
-        invoke_ = std::exchange(other.invoke_, nullptr);
-        destroy_ = std::exchange(other.destroy_, nullptr);
-        clone_ = std::exchange(other.clone_, nullptr);
-        resource_ = std::exchange(other.resource_, nullptr);
-    }
-
-    void swap(AccessLogCallback& other) noexcept {
-        std::swap(target_, other.target_);
-        std::swap(invoke_, other.invoke_);
-        std::swap(destroy_, other.destroy_);
-        std::swap(clone_, other.clone_);
-        std::swap(resource_, other.resource_);
-    }
-
-    void reset() noexcept {
-        if (destroy_ != nullptr) {
-            destroy_(target_, resource_);
-        }
-        target_ = nullptr;
-        invoke_ = nullptr;
-        destroy_ = nullptr;
-        clone_ = nullptr;
-        resource_ = nullptr;
-    }
-
-    void* target_{nullptr};
-    Invoke invoke_{nullptr};
-    Destroy destroy_{nullptr};
-    Clone clone_{nullptr};
-    std::pmr::memory_resource* resource_{nullptr};
-};
+using AccessLogCallback = detail::Callback<void(const AccessLogRecord&) noexcept>;
 
 // One connection lost to an exception that escaped its session: a handler bug
 // past the response's point of no return, an error handler that itself failed,
@@ -591,102 +496,6 @@ using ConnectionFailureCallbackRef = CallbackRef<void(const ConnectionFailureRec
 // line of defense for a connection, where a second failure would have nowhere
 // left to go, so the requirement is enforced at compile time rather than
 // swallowed at runtime.
-class ConnectionFailureCallback final {
-public:
-    constexpr ConnectionFailureCallback() noexcept = default;
-    template <typename Listener, typename Stored = std::decay_t<Listener>>
-        requires(!std::is_same_v<Stored, ConnectionFailureCallback> && !std::is_lvalue_reference_v<Listener> && std::is_nothrow_invocable_r_v<void, Stored&, const ConnectionFailureRecord&> && std::is_copy_constructible_v<Stored>)
-    ConnectionFailureCallback(Listener&& listener)
-        : target_(detail::constructPmrObject<Stored>(detail::processResource(), std::forward<Listener>(listener))),
-          invoke_([](void* target, const ConnectionFailureRecord& record) noexcept { (*static_cast<Stored*>(target))(record); }),
-          destroy_([](void* target, std::pmr::memory_resource* resource) noexcept { detail::destroyPmrObject(static_cast<Stored*>(target), resource); }),
-          clone_([](const void* target, std::pmr::memory_resource* resource) -> void* { return detail::constructPmrObject<Stored>(resource, *static_cast<const Stored*>(target)); }),
-          resource_(detail::processResource()) {}
-
-    ConnectionFailureCallback(const ConnectionFailureCallback& other) {
-        copyFrom(other);
-    }
-
-    ConnectionFailureCallback& operator=(const ConnectionFailureCallback& other) {
-        if (this != &other) {
-            ConnectionFailureCallback copy(other);
-            swap(copy);
-        }
-        return *this;
-    }
-
-    ConnectionFailureCallback(ConnectionFailureCallback&& other) noexcept {
-        moveFrom(other);
-    }
-
-    ConnectionFailureCallback& operator=(ConnectionFailureCallback&& other) noexcept {
-        if (this != &other) {
-            reset();
-            moveFrom(other);
-        }
-        return *this;
-    }
-
-    ~ConnectionFailureCallback() {
-        reset();
-    }
-
-    [[nodiscard]] constexpr explicit operator bool() const noexcept {
-        return invoke_ != nullptr;
-    }
-
-private:
-    friend struct detail::CallbackAccess;
-    friend struct detail::ConnectionFailureRecordAccess;
-
-    using Invoke = void (*)(void*, const ConnectionFailureRecord&) noexcept;
-    using Destroy = void (*)(void*, std::pmr::memory_resource*) noexcept;
-    using Clone = void* (*)(const void*, std::pmr::memory_resource*);
-
-    [[nodiscard]] constexpr detail::ConnectionFailureCallbackRef callbackRef() const noexcept {
-        return detail::CallbackAccess::make<void(const ConnectionFailureRecord&) noexcept>(target_, invoke_);
-    }
-
-    void copyFrom(const ConnectionFailureCallback& other) {
-        target_ = other.clone_ == nullptr ? other.target_ : other.clone_(other.target_, other.resource_);
-        invoke_ = other.invoke_;
-        destroy_ = other.destroy_;
-        clone_ = other.clone_;
-        resource_ = other.resource_;
-    }
-
-    void moveFrom(ConnectionFailureCallback& other) noexcept {
-        target_ = std::exchange(other.target_, nullptr);
-        invoke_ = std::exchange(other.invoke_, nullptr);
-        destroy_ = std::exchange(other.destroy_, nullptr);
-        clone_ = std::exchange(other.clone_, nullptr);
-        resource_ = std::exchange(other.resource_, nullptr);
-    }
-
-    void swap(ConnectionFailureCallback& other) noexcept {
-        std::swap(target_, other.target_);
-        std::swap(invoke_, other.invoke_);
-        std::swap(destroy_, other.destroy_);
-        std::swap(clone_, other.clone_);
-        std::swap(resource_, other.resource_);
-    }
-
-    void reset() noexcept {
-        if (destroy_ != nullptr) {
-            destroy_(target_, resource_);
-        }
-        target_ = nullptr;
-        invoke_ = nullptr;
-        destroy_ = nullptr;
-        clone_ = nullptr;
-        resource_ = nullptr;
-    }
-
-    void* target_{nullptr};
-    Invoke invoke_{nullptr};
-    Destroy destroy_{nullptr};
-    Clone clone_{nullptr};
-    std::pmr::memory_resource* resource_{nullptr};
-};
+using ConnectionFailureCallback = detail::Callback<void(const ConnectionFailureRecord&) noexcept>;
 
 }  // namespace ruvia

@@ -68,6 +68,8 @@ private:
     [[nodiscard]] Task<void> dispatchOneInner(std::uint32_t streamId);
     [[nodiscard]] Task<void> dispatchOne(std::uint32_t streamId);
     [[nodiscard]] bool admitStream(std::uint32_t streamId);
+    void resetStreamNoThrow(std::uint32_t streamId, Http2ErrorCode error) noexcept;
+    void unpinStreamNoThrow(std::uint32_t streamId) noexcept;
 
     asio::any_io_executor executor_;
     asio::ip::tcp::socket* socket_;

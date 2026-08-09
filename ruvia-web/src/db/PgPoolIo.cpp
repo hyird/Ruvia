@@ -187,7 +187,8 @@ Task<void> PostgreSqlPool::sendQuery(ConnectionSlot& slot, const std::pmr::strin
     }
     auto encoded = encodePostgreSqlParams(params, resource_);
     const auto* values = encoded.values.empty() ? nullptr : encoded.values.data();
-    if (PQsendQueryParams(slot.connection, sql.c_str(), static_cast<int>(params.size()), nullptr, values, nullptr, nullptr, 0) == 0) {
+    const auto* lengths = encoded.lengths.empty() ? nullptr : encoded.lengths.data();
+    if (PQsendQueryParams(slot.connection, sql.c_str(), static_cast<int>(params.size()), nullptr, values, lengths, nullptr, 0) == 0) {
         throw postgreSqlError(*slot.connection, "PQsendQueryParams");
     }
     if (singleRow && PQsetSingleRowMode(slot.connection) == 0) {

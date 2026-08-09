@@ -13,10 +13,11 @@
 
 namespace ruvia {
 
-class MultipartReader final {
+class MultipartReader final : private detail::ScopedCapabilityNode {
 public:
     MultipartReader(BodyReader& bodyReader, MultipartBoundary boundary, std::pmr::memory_resource* resource)
-        : bodyReader_(bodyReader),
+        : detail::ScopedCapabilityNode(bodyReader.operationScope_, &MultipartReader::expireCapability),
+          bodyReader_(&bodyReader),
           parser_(std::move(boundary), resource) {}
 
     MultipartReader(const MultipartReader&) = delete;
@@ -57,7 +58,10 @@ private:
         bool committed_{false};
     };
 
-    BodyReader& bodyReader_;
+    [[nodiscard]] BodyReader& bodyReader() const;
+    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
+
+    BodyReader* bodyReader_;
     MultipartParser parser_;
     State state_{State::kReady};
     detail::ScopedOperationScope operationScope_;

@@ -59,9 +59,7 @@ TlsConfig& TlsConfig::setClientCertificatePolicy(TlsClientCertificatePolicy poli
 }
 
 TlsConfig& TlsConfig::addSniIdentity(std::string_view host, TlsIdentity identity) {
-    if (host.empty()) {
-        throw std::invalid_argument("SNI host must not be empty");
-    }
+    detail::ensureSniHost(host, "SNI host must not be empty", "SNI host is invalid");
     for (const auto& configured : sniIdentities_) {
         if (asciiEqualsIgnoreCase(configured.host(), host)) {
             throw std::invalid_argument("SNI hosts must be unique");

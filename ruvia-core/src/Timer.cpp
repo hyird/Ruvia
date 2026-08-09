@@ -44,15 +44,11 @@ private:
 
 }  // namespace
 
-Task<TimerSleepResult> detail::sleepForBorrowed(const WorkerHandle& worker, std::chrono::steady_clock::duration duration) {
+Task<TimerSleepResult> sleepFor(const WorkerHandle& worker, std::chrono::steady_clock::duration duration) {
     if (!worker.isCurrent()) {
         throw std::logic_error("sleepFor must run on its bound worker");
     }
     co_return co_await SleepAwaiter(worker, duration);
-}
-
-Task<TimerSleepResult> sleepFor(WorkerHandle worker, std::chrono::steady_clock::duration duration) {
-    co_return co_await detail::sleepForBorrowed(worker, duration);
 }
 
 }  // namespace ruvia

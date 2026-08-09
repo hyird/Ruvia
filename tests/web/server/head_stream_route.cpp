@@ -1,11 +1,9 @@
-// A HEAD request for a streaming or SSE GET route must answer like GET but
-// without any body (RFC 9110 9.3.2): the auto HEAD shadow used to cover only
-// buffered GET routes, so HEAD of an SSE endpoint answered 404 -- and once the
-// shadow exists, the handler must stop deterministically at its first write
-// instead of streaming forever into a body-suppressed response. Drives a real
-// HTTP/1.1 loopback server and asserts the HEAD responses carry the streaming
-// head (chunked framing / SSE content type), leak zero body bytes, and keep
-// the connection alive for a pipelined GET that still streams normally.
+// An explicit HEAD streaming/SSE route must answer like the corresponding GET
+// route's head but without any body (RFC 9110 9.3.2). Streaming GET routes do
+// not receive implicit HEAD shadows; this drives a real HTTP/1.1 loopback
+// server and asserts explicit HEAD responses carry the streaming head (chunked
+// framing / SSE content type), leak zero body bytes, and keep the connection
+// alive for a pipelined GET that still streams normally.
 
 #include <algorithm>
 #include <charconv>
@@ -119,8 +117,10 @@ int main() {
     std::pmr::string eventsPath("/events", std::pmr::get_default_resource());
     std::pmr::string ssePath("/sse", std::pmr::get_default_resource());
     std::pmr::string noTransformPath("/no-transform", std::pmr::get_default_resource());
-    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(eventsPath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
-    impl.registerSseRoute(ruvia::HttpKnownMethod::kGet, std::move(ssePath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string(eventsPath, std::pmr::get_default_resource()), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kHead, std::move(eventsPath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerSseRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string(ssePath, std::pmr::get_default_resource()), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerSseRoute(ruvia::HttpKnownMethod::kHead, std::move(ssePath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
     impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(noTransformPath), ruvia::detail::RouteStreamHandler(nullptr, &noTransformStreamHandler), {}, {});
     impl.finalize();
 
@@ -142,31 +142,31 @@ int main() {
     sock.connect(endpoint, ec);
     asio::streambuf buffer;
 
-    // HEAD of the generic streaming route: the streaming head, no body bytes.
+    // Explicit HEAD of the generic streaming route: the streaming head, no body bytes.
     asio::write(sock, asio::buffer(std::string_view("HEAD /events HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n")), ec);
     const auto eventsHead = lowered(readHead(sock, buffer, ec));
     if (!eventsHead.starts_with("http/1.1 200")) {
-        fail(1, "HEAD of a streaming route was not 200");
+        fail(1, "explicit HEAD of a streaming route was not 200");
     } else if (buffer.size() != 0) {
-        fail(2, "HEAD of a streaming route sent body bytes");
+        fail(2, "explicit HEAD of a streaming route sent body bytes");
     } else if (eventsHead.find("connection: close") != std::string_view::npos) {
-        fail(3, "HEAD of a streaming route forced the connection closed");
+        fail(3, "explicit HEAD of a streaming route forced the connection closed");
     } else if (eventsHead.find("content-encoding: gzip") == std::string_view::npos) {
-        fail(4, "HEAD of a streaming route lost the negotiated content coding");
+        fail(4, "explicit HEAD of a streaming route lost the negotiated content coding");
     }
 
-    // HEAD of the SSE route mirrors the GET head, content type included.
+    // Explicit HEAD of the SSE route mirrors the GET head, content type included.
     if (rc == 0) {
         asio::write(sock, asio::buffer(std::string_view("HEAD /sse HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n")), ec);
         const auto sseHead = lowered(readHead(sock, buffer, ec));
         if (!sseHead.starts_with("http/1.1 200")) {
-            fail(5, "HEAD of an SSE route was not 200");
+            fail(5, "explicit HEAD of an SSE route was not 200");
         } else if (sseHead.find("content-type: text/event-stream") == std::string_view::npos) {
-            fail(6, "HEAD of an SSE route lost the SSE content type");
+            fail(6, "explicit HEAD of an SSE route lost the SSE content type");
         } else if (buffer.size() != 0) {
-            fail(7, "HEAD of an SSE route sent body bytes");
+            fail(7, "explicit HEAD of an SSE route sent body bytes");
         } else if (sseHead.find("content-encoding: gzip") == std::string_view::npos) {
-            fail(8, "HEAD of an SSE route lost the negotiated content coding");
+            fail(8, "explicit HEAD of an SSE route lost the negotiated content coding");
         }
     }
 

@@ -28,8 +28,8 @@ inline constexpr std::size_t kRateLimitKeyBufferBytes = 19;
     }
     std::error_code ec;
     const auto address = asio::ip::make_address_v6(remoteAddress, ec);
-    if (ec || address.is_v4_mapped()) {
-        return remoteAddress;  // unparseable, or IPv4-mapped -> a full host key
+    if (ec || address.is_v4_mapped() || address.scope_id() != 0) {
+        return remoteAddress;  // unparseable, IPv4-mapped, or scoped -> a full host key
     }
     const auto bytes = address.to_bytes();
     static constexpr char kHex[] = "0123456789abcdef";

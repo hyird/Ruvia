@@ -196,6 +196,17 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
         }
         return true;
     }
+    const auto resetStreamForWindowUpdateError = [&](Http2ErrorCode error) {
+        const auto outputCheckpoint = output_.checkpoint();
+        try {
+            output_.appendRstStream(header.streamId, error);
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal, error);
+            markSendWindowOpened();
+        } catch (...) {
+            output_.rollbackTo(outputCheckpoint);
+            throw;
+        }
+    };
     switch (http2ApplyStreamWindowUpdate(*stream, increment)) {
         case Http2WindowUpdateResult::kOk:
             try {
@@ -206,14 +217,10 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
             }
             return true;
         case Http2WindowUpdateResult::kZeroIncrement:
-            output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
-            markSendWindowOpened();
+            resetStreamForWindowUpdateError(Http2ErrorCode::kProtocolError);
             return true;
         case Http2WindowUpdateResult::kOverflow:
-            output_.appendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kFlowControlError);
-            markSendWindowOpened();
+            resetStreamForWindowUpdateError(Http2ErrorCode::kFlowControlError);
             return true;
     }
     return true;

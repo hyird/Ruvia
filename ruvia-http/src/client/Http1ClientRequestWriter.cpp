@@ -18,7 +18,7 @@
 namespace ruvia::detail {
 
 struct Http1ClientRequestPrepareResultAccess final {
-    [[nodiscard]] static constexpr Http1ClientRequestContext context(std::string_view method, std::span<const HttpHeaderView> headers, HttpConnectionOptions connectionOptions, Http1ClientRequestClosePolicy closePolicy) noexcept {
+    [[nodiscard]] static constexpr Http1ClientRequestContext context(std::string_view method, std::span<const HttpHeaderView> headers, HttpConnectionOptions connectionOptions, Http1ClosePolicy closePolicy) noexcept {
         return Http1ClientRequestContext(method, headers, connectionOptions, closePolicy);
     }
 
@@ -90,6 +90,15 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     }
 }
 
+[[nodiscard]] bool isValidHttp1ClosePolicy(Http1ClosePolicy policy) noexcept {
+    switch (policy) {
+        case Http1ClosePolicy::kAllowReuse:
+        case Http1ClosePolicy::kCloseAfterResponse:
+            return true;
+    }
+    return false;
+}
+
 [[nodiscard]] Http1ClientRequestPrepareResult prepareRequest(const HttpOriginView& origin, std::string_view method, std::string_view target, bool connect, std::span<const HttpHeaderView> headers, HttpClientRequestContentView content, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) noexcept {
     RequestHeaderFacts headerFacts;
     Http1ClientRequestPrepareError error = Http1ClientRequestPrepareError::kInvalidHeader;
@@ -113,8 +122,8 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
         }
     }
 
-    const bool generateConnectionClose = policy.closePolicy() == Http1ClientRequestClosePolicy::kCloseAfterResponse && !headerFacts.connectionOptions.close();
-    const auto effectiveClosePolicy = headerFacts.connectionOptions.close() || generateConnectionClose ? Http1ClientRequestClosePolicy::kCloseAfterResponse : Http1ClientRequestClosePolicy::kAllowReuse;
+    const bool generateConnectionClose = policy.closePolicy() == Http1ClosePolicy::kCloseAfterResponse && !headerFacts.connectionOptions.close();
+    const auto effectiveClosePolicy = headerFacts.connectionOptions.close() || generateConnectionClose ? Http1ClosePolicy::kCloseAfterResponse : Http1ClosePolicy::kAllowReuse;
     const std::size_t generatedFields = 1 + (explicitContent ? 1 : 0) + (expectContinue ? 1 : 0) + (generateConnectionClose ? 1 : 0);
     if (headers.size() > kMaxHttpHeaderFields - generatedFields) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kTooManyHeaders);
@@ -210,11 +219,16 @@ std::string_view http1ClientRequestPrepareErrorMessage(Http1ClientRequestPrepare
             return "OPTIONS content requires Content-Type";
         case Http1ClientRequestPrepareError::kHeaderTooLarge:
             return "HTTP/1 client request header is too large";
+        case Http1ClientRequestPrepareError::kInvalidClosePolicy:
+            return "invalid HTTP/1 client close policy";
     }
     return "invalid HTTP/1 client request";
 }
 
 Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOriginView& origin, const HttpClientRequestView& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const noexcept {
+    if (!isValidHttp1ClosePolicy(policy.closePolicy())) {
+        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidClosePolicy);
+    }
     if (!isValidHttpMethodToken(request.method)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidMethod);
     }
@@ -228,6 +242,9 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOrig
 }
 
 Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const noexcept {
+    if (!isValidHttp1ClosePolicy(policy.closePolicy())) {
+        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidClosePolicy);
+    }
     if (tunnelOrigin.port() == 0) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidConnectOrigin);
     }

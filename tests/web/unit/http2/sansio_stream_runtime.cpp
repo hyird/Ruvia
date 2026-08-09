@@ -20,6 +20,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
@@ -27,8 +28,10 @@
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/http2/Http2BufferedResponseWrite.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
+#include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
 #include "ruvia/web/detail/router/RouteModes.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 
@@ -80,6 +83,10 @@ ruvia::HttpResponse invalidStreamingHead(ruvia::Context&) {
     ruvia::HttpResponse response(std::pmr::new_delete_resource());
     response.header("Content-Length", "not-a-number");
     return response;
+}
+
+ruvia::HttpResponse okStreamingHead(ruvia::Context&) {
+    return ruvia::HttpResponse(std::pmr::new_delete_resource());
 }
 
 [[nodiscard]] HttpResponseCodingSelection identityResponseCoding() {
@@ -284,6 +291,78 @@ RUVIA_TEST(http2_stream_head_failure_aborts_precommit_state) {
     RUVIA_CHECK(retryRejected);
 }
 
+RUVIA_TEST(http2_response_stream_empty_end_is_idempotent_after_late_termination) {
+    using http2_connection_test::driveGetRequest;
+    using http2_connection_test::handshake;
+
+    std::pmr::monotonic_buffer_resource resource;
+    ruvia::detail::Http2Connection connection(&resource);
+    handshake(connection);
+    driveGetRequest(connection, &resource);
+
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    ruvia::detail::WorkerSignal writeSignal(worker);
+    ruvia::detail::Http2SansIoTermination termination;
+    ruvia::detail::Http2SansIoStreamSignal streamSignal(worker, termination);
+
+    ruvia::WorkerMemory workerMemory;
+    ruvia::RequestMemory requestMemory(workerMemory);
+    auto request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
+    ruvia::detail::HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ruvia::detail::ContextAccess::make(requestMemory, request);
+
+    Http2SansIoResponseStreamSink sink(
+        connection,
+        1,
+        ruvia::detail::ResponseStreamKind::kGeneric,
+        worker,
+        writeSignal,
+        streamSignal,
+        &resource,
+        ruvia::HttpKnownMethod::kGet,
+        identityResponseCoding(),
+        ruvia::detail::HttpResponseCodingAvailability::kIdentityOnly);
+    sink.bindContext(&context, &okStreamingHead);
+
+    bool firstEndCompleted = false;
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            co_await ruvia::detail::taskAsAwaitable(sink.end({}));
+            firstEndCompleted = true;
+        },
+        asio::detached);
+    io.run();
+
+    RUVIA_CHECK(firstEndCompleted);
+    RUVIA_CHECK(sink.committed());
+
+    (void)termination.terminate(std::make_error_code(std::errc::connection_reset));
+
+    bool secondEndCompleted = false;
+    bool secondEndRejected = false;
+    io.restart();
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                co_await ruvia::detail::taskAsAwaitable(sink.end({}));
+                secondEndCompleted = true;
+            } catch (const std::system_error&) {
+                secondEndRejected = true;
+            }
+        },
+        asio::detached);
+    io.run();
+
+    RUVIA_CHECK(!secondEndRejected);
+    RUVIA_CHECK(secondEndCompleted);
+}
+
 RUVIA_TEST(http2_web_body_queue_preserves_fifo_and_tracks_backlog) {
     Http2SansIoBodyQueue queue(std::pmr::get_default_resource());
     RUVIA_CHECK(queue.empty());
@@ -352,6 +431,121 @@ RUVIA_TEST(http2_web_body_queue_commits_backlog_only_after_storage_succeeds) {
     RUVIA_CHECK_EQ(populatedQueue.queuedBytes(), std::size_t{8});
     RUVIA_CHECK_EQ(populatedQueue.pop(), std::string_view("retained"));
     RUVIA_CHECK(populatedQueue.empty());
+}
+
+RUVIA_TEST(http2_websocket_transport_abort_remains_noexcept_when_reset_output_allocation_fails) {
+    using http2_connection_test::driveGetRequest;
+    using http2_connection_test::handshake;
+
+    ToggleRejectingMemoryResource resource;
+    ruvia::detail::Http2Connection connection(&resource);
+    handshake(connection);
+    driveGetRequest(connection, &resource);
+
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    const auto worker = attachment.loop().handle();
+    ruvia::detail::WorkerSignal writeSignal(worker);
+    ruvia::detail::Http2SansIoTermination termination;
+    ruvia::detail::Http2SansIoStreamSignal streamSignal(worker, termination);
+    ruvia::detail::Http2SansIoBodyQueue queue(&resource);
+    ruvia::detail::Http2SansIoWsTransport<asio::any_io_executor> transport(
+        connection,
+        1,
+        queue,
+        streamSignal,
+        writeSignal,
+        asio::any_io_executor(io.get_executor()));
+
+    std::pmr::string scratch(&resource);
+    connection.takeOutput(scratch);
+    char settings[ruvia::detail::kHttp2FrameHeaderBytes];
+    ruvia::detail::http2EncodeFrameHeader(
+        settings,
+        0,
+        ruvia::detail::Http2FrameType::kSettings,
+        0,
+        0);
+    RUVIA_CHECK(
+        connection.feed(std::string_view(settings, sizeof(settings))) ==
+        ruvia::detail::Http2FeedResult::kAccepted);
+    RUVIA_CHECK_EQ(
+        connection.pendingOutput().size(),
+        static_cast<std::size_t>(ruvia::detail::kHttp2FrameHeaderBytes));
+
+    resource.rejectAllocations(true);
+    bool aborted = false;
+    const auto postResult = worker.post([&] {
+        transport.abort();
+        aborted = true;
+        attachment.stop();
+    });
+    RUVIA_CHECK(postResult.accepted());
+    io.run();
+    RUVIA_CHECK(aborted);
+}
+
+RUVIA_TEST(http2_buffered_response_writer_reports_failure_when_reset_output_allocation_fails) {
+    using http2_connection_test::driveGetRequest;
+    using http2_connection_test::handshake;
+
+    ToggleRejectingMemoryResource resource;
+    ruvia::detail::Http2Connection connection(&resource);
+    handshake(connection);
+    driveGetRequest(connection, &resource);
+
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    ruvia::detail::WorkerSignal writeSignal(worker);
+    ruvia::detail::Http2SansIoTermination termination;
+    ruvia::detail::Http2SansIoStreamRuntimeTable table(std::pmr::get_default_resource(), termination);
+    ruvia::WorkerMemory workerMemory;
+    ruvia::detail::Http2BufferedResponseWriter writer(connection, table, workerMemory, writeSignal);
+
+    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    response.header("Connection", "close");
+    const auto writePlan = ruvia::detail::httpBufferedResponseWritePlan(
+        ruvia::HttpKnownMethod::kGet, response);
+
+    std::pmr::string scratch(&resource);
+    connection.takeOutput(scratch);
+    char settings[ruvia::detail::kHttp2FrameHeaderBytes];
+    ruvia::detail::http2EncodeFrameHeader(
+        settings,
+        0,
+        ruvia::detail::Http2FrameType::kSettings,
+        0,
+        0);
+    RUVIA_CHECK(
+        connection.feed(std::string_view(settings, sizeof(settings))) ==
+        ruvia::detail::Http2FeedResult::kAccepted);
+    RUVIA_CHECK_EQ(
+        connection.pendingOutput().size(),
+        static_cast<std::size_t>(ruvia::detail::kHttp2FrameHeaderBytes));
+
+    resource.rejectAllocations(true);
+    bool threw = false;
+    std::optional<ruvia::detail::Http2BufferedResponseWriteResult> result;
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                result = co_await ruvia::detail::taskAsAwaitable(
+                    writer.write(1, response, writePlan));
+            } catch (const std::bad_alloc&) {
+                threw = true;
+            }
+        },
+        asio::detached);
+    io.run();
+
+    RUVIA_CHECK(!threw);
+    RUVIA_CHECK(result.has_value());
+    if (result.has_value()) {
+        RUVIA_CHECK(result->failedBeforeCommit() != nullptr);
+    }
+    dispatcher->detachContext();
 }
 #endif  // !_MSC_VER
 

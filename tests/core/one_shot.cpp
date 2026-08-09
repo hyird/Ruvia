@@ -86,7 +86,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
             moveFailed = true;
         }
         ThrowingMove::throwOnMove = false;
-        if (!moveFailed || !completion.complete(ThrowingMove(6)).completed()) {
+        if (!moveFailed || !completion.complete(ThrowingMove(6)).accepted()) {
             co_return;
         }
         const auto result = co_await receiver.wait();
@@ -99,7 +99,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
         auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
         const auto completed = completion.complete(7);
         const auto duplicate = completion.complete(8);
-        if (!completed.completed() || duplicate.status() != ruvia::OneShotCompleteStatus::kAlreadyCompleted || duplicate.rejected() == nullptr || *duplicate.rejected() != 8) {
+        if (!completed.accepted() || duplicate.status() != ruvia::OneShotCompleteStatus::kAlreadyCompleted || duplicate.rejected() == nullptr || *duplicate.rejected() != 8) {
             co_return;
         }
         const auto result = co_await receiver.wait();
@@ -111,7 +111,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     {
         auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
         const auto timeout = co_await receiver.waitFor(std::chrono::milliseconds(1));
-        if (timeout.timedOut() == nullptr || !completion.complete(9).completed()) {
+        if (timeout.timedOut() == nullptr || !completion.complete(9).accepted()) {
             co_return;
         }
         const auto late = co_await receiver.wait();
@@ -134,7 +134,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     auto activeReceiver = std::move(receiver);
     ruvia::TaskScope scope(worker);
     scope.spawn(waitForValue(activeReceiver, 42, success));
-    if (!completion.complete(42).completed()) {
+    if (!completion.complete(42).accepted()) {
         co_return;
     }
     co_await scope.join();
@@ -182,7 +182,7 @@ int main() {
         asio::post(ioContext, [&receiverScheduled] { receiverScheduled.release(); });
         std::thread completer([&] {
             receiverScheduled.acquire();
-            crossThreadCompleted = completion.complete(77).completed();
+            crossThreadCompleted = completion.complete(77).accepted();
         });
         ioContext.run();
         completer.join();

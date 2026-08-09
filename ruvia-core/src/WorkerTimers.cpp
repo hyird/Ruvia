@@ -107,12 +107,15 @@ void WorkerDispatcher::requestTimerCancellation(std::size_t slot, std::uint64_t 
     bool current = false;
     {
         std::lock_guard lock(impl_->mutex);
-        if (!impl_->contextAttached || impl_->ioContext.stopped()) {
+        if (impl_->timersStopping || !impl_->contextAttached) {
             return;
         }
         current = impl_->ioContext.get_executor().running_in_this_thread();
         if (!current) {
             try {
+                // A stopped io_context can be restarted; queue the cancellation
+                // so a destroyed registration cannot leave a live slot that
+                // expires after that restart.
                 asio::post(impl_->ioContext, [self = shared_from_this(), slot, generation] { self->cancelTimer(slot, generation); });
             } catch (...) {
                 std::terminate();
@@ -163,6 +166,12 @@ void WorkerDispatcher::stopTimers() noexcept {
     std::error_code ignored;
     if (impl_->timer) {
         impl_->timer->cancel(ignored);
+        // The timer object is bound to the worker io_context service.  A
+        // WorkerHandle may keep the dispatcher endpoint alive after shutdown,
+        // so stopping timers must release the Asio object while the context is
+        // still known to be alive rather than leaving that work to the
+        // dispatcher's eventual destructor.
+        impl_->timer.reset();
     }
 
     impl_->timers.clear();

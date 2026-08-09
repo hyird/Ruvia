@@ -99,6 +99,11 @@ inline ruvia::Task<ruvia::HttpResponse> fastHandler(void*, ruvia::Context& ctx) 
     co_return ctx.text("fast");
 }
 
+inline ruvia::Task<ruvia::HttpResponse> noContentHandler(void*, ruvia::Context& ctx) {
+    ctx.status(ruvia::http_status::kNoContent);
+    co_return ctx.body(nullptr);
+}
+
 inline ruvia::Task<ruvia::HttpResponse> bufferedStatusHandler(void*, ruvia::Context& ctx) {
     ctx.status(ruvia::http_status::kMultiStatus);
     co_return ctx.text("buffered-status");

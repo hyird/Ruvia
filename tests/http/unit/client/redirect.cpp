@@ -16,23 +16,17 @@ namespace {
 using ruvia::classifyHttpClientOriginAuthority;
 using ruvia::HttpClientOriginAuthorityStatus;
 using ruvia::HttpClientRedirectContentDisposition;
-using ruvia::HttpClientRedirectTargetError;
+using ruvia::HttpClientRedirectResolutionError;
 using ruvia::HttpClientRequestView;
 using ruvia::HttpOriginView;
 using ruvia::HttpScheme;
 using ruvia::isHttpClientRedirectStatus;
 using ruvia::lookupUniqueHttpClientResponseHeader;
 using ruvia::planHttpClientRedirectRequest;
-using ruvia::resolveHttpClientSameOriginRedirectTarget;
+using ruvia::resolveHttpClientRedirectTarget;
 
 template <typename T>
 concept HasAnyRvalueHttpClientHeaderLookupAccessor = requires(T&& result) { std::move(result).absent(); } || requires(T&& result) { std::move(result).found(); } || requires(T&& result) { std::move(result).repeated(); };
-
-template <typename T>
-concept HasAnyRvalueHttpClientRedirectTargetAccessor = requires(T&& result) { std::move(result).target(); } || requires(T&& result) { std::move(result).failure(); };
-
-template <typename T>
-concept ExposesRvalueHttpClientRedirectTargetView = requires(T&& target) { std::move(target).value(); };
 
 template <typename T>
 concept ExposesRvalueHttpClientRedirectRequestMethod = requires(T&& plan) { std::move(plan).method(); };
@@ -41,8 +35,6 @@ template <typename T>
 concept AcceptsTemporaryHttpClientResponseHeaderLookup = requires(T&& response) { lookupUniqueHttpClientResponseHeader(std::move(response), std::string_view{}); };
 
 static_assert(!HasAnyRvalueHttpClientHeaderLookupAccessor<ruvia::HttpClientResponseHeaderLookupResult>);
-static_assert(!HasAnyRvalueHttpClientRedirectTargetAccessor<ruvia::HttpClientRedirectTargetResult>);
-static_assert(!ExposesRvalueHttpClientRedirectTargetView<ruvia::HttpClientRedirectTarget>);
 static_assert(!ExposesRvalueHttpClientRedirectRequestMethod<ruvia::HttpClientRedirectRequestPlan>);
 static_assert(!std::copy_constructible<ruvia::HttpClientRedirectRequestPlan>);
 static_assert(std::move_constructible<ruvia::HttpClientRedirectRequestPlan>);
@@ -54,11 +46,6 @@ concept HasHeaderValue = requires(const T& value) {
 };
 
 template <typename T>
-concept HasRedirectTargetError = requires(const T& value) {
-    { value.error() } -> std::same_as<HttpClientRedirectTargetError>;
-};
-
-template <typename T>
 concept HasRedirectStatus = requires(const T& value) { value.status(); };
 
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientResponseHeaderLookupResult&>().found()), const ruvia::HttpClientResponseHeaderFound*>);
@@ -66,27 +53,36 @@ static_assert(!HasHeaderValue<ruvia::HttpClientResponseHeaderAbsent>);
 static_assert(HasHeaderValue<ruvia::HttpClientResponseHeaderFound>);
 static_assert(!HasHeaderValue<ruvia::HttpClientResponseHeaderRepeated>);
 static_assert(!HasRedirectStatus<ruvia::HttpClientResponseHeaderLookupResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientRedirectTargetResult&>().target()), const ruvia::HttpClientRedirectTarget*>);
-static_assert(!HasRedirectTargetError<ruvia::HttpClientRedirectTarget>);
-static_assert(HasRedirectTargetError<ruvia::HttpClientRedirectTargetFailure>);
-static_assert(!HasRedirectStatus<ruvia::HttpClientRedirectTargetResult>);
 
 HttpOriginView originFor(std::string_view host, std::uint16_t port, HttpScheme scheme = HttpScheme::kHttp) {
     return scheme == HttpScheme::kHttps ? HttpOriginView::https(host, port) : HttpOriginView::http(host, port);
 }
 
+// Same-origin resolution is a followable redirect whose destination stays on
+// the request origin; the cross-origin-capable resolver reports that as a
+// resolved destination with crossOrigin() == false.
 void checkResolvedTarget(ruvia::testing::TestContext& ruvia_ctx, const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, std::string_view expected) {
-    const auto result = resolveHttpClientSameOriginRedirectTarget(origin, currentTarget, location, std::pmr::get_default_resource());
-    RUVIA_CHECK(result.target() != nullptr);
+    const auto result = resolveHttpClientRedirectTarget(origin, currentTarget, location, std::pmr::get_default_resource());
     RUVIA_CHECK(result.failure() == nullptr);
-    if (const auto* target = result.target()) {
-        RUVIA_CHECK_EQ(target->value(), expected);
+    RUVIA_CHECK(result.resolved() != nullptr);
+    if (const auto* resolved = result.resolved()) {
+        RUVIA_CHECK(!resolved->crossOrigin());
+        RUVIA_CHECK_EQ(resolved->target(), expected);
     }
 }
 
-void checkRedirectTargetFailure(ruvia::testing::TestContext& ruvia_ctx, const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, HttpClientRedirectTargetError expected) {
-    const auto result = resolveHttpClientSameOriginRedirectTarget(origin, currentTarget, location, std::pmr::get_default_resource());
-    RUVIA_CHECK(result.target() == nullptr);
+void checkCrossOriginRedirect(ruvia::testing::TestContext& ruvia_ctx, const HttpOriginView& origin, std::string_view currentTarget, std::string_view location) {
+    const auto result = resolveHttpClientRedirectTarget(origin, currentTarget, location, std::pmr::get_default_resource());
+    RUVIA_CHECK(result.failure() == nullptr);
+    RUVIA_CHECK(result.resolved() != nullptr);
+    if (const auto* resolved = result.resolved()) {
+        RUVIA_CHECK(resolved->crossOrigin());
+    }
+}
+
+void checkRedirectTargetFailure(ruvia::testing::TestContext& ruvia_ctx, const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, HttpClientRedirectResolutionError expected) {
+    const auto result = resolveHttpClientRedirectTarget(origin, currentTarget, location, std::pmr::get_default_resource());
+    RUVIA_CHECK(result.resolved() == nullptr);
     RUVIA_CHECK(result.failure() != nullptr);
     if (const auto* failure = result.failure()) {
         RUVIA_CHECK(failure->error() == expected);
@@ -247,12 +243,12 @@ RUVIA_TEST(http_client_same_origin_redirect_resolves_uri_references) {
 RUVIA_TEST(http_client_same_origin_redirect_reports_rejection_reason) {
     const auto origin = HttpOriginView::http("example.com");
 
-    checkRedirectTargetFailure(ruvia_ctx, origin, "/current", "http://evil.com/next", HttpClientRedirectTargetError::kNotSameOrigin);
-    checkRedirectTargetFailure(ruvia_ctx, origin, "/current", "https://example.com/next", HttpClientRedirectTargetError::kNotSameOrigin);
+    checkCrossOriginRedirect(ruvia_ctx, origin, "/current", "http://evil.com/next");
+    checkCrossOriginRedirect(ruvia_ctx, origin, "/current", "https://example.com/next");
     for (const std::string_view invalid : {"https://user@example.com/next", "https://example.com:99999/next", "http://user@example.com/next", "http://example.com:99999/next", "http:/broken", "/next#bad fragment", "/next#%zz", "/next#[bad]", "/next#first#second"}) {
-        checkRedirectTargetFailure(ruvia_ctx, origin, "/current", invalid, HttpClientRedirectTargetError::kInvalidLocation);
+        checkRedirectTargetFailure(ruvia_ctx, origin, "/current", invalid, HttpClientRedirectResolutionError::kInvalidLocation);
     }
-    checkRedirectTargetFailure(ruvia_ctx, origin, "*", "/next", HttpClientRedirectTargetError::kInvalidCurrentTarget);
+    checkRedirectTargetFailure(ruvia_ctx, origin, "*", "/next", HttpClientRedirectResolutionError::kInvalidCurrentTarget);
 }
 
 RUVIA_TEST(http_client_same_origin_redirect_supports_ipvfuture) {

@@ -244,6 +244,20 @@ RUVIA_TEST(security_headers_legacy_xss_filter_policy_is_explicit) {
     RUVIA_CHECK(!fixture.response().header("X-XSS-Protection").has_value());
 }
 
+RUVIA_TEST(security_headers_reject_invalid_legacy_xss_filter_policy) {
+    SecurityContextFixture fixture;
+    SecurityHeadersOptions options;
+    options.legacyXssFilter = static_cast<LegacyXssFilterPolicy>(0xFF);
+
+    bool rejected = false;
+    try {
+        applySecurityHeaders(fixture.context(), options);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+}
+
 RUVIA_TEST(security_headers_empty_policy_is_not_emitted) {
     // An explicitly-cleared policy string produces no header (rather than an
     // empty-valued one).
@@ -297,6 +311,23 @@ RUVIA_TEST(security_headers_apply_custom_headers) {
     RUVIA_CHECK_EQ(response.header("X-Report-To"), std::string_view("endpoint"));
     // Built-in defaults are still applied alongside custom headers.
     RUVIA_CHECK_EQ(response.header("X-Frame-Options"), std::string_view("DENY"));
+}
+
+RUVIA_TEST(security_headers_custom_hsts_is_still_tls_only) {
+    const ruvia::SecurityHeader custom[] = {
+        {"Strict-Transport-Security", "max-age=1"},
+    };
+    SecurityHeadersOptions options;
+    options.strictTransportSecurity = false;
+    options.customHeaders = custom;
+
+    SecurityContextFixture plain(ContextServices{}.withPlainTransport("192.0.2.1"));
+    applySecurityHeaders(plain.context(), options);
+    RUVIA_CHECK(!plain.response().header("Strict-Transport-Security").has_value());
+
+    SecurityContextFixture tls(ContextServices{}.withTlsTransport("192.0.2.2"));
+    applySecurityHeaders(tls.context(), options);
+    RUVIA_CHECK_EQ(tls.response().header("Strict-Transport-Security"), std::string_view("max-age=1"));
 }
 
 RUVIA_TEST(security_headers_respect_overwrite_existing_flag) {

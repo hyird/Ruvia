@@ -34,11 +34,15 @@ Task<bool> executeRedisSetNx(RedisCommandExecutor executor, std::pmr::vector<std
     if (reply.null()) {
         co_return false;
     }
-    co_return httpAsciiEqualsIgnoreCase(redisValueString(reply), "OK");
+    if (!httpAsciiEqualsIgnoreCase(redisValueString(reply), "OK")) {
+        throw RedisError(RedisError::Code::kProtocolError, "unexpected redis set nx reply");
+    }
+    co_return true;
 }
 
 Task<bool> executeRedisIntegerBool(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
-    co_return (co_await redisIntegerCommand(std::move(executor), std::move(args), resource)) != 0;
+    auto reply = co_await executeOwnedRedisCommand(std::move(executor), std::move(args), resource);
+    co_return redisValueIntegerBool(reply);
 }
 
 Task<std::pmr::vector<RedisKeyValue>> executeRedisKeyValueArray(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::string_view context, std::pmr::memory_resource* resource) {

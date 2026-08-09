@@ -56,19 +56,19 @@ RUVIA_TEST(response_header_index_cache_first_write_wins) {
 RUVIA_TEST(response_header_index_cache_overflow_boundary) {
     constexpr auto kMax = static_cast<std::size_t>(std::numeric_limits<std::int16_t>::max());
     // The largest representable index is kMax - 1 (it stores as kMax after the +1).
-    ResponseHeaderIndexCache<4> representable{};
+    ResponseHeaderIndexCache<8> representable{};
     recordResponseHeaderIndex(representable, 0, kMax - 1);
     RUVIA_CHECK(responseHeaderIndexSlotHasValue(representable[0]));
     RUVIA_CHECK_EQ(responseHeaderIndexSlotValue(representable[0]), kMax - 1);
     // An index at/above the max records the overflow sentinel instead of wrapping.
-    ResponseHeaderIndexCache<4> overflow{};
+    ResponseHeaderIndexCache<8> overflow{};
     recordResponseHeaderIndex(overflow, 0, kMax);
     RUVIA_CHECK(responseHeaderIndexSlotOverflowed(overflow[0]));
     RUVIA_CHECK(!responseHeaderIndexSlotHasValue(overflow[0]));
 }
 
 RUVIA_TEST(response_header_index_cache_out_of_range_slot_is_noop) {
-    ResponseHeaderIndexCache<4> cache{};
+    ResponseHeaderIndexCache<8> cache{};
     recordResponseHeaderIndex(cache, 100, 1);  // slot >= size: must not write out of bounds
     for (const auto slot : cache) {
         RUVIA_CHECK(!responseHeaderIndexSlotHasValue(slot));

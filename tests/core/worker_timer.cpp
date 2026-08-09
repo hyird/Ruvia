@@ -19,12 +19,11 @@
 
 namespace {
 
-static_assert(std::same_as<decltype(ruvia::sleepFor(std::declval<ruvia::WorkerHandle>(), std::chrono::steady_clock::duration{})), ruvia::Task<ruvia::TimerSleepResult>>);
-static_assert(std::same_as<decltype(ruvia::detail::sleepForBorrowed(std::declval<const ruvia::WorkerHandle&>(), std::chrono::steady_clock::duration{})), ruvia::Task<ruvia::TimerSleepResult>>);
+static_assert(std::same_as<decltype(ruvia::sleepFor(std::declval<const ruvia::WorkerHandle&>(), std::chrono::steady_clock::duration{})), ruvia::Task<ruvia::TimerSleepResult>>);
 
 template <typename Worker>
 concept AcceptsTemporaryBorrowedWorker = requires(Worker&& worker) {
-    ruvia::detail::sleepForBorrowed(std::forward<Worker>(worker), std::chrono::steady_clock::duration{});
+    ruvia::sleepFor(std::forward<Worker>(worker), std::chrono::steady_clock::duration{});
 };
 
 static_assert(!AcceptsTemporaryBorrowedWorker<ruvia::WorkerHandle>);
@@ -61,7 +60,7 @@ bool discriminatedWaitStateWorks() {
     if (early.complete(ruvia::detail::WorkerWaitResultAccess::value(3)) || early.suspend(std::noop_coroutine())) {
         return false;
     }
-    const auto earlyResult = early.takeResult();
+    const auto earlyResult = early.takeValue();
     if (earlyResult.value() == nullptr || *earlyResult.value() != 3) {
         return false;
     }
@@ -71,7 +70,7 @@ bool discriminatedWaitStateWorks() {
     if (!suspended.suspend(continuation) || !suspended.complete(ruvia::detail::WorkerWaitResultAccess::timedOut<int>()) || suspended.continuation() != continuation) {
         return false;
     }
-    const auto suspendedResult = suspended.takeResult();
+    const auto suspendedResult = suspended.takeValue();
     if (suspendedResult.timedOut() == nullptr) {
         return false;
     }
@@ -89,7 +88,7 @@ bool discriminatedWaitStateWorks() {
     if (!moveFailed || recovering.complete(ruvia::detail::WorkerWaitResultAccess::value(ThrowingMove(7)))) {
         return false;
     }
-    const auto recovered = recovering.takeResult();
+    const auto recovered = recovering.takeValue();
     return recovered.value() != nullptr && recovered.value()->value() == 7;
 }
 
@@ -156,6 +155,93 @@ bool timerImmediateShutdownWorks() {
         dispatcher->detachContext();
     }
     return true;
+}
+
+bool stoppedDispatcherCanOutliveContext() {
+    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
+    ruvia::WorkerHandle worker;
+    {
+        asio::io_context ioContext;
+        dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
+        worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+        dispatcher->stopTimers();
+    }
+    dispatcher.reset();
+    worker = ruvia::WorkerHandle{};
+    return true;
+}
+
+bool timerRegistrationResetAfterStopDoesNotQueueCancellation() {
+    asio::io_context ioContext;
+    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    auto registration = std::make_unique<ruvia::detail::WorkerTimerRegistration>();
+    std::size_t cancelled = 0;
+    std::size_t expired = 0;
+
+    asio::post(ioContext, [&] {
+        ruvia::detail::WorkerHandleAccess::scheduleTimer(
+            worker,
+            *registration,
+            std::chrono::steady_clock::now() + std::chrono::hours(1),
+            [&](ruvia::detail::WorkerTimerOutcome outcome) {
+                if (outcome == ruvia::detail::WorkerTimerOutcome::kCancelled) {
+                    ++cancelled;
+                } else if (outcome == ruvia::detail::WorkerTimerOutcome::kExpired) {
+                    ++expired;
+                }
+            });
+        dispatcher->stopTimers();
+        ioContext.stop();
+    });
+    ioContext.run();
+    if (cancelled != 1 || expired != 0) {
+        dispatcher->detachContext();
+        return false;
+    }
+
+    ioContext.restart();
+    while (ioContext.poll() != 0) {
+    }
+
+    registration.reset();
+
+    ioContext.restart();
+    const auto queuedHandlers = ioContext.poll();
+    dispatcher->detachContext();
+    return queuedHandlers == 0 && cancelled == 1 && expired == 0;
+}
+
+bool offWorkerCancellationAfterContextStopDoesNotExpireLater() {
+    asio::io_context ioContext;
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
+    auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    auto registration = std::make_unique<ruvia::detail::WorkerTimerRegistration>();
+    bool expired = false;
+    bool cancelled = false;
+
+    asio::post(ioContext, [&] {
+        ruvia::detail::WorkerHandleAccess::scheduleTimer(
+            worker,
+            *registration,
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(1),
+            [&](ruvia::detail::WorkerTimerOutcome outcome) {
+                expired = outcome == ruvia::detail::WorkerTimerOutcome::kExpired;
+                cancelled = outcome == ruvia::detail::WorkerTimerOutcome::kCancelled;
+            });
+        ioContext.stop();
+    });
+    ioContext.run();
+
+    // The cancellation request is issued outside the worker while the context is
+    // stopped. It still has to remove the active timer slot; otherwise a later
+    // restart can fire a callback owned by an already-destroyed registration.
+    registration.reset();
+
+    ioContext.restart();
+    ioContext.run_for(std::chrono::milliseconds(20));
+    dispatcher->detachContext();
+    return !expired && cancelled;
 }
 
 ruvia::Task<void> markAfterSleep(ruvia::WorkerHandle worker, bool& completed, bool& reportedElapsed) {
@@ -230,7 +316,8 @@ ruvia::Task<void> exerciseSlotReuse(ruvia::WorkerHandle worker, bool& success) {
 }  // namespace
 
 int main() {
-    if (!discriminatedWaitStateWorks() || !saturatingTimerDeadlineWorks() || !saturatingTimerDurationCastWorks() || !timerImmediateShutdownWorks()) {
+    if (!discriminatedWaitStateWorks() || !saturatingTimerDeadlineWorks() || !saturatingTimerDurationCastWorks() || !timerImmediateShutdownWorks() || !stoppedDispatcherCanOutliveContext() || !timerRegistrationResetAfterStopDoesNotQueueCancellation() ||
+        !offWorkerCancellationAfterContextStopDoesNotExpireLater()) {
         return 1;
     }
     asio::io_context ioContext;

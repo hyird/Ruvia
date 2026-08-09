@@ -15,6 +15,7 @@ enum class Http1FinalResponseControlPlanError : std::uint8_t {
     kInvalidConnectionField,
     kInvalidUpgradeField,
     kUpgradeRequired,
+    kTeFieldForbidden,
 };
 
 enum class Http2FinalResponseControlPlanError : std::uint8_t { kInvalidStatus, kUpgradeUnavailable, kConnectionSpecificFieldForbidden };
@@ -166,6 +167,10 @@ static_assert(sizeof(Http2FinalResponseControlPlanResult) <= 2);
             if (upgradeProtocols.parseField(header.value(), HttpFieldListRole::kSender, [](const HttpUpgradeProtocol&) noexcept { return true; }) != HttpFieldListParseStatus::kOk) {
                 return Http1FinalResponseControlPlanResult(Http1FinalResponseControlPlanFailure(Http1FinalResponseControlPlanError::kInvalidUpgradeField));
             }
+            continue;
+        }
+        if (httpAsciiEqualsIgnoreCase(header.name(), "TE")) {
+            return Http1FinalResponseControlPlanResult(Http1FinalResponseControlPlanFailure(Http1FinalResponseControlPlanError::kTeFieldForbidden));
         }
     }
     if (statusCode == http_status::kUpgradeRequired && !upgradeProtocols.hasProtocol()) {

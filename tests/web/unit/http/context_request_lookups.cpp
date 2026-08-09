@@ -1,4 +1,5 @@
 #include "context_request_fixture.h"
+#include "model_field_fixture.h"
 
 #include <vector>
 
@@ -106,12 +107,17 @@ RUVIA_TEST(context_request_query_list_uses_last_duplicate_like_single_lookup) {
     // Single-value lookup resolves a duplicate name to its LAST value.
     RUVIA_CHECK_EQ(*context.req().query("a"), std::string_view("3"));
 
-    // The flattened query field list (used by controller field binding) must
-    // agree. It previously kept the first occurrence ("1"), so a caller binding
-    // fields from the list and one calling query("a") saw different values for
-    // ?a=1&a=3 -- the inconsistency this pins.
+    // The query field list (used by controller field binding) preserves every
+    // decoded occurrence, while its scalar get() agrees with query("a") by
+    // taking the last value.
     const auto& list = ruvia::detail::requestQueryFields(context.req());
-    RUVIA_CHECK_EQ(list.size(), std::size_t{2});  // deduped to unique names a, b
+    RUVIA_CHECK_EQ(list.size(), std::size_t{3});
+    RUVIA_CHECK_EQ(list[0].name(), std::string_view("a"));
+    RUVIA_CHECK_EQ(list[0].value(), std::string_view("1"));
+    RUVIA_CHECK_EQ(list[1].name(), std::string_view("b"));
+    RUVIA_CHECK_EQ(list[1].value(), std::string_view("2"));
+    RUVIA_CHECK_EQ(list[2].name(), std::string_view("a"));
+    RUVIA_CHECK_EQ(list[2].value(), std::string_view("3"));
     const auto viaList = list.get("a");
     RUVIA_CHECK(viaList.has_value());
     RUVIA_CHECK_EQ(*viaList, std::string_view("3"));
@@ -122,6 +128,30 @@ RUVIA_TEST(context_request_query_list_uses_last_duplicate_like_single_lookup) {
     RUVIA_CHECK_EQ(all.size(), std::size_t{2});
     RUVIA_CHECK_EQ(all[0], std::string_view("1"));
     RUVIA_CHECK_EQ(all[1], std::string_view("3"));
+}
+
+RUVIA_TEST(context_request_query_fields_preserve_duplicates_for_model_binding) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setQueryString(request, "message=first&other=x&message=second");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    const auto& fields = ruvia::detail::requestQueryFields(context.req());
+    RUVIA_CHECK_EQ(fields.size(), std::size_t{3});
+    RUVIA_CHECK_EQ(*fields.get("message"), std::string_view("second"));
+
+    const auto parsed = ruvia::FormBody<AccessorSurfaceRequest>::parseFields(fields, requestMemory.resource());
+    RUVIA_CHECK(parsed.has_value());
+    if (!parsed) {
+        return;
+    }
+    RUVIA_CHECK(parsed->message().has_value());
+    RUVIA_CHECK_EQ(parsed->message()->view(), std::string_view("first"));
+    RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(*parsed) == ruvia::detail::ModelFieldState::kDuplicate);
 }
 
 RUVIA_TEST(context_request_queries_use_empty_span_only_for_missing_name) {

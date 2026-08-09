@@ -55,6 +55,8 @@ struct ParsedRequestHeaderBlock {
     HttpResponseCodingQualities responseCodingQualities;
     HttpTransferEncodingState transferEncoding;
     HttpRequestExpectations expectations;
+    bool nonEmptyTrailerHeaderPresent{false};
+    bool teHeaderPresent{false};
 };
 
 [[nodiscard]] std::size_t findHttpHeaderEnd(std::string_view buffer, std::size_t searchOffset) noexcept;

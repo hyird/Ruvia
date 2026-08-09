@@ -27,6 +27,7 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
+#include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/Streaming.h"
 
 namespace streaming_test {

@@ -15,6 +15,7 @@
 #include "ruvia/web/Dotenv.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ErrorHandlers.h"
+#include "ruvia/web/HttpClient.h"
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/WebWorker.h"
@@ -92,6 +93,8 @@ public:
     App& onConnectionFailure(ConnectionFailureCallback callback);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
+    App& useHttpClient(HttpClientConfig config);
+    App& useHttpClient(std::string_view alias, HttpClientConfig config);
 #ifdef RUVIA_ENABLE_DATABASE
     App& useDb(DbConfig config);
     App& useDb(std::string_view alias, DbConfig config);

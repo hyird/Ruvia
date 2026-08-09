@@ -192,20 +192,23 @@ void Context::ensureRequestQuery() const {
 
     auto query = detail::RequestNameValueListAccess::make(resource());
     detail::RequestQueryValues groups{resource()};
-    detail::RequestNameValueListAccess::reserve(query, builds.size());
+    const auto decodedPairCount = storage.size() / 2;
+    detail::RequestNameValueListAccess::reserve(query, decodedPairCount);
     groups.reserve(builds.size());
+    for (std::size_t pairIndex = 0; pairIndex < decodedPairCount; ++pairIndex) {
+        detail::RequestNameValueListAccess::pushBack(
+            query,
+            detail::RequestNameValueViewAccess::make(
+                detail::storedStringView(storage[pairIndex * 2]),
+                detail::storedStringView(storage[pairIndex * 2 + 1])));
+    }
     for (const auto& build : builds) {
         // A duplicated query name resolves to its LAST value, matching every other
         // duplicate-resolution path: Context::requestQuery(name), HttpRequest::query,
-        // the parsed-form scalar compaction, and the raw cookie lookup all take the
-        // last occurrence (commit 5523295). This flattened list was the lone holdout
-        // keeping the first, so requestQuery("a") and iterating requestQuery()
-        // disagreed on ?a=1&a=2. The group is name-sorted with stable ties, so
-        // order[build.end - 1] is the last occurrence. requestQueries() below still
-        // lists every value in order.
-        const auto lastIndex = order[build.end - 1];
-        detail::RequestNameValueListAccess::pushBack(query, detail::RequestNameValueViewAccess::make(detail::storedStringView(storage[lastIndex * 2]), detail::storedStringView(storage[lastIndex * 2 + 1])));
-
+        // the parsed-form scalar compaction, RequestNameValueList::get(), and the
+        // raw cookie lookup all take the last occurrence. Keep the public field
+        // list duplicate-preserving so model binding can still reject ambiguity;
+        // this grouped index only backs requestQueries(name).
         auto& group = groups.append(detail::pairNameAt(storage, build.firstIndex));
         for (std::size_t i = build.begin; i < build.end; ++i) {
             const auto pairIndex = order[i];

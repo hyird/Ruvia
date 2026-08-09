@@ -14,6 +14,7 @@
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 #include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
+#include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpLimits.h"
@@ -42,6 +43,11 @@ enum class ResponseHeadMode : std::uint8_t { kBuffered, kStreaming };
 struct Collector final {
     std::vector<std::pair<std::string, std::string>> headers;
 };
+
+void addUncheckedHeader(HttpResponse& response, std::string_view name, std::string_view value) {
+    auto& headers = const_cast<ruvia::HttpResponseHeaders&>(response.headers());
+    (void)ruvia::detail::HttpResponseHeadersAccess::add(headers, name, value, 0);
+}
 
 bool collect(void* target, std::string_view name, std::string_view value) {
     static_cast<Collector*>(target)->headers.emplace_back(std::string(name), std::string(value));
@@ -263,6 +269,12 @@ RUVIA_TEST(http2_interim_response_header_rejection_is_transactional) {
     const ruvia::HttpHeaderView emptyContentType[] = {
         {"Content-Type", ""},
     };
+    const ruvia::HttpHeaderView leadingWhitespace[] = {
+        {"Link", " </style.css>; rel=preload"},
+    };
+    const ruvia::HttpHeaderView trailingWhitespace[] = {
+        {"Link", "</style.css>; rel=preload\t"},
+    };
     const ruvia::HttpHeaderView duplicateServer[] = {
         {"Server", "one"},
         {"server", "two"},
@@ -277,6 +289,8 @@ RUVIA_TEST(http2_interim_response_header_rejection_is_transactional) {
     RUVIA_CHECK(rejects(emptyContentEncoding));
     RUVIA_CHECK(rejects(malformedContentType));
     RUVIA_CHECK(rejects(emptyContentType));
+    RUVIA_CHECK(rejects(leadingWhitespace));
+    RUVIA_CHECK(rejects(trailingWhitespace));
     RUVIA_CHECK(rejects(duplicateServer));
 
     const std::string oversizedValue(ruvia::kMaxHttpHeaderBytes, 'x');
@@ -462,7 +476,38 @@ RUVIA_TEST(http2_response_headers_reject_connection_specific_fields_before_hpack
     };
     for (const auto& [name, value] : fields) {
         HttpResponse response(std::pmr::get_default_resource());
-        response.header(name, value);
+        if (name == "TE") {
+            addUncheckedHeader(response, name, value);
+        } else {
+            response.header(name, value);
+        }
+        Collector headers;
+        RUVIA_CHECK(!decodeResponseHeaders(response, headers));
+        RUVIA_CHECK(headers.headers.empty());
+    }
+}
+
+RUVIA_TEST(http2_response_headers_reject_leading_and_trailing_value_whitespace_before_hpack) {
+    for (const auto value : {" value", "value ", "\tvalue", "value\t"}) {
+        HttpResponse response(std::pmr::get_default_resource());
+        ruvia::detail::setResponseHeaderStableView(response, "X-Test", value);
+
+        Collector headers;
+        RUVIA_CHECK(!decodeResponseHeaders(response, headers));
+        RUVIA_CHECK(headers.headers.empty());
+    }
+}
+
+RUVIA_TEST(http2_response_headers_reject_malformed_name_and_value_before_hpack) {
+    constexpr std::pair<std::string_view, std::string_view> fields[] = {
+        {"Bad Name", "value"},
+        {"X-Test", std::string_view("bad\r\nvalue", 10)},
+    };
+
+    for (const auto& [name, value] : fields) {
+        HttpResponse response(std::pmr::get_default_resource());
+        ruvia::detail::setResponseHeaderStableView(response, name, value);
+
         Collector headers;
         RUVIA_CHECK(!decodeResponseHeaders(response, headers));
         RUVIA_CHECK(headers.headers.empty());

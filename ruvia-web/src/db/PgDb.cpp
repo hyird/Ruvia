@@ -16,6 +16,47 @@ void freePostgreSqlResult(void* result) noexcept {
     PQclear(static_cast<PGresult*>(result));
 }
 
+class PostgreSqlResultOwner final {
+public:
+    explicit PostgreSqlResultOwner(PGresult* result) noexcept
+        : result_(result) {}
+
+    ~PostgreSqlResultOwner() {
+        reset();
+    }
+
+    PostgreSqlResultOwner(const PostgreSqlResultOwner&) = delete;
+    PostgreSqlResultOwner& operator=(const PostgreSqlResultOwner&) = delete;
+
+    [[nodiscard]] PGresult* get() const noexcept {
+        return result_;
+    }
+
+    [[nodiscard]] PGresult& operator*() const noexcept {
+        return *result_;
+    }
+
+    [[nodiscard]] PGresult* release() noexcept {
+        return std::exchange(result_, nullptr);
+    }
+
+    void reset() noexcept {
+        if (result_ != nullptr) {
+            PQclear(result_);
+            result_ = nullptr;
+        }
+    }
+
+private:
+    PGresult* result_;
+};
+
+void clearRemainingPostgreSqlResults(PGconn* connection) noexcept {
+    while (auto* remaining = PQgetResult(connection)) {
+        PQclear(remaining);
+    }
+}
+
 [[nodiscard]] bool successfulResultStatus(ExecStatusType status) noexcept {
     return status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK || status == PGRES_EMPTY_QUERY;
 }
@@ -79,30 +120,26 @@ Task<DbRows> PostgreSqlPool::queryOnSlot(ConnectionSlot& slot, const std::pmr::s
     bool retainedTupleResult = false;
     while (true) {
         co_await waitUntilResultReady(slot, deadline);
-        auto* result = PQgetResult(slot.connection);
-        if (result == nullptr) {
+        PostgreSqlResultOwner result(PQgetResult(slot.connection));
+        if (result.get() == nullptr) {
             break;
         }
-        const auto status = PQresultStatus(result);
+        const auto status = PQresultStatus(result.get());
         if (!successfulResultStatus(status)) {
-            auto error = postgreSqlError(*slot.connection, "PostgreSQL query", result);
-            PQclear(result);
-            while (auto* remaining = PQgetResult(slot.connection)) {
-                PQclear(remaining);
-            }
+            auto error = postgreSqlError(*slot.connection, "PostgreSQL query", result.get());
+            result.reset();
+            clearRemainingPostgreSqlResults(slot.connection);
             throw error;
         }
 
         if (status == PGRES_TUPLES_OK) {
             if (retainedTupleResult) {
-                PQclear(result);
+                result.reset();
                 throw std::runtime_error("PostgreSQL returned multiple tuple results");
             }
             materializeBorrowedResult(output, *result, resource);
-            DbResultAccess::ownRawResult(output, result, &freePostgreSqlResult);
+            DbResultAccess::ownRawResult(output, result.release(), &freePostgreSqlResult);
             retainedTupleResult = true;
-        } else {
-            PQclear(result);
         }
     }
     if (!retainedTupleResult) {
@@ -121,28 +158,23 @@ Task<DbExecResult> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std
     std::uint64_t affectedRows = 0;
     while (true) {
         co_await waitUntilResultReady(slot, deadline);
-        auto* result = PQgetResult(slot.connection);
-        if (result == nullptr) {
+        PostgreSqlResultOwner result(PQgetResult(slot.connection));
+        if (result.get() == nullptr) {
             break;
         }
-        const auto status = PQresultStatus(result);
+        const auto status = PQresultStatus(result.get());
         if (!successfulResultStatus(status)) {
-            auto error = postgreSqlError(*slot.connection, "PostgreSQL execute", result);
-            PQclear(result);
-            while (auto* remaining = PQgetResult(slot.connection)) {
-                PQclear(remaining);
-            }
+            auto error = postgreSqlError(*slot.connection, "PostgreSQL execute", result.get());
+            result.reset();
+            clearRemainingPostgreSqlResults(slot.connection);
             throw error;
         }
         if (status == PGRES_TUPLES_OK) {
-            PQclear(result);
-            while (auto* remaining = PQgetResult(slot.connection)) {
-                PQclear(remaining);
-            }
+            result.reset();
+            clearRemainingPostgreSqlResults(slot.connection);
             throw std::invalid_argument("execute() does not accept row-producing SQL");
         }
         affectedRows = postgreSqlAffectedRows(*result);
-        PQclear(result);
     }
     co_return DbResultAccess::makeExecResult(affectedRows);
 }
@@ -172,40 +204,48 @@ Task<std::optional<DbRow>> PostgreSqlPool::readStreamRow(std::size_t slotIndex, 
         co_return std::nullopt;
     }
     auto& slot = slots_[slotIndex];
+    bool slotReleased = false;
     try {
         OperationTimeout deadline(config_.queryTimeout);
         co_await waitUntilResultReady(slot, deadline);
-        auto* result = PQgetResult(slot.connection);
-        if (result == nullptr) {
+        PostgreSqlResultOwner result(PQgetResult(slot.connection));
+        if (result.get() == nullptr) {
             releaseSlot(slotIndex);
+            slotReleased = true;
             co_return std::nullopt;
         }
-        const auto status = PQresultStatus(result);
+        const auto status = PQresultStatus(result.get());
         if (status == PGRES_SINGLE_TUPLE) {
             auto row = materializeOwnedSingleRow(*result, resource);
-            PQclear(result);
             co_return row;
         }
         if (status == PGRES_TUPLES_OK || status == PGRES_COMMAND_OK || status == PGRES_EMPTY_QUERY) {
-            PQclear(result);
-            while (auto* remaining = PQgetResult(slot.connection)) {
-                const auto remainingStatus = PQresultStatus(remaining);
+            result.reset();
+            while (true) {
+                PostgreSqlResultOwner remaining(PQgetResult(slot.connection));
+                if (remaining.get() == nullptr) {
+                    break;
+                }
+                const auto remainingStatus = PQresultStatus(remaining.get());
                 if (!successfulResultStatus(remainingStatus)) {
-                    auto error = postgreSqlError(*slot.connection, "PostgreSQL stream", remaining);
-                    PQclear(remaining);
+                    auto error = postgreSqlError(*slot.connection, "PostgreSQL stream", remaining.get());
                     throw error;
                 }
-                PQclear(remaining);
             }
             releaseSlot(slotIndex);
+            slotReleased = true;
+            if (status == PGRES_COMMAND_OK || status == PGRES_EMPTY_QUERY) {
+                throw std::invalid_argument("queryStream() requires row-producing SQL");
+            }
             co_return std::nullopt;
         }
-        auto error = postgreSqlError(*slot.connection, "PostgreSQL stream", result);
-        PQclear(result);
+        auto error = postgreSqlError(*slot.connection, "PostgreSQL stream", result.get());
         throw error;
     } catch (...) {
-        closeSlot(slot);
-        releaseSlot(slotIndex);
+        if (!slotReleased) {
+            closeSlot(slot);
+            releaseSlot(slotIndex);
+        }
         throw;
     }
 }

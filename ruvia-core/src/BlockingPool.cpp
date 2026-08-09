@@ -207,7 +207,7 @@ BlockingSubmitStatus BlockingPool::submit(MoveOnlyFunction<void()> task) {
         std::lock_guard lock(impl_->mutex);
         if (impl_->stopping) {
             ++impl_->discarded;
-            return BlockingSubmitStatus::kStopped;
+            return BlockingSubmitStatus::kPoolStopped;
         }
         if (impl_->queue.size() >= impl_->queueCapacity) {
             ++impl_->rejected;

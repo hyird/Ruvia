@@ -13,6 +13,7 @@ struct SessionAccess;
 #ifdef RUVIA_ENABLE_REDIS
 
 #include "ruvia/core/Task.h"
+#include "ruvia/http/BorrowedText.h"
 #include "ruvia/web/Middleware.h"
 #include "ruvia/web/Next.h"
 
@@ -23,10 +24,17 @@ namespace ruvia {
 // persists (SETEX, 1-day TTL) or deletes it if the handler changed the session
 // via c.setSession()/c.clearSession(). A new session mints a random id (HttpOnly
 // cookie). The blob format is the application's; pair it with JSON if desired.
-// Uses the "default" Redis connection.
+// The Redis connection alias defaults to "default"; pass another alias to a
+// session-dedicated connection: SessionMiddleware("sessions").
 class SessionMiddleware final : public Middleware<SessionMiddleware> {
 public:
+    explicit SessionMiddleware(::ruvia::BorrowedText redisAlias = "default") noexcept
+        : redisAlias_(redisAlias) {}
+
     Task<void> handle(Context& c, Next& next);
+
+private:
+    ::ruvia::BorrowedText redisAlias_;
 };
 
 }  // namespace ruvia

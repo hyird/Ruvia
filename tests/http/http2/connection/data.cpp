@@ -383,6 +383,50 @@ RUVIA_TEST(http2_connection_websocket_tunnel_handshake_and_data) {
     RUVIA_CHECK(frameOut.substr(9) == std::string_view("\x81\x02hi"));
 }
 
+RUVIA_TEST(http2_connection_rejects_half_closed_websocket_opening_handshake) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    HpackEncoder::encodeHeader(block, ":method", "CONNECT");
+    HpackEncoder::encodeHeader(block, ":protocol", "websocket");
+    HpackEncoder::encodeHeader(block, ":scheme", "https");
+    HpackEncoder::encodeHeader(block, ":path", "/ws");
+    HpackEncoder::encodeHeader(block, ":authority", "example.com");
+    HpackEncoder::encodeHeader(block, "sec-websocket-version", "13");
+    const auto h = headersFrame(&resource, 1, ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream, std::string_view(block.data(), block.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(h.data(), h.size())) == Http2FeedResult::kAccepted);
+
+    bool sawHeaders = false;
+    while (const auto event = conn.nextEvent()) {
+        if (const auto* head = event->messageHead(); head != nullptr && head->streamId() == 1) {
+            sawHeaders = true;
+        }
+        RUVIA_CHECK(event->tunnelEnd() == nullptr);
+    }
+    RUVIA_CHECK(sawHeaders);
+
+    auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    RUVIA_CHECK(stream->remoteReceive().connectPendingEndStream() != nullptr);
+
+    ruvia::detail::Http1ServerRequestParser negotiationParser;
+    const auto negotiationRequest = negotiationParser.parseMessage(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "\r\n");
+    auto negotiation = ruvia::detail::makeWebSocketServerNegotiation(negotiationRequest.request, "");
+    const auto handshakeResult = conn.submitWebSocketHandshake(1, std::move(negotiation));
+    RUVIA_CHECK(handshakeResult.submitted() == nullptr);
+    RUVIA_CHECK(handshakeResult.failure() != nullptr);
+    if (const auto* failure = handshakeResult.failure()) {
+        RUVIA_CHECK(failure->error() == ruvia::detail::Http2WebSocketHandshakeSubmitError::kInvalidState);
+    }
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+    RUVIA_CHECK(conn.pendingOutput().empty());
+}
+
 // RFC 9110 Section 6.4.1 defines HEAD/204/304 responses as having no message
 // content. RFC 9113 Section 8.1.1 therefore makes a non-empty DATA payload a
 // malformed response and requires PROTOCOL_ERROR on that stream. This is distinct

@@ -146,6 +146,10 @@ RUVIA_TEST(db_interpolate_sql_binds_only_statement_level_placeholders) {
         std::string("SELECT 1 # really?\n WHERE id = 3"));
     RUVIA_CHECK_EQ(interp(mysql, "SELECT /* ? */ 1 WHERE id = ?", {DbValue(std::int64_t{4})}),
         std::string("SELECT /* ? */ 1 WHERE id = 4"));
+    // MySQL/MariaDB require "--" comments to be followed by whitespace or a
+    // control byte. Without that byte, the following "?" remains a placeholder.
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT 1--?", {DbValue(std::int64_t{9})}),
+        std::string("SELECT 1--9"));
 
     // A doubled quote escapes the quote rather than closing the literal, so the
     // scan must not resume inside what is still one string.

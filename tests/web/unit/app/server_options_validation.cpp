@@ -240,6 +240,16 @@ RUVIA_TEST(validate_server_options_enforces_nested_tls_material) {
         HttpServerOptions options;
         auto tls = validTls();
         auto& sni = tls.sniIdentities.emplace_back();
+        sni.host = "example.com:443";
+        sni.identity.certificateChainFile = "sni-cert.pem";
+        sni.identity.privateKeyFile = "sni-key.pem";
+        options.transport = std::move(tls);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        auto tls = validTls();
+        auto& sni = tls.sniIdentities.emplace_back();
         sni.host = "example.com";
         options.transport = std::move(tls);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
@@ -286,6 +296,8 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
 RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {
     auto tls = ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles("cert.pem", "key.pem"));
     RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity({}, ruvia::TlsIdentity::fromFiles("other.pem", "other.key")); }));
+    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity("example.com:443", ruvia::TlsIdentity::fromFiles("other.pem", "other.key")); }));
+    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity("127.0.0.1", ruvia::TlsIdentity::fromFiles("other.pem", "other.key")); }));
     tls.addSniIdentity("Example.com", ruvia::TlsIdentity::fromFiles("other.pem", "other.key"));
     RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity("example.COM", ruvia::TlsIdentity::fromFiles("third.pem", "third.key")); }));
 }

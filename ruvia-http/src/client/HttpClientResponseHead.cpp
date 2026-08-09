@@ -9,6 +9,7 @@
 #include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 
 namespace ruvia::detail {
 
@@ -93,10 +94,13 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(std::strin
 
         if (httpAsciiEqualsIgnoreCase(name, "Content-Length")) {
             output.contentLengthFieldPresent = true;
+            if (output.statusCode == http_status::kNoContent) {
+                return Http1ClientResponseParseError::kInvalidContentLength;
+            }
             // RFC 9112 section 6.3 applies method/status precedence before
-            // Content-Length parsing. HEAD, non-101 informational, 204, 304,
-            // and successful CONNECT therefore ignore this field for framing.
-            // A 101 still records its forbidden presence for handshake checks.
+            // Content-Length parsing. HEAD, non-101 informational, 304, and
+            // successful CONNECT therefore ignore this field for framing. A
+            // 101 still records its forbidden presence for handshake checks.
             if (framingFieldsApply || resetContentRequiresEmpty) {
                 switch (output.contentLength.parseField(value)) {
                     case HttpContentLengthParseStatus::kOk:
@@ -116,15 +120,27 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(std::strin
             if (!isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kRecipient)) {
                 return Http1ClientResponseParseError::kInvalidHeader;
             }
+        } else if (httpAsciiEqualsIgnoreCase(name, "Trailer")) {
+            if (!isValidHttpResponseTrailerFieldValue(value, HttpFieldListRole::kRecipient)) {
+                return Http1ClientResponseParseError::kInvalidHeader;
+            }
+            if (!httpFindHeaderToken(value, [](std::string_view) noexcept { return true; }).empty()) {
+                output.nonEmptyTrailerHeaderPresent = true;
+            }
+        } else if (httpAsciiEqualsIgnoreCase(name, "TE")) {
+            return Http1ClientResponseParseError::kInvalidHeader;
         } else if (httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (output.connectionOptions.parseField(value, HttpFieldListRole::kRecipient, [](std::string_view option) noexcept { return !httpConnectionOptionConflictsWithManagedField(option); }) != HttpFieldListParseStatus::kOk) {
                 return Http1ClientResponseParseError::kInvalidConnection;
             }
         } else if (httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding")) {
             output.sawTransferEncoding = true;
+            if (output.statusCode == http_status::kNoContent) {
+                return Http1ClientResponseParseError::kInvalidTransferEncoding;
+            }
             // RFC 9112 method/status precedence decides whether this field can
-            // frame this message. HEAD/1xx/204/304 and successful CONNECT ignore
-            // it here; HEAD/304 may legitimately carry representation metadata.
+            // frame this message. HEAD/304 may legitimately carry representation
+            // metadata; successful CONNECT is ignored by client-side rule.
             if (framingFieldsApply && output.protocolVersion == HttpProtocolVersion::kHttp11) {
                 switch (output.transferEncoding.parseField(value)) {
                     case HttpTransferEncodingParseStatus::kOk:
@@ -149,6 +165,15 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(std::strin
 
     if (output.protocolVersion == HttpProtocolVersion::kHttp10 && output.sawTransferEncoding) {
         return Http1ClientResponseParseError::kTransferEncodingInHttp10;
+    }
+    if (output.upgradeProtocols.hasField() && !output.connectionOptions.upgrade()) {
+        return Http1ClientResponseParseError::kInvalidConnection;
+    }
+    if (output.nonEmptyTrailerHeaderPresent) {
+        const auto transferEncoding = output.transferEncoding.value();
+        if (!transferEncoding.has_value() || transferEncoding->finalChunked() == nullptr) {
+            return Http1ClientResponseParseError::kInvalidHeader;
+        }
     }
     return result;
 }

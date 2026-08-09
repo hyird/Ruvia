@@ -121,7 +121,7 @@ private:
 class Http1SessionRequestCompletion final {
 public:
     [[nodiscard]] static Http1SessionRequestCompletion makeBufferedClosing(Http1ServerConnectionPlan connectionPlan) noexcept {
-        if (connectionPlan.disposition() != Http1ConnectionDisposition::kClose) {
+        if (connectionPlan.disposition() != Http1ClosePolicy::kCloseAfterResponse) {
             std::terminate();
         }
         return Http1SessionRequestCompletion(Http1BufferedResponseReady{}, connectionPlan, Http1RequestBufferCompletion(Http1RequestBufferDiscarded{}));
@@ -132,7 +132,7 @@ public:
     }
 
     [[nodiscard]] static Http1SessionRequestCompletion makeBufferedPipelineRestore(Http1ServerConnectionPlan connectionPlan, std::string_view pipeline) noexcept {
-        if (connectionPlan.disposition() != Http1ConnectionDisposition::kReuse) {
+        if (connectionPlan.disposition() != Http1ClosePolicy::kAllowReuse) {
             std::terminate();
         }
         return Http1SessionRequestCompletion(Http1BufferedResponseReady{}, connectionPlan, Http1RequestBufferCompletion(Http1RequestBufferPipelineRestore(pipeline)));
@@ -179,7 +179,7 @@ public:
             return makeBufferedUnrestored(connectionPlan, compaction->consumedBytes());
         }
         if (const auto* pipeline = bufferCompletion_.pipelineRestore()) {
-            if (connectionPlan.disposition() == Http1ConnectionDisposition::kClose) {
+            if (connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse) {
                 return makeBufferedClosing(connectionPlan);
             }
             return makeBufferedPipelineRestore(connectionPlan, pipeline->pipeline());
@@ -191,7 +191,7 @@ private:
     using Value = std::variant<Http1BufferedResponseReady, Http1CommittedStreamResponse>;
 
     [[nodiscard]] static Http1RequestBufferCompletion unshiftedBufferCompletion(Http1ServerConnectionPlan connectionPlan, std::size_t consumedBytes) noexcept {
-        if (connectionPlan.disposition() == Http1ConnectionDisposition::kClose) {
+        if (connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse) {
             return Http1RequestBufferCompletion(Http1RequestBufferDiscarded{});
         }
         return Http1RequestBufferCompletion(Http1RequestBufferCompaction(consumedBytes));

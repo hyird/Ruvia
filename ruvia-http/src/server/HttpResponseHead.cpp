@@ -7,9 +7,14 @@
 #include <stdexcept>
 
 #include "ruvia/http/detail/server/HttpDateCache.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
+#include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/http/detail/util/HttpOws.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpStatus.h"
@@ -96,6 +101,33 @@ void addResponseHeadBytes(std::size_t& total, std::size_t bytes) {
     return digits;
 }
 
+[[nodiscard]] bool isValidHttp1EmittedResponseHeader(std::string_view name, std::string_view value, std::uint32_t knownBit, bool trailerHeaderAllowed) noexcept {
+    if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value)) {
+        return false;
+    }
+    if (knownBit == kResponseHeaderContentType && !isValidHttpContentTypeFieldValue(value)) {
+        return false;
+    }
+    if (knownBit == kResponseHeaderContentEncoding && !isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kSender)) {
+        return false;
+    }
+    if (httpAsciiEqualsIgnoreCase(name, "Trailer")) {
+        return isValidHttpResponseTrailerFieldValue(value, HttpFieldListRole::kSender) && (trailerHeaderAllowed || httpTrimOws(value).empty());
+    }
+    if (httpAsciiEqualsIgnoreCase(name, "Connection")) {
+        HttpConnectionOptions options;
+        return options.parseField(value, HttpFieldListRole::kSender, [](std::string_view option) noexcept { return !httpConnectionOptionConflictsWithManagedField(option); }) == HttpFieldListParseStatus::kOk;
+    }
+    if (httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
+        HttpUpgradeProtocols protocols;
+        return protocols.parseField(value, HttpFieldListRole::kSender, [](const HttpUpgradeProtocol&) noexcept { return true; }) == HttpFieldListParseStatus::kOk;
+    }
+    if (httpAsciiEqualsIgnoreCase(name, "TE")) {
+        return false;
+    }
+    return true;
+}
+
 template <typename Sink>
 void emitResponseHead(const HttpResponse& response, Sink& sink, HttpStatusCode responseStatus, std::string_view reasonPhrase, std::string_view dateHeader, ResponseHeadFlags flags) {
     sink.append(flags.protocolVersion == HttpProtocolVersion::kHttp10 ? std::string_view("HTTP/1.0 ") : std::string_view("HTTP/1.1 "));
@@ -150,7 +182,11 @@ void appendResponseHead(const HttpResponse& response, ResponseHeadBuffer& head, 
     }
     const auto responseStatus = bodyPlan.responseStatus();
     const auto policy = bodyPlan.policy();
-    const bool emitChunkedTransferEncoding = plan.chunkedStream() != nullptr && policy.transferEncodingAllowed() && !bodyPlan.bodySuppressed();
+    const bool chunkedPayloadPlan = plan.chunkedStream() != nullptr && policy.transferEncodingAllowed() && !bodyPlan.bodySuppressed();
+    if (chunkedPayloadPlan && plan.protocolVersion() == HttpProtocolVersion::kHttp10) {
+        throw std::invalid_argument("HTTP/1.0 response cannot use chunked Transfer-Encoding");
+    }
+    const bool emitChunkedTransferEncoding = chunkedPayloadPlan;
     const bool autoContentLengthOwnedByWriter = policy.autoContentLengthAllowed() && !emitChunkedTransferEncoding && (buffered != nullptr || knownLengthStream != nullptr || !policy.bodyAllowed());
     const bool explicitContentLengthAllowed = policy.explicitContentLengthAllowed() && !emitChunkedTransferEncoding && !autoContentLengthOwnedByWriter && (plan.closeDelimitedStream() == nullptr || bodyPlan.bodySuppressed());
     const auto knownBits = responseKnownHeaderBits(response);
@@ -179,6 +215,9 @@ void appendResponseHead(const HttpResponse& response, ResponseHeadBuffer& head, 
         const auto knownBit = responseHeaderKnownBit(header);
         if (knownBit == kResponseHeaderTransferEncoding || knownBit == kResponseHeaderContentLength) {
             continue;
+        }
+        if (!isValidHttp1EmittedResponseHeader(header.name(), header.value(), knownBit, emitChunkedTransferEncoding)) {
+            throw std::invalid_argument("invalid HTTP response header");
         }
         ++fieldCount;
         addResponseHeadBytes(headBytes, header.name().size());

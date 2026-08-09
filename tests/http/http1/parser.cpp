@@ -19,7 +19,7 @@ using ruvia::HttpKnownMethod;
 using ruvia::HttpParseError;
 using ruvia::HttpProtocolVersion;
 using ruvia::detail::Http1ServerRequestParseFailureSource;
-using ruvia::detail::Http1ConnectionDisposition;
+using ruvia::Http1ClosePolicy;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::Http1ServerRequestParseState;
 using ruvia::detail::HttpUnsupportedExpectationPolicy;
@@ -164,6 +164,23 @@ RUVIA_TEST(http1_public_parser_preserves_expect_extensions_as_semantics) {
         RUVIA_CHECK(plan.rejection() != nullptr);
         RUVIA_CHECK(parsed->bodyPlan().expectations().hasContinue());
         RUVIA_CHECK(parsed->bodyPlan().expectations().hasUnsupported());
+    }
+}
+
+RUVIA_TEST(http1_parse_rejects_malformed_expect_field) {
+    const auto result = ruvia::Http1RequestParser().parse(
+        "POST /extensions HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Expect: bad value\r\n"
+        "Content-Length: 1\r\n\r\nx");
+
+    RUVIA_CHECK(result.parsed() == nullptr);
+    RUVIA_CHECK(result.failure() != nullptr);
+    if (const auto* failure = result.failure()) {
+        const auto protocolError = failure->protocolError();
+        const auto expected = ruvia::httpParseProtocolError(HttpParseError::kInvalidHeader);
+        RUVIA_CHECK_EQ(protocolError.status(), expected.status());
+        RUVIA_CHECK_EQ(std::string_view(protocolError.what()), std::string_view(expected.what()));
     }
 }
 
@@ -323,6 +340,65 @@ RUVIA_TEST(http1_parse_repeated_etag_list_fields_accepted) {
     RUVIA_CHECK(result.messageReady());
 }
 
+RUVIA_TEST(http1_parse_upgrade_requires_connection_option) {
+    {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n\r\n");
+        RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidConnection));
+    }
+    {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage(
+            "GET / HTTP/1.1\r\nHost: x\r\n"
+            "Connection: Upgrade\r\n"
+            "Upgrade: websocket\r\n\r\n");
+        RUVIA_CHECK(result.messageReady());
+        RUVIA_CHECK_EQ(result.request.header("Upgrade").value_or(std::string_view{}), std::string_view("websocket"));
+    }
+    {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage("GET / HTTP/1.0\r\nUpgrade: websocket\r\n\r\n");
+        RUVIA_CHECK(result.messageReady());
+        RUVIA_CHECK(result.request.header("Upgrade").has_value());
+    }
+}
+
+RUVIA_TEST(http1_parse_te_requires_connection_option) {
+    {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\nTE: trailers\r\n\r\n");
+        RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidConnection));
+    }
+    {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage(
+            "GET / HTTP/1.1\r\nHost: x\r\n"
+            "Connection: TE\r\n"
+            "TE: trailers\r\n\r\n");
+        RUVIA_CHECK(result.messageReady());
+        RUVIA_CHECK_EQ(result.request.header("TE").value_or(std::string_view{}), std::string_view("trailers"));
+    }
+    {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage(
+            "GET / HTTP/1.1\r\nHost: x\r\n"
+            "Connection: keep-alive\r\n"
+            "Connection: TE\r\n"
+            "TE:\r\n\r\n");
+        RUVIA_CHECK(result.messageReady());
+        RUVIA_CHECK(result.request.header("TE").has_value());
+    }
+}
+
+RUVIA_TEST(http1_parse_invalid_te_field_rejected) {
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
+        "GET / HTTP/1.1\r\nHost: x\r\n"
+        "Connection: TE\r\n"
+        "TE: chunked\r\n\r\n");
+    RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHeader));
+}
+
 RUVIA_TEST(http1_parse_duplicate_authorization_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
@@ -356,6 +432,30 @@ RUVIA_TEST(http1_parse_chunked_body) {
     const auto result = parser.parseMessage("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n");
     RUVIA_CHECK(result.messageReady());
     RUVIA_CHECK(requireChunked(result.bodyPlan).transferCodings().empty());
+}
+
+RUVIA_TEST(http1_parse_rejects_non_empty_trailer_header_without_chunked_framing) {
+    {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage("POST / HTTP/1.1\r\nHost: x\r\nTrailer: X-Checksum\r\n\r\n");
+        RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHeader));
+    }
+    {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage("POST / HTTP/1.1\r\nHost: x\r\nTrailer: X-Checksum\r\nContent-Length: 0\r\n\r\n");
+        RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHeader));
+    }
+    {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage("POST / HTTP/1.1\r\nHost: x\r\nTrailer: ,\r\n\r\n");
+        RUVIA_CHECK(result.messageReady());
+    }
+    {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage("POST / HTTP/1.1\r\nHost: x\r\nTrailer: X-Checksum\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n");
+        RUVIA_CHECK(result.messageReady());
+        RUVIA_CHECK(result.bodyPlan.chunked() != nullptr);
+    }
 }
 
 RUVIA_TEST(http1_parse_transfer_coding_before_final_chunked) {
@@ -418,14 +518,14 @@ RUVIA_TEST(http1_parse_failure_preserves_accepted_http10_version) {
     const auto invalidTarget = parser.parseMessage("GET * HTTP/1.0\r\n\r\n");
     RUVIA_CHECK(invalidTarget.failure() != nullptr);
     RUVIA_CHECK(invalidTarget.connectionPlan.protocolVersion() == HttpProtocolVersion::kHttp10);
-    RUVIA_CHECK(invalidTarget.connectionPlan.disposition() == Http1ConnectionDisposition::kClose);
+    RUVIA_CHECK(invalidTarget.connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse);
 
     // The same invariant applies to a framing rule checked after the version
     // line has already been accepted.
     const auto invalidFraming = parser.parseMessage("POST / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n");
     RUVIA_CHECK(invalidFraming.failure() != nullptr);
     RUVIA_CHECK(invalidFraming.connectionPlan.protocolVersion() == HttpProtocolVersion::kHttp10);
-    RUVIA_CHECK(invalidFraming.connectionPlan.disposition() == Http1ConnectionDisposition::kClose);
+    RUVIA_CHECK(invalidFraming.connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse);
 }
 
 RUVIA_TEST(http1_parse_absolute_uri_uses_target_authority) {
@@ -473,6 +573,18 @@ RUVIA_TEST(http1_parse_absolute_options_empty_path_is_server_wide) {
     RUVIA_CHECK(result.messageReady());
     RUVIA_CHECK_EQ(result.request.path(), std::string_view("*"));
     RUVIA_CHECK(result.request.queryString().empty());
+    RUVIA_CHECK_EQ(result.request.header("Host").value_or(std::string_view{}), std::string_view("api.example"));
+}
+
+RUVIA_TEST(http1_parse_absolute_options_empty_path_with_query_normalizes_to_slash) {
+    Http1ServerRequestParser parser;
+
+    const auto result = parser.parseMessage(
+        "OPTIONS http://api.example?debug=true HTTP/1.1\r\n"
+        "Host: stale.example\r\n\r\n");
+    RUVIA_CHECK(result.messageReady());
+    RUVIA_CHECK_EQ(result.request.path(), std::string_view("/"));
+    RUVIA_CHECK_EQ(result.request.queryString(), std::string_view("debug=true"));
     RUVIA_CHECK_EQ(result.request.header("Host").value_or(std::string_view{}), std::string_view("api.example"));
 }
 

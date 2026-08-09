@@ -14,9 +14,14 @@
 
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpParseError.h"
+#include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/detail/router/Router.h"
@@ -34,6 +39,13 @@ template <typename Handlers, typename Handler>
 void appendPrefixHandler(Handlers& handlers, std::string_view prefix, Handler handler) {
     const auto normalized = detail::validateFallbackPrefix(handlers, prefix, handler);
     handlers.emplace_back(std::string(normalized), std::move(handler));
+}
+
+void appendSyntheticHeaderLine(std::string& head, std::string_view name, std::string_view value) {
+    head.append(name);
+    head.append(": ");
+    head.append(value);
+    head.append("\r\n");
 }
 
 }  // namespace
@@ -155,31 +167,83 @@ TestResponse TestApp::request(const TestRequest& request) {
     detail::HttpRequestAccess::setResource(parsed, requestMemory.resource());
     detail::HttpRequestAccess::setMethod(parsed, request.method_);
     detail::HttpRequestAccess::setTarget(parsed, request.target_);
-    const std::string_view target(request.target_);
-    const auto queryAt = target.find('?');
-    detail::HttpRequestAccess::setPath(parsed, queryAt == std::string_view::npos ? target : target.substr(0, queryAt));
-    if (queryAt != std::string_view::npos) {
-        detail::HttpRequestAccess::setQueryString(parsed, target.substr(queryAt + 1));
+
+    std::optional<HttpParseError> parseError;
+    detail::RequestTargetView targetView;
+    if (!isValidHttpMethodToken(request.method_)) {
+        parseError = HttpParseError::kInvalidRequestLine;
+    } else if (!detail::parseRequestTarget(parsed.knownMethod(), request.target_, targetView)) {
+        parseError = HttpParseError::kInvalidRequestTarget;
+    } else {
+        detail::HttpRequestAccess::setPath(parsed, targetView.path);
+        detail::HttpRequestAccess::setQueryString(parsed, targetView.query);
     }
 
-    // Route each header through the parser's own classifier so known-header
-    // slots (Content-Type, Cookie, Accept, ...) behave exactly as they do for
-    // a parsed wire request.
-    const auto addHeader = [&parsed](std::string_view name, std::string_view value) {
-        const HttpHeaderView view{name, value};
-        const auto kind = detail::classifyRequestHeader(name);
-        const auto slot = detail::requestHeaderKindKnownSlot(kind);
-        if (slot < detail::kRequestHeaderKindCount) {
-            (void)detail::HttpRequestAccess::addHeader(parsed, view, slot);
-        } else {
-            (void)detail::HttpRequestAccess::addHeader(parsed, view);
+    std::string requestHead;
+    if (!parseError.has_value()) {
+        for (const auto& [name, value] : request.headers_) {
+            if (!detail::isValidHttpHeaderName(name) || !detail::isValidHttpHeaderValue(value)) {
+                parseError = HttpParseError::kInvalidHeader;
+                break;
+            }
         }
-    };
-    for (const auto& [name, value] : request.headers_) {
-        addHeader(name, value);
+        if (!parseError.has_value() && !request.cookies_.empty() && !detail::isValidHttpHeaderValue(request.cookies_)) {
+            parseError = HttpParseError::kInvalidHeader;
+        }
     }
-    if (!request.cookies_.empty()) {
-        addHeader("Cookie", request.cookies_);
+    if (!parseError.has_value()) {
+        requestHead.reserve(request.method_.size() + request.target_.size() + request.cookies_.size() + 16);
+        requestHead.append(request.method_);
+        requestHead.push_back(' ');
+        requestHead.append(request.target_);
+        requestHead.append(" HTTP/1.1\r\n");
+        for (const auto& [name, value] : request.headers_) {
+            appendSyntheticHeaderLine(requestHead, name, value);
+        }
+        if (!request.cookies_.empty()) {
+            appendSyntheticHeaderLine(requestHead, "Cookie", request.cookies_);
+        }
+        requestHead.append("\r\n");
+
+        detail::ParsedRequestHeaderBlock block;
+        if (requestHead.size() > kMaxHttpHeaderBytes) {
+            parseError = HttpParseError::kHeaderTooLarge;
+        } else if (const auto error = detail::parseHttpHeaderBlock(requestHead, requestHead.size(), block)) {
+            parseError = *error;
+        } else {
+            const auto contentLength = block.contentLength.value();
+            const auto transferEncoding = block.transferEncoding.value();
+            const auto contentSemantics = detail::httpRequestContentSemantics(request.method_);
+            if (transferEncoding.has_value() && contentLength.has_value()) {
+                parseError = HttpParseError::kInvalidTransferEncoding;
+            } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden && transferEncoding.has_value()) {
+                parseError = HttpParseError::kInvalidTransferEncoding;
+            } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden && contentLength.has_value()) {
+                parseError = HttpParseError::kInvalidContentLength;
+            } else if (transferEncoding.has_value() && transferEncoding->finalChunked() == nullptr) {
+                parseError = HttpParseError::kInvalidTransferEncoding;
+            } else if (contentSemantics == detail::HttpRequestContentSemantics::kContentTypeRequired && (contentLength.has_value() || transferEncoding.has_value()) && (block.seenHeaderBits & detail::singletonRequestHeaderBit(detail::RequestHeaderKind::kContentType)) == 0) {
+                parseError = HttpParseError::kInvalidHeader;
+            }
+
+            if (!parseError.has_value()) {
+                const auto targetRebindsHost = targetView.form == detail::HttpRequestTargetForm::kAbsolute || targetView.form == detail::HttpRequestTargetForm::kAuthority;
+                for (std::size_t i = 0; i < block.headerCount; ++i) {
+                    const auto& header = block.headers[i];
+                    auto value = header.value.bind(requestHead);
+                    if (targetRebindsHost && block.hostHeaderIndex >= 0 && i == static_cast<std::size_t>(block.hostHeaderIndex)) {
+                        value = targetView.authority;
+                    }
+                    const HttpHeaderView view{header.name.bind(requestHead), value};
+                    const auto slot = detail::requestHeaderKindKnownSlot(header.kind);
+                    const bool added = slot < detail::kRequestHeaderKindCount ? detail::HttpRequestAccess::addHeader(parsed, view, slot) : detail::HttpRequestAccess::addHeader(parsed, view);
+                    if (!added) {
+                        parseError = HttpParseError::kTooManyHeaders;
+                        break;
+                    }
+                }
+            }
+        }
     }
     detail::HttpRequestAccess::setBody(parsed, request.body_);
 
@@ -190,6 +254,10 @@ TestResponse TestApp::request(const TestRequest& request) {
 
     asio::io_context context(1);
     auto dispatch = [&]() -> asio::awaitable<HttpResponse> {
+        if (parseError.has_value()) {
+            const auto error = httpParseProtocolError(*parseError);
+            co_return co_await detail::taskAsAwaitable(routes.handleError(parsed, requestMemory, HttpErrorInfo(error.status(), {}, error.what()), services));
+        }
         auto result = co_await detail::taskAsAwaitable(routes.dispatchBufferedResponse(parsed, resolution, requestMemory, detail::DocumentRootBinding::none(), services));
         co_return std::move(result).takeResponse();
     };

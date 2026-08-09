@@ -138,13 +138,13 @@ private:
     // HTTP/1.0 close-delimited body cannot retain either framing field. HEAD/304
     // may retain Content-Length metadata because their body is suppressed.
     if (writerOwnsHttp1KnownLength || writerOwnsHttp1Chunked) {
-        response.header("Content-Length", std::nullopt);
+        response.removeHeader("Content-Length");
     }
     if (framing == ResponseStreamFraming::kHttp1KnownLength || framing == ResponseStreamFraming::kHttp1Chunked || framing == ResponseStreamFraming::kHttp1CloseDelimited) {
-        response.header("Transfer-Encoding", std::nullopt);
+        response.removeHeader("Transfer-Encoding");
     }
     if (framing == ResponseStreamFraming::kHttp1CloseDelimited && !bodyPlan.bodySuppressed()) {
-        response.header("Content-Length", std::nullopt);
+        response.removeHeader("Content-Length");
     }
 
     const bool needsSseContentType = kind == ResponseStreamKind::kSse && !responseHasKnownHeader(response, kResponseHeaderContentType);
