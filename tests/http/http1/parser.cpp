@@ -19,7 +19,7 @@ using ruvia::HttpKnownMethod;
 using ruvia::HttpParseError;
 using ruvia::HttpProtocolVersion;
 using ruvia::detail::Http1ServerRequestParseFailureSource;
-using ruvia::detail::Http1ConnectionDisposition;
+using ruvia::Http1ClosePolicy;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::Http1ServerRequestParseState;
 using ruvia::detail::HttpUnsupportedExpectationPolicy;
@@ -418,14 +418,14 @@ RUVIA_TEST(http1_parse_failure_preserves_accepted_http10_version) {
     const auto invalidTarget = parser.parseMessage("GET * HTTP/1.0\r\n\r\n");
     RUVIA_CHECK(invalidTarget.failure() != nullptr);
     RUVIA_CHECK(invalidTarget.connectionPlan.protocolVersion() == HttpProtocolVersion::kHttp10);
-    RUVIA_CHECK(invalidTarget.connectionPlan.disposition() == Http1ConnectionDisposition::kClose);
+    RUVIA_CHECK(invalidTarget.connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse);
 
     // The same invariant applies to a framing rule checked after the version
     // line has already been accepted.
     const auto invalidFraming = parser.parseMessage("POST / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n");
     RUVIA_CHECK(invalidFraming.failure() != nullptr);
     RUVIA_CHECK(invalidFraming.connectionPlan.protocolVersion() == HttpProtocolVersion::kHttp10);
-    RUVIA_CHECK(invalidFraming.connectionPlan.disposition() == Http1ConnectionDisposition::kClose);
+    RUVIA_CHECK(invalidFraming.connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse);
 }
 
 RUVIA_TEST(http1_parse_absolute_uri_uses_target_authority) {

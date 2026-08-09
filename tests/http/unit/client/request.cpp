@@ -18,7 +18,7 @@
 
 namespace {
 
-using ruvia::Http1ClientRequestClosePolicy;
+using ruvia::Http1ClosePolicy;
 using ruvia::Http1ClientRequestPrepareError;
 using ruvia::Http1ClientRequestWirePolicy;
 using ruvia::Http1ClientRequestWriter;
@@ -573,13 +573,13 @@ RUVIA_TEST(http1_client_request_context_binds_the_actual_close_signal) {
             const auto* withoutContent = response.parsed()->plan().withoutContent();
             RUVIA_CHECK(withoutContent != nullptr);
             if (withoutContent != nullptr) {
-                RUVIA_CHECK(withoutContent->persistence() == ruvia::Http1ClientResponsePersistence::kClose);
+                RUVIA_CHECK(withoutContent->persistence() == ruvia::Http1ClosePolicy::kCloseAfterResponse);
             }
         }
     }
 
     HttpClientRequestView generatedRequest;
-    PreparedFixture generatedClose(HttpOriginView::https("example.test"), generatedRequest, Http1ClientRequestWirePolicy::withoutExpectation(Http1ClientRequestClosePolicy::kCloseAfterResponse));
+    PreparedFixture generatedClose(HttpOriginView::https("example.test"), generatedRequest, Http1ClientRequestWirePolicy::withoutExpectation(Http1ClosePolicy::kCloseAfterResponse));
     RUVIA_CHECK(generatedClose.result.prepared() != nullptr);
     if (generatedClose.result.prepared() != nullptr) {
         RUVIA_CHECK(generatedClose.result.prepared()->head().find("Connection: close\r\n") != std::string_view::npos);

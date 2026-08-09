@@ -73,6 +73,10 @@ public:
 
     [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read();
 
+    /// text()/binary()/pong()/ping() copy the payload into process-owned PMR
+    /// storage before returning. Hot-path producers that already hold a buffer
+    /// in request-owned storage should build it with the request arena and move
+    /// it in through the matching *Owned() entry to skip that copy.
     ScopedOperation<void> text(std::string_view payload);
 
     ScopedOperation<void> binary(std::string_view payload);
@@ -80,6 +84,18 @@ public:
     ScopedOperation<void> pong(std::string_view payload);
 
     ScopedOperation<void> ping(std::string_view payload = {});
+
+    /// Zero-copy text frame: takes ownership of an already-allocated payload.
+    ScopedOperation<void> textOwned(std::pmr::string payload);
+
+    /// Zero-copy binary frame.
+    ScopedOperation<void> binaryOwned(std::pmr::string payload);
+
+    /// Zero-copy pong frame.
+    ScopedOperation<void> pongOwned(std::pmr::string payload);
+
+    /// Zero-copy ping frame.
+    ScopedOperation<void> pingOwned(std::pmr::string payload);
 
     ScopedOperation<void> close(std::uint16_t code = 1000, std::string_view reason = {});
     void abort() noexcept;
@@ -100,6 +116,7 @@ private:
           abort_(abort) {}
 
     ScopedOperation<void> write(WebSocketOpcode opcode, std::string_view payload);
+    ScopedOperation<void> writeOwned(WebSocketOpcode opcode, std::pmr::string payload);
 
     void* target_;
     Read read_;

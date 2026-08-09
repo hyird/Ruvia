@@ -72,7 +72,7 @@ inline asio::awaitable<void> parseArrayForm(ruvia::Context& context, std::size_t
     const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {}));
     const auto tags = form.get("tags[]");
     tagsSize = tags.size();
-    tagsArray = tags.array();
+    tagsArray = tags.isArray();
     const auto x = form.get("x");
     xSize = x.size();
     if (const auto xv = x.value(); xv.has_value()) {
@@ -85,7 +85,7 @@ inline asio::awaitable<void> parseRepeatedFiles(ruvia::Context& context, std::si
     const auto photos = form.get("photos");
     count = photos.size();
     for (const auto* field : photos.fields()) {
-        if (field == nullptr || !field->file()) {
+        if (field == nullptr || !field->isFile()) {
             continue;
         }
         ++fileCount;

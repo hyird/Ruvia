@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 #include "ruvia/web/detail/integration/DataAccessDefinitions.h"
+#include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/detail/db/DbConfigValidation.h"
@@ -28,6 +29,24 @@ void upsertDefinition(std::pmr::vector<Definition>& definitions, std::string_vie
 }
 
 }  // namespace
+
+App& App::useHttpClient(HttpClientConfig config) {
+    return useHttpClient("default", std::move(config));
+}
+
+App& App::useHttpClient(std::string_view alias, HttpClientConfig config) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure http client while app is running", [&](detail::AppState& state) {
+        if (alias.empty()) {
+            throw std::invalid_argument("http client alias must not be empty");
+        }
+        detail::validateHttpClientConfig(config);
+        detail::HttpClientConfigStorage storedConfig(config, detail::appResource());
+        upsertDefinition(state.httpClients, alias, storedConfig, [](std::string_view storedAlias, detail::HttpClientConfigStorage&& definitionConfig) {
+            auto* resource = detail::appResource();
+            return detail::HttpClientDefinition{std::pmr::string(storedAlias, resource), std::move(definitionConfig)};
+        });
+    });
+}
 
 #ifdef RUVIA_ENABLE_DATABASE
 App& App::useDb(DbConfig config) {

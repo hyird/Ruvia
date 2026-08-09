@@ -2,6 +2,8 @@
 
 // Routing: registering routes and matching a request to one.
 
+RUVIA_ROUTE_RATE_LIMIT(TestRouteRateLimit, 1, 1000);
+
 RUVIA_TEST(route_rejects_duplicate_validated_model_types_at_registration) {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
@@ -29,7 +31,7 @@ RUVIA_TEST(finalized_route_table_records_route_rate_limit_usage) {
     {
         ruvia::detail::Router router;
         auto& impl = ruvia::detail::RouterImpl::from(router);
-        const auto rateLimit = ruvia::detail::makeMiddlewareDescriptor<ruvia::RouteRateLimit<1, 1000>>();
+        const auto rateLimit = ruvia::detail::makeMiddlewareDescriptor<TestRouteRateLimit>();
         impl.registerRoute(HttpKnownMethod::kGet, path("/limited"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span(&rateLimit, std::size_t{1}));
         impl.finalize();
         RUVIA_CHECK(impl.routeTable().hasRouteRateLimit());

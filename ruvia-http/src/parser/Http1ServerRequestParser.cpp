@@ -222,7 +222,7 @@ void Http1ServerRequestParser::parseMessageBody(std::string_view buffer, Http1Se
         }
     } else if (knownLengthBody != nullptr) {
         const auto contentLength = knownLengthBody->contentLength();
-        if (contentLength > kMaxHttpBodyBytes || contentLength > kMaxHttpRequestBytes - headerBytes) {
+        if (contentLength > kDefaultMaxBufferedBodyBytes || contentLength > kMaxHttpRequestBytes - headerBytes) {
             return fail(HttpParseError::kBodyTooLarge);
         }
         messageBytes = headerBytes + contentLength;

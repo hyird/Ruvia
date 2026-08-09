@@ -116,6 +116,38 @@ RUVIA_TEST(websocket_stored_operation_owns_temporary_payload) {
     RUVIA_CHECK_EQ(capture.writes[0], std::string("owned-payload"));
 }
 
+RUVIA_TEST(response_stream_write_owned_transfers_prebuilt_chunk) {
+    CaptureStreamSink sink;
+    auto writer = makeWriter(sink);
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable([&writer]() -> ruvia::Task<void> {
+        std::pmr::string chunk("owned-chunk", ruvia::detail::processResource());
+        co_await writer.writeOwned(std::move(chunk));
+    }()), asio::use_future);
+    ctx.run();
+    future.get();
+
+    RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(sink.writes[0], std::string("owned-chunk"));
+}
+
+RUVIA_TEST(websocket_text_owned_transfers_prebuilt_payload) {
+    CaptureWebSocket capture;
+    auto socket = ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable([&socket]() -> ruvia::Task<void> {
+        std::pmr::string payload("owned-frame", ruvia::detail::processResource());
+        co_await socket.textOwned(std::move(payload));
+    }()), asio::use_future);
+    ctx.run();
+    future.get();
+
+    RUVIA_CHECK_EQ(capture.writes.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(capture.writes[0], std::string("owned-frame"));
+}
+
 RUVIA_TEST(response_stream_end_submits_one_terminal_trailer_section) {
     CaptureStreamSink sink;
     auto writer = makeWriter(sink);

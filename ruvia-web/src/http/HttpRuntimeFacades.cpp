@@ -89,7 +89,7 @@ WebSocket& Context::webSocket() const {
     return output->webSocket();
 }
 
-ResponseStreamWriter& Context::stream() const {
+ResponseStreamWriter& Context::stream() {
     const auto* output = responseOutput_.responseStream();
     if (output == nullptr) {
         throw std::logic_error("response body is not streamable");
@@ -182,6 +182,22 @@ ScopedOperation<void> WebSocket::ping(std::string_view payload) {
     return write(WebSocketOpcode::kPing, payload);
 }
 
+ScopedOperation<void> WebSocket::textOwned(std::pmr::string payload) {
+    return writeOwned(WebSocketOpcode::kText, std::move(payload));
+}
+
+ScopedOperation<void> WebSocket::binaryOwned(std::pmr::string payload) {
+    return writeOwned(WebSocketOpcode::kBinary, std::move(payload));
+}
+
+ScopedOperation<void> WebSocket::pongOwned(std::pmr::string payload) {
+    return writeOwned(WebSocketOpcode::kPong, std::move(payload));
+}
+
+ScopedOperation<void> WebSocket::pingOwned(std::pmr::string payload) {
+    return writeOwned(WebSocketOpcode::kPing, std::move(payload));
+}
+
 ScopedOperation<void> WebSocket::close(std::uint16_t code, std::string_view reason) {
     std::pmr::string owned(reason, detail::processResource());
     return detail::makeScopedOperation(operationScope_, closeWebSocketOwned(target_, close_, code, std::move(owned)));
@@ -193,7 +209,11 @@ void WebSocket::abort() noexcept {
 
 ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::string_view payload) {
     std::pmr::string owned(payload, detail::processResource());
-    return detail::makeScopedOperation(operationScope_, writeWebSocketOwned(target_, write_, opcode, std::move(owned)));
+    return writeOwned(opcode, std::move(owned));
+}
+
+ScopedOperation<void> WebSocket::writeOwned(WebSocketOpcode opcode, std::pmr::string payload) {
+    return detail::makeScopedOperation(operationScope_, writeWebSocketOwned(target_, write_, opcode, std::move(payload)));
 }
 
 ScopedOperation<void> SseWriter::write(const SseMessage& message) {

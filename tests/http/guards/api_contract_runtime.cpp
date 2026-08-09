@@ -216,7 +216,7 @@ int main() {
     ruvia::Http1ClientResponseParser expectParser(*expectWire);
     const auto continueResult = expectParser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     const auto* continueHead = continueResult.parsed();
-    if (continueHead == nullptr || continueHead->plan().informational() == nullptr || continueHead->plan().informational()->persistence() != ruvia::Http1ClientResponsePersistence::kReuse || continueHead->head().protocolVersion() != ruvia::HttpProtocolVersion::kHttp11 || continueHead->plan().requestContentSignal() != ruvia::Http1ClientRequestContentSignal::kContinue) {
+    if (continueHead == nullptr || continueHead->plan().informational() == nullptr || continueHead->plan().informational()->persistence() != ruvia::Http1ClosePolicy::kAllowReuse || continueHead->head().protocolVersion() != ruvia::HttpProtocolVersion::kHttp11 || continueHead->plan().requestContentSignal() != ruvia::Http1ClientRequestContentSignal::kContinue) {
         return 25;
     }
     if (expectParser.completeRequestContent() != ruvia::Http1ClientRequestContentCompletionStatus::kCompleted) {
@@ -247,12 +247,12 @@ int main() {
         return 38;
     }
 
-    const auto redirectTarget = ruvia::resolveHttpClientSameOriginRedirectTarget(outboundOrigin, "/base/current", "../next?x=1", std::pmr::get_default_resource());
-    if (redirectTarget.target() == nullptr || redirectTarget.failure() != nullptr || redirectTarget.target()->value() != "/next?x=1") {
+    const auto redirectTarget = ruvia::resolveHttpClientRedirectTarget(outboundOrigin, "/base/current", "../next?x=1", std::pmr::get_default_resource());
+    if (redirectTarget.resolved() == nullptr || redirectTarget.failure() != nullptr || redirectTarget.resolved()->crossOrigin() || redirectTarget.resolved()->target() != "/next?x=1") {
         return 28;
     }
-    const auto crossOrigin = ruvia::resolveHttpClientSameOriginRedirectTarget(outboundOrigin, "/base/current", "https://other.test/next", std::pmr::get_default_resource());
-    if (crossOrigin.target() != nullptr || crossOrigin.failure() == nullptr || crossOrigin.failure()->error() != ruvia::HttpClientRedirectTargetError::kNotSameOrigin) {
+    const auto crossOrigin = ruvia::resolveHttpClientRedirectTarget(outboundOrigin, "/base/current", "https://other.test/next", std::pmr::get_default_resource());
+    if (crossOrigin.resolved() == nullptr || crossOrigin.failure() != nullptr || !crossOrigin.resolved()->crossOrigin()) {
         return 29;
     }
 
@@ -332,14 +332,14 @@ int main() {
     const auto knownLengthResult = knownLengthParser.parse("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc");
     const auto* knownLengthHead = knownLengthResult.parsed();
     const auto* knownLength = knownLengthHead == nullptr ? nullptr : knownLengthHead->plan().knownLength();
-    if (knownLength == nullptr || knownLength->contentLength() != 3 || knownLength->persistence() != ruvia::Http1ClientResponsePersistence::kReuse) {
+    if (knownLength == nullptr || knownLength->contentLength() != 3 || knownLength->persistence() != ruvia::Http1ClosePolicy::kAllowReuse) {
         return 15;
     }
     ruvia::Http1ClientResponseParser chunkedParser(*getWire);
     const auto chunkedResult = chunkedParser.parse("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n");
     const auto* chunkedHead = chunkedResult.parsed();
     const auto* chunked = chunkedHead == nullptr ? nullptr : chunkedHead->plan().chunked();
-    if (chunked == nullptr || chunked->transferCodings().count != 1 || chunked->transferCodings().values[0] != ruvia::detail::HttpTransferCoding::kGzip || chunked->persistence() != ruvia::Http1ClientResponsePersistence::kReuse) {
+    if (chunked == nullptr || chunked->transferCodings().count != 1 || chunked->transferCodings().values[0] != ruvia::detail::HttpTransferCoding::kGzip || chunked->persistence() != ruvia::Http1ClosePolicy::kAllowReuse) {
         return 15;
     }
     ruvia::Http1ClientResponseParser clientParser(*getWire);
@@ -393,8 +393,8 @@ int main() {
         return 24;
     }
 
-    const auto streamPlan = ruvia::detail::http1PlanResponseStream(serverParser.parseMessage("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n"), ruvia::detail::Http1ServerClosePolicy::kAllowReuse);
-    if (streamPlan.framing() != ruvia::detail::ResponseStreamFraming::kHttp1Chunked || streamPlan.requestConnectionPlan().disposition() != ruvia::detail::Http1ConnectionDisposition::kReuse || streamPlan.requestConnectionPlan().protocolVersion() != ruvia::HttpProtocolVersion::kHttp11 || streamPlan.closePolicy() != ruvia::detail::Http1ServerClosePolicy::kAllowReuse) {
+    const auto streamPlan = ruvia::detail::http1PlanResponseStream(serverParser.parseMessage("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n"), ruvia::Http1ClosePolicy::kAllowReuse);
+    if (streamPlan.framing() != ruvia::detail::ResponseStreamFraming::kHttp1Chunked || streamPlan.requestConnectionPlan().disposition() != ruvia::Http1ClosePolicy::kAllowReuse || streamPlan.requestConnectionPlan().protocolVersion() != ruvia::HttpProtocolVersion::kHttp11 || streamPlan.closePolicy() != ruvia::Http1ClosePolicy::kAllowReuse) {
         return 4;
     }
 
@@ -402,16 +402,16 @@ int main() {
     streamResponse.header("Connection", "close");
     const auto preparedStreamResult = ruvia::detail::prepareHttp1ResponseStreamHead(std::move(streamResponse), ruvia::detail::ResponseStreamKind::kGeneric, streamPlan, ruvia::detail::ResponseTrailerIntent::kNone);
     const auto* preparedStream = preparedStreamResult.prepared();
-    if (preparedStream == nullptr || preparedStreamResult.failure() != nullptr || preparedStream->connectionPlan().disposition() != ruvia::detail::Http1ConnectionDisposition::kClose || preparedStream->response().header("Connection") != "close" || preparedStream->responseHeadPlan().chunkedStream() == nullptr || preparedStream->responseHeadPlan().buffered() != nullptr || preparedStream->responseHeadPlan().closeDelimitedStream() != nullptr) {
+    if (preparedStream == nullptr || preparedStreamResult.failure() != nullptr || preparedStream->connectionPlan().disposition() != ruvia::Http1ClosePolicy::kCloseAfterResponse || preparedStream->response().header("Connection") != "close" || preparedStream->responseHeadPlan().chunkedStream() == nullptr || preparedStream->responseHeadPlan().buffered() != nullptr || preparedStream->responseHeadPlan().closeDelimitedStream() != nullptr) {
         return 5;
     }
 
-    const auto http10Plan = ruvia::detail::http1PlanResponseStream(serverParser.parseMessage("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n"), ruvia::detail::Http1ServerClosePolicy::kAllowReuse);
+    const auto http10Plan = ruvia::detail::http1PlanResponseStream(serverParser.parseMessage("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n"), ruvia::Http1ClosePolicy::kAllowReuse);
     ruvia::HttpResponse resetContentStream;
     resetContentStream.status(ruvia::http_status::kResetContent);
     const auto preparedHttp10Result = ruvia::detail::prepareHttp1ResponseStreamHead(std::move(resetContentStream), ruvia::detail::ResponseStreamKind::kGeneric, http10Plan, ruvia::detail::ResponseTrailerIntent::kNone);
     const auto* preparedHttp10 = preparedHttp10Result.prepared();
-    if (preparedHttp10 == nullptr || preparedHttp10Result.failure() != nullptr || !preparedHttp10->commitPlan().bodyPlan().bodySuppressed() || preparedHttp10->commitPlan().headDisposition() != ruvia::detail::ResponseStreamHeadDisposition::kMessageEnded || preparedHttp10->responseHeadPlan().closeDelimitedStream() == nullptr || preparedHttp10->responseHeadPlan().protocolVersion() != ruvia::HttpProtocolVersion::kHttp10 || preparedHttp10->connectionPlan().disposition() != ruvia::detail::Http1ConnectionDisposition::kReuse || preparedHttp10->response().header("Connection") != "keep-alive") {
+    if (preparedHttp10 == nullptr || preparedHttp10Result.failure() != nullptr || !preparedHttp10->commitPlan().bodyPlan().bodySuppressed() || preparedHttp10->commitPlan().headDisposition() != ruvia::detail::ResponseStreamHeadDisposition::kMessageEnded || preparedHttp10->responseHeadPlan().closeDelimitedStream() == nullptr || preparedHttp10->responseHeadPlan().protocolVersion() != ruvia::HttpProtocolVersion::kHttp10 || preparedHttp10->connectionPlan().disposition() != ruvia::Http1ClosePolicy::kAllowReuse || preparedHttp10->response().header("Connection") != "keep-alive") {
         return 13;
     }
 

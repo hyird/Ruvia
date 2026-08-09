@@ -214,7 +214,7 @@ RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
 }
 
 RUVIA_TEST(chunked_body_decoder_caps_each_size_line) {
-    Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(ruvia::kMaxHttpBodyBytes));
+    Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(ruvia::kDefaultMaxBufferedBodyBytes));
     std::string oversized = "1;x=";
     oversized.append(ruvia::kMaxHttpHeaderBytes, 'a');
     oversized.append("\r\n");
@@ -225,7 +225,7 @@ RUVIA_TEST(chunked_body_decoder_caps_each_size_line) {
         RUVIA_CHECK_EQ(failure->protocolError().status(), ruvia::http_status::kContentTooLarge);
     }
 
-    Http1ChunkedBodyDecoder boundary(ProtocolByteLimit::limited(ruvia::kMaxHttpBodyBytes));
+    Http1ChunkedBodyDecoder boundary(ProtocolByteLimit::limited(ruvia::kDefaultMaxBufferedBodyBytes));
     std::string accepted = "1;x=";
     // Reserve two bytes for the data delimiter and five for the terminal chunk.
     accepted.append(ruvia::kMaxHttpHeaderBytes - 7 - accepted.size() - 2, 'a');

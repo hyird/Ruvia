@@ -137,7 +137,7 @@ void HttpResponse::header(std::string_view key, std::string_view value, HeaderOp
     }
 }
 
-void HttpResponse::header(std::string_view key, std::nullopt_t) {
+void HttpResponse::removeHeader(std::string_view key) {
     detail::validateResponseHeaderStorageSize(key.size(), 0);
     if (!isValidHttpHeaderName(key)) {
         throw std::invalid_argument("invalid HTTP header name");

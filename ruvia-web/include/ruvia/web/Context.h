@@ -27,6 +27,7 @@
 #include "ruvia/web/ContextRequest.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
+#include "ruvia/web/HttpClient.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/MultipartReader.h"
 #include "ruvia/web/RequestFields.h"
@@ -53,6 +54,7 @@ namespace ruvia {
 class Context;
 class Env;
 class StaticRoot;
+class HttpClient;
 
 #ifdef RUVIA_ENABLE_DATABASE
 class DbHandle;
@@ -63,6 +65,7 @@ class RedisHandle;
 namespace detail {
 class DbRegistry;
 class RedisRegistry;
+class HttpClientRegistry;
 class RateLimiter;
 class RouteTable;
 class WorkerStateRegistry;
@@ -107,7 +110,10 @@ public:
         return ContextRequest(*this);
     }
 
-    [[nodiscard]] std::exception_ptr error() const noexcept {
+    // The exception that failed the current middleware/handler dispatch, or
+    // null. Distinct from error(status, code, message) which constructs an
+    // error response.
+    [[nodiscard]] std::exception_ptr exception() const noexcept {
         return error_;
     }
 
@@ -169,9 +175,11 @@ public:
     [[nodiscard]] RedisHandle redis() const;
     [[nodiscard]] RedisHandle redis(std::string_view alias) const;
 #endif
+    [[nodiscard]] HttpClient httpClient() const;
+    [[nodiscard]] HttpClient httpClient(std::string_view alias) const;
     [[nodiscard]] WebSocket& webSocket() const;
 
-    [[nodiscard]] ResponseStreamWriter& stream() const;
+    [[nodiscard]] ResponseStreamWriter& stream();
 
     [[nodiscard]] ResponseStreamWriter& streamText();
 
@@ -192,7 +200,10 @@ public:
 
     void header(std::string_view name, std::string_view value, HeaderOptions options);
 
-    void header(std::string_view name, std::nullopt_t);
+    // Remove a response header set by this handler, before the response is
+    // committed. Setting header(name, std::nullopt) to mean deletion was a
+    // hidden sentinel; removal now has its own named entry point.
+    void removeHeader(std::string_view name);
 
     void setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
     void setSignedCookie(std::string_view name, std::string_view value, std::string_view secret, const CookieOptions& options = {});
@@ -318,6 +329,7 @@ private:
     std::size_t paramCount_{0};
     [[maybe_unused]] detail::DbRegistry* db_{nullptr};
     [[maybe_unused]] detail::RedisRegistry* redis_{nullptr};
+    detail::HttpClientRegistry* httpClients_{nullptr};
     detail::RateLimiter* rateLimiter_{nullptr};
     const Env* env_{nullptr};
     detail::HttpErrorHandlerRef errorHandler_{nullptr};

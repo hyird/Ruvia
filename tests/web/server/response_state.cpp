@@ -45,7 +45,7 @@ bool throwsInvalid(Fn&& fn) {
 
 RUVIA_TEST(finalize_buffered_response_preserves_request_version_and_persistence) {
     using ruvia::detail::finalizeBufferedRouteResponse;
-    using ruvia::detail::Http1ConnectionDisposition;
+    using ruvia::Http1ClosePolicy;
     using ruvia::detail::Http1ServerRequestParser;
 
     Http1ServerRequestParser parser;
@@ -60,11 +60,11 @@ RUVIA_TEST(finalize_buffered_response_preserves_request_version_and_persistence)
     // RFC 9112 §9.3: a kept-alive HTTP/1.0 response MUST advertise keep-alive,
     // otherwise the client (which defaults to close) never reuses the connection.
     const auto http10Reuse = finalize("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n");
-    RUVIA_CHECK(http10Reuse.first == Http1ConnectionDisposition::kReuse);
+    RUVIA_CHECK(http10Reuse.first == Http1ClosePolicy::kAllowReuse);
     RUVIA_CHECK_EQ(http10Reuse.second, std::string("keep-alive"));
     // HTTP/1.1 is persistent by default -> no Connection header needed.
     const auto http11Reuse = finalize("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-    RUVIA_CHECK(http11Reuse.first == Http1ConnectionDisposition::kReuse);
+    RUVIA_CHECK(http11Reuse.first == Http1ClosePolicy::kAllowReuse);
     RUVIA_CHECK_EQ(http11Reuse.second, std::string(""));
     // A non-kept-alive response is closed regardless of version.
     RUVIA_CHECK_EQ(finalize("GET / HTTP/1.0\r\n\r\n").second, std::string("close"));
@@ -91,7 +91,7 @@ RUVIA_TEST(http1_final_response_commit_requirement_preserves_typed_failure) {
 
 RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {
     using ruvia::detail::finalizeBufferedRouteResponse;
-    using ruvia::detail::Http1ConnectionDisposition;
+    using ruvia::Http1ClosePolicy;
     using ruvia::detail::Http1RequestSequence;
     using ruvia::detail::Http1ServerRequestParser;
 
@@ -101,13 +101,13 @@ RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {
     for (std::size_t completed = 0; completed < 4; ++completed) {
         HttpResponse response(std::pmr::new_delete_resource());
         const auto connectionPlan = finalizeBufferedRouteResponse(response, requestPlan, requestSequence);
-        RUVIA_CHECK(connectionPlan.disposition() == Http1ConnectionDisposition::kReuse);
+        RUVIA_CHECK(connectionPlan.disposition() == Http1ClosePolicy::kAllowReuse);
         RUVIA_CHECK(!response.header("Connection").has_value());
     }
 
     HttpResponse response(std::pmr::new_delete_resource());
     const auto connectionPlan = finalizeBufferedRouteResponse(response, requestPlan, requestSequence);
-    RUVIA_CHECK(connectionPlan.disposition() == Http1ConnectionDisposition::kClose);
+    RUVIA_CHECK(connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse);
     RUVIA_CHECK_EQ(std::string(response.header("Connection").value_or(std::string_view{})), std::string("close"));
 }
 
@@ -116,39 +116,39 @@ RUVIA_TEST(http1_request_sequence_rejects_configured_zero_budget) {
 }
 
 RUVIA_TEST(http1_request_sequence_unifies_buffered_and_committed_completion) {
-    using ruvia::detail::Http1ConnectionDisposition;
+    using ruvia::Http1ClosePolicy;
     using ruvia::detail::http1PlanResponseStream;
     using ruvia::detail::Http1RequestSequence;
-    using ruvia::detail::Http1ServerClosePolicy;
+    using ruvia::Http1ClosePolicy;
     using ruvia::detail::Http1ServerRequestParser;
     using ruvia::detail::ResponseStreamKind;
     using ruvia::detail::ResponseTrailerIntent;
 
     const auto reusablePlan = connectionPlanFor(ruvia::HttpProtocolVersion::kHttp11);
     Http1RequestSequence requestSequence(std::optional<std::size_t>{2});
-    RUVIA_CHECK(requestSequence.nextResponseClosePolicy() == Http1ServerClosePolicy::kAllowReuse);
+    RUVIA_CHECK(requestSequence.nextResponseClosePolicy() == Http1ClosePolicy::kAllowReuse);
 
     const auto firstPlan = requestSequence.completeUncommittedResponse(reusablePlan);
-    RUVIA_CHECK(firstPlan.disposition() == Http1ConnectionDisposition::kReuse);
-    RUVIA_CHECK(requestSequence.nextResponseClosePolicy() == Http1ServerClosePolicy::kCloseAfterResponse);
+    RUVIA_CHECK(firstPlan.disposition() == Http1ClosePolicy::kAllowReuse);
+    RUVIA_CHECK(requestSequence.nextResponseClosePolicy() == Http1ClosePolicy::kCloseAfterResponse);
 
     Http1ServerRequestParser parser;
     const auto parsed = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     const auto streamPlan = http1PlanResponseStream(parsed, requestSequence.nextResponseClosePolicy());
-    RUVIA_CHECK(streamPlan.closePolicy() == Http1ServerClosePolicy::kCloseAfterResponse);
+    RUVIA_CHECK(streamPlan.closePolicy() == Http1ClosePolicy::kCloseAfterResponse);
     HttpResponse streamResponse(std::pmr::new_delete_resource());
     const auto prepared = prepareStream(std::move(streamResponse), ResponseStreamKind::kGeneric, streamPlan, ResponseTrailerIntent::kNone);
-    RUVIA_CHECK(prepared.connectionPlan().disposition() == Http1ConnectionDisposition::kClose);
+    RUVIA_CHECK(prepared.connectionPlan().disposition() == Http1ClosePolicy::kCloseAfterResponse);
     requestSequence.completeCommittedResponse(prepared.connectionPlan());
 
     Http1RequestSequence unlimited(std::nullopt);
     unlimited.completeCommittedResponse(reusablePlan);
-    RUVIA_CHECK(unlimited.nextResponseClosePolicy() == Http1ServerClosePolicy::kAllowReuse);
+    RUVIA_CHECK(unlimited.nextResponseClosePolicy() == Http1ClosePolicy::kAllowReuse);
 }
 
 RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
     using ruvia::detail::finalizeBodyRouteResponse;
-    using ruvia::detail::Http1ConnectionDisposition;
+    using ruvia::Http1ClosePolicy;
     using ruvia::detail::Http1RequestBodyConsumption;
     using ruvia::detail::Http1ServerRequestParser;
 
@@ -159,7 +159,7 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
     completeResponse.body("response");
     ruvia::detail::Http1RequestSequence completeRequestSequence(std::nullopt);
     const auto completePlan = finalizeBodyRouteResponse(completeResponse, parser.parseMessage(request).connectionPlan, completeRequestSequence, Http1RequestBodyConsumption::kComplete);
-    RUVIA_CHECK(completePlan.disposition() == Http1ConnectionDisposition::kReuse);
+    RUVIA_CHECK(completePlan.disposition() == Http1ClosePolicy::kAllowReuse);
     RUVIA_CHECK(completePlan.protocolVersion() == ruvia::HttpProtocolVersion::kHttp10);
     RUVIA_CHECK_EQ(std::string(completeResponse.header("Connection").value_or(std::string_view{})), std::string("keep-alive"));
 
@@ -167,7 +167,7 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
     incompleteResponse.body("response");
     ruvia::detail::Http1RequestSequence incompleteRequestSequence(std::nullopt);
     const auto incompletePlan = finalizeBodyRouteResponse(incompleteResponse, parser.parseMessage(request).connectionPlan, incompleteRequestSequence, Http1RequestBodyConsumption::kIncomplete);
-    RUVIA_CHECK(incompletePlan.disposition() == Http1ConnectionDisposition::kClose);
+    RUVIA_CHECK(incompletePlan.disposition() == Http1ClosePolicy::kCloseAfterResponse);
     RUVIA_CHECK(incompletePlan.protocolVersion() == ruvia::HttpProtocolVersion::kHttp10);
     RUVIA_CHECK_EQ(std::string(incompleteResponse.header("Connection").value_or(std::string_view{})), std::string("close"));
 }

@@ -120,7 +120,8 @@ bool http2OnDecodedResponseTrailer(void* target, std::string_view name, std::str
     // trailer sections, after applying HTTP/2's lowercase and connection-field
     // rules. In particular, Accept-Ranges and ETag are explicitly trailer-safe,
     // while response controls such as Date and Location are not.
-    return context.acceptRegularField() && http2IsValidDecodedResponseHeader(name, value) && !isForbiddenResponseTrailerName(name);
+    return context.acceptRegularField() && http2IsValidDecodedResponseHeader(name, value) &&
+        !isForbiddenResponseTrailerName(name) && context.stream.appendRequestHeader(name, value, classifyRequestHeader(name));
 }
 
 HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction) {
@@ -178,6 +179,9 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
         return HeaderDecodeStatus::kProtocolError;
     }
     if (http2RemotePeerHalfClosed(stream) && !stream.remoteContent().terminalLengthValid()) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
+    if (!stream.setResponseHeaderCount(stream.requestHeaderCount())) {
         return HeaderDecodeStatus::kProtocolError;
     }
     return HeaderDecodeStatus::kOk;

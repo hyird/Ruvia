@@ -292,7 +292,7 @@ RUVIA_TEST(response_header_replace_append_and_remove) {
     RUVIA_CHECK_EQ(setCookieCount, std::size_t{2});
 
     // Passing nullopt removes the header entirely.
-    response.header("X-Test", std::nullopt);
+    response.removeHeader("X-Test");
     RUVIA_CHECK(!response.header("X-Test").has_value());
 }
 
@@ -417,7 +417,7 @@ RUVIA_TEST(response_header_remove_known_header_rebuilds_index) {
     response.header("Content-Type", "text/plain");
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain"));
 
-    response.header("Content-Type", std::nullopt);
+    response.removeHeader("Content-Type");
     RUVIA_CHECK(!response.header("Content-Type").has_value());  // gone, not a stale index hit
 
     // Re-adding after removal replaces cleanly and leaves exactly one header line --

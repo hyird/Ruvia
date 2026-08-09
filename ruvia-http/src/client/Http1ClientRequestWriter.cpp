@@ -18,7 +18,7 @@
 namespace ruvia::detail {
 
 struct Http1ClientRequestPrepareResultAccess final {
-    [[nodiscard]] static constexpr Http1ClientRequestContext context(std::string_view method, std::span<const HttpHeaderView> headers, HttpConnectionOptions connectionOptions, Http1ClientRequestClosePolicy closePolicy) noexcept {
+    [[nodiscard]] static constexpr Http1ClientRequestContext context(std::string_view method, std::span<const HttpHeaderView> headers, HttpConnectionOptions connectionOptions, Http1ClosePolicy closePolicy) noexcept {
         return Http1ClientRequestContext(method, headers, connectionOptions, closePolicy);
     }
 
@@ -113,8 +113,8 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
         }
     }
 
-    const bool generateConnectionClose = policy.closePolicy() == Http1ClientRequestClosePolicy::kCloseAfterResponse && !headerFacts.connectionOptions.close();
-    const auto effectiveClosePolicy = headerFacts.connectionOptions.close() || generateConnectionClose ? Http1ClientRequestClosePolicy::kCloseAfterResponse : Http1ClientRequestClosePolicy::kAllowReuse;
+    const bool generateConnectionClose = policy.closePolicy() == Http1ClosePolicy::kCloseAfterResponse && !headerFacts.connectionOptions.close();
+    const auto effectiveClosePolicy = headerFacts.connectionOptions.close() || generateConnectionClose ? Http1ClosePolicy::kCloseAfterResponse : Http1ClosePolicy::kAllowReuse;
     const std::size_t generatedFields = 1 + (explicitContent ? 1 : 0) + (expectContinue ? 1 : 0) + (generateConnectionClose ? 1 : 0);
     if (headers.size() > kMaxHttpHeaderFields - generatedFields) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kTooManyHeaders);

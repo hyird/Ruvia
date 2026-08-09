@@ -33,7 +33,7 @@ public:
         static_assert((isValidationRule<RuleTs>() && ...),
             "RUVIA_RULE accepts only validation rules such as RUVIA_REQUIRED, RUVIA_MIN, "
             "RUVIA_MAX, "
-            "RUVIA_ONE_OF, RUVIA_EMAIL, RUVIA_PATTERN, RUVIA_REGEX, RUVIA_MATCH, RUVIA_CUSTOM, "
+            "RUVIA_ONE_OF, RUVIA_EMAIL, RUVIA_PATTERN, RUVIA_REGEX, RUVIA_CUSTOM, "
             "RUVIA_NESTED, and RUVIA_EACH.");
     }
 

@@ -29,8 +29,8 @@ public:
     Http1RequestSequence(Http1RequestSequence&&) = delete;
     Http1RequestSequence& operator=(Http1RequestSequence&&) = delete;
 
-    [[nodiscard]] Http1ServerClosePolicy nextResponseClosePolicy() const noexcept {
-        return requestsUntilClose_.has_value() && *requestsUntilClose_ == 1 ? Http1ServerClosePolicy::kCloseAfterResponse : Http1ServerClosePolicy::kAllowReuse;
+    [[nodiscard]] Http1ClosePolicy nextResponseClosePolicy() const noexcept {
+        return requestsUntilClose_.has_value() && *requestsUntilClose_ == 1 ? Http1ClosePolicy::kCloseAfterResponse : Http1ClosePolicy::kAllowReuse;
     }
 
     // Buffered response bytes have not been committed yet, so the request
@@ -39,14 +39,14 @@ public:
     [[nodiscard]] Http1ServerConnectionPlan completeUncommittedResponse(Http1ServerConnectionPlan connectionPlan) noexcept {
         const auto closePolicy = nextResponseClosePolicy();
         recordCompletion();
-        return closePolicy == Http1ServerClosePolicy::kCloseAfterResponse ? connectionPlan.requireClose() : connectionPlan;
+        return closePolicy == Http1ClosePolicy::kCloseAfterResponse ? connectionPlan.requireClose() : connectionPlan;
     }
 
     // A streamed head already carries the pre-commit close policy. Once bytes
     // are committed the plan cannot be tightened; fail fast if a caller tries
     // to complete a limit-ending response whose wire plan still permits reuse.
     void completeCommittedResponse(Http1ServerConnectionPlan connectionPlan) noexcept {
-        if (nextResponseClosePolicy() == Http1ServerClosePolicy::kCloseAfterResponse && connectionPlan.disposition() != Http1ConnectionDisposition::kClose) {
+        if (nextResponseClosePolicy() == Http1ClosePolicy::kCloseAfterResponse && connectionPlan.disposition() != Http1ClosePolicy::kCloseAfterResponse) {
             std::terminate();
         }
         recordCompletion();

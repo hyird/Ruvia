@@ -103,7 +103,7 @@ void compactParsedBodyFields(std::pmr::vector<ContextRequest::RequestFormField>&
             // non-"[]" name, and collapsing them as repeated scalars would
             // silently drop all but the last upload. Only true repeated scalars
             // (text fields) collapse to their last value.
-            if (fields[index].array() || fields[index].file()) {
+            if (fields[index].isArray() || fields[index].isFile()) {
                 keep[index] = 1;
             } else {
                 lastScalar = index;

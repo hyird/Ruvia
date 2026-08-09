@@ -57,9 +57,19 @@ public:
     /// Writes one body chunk. write(), writeln(), and end() share one linear
     /// output lane; starting another output operation before the current one
     /// completes throws std::logic_error.
+    ///
+    /// write()/writeln() copy the chunk into process-owned PMR storage before
+    /// returning. Hot-path producers that already hold a buffer in request-owned
+    /// storage should build it with the request arena and move it in through
+    /// writeOwned() to skip that copy.
     ScopedOperation<void> write(std::string_view chunk);
 
     ScopedOperation<void> writeln(std::string_view chunk);
+
+    /// Zero-copy write: takes ownership of an already-allocated chunk and
+    /// transfers it into the output lane without copying. Build the chunk with
+    /// a request-owned arena (Context::resource()) for hot-path streaming.
+    ScopedOperation<void> writeOwned(std::pmr::string chunk);
 
     /// Suspends the stream producer. The result is kElapsed for a normal
     /// delay, or kWorkerStopping when the owning worker is shutting down.
@@ -131,7 +141,6 @@ private:
     detail::ScopedOperationScope operationScope_;
 
     friend class SseWriter;
-    ScopedOperation<void> writeOwned(std::pmr::string chunk);
 };
 
 class SseWriter final {

@@ -21,6 +21,7 @@ namespace ruvia::detail {
 
 class DbRegistry;
 class RedisRegistry;
+class HttpClientRegistry;
 class RateLimiter;
 class RouteTable;
 class WorkerStateRegistry;
@@ -30,9 +31,10 @@ public:
     ContextServices() noexcept
         : connInfo_(ConnInfo::plain({})) {}
 
-    ContextServices(DbRegistry* db, RedisRegistry* redis, RateLimiter* rateLimiter = nullptr, std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes, const WorkerHandle* worker = nullptr) noexcept
+    ContextServices(DbRegistry* db, RedisRegistry* redis, RateLimiter* rateLimiter = nullptr, std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes, const WorkerHandle* worker = nullptr, HttpClientRegistry* httpClients = nullptr) noexcept
         : db_(db),
           redis_(redis),
+          httpClients_(httpClients),
           rateLimiter_(rateLimiter),
           maxDecodedBodyBytes_(maxDecodedBodyBytes),
           worker_(worker),
@@ -45,6 +47,8 @@ public:
     [[nodiscard]] RedisRegistry* redis() const noexcept {
         return redis_;
     }
+
+    [[nodiscard]] HttpClientRegistry* httpClients() const noexcept { return httpClients_; }
 
     [[nodiscard]] RateLimiter* rateLimiter() const noexcept {
         return rateLimiter_;
@@ -220,6 +224,7 @@ public:
 private:
     DbRegistry* db_{nullptr};
     RedisRegistry* redis_{nullptr};
+    HttpClientRegistry* httpClients_{nullptr};
     RateLimiter* rateLimiter_{nullptr};
     const Env* env_{nullptr};
     std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};

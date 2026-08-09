@@ -98,12 +98,12 @@ ScopedOperation<std::optional<T>> ContextRequest::formIf() const {
 }
 
 template <typename T>
-inline const T& ContextRequest::valid() const {
+inline const T& ContextRequest::validated() const {
     return validatedModels().get<T>();
 }
 
 template <typename T>
-inline ValidatedJson<T> ContextRequest::validJson() const {
+inline ValidatedJson<T> ContextRequest::validatedJson() const {
     return validatedModels().getJson<T>();
 }
 

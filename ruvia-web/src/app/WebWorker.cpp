@@ -14,14 +14,16 @@
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "ruvia/web/detail/client/HttpClientRegistry.h"
 
 namespace ruvia {
 
-WebWorkerContext::WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource, detail::DbRegistry* databases, detail::RedisRegistry* redis, const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool, StopToken stopToken) noexcept
+WebWorkerContext::WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource, detail::DbRegistry* databases, detail::RedisRegistry* redis, detail::HttpClientRegistry* httpClients, const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool, StopToken stopToken) noexcept
     : worker_(std::move(worker)),
       resource_(detail::pmrResourceOrDefault(resource)),
       databases_(databases),
       redis_(redis),
+      httpClients_(httpClients),
       workerStates_(workerStates),
       blockingPool_(blockingPool),
       stopToken_(stopToken) {}
@@ -62,6 +64,16 @@ DbHandle WebWorkerContext::db(std::string_view alias) const {
     return databases_->get(alias, resource_, operationScope_);
 }
 #endif
+
+HttpClient WebWorkerContext::httpClient() const {
+    if (httpClients_ == nullptr) throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
+    return httpClients_->get(resource_, operationScope_);
+}
+
+HttpClient WebWorkerContext::httpClient(std::string_view alias) const {
+    if (httpClients_ == nullptr) throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
+    return httpClients_->get(alias, resource_, operationScope_);
+}
 
 #ifdef RUVIA_ENABLE_REDIS
 RedisHandle WebWorkerContext::redis() const {
@@ -117,12 +129,13 @@ using AbandonReservation = std::unique_ptr<WebWorkerDispatch, AbandonReservation
 
 }  // namespace
 
-WebWorkerDispatch::WebWorkerDispatch(asio::any_io_executor executor, WorkerHandle worker, std::pmr::memory_resource* resource, DbRegistry& databases, RedisRegistry& redis, const WorkerStateRegistry& workerStates, BlockingPool* blockingPool, MoveOnlyFunction<void(std::exception_ptr)> failed)
+WebWorkerDispatch::WebWorkerDispatch(asio::any_io_executor executor, WorkerHandle worker, std::pmr::memory_resource* resource, DbRegistry& databases, RedisRegistry& redis, HttpClientRegistry& httpClients, const WorkerStateRegistry& workerStates, BlockingPool* blockingPool, MoveOnlyFunction<void(std::exception_ptr)> failed)
     : executor_(std::move(executor)),
       worker_(std::move(worker)),
       resource_(pmrResourceOrDefault(resource)),
       databases_(&databases),
       redis_(&redis),
+      httpClients_(&httpClients),
       workerStates_(&workerStates),
       blockingPool_(blockingPool),
       failed_(std::move(failed)) {}
@@ -183,6 +196,7 @@ void WebWorkerDispatch::retire() noexcept {
     failed_ = nullptr;
     databases_ = nullptr;
     redis_ = nullptr;
+    httpClients_ = nullptr;
     resource_ = nullptr;
     executor_ = asio::any_io_executor{};
 }
@@ -228,7 +242,7 @@ void WebWorkerDispatch::start(Task task) {
 }
 
 ruvia::Task<void> WebWorkerDispatch::run(Task task) {
-    WebWorkerContext context(worker_, resource_, databases_, redis_, workerStates_, blockingPool_, stopSource_.token());
+    WebWorkerContext context(worker_, resource_, databases_, redis_, httpClients_, workerStates_, blockingPool_, stopSource_.token());
     co_await task(context);
 }
 

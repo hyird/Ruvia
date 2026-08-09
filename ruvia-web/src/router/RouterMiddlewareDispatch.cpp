@@ -72,7 +72,7 @@ Task<HttpResponse> detail::RouteTable::invokeRouteWithMiddleware(const RouteEntr
     if (detail::ContextAccess::hasResponse(context)) {
         co_return detail::ContextAccess::takeResponse(context);
     }
-    if (auto exception = context.error()) {
+    if (auto exception = context.exception()) {
         co_return co_await handleException(context, exception);
     }
     throw std::logic_error("context is not finalized; middleware must set a response or await next()");

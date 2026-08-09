@@ -45,7 +45,7 @@ public:
         return status_;
     }
 
-    [[nodiscard]] bool completed() const noexcept {
+    [[nodiscard]] bool accepted() const noexcept {
         return status_ == OneShotCompleteStatus::kCompleted;
     }
 
@@ -74,7 +74,7 @@ private:
         : status_(status),
           rejected_(std::move(rejected)) {}
 
-    [[nodiscard]] static OneShotCompleteResult accepted() noexcept {
+    [[nodiscard]] static OneShotCompleteResult accept() noexcept {
         return OneShotCompleteResult(OneShotCompleteStatus::kCompleted);
     }
 
@@ -169,7 +169,7 @@ struct OneShotAwaiter final {
     }
 
     [[nodiscard]] WorkerWaitResult<T> await_resume() {
-        return completion.takeResult();
+        return completion.takeValue();
     }
 
     std::shared_ptr<OneShotState<T>> state;
@@ -261,7 +261,7 @@ public:
                 }
             }
         }
-        return OneShotCompleteResult<T>::accepted();
+        return OneShotCompleteResult<T>::accept();
     }
 
 private:
@@ -284,13 +284,23 @@ public:
         close();
     }
 
-    [[nodiscard]] Task<WorkerWaitResult<T>> wait() {
+    [[nodiscard]] Task<WorkerWaitResult<T>> wait() const {
         return detail::waitOneShotState<T>(state_, std::nullopt);
     }
 
     template <typename Rep, typename Period>
-    [[nodiscard]] Task<WorkerWaitResult<T>> waitFor(std::chrono::duration<Rep, Period> duration) {
+    [[nodiscard]] Task<WorkerWaitResult<T>> waitFor(std::chrono::duration<Rep, Period> duration) const {
         return detail::waitOneShotState<T>(state_, detail::workerTimerSaturatingDurationCast(duration));
+    }
+
+    // The worker every wait must run on. Makes the receive-side affinity
+    // contract queryable instead of only failing at await time. A moved-from
+    // receiver has no bound worker and cannot answer this query.
+    [[nodiscard]] const WorkerHandle& worker() const noexcept {
+        if (!state_) {
+            std::terminate();
+        }
+        return state_->worker;
     }
 
     void close() const {

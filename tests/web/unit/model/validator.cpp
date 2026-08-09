@@ -79,15 +79,15 @@ RUVIA_TEST(validator_length_bounds_and_absent_skips) {
     v.maxLength(value, "f", 5);  // 3 <= 5, ok
     RUVIA_CHECK(v.ok());
 
-    v.minLength(value, "f", 5);  // 3 < 5 -> min_length
-    v.maxLength(value, "f", 2);  // 3 > 2 -> max_length
+    v.minLength(value, "f", 5);  // 3 < 5 -> too_small
+    v.maxLength(value, "f", 2);  // 3 > 2 -> too_big
     // An absent value is never checked.
     std::optional<std::string> absent;
     v.minLength(absent, "g", 100);
 
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{2});
-    RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("min_length"));
-    RUVIA_CHECK_EQ(v.issues()[1].code(), std::string_view("max_length"));
+    RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("too_small"));
+    RUVIA_CHECK_EQ(v.issues()[1].code(), std::string_view("too_big"));
 }
 
 RUVIA_TEST(validator_range_and_one_of) {
@@ -95,14 +95,14 @@ RUVIA_TEST(validator_range_and_one_of) {
     std::optional<int> n = 5;
     v.range(n, "n", 1, 10);  // in range, ok
     RUVIA_CHECK(v.ok());
-    v.range(n, "n", 6, 10);  // 5 < 6 -> range
+    v.range(n, "n", 6, 10);  // 5 < 6 -> too_small
 
     std::optional<std::string> s = std::string("b");
     v.oneOf(s, "s", {"a", "b", "c"});  // allowed, ok
     v.oneOf(s, "s", {"x", "y"});       // not allowed -> one_of
 
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{2});
-    RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("range"));
+    RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("too_small"));
     RUVIA_CHECK_EQ(v.issues()[1].code(), std::string_view("one_of"));
 }
 
@@ -110,9 +110,9 @@ RUVIA_TEST(validator_range_upper_bound_inclusive_and_absent_skips) {
     Validator v;
     // The upper bound is enforced independently of the lower bound.
     std::optional<int> high = 5;
-    v.range(high, "high", 1, 3);  // 5 > 3 -> range
+    v.range(high, "high", 1, 3);  // 5 > 3 -> too_big
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{1});
-    RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("range"));
+    RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("too_big"));
     // Both bounds are inclusive: values exactly at min or max are accepted.
     std::optional<int> atMin = 1;
     std::optional<int> atMax = 10;
@@ -139,12 +139,12 @@ RUVIA_TEST(validator_one_of_absent_skips_and_range_accepts_doubles) {
     v.range(inRange, "d", 0.0, 1.0);  // 0.0 <= 0.5 <= 1.0, ok
     RUVIA_CHECK(v.ok());
     std::optional<double> low = -0.1;
-    v.range(low, "d", 0.0, 1.0);  // -0.1 < 0.0 -> range
+    v.range(low, "d", 0.0, 1.0);  // -0.1 < 0.0 -> too_small
     std::optional<double> high = 1.1;
-    v.range(high, "d", 0.0, 1.0);  // 1.1 > 1.0 -> range
+    v.range(high, "d", 0.0, 1.0);  // 1.1 > 1.0 -> too_big
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{2});
-    RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("range"));
-    RUVIA_CHECK_EQ(v.issues()[1].code(), std::string_view("range"));
+    RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("too_small"));
+    RUVIA_CHECK_EQ(v.issues()[1].code(), std::string_view("too_big"));
 
     // Both floating bounds are inclusive: a value exactly at min or max is accepted.
     std::optional<double> atMin = 0.0;
@@ -166,7 +166,7 @@ RUVIA_TEST(validation_error_serializes_issues_to_json) {
         RUVIA_CHECK(false);  // must have thrown
     } catch (const ruvia::ValidationError& error) {
         RUVIA_CHECK_EQ(error.info().detailsJson(), std::string_view(R"([{"field":"email","code":"required","message":"email is required"},)"
-                                                                    R"({"field":"name","code":"min_length","message":"too short"}])"));
+                                                                    R"({"field":"name","code":"too_small","message":"too short"}])"));
     }
 }
 

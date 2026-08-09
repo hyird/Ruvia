@@ -246,7 +246,8 @@ RUVIA_TEST(http2_connection_response_head_submit_result_is_discriminated) {
     RUVIA_CHECK(closed.submitted() == nullptr);
     RUVIA_CHECK(closed.failure() != nullptr);
     RUVIA_CHECK(closed.failure()->peerClosed());
-    RUVIA_CHECK_EQ(std::string_view(closed.failure()->exception().what()), std::string_view("HTTP/2 response stream is closed"));
+    RUVIA_CHECK_EQ(closed.failure()->error(), ruvia::detail::Http2ResponseHeadSubmitError::kClosed);
+    RUVIA_CHECK_EQ(ruvia::detail::http2ResponseHeadSubmitErrorMessage(ruvia::detail::Http2ResponseHeadSubmitError::kClosed), std::string_view("HTTP/2 response stream is closed"));
     RUVIA_CHECK(missingStream.pendingOutput().empty());
 
     Http2Connection buffered(&resource);

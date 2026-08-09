@@ -92,7 +92,7 @@ public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
         co_await next();
         try {
-            (void)context.req().valid<ScopedValidationRequest>();
+            (void)context.req().validated<ScopedValidationRequest>();
         } catch (const std::logic_error&) {
             releasedAfterNext = true;
         }
@@ -106,8 +106,8 @@ inline bool scopedValidationRawRead{false};
 inline bool scopedValidationHandlerThrows{false};
 
 inline ruvia::Task<ruvia::HttpResponse> scopedValidationHandler(void*, ruvia::Context& context) {
-    const auto& model = context.req().valid<ScopedValidationRequest>();
-    const auto json = context.req().validJson<ScopedValidationRequest>();
+    const auto& model = context.req().validated<ScopedValidationRequest>();
+    const auto json = context.req().validatedJson<ScopedValidationRequest>();
     scopedValidationHandlerRead = model.value().has_value() && model.value()->view() == "ok";
     scopedValidationRawRead = &json.value() == &model && json.raw() == R"({"value":"ok"})";
     if (scopedValidationHandlerThrows) {

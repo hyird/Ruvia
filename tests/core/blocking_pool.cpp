@@ -382,7 +382,7 @@ int main() {
         }
         pool.stop();
         pool.join();
-        rejectsEmptyTask = rejectsEmptyTask && pool.submit([] {}) == BlockingSubmitStatus::kStopped;
+        rejectsEmptyTask = rejectsEmptyTask && pool.submit([] {}) == BlockingSubmitStatus::kPoolStopped;
     }
 
     const bool destructionDoesNotJoin = testDestructionDoesNotJoinRunningCallable();

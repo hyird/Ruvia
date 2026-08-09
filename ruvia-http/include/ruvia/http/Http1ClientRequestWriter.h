@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <variant>
 
+#include "ruvia/http/Http1ClosePolicy.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
@@ -16,11 +17,6 @@
 namespace ruvia {
 
 class Http1ClientResponseParser;
-
-enum class Http1ClientRequestClosePolicy : std::uint8_t {
-    kAllowReuse,
-    kCloseAfterResponse,
-};
 
 class Http1ClientNoRequestExpectation final {
 private:
@@ -43,20 +39,20 @@ private:
     using Expectation = std::variant<Http1ClientNoRequestExpectation, Http1ClientContinueExpectation>;
 
     template <typename ExpectationAlternative>
-    constexpr Http1ClientRequestWirePolicy(Http1ClientRequestClosePolicy closePolicy, ExpectationAlternative expectation) noexcept
+    constexpr Http1ClientRequestWirePolicy(Http1ClosePolicy closePolicy, ExpectationAlternative expectation) noexcept
         : closePolicy_(closePolicy),
           expectation_(expectation) {}
 
 public:
-    [[nodiscard]] static constexpr Http1ClientRequestWirePolicy withoutExpectation(Http1ClientRequestClosePolicy closePolicy = Http1ClientRequestClosePolicy::kAllowReuse) noexcept {
+    [[nodiscard]] static constexpr Http1ClientRequestWirePolicy withoutExpectation(Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse) noexcept {
         return Http1ClientRequestWirePolicy(closePolicy, Http1ClientNoRequestExpectation());
     }
 
-    [[nodiscard]] static constexpr Http1ClientRequestWirePolicy expectContinue(Http1ClientRequestClosePolicy closePolicy = Http1ClientRequestClosePolicy::kAllowReuse) noexcept {
+    [[nodiscard]] static constexpr Http1ClientRequestWirePolicy expectContinue(Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse) noexcept {
         return Http1ClientRequestWirePolicy(closePolicy, Http1ClientContinueExpectation());
     }
 
-    [[nodiscard]] constexpr Http1ClientRequestClosePolicy closePolicy() const noexcept {
+    [[nodiscard]] constexpr Http1ClosePolicy closePolicy() const noexcept {
         return closePolicy_;
     }
 
@@ -71,7 +67,7 @@ public:
     const Http1ClientContinueExpectation* continueExpectation() const&& = delete;
 
 private:
-    Http1ClientRequestClosePolicy closePolicy_;
+    Http1ClosePolicy closePolicy_;
     Expectation expectation_;
 };
 
@@ -96,7 +92,7 @@ public:
         return headers_;
     }
 
-    [[nodiscard]] constexpr Http1ClientRequestClosePolicy closePolicy() const noexcept {
+    [[nodiscard]] constexpr Http1ClosePolicy closePolicy() const noexcept {
         return closePolicy_;
     }
 
@@ -107,7 +103,7 @@ public:
 private:
     friend struct Http1ClientRequestPrepareResultAccess;
 
-    constexpr Http1ClientRequestContext(std::string_view method, std::span<const HttpHeaderView> headers, HttpConnectionOptions connectionOptions, Http1ClientRequestClosePolicy closePolicy) noexcept
+    constexpr Http1ClientRequestContext(std::string_view method, std::span<const HttpHeaderView> headers, HttpConnectionOptions connectionOptions, Http1ClosePolicy closePolicy) noexcept
         : method_(method),
           headers_(headers),
           connectionOptions_(connectionOptions),
@@ -116,7 +112,7 @@ private:
     std::string_view method_;
     std::span<const HttpHeaderView> headers_;
     HttpConnectionOptions connectionOptions_;
-    Http1ClientRequestClosePolicy closePolicy_;
+    Http1ClosePolicy closePolicy_;
 };
 
 }  // namespace detail

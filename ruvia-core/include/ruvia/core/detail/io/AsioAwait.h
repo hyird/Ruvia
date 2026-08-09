@@ -15,9 +15,9 @@
 #include <system_error>
 #include <type_traits>
 #include <utility>
-#include <variant>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/detail/SuspendRaceState.h"
 
 namespace ruvia::detail {
 
@@ -261,11 +261,8 @@ inline asio::awaitable<void> taskAsAwaitable(Task<void> task) {
     co_return;
 }
 
-struct AsioCompletionPending final {};
-
 template <typename Result, typename Initiate>
 class AsioCompletionAwaiter;
-
 template <typename Result>
 class AsioCompletion final {
 public:
@@ -340,34 +337,39 @@ public:
 
     // If initiate_ throws, the exception propagates from the await-expression
     // directly ([expr.await]/5), without an exception_ptr side channel.
+    //
+    // An asio initiation may complete synchronously (for example a closed
+    // socket or a resolver cache hit), invoking the completion handler before
+    // await_suspend returns. Resuming the continuation from inside that window
+    // would run the coroutine while it is still suspended-by-await_suspend and
+    // potentially destroy its frame before this function returns. The
+    // SuspendRaceState records the completion instead; the return value of
+    // await_suspend then reports the actual race order, so a synchronous
+    // completion is consumed by await_resume without resuming at all.
     [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) {
         if constexpr (std::is_void_v<Result>) {
             initiate_([this, handle](std::error_code ec, auto&&...) mutable {
-                state_.template emplace<AsioCompletion<void>>(AsioCompletion<void>::completed(ec));
-                handle.resume();
+                if (state_.complete(AsioCompletion<void>::completed(ec))) {
+                    handle.resume();
+                }
             });
         } else {
             initiate_([this, handle](std::error_code ec, Result result) mutable {
-                state_.template emplace<AsioCompletion<Result>>(AsioCompletion<Result>::completed(ec, std::move(result)));
-                handle.resume();
+                if (state_.complete(AsioCompletion<Result>::completed(ec, std::move(result)))) {
+                    handle.resume();
+                }
             });
         }
-        return true;
+        return state_.suspend(handle);
     }
 
     [[nodiscard]] AsioCompletion<Result> await_resume() {
-        auto* completion = std::get_if<AsioCompletion<Result>>(&state_);
-        if (completion == nullptr) {
-            std::terminate();
-        }
-        return std::move(*completion);
+        return state_.takeValue();
     }
 
 private:
-    using State = std::variant<AsioCompletionPending, AsioCompletion<Result>>;
-
     Initiate initiate_;
-    State state_;
+    SuspendRaceState<AsioCompletion<Result>> state_;
 };
 
 template <typename Result = void, typename Initiate>

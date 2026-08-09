@@ -18,6 +18,10 @@ static_assert(std::is_move_constructible_v<ruvia::Task<void>>);
 static_assert(!std::is_move_assignable_v<ruvia::Task<void>>);
 static_assert(std::is_move_constructible_v<ruvia::Task<int>>);
 static_assert(!std::is_move_assignable_v<ruvia::Task<int>>);
+static_assert(std::is_constructible_v<ruvia::TaskScope, const ruvia::WorkerHandle&>);
+static_assert(std::is_constructible_v<ruvia::TaskScope, const ruvia::WorkerHandle&, std::pmr::memory_resource*>);
+static_assert(!std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&>);
+static_assert(!std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&, std::pmr::memory_resource*>);
 
 namespace {
 
@@ -69,7 +73,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
         bool emptyTaskRejected = false;
         try {
             emptyTaskScope.spawn(std::move(movedFrom));
-        } catch (const std::invalid_argument&) {
+        } catch (const std::logic_error&) {
             emptyTaskRejected = true;
         }
         if (!emptyTaskRejected || emptyTaskScope.size() != 0) {

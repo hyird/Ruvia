@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/http/Http1ClosePolicy.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
@@ -19,11 +20,6 @@
 
 namespace ruvia::detail {
 
-// Runtime-owned policy that is independent of HTTP message semantics (for
-// example, a per-connection request limit). A named policy keeps the Web driver
-// from passing an unlabelled bool into the protocol planner.
-enum class Http1ServerClosePolicy : std::uint8_t { kAllowReuse, kCloseAfterResponse };
-
 [[nodiscard]] inline constexpr Http1ServerConnectionPlan http1ApplyRequestBodyConsumption(Http1ServerConnectionPlan plan, Http1RequestBodyConsumption consumption) noexcept {
     return consumption == Http1RequestBodyConsumption::kComplete ? plan : plan.requireClose();
 }
@@ -38,7 +34,7 @@ public:
         return requestConnectionPlan_;
     }
 
-    [[nodiscard]] Http1ServerClosePolicy closePolicy() const noexcept {
+    [[nodiscard]] Http1ClosePolicy closePolicy() const noexcept {
         return closePolicy_;
     }
 
@@ -47,10 +43,10 @@ public:
     }
 
 private:
-    friend Http1ResponseStreamPlan http1PlanResponseStream(const Http1ServerRequestParseState&, Http1ServerClosePolicy) noexcept;
-    friend Http1ResponseStreamPlan http1PlanConsumedResponseStream(const Http1ServerRequestParseState&, Http1ServerClosePolicy) noexcept;
+    friend Http1ResponseStreamPlan http1PlanResponseStream(const Http1ServerRequestParseState&, Http1ClosePolicy) noexcept;
+    friend Http1ResponseStreamPlan http1PlanConsumedResponseStream(const Http1ServerRequestParseState&, Http1ClosePolicy) noexcept;
 
-    Http1ResponseStreamPlan(ResponseStreamFraming framing, Http1ServerConnectionPlan requestConnectionPlan, Http1ServerClosePolicy closePolicy, HttpKnownMethod requestMethod) noexcept
+    Http1ResponseStreamPlan(ResponseStreamFraming framing, Http1ServerConnectionPlan requestConnectionPlan, Http1ClosePolicy closePolicy, HttpKnownMethod requestMethod) noexcept
         : framing_(framing),
           requestConnectionPlan_(requestConnectionPlan),
           closePolicy_(closePolicy),
@@ -58,7 +54,7 @@ private:
 
     ResponseStreamFraming framing_;
     Http1ServerConnectionPlan requestConnectionPlan_;
-    Http1ServerClosePolicy closePolicy_{Http1ServerClosePolicy::kCloseAfterResponse};
+    Http1ClosePolicy closePolicy_{Http1ClosePolicy::kCloseAfterResponse};
     HttpKnownMethod requestMethod_{HttpKnownMethod::kUnknown};
 };
 
@@ -67,7 +63,7 @@ private:
 // request disposition and candidate framing until the response status is known.
 // Commit can therefore distinguish a body-allowed HTTP/1.0 stream, which requires
 // close delimiting, from a body-suppressed response that is already self-delimited.
-[[nodiscard]] inline Http1ResponseStreamPlan http1PlanResponseStream(const Http1ServerRequestParseState& parsed, Http1ServerClosePolicy closePolicy) noexcept {
+[[nodiscard]] inline Http1ResponseStreamPlan http1PlanResponseStream(const Http1ServerRequestParseState& parsed, Http1ClosePolicy closePolicy) noexcept {
     const auto requestConnectionPlan = http1ApplyRequestBodyConsumption(parsed.connectionPlan, parsed.bodyPlan.requiresConsumption() ? Http1RequestBodyConsumption::kIncomplete : Http1RequestBodyConsumption::kComplete);
     const auto framing = parsed.request.protocolVersion() == HttpProtocolVersion::kHttp11 ? ResponseStreamFraming::kHttp1Chunked : ResponseStreamFraming::kHttp1CloseDelimited;
     return Http1ResponseStreamPlan(framing, requestConnectionPlan, closePolicy, parsed.request.knownMethod());
@@ -77,7 +73,7 @@ private:
 // body before deciding to stream its response. The parser's body plan still
 // describes the original request framing, so this named entry point records the
 // completed consumption instead of pessimistically forcing connection close.
-[[nodiscard]] inline Http1ResponseStreamPlan http1PlanConsumedResponseStream(const Http1ServerRequestParseState& parsed, Http1ServerClosePolicy closePolicy) noexcept {
+[[nodiscard]] inline Http1ResponseStreamPlan http1PlanConsumedResponseStream(const Http1ServerRequestParseState& parsed, Http1ClosePolicy closePolicy) noexcept {
     const auto framing = parsed.request.protocolVersion() == HttpProtocolVersion::kHttp11 ? ResponseStreamFraming::kHttp1Chunked : ResponseStreamFraming::kHttp1CloseDelimited;
     return Http1ResponseStreamPlan(framing, parsed.connectionPlan, closePolicy, parsed.request.knownMethod());
 }
@@ -88,7 +84,7 @@ inline void http1MarkConnectionClose(HttpResponse& response, Http1ConnectionClos
     // A runtime close verdict dominates keep-alive. Collapse repeated fields
     // after the socket lifecycle is decided, while preserving the Upgrade
     // option required by any retained Upgrade field.
-    response.header("Connection", std::nullopt);
+    response.removeHeader("Connection");
     setResponseHeaderStableView(response, "Connection", fieldPolicy == Http1ConnectionCloseFieldPolicy::kPreserveUpgrade ? "close, Upgrade" : "close");
 }
 
@@ -196,7 +192,7 @@ private:
     if (responseOptions.close()) {
         plan = plan.requireClose();
     }
-    if (plan.disposition() == Http1ConnectionDisposition::kClose) {
+    if (plan.disposition() == Http1ClosePolicy::kCloseAfterResponse) {
         http1MarkConnectionClose(response, preserveUpgrade ? Http1ConnectionCloseFieldPolicy::kPreserveUpgrade : Http1ConnectionCloseFieldPolicy::kCloseOnly);
     } else if (plan.protocolVersion() == HttpProtocolVersion::kHttp10 && !responseOptions.keepAlive()) {
         if (responseOptions.hasField() || generateUpgradeOption) {
@@ -291,7 +287,7 @@ private:
     // connection, but a response whose method/status forbids payload is already
     // self-delimited. Make this decision at head commit, when the response status is
     // finally known, instead of pessimistically baking close into the pre-commit plan.
-    const auto plannedConnection = plan.requestConnectionPlan().disposition() == Http1ConnectionDisposition::kReuse && plan.closePolicy() == Http1ServerClosePolicy::kAllowReuse && (plan.framing() != ResponseStreamFraming::kHttp1CloseDelimited || bodyPlan.bodySuppressed()) ? plan.requestConnectionPlan() : plan.requestConnectionPlan().requireClose();
+    const auto plannedConnection = plan.requestConnectionPlan().disposition() == Http1ClosePolicy::kAllowReuse && plan.closePolicy() == Http1ClosePolicy::kAllowReuse && (plan.framing() != ResponseStreamFraming::kHttp1CloseDelimited || bodyPlan.bodySuppressed()) ? plan.requestConnectionPlan() : plan.requestConnectionPlan().requireClose();
     const auto commitResult = http1CommitFinalResponse(response, plannedConnection);
     if (const auto* failure = commitResult.failure()) {
         return PreparedHttp1ResponseStreamResult(*failure);
@@ -312,7 +308,7 @@ private:
     ResponseStreamKind kind,
     const Http1ResponseStreamPlan& plan) {
     auto commitPlan = httpResponseStreamCommitPlan(ResponseStreamFraming::kHttp1KnownLength, plan.requestMethod(), response.status(), ResponseTrailerIntent::kNone);
-    const auto plannedConnection = plan.requestConnectionPlan().disposition() == Http1ConnectionDisposition::kReuse && plan.closePolicy() == Http1ServerClosePolicy::kAllowReuse ? plan.requestConnectionPlan() : plan.requestConnectionPlan().requireClose();
+    const auto plannedConnection = plan.requestConnectionPlan().disposition() == Http1ClosePolicy::kAllowReuse && plan.closePolicy() == Http1ClosePolicy::kAllowReuse ? plan.requestConnectionPlan() : plan.requestConnectionPlan().requireClose();
     const auto commitResult = http1CommitFinalResponse(response, plannedConnection);
     if (const auto* failure = commitResult.failure()) {
         return PreparedHttp1ResponseStreamResult(*failure);

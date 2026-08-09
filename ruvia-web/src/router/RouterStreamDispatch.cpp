@@ -63,7 +63,7 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(const 
         } else {
             co_await invokeStreamMiddlewareAt(route, 0, context, middlewareChain, handler);
             if (!detail::ContextAccess::hasResponse(context)) {
-                if (auto contextException = context.error()) {
+                if (auto contextException = context.exception()) {
                     std::rethrow_exception(contextException);
                 }
                 const bool streamCommitted = responseStreamOutput != nullptr && detail::StreamingAccess::committed(responseStreamOutput->writer());
@@ -106,7 +106,7 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(const 
     }
 
     // The middleware chain converts a handler exception into a buffered error
-    // response and records it via context.error() (storeMiddlewareExceptionResponse
+    // response and records it via context.exception() (storeMiddlewareExceptionResponse
     // -> handleException -> setError), so a mid-request failure does not surface as
     // a local exception above. When the stream is already committed (or this is a
     // WebSocket route), that buffered response can no longer be sent, and finalizing
@@ -114,7 +114,7 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(const 
     // Rethrow so the driver aborts (connection close / RST_STREAM), exactly as the
     // no-middleware path does through the committed check above.
     if (webSocketRoute || (responseStreamOutput != nullptr && detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
-        if (auto contextException = context.error()) {
+        if (auto contextException = context.exception()) {
             std::rethrow_exception(contextException);
         }
     }

@@ -221,6 +221,7 @@ ruvia_add_unit_suite(ruvia_http_unit_tests ruvia::http
     http/unit/client/response_exchange.cpp
     http/unit/client/response_framing.cpp
     http/unit/client/response_parser.cpp
+    http/unit/client/set_cookie.cpp
 
     # http/unit/coding
     http/unit/coding/content_codec.cpp
@@ -561,6 +562,7 @@ if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_one_shot core/one_shot.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_worker_timer core/worker_timer.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_worker_dispatch_failure core/worker_dispatch_failure.cpp LIB ruvia::core)
+    ruvia_add_test(ruvia_worker_async_await core/asio_await.cpp LIB ruvia::core)
 
     ruvia_validate_test_sources(ruvia_worker_signal_violation ruvia::core
         core/worker_signal_violation.cpp)
@@ -644,6 +646,10 @@ if(RUVIA_BUILD_WEB)
         web/server/max_connections.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_notfound_keepalive
         web/server/notfound_keepalive.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_http_client
+        web/server/http_client.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_http_client_limits
+        web/server/http_client_limits.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_http2_document_root
         web/server/http2_document_root.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_head_document_root

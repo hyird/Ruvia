@@ -173,7 +173,9 @@ public:
     void status(HttpStatusCode statusCode);
     void header(std::string_view key, std::string_view value);
     void header(std::string_view key, std::string_view value, HeaderOptions options);
-    void header(std::string_view key, std::nullopt_t);
+    // Remove a header set by an earlier step. header(key, std::nullopt) meant
+    // deletion; removal now has its own named entry point.
+    void removeHeader(std::string_view key);
     void body(std::string_view value);
 
 private:

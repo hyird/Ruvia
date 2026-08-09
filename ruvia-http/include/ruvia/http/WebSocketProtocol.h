@@ -22,6 +22,10 @@ public:
         return opcode_;
     }
 
+    // The payload view borrows the connection read buffer: it is valid only
+    // until the next WebSocket read() on the same connection (the same rule as
+    // BodyReader::read). Copy the payload before the next read if it must
+    // outlive the current message.
     [[nodiscard]] constexpr std::string_view payload() const noexcept {
         return payload_;
     }

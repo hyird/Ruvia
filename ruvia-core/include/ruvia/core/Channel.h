@@ -47,7 +47,7 @@ public:
         return status_;
     }
 
-    [[nodiscard]] bool sent() const noexcept {
+    [[nodiscard]] bool accepted() const noexcept {
         return status_ == ChannelSendStatus::kSent;
     }
 
@@ -76,7 +76,7 @@ private:
         : status_(status),
           rejected_(std::move(rejected)) {}
 
-    [[nodiscard]] static ChannelSendResult accepted() noexcept {
+    [[nodiscard]] static ChannelSendResult accept() noexcept {
         return ChannelSendResult(ChannelSendStatus::kSent);
     }
 
@@ -167,7 +167,7 @@ struct ChannelReceiveAwaiter final {
     }
 
     [[nodiscard]] WorkerWaitResult<T> await_resume() {
-        return completion.takeResult();
+        return completion.takeValue();
     }
 
     std::shared_ptr<ChannelState<T>> state;
@@ -253,7 +253,7 @@ public:
                 ++state_->size;
             }
         }
-        return ChannelSendResult<T>::accepted();
+        return ChannelSendResult<T>::accept();
     }
 
     void close() const {
@@ -302,13 +302,23 @@ public:
         close();
     }
 
-    [[nodiscard]] Task<WorkerWaitResult<T>> receive() {
+    [[nodiscard]] Task<WorkerWaitResult<T>> receive() const {
         return detail::receiveChannelState<T>(state_, std::nullopt);
     }
 
     template <typename Rep, typename Period>
-    [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period> duration) {
+    [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period> duration) const {
         return detail::receiveChannelState<T>(state_, detail::workerTimerSaturatingDurationCast(duration));
+    }
+
+    // The worker every receive must run on. Makes the receive-side affinity
+    // contract queryable instead of only failing at await time. A moved-from
+    // receiver has no bound worker and cannot answer this query.
+    [[nodiscard]] const WorkerHandle& worker() const noexcept {
+        if (!state_) {
+            std::terminate();
+        }
+        return state_->worker;
     }
 
     void close() const {

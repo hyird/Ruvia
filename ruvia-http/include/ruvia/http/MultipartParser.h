@@ -71,12 +71,25 @@ public:
         assign(value);
     }
 
+    // Validation-only entry for parsing paths that must report failure as a
+    // value rather than drive control flow through the throwing constructor.
+    [[nodiscard]] static std::optional<MultipartBoundary> tryCreate(std::string_view value) noexcept {
+        if (!valid(value)) {
+            return std::nullopt;
+        }
+        MultipartBoundary boundary;
+        boundary.assign(value);
+        return boundary;
+    }
+
     [[nodiscard]] constexpr std::string_view value() const& noexcept {
         return std::string_view(bytes_.data(), size_);
     }
     [[nodiscard]] std::string_view value() const&& = delete;
 
 private:
+    constexpr MultipartBoundary() noexcept = default;
+
     static constexpr std::size_t kMaxSize = 70;
 
     [[nodiscard]] static constexpr bool nonSpaceChar(char value) noexcept {

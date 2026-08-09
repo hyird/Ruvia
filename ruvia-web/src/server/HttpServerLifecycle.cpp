@@ -137,9 +137,12 @@ HttpServer::HttpServer(TcpEndpoint endpoint, const RouteTable& routes, std::span
     : HttpServer(std::move(endpoint), routes, databases, redis, std::span<const WorkerStateDefinition>{}, std::move(options)) {}
 
 HttpServer::HttpServer(TcpEndpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, HttpServerOptions options)
-    : HttpServer(ValidatedOptionsTag{}, std::move(endpoint), routes, databases, redis, workerStates, validatedHttpServerOptions(std::move(options))) {}
+    : HttpServer(std::move(endpoint), routes, databases, redis, workerStates, std::span<const HttpClientDefinition>{}, std::move(options)) {}
 
-HttpServer::HttpServer(ValidatedOptionsTag, TcpEndpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, HttpServerOptions validatedOptions)
+HttpServer::HttpServer(TcpEndpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, std::span<const HttpClientDefinition> httpClients, HttpServerOptions options)
+    : HttpServer(ValidatedOptionsTag{}, std::move(endpoint), routes, databases, redis, workerStates, httpClients, validatedHttpServerOptions(std::move(options))) {}
+
+HttpServer::HttpServer(ValidatedOptionsTag, TcpEndpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, std::span<const HttpClientDefinition> httpClients, HttpServerOptions validatedOptions)
     // One worker thread runs all I/O on this context; cross-thread access is
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
@@ -158,8 +161,9 @@ HttpServer::HttpServer(ValidatedOptionsTag, TcpEndpoint endpoint, const RouteTab
       options_(std::move(validatedOptions)),
       connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
       dataAccess_(ioContext_, workerHandle_, memory_.resource(), databases, redis, connectionScanner_),
+      httpClients_(ioContext_, workerHandle_, memory_.resource(), httpClients),
       workerStates_(memory_.resource(), workerStates),
-      webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(), workerHandle_, memory_.resource(), dataAccess_.databases(), dataAccess_.redis(), workerStates_, options_.blockingPool, [this](std::exception_ptr failure) { failWorker(std::move(failure)); })),
+      webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(), workerHandle_, memory_.resource(), dataAccess_.databases(), dataAccess_.redis(), httpClients_, workerStates_, options_.blockingPool, [this](std::exception_ptr failure) { failWorker(std::move(failure)); })),
       rateLimiter_(options_.defaultRateLimitPerWorker, routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent : RouteRateLimitPresence::kAbsent, options_.rateLimitSlotsPerWorker, memory_.resource()),
       workSetPool_(memory_) {
     if (options_.documentRoot.root != nullptr && options_.documentRoot.runtimeOptions.refreshMode == DocumentRootRefreshMode::kPolling) {
@@ -360,6 +364,7 @@ void HttpServer::stopOnContext() noexcept {
     connectionScanner_.stop();
     connectionScanner_.closeAll();
     dataAccess_.closeNow();
+    httpClients_.closeNow();
     workerDispatcher_->stopTimers();
 }
 
@@ -375,6 +380,11 @@ void HttpServer::failWorker(std::exception_ptr failure) noexcept {
 }
 
 void HttpServer::runIoContext() noexcept {
+    httpClients_.bindCurrent();
+    struct UnbindHttpClients final {
+        HttpClientRegistry& registry;
+        ~UnbindHttpClients() { registry.unbindCurrent(); }
+    } unbindHttpClients{httpClients_};
     bool workerFailed = false;
     try {
         workerDispatcher_->runContext(
@@ -436,6 +446,13 @@ Task<void> HttpServer::runWorker() {
             failWorker(failure);
         }
     }
+    try {
+        co_await httpClients_.join();
+    } catch (...) {
+        const auto failure = std::current_exception();
+        (void)workerCompletion_.markStartupFailed(failure);
+        failWorker(failure);
+    }
 }
 
 Task<void> HttpServer::staticRootRefreshLoop() {
@@ -449,7 +466,7 @@ Task<void> HttpServer::staticRootRefreshLoop() {
         if (!httpServerWorkerRunning(workerState_)) {
             co_return;
         }
-        if (co_await sleepForBorrowed(workerHandle_, interval) == TimerSleepResult::kWorkerStopping) {
+        if (co_await sleepFor(workerHandle_, interval) == TimerSleepResult::kWorkerStopping) {
             co_return;
         }
         if (!httpServerWorkerRunning(workerState_)) {

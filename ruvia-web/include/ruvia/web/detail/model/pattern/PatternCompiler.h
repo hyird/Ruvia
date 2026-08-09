@@ -118,7 +118,7 @@ struct CompiledPatternPlan final {
     static constexpr auto value = compilePatternPlan<Pattern.view().size()>(Pattern.view());
     static_assert(value.valid,
         "RUVIA_PATTERN supports only anchored lightweight full-match patterns. "
-        "Use RUVIA_REGEX for full std::regex syntax or RUVIA_MATCH for a custom hot-path matcher.");
+        "Use RUVIA_REGEX for full std::regex syntax or RUVIA_CUSTOM for a custom hot-path matcher.");
 };
 
 }  // namespace ruvia::detail::model

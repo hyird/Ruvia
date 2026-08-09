@@ -19,12 +19,11 @@
 
 namespace {
 
-static_assert(std::same_as<decltype(ruvia::sleepFor(std::declval<ruvia::WorkerHandle>(), std::chrono::steady_clock::duration{})), ruvia::Task<ruvia::TimerSleepResult>>);
-static_assert(std::same_as<decltype(ruvia::detail::sleepForBorrowed(std::declval<const ruvia::WorkerHandle&>(), std::chrono::steady_clock::duration{})), ruvia::Task<ruvia::TimerSleepResult>>);
+static_assert(std::same_as<decltype(ruvia::sleepFor(std::declval<const ruvia::WorkerHandle&>(), std::chrono::steady_clock::duration{})), ruvia::Task<ruvia::TimerSleepResult>>);
 
 template <typename Worker>
 concept AcceptsTemporaryBorrowedWorker = requires(Worker&& worker) {
-    ruvia::detail::sleepForBorrowed(std::forward<Worker>(worker), std::chrono::steady_clock::duration{});
+    ruvia::sleepFor(std::forward<Worker>(worker), std::chrono::steady_clock::duration{});
 };
 
 static_assert(!AcceptsTemporaryBorrowedWorker<ruvia::WorkerHandle>);
@@ -61,7 +60,7 @@ bool discriminatedWaitStateWorks() {
     if (early.complete(ruvia::detail::WorkerWaitResultAccess::value(3)) || early.suspend(std::noop_coroutine())) {
         return false;
     }
-    const auto earlyResult = early.takeResult();
+    const auto earlyResult = early.takeValue();
     if (earlyResult.value() == nullptr || *earlyResult.value() != 3) {
         return false;
     }
@@ -71,7 +70,7 @@ bool discriminatedWaitStateWorks() {
     if (!suspended.suspend(continuation) || !suspended.complete(ruvia::detail::WorkerWaitResultAccess::timedOut<int>()) || suspended.continuation() != continuation) {
         return false;
     }
-    const auto suspendedResult = suspended.takeResult();
+    const auto suspendedResult = suspended.takeValue();
     if (suspendedResult.timedOut() == nullptr) {
         return false;
     }
@@ -89,7 +88,7 @@ bool discriminatedWaitStateWorks() {
     if (!moveFailed || recovering.complete(ruvia::detail::WorkerWaitResultAccess::value(ThrowingMove(7)))) {
         return false;
     }
-    const auto recovered = recovering.takeResult();
+    const auto recovered = recovering.takeValue();
     return recovered.value() != nullptr && recovered.value()->value() == 7;
 }
 

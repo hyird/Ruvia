@@ -22,6 +22,7 @@
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
 #endif
 #include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 
 namespace ruvia::detail {
 
@@ -131,6 +132,7 @@ struct AppState final {
     std::optional<BlockingPoolOptions> blockingPool;
     std::pmr::vector<AppHook> onStartHooks{appResource()};
     std::pmr::vector<AppHook> onStopHooks{appResource()};
+    std::pmr::vector<HttpClientDefinition> httpClients{appResource()};
 #ifdef RUVIA_ENABLE_DATABASE
     std::pmr::vector<DbDefinition> databases{appResource()};
 #endif

@@ -444,7 +444,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
             throw std::logic_error("HTTP/1 request completion has no wire alternative");
         }
 
-        if (connectionPlan.disposition() == Http1ConnectionDisposition::kClose || !httpServerWorkerRunning(workerState_)) {
+        if (connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse || !httpServerWorkerRunning(workerState_)) {
             co_return;
         }
         applyReusableHttp1RequestBufferCompletion(requestCompletion->bufferCompletion(), readBuffer, usedBytes);

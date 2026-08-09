@@ -55,9 +55,12 @@ public:
         return acquireReserved(AcquireReservation(*this), timeout, {}, nullptr);
     }
 
-    [[nodiscard]] Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds> timeout, StopToken stopToken, const WorkerHandle& worker) {
-        return acquireReserved(AcquireReservation(*this), timeout, std::move(stopToken), &worker);
-    }
+    // Cancellable acquire borrows the caller's worker for the lifetime of the
+    // returned Task: the caller must keep the address-stable handle alive until
+    // the Task completes or is cancelled and joined. A temporary handle would
+    // dangle in the lazy coroutine frame, so it is rejected at compile time.
+    [[nodiscard]] Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds> timeout, StopToken stopToken, const WorkerHandle& worker);
+    Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds>, StopToken, WorkerHandle&&) = delete;
 
 private:
     class AcquireReservation final {
@@ -187,5 +190,13 @@ private:
     std::uint64_t nextWaiterId_{0};
     bool closing_{false};
 };
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+inline Task<PoolWaiterResult> PoolLeaseScheduler::acquire(std::optional<std::chrono::milliseconds> timeout, StopToken stopToken, const WorkerHandle& worker) {
+    return acquireReserved(AcquireReservation(*this), timeout, std::move(stopToken), &worker);
+}
 
 }  // namespace ruvia::detail

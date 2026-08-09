@@ -87,7 +87,7 @@ void assignActiveResponseHeaders(HttpResponse& response, const HttpResponse& act
         const auto value = header.value();
         if (knownBit == detail::kResponseHeaderSetCookie) {
             if (!replacedSetCookie) {
-                response.header("Set-Cookie", std::nullopt);
+                response.removeHeader("Set-Cookie");
                 replacedSetCookie = true;
             }
             detail::upsertResponseSetCookieValidated(response, value);
@@ -130,16 +130,16 @@ std::pmr::string Context::urlFor(std::string_view pattern, std::initializer_list
 }
 
 Context& Context::removeResponseHeader(std::string_view name) {
-    responseState_.activeResponse().header(name, std::nullopt);
+    responseState_.activeResponse().removeHeader(name);
     return *this;
+}
+
+void Context::removeHeader(std::string_view name) {
+    responseState_.activeResponse().removeHeader(name);
 }
 
 void Context::header(std::string_view name, std::string_view value, HeaderOptions options) {
     responseState_.activeResponse().header(name, value, HttpResponse::HeaderOptions{.append = options.append});
-}
-
-void Context::header(std::string_view name, std::nullopt_t) {
-    removeResponseHeader(name);
 }
 
 void Context::storeResponse(HttpResponse&& response) {

@@ -21,7 +21,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
         std::pmr::string key(c.resource());
         key.append("sess:");
         key.append(cookie->data(), cookie->size());
-        if (auto stored = co_await c.redis("default").get(key)) {
+        if (auto stored = co_await c.redis(redisAlias_.view()).get(key)) {
             detail::SessionAccess::load(c, *stored);
         }
     }
@@ -41,7 +41,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
             std::pmr::string key(c.resource());
             key.append("sess:");
             key.append(cleared->oldId->data(), cleared->oldId->size());
-            (void)(co_await c.redis("default").del(key));
+            (void)(co_await c.redis(redisAlias_.view()).del(key));
         }
         detail::appendExpiredSessionCookieHeader(response, c.resource(), secure);
         co_return;
@@ -81,14 +81,14 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
         std::pmr::string oldKey(c.resource());
         oldKey.append("sess:");
         oldKey.append(oldIdToDelete.data(), oldIdToDelete.size());
-        (void)(co_await c.redis("default").del(oldKey));
+        (void)(co_await c.redis(redisAlias_.view()).del(oldKey));
     }
 
     if (!existingId.empty()) {
         std::pmr::string key(c.resource());
         key.append("sess:");
         key.append(existingId.data(), existingId.size());
-        co_await c.redis("default").setEx(key, std::chrono::seconds(86400), data);
+        co_await c.redis(redisAlias_.view()).setEx(key, std::chrono::seconds(86400), data);
     }
 }
 

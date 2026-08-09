@@ -59,9 +59,9 @@ RUVIA_TEST(http_client_limits_informational_responses_per_exchange) {
         RUVIA_CHECK(excessive.failure()->error() == Http1ClientResponseParseError::kTooManyInformationalResponses);
     }
     const auto afterFailure = parser.parse("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
-    RUVIA_CHECK(afterFailure.failure() != nullptr);
-    if (afterFailure.failure() != nullptr) {
-        RUVIA_CHECK(afterFailure.failure()->error() == Http1ClientResponseParseError::kExchangeFailed);
+    RUVIA_CHECK(afterFailure.terminal() != nullptr);
+    if (afterFailure.terminal() != nullptr) {
+        RUVIA_CHECK(afterFailure.terminal()->failed());
     }
 }
 
@@ -106,9 +106,9 @@ RUVIA_TEST(http_client_expect_continue_is_one_stateful_exchange_contract) {
     }
 
     const auto afterFinal = parser.parse("HTTP/1.1 204 No Content\r\n\r\n");
-    RUVIA_CHECK(afterFinal.failure() != nullptr);
-    if (afterFinal.failure() != nullptr) {
-        RUVIA_CHECK(afterFinal.failure()->error() == Http1ClientResponseParseError::kExchangeComplete);
+    RUVIA_CHECK(afterFinal.terminal() != nullptr);
+    if (afterFinal.terminal() != nullptr) {
+        RUVIA_CHECK(afterFinal.terminal()->completed());
     }
     RUVIA_CHECK(parser.completeRequestContent() == Http1ClientRequestContentCompletionStatus::kExchangeTerminal);
 }
@@ -130,13 +130,13 @@ RUVIA_TEST(http_client_closing_informational_response_ends_exchange) {
         const auto* const informational = earlyHints.parsed()->plan().informational();
         RUVIA_CHECK(informational != nullptr);
         if (informational != nullptr) {
-            RUVIA_CHECK(informational->persistence() == Http1ClientResponsePersistence::kClose);
+            RUVIA_CHECK(informational->persistence() == Http1ClosePolicy::kCloseAfterResponse);
         }
     }
     const auto afterClose = getParser.parse("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
-    RUVIA_CHECK(afterClose.failure() != nullptr);
-    if (afterClose.failure() != nullptr) {
-        RUVIA_CHECK(afterClose.failure()->error() == Http1ClientResponseParseError::kExchangeComplete);
+    RUVIA_CHECK(afterClose.terminal() != nullptr);
+    if (afterClose.terminal() != nullptr) {
+        RUVIA_CHECK(afterClose.terminal()->completed());
     }
 
     ruvia::HttpClientRequestView postRequest;
@@ -164,7 +164,7 @@ RUVIA_TEST(http_client_closing_informational_response_ends_exchange) {
     }
 
     std::array<char, 512> requestCloseHead;
-    const auto requestClosePrepared = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https("example.test"), getRequest, requestCloseHead, Http1ClientRequestWirePolicy::withoutExpectation(Http1ClientRequestClosePolicy::kCloseAfterResponse));
+    const auto requestClosePrepared = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https("example.test"), getRequest, requestCloseHead, Http1ClientRequestWirePolicy::withoutExpectation(Http1ClosePolicy::kCloseAfterResponse));
     RUVIA_CHECK(requestClosePrepared.prepared() != nullptr);
     if (requestClosePrepared.prepared() == nullptr) {
         return;
@@ -177,13 +177,13 @@ RUVIA_TEST(http_client_closing_informational_response_ends_exchange) {
         const auto* const informational = nonClosingHints.parsed()->plan().informational();
         RUVIA_CHECK(informational != nullptr);
         if (informational != nullptr) {
-            RUVIA_CHECK(informational->persistence() == Http1ClientResponsePersistence::kReuse);
+            RUVIA_CHECK(informational->persistence() == Http1ClosePolicy::kAllowReuse);
         }
     }
     const auto requestCloseFinal = requestCloseParser.parse("HTTP/1.1 204 No Content\r\n\r\n");
     RUVIA_CHECK(requestCloseFinal.parsed() != nullptr);
     if (requestCloseFinal.parsed() != nullptr) {
-        RUVIA_CHECK(requireWithoutContent(requestCloseFinal.parsed()->plan()).persistence() == Http1ClientResponsePersistence::kClose);
+        RUVIA_CHECK(requireWithoutContent(requestCloseFinal.parsed()->plan()).persistence() == Http1ClosePolicy::kCloseAfterResponse);
     }
 }
 
@@ -240,9 +240,9 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
         RUVIA_CHECK(rejected.failure()->error() == Http1ClientResponseParseError::kInvalidProtocolSwitch);
     }
     const auto afterFailure = rejectedParser.parse(switching);
-    RUVIA_CHECK(afterFailure.failure() != nullptr);
-    if (afterFailure.failure() != nullptr) {
-        RUVIA_CHECK(afterFailure.failure()->error() == Http1ClientResponseParseError::kExchangeFailed);
+    RUVIA_CHECK(afterFailure.terminal() != nullptr);
+    if (afterFailure.terminal() != nullptr) {
+        RUVIA_CHECK(afterFailure.terminal()->failed());
     }
 
     // RFC 9110 section 7.8 still requires the server to acknowledge Expect
@@ -362,7 +362,7 @@ RUVIA_TEST(http_client_switching_protocols_is_an_exclusive_upgrade_transition) {
     const auto upgraded = parseHead("GET",
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Connection: Upgrade\r\nUpgrade: WebSocket",
-        Http1ClientRequestClosePolicy::kAllowReuse, requestHeaders);
+        Http1ClosePolicy::kAllowReuse, requestHeaders);
     RUVIA_CHECK(upgraded.head().status() == ruvia::http_status::kSwitchingProtocols);
     RUVIA_CHECK(upgraded.plan().protocolUpgrade() != nullptr);
     RUVIA_CHECK(upgraded.plan().connectTunnel() == nullptr);
@@ -371,19 +371,19 @@ RUVIA_TEST(http_client_switching_protocols_is_an_exclusive_upgrade_transition) {
     const auto versioned = parseHead("GET",
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Connection: upgrade\r\nUpgrade: irc/6.9",
-        Http1ClientRequestClosePolicy::kAllowReuse, requestHeaders);
+        Http1ClosePolicy::kAllowReuse, requestHeaders);
     RUVIA_CHECK(versioned.plan().protocolUpgrade() != nullptr);
     RUVIA_CHECK(parseFails("GET",
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Connection: upgrade\r\nUpgrade: IRC/6.10",
-        Http1ClientRequestClosePolicy::kAllowReuse, requestHeaders));
+        Http1ClosePolicy::kAllowReuse, requestHeaders));
 }
 
 RUVIA_TEST(http_client_connection_fields_use_recipient_list_semantics) {
     const auto reusable = parseHead("GET",
         "HTTP/1.0 200 OK\r\n"
         "Connection: , keep-alive,\r\nContent-Length: 0");
-    RUVIA_CHECK(requireKnownLength(reusable.plan()).persistence() == Http1ClientResponsePersistence::kReuse);
+    RUVIA_CHECK(requireKnownLength(reusable.plan()).persistence() == Http1ClosePolicy::kAllowReuse);
     RUVIA_CHECK(reusable.head().protocolVersion() == HttpProtocolVersion::kHttp10);
 
     RUVIA_CHECK(parseFailureError("GET",
@@ -401,7 +401,7 @@ RUVIA_TEST(http_client_connection_fields_use_recipient_list_semantics) {
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Connection: , Upgrade,\r\n"
         "Upgrade: , websocket,",
-        Http1ClientRequestClosePolicy::kAllowReuse, offered);
+        Http1ClosePolicy::kAllowReuse, offered);
     RUVIA_CHECK(upgraded.plan().protocolUpgrade() != nullptr);
 }
 
@@ -433,41 +433,41 @@ RUVIA_TEST(http_client_switching_protocols_requires_wire_agreement) {
         "Connection: Upgrade\r\nUpgrade: websocket";
 
     RUVIA_CHECK(parseFails("GET", validResponse));
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket", Http1ClientRequestClosePolicy::kAllowReuse, offered));
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade", Http1ClientRequestClosePolicy::kAllowReuse, offered));
+    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket", Http1ClosePolicy::kAllowReuse, offered));
+    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade", Http1ClosePolicy::kAllowReuse, offered));
     RUVIA_CHECK(parseFails("GET",
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Connection: Upgrade\r\nUpgrade: IRC",
-        Http1ClientRequestClosePolicy::kAllowReuse, offered));
+        Http1ClosePolicy::kAllowReuse, offered));
     RUVIA_CHECK(parseFails("GET",
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Connection: Upgrade\r\nUpgrade: websocket\r\nContent-Length: 0",
-        Http1ClientRequestClosePolicy::kAllowReuse, offered));
+        Http1ClosePolicy::kAllowReuse, offered));
     RUVIA_CHECK(parseFails("GET",
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Connection: Upgrade\r\nUpgrade: websocket\r\n"
         "Transfer-Encoding: chunked",
-        Http1ClientRequestClosePolicy::kAllowReuse, offered));
+        Http1ClosePolicy::kAllowReuse, offered));
     RUVIA_CHECK(parseFails("GET",
         "HTTP/1.0 101 Switching Protocols\r\n"
         "Connection: Upgrade\r\nUpgrade: websocket",
-        Http1ClientRequestClosePolicy::kAllowReuse, offered));
-    RUVIA_CHECK(parseFails("GET", validResponse, Http1ClientRequestClosePolicy::kAllowReuse, closingOffer));
+        Http1ClosePolicy::kAllowReuse, offered));
+    RUVIA_CHECK(parseFails("GET", validResponse, Http1ClosePolicy::kAllowReuse, closingOffer));
 }
 
 RUVIA_TEST(http_client_response_plan_owns_version_and_connection_persistence) {
     const auto http10 = parseHead("GET", "HTTP/1.0 200 OK\r\nContent-Length: 3");
     const auto& http10Body = requireKnownLength(http10.plan());
-    RUVIA_CHECK(http10Body.persistence() == Http1ClientResponsePersistence::kClose);
+    RUVIA_CHECK(http10Body.persistence() == Http1ClosePolicy::kCloseAfterResponse);
 
     const auto http10KeepAlive = parseHead("GET", "HTTP/1.0 200 OK\r\nConnection: keep-alive\r\nContent-Length: 3");
-    RUVIA_CHECK(requireKnownLength(http10KeepAlive.plan()).persistence() == Http1ClientResponsePersistence::kReuse);
+    RUVIA_CHECK(requireKnownLength(http10KeepAlive.plan()).persistence() == Http1ClosePolicy::kAllowReuse);
 
     const auto responseClose = parseHead("GET", "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 3");
-    RUVIA_CHECK(requireKnownLength(responseClose.plan()).persistence() == Http1ClientResponsePersistence::kClose);
+    RUVIA_CHECK(requireKnownLength(responseClose.plan()).persistence() == Http1ClosePolicy::kCloseAfterResponse);
 
-    const auto requestClose = parseHead("GET", "HTTP/1.1 200 OK\r\nContent-Length: 3", Http1ClientRequestClosePolicy::kCloseAfterResponse);
-    RUVIA_CHECK(requireKnownLength(requestClose.plan()).persistence() == Http1ClientResponsePersistence::kClose);
+    const auto requestClose = parseHead("GET", "HTTP/1.1 200 OK\r\nContent-Length: 3", Http1ClosePolicy::kCloseAfterResponse);
+    RUVIA_CHECK(requireKnownLength(requestClose.plan()).persistence() == Http1ClosePolicy::kCloseAfterResponse);
 }
 
 RUVIA_TEST(http_client_successful_connect_transitions_to_tunnel) {

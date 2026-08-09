@@ -16,7 +16,7 @@ RUVIA_TEST(http_client_response_plan_alternatives_are_exclusive) {
     const auto upgrade = parseHead("GET",
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Connection: Upgrade\r\nUpgrade: websocket",
-        Http1ClientRequestClosePolicy::kAllowReuse, upgradeHeaders);
+        Http1ClosePolicy::kAllowReuse, upgradeHeaders);
 
     for (const auto* plan : {&informational.plan(), &withoutContent.plan(), &knownLength.plan(), &chunked.plan(), &closeDelimited.plan(), &tunnel.plan(), &upgrade.plan()}) {
         RUVIA_CHECK_EQ(activePlanAlternativeCount(*plan), std::size_t{1});
@@ -29,7 +29,7 @@ RUVIA_TEST(http_client_response_plan_owns_content_length_framing) {
     const auto& knownLength = requireKnownLength(head.plan());
     RUVIA_CHECK_EQ(knownLength.contentLength(), std::size_t{5});
     RUVIA_CHECK(knownLength.requiresBodyConsumption());
-    RUVIA_CHECK(knownLength.persistence() == Http1ClientResponsePersistence::kReuse);
+    RUVIA_CHECK(knownLength.persistence() == Http1ClosePolicy::kAllowReuse);
     RUVIA_CHECK_EQ(head.consumedBytes(), header.size() + 4);
 
     const auto empty = parseHead("GET", "HTTP/1.1 200 OK\r\nContent-Length: 0");
@@ -51,7 +51,7 @@ RUVIA_TEST(http_client_response_plan_owns_chunked_framing_and_reuse) {
     const auto head = parseHead("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked");
     const auto& chunked = requireChunked(head.plan());
     RUVIA_CHECK(chunked.transferCodings().empty());
-    RUVIA_CHECK(chunked.persistence() == Http1ClientResponsePersistence::kReuse);
+    RUVIA_CHECK(chunked.persistence() == Http1ClosePolicy::kAllowReuse);
 }
 
 RUVIA_TEST(http_client_transfer_coding_before_final_chunked_is_typed) {
@@ -59,7 +59,7 @@ RUVIA_TEST(http_client_transfer_coding_before_final_chunked_is_typed) {
     const auto& combinedChunked = requireChunked(combined.plan());
     RUVIA_CHECK_EQ(combinedChunked.transferCodings().count, std::size_t{1});
     RUVIA_CHECK(combinedChunked.transferCodings().values[0] == ruvia::detail::HttpTransferCoding::kGzip);
-    RUVIA_CHECK(combinedChunked.persistence() == Http1ClientResponsePersistence::kReuse);
+    RUVIA_CHECK(combinedChunked.persistence() == Http1ClosePolicy::kAllowReuse);
 
     // Transfer-Encoding is list-based: split field lines retain wire order.
     const auto split = parseHead("GET",
@@ -97,7 +97,7 @@ RUVIA_TEST(http_client_no_body_precedence_ignores_framing_fields) {
         "HTTP/1.1 200 OK\r\nContent-Length: invalid\r\n"
         "Transfer-Encoding: custom-coding");
     const auto& withoutContent = requireWithoutContent(head.plan());
-    RUVIA_CHECK(withoutContent.persistence() == Http1ClientResponsePersistence::kReuse);
+    RUVIA_CHECK(withoutContent.persistence() == Http1ClosePolicy::kAllowReuse);
 
     const auto notModified = parseHead("GET",
         "HTTP/1.1 304 Not Modified\r\nContent-Length: invalid\r\n"
@@ -118,7 +118,7 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
         return;
     }
     RUVIA_CHECK(!zeroLengthBody->requiresBodyConsumption());
-    RUVIA_CHECK(zeroLengthBody->persistence() == Http1ClientResponsePersistence::kReuse);
+    RUVIA_CHECK(zeroLengthBody->persistence() == Http1ClosePolicy::kAllowReuse);
     RUVIA_CHECK_EQ(activePlanAlternativeCount(zeroLength.plan()), std::size_t{1});
 
     RUVIA_CHECK(parseFails("GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 3"));
@@ -177,7 +177,7 @@ RUVIA_TEST(http_client_final_after_continue_does_not_cancel_released_content) {
     RUVIA_CHECK(finalResponse.parsed() != nullptr);
     if (finalResponse.parsed() != nullptr) {
         RUVIA_CHECK(!finalResponse.parsed()->plan().requestContentSignal());
-        RUVIA_CHECK(requireKnownLength(finalResponse.parsed()->plan()).persistence() == Http1ClientResponsePersistence::kReuse);
+        RUVIA_CHECK(requireKnownLength(finalResponse.parsed()->plan()).persistence() == Http1ClosePolicy::kAllowReuse);
     }
 }
 
@@ -202,7 +202,7 @@ RUVIA_TEST(http_client_closing_final_stops_unfinished_request_content) {
     RUVIA_CHECK(closingFinal.parsed() != nullptr);
     if (closingFinal.parsed() != nullptr) {
         RUVIA_CHECK(closingFinal.parsed()->plan().requestContentSignal() == Http1ClientRequestContentSignal::kExchangeComplete);
-        RUVIA_CHECK(requireKnownLength(closingFinal.parsed()->plan()).persistence() == Http1ClientResponsePersistence::kClose);
+        RUVIA_CHECK(requireKnownLength(closingFinal.parsed()->plan()).persistence() == Http1ClosePolicy::kCloseAfterResponse);
     }
 }
 

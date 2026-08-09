@@ -119,7 +119,7 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
     std::size_t decoded = 0;
     std::size_t encodedOverhead = 0;
     const auto addOverhead = [&encodedOverhead](std::size_t bytes) noexcept {
-        if (bytes > kMaxHttpBodyBytes || encodedOverhead > kMaxHttpBodyBytes - bytes) {
+        if (bytes > kDefaultMaxBufferedBodyBytes || encodedOverhead > kDefaultMaxBufferedBodyBytes - bytes) {
             return false;
         }
         encodedOverhead += bytes;
@@ -185,7 +185,7 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
             return HttpChunkScanResult::makeNeedMore();
         }
 
-        if (chunkSize > kMaxHttpBodyBytes || decoded > kMaxHttpBodyBytes - chunkSize) {
+        if (chunkSize > kDefaultMaxBufferedBodyBytes || decoded > kDefaultMaxBufferedBodyBytes - chunkSize) {
             return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
         }
         if (body.size() < cursor + chunkSize + 2) {

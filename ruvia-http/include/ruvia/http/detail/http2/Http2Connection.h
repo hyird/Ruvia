@@ -281,63 +281,48 @@ enum class Http2FinishSubmitStatus : std::uint8_t {
 
 // A final response HEADERS transaction either commits one body/stream plan or
 // rejects the submission without exposing a plan that was never committed.
-class Http2ResponseHeadSubmitFailure;
-template <typename Plan>
-class Http2ResponseHeadSubmitResult;
-
-class Http2ResponseHeadSubmitError final : public std::exception {
-public:
-    [[nodiscard]] const char* what() const noexcept override {
-        switch (kind_) {
-            case Kind::kClosed:
-                return "HTTP/2 response stream is closed";
-            case Kind::kInvalidState:
-                return "invalid HTTP/2 response head submission state";
-            case Kind::kResponsePlanMismatch:
-                return "HTTP/2 response head does not match its write plan";
-            case Kind::kInvalidMessage:
-                return "invalid HTTP/2 response head message";
-        }
-        return "unknown HTTP/2 response head submission failure";
-    }
-
-private:
-    friend class Http2ResponseHeadSubmitFailure;
-    template <typename>
-    friend class Http2ResponseHeadSubmitResult;
-
-    enum class Kind : std::uint8_t {
-        kClosed,
-        kInvalidState,
-        kResponsePlanMismatch,
-        kInvalidMessage,
-    };
-
-    explicit Http2ResponseHeadSubmitError(Kind kind) noexcept
-        : kind_(kind) {}
-
-    Kind kind_;
+// The refusal reason is a plain enum, matching the request-head submission
+// contract; protocol layers never manufacture exception objects.
+enum class Http2ResponseHeadSubmitError : std::uint8_t {
+    kClosed,
+    kInvalidState,
+    kResponsePlanMismatch,
+    kInvalidMessage,
 };
 
 class Http2ResponseHeadSubmitFailure final {
 public:
     [[nodiscard]] constexpr bool peerClosed() const noexcept {
-        return kind_ == Http2ResponseHeadSubmitError::Kind::kClosed;
+        return error_ == Http2ResponseHeadSubmitError::kClosed;
     }
 
-    [[nodiscard]] Http2ResponseHeadSubmitError exception() const noexcept {
-        return Http2ResponseHeadSubmitError(kind_);
+    [[nodiscard]] constexpr Http2ResponseHeadSubmitError error() const noexcept {
+        return error_;
     }
 
 private:
     template <typename>
     friend class Http2ResponseHeadSubmitResult;
 
-    explicit constexpr Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::Kind kind) noexcept
-        : kind_(kind) {}
+    explicit constexpr Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError error) noexcept
+        : error_(error) {}
 
-    Http2ResponseHeadSubmitError::Kind kind_;
+    Http2ResponseHeadSubmitError error_;
 };
+
+[[nodiscard]] inline std::string_view http2ResponseHeadSubmitErrorMessage(Http2ResponseHeadSubmitError error) noexcept {
+    switch (error) {
+        case Http2ResponseHeadSubmitError::kClosed:
+            return "HTTP/2 response stream is closed";
+        case Http2ResponseHeadSubmitError::kInvalidState:
+            return "invalid HTTP/2 response head submission state";
+        case Http2ResponseHeadSubmitError::kResponsePlanMismatch:
+            return "HTTP/2 response head does not match its write plan";
+        case Http2ResponseHeadSubmitError::kInvalidMessage:
+            return "invalid HTTP/2 response head message";
+    }
+    return "unknown HTTP/2 response head submission failure";
+}
 
 // The successful alternative directly owns the plan that now governs
 // DATA/END_STREAM. A failure owns only its refusal reason, so callers cannot
@@ -369,19 +354,19 @@ private:
     }
 
     [[nodiscard]] static Http2ResponseHeadSubmitResult makeClosedFailure() {
-        return Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::Kind::kClosed));
+        return Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::kClosed));
     }
 
     [[nodiscard]] static Http2ResponseHeadSubmitResult makeInvalidStateFailure() {
-        return Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::Kind::kInvalidState));
+        return Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::kInvalidState));
     }
 
     [[nodiscard]] static Http2ResponseHeadSubmitResult makeResponsePlanMismatchFailure() {
-        return Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::Kind::kResponsePlanMismatch));
+        return Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::kResponsePlanMismatch));
     }
 
     [[nodiscard]] static Http2ResponseHeadSubmitResult makeInvalidMessageFailure() {
-        return Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::Kind::kInvalidMessage));
+        return Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::kInvalidMessage));
     }
 
     Value value_;
@@ -545,9 +530,24 @@ public:
     // schemes use the complete RFC 3986 authority grammar and may carry an empty
     // path. Asterisk-form OPTIONS requires std::nullopt.
     [[nodiscard]] Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view method, std::string_view scheme, std::optional<std::string_view> authority, std::string_view path, std::span<const HttpHeaderView> headers, Http2RequestContent content);
+    // The submitted head is queued for later HPACK encoding, so every view must
+    // outlive the call; a temporary owning string would be destroyed while the
+    // borrowed head is still pending. Owning temporaries are rejected at
+    // compile time, one deleted overload per view parameter.
+    template <detail::HttpTemporaryOwningCharString Method>
+    Http2RequestHeadSubmitResult submitRegularRequestHead(Method&&, std::string_view, std::optional<std::string_view>, std::string_view, std::span<const HttpHeaderView>, Http2RequestContent) = delete;
+    template <detail::HttpTemporaryOwningCharString Scheme>
+    Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view, Scheme&&, std::optional<std::string_view>, std::string_view, std::span<const HttpHeaderView>, Http2RequestContent) = delete;
+    template <typename Authority>
+        requires detail::HttpTemporaryOwningCharString<Authority>
+    Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view, std::string_view, std::optional<Authority>&&, std::string_view, std::span<const HttpHeaderView>, Http2RequestContent) = delete;
+    template <detail::HttpTemporaryOwningCharString Path>
+    Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view, std::string_view, std::optional<std::string_view>, Path&&, std::span<const HttpHeaderView>, Http2RequestContent) = delete;
     // Standard CONNECT uses only :method and an authority-form :authority. Its
     // initial HEADERS never ends the stream; DATA is gated until a final 2xx response.
     [[nodiscard]] Http2RequestHeadSubmitResult submitConnectRequestHead(std::string_view authority, std::span<const HttpHeaderView> headers = {});
+    template <detail::HttpTemporaryOwningCharString Authority>
+    Http2RequestHeadSubmitResult submitConnectRequestHead(Authority&&, std::span<const HttpHeaderView> = {}) = delete;
     // RFC 8441 Extended CONNECT. The peer must first advertise
     // SETTINGS_ENABLE_CONNECT_PROTOCOL=1. :protocol is a protocol-name token and the
     // ordinary target pseudo-headers are generated by the core. Generic protocols
@@ -555,6 +555,14 @@ public:
     // is origin-form. WebSocket requires an HTTP(S) scheme. WebSocket protocol names
     // are matched case-insensitively and encoded as `websocket`.
     [[nodiscard]] Http2RequestHeadSubmitResult submitExtendedConnectRequestHead(std::string_view protocol, std::string_view scheme, std::string_view authority, std::string_view path, std::span<const HttpHeaderView> headers = {});
+    template <detail::HttpTemporaryOwningCharString Protocol>
+    Http2RequestHeadSubmitResult submitExtendedConnectRequestHead(Protocol&&, std::string_view, std::string_view, std::string_view, std::span<const HttpHeaderView> = {}) = delete;
+    template <detail::HttpTemporaryOwningCharString Scheme>
+    Http2RequestHeadSubmitResult submitExtendedConnectRequestHead(std::string_view, Scheme&&, std::string_view, std::string_view, std::span<const HttpHeaderView> = {}) = delete;
+    template <detail::HttpTemporaryOwningCharString Authority>
+    Http2RequestHeadSubmitResult submitExtendedConnectRequestHead(std::string_view, std::string_view, Authority&&, std::string_view, std::span<const HttpHeaderView> = {}) = delete;
+    template <detail::HttpTemporaryOwningCharString Path>
+    Http2RequestHeadSubmitResult submitExtendedConnectRequestHead(std::string_view, std::string_view, std::string_view, Path&&, std::span<const HttpHeaderView> = {}) = delete;
     // A DATA event borrows bytes from the accepted input and retains the matching
     // receive-window debt. Once the owner has copied/consumed every currently
     // delivered DATA event for this stream, transfer the debt into batched
