@@ -121,6 +121,21 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
             throw HttpClientError(HttpClientError::Code::kProtocolError,
                 "incomplete HTTP response transfer coding");
         };
+        const auto retainTrailers = [&](std::string_view trailerBlock) {
+            HttpChunkTrailerParser trailerParser(trailerBlock);
+            for (;;) {
+                const auto trailer = trailerParser.next();
+                if (const auto* field = trailer.field()) {
+                    response.trailers_.push_back(HttpClientHeaderAccess::make(
+                        field->name(), field->value(), responseResource));
+                    continue;
+                }
+                if (trailer.end()) return;
+                throw HttpClientError(
+                    HttpClientError::Code::kProtocolError,
+                    "invalid chunked HTTP response trailers");
+            }
+        };
         const auto readMore = [&]() -> Task<void> {
             const auto bytes = co_await readSome(connection, input, timeout);
             if (bytes == 0) throw HttpClientError(HttpClientError::Code::kIoError, "upstream closed before the HTTP response completed");
@@ -144,6 +159,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
             for (;;) {
                 auto decoded = decoder.decode(connection.readBuffer);
                 if (const auto* body = decoded.bodyChunk()) appendTransferDecoded(body->bytes());
+                if (const auto* complete = decoded.complete()) retainTrailers(complete->trailers());
                 connection.readBuffer.erase(0, decoded.consumedBytes());
                 if (decoded.failure()) throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid chunked HTTP response");
                 if (decoded.complete()) break;
@@ -175,6 +191,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
                 for (;;) {
                     auto decoded = decoder.decode(connection.readBuffer);
                     if (const auto* body = decoded.bodyChunk()) appendTransferDecoded(body->bytes());
+                    if (const auto* complete = decoded.complete()) retainTrailers(complete->trailers());
                     connection.readBuffer.erase(0, decoded.consumedBytes());
                     if (decoded.failure()) throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid chunked HTTP response");
                     if (decoded.complete()) break;

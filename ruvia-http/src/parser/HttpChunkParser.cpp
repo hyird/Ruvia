@@ -73,41 +73,53 @@ namespace {
 
 }  // namespace
 
-std::optional<HttpChunkScanError> validateHttpChunkTrailers(std::string_view trailers) noexcept {
-    if (trailers.empty()) {
-        return std::nullopt;
+HttpChunkTrailerParseResult HttpChunkTrailerParser::fail(HttpChunkScanError error) noexcept {
+    failure_ = error;
+    return HttpChunkTrailerParseResult(HttpChunkTrailerFailure(error));
+}
+
+HttpChunkTrailerParseResult HttpChunkTrailerParser::next() noexcept {
+    if (failure_) return HttpChunkTrailerParseResult(HttpChunkTrailerFailure(*failure_));
+    if (cursor_ == 0 && trailers_.size() > kMaxHttpHeaderBytes) {
+        return fail(HttpChunkScanError::kTooLarge);
     }
+    if (cursor_ == trailers_.size()) {
+        return HttpChunkTrailerParseResult(HttpChunkTrailerEnd());
+    }
+    if (fieldCount_ == kMaxHttpHeaderFields) return fail(HttpChunkScanError::kTooLarge);
+    ++fieldCount_;
+
+    const auto lineEnd = trailers_.find("\r\n", cursor_);
+    const auto line = lineEnd == std::string_view::npos
+        ? trailers_.substr(cursor_)
+        : trailers_.substr(cursor_, lineEnd - cursor_);
+    if (line.empty() || line.front() == ' ' || line.front() == '\t') {
+        return fail(HttpChunkScanError::kInvalidTrailer);
+    }
+    const auto colon = line.find(':');
+    if (colon == std::string_view::npos || colon == 0) {
+        return fail(HttpChunkScanError::kInvalidTrailer);
+    }
+    const auto name = line.substr(0, colon);
+    const auto value = httpTrimOws(line.substr(colon + 1));
+    if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) ||
+        isForbiddenChunkTrailer(name)) {
+        return fail(HttpChunkScanError::kInvalidTrailer);
+    }
+    cursor_ = lineEnd == std::string_view::npos ? trailers_.size() : lineEnd + 2;
+    return HttpChunkTrailerParseResult(HttpChunkTrailerField(name, value));
+}
+
+std::optional<HttpChunkScanError> validateHttpChunkTrailers(std::string_view trailers) noexcept {
     if (trailers.size() > kMaxHttpHeaderBytes) {
         return HttpChunkScanError::kTooLarge;
     }
-
-    std::size_t cursor = 0;
-    std::size_t fieldCount = 0;
-    while (cursor < trailers.size()) {
-        if (fieldCount == kMaxHttpHeaderFields) {
-            return HttpChunkScanError::kTooLarge;
-        }
-        ++fieldCount;
-        const auto lineEnd = trailers.find("\r\n", cursor);
-        const auto line = lineEnd == std::string_view::npos ? trailers.substr(cursor) : trailers.substr(cursor, lineEnd - cursor);
-        if (line.empty() || line.front() == ' ' || line.front() == '\t') {
-            return HttpChunkScanError::kInvalidTrailer;
-        }
-        const auto colon = line.find(':');
-        if (colon == std::string_view::npos || colon == 0) {
-            return HttpChunkScanError::kInvalidTrailer;
-        }
-        const auto name = line.substr(0, colon);
-        const auto value = httpTrimOws(line.substr(colon + 1));
-        if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) || isForbiddenChunkTrailer(name)) {
-            return HttpChunkScanError::kInvalidTrailer;
-        }
-        if (lineEnd == std::string_view::npos) {
-            return std::nullopt;
-        }
-        cursor = lineEnd + 2;
+    HttpChunkTrailerParser parser(trailers);
+    for (;;) {
+        const auto result = parser.next();
+        if (const auto* failure = result.failure()) return failure->error();
+        if (result.end()) return std::nullopt;
     }
-    return std::nullopt;
 }
 
 bool parseHttpChunkSize(std::string_view value, std::size_t& size) noexcept {

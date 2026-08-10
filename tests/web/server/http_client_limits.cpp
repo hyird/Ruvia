@@ -715,11 +715,43 @@ int testIpCookieDomainSuffixRejection() {
         });
 }
 
+int testHttp1ResponseTrailers() {
+    OneShotServer server([](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) return;
+        constexpr std::string_view response =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "Trailer: Server-Timing, X-Trace\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "3\r\nabc\r\n"
+            "0\r\n"
+            "Server-Timing: db;dur=4\r\n"
+            "X-Trace: done\r\n"
+            "\r\n";
+        asio::write(socket, asio::buffer(response), error);
+    });
+    auto config = plainConfig(server.port());
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            auto request = client.newRequest();
+            auto response = co_await client.sendRequest(std::move(request));
+            if (response.body() != "abc") co_return 1;
+            if (response.getTrailer("server-timing") !=
+                std::optional<std::string_view>("db;dur=4")) co_return 2;
+            co_return response.getTrailer("x-trace") ==
+                std::optional<std::string_view>("done") ? 0 : 3;
+        });
+}
+
 }  // namespace
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 18> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 19> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testClosingInformationalResponse, "closing informational response"},
@@ -738,6 +770,7 @@ int main() {
             {&testFarFutureCookieExpires, "far-future cookie Expires"},
             {&testCookieStorageSecurityConstraints, "cookie storage security constraints"},
             {&testIpCookieDomainSuffixRejection, "IP cookie domain suffix rejection"},
+            {&testHttp1ResponseTrailers, "HTTP/1 response trailers"},
         }};
         for (const auto& [check, name] : checks) {
             if (const auto result = check(); result != 0) {
