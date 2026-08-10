@@ -183,7 +183,8 @@ void HttpClientPool::failHttp2Session(Connection& connection, std::uint64_t gene
             } else if (error == std::errc::protocol_error) {
                 pendingError = HttpClientError::Code::kProtocolError;
             } else if (config_.scheme == HttpScheme::kHttps &&
-                error.category() == asio::error::get_ssl_category()) {
+                (error.category() == asio::error::get_ssl_category() ||
+                    error == asio::ssl::error::stream_truncated)) {
                 pendingError = HttpClientError::Code::kTlsFailed;
             }
             break;

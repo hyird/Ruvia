@@ -5,13 +5,16 @@
 #include <fstream>
 #include <future>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/read.hpp>
 #include <asio/read_until.hpp>
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/stream.hpp>
@@ -200,6 +203,100 @@ private:
     std::thread thread_;
 };
 
+int selectH2Alpn(SSL*, const unsigned char** output, unsigned char* outputLength,
+    const unsigned char* input, unsigned int inputLength, void*) noexcept {
+    static constexpr unsigned char protocols[] = {2, 'h', '2'};
+    return SSL_select_next_proto(const_cast<unsigned char**>(output), outputLength,
+               protocols, static_cast<unsigned int>(sizeof(protocols)), input, inputLength) ==
+            OPENSSL_NPN_NEGOTIATED
+        ? SSL_TLSEXT_ERR_OK
+        : SSL_TLSEXT_ERR_NOACK;
+}
+
+class TruncatedHttp2TlsServer final {
+public:
+    TruncatedHttp2TlsServer(const std::filesystem::path& certificateChainFile,
+        const std::filesystem::path& privateKeyFile)
+        : tlsContext_(asio::ssl::context::tls_server),
+          acceptor_(io_, {asio::ip::make_address("127.0.0.1"), 0}) {
+        tlsContext_.use_certificate_chain_file(certificateChainFile.string());
+        tlsContext_.use_private_key_file(privateKeyFile.string(), asio::ssl::context::pem);
+        SSL_CTX_set_alpn_select_cb(tlsContext_.native_handle(), &selectH2Alpn, nullptr);
+        thread_ = std::thread([this] {
+            asio::ssl::stream<asio::ip::tcp::socket> stream(io_, tlsContext_);
+            std::error_code error;
+            acceptor_.accept(stream.next_layer(), error);
+            if (error) return;
+            stream.handshake(asio::ssl::stream_base::server, error);
+            if (error) return;
+
+            std::array<char, 24> clientPreface{};
+            asio::read(stream, asio::buffer(clientPreface), error);
+            if (error || std::string_view(clientPreface.data(), clientPreface.size()) !=
+                    "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n") return;
+
+            if (!readFrame(stream, error)) return;  // Client SETTINGS.
+            static constexpr std::array<unsigned char, 9> serverSettings{
+                0, 0, 0, 4, 0, 0, 0, 0, 0};
+            asio::write(stream, asio::buffer(serverSettings), error);
+            if (error) return;
+
+            // Wait until the request HEADERS is on the wire so the client has a
+            // live pending stream when the TLS transport is truncated.
+            for (;;) {
+                const auto frame = readFrame(stream, error);
+                if (!frame || error) return;
+                if (frame->type == 1 && frame->streamId != 0) break;
+            }
+            stream.next_layer().shutdown(asio::ip::tcp::socket::shutdown_both, error);
+            stream.next_layer().close(error);
+        });
+    }
+
+    ~TruncatedHttp2TlsServer() {
+        std::error_code ignored;
+        acceptor_.close(ignored);
+        if (thread_.joinable()) thread_.join();
+    }
+
+    TruncatedHttp2TlsServer(const TruncatedHttp2TlsServer&) = delete;
+    TruncatedHttp2TlsServer& operator=(const TruncatedHttp2TlsServer&) = delete;
+
+    [[nodiscard]] std::uint16_t port() const { return acceptor_.local_endpoint().port(); }
+
+private:
+    struct Frame final {
+        unsigned char type{0};
+        std::uint32_t streamId{0};
+    };
+
+    static std::optional<Frame> readFrame(
+        asio::ssl::stream<asio::ip::tcp::socket>& stream, std::error_code& error) {
+        std::array<unsigned char, 9> header{};
+        asio::read(stream, asio::buffer(header), error);
+        if (error) return std::nullopt;
+        const auto length = (static_cast<std::size_t>(header[0]) << 16U) |
+            (static_cast<std::size_t>(header[1]) << 8U) |
+            static_cast<std::size_t>(header[2]);
+        std::vector<unsigned char> payload(length);
+        if (!payload.empty()) {
+            asio::read(stream, asio::buffer(payload), error);
+            if (error) return std::nullopt;
+        }
+        const auto streamId =
+            (static_cast<std::uint32_t>(header[5] & 0x7fU) << 24U) |
+            (static_cast<std::uint32_t>(header[6]) << 16U) |
+            (static_cast<std::uint32_t>(header[7]) << 8U) |
+            static_cast<std::uint32_t>(header[8]);
+        return Frame{.type = header[3], .streamId = streamId};
+    }
+
+    asio::io_context io_;
+    asio::ssl::context tlsContext_;
+    asio::ip::tcp::acceptor acceptor_;
+    std::thread thread_;
+};
+
 int runTlsTruncationCheck(
     const std::filesystem::path& certificateChainFile,
     const std::filesystem::path& privateKeyFile) {
@@ -236,6 +333,51 @@ int runTlsTruncationCheck(
         co_return result;
     };
     auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
+    io.run();
+    const auto result = future.get();
+    registry.closeNow();
+    dispatcher->detachContext();
+    return result;
+}
+
+int runHttp2TlsTruncationCheck(
+    const std::filesystem::path& certificateChainFile,
+    const std::filesystem::path& privateKeyFile) {
+    TruncatedHttp2TlsServer server(certificateChainFile, privateKeyFile);
+    asio::io_context io;
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
+    auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    ruvia::WorkerMemory memory;
+    ruvia::HttpClientConfig publicConfig;
+    publicConfig.host = "127.0.0.1";
+    publicConfig.port = server.port();
+    publicConfig.scheme = ruvia::HttpScheme::kHttps;
+    publicConfig.protocol = ruvia::HttpClientProtocol::kHttp2Only;
+    publicConfig.verifyCertificate = false;
+    ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(config)};
+    ruvia::detail::HttpClientRegistry registry(
+        io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+    auto exercise = [&]() -> ruvia::Task<int> {
+        ruvia::detail::ScopedOperationScope scope;
+        auto client = registry.get(memory.resource(), scope);
+        int result = 1;
+        try {
+            auto request = client.newRequest();
+            (void)co_await client.sendRequest(std::move(request), 2s);
+        } catch (const ruvia::HttpClientError& error) {
+            result = error.code() == ruvia::HttpClientError::Code::kTlsFailed ? 0 :
+                error.code() == ruvia::HttpClientError::Code::kIoError ? 2 : 3;
+        }
+        scope.close();
+        registry.closeNow();
+        co_await registry.join();
+        co_return result;
+    };
+    auto future = asio::co_spawn(
+        io, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
     io.run();
     const auto result = future.get();
     registry.closeNow();
@@ -775,6 +917,7 @@ int main() {
     writeFile(certPath, pem.cert);
     writeFile(keyPath, pem.key);
     const auto tlsTruncationResult = runTlsTruncationCheck(certPath, keyPath);
+    const auto h2TlsTruncationResult = runHttp2TlsTruncationCheck(certPath, keyPath);
     ruvia::detail::HttpServerOptions options;
     ruvia::detail::HttpServerOptions::Tls tls;
     tls.identity.certificateChainFile = std::pmr::string(certPath.string(), std::pmr::get_default_resource());
@@ -789,10 +932,13 @@ int main() {
         secure.localEndpoint().port(), "127.0.0.1", certPath, nullptr, nullptr, false);
     secure.stop();
     secure.join();
-    if (tlsTruncationResult != 0 || h2Result != 0 || verifiedResult != 0 || hostnameFailureResult != 0) {
+    if (tlsTruncationResult != 0 || h2TlsTruncationResult != 0 || h2Result != 0 ||
+        verifiedResult != 0 || hostnameFailureResult != 0) {
         std::fprintf(stderr,
-            "HTTP/2 or verified TLS client exchange failed (truncation=%d, h2=%d, verified=%d, hostname=%d)\n",
-            tlsTruncationResult, h2Result, verifiedResult, hostnameFailureResult);
+            "HTTP/2 or verified TLS client exchange failed (h1-truncation=%d, "
+            "h2-truncation=%d, h2=%d, verified=%d, hostname=%d)\n",
+            tlsTruncationResult, h2TlsTruncationResult, h2Result,
+            verifiedResult, hostnameFailureResult);
         return 3;
     }
 
