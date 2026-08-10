@@ -5,6 +5,7 @@
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 
@@ -51,7 +52,13 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
         if (!parsed) std::terminate();
         const auto consumedHead = parsed->consumedBytes();
         if (parsed->plan().informational()) {
+            const bool closesExchange = parsed->plan().informational()->persistence() == Http1ClosePolicy::kCloseAfterResponse;
             connection.readBuffer.erase(0, consumedHead);
+            if (closesExchange) {
+                close(connection);
+                throw HttpClientError(HttpClientError::Code::kProtocolError,
+                    "upstream closed the HTTP exchange after an informational response");
+            }
             continue;
         }
         response.status_ = parsed->head().status();
@@ -65,6 +72,54 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
                 throw HttpClientError(HttpClientError::Code::kResponseTooLarge, "HTTP response exceeds configured byte limit");
             }
             response.body_.append(bytes);
+        };
+        std::optional<TransferCodingDecoder> transferDecoder;
+        std::array<char, kBodyReadChunkBytes> transferOutput{};
+        const auto configureTransferDecoder = [&](HttpTransferCodings codings) {
+            if (codings.count != 0) {
+                transferDecoder.emplace(codings.values[0], responseResource,
+                    ProtocolByteLimit::limited(config_.maxResponseBytes));
+            }
+        };
+        const auto throwTransferFailure = [](const TransferCodingDecodeResult& result) -> void {
+            if (const auto* failure = result.protocolFailure()) {
+                if (failure->protocolError().status() == http_status::kContentTooLarge) {
+                    throw HttpClientError(HttpClientError::Code::kResponseTooLarge,
+                        "HTTP response exceeds configured byte limit");
+                }
+                throw HttpClientError(HttpClientError::Code::kProtocolError,
+                    "invalid HTTP response transfer coding");
+            }
+            if (result.decoderFailure()) {
+                throw HttpClientError(HttpClientError::Code::kProtocolError,
+                    "HTTP response transfer-coding decoder failed");
+            }
+        };
+        const auto appendTransferDecoded = [&](std::string_view encodedBytes) {
+            if (!transferDecoder) {
+                appendChecked(encodedBytes);
+                return;
+            }
+            for (;;) {
+                const auto decoded = transferDecoder->decode(encodedBytes, transferOutput);
+                encodedBytes.remove_prefix(std::min(encodedBytes.size(), decoded.consumedBytes()));
+                if (const auto* output = decoded.output()) {
+                    appendChecked(output->bytes());
+                    continue;
+                }
+                throwTransferFailure(decoded);
+                if (decoded.needInput() || decoded.complete()) return;
+                throw HttpClientError(HttpClientError::Code::kProtocolError,
+                    "invalid HTTP response transfer-coding state");
+            }
+        };
+        const auto finishTransferDecoder = [&] {
+            if (!transferDecoder) return;
+            const auto finished = transferDecoder->finishInput();
+            if (finished.complete()) return;
+            throwTransferFailure(finished);
+            throw HttpClientError(HttpClientError::Code::kProtocolError,
+                "incomplete HTTP response transfer coding");
         };
         const auto readMore = [&]() -> Task<void> {
             const auto bytes = co_await readSome(connection, input, timeout);
@@ -82,26 +137,30 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
             connection.readBuffer.erase(0, known->contentLength());
             closeAfter = known->persistence() == Http1ClosePolicy::kCloseAfterResponse;
         } else if (const auto* chunked = parsed->plan().chunked()) {
-            if (chunked->transferCodings().count != 0) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP transfer coding before chunked is unsupported");
-            Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(config_.maxResponseBytes));
+            configureTransferDecoder(chunked->transferCodings());
+            Http1ChunkedBodyDecoder decoder(transferDecoder
+                    ? ProtocolByteLimit::unlimited()
+                    : ProtocolByteLimit::limited(config_.maxResponseBytes));
             for (;;) {
                 auto decoded = decoder.decode(connection.readBuffer);
-                if (const auto* body = decoded.bodyChunk()) appendChecked(body->bytes());
+                if (const auto* body = decoded.bodyChunk()) appendTransferDecoded(body->bytes());
                 connection.readBuffer.erase(0, decoded.consumedBytes());
                 if (decoded.failure()) throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid chunked HTTP response");
                 if (decoded.complete()) break;
                 if (decoded.needMore() || connection.readBuffer.empty()) co_await readMore();
             }
+            finishTransferDecoder();
             closeAfter = chunked->persistence() == Http1ClosePolicy::kCloseAfterResponse;
         } else if (const auto* closeDelimited = parsed->plan().closeDelimited()) {
-            if (closeDelimited->transferCodings().count != 0) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP transfer coding is unsupported");
-            appendChecked(connection.readBuffer);
+            configureTransferDecoder(closeDelimited->transferCodings());
+            appendTransferDecoded(connection.readBuffer);
             connection.readBuffer.clear();
             for (;;) {
                 const auto bytes = co_await readSome(connection, input, timeout, true);
                 if (bytes == 0) break;
-                appendChecked(std::string_view(input.data(), bytes));
+                appendTransferDecoded(std::string_view(input.data(), bytes));
             }
+            finishTransferDecoder();
             closeAfter = true;
         } else if (const auto* zero = parsed->plan().zeroContent()) {
             if (const auto* zeroKnown = zero->knownLength()) {
@@ -109,19 +168,35 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
                 if (zeroKnown->contentLength() != 0) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
                 closeAfter = zeroKnown->persistence() == Http1ClosePolicy::kCloseAfterResponse;
             } else if (const auto* zeroChunked = zero->chunked()) {
-                if (zeroChunked->transferCodings().count != 0) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP transfer coding before chunked is unsupported");
-                Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(config_.maxResponseBytes));
+                configureTransferDecoder(zeroChunked->transferCodings());
+                Http1ChunkedBodyDecoder decoder(transferDecoder
+                        ? ProtocolByteLimit::unlimited()
+                        : ProtocolByteLimit::limited(config_.maxResponseBytes));
                 for (;;) {
                     auto decoded = decoder.decode(connection.readBuffer);
-                    if (decoded.bodyChunk() && !decoded.bodyChunk()->bytes().empty()) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
+                    if (const auto* body = decoded.bodyChunk()) appendTransferDecoded(body->bytes());
                     connection.readBuffer.erase(0, decoded.consumedBytes());
                     if (decoded.failure()) throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid chunked HTTP response");
                     if (decoded.complete()) break;
                     if (decoded.needMore() || connection.readBuffer.empty()) co_await readMore();
                 }
+                finishTransferDecoder();
+                if (!response.body_.empty()) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
                 closeAfter = zeroChunked->persistence() == Http1ClosePolicy::kCloseAfterResponse;
+            } else if (const auto* zeroCloseDelimited = zero->closeDelimited()) {
+                configureTransferDecoder(zeroCloseDelimited->transferCodings());
+                appendTransferDecoded(connection.readBuffer);
+                connection.readBuffer.clear();
+                for (;;) {
+                    const auto bytes = co_await readSome(connection, input, timeout, true);
+                    if (bytes == 0) break;
+                    appendTransferDecoded(std::string_view(input.data(), bytes));
+                }
+                finishTransferDecoder();
+                if (!response.body_.empty()) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
+                closeAfter = true;
             } else {
-                throw HttpClientError(HttpClientError::Code::kProtocolError, "close-delimited HTTP 205 response is unsupported");
+                throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid HTTP 205 response framing");
             }
         } else if (const auto* without = parsed->plan().withoutContent()) {
             closeAfter = without->persistence() == Http1ClosePolicy::kCloseAfterResponse;

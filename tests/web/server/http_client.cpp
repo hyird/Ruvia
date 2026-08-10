@@ -77,17 +77,40 @@ int checkFactoryOrigins() {
     const auto ipv6 = ruvia::HttpClient::newHttpClient("http://[::1]:8080/");
     if (ipv6->host() != "::1" || ipv6->port() != 8080 || ipv6->secure()) return 1;
 
+    const auto mixedCase = ruvia::HttpClient::newHttpClient("HTTPS://Example.COM:8443");
+    if (mixedCase->host() != "Example.COM" || mixedCase->port() != 8443 || !mixedCase->secure()) return 2;
+
     ruvia::HttpClientConfig config;
     config.host = "::1";
     ruvia::detail::HttpClientConfigStorage stored(config, std::pmr::get_default_resource());
-    if (ruvia::detail::httpClientWireHost(stored, std::pmr::get_default_resource()) != "[::1]") return 2;
+    if (ruvia::detail::httpClientWireHost(stored, std::pmr::get_default_resource()) != "[::1]") return 3;
 
-    try {
-        (void)ruvia::HttpClient::newHttpClient("http://[not-an-ipv6-address]");
-    } catch (const std::invalid_argument&) {
-        return 0;
-    }
-    return 3;
+    const auto rejectsConfigHost = [](std::string_view host) {
+        try {
+            ruvia::HttpClientConfig invalid;
+            invalid.host.assign(host);
+            ruvia::detail::validateHttpClientConfig(invalid);
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    if (!rejectsConfigHost("bad?host")) return 4;
+    if (!rejectsConfigHost("::::")) return 5;
+    if (!rejectsConfigHost("user@example.com")) return 6;
+
+    const auto rejects = [](std::string_view origin) {
+        try {
+            (void)ruvia::HttpClient::newHttpClient(origin);
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    if (!rejects("http://[not-an-ipv6-address]")) return 7;
+    if (!rejects("http://example.com:")) return 8;
+    if (!rejects("http://[::1]:")) return 9;
+    return 0;
 }
 
 SelfSignedPem makeSelfSignedPem() {

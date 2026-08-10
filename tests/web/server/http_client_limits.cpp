@@ -1,4 +1,5 @@
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <memory_resource>
@@ -21,6 +22,7 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/web/HttpClient.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
@@ -127,6 +129,15 @@ void writeResponse(asio::ip::tcp::socket& socket, std::string_view body, std::st
     asio::write(socket, asio::buffer(response), ignored);
 }
 
+std::string gzipContent(std::string_view body) {
+    auto encoded = ruvia::detail::encodeHttpContent(
+        ruvia::detail::HttpContentCoding::kGzip, body,
+        body.size() + 1024, std::pmr::get_default_resource());
+    if (!encoded.encoded()) throw std::runtime_error("failed to encode test gzip body");
+    const auto bytes = encoded.encoded()->bytes();
+    return {bytes.data(), bytes.size()};
+}
+
 template <typename Exercise>
 int runClient(ruvia::HttpClientConfig config, CountingResource& operationResource, Exercise exercise) {
     asio::io_context io;
@@ -205,6 +216,63 @@ int testResponseLimit() {
                 co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 0 : 2;
             }
             co_return 1;
+        });
+}
+
+int testClosingInformationalResponse() {
+    OneShotServer server([](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) return;
+        constexpr std::string_view response =
+            "HTTP/1.1 103 Early Hints\r\n"
+            "Connection: close\r\n"
+            "\r\n";
+        asio::write(socket, asio::buffer(response), error);
+    });
+    auto config = plainConfig(server.port());
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            try {
+                auto request = client.newRequest();
+                (void)co_await client.sendRequest(std::move(request));
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kProtocolError ? 0 : 2;
+            }
+            co_return 1;
+        });
+}
+
+int testTransferCodedResponse() {
+    const auto encoded = gzipContent("decoded transfer body");
+    OneShotServer server([encoded](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        const auto request = readHead(socket, error);
+        if (error || request.find("TE: gzip") == std::string::npos) return;
+        std::array<char, 32> sizeBytes{};
+        const auto [sizeEnd, sizeError] = std::to_chars(
+            sizeBytes.data(), sizeBytes.data() + sizeBytes.size(), encoded.size(), 16);
+        if (sizeError != std::errc{}) return;
+        std::string response =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: gzip, chunked\r\n"
+            "Connection: close\r\n"
+            "\r\n";
+        response.append(sizeBytes.data(), sizeEnd);
+        response.append("\r\n");
+        response.append(encoded);
+        response.append("\r\n0\r\n\r\n");
+        asio::write(socket, asio::buffer(response), error);
+    });
+    auto config = plainConfig(server.port());
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            auto request = client.newRequest();
+            request.addHeader("Connection", "TE").addHeader("TE", "gzip");
+            auto response = co_await client.sendRequest(std::move(request));
+            co_return response.body() == "decoded transfer body" ? 0 : 1;
         });
 }
 
@@ -437,6 +505,37 @@ int testAutomaticCookieCapacity() {
         });
 }
 
+int testCookieIdentityCanonicalization() {
+    TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
+        std::error_code error;
+        const auto head = readHead(socket, error);
+        if (error) return;
+        if (exchange == 0) {
+            writeResponse(socket, "seeded",
+                "Set-Cookie: sid=host-only; Path=/\r\n"
+                "Set-Cookie: sid=domain; Domain=LOCALHOST; Path=/\r\n");
+            return;
+        }
+        const auto oneCookie = head.find("cookie: sid=domain") != std::string::npos &&
+            head.find("sid=host-only") == std::string::npos &&
+            head.find("sid=domain; sid=domain") == std::string::npos;
+        writeResponse(socket, oneCookie ? "canonical" : "duplicate");
+    });
+    auto config = plainConfig(server.port());
+    config.host = "localhost";
+    config.cookiesEnabled = true;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            auto first = client.newRequest();
+            auto firstResponse = co_await client.sendRequest(std::move(first));
+            if (firstResponse.body() != "seeded") co_return 1;
+            auto second = client.newRequest();
+            auto secondResponse = co_await client.sendRequest(std::move(second));
+            co_return secondResponse.body() == "canonical" ? 0 : 2;
+        });
+}
+
 int testLargeCookieMaxAge() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
@@ -468,9 +567,11 @@ int testLargeCookieMaxAge() {
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 10> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 13> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
+            {&testClosingInformationalResponse, "closing informational response"},
+            {&testTransferCodedResponse, "transfer-coded response"},
             {&testWriteTimeout, "HTTP/1 write timeout"},
             {&testNegotiatedHttp1AcquireTimeout, "negotiated HTTP/1 acquire timeout"},
             {&testStopTokenCancellation, "stop-token cancellation"},
@@ -478,6 +579,7 @@ int main() {
             {&testRegistryRejectsDynamicPoolsAfterClose, "registry close gate"},
             {&testCookieCapacity, "cookie capacity"},
             {&testAutomaticCookieCapacity, "automatic cookie capacity"},
+            {&testCookieIdentityCanonicalization, "cookie identity canonicalization"},
             {&testLargeCookieMaxAge, "large cookie Max-Age"},
         }};
         for (const auto& [check, name] : checks) {

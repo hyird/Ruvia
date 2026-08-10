@@ -12,6 +12,7 @@
 #include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/cookie/CookieValidation.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
@@ -49,10 +50,10 @@ std::size_t configuredCookieBytes(const HttpClientConfig& config) noexcept {
 }
 
 HttpClientConfig parseHttpClientOrigin(std::string_view origin, HttpClientConfig config) {
-    if (origin.starts_with("https://")) {
+    if (origin.size() >= 8 && detail::httpAsciiEqualsIgnoreCase(origin.substr(0, 8), "https://")) {
         config.scheme = HttpScheme::kHttps;
         origin.remove_prefix(8);
-    } else if (origin.starts_with("http://")) {
+    } else if (origin.size() >= 7 && detail::httpAsciiEqualsIgnoreCase(origin.substr(0, 7), "http://")) {
         config.scheme = HttpScheme::kHttp;
         origin.remove_prefix(7);
     } else {
@@ -69,6 +70,7 @@ HttpClientConfig parseHttpClientOrigin(std::string_view origin, HttpClientConfig
 
     std::string_view host;
     std::string_view port;
+    bool explicitPort = false;
     const bool bracketedLiteral = authority.front() == '[';
     if (bracketedLiteral) {
         const auto closing = authority.find(']');
@@ -77,12 +79,14 @@ HttpClientConfig parseHttpClientOrigin(std::string_view origin, HttpClientConfig
         const auto remainder = authority.substr(closing + 1);
         if (!remainder.empty()) {
             if (remainder.front() != ':') throw std::invalid_argument("HTTP client origin authority is invalid");
+            explicitPort = true;
             port = remainder.substr(1);
         }
     } else {
         const auto colon = authority.rfind(':');
         if (colon != std::string_view::npos) {
             if (authority.find(':') != colon) throw std::invalid_argument("HTTP client IPv6 origin must use brackets");
+            explicitPort = true;
             host = authority.substr(0, colon);
             port = authority.substr(colon + 1);
         } else {
@@ -91,6 +95,9 @@ HttpClientConfig parseHttpClientOrigin(std::string_view origin, HttpClientConfig
     }
     config.host.assign(host);
     config.port = 0;
+    if (explicitPort && port.empty()) {
+        throw std::invalid_argument("HTTP client origin port is invalid");
+    }
     if (!port.empty()) {
         unsigned int parsedPort = 0;
         const auto [end, error] = std::from_chars(port.data(), port.data() + port.size(), parsedPort);

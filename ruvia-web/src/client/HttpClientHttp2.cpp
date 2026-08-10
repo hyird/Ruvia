@@ -346,9 +346,34 @@ void HttpClientPool::removeHttp2Pending(Connection& connection, Http2PendingStre
     }
 }
 
-Task<void> HttpClientPool::waitForHttp2SessionStop(Connection& connection) {
+Task<void> HttpClientPool::waitForHttp2SessionStop(
+    Connection& connection,
+    const OperationTimeout& timeout,
+    StopToken stopToken) {
     auto& runtime = *connection.http2Runtime;
+    WorkerTimerRegistration deadlineTimer;
+    if (const auto remaining = timeout.remaining()) {
+        if (remaining->count() == 0) {
+            throw HttpClientError(HttpClientError::Code::kTimeout,
+                "HTTP/2 session shutdown wait timed out");
+        }
+        WorkerHandleAccess::scheduleTimer(worker_, deadlineTimer, workerTimerDeadlineAfter(*remaining),
+            [&runtime](WorkerTimerOutcome outcome) noexcept {
+                if (outcome == WorkerTimerOutcome::kExpired) runtime.stateSignal.notify();
+            });
+    }
+    auto stopRegistration = stopToken.registerCallback([this, &runtime] {
+        WorkerHandleAccess::deferOrTerminate(worker_, [&runtime] { runtime.stateSignal.notify(); });
+    });
     while (runtime.sessionTasks != 0 || !runtime.pending.empty()) {
+        if (stopToken.stopRequested()) {
+            throw HttpClientError(HttpClientError::Code::kCancelled,
+                "HTTP/2 session shutdown wait cancelled");
+        }
+        if (timeout.expired()) {
+            throw HttpClientError(HttpClientError::Code::kTimeout,
+                "HTTP/2 session shutdown wait timed out");
+        }
         co_await runtime.stateSignal.wait();
     }
 }
@@ -373,7 +398,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, st
                 connection.connected = false;
                 runtime.writeSignal.notify();
             }
-            co_await waitForHttp2SessionStop(connection);
+            co_await waitForHttp2SessionStop(connection, timeout, stopToken);
             co_await ensureConnected(connection, index, timeout, timeout, stopToken);
             if (connection.protocol != WireProtocol::kHttp2) {
                 throw HttpClientError(HttpClientError::Code::kProtocolUnavailable, "upstream no longer negotiated HTTP/2");
@@ -400,6 +425,11 @@ Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, st
         if (stopToken.stopRequested()) cancelHttp2Stream(connection, pending.requestId, AbortReason::kCancelled);
 
         for (;;) {
+            if (pending.error) break;
+            if (timeout.expired()) {
+                pending.error = HttpClientError::Code::kTimeout;
+                break;
+            }
             const auto submitted = connection.http2->submitRegularRequestHead(std::string_view(source.method),
                 config_.scheme == HttpScheme::kHttps ? "https" : "http", authority, std::string_view(source.target), headers, content);
             if (const auto* accepted = submitted.submitted()) {

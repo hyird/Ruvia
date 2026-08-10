@@ -1,16 +1,30 @@
 #pragma once
 
 #include <stdexcept>
+#include <string>
 
 #include "ruvia/web/detail/app/ConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/http/detail/cookie/CookieValidation.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 namespace ruvia::detail {
 
 template <typename Config>
 void validateHttpClientConfig(const Config& config) {
     ensureConfigHost(config.host, "http client host must not be empty", "http client host is invalid", kSeparatedPortHostRules);
+    std::string wireHost;
+    if (config.host.find(':') != std::string_view::npos) {
+        wireHost.reserve(config.host.size() + 2);
+        wireHost.push_back('[');
+        wireHost.append(config.host);
+        wireHost.push_back(']');
+    } else {
+        wireHost.assign(config.host);
+    }
+    if (!isValidHttpHost(wireHost)) {
+        throw std::invalid_argument("http client host is invalid");
+    }
     ensurePositiveSize(config.connectionsPerWorker, "http client connections per worker must be greater than zero");
     ensurePositiveSize(config.maxConcurrentHttp2StreamsPerConnection, "http client HTTP/2 stream limit per connection must be greater than zero");
     ensurePositiveSize(config.maxBufferedRequestsPerWorker, "http client buffered request limit per worker must be greater than zero");

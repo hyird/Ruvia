@@ -10,6 +10,7 @@
 #include <utility>
 
 #include <asio/connect.hpp>
+#include <asio/ip/address.hpp>
 #include <asio/ssl/error.hpp>
 #include <asio/ssl/host_name_verification.hpp>
 #include <asio/write.hpp>
@@ -31,6 +32,12 @@ std::string_view selectedAlpn(SSL* ssl) noexcept {
     unsigned int length = 0;
     SSL_get0_alpn_selected(ssl, &selected, &length);
     return {reinterpret_cast<const char*>(selected), length};
+}
+
+bool isIpAddress(std::string_view host) noexcept {
+    std::error_code error;
+    (void)asio::ip::make_address(host, error);
+    return !error;
 }
 
 bool headerNameEquals(std::string_view left, std::string_view right) noexcept {
@@ -277,8 +284,15 @@ void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, con
             expires = std::chrono::system_clock::from_time_t(*parsed->expires);
             remove = *expires <= now;
         }
+        const auto parsedIdentityDomain = parsed->domain.empty()
+            ? std::string_view(config_.host)
+            : parsed->domain;
         const auto match = std::ranges::find_if(cookies_, [&](const StoredCookie& cookie) {
-            return !cookie.persistent && cookie.name == parsed->name && cookie.path == path && cookie.domain == parsed->domain;
+            const auto cookieIdentityDomain = cookie.domain.empty()
+                ? std::string_view(config_.host)
+                : std::string_view(cookie.domain);
+            return !cookie.persistent && cookie.name == parsed->name && cookie.path == path &&
+                httpAsciiEqualsIgnoreCase(cookieIdentityDomain, parsedIdentityDomain);
         });
         if (remove) {
             if (match != cookies_.end()) {
@@ -302,6 +316,7 @@ void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, con
             cookie.persistent = false;
         } else {
             match->value.assign(parsed->value);
+            match->domain.assign(parsed->domain);
             match->expires = expires;
             match->secure = parsed->secure;
         }
@@ -487,7 +502,11 @@ Task<void> HttpClientPool::ensureConnected(
 
     if (config_.scheme == HttpScheme::kHttps) {
         SSL_clear(connection.stream.native_handle());
-        if (SSL_set_tlsext_host_name(connection.stream.native_handle(), config_.host.c_str()) != 1) {
+        // RFC 6066 HostName carries a DNS host_name, never an IPv4/IPv6
+        // literal. Certificate verification still receives the configured IP
+        // so OpenSSL can apply its IP subjectAltName rules.
+        if (!isIpAddress(config_.host) &&
+            SSL_set_tlsext_host_name(connection.stream.native_handle(), config_.host.c_str()) != 1) {
             throw HttpClientError(HttpClientError::Code::kTlsFailed, "failed to set TLS SNI host");
         }
         if (config_.verifyCertificate) connection.stream.set_verify_callback(asio::ssl::host_name_verification(std::string(config_.host)));

@@ -195,7 +195,10 @@ private:
     void submitHttp2Reset(Connection& connection, std::uint32_t streamId) noexcept;
     void cancelHttp2Stream(Connection& connection, std::uint64_t requestId, AbortReason reason) noexcept;
     void removeHttp2Pending(Connection& connection, Http2PendingStream& pending) noexcept;
-    [[nodiscard]] Task<void> waitForHttp2SessionStop(Connection& connection);
+    [[nodiscard]] Task<void> waitForHttp2SessionStop(
+        Connection& connection,
+        const OperationTimeout& timeout,
+        StopToken stopToken);
 
     asio::io_context& ioContext_;
     const WorkerHandle& worker_;
