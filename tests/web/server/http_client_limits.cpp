@@ -536,6 +536,39 @@ int testCookieIdentityCanonicalization() {
         });
 }
 
+int testCookiePathOrdering() {
+    TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
+        std::error_code error;
+        const auto head = readHead(socket, error);
+        if (error) return;
+        if (exchange == 0) {
+            writeResponse(socket, "seeded",
+                "Set-Cookie: sid=root; Path=/\r\n"
+                "Set-Cookie: sid=account; Path=/account\r\n");
+            return;
+        }
+        const auto account = head.find("sid=account");
+        const auto root = head.find("sid=root");
+        writeResponse(socket,
+            account != std::string::npos && root != std::string::npos && account < root
+                ? "ordered"
+                : "misordered");
+    });
+    auto config = plainConfig(server.port());
+    config.cookiesEnabled = true;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            auto first = client.newRequest();
+            auto firstResponse = co_await client.sendRequest(std::move(first));
+            if (firstResponse.body() != "seeded") co_return 1;
+            auto second = client.newRequest();
+            second.setPath("/account/profile");
+            auto secondResponse = co_await client.sendRequest(std::move(second));
+            co_return secondResponse.body() == "ordered" ? 0 : 2;
+        });
+}
+
 int testLargeCookieMaxAge() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
@@ -567,7 +600,7 @@ int testLargeCookieMaxAge() {
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 13> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 14> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testClosingInformationalResponse, "closing informational response"},
@@ -580,6 +613,7 @@ int main() {
             {&testCookieCapacity, "cookie capacity"},
             {&testAutomaticCookieCapacity, "automatic cookie capacity"},
             {&testCookieIdentityCanonicalization, "cookie identity canonicalization"},
+            {&testCookiePathOrdering, "cookie path ordering"},
             {&testLargeCookieMaxAge, "large cookie Max-Age"},
         }};
         for (const auto& [check, name] : checks) {

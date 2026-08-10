@@ -307,8 +307,13 @@ void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, con
             : cookieStorageBytes(match->name, match->value, match->path, match->domain);
         if (!cookieCapacityAvailable(replacedBytes, replacementBytes, match == cookies_.end())) continue;
         if (match == cookies_.end()) {
-            cookies_.emplace_back(parsed->name, parsed->value, resource_);
-            auto& cookie = cookies_.back();
+            // RFC 6265 section 5.4 sends longer paths first and uses creation
+            // order as the tie-breaker. Keep the jar in that order when it is
+            // mutated so the request hot path only has to scan and append.
+            const auto insertion = std::ranges::find_if(cookies_, [path](const StoredCookie& cookie) {
+                return cookie.path.size() < path.size();
+            });
+            auto& cookie = *cookies_.emplace(insertion, parsed->name, parsed->value, resource_);
             cookie.path.assign(path);
             cookie.domain.assign(parsed->domain);
             cookie.expires = expires;
