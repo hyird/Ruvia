@@ -356,6 +356,8 @@ void HttpClientPool::cancelOperation(std::size_t index, std::uint64_t generation
     connection.resolver.cancel();
     connection.stream.lowest_layer().cancel(ignored);
     connection.stream.lowest_layer().close(ignored);
+    connection.http2Runtime->writeSignal.notify();
+    connection.http2Runtime->stateSignal.notify();
 }
 
 void HttpClientPool::throwAbort(const Connection& connection) const {
@@ -381,7 +383,8 @@ Task<void> HttpClientPool::write(Connection& connection, std::string_view bytes,
     if (timedOut) throw HttpClientError(HttpClientError::Code::kTimeout, "http client write timed out");
     if (completion.errorCode()) {
         const auto code = config_.scheme == HttpScheme::kHttps &&
-                completion.errorCode().category() == asio::error::get_ssl_category()
+                (completion.errorCode().category() == asio::error::get_ssl_category() ||
+                    completion.errorCode() == asio::ssl::error::stream_truncated)
             ? HttpClientError::Code::kTlsFailed
             : HttpClientError::Code::kIoError;
         throw HttpClientError(code, completion.errorCode().message());
@@ -398,9 +401,10 @@ Task<std::size_t> HttpClientPool::readSome(Connection& connection, std::span<cha
     throwAbort(connection);
     if (timedOut) throw HttpClientError(HttpClientError::Code::kTimeout, "http client request timed out");
     if (completion.errorCode()) {
-        if (allowEof && (completion.errorCode() == asio::error::eof || completion.errorCode() == asio::ssl::error::stream_truncated)) co_return 0;
+        if (allowEof && completion.errorCode() == asio::error::eof) co_return 0;
         const auto code = config_.scheme == HttpScheme::kHttps &&
-                completion.errorCode().category() == asio::error::get_ssl_category()
+                (completion.errorCode().category() == asio::error::get_ssl_category() ||
+                    completion.errorCode() == asio::ssl::error::stream_truncated)
             ? HttpClientError::Code::kTlsFailed
             : HttpClientError::Code::kIoError;
         throw HttpClientError(code, completion.errorCode().message());
@@ -411,6 +415,7 @@ Task<std::size_t> HttpClientPool::readSome(Connection& connection, std::span<cha
 
 Task<void> HttpClientPool::ensureConnected(
     Connection& connection,
+    std::size_t index,
     const OperationTimeout& operationTimeout,
     const OperationTimeout& acquireTimeout,
     StopToken stopToken) {
@@ -426,7 +431,24 @@ Task<void> HttpClientPool::ensureConnected(
         ~ConnectLease() { (void)scheduler.release(slot); }
     } connectLease{runtime.connectScheduler, connectSlot};
     if (connection.connected) co_return;
-    while (runtime.sessionTasks != 0 || !runtime.pending.empty()) co_await runtime.stateSignal.wait();
+    connection.abortReason = AbortReason::kNone;
+    auto generation = ++connection.generation;
+    if (generation == 0) generation = ++connection.generation;
+    struct ConnectCancellationGeneration final {
+        Connection& connection;
+        ~ConnectCancellationGeneration() { ++connection.generation; }
+    } cancellationGeneration{connection};
+    auto stopRegistration = stopToken.registerCallback([this, index, generation] {
+        WorkerHandleAccess::deferOrTerminate(worker_, [this, index, generation] {
+            cancelOperation(index, generation, AbortReason::kCancelled);
+        });
+    });
+    if (stopToken.stopRequested()) cancelOperation(index, generation, AbortReason::kCancelled);
+    while (runtime.sessionTasks != 0 || !runtime.pending.empty()) {
+        throwAbort(connection);
+        co_await runtime.stateSignal.wait();
+    }
+    throwAbort(connection);
     runtime.connecting = true;
     struct ConnectGuard final {
         Http2Runtime& runtime;
@@ -440,7 +462,6 @@ Task<void> HttpClientPool::ensureConnected(
     runtime.draining = false;
     runtime.failed = false;
     runtime.terminalError.clear();
-    connection.abortReason = AbortReason::kNone;
     const auto timeout = operationTimeout.constrainedBy(config_.connectTimeout);
     std::array<char, 8> portBytes{};
     const auto [portEnd, ec] = std::to_chars(portBytes.data(), portBytes.data() + portBytes.size(), httpClientPort(config_));
@@ -517,11 +538,11 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, Http
     auto& connection = lease.connection();
     bool discardConnection = true;
     try {
-        co_await ensureConnected(connection, timeout, acquireTimeout, options.stopToken);
+        co_await ensureConnected(connection, index, timeout, acquireTimeout, options.stopToken);
         HttpClientResponse response(responseResource);
         if (connection.protocol == WireProtocol::kHttp2) {
             discardConnection = false;
-            response = co_await executeHttp2(connection, request, timeout, options.stopToken, responseResource);
+            response = co_await executeHttp2(connection, index, request, timeout, options.stopToken, responseResource);
         } else {
             // A negotiated HTTP/1 connection can have several operations that
             // already hold outer HTTP/2-capacity slots. Waiting for this
@@ -572,13 +593,15 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, Http
             connection.abortReason = AbortReason::kNone;
             auto generation = ++connection.generation;
             if (generation == 0) generation = ++connection.generation;
+            struct H1CancellationGeneration final {
+                Connection& connection;
+                ~H1CancellationGeneration() { ++connection.generation; }
+            } cancellationGeneration{connection};
             auto stopRegistration = options.stopToken.registerCallback([this, index, generation] {
                 WorkerHandleAccess::deferOrTerminate(worker_, [this, index, generation] { cancelOperation(index, generation, AbortReason::kCancelled); });
             });
             if (options.stopToken.stopRequested()) cancelOperation(index, generation, AbortReason::kCancelled);
             response = co_await executeHttp1(connection, request, timeout, responseResource);
-            stopRegistration.reset();
-            ++connection.generation;
         }
         retainResponseCookies(request, response);
         --requestsInFlight_;

@@ -311,6 +311,73 @@ int testStopTokenCancellation() {
         });
 }
 
+int testConnectStopTokenCancellation() {
+    OneShotServer server([](asio::ip::tcp::socket&) {
+        std::this_thread::sleep_for(200ms);
+    });
+    auto config = plainConfig(server.port());
+    config.scheme = ruvia::HttpScheme::kHttps;
+    config.verifyCertificate = false;
+    config.connectTimeout = 2s;
+    config.requestTimeout = 2s;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle& worker, CountingResource* resource) -> ruvia::Task<int> {
+            ruvia::detail::StopSource source;
+            ruvia::TaskScope cancellation(worker, resource);
+            cancellation.spawn(requestStopSoon(worker, source));
+            int result = 1;
+            try {
+                auto request = client.newRequest();
+                (void)co_await client.sendRequest(std::move(request), {.stopToken = source.token()});
+            } catch (const ruvia::HttpClientError& error) {
+                result = error.code() == ruvia::HttpClientError::Code::kCancelled ? 0 : 2;
+            }
+            co_await cancellation.join();
+            co_return result;
+        });
+}
+
+int testRegistryRejectsDynamicPoolsAfterClose() {
+    asio::io_context io;
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
+    auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    ruvia::WorkerMemory memory;
+    ruvia::detail::HttpClientRegistry registry(
+        io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>{});
+    auto existing = ruvia::HttpClient::newHttpClient("http://127.0.0.1:1");
+    auto late = ruvia::HttpClient::newHttpClient("http://127.0.0.1:2");
+    auto exercise = [&]() -> ruvia::Task<int> {
+        {
+            auto request = existing->newRequest();
+            auto coldOperation = existing->sendRequest(std::move(request));
+            static_cast<void>(coldOperation);
+        }
+        registry.closeNow();
+        const auto rejected = [](const ruvia::HttpClientPtr& client) {
+            try {
+                auto request = client->newRequest();
+                auto coldOperation = client->sendRequest(std::move(request));
+                static_cast<void>(coldOperation);
+            } catch (const ruvia::HttpClientError& error) {
+                return error.code() == ruvia::HttpClientError::Code::kClosing;
+            }
+            return false;
+        };
+        const bool existingRejected = rejected(existing);
+        const bool lateRejected = rejected(late);
+        co_await registry.join();
+        co_return existingRejected && lateRejected ? 0 : 1;
+    };
+    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
+    registry.bindCurrent();
+    io.run();
+    registry.unbindCurrent();
+    const auto result = future.get();
+    dispatcher->detachContext();
+    return result;
+}
+
 int testCookieCapacity() {
     ruvia::HttpClientConfig config;
     config.host = "127.0.0.1";
@@ -401,12 +468,14 @@ int testLargeCookieMaxAge() {
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 8> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 10> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testWriteTimeout, "HTTP/1 write timeout"},
             {&testNegotiatedHttp1AcquireTimeout, "negotiated HTTP/1 acquire timeout"},
             {&testStopTokenCancellation, "stop-token cancellation"},
+            {&testConnectStopTokenCancellation, "connect stop-token cancellation"},
+            {&testRegistryRejectsDynamicPoolsAfterClose, "registry close gate"},
             {&testCookieCapacity, "cookie capacity"},
             {&testAutomaticCookieCapacity, "automatic cookie capacity"},
             {&testLargeCookieMaxAge, "large cookie Max-Age"},

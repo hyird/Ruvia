@@ -45,6 +45,7 @@ HttpClientRegistry::HttpClientRegistry(asio::io_context& ioContext, const Worker
 
 HttpClientPool& HttpClientRegistry::getOrCreate(std::uint64_t dynamicId, const HttpClientConfig& publicConfig) {
     if (dynamicId == 0) throw std::invalid_argument("dynamic HTTP client id must not be zero");
+    if (closing_) throw HttpClientError(HttpClientError::Code::kClosing, "HTTP client registry is closing");
     const auto existing = std::ranges::find_if(pools_, [dynamicId](const Entry& entry) { return entry.dynamicId == dynamicId; });
     if (existing != pools_.end()) return *existing->pool;
     HttpClientConfigStorage config(publicConfig, resource_);
@@ -74,11 +75,14 @@ HttpClientRegistry* HttpClientRegistry::current() noexcept { return currentHttpC
 HttpClientRegistry::~HttpClientRegistry() = default;
 
 void HttpClientRegistry::closeNow() noexcept {
+    if (closing_) return;
+    closing_ = true;
     for (auto& entry : pools_) entry.pool->closeNow();
 }
 
 Task<void> HttpClientRegistry::join() {
-    for (auto& entry : pools_) co_await entry.pool->join();
+    closeNow();
+    for (std::size_t i = 0; i < pools_.size(); ++i) co_await pools_[i].pool->join();
 }
 
 HttpClient HttpClientRegistry::get(std::pmr::memory_resource* resource, ScopedOperationScope& scope) const {

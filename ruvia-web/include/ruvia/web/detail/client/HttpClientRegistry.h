@@ -166,6 +166,7 @@ private:
     void throwAbort(const Connection& connection) const;
     [[nodiscard]] Task<void> ensureConnected(
         Connection& connection,
+        std::size_t index,
         const OperationTimeout& timeout,
         const OperationTimeout& acquireTimeout,
         StopToken stopToken);
@@ -173,7 +174,7 @@ private:
     [[nodiscard]] Task<void> runHttp2Reader(Connection& connection, std::uint64_t generation);
     [[nodiscard]] Task<void> runHttp2Writer(Connection& connection, std::uint64_t generation);
     [[nodiscard]] Task<HttpClientResponse> executeHttp1(Connection& connection, const HttpClientRequest& request, const OperationTimeout& timeout, std::pmr::memory_resource* responseResource);
-    [[nodiscard]] Task<HttpClientResponse> executeHttp2(Connection& connection, const HttpClientRequest& request, const OperationTimeout& timeout, StopToken stopToken, std::pmr::memory_resource* responseResource);
+    [[nodiscard]] Task<HttpClientResponse> executeHttp2(Connection& connection, std::size_t index, const HttpClientRequest& request, const OperationTimeout& timeout, StopToken stopToken, std::pmr::memory_resource* responseResource);
     [[nodiscard]] Task<void> write(Connection& connection, std::string_view bytes, const OperationTimeout& timeout);
     [[nodiscard]] Task<std::size_t> readSome(Connection& connection, std::span<char> bytes, const OperationTimeout& timeout, bool allowEof = false);
     void appendAutomaticHeaders(const HttpClientRequest& request, std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader);
@@ -245,6 +246,7 @@ private:
     std::pmr::vector<Entry> pools_;
     std::pmr::vector<std::size_t> aliasIndex_;
     std::optional<std::size_t> defaultPoolIndex_;
+    bool closing_{false};
 };
 
 }  // namespace ruvia::detail

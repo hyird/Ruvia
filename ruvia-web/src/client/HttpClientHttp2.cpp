@@ -353,7 +353,7 @@ Task<void> HttpClientPool::waitForHttp2SessionStop(Connection& connection) {
     }
 }
 
-Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, const HttpClientRequest& request, const OperationTimeout& timeout, StopToken stopToken, std::pmr::memory_resource* responseResource) {
+Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, std::size_t index, const HttpClientRequest& request, const OperationTimeout& timeout, StopToken stopToken, std::pmr::memory_resource* responseResource) {
     std::pmr::vector<HttpHeaderView> headers(resource_);
     auto source = HttpClientRequestAccess::view(request, headers);
     std::pmr::string cookieHeader(resource_);
@@ -374,7 +374,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, co
                 runtime.writeSignal.notify();
             }
             co_await waitForHttp2SessionStop(connection);
-            co_await ensureConnected(connection, timeout, timeout, stopToken);
+            co_await ensureConnected(connection, index, timeout, timeout, stopToken);
             if (connection.protocol != WireProtocol::kHttp2) {
                 throw HttpClientError(HttpClientError::Code::kProtocolUnavailable, "upstream no longer negotiated HTTP/2");
             }
