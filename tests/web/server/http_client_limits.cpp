@@ -505,7 +505,7 @@ int testAutomaticCookieCapacity() {
         });
 }
 
-int testCookieIdentityCanonicalization() {
+int testCookieHostOnlyIdentity() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
         const auto head = readHead(socket, error);
@@ -516,10 +516,11 @@ int testCookieIdentityCanonicalization() {
                 "Set-Cookie: sid=domain; Domain=LOCALHOST; Path=/\r\n");
             return;
         }
-        const auto oneCookie = head.find("cookie: sid=domain") != std::string::npos &&
-            head.find("sid=host-only") == std::string::npos &&
-            head.find("sid=domain; sid=domain") == std::string::npos;
-        writeResponse(socket, oneCookie ? "canonical" : "duplicate");
+        const auto hostOnly = head.find("sid=host-only");
+        const auto domain = head.find("sid=domain");
+        const bool distinct = hostOnly != std::string::npos &&
+            domain != std::string::npos && hostOnly < domain;
+        writeResponse(socket, distinct ? "distinct" : "collapsed");
     });
     auto config = plainConfig(server.port());
     config.host = "localhost";
@@ -532,7 +533,7 @@ int testCookieIdentityCanonicalization() {
             if (firstResponse.body() != "seeded") co_return 1;
             auto second = client.newRequest();
             auto secondResponse = co_await client.sendRequest(std::move(second));
-            co_return secondResponse.body() == "canonical" ? 0 : 2;
+            co_return secondResponse.body() == "distinct" ? 0 : 2;
         });
 }
 
@@ -596,11 +597,129 @@ int testLargeCookieMaxAge() {
         });
 }
 
+int testNamelessResponseCookie() {
+    TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
+        std::error_code error;
+        const auto head = readHead(socket, error);
+        if (error) return;
+        if (exchange == 0) {
+            writeResponse(socket, "seeded", "Set-Cookie: nameless-value; Path=/\r\n");
+            return;
+        }
+        writeResponse(socket,
+            head.find("cookie: nameless-value\r\n") != std::string::npos
+                ? "serialized"
+                : "missing");
+    });
+    auto config = plainConfig(server.port());
+    config.cookiesEnabled = true;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            auto first = client.newRequest();
+            auto firstResponse = co_await client.sendRequest(std::move(first));
+            if (firstResponse.body() != "seeded") co_return 1;
+            auto second = client.newRequest();
+            auto secondResponse = co_await client.sendRequest(std::move(second));
+            co_return secondResponse.body() == "serialized" ? 0 : 2;
+        });
+}
+
+int testFarFutureCookieExpires() {
+    TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
+        std::error_code error;
+        const auto head = readHead(socket, error);
+        if (error) return;
+        if (exchange == 0) {
+            writeResponse(socket, "seeded",
+                "Set-Cookie: future=yes; Path=/; Expires=Fri, 31 Dec 9999 23:59:59 GMT\r\n");
+            return;
+        }
+        writeResponse(socket,
+            head.find("cookie: future=yes") != std::string::npos
+                ? "retained"
+                : "expired");
+    });
+    auto config = plainConfig(server.port());
+    config.cookiesEnabled = true;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            auto first = client.newRequest();
+            auto firstResponse = co_await client.sendRequest(std::move(first));
+            if (firstResponse.body() != "seeded") co_return 1;
+            auto second = client.newRequest();
+            auto secondResponse = co_await client.sendRequest(std::move(second));
+            co_return secondResponse.body() == "retained" ? 0 : 2;
+        });
+}
+
+int testCookieStorageSecurityConstraints() {
+    TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
+        std::error_code error;
+        const auto head = readHead(socket, error);
+        if (error) return;
+        if (exchange == 0) {
+            writeResponse(socket, "seeded",
+                "Set-Cookie: __SeCuRe-named=bad; Path=/\r\n"
+                "Set-Cookie: __SeCuRe-nameless; Path=/\r\n"
+                "Set-Cookie: same_site=bad; Path=/; SameSite=None\r\n");
+            return;
+        }
+        const bool rejected =
+            head.find("__SeCuRe-named=bad") == std::string::npos &&
+            head.find("__SeCuRe-nameless") == std::string::npos &&
+            head.find("same_site=bad") == std::string::npos;
+        writeResponse(socket, rejected ? "rejected" : "accepted");
+    });
+    auto config = plainConfig(server.port());
+    config.cookiesEnabled = true;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            auto first = client.newRequest();
+            auto firstResponse = co_await client.sendRequest(std::move(first));
+            if (firstResponse.body() != "seeded") co_return 1;
+            auto second = client.newRequest();
+            auto secondResponse = co_await client.sendRequest(std::move(second));
+            co_return secondResponse.body() == "rejected" ? 0 : 2;
+        });
+}
+
+int testIpCookieDomainSuffixRejection() {
+    TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
+        std::error_code error;
+        const auto head = readHead(socket, error);
+        if (error) return;
+        if (exchange == 0) {
+            writeResponse(socket, "seeded",
+                "Set-Cookie: suffix=bad; Domain=0.0.1; Path=/\r\n"
+                "Set-Cookie: exact=good; Domain=127.0.0.1; Path=/\r\n");
+            return;
+        }
+        const bool correct = head.find("suffix=bad") == std::string::npos &&
+            head.find("exact=good") != std::string::npos;
+        writeResponse(socket, correct ? "restricted" : "leaked");
+    });
+    auto config = plainConfig(server.port());
+    config.cookiesEnabled = true;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            auto first = client.newRequest();
+            auto firstResponse = co_await client.sendRequest(std::move(first));
+            if (firstResponse.body() != "seeded") co_return 1;
+            auto second = client.newRequest();
+            auto secondResponse = co_await client.sendRequest(std::move(second));
+            co_return secondResponse.body() == "restricted" ? 0 : 2;
+        });
+}
+
 }  // namespace
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 14> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 18> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testClosingInformationalResponse, "closing informational response"},
@@ -612,9 +731,13 @@ int main() {
             {&testRegistryRejectsDynamicPoolsAfterClose, "registry close gate"},
             {&testCookieCapacity, "cookie capacity"},
             {&testAutomaticCookieCapacity, "automatic cookie capacity"},
-            {&testCookieIdentityCanonicalization, "cookie identity canonicalization"},
+            {&testCookieHostOnlyIdentity, "cookie host-only identity"},
             {&testCookiePathOrdering, "cookie path ordering"},
             {&testLargeCookieMaxAge, "large cookie Max-Age"},
+            {&testNamelessResponseCookie, "nameless response cookie"},
+            {&testFarFutureCookieExpires, "far-future cookie Expires"},
+            {&testCookieStorageSecurityConstraints, "cookie storage security constraints"},
+            {&testIpCookieDomainSuffixRejection, "IP cookie domain suffix rejection"},
         }};
         for (const auto& [check, name] : checks) {
             if (const auto result = check(); result != 0) {

@@ -142,6 +142,7 @@ private:
         std::pmr::string domain;
         std::optional<std::chrono::system_clock::time_point> expires;
         bool secure{false};
+        bool hostOnly{true};
         bool persistent{true};
     };
 

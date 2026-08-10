@@ -47,6 +47,7 @@ bool headerNameEquals(std::string_view left, std::string_view right) noexcept {
 bool cookieDomainMatches(std::string_view host, std::string_view domain) noexcept {
     if (domain.empty()) return true;
     if (httpAsciiEqualsIgnoreCase(host, domain)) return true;
+    if (isIpAddress(host)) return false;
     return host.size() > domain.size() && host[host.size() - domain.size() - 1] == '.' &&
         httpAsciiEqualsIgnoreCase(host.substr(host.size() - domain.size()), domain);
 }
@@ -256,8 +257,10 @@ void HttpClientPool::appendAutomaticHeaders(const HttpClientRequest& request, st
         if (cookie.secure && config_.scheme != HttpScheme::kHttps) continue;
         if (!cookieDomainMatches(config_.host, cookie.domain) || !cookiePathMatches(path, cookie.path)) continue;
         if (!cookieHeader.empty()) cookieHeader.append("; ");
-        cookieHeader.append(cookie.name);
-        cookieHeader.push_back('=');
+        if (!cookie.name.empty()) {
+            cookieHeader.append(cookie.name);
+            cookieHeader.push_back('=');
+        }
         cookieHeader.append(cookie.value);
     }
     if (!cookieHeader.empty()) headers.emplace_back("cookie", cookieHeader);
@@ -273,25 +276,39 @@ void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, con
             !cookieDomainMatches(config_.host, parsed->domain)) continue;
 
         const auto path = parsed->path.empty() || parsed->path.front() != '/' ? defaultCookiePath(request.path()) : parsed->path;
-        if ((parsed->name.starts_with("__Secure-") && (!parsed->secure || config_.scheme != HttpScheme::kHttps)) ||
-            (parsed->name.starts_with("__Host-") && (!parsed->secure || config_.scheme != HttpScheme::kHttps || path != "/" || !parsed->domain.empty()))) continue;
+        const bool securePrefixed = cookieNameStartsWithIgnoreCase(parsed->name, "__Secure-");
+        const bool hostPrefixed = cookieNameStartsWithIgnoreCase(parsed->name, "__Host-");
+        const bool namelessPrefix = parsed->name.empty() &&
+            (cookieNameStartsWithIgnoreCase(parsed->value, "__Secure-") ||
+                cookieNameStartsWithIgnoreCase(parsed->value, "__Host-"));
+        if (namelessPrefix || (parsed->sameSiteNone && !parsed->secure) ||
+            (securePrefixed && (!parsed->secure || config_.scheme != HttpScheme::kHttps)) ||
+            (hostPrefixed && (!parsed->secure || config_.scheme != HttpScheme::kHttps ||
+                !parsed->hasPathAttribute || path != "/" || !parsed->domain.empty()))) continue;
         std::optional<std::chrono::system_clock::time_point> expires;
         bool remove = false;
         if (parsed->maxAgeSeconds) {
             remove = *parsed->maxAgeSeconds <= 0;
             if (!remove) expires = cookieExpiration(now, *parsed->maxAgeSeconds);
         } else if (parsed->expires) {
-            expires = std::chrono::system_clock::from_time_t(*parsed->expires);
-            remove = *expires <= now;
+            remove = *parsed->expires <= std::chrono::system_clock::to_time_t(now);
+            if (!remove) {
+                const auto expirationLimit = std::chrono::system_clock::to_time_t(
+                    cookieExpiration(now, detail::kMaxCookieAgeSeconds));
+                expires = std::chrono::system_clock::from_time_t(
+                    std::min(*parsed->expires, expirationLimit));
+            }
         }
         const auto parsedIdentityDomain = parsed->domain.empty()
             ? std::string_view(config_.host)
             : parsed->domain;
+        const bool parsedHostOnly = parsed->domain.empty();
         const auto match = std::ranges::find_if(cookies_, [&](const StoredCookie& cookie) {
             const auto cookieIdentityDomain = cookie.domain.empty()
                 ? std::string_view(config_.host)
                 : std::string_view(cookie.domain);
-            return !cookie.persistent && cookie.name == parsed->name && cookie.path == path &&
+            return !cookie.persistent && cookie.name == parsed->name &&
+                cookie.hostOnly == parsedHostOnly && cookie.path == path &&
                 httpAsciiEqualsIgnoreCase(cookieIdentityDomain, parsedIdentityDomain);
         });
         if (remove) {
@@ -318,12 +335,14 @@ void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, con
             cookie.domain.assign(parsed->domain);
             cookie.expires = expires;
             cookie.secure = parsed->secure;
+            cookie.hostOnly = parsedHostOnly;
             cookie.persistent = false;
         } else {
             match->value.assign(parsed->value);
             match->domain.assign(parsed->domain);
             match->expires = expires;
             match->secure = parsed->secure;
+            match->hostOnly = parsedHostOnly;
         }
         cookieBytes_ = cookieBytes_ - replacedBytes + replacementBytes;
     }
