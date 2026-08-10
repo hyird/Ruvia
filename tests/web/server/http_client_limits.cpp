@@ -249,7 +249,7 @@ int testTransferCodedResponse() {
     OneShotServer server([encoded](asio::ip::tcp::socket& socket) {
         std::error_code error;
         const auto request = readHead(socket, error);
-        if (error || request.find("TE: gzip") == std::string::npos) return;
+        if (error || request.find("te: gzip") == std::string::npos) return;
         std::array<char, 32> sizeBytes{};
         const auto [sizeEnd, sizeError] = std::to_chars(
             sizeBytes.data(), sizeBytes.data() + sizeBytes.size(), encoded.size(), 16);

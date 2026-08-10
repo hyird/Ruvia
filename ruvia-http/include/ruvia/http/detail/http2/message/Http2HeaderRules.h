@@ -44,7 +44,10 @@ namespace ruvia::detail {
     if (http2IsForbiddenConnectionHeader(name)) {
         return false;
     }
-    return name != "te" || value == "trailers";
+    // `trailers` is an unprefixed ABNF literal in RFC 9110 Section 10.1.4,
+    // hence it is case-insensitive (RFC 7405 Section 2.1). HTTP/2 restricts TE
+    // to that sole value, but does not make the field-value keyword lowercase.
+    return name != "te" || httpAsciiEqualsIgnoreCase(value, "trailers");
 }
 
 // Decoded HTTP/2 field names are already required to be lowercase. The TE

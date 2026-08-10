@@ -350,6 +350,15 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
             auto dynamicResponse = co_await std::move(dynamicOperation);
             if (dynamicResponse.body() != "dynamic" || dynamicResponse.protocolVersion() != (protocol == ruvia::HttpClientProtocol::kHttp2Only ? ruvia::HttpProtocolVersion::kHttp2 : ruvia::HttpProtocolVersion::kHttp11)) result = 2;
         }
+        if (result == 0) {
+            auto mixedCaseRequest = dynamicClient->newRequest();
+            mixedCaseRequest.setPath("/header").addHeader("X-Mixed-Case", "preserved");
+            if (protocol == ruvia::HttpClientProtocol::kHttp2Only) {
+                mixedCaseRequest.addHeader("TE", "Trailers");
+            }
+            auto mixedCaseResponse = co_await dynamicClient->sendRequest(std::move(mixedCaseRequest));
+            if (mixedCaseResponse.body() != "preserved") result = 5;
+        }
         if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
             std::array<int, 16> results{};
             ruvia::TaskScope batch(worker, memory.resource());
@@ -698,10 +707,14 @@ int main() {
         (void)co_await ruvia::sleepFor(context.worker(), 50ms);
         co_return context.text(body);
     };
+    auto header = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
+        co_return context.text(context.req().header("x-mixed-case").value_or("missing"));
+    };
     routerImpl.registerRoute(ruvia::HttpKnownMethod::kPost, std::pmr::string("/echo", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(echo), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
     routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/cookie", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(cookie), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
     routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/slow", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(slow), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
     routerImpl.registerRoute(ruvia::HttpKnownMethod::kPost, std::pmr::string("/multiplex", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(multiplex), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/header", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(header), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
     routerImpl.finalize();
 
     ruvia::detail::HttpServer plain(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable());

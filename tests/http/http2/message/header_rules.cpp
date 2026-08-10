@@ -59,7 +59,10 @@ RUVIA_TEST(http2_valid_regular_header) {
     RUVIA_CHECK(!http2IsValidRegularHeader("transfer-encoding", "chunked"));
     // TE may carry only "trailers".
     RUVIA_CHECK(http2IsValidRegularHeader("te", "trailers"));
+    RUVIA_CHECK(http2IsValidRegularHeader("te", "Trailers"));
+    RUVIA_CHECK(http2IsValidRegularHeader("te", "TRAILERS"));
     RUVIA_CHECK(!http2IsValidRegularHeader("te", "gzip"));
+    RUVIA_CHECK(!http2IsValidRegularHeader("te", "trailers, gzip"));
     // That exception is request-only; responses cannot carry TE at all.
     RUVIA_CHECK(!http2IsValidDecodedResponseHeader("te", "trailers"));
     RUVIA_CHECK(http2IsValidDecodedResponseHeader("content-type", "text/plain"));

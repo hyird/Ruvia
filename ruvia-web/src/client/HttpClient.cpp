@@ -164,7 +164,15 @@ HttpClientRequest& HttpClientRequest::setPath(std::string_view path) {
 }
 
 HttpClientRequest& HttpClientRequest::addHeader(std::string_view name, std::string_view value) {
-    headers_.emplace_back(name, value, headers_.get_allocator().resource());
+    auto& header = headers_.emplace_back(name, value, headers_.get_allocator().resource());
+    // HTTP field names are case-insensitive, but HTTP/2 requires their wire form
+    // to be lowercase (RFC 9113 Section 8.2). Normalize once at the owning public
+    // request boundary so the same request remains valid after ALPN selects either
+    // HTTP/1.1 or HTTP/2; invalid non-token bytes are deliberately left for the
+    // shared protocol validators to reject at submission time.
+    for (auto& ch : header.name) {
+        ch = static_cast<char>(detail::httpAsciiToLower(static_cast<unsigned char>(ch)));
+    }
     return *this;
 }
 
