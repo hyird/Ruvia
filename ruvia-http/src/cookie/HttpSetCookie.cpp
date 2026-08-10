@@ -1,6 +1,7 @@
 #include "ruvia/http/HttpSetCookie.h"
 
 #include <charconv>
+#include <limits>
 
 #include "ruvia/http/HttpCache.h"
 #include "ruvia/http/HttpHeader.h"
@@ -22,6 +23,29 @@ std::pair<std::string_view, std::string_view> splitAttribute(std::string_view va
     return {trimOws(value.substr(0, equals)), trimOws(value.substr(equals + 1))};
 }
 
+std::optional<std::int64_t> parseMaxAgeSeconds(std::string_view value) noexcept {
+    if (value.empty()) return std::nullopt;
+    const bool negative = value.front() == '-';
+    const auto digitOffset = negative ? std::size_t{1} : std::size_t{0};
+    if (digitOffset == value.size()) return std::nullopt;
+    for (const char byte : value.substr(digitOffset)) {
+        if (byte < '0' || byte > '9') return std::nullopt;
+    }
+
+    std::int64_t seconds = 0;
+    const auto [parsed, error] = std::from_chars(
+        value.data(), value.data() + value.size(), seconds);
+    if (error == std::errc::result_out_of_range) {
+        return negative
+            ? std::numeric_limits<std::int64_t>::min()
+            : detail::kMaxCookieAgeSeconds;
+    }
+    if (error != std::errc{} || parsed != value.data() + value.size()) return std::nullopt;
+    return seconds > detail::kMaxCookieAgeSeconds
+        ? detail::kMaxCookieAgeSeconds
+        : seconds;
+}
+
 }  // namespace
 
 std::optional<HttpSetCookieView> parseSetCookie(std::string_view value) noexcept {
@@ -29,12 +53,13 @@ std::optional<HttpSetCookieView> parseSetCookie(std::string_view value) noexcept
     const auto cookiePair = value.substr(0, firstEnd);
     if (cookiePair.find('=') == std::string_view::npos) return std::nullopt;
     auto [name, cookieValue] = splitAttribute(cookiePair);
+    auto cookieValueContent = cookieValue;
     if (cookieValue.size() >= 2 && cookieValue.front() == '"' && cookieValue.back() == '"') {
-        cookieValue = cookieValue.substr(1, cookieValue.size() - 2);
+        cookieValueContent = cookieValue.substr(1, cookieValue.size() - 2);
     } else if ((!cookieValue.empty() && cookieValue.front() == '"') || (!cookieValue.empty() && cookieValue.back() == '"')) {
         return std::nullopt;
     }
-    if (name.empty() || !isValidHttpHeaderName(name) || !detail::isValidCookieValue(cookieValue)) return std::nullopt;
+    if (name.empty() || !isValidHttpHeaderName(name) || !detail::isValidCookieValue(cookieValueContent)) return std::nullopt;
 
     HttpSetCookieView result{
         .name = name,
@@ -54,14 +79,16 @@ std::optional<HttpSetCookieView> parseSetCookie(std::string_view value) noexcept
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "Domain")) {
             auto domain = argument;
             if (!domain.empty() && domain.front() == '.') domain.remove_prefix(1);
-            if (domain.empty() || !detail::isValidCookieDomain(domain)) return std::nullopt;
+            if (!domain.empty() && !detail::isValidCookieDomain(domain)) return std::nullopt;
             result.domain = domain;
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "Expires")) {
-            result.expires = parseHttpDate(argument);
+            if (const auto expires = parseHttpDate(argument)) {
+                result.expires = *expires;
+            }
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "Max-Age")) {
-            std::int64_t seconds = 0;
-            const auto [parsed, error] = std::from_chars(argument.data(), argument.data() + argument.size(), seconds);
-            if (error == std::errc{} && parsed == argument.data() + argument.size()) result.maxAgeSeconds = seconds;
+            if (const auto seconds = parseMaxAgeSeconds(argument)) {
+                result.maxAgeSeconds = *seconds;
+            }
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "Secure")) {
             result.secure = true;
         }
