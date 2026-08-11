@@ -74,8 +74,9 @@ public:
     ScopedOperation<void> writeOwned(std::pmr::string chunk);
 
     /// Suspends the stream producer. The result is kElapsed for a normal
-    /// delay, or kWorkerStopping when the owning worker is shutting down.
-    /// HTTP/2 peer termination remains reported as its transport error.
+    /// delay, or kStopRequested when the owning worker is shutting down or the
+    /// request's stop token trips. HTTP/2 peer termination remains reported as
+    /// its transport error.
     ScopedOperation<TimerSleepResult> sleep(std::chrono::milliseconds duration);
 
     /// Whether the response stream can no longer be delivered. The signal is

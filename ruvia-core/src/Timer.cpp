@@ -60,12 +60,12 @@ public:
     // registration pointer and does nothing; one that lands after finds it set,
     // because the deferred cancel runs on this worker and therefore after
     // await_suspend has returned to the loop.
-    StoppableSleepAwaiter(const WorkerHandle& worker, std::chrono::steady_clock::duration duration, const StopToken& stopToken)
+    StoppableSleepAwaiter(const WorkerHandle& worker, std::chrono::steady_clock::duration duration, StopToken stopToken)
         : worker_(&worker),
           duration_(duration),
-          stopToken_(&stopToken),
+          stopToken_(std::move(stopToken)),
           cancellation_(std::make_shared<SleepCancellation>()),
-          stopRegistration_(stopToken.registerCallback([worker = &worker, cancellation = cancellation_]() noexcept {
+          stopRegistration_(stopToken_.registerCallback([worker = &worker, cancellation = cancellation_]() noexcept {
               detail::WorkerHandleAccess::deferOrTerminate(*worker, [cancellation] {
                   if (cancellation->registration != nullptr) {
                       cancellation->registration->cancel();
@@ -74,7 +74,7 @@ public:
           })) {}
 
     [[nodiscard]] bool await_ready() const noexcept {
-        return duration_ <= std::chrono::steady_clock::duration::zero() || stopToken_->stopRequested();
+        return duration_ <= std::chrono::steady_clock::duration::zero() || stopToken_.stopRequested();
     }
 
     bool await_suspend(std::coroutine_handle<> continuation) {
@@ -91,16 +91,16 @@ public:
     }
 
     TimerSleepResult await_resume() const noexcept {
-        if (duration_ <= std::chrono::steady_clock::duration::zero() && !stopToken_->stopRequested()) {
+        if (duration_ <= std::chrono::steady_clock::duration::zero() && !stopToken_.stopRequested()) {
             return TimerSleepResult::kElapsed;
         }
-        return outcome_ == detail::WorkerTimerOutcome::kExpired && !stopToken_->stopRequested() ? TimerSleepResult::kElapsed : TimerSleepResult::kStopRequested;
+        return outcome_ == detail::WorkerTimerOutcome::kExpired && !stopToken_.stopRequested() ? TimerSleepResult::kElapsed : TimerSleepResult::kStopRequested;
     }
 
 private:
     const WorkerHandle* worker_;
     std::chrono::steady_clock::duration duration_;
-    const StopToken* stopToken_;
+    StopToken stopToken_;
     std::coroutine_handle<> continuation_{};
     detail::WorkerTimerOutcome outcome_{detail::WorkerTimerOutcome::kExpired};
     detail::WorkerTimerRegistration registration_;
@@ -119,14 +119,14 @@ Task<TimerSleepResult> sleepFor(const WorkerHandle& worker, std::chrono::steady_
     co_return co_await SleepAwaiter(worker, duration);
 }
 
-Task<TimerSleepResult> sleepFor(const WorkerHandle& worker, std::chrono::steady_clock::duration duration, const StopToken& stopToken) {
+Task<TimerSleepResult> sleepFor(const WorkerHandle& worker, std::chrono::steady_clock::duration duration, StopToken stopToken) {
     if (!worker.isCurrent()) {
         throw std::logic_error("sleepFor must run on its bound worker");
     }
     if (!stopToken.stoppable()) {
         co_return co_await SleepAwaiter(worker, duration);
     }
-    co_return co_await StoppableSleepAwaiter(worker, duration, stopToken);
+    co_return co_await StoppableSleepAwaiter(worker, duration, std::move(stopToken));
 }
 
 }  // namespace ruvia

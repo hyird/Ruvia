@@ -2,9 +2,11 @@
 
 #include <chrono>
 #include <coroutine>
+#include <memory>
 #include <system_error>
 #include <utility>
 
+#include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
@@ -113,6 +115,10 @@ private:
     Http2SansIoTerminationObserver* head_{nullptr};
 };
 
+struct Http2SansIoSleepCancellation final {
+    WorkerTimerRegistration* timer{nullptr};
+};
+
 // A response-stream sleep races its worker timer against connection termination.
 // Cancelling the timer is the wakeup path, so the timer callback remains the sole
 // continuation owner and a terminal event cannot double-resume the coroutine.
@@ -124,8 +130,23 @@ public:
           duration_(duration),
           observer_(this, &Http2SansIoSleepAwaiter::notifyTermination) {}
 
+    Http2SansIoSleepAwaiter(const WorkerHandle& worker, Http2SansIoTermination& termination, std::chrono::steady_clock::duration duration, StopToken stopToken)
+        : worker_(worker),
+          termination_(termination),
+          duration_(duration),
+          stopToken_(std::move(stopToken)),
+          cancellation_(std::make_shared<Http2SansIoSleepCancellation>()),
+          stopRegistration_(stopToken_.registerCallback([worker = &worker, cancellation = cancellation_]() noexcept {
+              WorkerHandleAccess::deferOrTerminate(*worker, [cancellation] {
+                  if (cancellation->timer != nullptr) {
+                      cancellation->timer->cancel();
+                  }
+              });
+          })),
+          observer_(this, &Http2SansIoSleepAwaiter::notifyTermination) {}
+
     [[nodiscard]] bool await_ready() const noexcept {
-        return duration_ <= std::chrono::steady_clock::duration::zero() || termination_.terminated();
+        return duration_ <= std::chrono::steady_clock::duration::zero() || termination_.terminated() || stopToken_.stopRequested();
     }
 
     bool await_suspend(std::coroutine_handle<> continuation) {
@@ -133,13 +154,22 @@ public:
         if (!termination_.attach(observer_)) {
             return false;
         }
+        if (cancellation_ != nullptr) {
+            cancellation_->timer = &timer_;
+        }
         try {
             WorkerHandleAccess::scheduleTimer(worker_, timer_, workerTimerDeadlineAfter(duration_), [this](WorkerTimerOutcome outcome) noexcept {
                 timerOutcome_ = outcome;
+                if (cancellation_ != nullptr) {
+                    cancellation_->timer = nullptr;
+                }
                 termination_.detach(observer_);
                 continuation_.resume();
             });
         } catch (...) {
+            if (cancellation_ != nullptr) {
+                cancellation_->timer = nullptr;
+            }
             termination_.detach(observer_);
             throw;
         }
@@ -153,7 +183,7 @@ public:
         if (timerOutcome_ == WorkerTimerOutcome::kCancelled) {
             return TimerSleepResult::kStopRequested;
         }
-        return TimerSleepResult::kElapsed;
+        return stopToken_.stopRequested() ? TimerSleepResult::kStopRequested : TimerSleepResult::kElapsed;
     }
 
 private:
@@ -167,9 +197,12 @@ private:
     const WorkerHandle& worker_;
     Http2SansIoTermination& termination_;
     std::chrono::steady_clock::duration duration_;
+    StopToken stopToken_;
     std::coroutine_handle<> continuation_{};
     WorkerTimerRegistration timer_;
     WorkerTimerOutcome timerOutcome_{WorkerTimerOutcome::kExpired};
+    std::shared_ptr<Http2SansIoSleepCancellation> cancellation_;
+    StopRegistration stopRegistration_;
     Http2SansIoTerminationObserver observer_;
 };
 

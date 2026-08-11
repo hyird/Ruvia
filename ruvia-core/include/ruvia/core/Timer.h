@@ -40,7 +40,7 @@ Task<TimerSleepResult> sleepFor(WorkerHandle&&, std::chrono::steady_clock::durat
 // a worker timer is worker-owned state, so cancellation is deferred onto the
 // worker and validated there -- a stop that arrives after the sleep already
 // finished is a no-op rather than a use-after-free.
-[[nodiscard]] Task<TimerSleepResult> sleepFor(const WorkerHandle& worker, std::chrono::steady_clock::duration duration, const StopToken& stopToken);
-Task<TimerSleepResult> sleepFor(WorkerHandle&&, std::chrono::steady_clock::duration, const StopToken&) = delete;
+[[nodiscard]] Task<TimerSleepResult> sleepFor(const WorkerHandle& worker, std::chrono::steady_clock::duration duration, StopToken stopToken);
+Task<TimerSleepResult> sleepFor(WorkerHandle&&, std::chrono::steady_clock::duration, StopToken) = delete;
 
 }  // namespace ruvia
