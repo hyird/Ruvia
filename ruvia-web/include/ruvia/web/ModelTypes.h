@@ -49,6 +49,10 @@ struct JsonBody<T, void> : std::true_type {
         return T::ruviaParseJsonBodyOwned(body, resource);
     }
 
+    static std::optional<T> parsePartial(std::string_view body, std::pmr::memory_resource* resource) {
+        return T::ruviaParseJsonBodyPartial(body, resource);
+    }
+
     static std::optional<T> parseDepth(std::string_view body, std::pmr::memory_resource* resource, std::size_t depth, detail::ModelStringStorage stringStorage = detail::ModelStringStorage::kBorrowed) {
         if constexpr (requires { T::ruviaParseJsonBodyDepth(body, resource, depth, stringStorage); }) {
             return T::ruviaParseJsonBodyDepth(body, resource, depth, stringStorage);
@@ -57,6 +61,10 @@ struct JsonBody<T, void> : std::true_type {
             (void)stringStorage;
             return T::ruviaParseJsonBody(body, resource);
         }
+    }
+
+    static std::optional<T> parseDepthPartial(std::string_view body, std::pmr::memory_resource* resource, std::size_t depth, detail::ModelStringStorage stringStorage = detail::ModelStringStorage::kBorrowed) {
+        return T::ruviaParseJsonBodyDepthPartial(body, resource, depth, stringStorage);
     }
 };
 
@@ -70,6 +78,10 @@ struct FormBody<T, void> : std::true_type {
         return T::ruviaParseFormBody(body, resource);
     }
 
+    static std::optional<T> parsePartial(std::string_view body, std::pmr::memory_resource* resource) {
+        return T::ruviaParseFormBodyPartial(body, resource);
+    }
+
     static std::optional<T> parseFields(const RequestNameValueList& fields, std::pmr::memory_resource* resource) {
         if constexpr (requires { T::ruviaParseFormFields(fields, resource); }) {
             return T::ruviaParseFormFields(fields, resource);
@@ -78,6 +90,9 @@ struct FormBody<T, void> : std::true_type {
             (void)resource;
             return std::nullopt;
         }
+    }
+    static std::optional<T> parseFieldsPartial(const RequestNameValueList& fields, std::pmr::memory_resource* resource) {
+        return T::ruviaParseFormFieldsPartial(fields, resource);
     }
 };
 

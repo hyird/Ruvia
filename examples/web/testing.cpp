@@ -12,8 +12,8 @@
 #include "ruvia/web/Testing.h"
 
 struct NoteRequest final {
-    RUVIA_OPTIONAL_FIELD(text, ruvia::String);
-    RUVIA_MODEL(NoteRequest, text);
+    RUVIA_MODEL(NoteRequest,
+        RUVIA_OPTIONAL_FIELD(text, ruvia::String));
 };
 
 namespace {

@@ -35,10 +35,10 @@ public:
 };
 
 struct UserResponse final {
-    RUVIA_OPTIONAL_FIELD(id, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(name, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(active, ruvia::Bool);
-    RUVIA_MODEL(UserResponse, id, name, active);
+    RUVIA_MODEL(UserResponse,
+        RUVIA_OPTIONAL_FIELD(id, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(active, ruvia::Bool));
 };
 
 ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(ruvia::Context& c, ruvia::HttpErrorInfo error) {

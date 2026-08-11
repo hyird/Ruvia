@@ -29,7 +29,7 @@ struct ModelJsonAccess final {
 template <typename ValueT>
 [[nodiscard]] std::size_t jsonSizeHintValue(const ValueT& value) {
     using T = std::remove_cvref_t<ValueT>;
-    if constexpr (isWrappedModelScalar<T>) {
+    if constexpr (isRuviaScalar<T>) {
         return jsonSizeHintValue(value.value);
     } else if constexpr (std::is_same_v<T, bool>) {
         return value ? 4 : 5;
@@ -77,7 +77,7 @@ void appendJsonSequence(std::pmr::string& output, const SequenceT& value) {
 template <typename ValueT>
 void appendJsonValue(std::pmr::string& output, const ValueT& value) {
     using T = std::remove_cvref_t<ValueT>;
-    if constexpr (isWrappedModelScalar<T>) {
+    if constexpr (isRuviaScalar<T>) {
         appendJsonValue(output, value.value);
     } else if constexpr (std::is_same_v<T, bool>) {
         output.append(value ? "true" : "false");

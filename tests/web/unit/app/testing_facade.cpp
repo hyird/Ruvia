@@ -21,8 +21,8 @@
 #include "ruvia/web/Testing.h"
 
 struct TestingFacadeEcho final {
-    RUVIA_OPTIONAL_FIELD(value, ruvia::String);
-    RUVIA_MODEL(TestingFacadeEcho, value);
+    RUVIA_MODEL(TestingFacadeEcho,
+        RUVIA_OPTIONAL_FIELD(value, ruvia::String));
 };
 
 namespace {

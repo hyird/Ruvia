@@ -41,95 +41,49 @@ static_assert(ParsesLvalueOwningString<ruvia::JsonObject>);
 static_assert(ParsesLvalueOwningString<ruvia::FormObject>);
 
 struct AccessorSurfaceRequest final {
-    RUVIA_OPTIONAL_FIELD(message, ruvia::String);
-    RUVIA_MODEL(AccessorSurfaceRequest, message);
+    RUVIA_MODEL(AccessorSurfaceRequest,
+        RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 };
 
 struct AccessorSurfaceResponse final {
-    RUVIA_OPTIONAL_FIELD(message, ruvia::String);
-    RUVIA_MODEL(AccessorSurfaceResponse, message);
+    RUVIA_MODEL(AccessorSurfaceResponse,
+        RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 };
 
 struct NestedModelItem final {
-    RUVIA_FIELD(id, ruvia::UInt32);
-    RUVIA_OPTIONAL_FIELD(label, ruvia::String);
-    RUVIA_MODEL(NestedModelItem, id, label);
+    RUVIA_MODEL(NestedModelItem,
+        RUVIA_FIELD(id, ruvia::UInt32),
+        RUVIA_OPTIONAL_FIELD(label, ruvia::String));
 };
 
 struct NestedModelEnvelope final {
-    RUVIA_FIELD(primary, NestedModelItem);
-    RUVIA_FIELD(items, ruvia::Array<NestedModelItem>);
-    RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>);
-    RUVIA_MODEL(NestedModelEnvelope, primary, items, tags);
+    RUVIA_MODEL(NestedModelEnvelope,
+        RUVIA_FIELD(primary, NestedModelItem),
+        RUVIA_FIELD(items, ruvia::Array<NestedModelItem>),
+        RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
 };
 
+#define RUVIA_TEST_BOOL_FIELD(field) RUVIA_OPTIONAL_FIELD(field, ruvia::Bool)
 struct MaxFieldCountResponse final {
-    RUVIA_OPTIONAL_FIELD(f01, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f02, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f03, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f04, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f05, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f06, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f07, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f08, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f09, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f10, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f11, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f12, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f13, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f14, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f15, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f16, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f17, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f18, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f19, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f20, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f21, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f22, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f23, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f24, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f25, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f26, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f27, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f28, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f29, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f30, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f31, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f32, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f33, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f34, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f35, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f36, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f37, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f38, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f39, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f40, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f41, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f42, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f43, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f44, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f45, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f46, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f47, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f48, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f49, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f50, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f51, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f52, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f53, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f54, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f55, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f56, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f57, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f58, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f59, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f60, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f61, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f62, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f63, ruvia::Bool);
-    RUVIA_OPTIONAL_FIELD(f64, ruvia::Bool);
-    RUVIA_MODEL(MaxFieldCountResponse, f01, f02, f03, f04, f05, f06, f07, f08, f09, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19, f20, f21, f22, f23, f24, f25, f26, f27, f28, f29, f30, f31, f32, f33, f34, f35, f36, f37, f38, f39, f40, f41, f42, f43, f44, f45, f46, f47, f48, f49, f50, f51, f52, f53, f54, f55, f56, f57, f58, f59, f60, f61, f62, f63, f64);
+    RUVIA_MODEL(MaxFieldCountResponse,
+        RUVIA_TEST_BOOL_FIELD(f01), RUVIA_TEST_BOOL_FIELD(f02), RUVIA_TEST_BOOL_FIELD(f03), RUVIA_TEST_BOOL_FIELD(f04),
+        RUVIA_TEST_BOOL_FIELD(f05), RUVIA_TEST_BOOL_FIELD(f06), RUVIA_TEST_BOOL_FIELD(f07), RUVIA_TEST_BOOL_FIELD(f08),
+        RUVIA_TEST_BOOL_FIELD(f09), RUVIA_TEST_BOOL_FIELD(f10), RUVIA_TEST_BOOL_FIELD(f11), RUVIA_TEST_BOOL_FIELD(f12),
+        RUVIA_TEST_BOOL_FIELD(f13), RUVIA_TEST_BOOL_FIELD(f14), RUVIA_TEST_BOOL_FIELD(f15), RUVIA_TEST_BOOL_FIELD(f16),
+        RUVIA_TEST_BOOL_FIELD(f17), RUVIA_TEST_BOOL_FIELD(f18), RUVIA_TEST_BOOL_FIELD(f19), RUVIA_TEST_BOOL_FIELD(f20),
+        RUVIA_TEST_BOOL_FIELD(f21), RUVIA_TEST_BOOL_FIELD(f22), RUVIA_TEST_BOOL_FIELD(f23), RUVIA_TEST_BOOL_FIELD(f24),
+        RUVIA_TEST_BOOL_FIELD(f25), RUVIA_TEST_BOOL_FIELD(f26), RUVIA_TEST_BOOL_FIELD(f27), RUVIA_TEST_BOOL_FIELD(f28),
+        RUVIA_TEST_BOOL_FIELD(f29), RUVIA_TEST_BOOL_FIELD(f30), RUVIA_TEST_BOOL_FIELD(f31), RUVIA_TEST_BOOL_FIELD(f32),
+        RUVIA_TEST_BOOL_FIELD(f33), RUVIA_TEST_BOOL_FIELD(f34), RUVIA_TEST_BOOL_FIELD(f35), RUVIA_TEST_BOOL_FIELD(f36),
+        RUVIA_TEST_BOOL_FIELD(f37), RUVIA_TEST_BOOL_FIELD(f38), RUVIA_TEST_BOOL_FIELD(f39), RUVIA_TEST_BOOL_FIELD(f40),
+        RUVIA_TEST_BOOL_FIELD(f41), RUVIA_TEST_BOOL_FIELD(f42), RUVIA_TEST_BOOL_FIELD(f43), RUVIA_TEST_BOOL_FIELD(f44),
+        RUVIA_TEST_BOOL_FIELD(f45), RUVIA_TEST_BOOL_FIELD(f46), RUVIA_TEST_BOOL_FIELD(f47), RUVIA_TEST_BOOL_FIELD(f48),
+        RUVIA_TEST_BOOL_FIELD(f49), RUVIA_TEST_BOOL_FIELD(f50), RUVIA_TEST_BOOL_FIELD(f51), RUVIA_TEST_BOOL_FIELD(f52),
+        RUVIA_TEST_BOOL_FIELD(f53), RUVIA_TEST_BOOL_FIELD(f54), RUVIA_TEST_BOOL_FIELD(f55), RUVIA_TEST_BOOL_FIELD(f56),
+        RUVIA_TEST_BOOL_FIELD(f57), RUVIA_TEST_BOOL_FIELD(f58), RUVIA_TEST_BOOL_FIELD(f59), RUVIA_TEST_BOOL_FIELD(f60),
+        RUVIA_TEST_BOOL_FIELD(f61), RUVIA_TEST_BOOL_FIELD(f62), RUVIA_TEST_BOOL_FIELD(f63), RUVIA_TEST_BOOL_FIELD(f64));
 };
+#undef RUVIA_TEST_BOOL_FIELD
 
 static_assert(ruvia::detail::isResponseModel<MaxFieldCountResponse>);
 
