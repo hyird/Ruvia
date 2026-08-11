@@ -7,12 +7,14 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 
 #include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/read.hpp>
 #include <asio/read_until.hpp>
 #include <asio/streambuf.hpp>
 #include <asio/use_future.hpp>
@@ -172,10 +174,35 @@ private:
 
 std::string readHead(asio::ip::tcp::socket& socket, std::error_code& error) {
     asio::streambuf input;
-    asio::read_until(socket, input, "\r\n\r\n", error);
+    const auto headBytes = asio::read_until(socket, input, "\r\n\r\n", error);
     if (error) return {};
     const auto bytes = input.data();
-    return {asio::buffers_begin(bytes), asio::buffers_end(bytes)};
+    auto begin = asio::buffers_begin(bytes);
+    std::string head(begin, begin + static_cast<std::ptrdiff_t>(headBytes));
+    input.consume(headBytes);
+
+    constexpr std::string_view kContentLengthPrefix = "Content-Length: ";
+    const auto contentLengthPosition = head.find(kContentLengthPrefix);
+    if (contentLengthPosition == std::string::npos) return head;
+    const auto valueBegin = contentLengthPosition + kContentLengthPrefix.size();
+    const auto valueEnd = head.find("\r\n", valueBegin);
+    if (valueEnd == std::string::npos) return head;
+    std::size_t contentLength = 0;
+    const auto value = std::string_view(head).substr(valueBegin, valueEnd - valueBegin);
+    const auto [parsedEnd, parseError] =
+        std::from_chars(value.data(), value.data() + value.size(), contentLength);
+    if (parseError != std::errc{} || parsedEnd != value.data() + value.size()) return head;
+
+    const auto bufferedBodyBytes = input.size() < contentLength ? input.size() : contentLength;
+    input.consume(bufferedBodyBytes);
+    auto remaining = contentLength - bufferedBodyBytes;
+    std::array<char, 4096> discard{};
+    while (remaining != 0 && !error) {
+        const auto chunk = remaining < discard.size() ? remaining : discard.size();
+        const auto read = asio::read(socket, asio::buffer(discard.data(), chunk), error);
+        remaining -= read;
+    }
+    return head;
 }
 
 void writeResponse(asio::ip::tcp::socket& socket, std::string_view body, std::string_view extraHeaders = {}) {

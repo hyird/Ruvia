@@ -8,6 +8,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -141,7 +142,7 @@ int checkFactoryOrigins() {
     return 0;
 }
 
-SelfSignedPem makeSelfSignedPem() {
+SelfSignedPem makeSelfSignedPem(const char* subjectAlternativeName = "DNS:localhost") {
     EVP_PKEY* pkey = EVP_RSA_gen(2048);
     X509* x509 = X509_new();
     ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
@@ -165,7 +166,7 @@ SelfSignedPem makeSelfSignedPem() {
     addExtension(NID_basic_constraints, "critical,CA:TRUE");
     addExtension(NID_key_usage, "critical,digitalSignature,keyEncipherment,keyCertSign");
     addExtension(NID_ext_key_usage, "serverAuth,clientAuth");
-    addExtension(NID_subject_alt_name, "DNS:localhost");
+    addExtension(NID_subject_alt_name, subjectAlternativeName);
     X509_sign(x509, pkey, EVP_sha256());
     SelfSignedPem result;
     BIO* cert = BIO_new(BIO_s_mem());
@@ -1038,15 +1039,20 @@ int main() {
         return 2;
     }
 
-    const auto pem = makeSelfSignedPem();
+    const auto pem = makeSelfSignedPem("IP:127.0.0.1");
+    const auto mismatchPem = makeSelfSignedPem("DNS:localhost");
     const auto directory = std::filesystem::temp_directory_path() / "ruvia_http_client_tls";
     std::error_code ignored;
     std::filesystem::remove_all(directory, ignored);
     std::filesystem::create_directories(directory, ignored);
     const auto certPath = directory / "cert.pem";
     const auto keyPath = directory / "key.pem";
+    const auto mismatchCertPath = directory / "mismatch-cert.pem";
+    const auto mismatchKeyPath = directory / "mismatch-key.pem";
     writeFile(certPath, pem.cert);
     writeFile(keyPath, pem.key);
+    writeFile(mismatchCertPath, mismatchPem.cert);
+    writeFile(mismatchKeyPath, mismatchPem.key);
     const auto tlsTruncationResult = runTlsTruncationCheck(certPath, keyPath);
     const auto h2TlsTruncationResult = runHttp2TlsTruncationCheck(certPath, keyPath);
     ruvia::detail::HttpServerOptions options;
@@ -1059,11 +1065,22 @@ int main() {
     const auto h2Result = runClient(secure.localEndpoint().port(), ruvia::HttpScheme::kHttps, ruvia::HttpClientProtocol::kHttp2Only);
     const auto hostPrefixCookieResult = runHostPrefixedCookies(secure.localEndpoint().port());
     const auto verifiedResult = runVerifiedTlsClient(
-        secure.localEndpoint().port(), "localhost", certPath);
-    const auto hostnameFailureResult = runVerifiedTlsClient(
-        secure.localEndpoint().port(), "127.0.0.1", certPath, nullptr, nullptr, false);
+        secure.localEndpoint().port(), "127.0.0.1", certPath);
     secure.stop();
     secure.join();
+    ruvia::detail::HttpServerOptions mismatchOptions;
+    ruvia::detail::HttpServerOptions::Tls mismatchTls;
+    mismatchTls.identity.certificateChainFile = std::pmr::string(mismatchCertPath.string(), std::pmr::get_default_resource());
+    mismatchTls.identity.privateKeyFile = std::pmr::string(mismatchKeyPath.string(), std::pmr::get_default_resource());
+    mismatchOptions.transport = std::move(mismatchTls);
+    ruvia::detail::HttpServer mismatchSecure(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
+        routerImpl.routeTable(), {}, std::move(mismatchOptions));
+    mismatchSecure.start();
+    const auto hostnameFailureResult = runVerifiedTlsClient(
+        mismatchSecure.localEndpoint().port(), "127.0.0.1", mismatchCertPath, nullptr, nullptr, false);
+    mismatchSecure.stop();
+    mismatchSecure.join();
     if (tlsTruncationResult != 0 || h2TlsTruncationResult != 0 || h2Result != 0 ||
         hostPrefixCookieResult != 0 ||
         verifiedResult != 0 || hostnameFailureResult != 0) {
@@ -1088,9 +1105,9 @@ int main() {
         routerImpl.routeTable(), {}, std::move(mtlsOptions));
     mtlsServer.start();
     const auto missingClientCertificate = runVerifiedTlsClient(
-        mtlsServer.localEndpoint().port(), "localhost", certPath, nullptr, nullptr, false);
+        mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, nullptr, nullptr, false);
     const auto mtlsResult = runVerifiedTlsClient(
-        mtlsServer.localEndpoint().port(), "localhost", certPath, &certPath, &keyPath);
+        mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, &certPath, &keyPath);
     mtlsServer.stop();
     mtlsServer.join();
     std::filesystem::remove_all(directory, ignored);
