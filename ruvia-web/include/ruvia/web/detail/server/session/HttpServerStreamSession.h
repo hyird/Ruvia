@@ -354,11 +354,11 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     }
 
                     if (bodySetupException != nullptr) {
-                        requestCompletion.emplace(co_await completeFailedHttpBodyRoute(scannerEntry, bodySetupException, parsed, routes, requestMemory, baseRouteServices, response));
+                        requestCompletion.emplace(co_await completeFailedHttpBodyRoute(scannerEntry, bodySetupException, parsed, routes, requestMemory, requestServices, response));
                         break;
                     }
 
-                    auto bufferedResult = co_await routes.dispatchBufferedResponse(parsed.request, routeResolution, requestMemory, options_.documentRoot.binding(), bodyState.withLoader(baseRouteServices));
+                    auto bufferedResult = co_await routes.dispatchBufferedResponse(parsed.request, routeResolution, requestMemory, options_.documentRoot.binding(), bodyState.withLoader(requestServices));
                     response = std::move(bufferedResult).takeResponse();
 
                     requestCompletion.emplace(completeSuccessfulHttpBodyRoute(scannerEntry, response, parsed.connectionPlan, requestSequence, bodyState.consumption(), pipelineStash, [&bodyState](std::pmr::string& stash) { bodyState.takePipeline(stash); }));
@@ -405,7 +405,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
         // keeps one set of call temporaries in the frame instead of one per
         // rejection branch.
         if (const auto* closingError = closingRejection.error()) {
-            response = co_await routes.handleError(parsed.request, requestMemory, *closingError, baseRouteServices);
+            response = co_await routes.handleError(parsed.request, requestMemory, *closingError, requestServices);
             if (const auto* rateLimit = closingRejection.rateLimit()) {
                 applyRateLimitRejectionHeaders(response, *rateLimit);
             }
@@ -449,7 +449,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     parsed.request,
                     requestMemory,
                     *error,
-                    baseRouteServices);
+                    requestServices);
                 preparation = prepareBufferedHttpResponse(parsed.request, responseCodingPolicy, response, options_);
                 if (httpBufferedResponsePreparationError(responseCodingPolicy, parsed.request, response, preparation.compressionResult()).has_value()) {
                     // The negotiated coding could not be installed even on
