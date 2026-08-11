@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string_view>
+
 // Internal startup-time middleware descriptor.
 
 #include "ruvia/core/Task.h"
@@ -49,11 +51,31 @@ public:
     // Two registrations of the same middleware type differ when they carry
     // different arguments, so identity spans the argument pointer as well.
     [[nodiscard]] friend bool operator==(const ControllerMiddlewareDescriptor& left, const ControllerMiddlewareDescriptor& right) noexcept {
-        return left.invoke_ == right.invoke_ && left.create_ == right.create_ && left.destroy_ == right.destroy_ && left.args_ == right.args_;
+        return left.invoke_ == right.invoke_ && left.create_ == right.create_ && left.destroy_ == right.destroy_ && left.args_ == right.args_ && left.prefix_ == right.prefix_;
     }
 
     [[nodiscard]] const void* validatedModelTypeKey() const noexcept {
         return validatedModelTypeKey_;
+    }
+
+    // Empty means app-wide. Otherwise the middleware runs only on routes whose
+    // path is under this prefix, decided once when the route table is built --
+    // there is no per-request pattern matching. The text is registration-owned
+    // and outlives the table.
+    [[nodiscard]] std::string_view prefix() const noexcept {
+        return prefix_;
+    }
+
+    [[nodiscard]] ControllerMiddlewareDescriptor scopedTo(std::string_view prefix) const noexcept {
+        auto scoped = *this;
+        scoped.prefix_ = prefix;
+        return scoped;
+    }
+
+    // See middlewareRunsOnUnmatchedRequests(): true means this middleware also
+    // wraps the 404/405/501 terminal, not just matched routes.
+    [[nodiscard]] bool runsOnUnmatchedRequests() const noexcept {
+        return runsOnUnmatchedRequests_;
     }
 
     [[nodiscard]] bool usesRouteRateLimit() const noexcept {
@@ -65,20 +87,23 @@ private:
     friend ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args);
 
     constexpr ControllerMiddlewareDescriptor() noexcept = default;
-    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy, const void* args, const void* validatedModelTypeKey, bool usesRouteRateLimit) noexcept
+    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy, const void* args, const void* validatedModelTypeKey, bool usesRouteRateLimit, bool runsOnUnmatchedRequests = false) noexcept
         : invoke_(invoke),
           create_(create),
           destroy_(destroy),
           args_(args),
           validatedModelTypeKey_(validatedModelTypeKey),
-          usesRouteRateLimit_(usesRouteRateLimit) {}
+          usesRouteRateLimit_(usesRouteRateLimit),
+          runsOnUnmatchedRequests_(runsOnUnmatchedRequests) {}
 
     Invoke invoke_{nullptr};
     Create create_{nullptr};
     Destroy destroy_{nullptr};
     const void* args_{nullptr};
     const void* validatedModelTypeKey_{nullptr};
+    std::string_view prefix_{};
     bool usesRouteRateLimit_{false};
+    bool runsOnUnmatchedRequests_{false};
 };
 
 }  // namespace detail

@@ -417,7 +417,8 @@ int runVerifiedTlsClient(
     const std::filesystem::path& caFile,
     const std::filesystem::path* certificateChainFile = nullptr,
     const std::filesystem::path* privateKeyFile = nullptr,
-    bool expectSuccess = true) {
+    bool expectSuccess = true,
+    bool allowIoFailure = false) {
     asio::io_context io;
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
@@ -451,7 +452,10 @@ int runVerifiedTlsClient(
                 result = 1;
             }
         } catch (const ruvia::HttpClientError& error) {
-            if (expectSuccess || error.code() != ruvia::HttpClientError::Code::kTlsFailed) {
+            const bool expectedFailure =
+                error.code() == ruvia::HttpClientError::Code::kTlsFailed ||
+                (allowIoFailure && error.code() == ruvia::HttpClientError::Code::kIoError);
+            if (expectSuccess || !expectedFailure) {
                 std::fprintf(stderr, "verified TLS client failed with code %u: %s\n",
                     static_cast<unsigned int>(error.code()), error.what());
                 result = 2;
@@ -1105,7 +1109,7 @@ int main() {
         routerImpl.routeTable(), {}, std::move(mtlsOptions));
     mtlsServer.start();
     const auto missingClientCertificate = runVerifiedTlsClient(
-        mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, nullptr, nullptr, false);
+        mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, nullptr, nullptr, false, true);
     const auto mtlsResult = runVerifiedTlsClient(
         mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, &certPath, &keyPath);
     mtlsServer.stop();

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/web/detail/util/CallableRef.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -277,6 +279,14 @@ private:
     [[nodiscard]] Task<void> storeMiddlewareExceptionResponse(Context& context, std::exception_ptr exception) const;
     [[nodiscard]] Task<HttpResponse> handleError(Context& context, HttpErrorInfo error) const;
     [[nodiscard]] Task<HttpResponse> handleNotFound(const HttpRequest& request, RequestMemory& memory, ContextServices services) const;
+
+    // Runs the unmatched-request middleware chain around `terminal`, which
+    // produces the 404/405/501 response. Falls straight through to the terminal
+    // when nothing declared itself for unmatched requests.
+    using UnmatchedTerminal = CallableRef<HttpResponse, Context&>;
+    [[nodiscard]] Task<HttpResponse> runUnmatchedChain(Context& context, const UnmatchedTerminal& terminal) const;
+    [[nodiscard]] Task<void> invokeUnmatchedMiddlewareAt(std::size_t index, Context& context, const UnmatchedTerminal& terminal) const;
+    [[nodiscard]] static Task<void> invokeUnmatchedMiddlewareContinuation(NextState state);
     [[nodiscard]] Task<HttpResponse> handleException(Context& context, std::exception_ptr exception) const;
 
     template <typename Handler>
@@ -295,6 +305,12 @@ private:
     std::pmr::memory_resource* resource_;
     std::pmr::vector<RouteEntry> routes_;
     std::pmr::vector<RouteMiddleware> middlewareFrames_;
+    // A contiguous block at the end of middlewareFrames_: the app-wide
+    // middlewares that declared they also run when no route matched. Kept as a
+    // range rather than a separate vector so the fallback chain indexes frames
+    // exactly the way a route's chain does.
+    std::size_t unmatchedMiddlewareOffset_{0};
+    std::size_t unmatchedMiddlewareCount_{0};
     std::pmr::vector<PerfectSlot> exactSlots_;
     std::array<DynamicNode, kRoutableMethodCount> dynamicRoots_{};
     std::pmr::vector<DynamicNode> dynamicNodeArena_;
