@@ -4,6 +4,7 @@
 #include <concepts>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -222,8 +223,12 @@ int main() {
     if (unavailableExtendedConnect.failure() == nullptr ||
         unavailableExtendedConnect.failure()->error() != ruvia::Http2RequestHeadSubmitError::kPeerCapabilityUnavailable) return 64;
     constexpr std::array<char, 6> enableConnectProtocol{0, 8, 0, 0, 0, 1};
+    static_assert(enableConnectProtocol.size() <=
+        (std::numeric_limits<std::uint32_t>::max)());
     std::array<char, ruvia::kHttp2FrameHeaderBytes> enableConnectHeader{};
-    (void)ruvia::encodeHttp2FrameHeader(enableConnectHeader, enableConnectProtocol.size(), ruvia::Http2FrameType::kSettings, 0, 0);
+    (void)ruvia::encodeHttp2FrameHeader(enableConnectHeader,
+        static_cast<std::uint32_t>(enableConnectProtocol.size()),
+        ruvia::Http2FrameType::kSettings, 0, 0);
     std::pmr::string enableConnectWire(&publicProtocolResource);
     enableConnectWire.append(enableConnectHeader.data(), enableConnectHeader.size());
     enableConnectWire.append(enableConnectProtocol.data(), enableConnectProtocol.size());

@@ -560,7 +560,8 @@ if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_connection_scanner_lifetime core/connection_scanner_lifetime.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_event_loop_pool core/runtime_worker.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_operation_deadline core/operation_deadline.cpp LIB ruvia::core)
-    ruvia_add_test(ruvia_pool_lease_scheduler core/pool_lease_scheduler.cpp LIB ruvia::core)
+    ruvia_add_test(ruvia_pool_lease_scheduler core/pool_lease_scheduler.cpp
+        LIB ruvia::core TIMEOUT 10)
     ruvia_add_test(ruvia_task_scope core/task_scope.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_task_completion core/task_completion.cpp LIB ruvia::core)
 

@@ -80,7 +80,8 @@ std::pmr::string clientWindowThresholdResponseWire(
     appendPeerSettings(wire);
     appendFrame(wire, ruvia::Http2FrameType::kHeaders, 0x4, 1, block);
     for (std::size_t index = 0; index < kFrameCount; ++index) {
-        const auto flags = endStream && index + 1 == kFrameCount ? 0x1 : 0;
+        const auto flags = static_cast<std::uint8_t>(
+            endStream && index + 1 == kFrameCount ? 0x1U : 0U);
         appendFrame(wire, ruvia::Http2FrameType::kData, flags, 1, payload);
     }
     return wire;

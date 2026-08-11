@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <coroutine>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -70,13 +71,22 @@ private:
 
         void requestCancellation(const WorkerHandle& worker, std::uint64_t waiterId) {
             if (worker.isCurrent()) {
-                (void)queue.cancel(waiterId);
+                std::coroutine_handle<> continuation;
+                if (!queue.commitCancellation(waiterId, continuation) ||
+                    !continuation) {
+                    return;
+                }
+                WorkerHandleAccess::deferOrTerminate(
+                    worker,
+                    [continuation] { continuation.resume(); });
                 return;
             }
             auto retained = shared_from_this();
-            (void)WorkerHandleAccess::deferIfAttached(worker, [retained = std::move(retained), waiterId] {
-                (void)retained->queue.cancel(waiterId);
-            });
+            WorkerHandleAccess::deferOrTerminate(
+                worker,
+                [retained = std::move(retained), waiterId] {
+                    (void)retained->queue.cancel(waiterId);
+                });
         }
     };
 
@@ -151,9 +161,9 @@ private:
         }
 
         auto stopRegistration = stopToken.registerCallback([worker, waiterState, waiterId] {
-            // Registration setup only borrows the pool-level state. An actual
-            // off-worker cancellation retains it for the queued continuation;
-            // waiter ids make late continuations no-ops after completion.
+            // A worker-local callback commits cancellation synchronously, then
+            // resumes only after std::stop_callback has returned. Off-worker
+            // callbacks transfer both operations to the worker.
             waiterState->requestCancellation(*worker, waiterId);
         });
         if (stopToken.stoppable()) {

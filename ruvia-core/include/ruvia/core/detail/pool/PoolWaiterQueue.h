@@ -161,10 +161,14 @@ private:
     }
 
     void resume() noexcept {
-        auto handle = std::exchange(handle_, {});
+        auto handle = takeContinuation();
         if (handle) {
             handle.resume();
         }
+    }
+
+    [[nodiscard]] std::coroutine_handle<> takeContinuation() noexcept {
+        return std::exchange(handle_, {});
     }
 
     using State = std::variant<PoolWaiterIdle, PoolWaiterQueued, PoolWaiterResult>;
@@ -234,18 +238,30 @@ public:
     }
 
     [[nodiscard]] bool cancel(PoolWaiter& waiter) noexcept {
-        if (!std::holds_alternative<PoolWaiterQueued>(waiter.state_)) {
+        std::coroutine_handle<> continuation;
+        if (!commitCancellation(waiter, continuation)) {
             return false;
         }
-        remove(waiter);
-        waiter.completeCancelled();
-        waiter.resume();
+        if (continuation) {
+            continuation.resume();
+        }
         return true;
     }
 
     [[nodiscard]] bool cancel(std::uint64_t id) noexcept {
         auto* waiter = find(id);
         return waiter != nullptr && cancel(*waiter);
+    }
+
+    // Commit cancellation while still inside a stop callback, but let the
+    // caller resume the coroutine only after that callback has returned.
+    [[nodiscard]] bool commitCancellation(
+        std::uint64_t id,
+        std::coroutine_handle<>& continuation) noexcept {
+        continuation = {};
+        auto* waiter = find(id);
+        return waiter != nullptr &&
+            commitCancellation(*waiter, continuation);
     }
 
     [[nodiscard]] bool expire(std::uint64_t id) noexcept {
@@ -323,6 +339,19 @@ public:
     }
 
 private:
+    [[nodiscard]] bool commitCancellation(
+        PoolWaiter& waiter,
+        std::coroutine_handle<>& continuation) noexcept {
+        continuation = {};
+        if (!std::holds_alternative<PoolWaiterQueued>(waiter.state_)) {
+            return false;
+        }
+        remove(waiter);
+        waiter.completeCancelled();
+        continuation = waiter.takeContinuation();
+        return true;
+    }
+
     [[nodiscard]] PoolWaiter* find(std::uint64_t id) const noexcept {
         auto* waiter = head_;
         while (waiter != nullptr) {
