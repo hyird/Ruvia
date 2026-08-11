@@ -17,7 +17,8 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
         RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(model) == ruvia::detail::ModelFieldState::kParsed);
     }
 
-    const auto invalidField = ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":42})", std::pmr::get_default_resource());
+    RUVIA_CHECK(!ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":42})", std::pmr::get_default_resource()).has_value());
+    const auto invalidField = ruvia::JsonBody<AccessorSurfaceRequest>::parsePartial(R"({"message":42})", std::pmr::get_default_resource());
     RUVIA_CHECK(invalidField.has_value());
     if (invalidField.has_value()) {
         RUVIA_CHECK(!invalidField->message().has_value());

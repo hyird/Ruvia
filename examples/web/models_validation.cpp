@@ -9,73 +9,69 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
-// A numeric field may be declared with the plain standard type; ruvia::UInt32
-// and friends remain available and behave identically. ruvia::String stays its
-// own type because it carries the borrowed/owned distinction a std::string_view
-// cannot express.
 struct ProfileRequest final {
-    RUVIA_OPTIONAL_FIELD(displayName, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(email, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(age, std::uint32_t);
-    RUVIA_MODEL(ProfileRequest, displayName, email, age);
+    RUVIA_MODEL(ProfileRequest,
+        RUVIA_OPTIONAL_FIELD(displayName, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(email, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32));
 };
 
 struct RoleRequest final {
-    RUVIA_OPTIONAL_FIELD(name, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(level, ruvia::UInt32);
-    RUVIA_MODEL(RoleRequest, name, level);
+    RUVIA_MODEL(RoleRequest,
+        RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(level, ruvia::UInt32));
 };
 
 struct RegisterRequest final {
-    RUVIA_OPTIONAL_FIELD_NAME("user_name", username, ruvia::String, RUVIA_DEFAULT("guest"));
-    RUVIA_OPTIONAL_FIELD(password, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(code, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(profile, ProfileRequest);
-    RUVIA_OPTIONAL_FIELD(roles, ruvia::Array<RoleRequest>);
-    RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>);
-    RUVIA_OPTIONAL_FIELD(newsletter, ruvia::Bool);
-    RUVIA_MODEL(RegisterRequest, username, password, code, profile, roles, tags, newsletter);
+    RUVIA_MODEL(RegisterRequest,
+        RUVIA_OPTIONAL_FIELD_NAME("user_name", username, ruvia::String, RUVIA_DEFAULT("guest")),
+        RUVIA_OPTIONAL_FIELD(password, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(code, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(profile, ProfileRequest),
+        RUVIA_OPTIONAL_FIELD(roles, ruvia::Array<RoleRequest>),
+        RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>),
+        RUVIA_OPTIONAL_FIELD(newsletter, ruvia::Bool));
 };
 
 struct RegisterResponse final {
-    RUVIA_OPTIONAL_FIELD(username, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(roleCount, ruvia::UInt32);
-    RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>);
-    RUVIA_MODEL(RegisterResponse, username, roleCount, tags);
+    RUVIA_MODEL(RegisterResponse,
+        RUVIA_OPTIONAL_FIELD(username, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(roleCount, ruvia::UInt32),
+        RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
 };
 
 struct ContactForm final {
-    RUVIA_OPTIONAL_FIELD(name, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(email, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(message, ruvia::String);
-    RUVIA_MODEL(ContactForm, name, email, message);
+    RUVIA_MODEL(ContactForm,
+        RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(email, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 };
 
 struct SearchQuery final {
-    RUVIA_OPTIONAL_FIELD(q, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(page, ruvia::UInt32);
-    RUVIA_MODEL(SearchQuery, q, page);
+    RUVIA_MODEL(SearchQuery,
+        RUVIA_OPTIONAL_FIELD(q, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(page, ruvia::UInt32));
 };
 
 struct CategoryParams final {
-    RUVIA_OPTIONAL_FIELD(id, ruvia::String);
-    RUVIA_MODEL(CategoryParams, id);
+    RUVIA_MODEL(CategoryParams,
+        RUVIA_OPTIONAL_FIELD(id, ruvia::String));
 };
 
 struct RequestHeaders final {
-    RUVIA_OPTIONAL_FIELD_NAME("x-request-id", requestId, ruvia::String);
-    RUVIA_MODEL(RequestHeaders, requestId);
+    RUVIA_MODEL(RequestHeaders,
+        RUVIA_OPTIONAL_FIELD_NAME("x-request-id", requestId, ruvia::String));
 };
 
 struct PreferencesCookie final {
-    RUVIA_OPTIONAL_FIELD(theme, ruvia::String);
-    RUVIA_MODEL(PreferencesCookie, theme);
+    RUVIA_MODEL(PreferencesCookie,
+        RUVIA_OPTIONAL_FIELD(theme, ruvia::String));
 };
 
 struct Category final {
-    RUVIA_OPTIONAL_FIELD(name, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(children, ruvia::BoxedArray<Category>);
-    RUVIA_MODEL(Category, name, children);
+    RUVIA_MODEL(Category,
+        RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(children, ruvia::BoxedArray<Category>));
 };
 
 static bool hasRuviaCodePrefix(const ruvia::String& code) {

@@ -8,34 +8,34 @@
 #include "ruvia/web/Controller.h"
 
 struct UserDTO final {
-    RUVIA_OPTIONAL_FIELD(name, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32);
-    RUVIA_OPTIONAL_FIELD(email, ruvia::String);
-    RUVIA_MODEL(UserDTO, name, age, email);
+    RUVIA_MODEL(UserDTO,
+        RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32),
+        RUVIA_OPTIONAL_FIELD(email, ruvia::String));
 };
 
 struct UserEcho final {
-    RUVIA_OPTIONAL_FIELD(name, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32);
-    RUVIA_OPTIONAL_FIELD(email, ruvia::String);
-    RUVIA_MODEL(UserEcho, name, age, email);
+    RUVIA_MODEL(UserEcho,
+        RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32),
+        RUVIA_OPTIONAL_FIELD(email, ruvia::String));
 };
 
 struct StatusResponse final {
-    RUVIA_OPTIONAL_FIELD(status, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(framework, ruvia::String);
-    RUVIA_MODEL(StatusResponse, status, framework);
+    RUVIA_MODEL(StatusResponse,
+        RUVIA_OPTIONAL_FIELD(status, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(framework, ruvia::String));
 };
 
 struct UserByIdResponse final {
-    RUVIA_OPTIONAL_FIELD(userId, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(name, ruvia::String);
-    RUVIA_MODEL(UserByIdResponse, userId, name);
+    RUVIA_MODEL(UserByIdResponse,
+        RUVIA_OPTIONAL_FIELD(userId, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(name, ruvia::String));
 };
 
 struct MiddlewareResponse final {
-    RUVIA_OPTIONAL_FIELD(middleware_count, ruvia::UInt32);
-    RUVIA_MODEL(MiddlewareResponse, middleware_count);
+    RUVIA_MODEL(MiddlewareResponse,
+        RUVIA_OPTIONAL_FIELD(middleware_count, ruvia::UInt32));
 };
 
 template <int N>

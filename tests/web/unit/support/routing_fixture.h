@@ -40,8 +40,8 @@
 #include "ruvia/web/detail/websocket/WebSocketAccess.h"
 
 struct ScopedValidationRequest final {
-    RUVIA_OPTIONAL_FIELD(value, ruvia::String);
-    RUVIA_MODEL(ScopedValidationRequest, value);
+    RUVIA_MODEL(ScopedValidationRequest,
+        RUVIA_OPTIONAL_FIELD(value, ruvia::String));
 };
 
 namespace routing_test {
