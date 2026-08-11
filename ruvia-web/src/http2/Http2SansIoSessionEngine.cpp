@@ -274,6 +274,14 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 writeSignal_);
         }
         auto dispatchServices = baseServices;
+        // Armed here, on the stream's own state, so concurrent requests on one
+        // connection each get their own clock. Nothing is armed when neither the
+        // deployment nor the route declared a deadline.
+        const auto handlerDeadline = effectiveHandlerDeadline(options.deadline ? options.deadline->handler : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
+        if (handlerDeadline > std::chrono::milliseconds::zero()) {
+            selectedRoute->armDeadline(baseServices.worker(), baseServices.stopToken(), handlerDeadline);
+            dispatchServices = dispatchServices.withStopToken(selectedRoute->deadline()->token()).withRequestDeadline(selectedRoute->deadline());
+        }
         if (bodyReaderStorage) {
             dispatchServices =
                 dispatchServices.withStreamingRequestBody(bodyReaderStorage->facade());

@@ -10,6 +10,7 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
+#include "ruvia/web/detail/server/RequestDeadline.h"
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
 #include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
 #include "ruvia/web/detail/server/session/HttpServerIdleWorkSet.h"
@@ -127,6 +128,11 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
         // requestCompletion, which borrows it, and empty for the common case of a
         // client that does not pipeline.
         std::pmr::string pipelineStash(requestMemory.resource());
+        // Declared here, before requestCompletion and everything that borrows
+        // the services below, so the deadline's stop source outlives every
+        // dispatch that observes its token.
+        std::optional<RequestDeadline> requestDeadline;
+        ContextServices requestServices = baseRouteServices;
         std::optional<Http1SessionRequestCompletion> requestCompletion;
         // Rejections that close the connection funnel through one co_await
         // site after the read loop: every co_await expression in a coroutine
@@ -221,6 +227,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     scannerEntry.touch();
                     break;
                 }
+                // Reset per request: a keep-alive connection serves many, and
+                // each gets its own deadline or none.
+                requestDeadline.reset();
+                requestServices = baseRouteServices;
                 routeResolution = routes.resolve(parsed.request);
                 // Keyed on the client, not the hop: behind a trusted proxy every
                 // request would otherwise share the proxy's single key.
@@ -254,6 +264,19 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     break;
                 }
 
+                // Arm the handler deadline for this request only. Nothing is
+                // armed when neither the deployment nor the route declared one,
+                // so a server without deadlines pays one comparison. The object
+                // lives to the end of this iteration; its timer registration
+                // cancels on destruction, so a request that finishes early
+                // leaves nothing pending.
+                const auto handlerDeadline = effectiveHandlerDeadline(options_.deadline ? options_.deadline->handler : std::nullopt, resolved->route().deadlineMs());
+                if (handlerDeadline > std::chrono::milliseconds::zero()) {
+                    requestDeadline.emplace(stopToken_);
+                    requestDeadline->arm(workerHandle_, handlerDeadline);
+                    requestServices = baseRouteServices.withStopToken(requestDeadline->token()).withRequestDeadline(&*requestDeadline);
+                }
+
                 // One bundle of what every route dispatch below needs from
                 // this session; each dispatcher adds only its own arguments.
                 const auto routeDispatch = [&] {
@@ -266,7 +289,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                         .responseCodingAvailability = options_.compression.has_value() ? HttpResponseCodingAvailability::kIdentityAndCompression : HttpResponseCodingAvailability::kIdentityOnly,
                         .routes = routes,
                         .requestMemory = requestMemory,
-                        .baseRouteServices = baseRouteServices,
+                        .baseRouteServices = requestServices,
                         .options = options_,
                         .response = response,
                         .requestSequence = requestSequence,

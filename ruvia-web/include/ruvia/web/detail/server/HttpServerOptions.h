@@ -171,6 +171,8 @@ struct HttpServerOptions final {
     DocumentRoot documentRoot;
     // Peers whose forwarding headers may be believed. Empty by default, so an
     // unconfigured server treats every direct peer as the client.
+    // Absent means no handler deadline anywhere, and nothing is armed.
+    std::optional<DeadlineConfig> deadline;
     TrustedProxySet trustedProxies;
     AccessLogSink accessLog;
     const Env* env{nullptr};

@@ -343,6 +343,21 @@ struct CorsConfig final {
     std::optional<CorsMaxAge> maxAge;
 };
 
+// How long a handler may run. The phase timeouts bound reading the head, reading
+// the body and writing the response; this bounds the handler between them.
+//
+// When it elapses the request's stop token trips, so every wait that takes that
+// token returns at once and the handler unwinds into an error response. It is
+// cooperative -- see ruvia::Deadline for what that does and does not bound.
+//
+// A route may declare a shorter one with ruvia::Deadline<N>; it can never extend
+// this. A struct rather than a bare duration so the hard backstop for handlers
+// that await nothing cancellable can be added as a field here, rather than as a
+// second setter with its own name.
+struct DeadlineConfig final {
+    std::optional<std::chrono::milliseconds> handler;
+};
+
 enum class DocumentRootRefreshMode : std::uint8_t {
     kImmutable,
     kPolling,

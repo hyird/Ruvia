@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string_view>
 
 // Internal startup-time middleware descriptor.
@@ -84,6 +85,11 @@ public:
         return requestBodyLimit_;
     }
 
+    // 0 when this middleware declares no deadline.
+    [[nodiscard]] std::int64_t deadlineMs() const noexcept {
+        return deadlineMs_;
+    }
+
     [[nodiscard]] bool usesRouteRateLimit() const noexcept {
         return usesRouteRateLimit_;
     }
@@ -93,7 +99,7 @@ private:
     friend ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args);
 
     constexpr ControllerMiddlewareDescriptor() noexcept = default;
-    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy, const void* args, const void* validatedModelTypeKey, bool usesRouteRateLimit, bool runsOnUnmatchedRequests = false, std::size_t requestBodyLimit = 0) noexcept
+    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy, const void* args, const void* validatedModelTypeKey, bool usesRouteRateLimit, bool runsOnUnmatchedRequests = false, std::size_t requestBodyLimit = 0, std::int64_t deadlineMs = 0) noexcept
         : invoke_(invoke),
           create_(create),
           destroy_(destroy),
@@ -101,6 +107,7 @@ private:
           validatedModelTypeKey_(validatedModelTypeKey),
           usesRouteRateLimit_(usesRouteRateLimit),
           requestBodyLimit_(requestBodyLimit),
+          deadlineMs_(deadlineMs),
           runsOnUnmatchedRequests_(runsOnUnmatchedRequests) {}
 
     Invoke invoke_{nullptr};
@@ -111,6 +118,7 @@ private:
     std::string_view prefix_{};
     bool usesRouteRateLimit_{false};
     std::size_t requestBodyLimit_{0};
+    std::int64_t deadlineMs_{0};
     bool runsOnUnmatchedRequests_{false};
 };
 

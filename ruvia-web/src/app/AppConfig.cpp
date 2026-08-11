@@ -140,6 +140,15 @@ App& App::setKeepaliveRequests(std::optional<std::size_t> maxRequests) {
     });
 }
 
+App& App::setDeadline(std::optional<DeadlineConfig> config) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change the deadline while app is running", [config](detail::AppState& state) {
+        if (config) {
+            detail::ensurePositiveOptionalDuration(config->handler, "handler deadline must be greater than zero");
+        }
+        state.options.deadline = config;
+    });
+}
+
 App& App::setBodyLimit(std::size_t bytes) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change buffered body limit while app is running", [bytes](detail::AppState& state) {
         detail::ensurePositiveSize(bytes, "buffered body limit must be greater than 0");

@@ -93,6 +93,7 @@ private:
             RouteEndpoint endpoint;
             bool dynamic{false};
             std::size_t maxRequestBodyBytes{0};
+            std::int64_t deadlineMs{0};
             std::pmr::vector<RouteMiddleware> middlewares;
         };
 
@@ -130,6 +131,10 @@ private:
             return maxRequestBodyBytes_;
         }
 
+        [[nodiscard]] std::int64_t deadlineMs() const noexcept {
+            return deadlineMs_;
+        }
+
         void setDynamic(bool dynamic) noexcept {
             dynamic_ = dynamic;
         }
@@ -141,6 +146,7 @@ private:
         RouteEndpoint endpoint_;
         bool dynamic_{false};
         std::size_t maxRequestBodyBytes_{0};
+        std::int64_t deadlineMs_{0};
         std::pmr::vector<RouteMiddleware> middlewares_;
     };
 

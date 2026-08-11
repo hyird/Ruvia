@@ -1,5 +1,6 @@
 #include "routing_fixture.h"
 #include "ruvia/web/BodyLimit.h"
+#include "ruvia/web/Deadline.h"
 
 // Routing: registering routes and matching a request to one.
 
@@ -77,6 +78,36 @@ RUVIA_TEST(finalized_route_table_carries_the_declared_body_limit) {
         const auto resolution = impl.routeTable().resolve(HttpKnownMethod::kGet, "/both");
         RUVIA_CHECK(resolution.resolved() != nullptr);
         RUVIA_CHECK_EQ(resolution.resolved()->route().maxRequestBodyBytes(), std::size_t{8});
+    }
+}
+
+RUVIA_TEST(finalized_route_table_carries_the_declared_deadline) {
+    using SlowRoute = ruvia::Deadline<30000>;
+    using FastRoute = ruvia::Deadline<500>;
+
+    {
+        ruvia::detail::Router router;
+        auto& impl = ruvia::detail::RouterImpl::from(router);
+        addRoute(impl, "/plain");
+        impl.finalize();
+        const auto resolution = impl.routeTable().resolve(HttpKnownMethod::kGet, "/plain");
+        RUVIA_CHECK(resolution.resolved() != nullptr);
+        RUVIA_CHECK_EQ(resolution.resolved()->route().deadlineMs(), std::int64_t{0});
+    }
+
+    {
+        // Controller-wide and route-specific: the stricter wins, not the nearer.
+        // A route asking for MORE time than its controller declared does not get
+        // it -- the one rule every app/route policy follows.
+        ruvia::detail::Router router;
+        auto& impl = ruvia::detail::RouterImpl::from(router);
+        const auto controllerDeadline = ruvia::detail::makeMiddlewareDescriptor<FastRoute>();
+        const auto routeDeadline = ruvia::detail::makeMiddlewareDescriptor<SlowRoute>();
+        impl.registerRoute(HttpKnownMethod::kGet, path("/both"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span(&controllerDeadline, std::size_t{1}), std::span(&routeDeadline, std::size_t{1}));
+        impl.finalize();
+        const auto resolution = impl.routeTable().resolve(HttpKnownMethod::kGet, "/both");
+        RUVIA_CHECK(resolution.resolved() != nullptr);
+        RUVIA_CHECK_EQ(resolution.resolved()->route().deadlineMs(), std::int64_t{500});
     }
 }
 

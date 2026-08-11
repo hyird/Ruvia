@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/web/detail/server/RequestDeadline.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -28,6 +30,19 @@ public:
         return resolution_;
     }
     const RouteResolution& resolution() const&& = delete;
+
+    // Per stream, not per connection: one HTTP/2 connection multiplexes many
+    // requests and each carries its own deadline. This state is address-stable
+    // and non-movable, which is what the timer registration and the token
+    // handed to ContextServices both require.
+    void armDeadline(const WorkerHandle& worker, const StopToken& workerStop, std::chrono::milliseconds deadline) {
+        deadline_.emplace(workerStop);
+        deadline_->arm(worker, deadline);
+    }
+
+    [[nodiscard]] const RequestDeadline* deadline() const noexcept {
+        return deadline_ ? &*deadline_ : nullptr;
+    }
 
     [[nodiscard]] Http2RequestBodyRuntime& body() & noexcept {
         return body_;
@@ -78,6 +93,7 @@ private:
     }
 
     RouteResolution resolution_;
+    std::optional<RequestDeadline> deadline_;
     Http2RequestBodyRuntime body_;
     DispatchState dispatch_;
 };

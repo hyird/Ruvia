@@ -102,6 +102,19 @@ template <typename MiddlewareT>
     }
 }
 
+// A handler deadline this middleware declares for the routes it is on, in
+// milliseconds, or 0 for none. Read by the server before dispatch, for the same
+// reason the body limit is: by the time a middleware's handle() runs, the clock
+// it wants to start has already been running.
+template <typename MiddlewareT>
+[[nodiscard]] constexpr std::int64_t middlewareDeadlineMs() noexcept {
+    if constexpr (requires { MiddlewareT::ruviaDeadlineMs; }) {
+        return MiddlewareT::ruviaDeadlineMs;
+    } else {
+        return 0;
+    }
+}
+
 // Registers one middleware type together with the arguments every instance of
 // it is constructed from. Arguments are decayed and copied once, at
 // registration; a middleware is built per router materialization, so they must
@@ -127,7 +140,7 @@ template <typename MiddlewareT, typename... Args>
 
     using ArgsT = std::tuple<std::decay_t<Args>...>;
     const auto* stored = constructPmrObject<ArgsT>(registrationResource(), std::forward<Args>(args)...);
-    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddleware<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>(), middlewareRunsOnUnmatchedRequests<MiddlewareT>(), middlewareRequestBodyLimit<MiddlewareT>());
+    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddleware<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>(), middlewareRunsOnUnmatchedRequests<MiddlewareT>(), middlewareRequestBodyLimit<MiddlewareT>(), middlewareDeadlineMs<MiddlewareT>());
 }
 
 }  // namespace ruvia::detail

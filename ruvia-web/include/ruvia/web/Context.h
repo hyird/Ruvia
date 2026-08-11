@@ -72,6 +72,7 @@ class WorkerStateRegistry;
 enum class StaticFileSelectionMode : std::uint8_t;
 struct ContextAccess;
 class ContextServices;
+class RequestDeadline;
 struct SessionAccess;
 }  // namespace detail
 
@@ -119,7 +120,28 @@ public:
         return worker_;
     }
 
-    // Requested when this Context's worker begins stopping. HTTP/1 cannot
+    // Whether this request's handler deadline elapsed. The token alone cannot
+    // say: it trips for worker shutdown too, and a handler that catches the
+    // cancellation its own await raised needs to tell those apart before
+    // deciding whether to press on.
+    [[nodiscard]] bool deadlineExceeded() const noexcept;
+
+    // Stopped when this request should stop doing work: its handler deadline
+    // elapsed (see ruvia::Deadline), or the owning worker began stopping.
+    // Waits that TAKE this token -- db(), redis(), httpClient()'s sendRequest,
+    // runBlocking() -- observe it, which is how a deadline reaches a handler
+    // that never mentions one.
+    //
+    // Cooperative by necessity: a suspended coroutine cannot be abandoned in
+    // C++, so this stops the WAITS rather than the handler. Work that awaits
+    // nothing cancellable is not bounded by it at all. A streaming producer's
+    // sleep() watches worker shutdown rather than this token.
+    //
+    // Historical note kept because it still holds: HTTP/1 cannot observe a peer
+    // FIN while a handler is suspended without a concurrent transport read, so
+    // this is not a promise of immediate client-disconnect detection.
+    //
+    // Old comment, superseded: requested when this Context's worker begins stopping. HTTP/1 cannot
     // observe a peer FIN while a handler is suspended without a concurrent
     // transport read, so this is a worker-lifecycle token rather than a promise
     // of immediate client-disconnect detection.
@@ -382,6 +404,7 @@ private:
     // server-owned handle without touching its shared ownership count.
     const WorkerHandle& worker_;
     const StopToken& stopToken_;
+    const detail::RequestDeadline* requestDeadline_{nullptr};
     std::string_view routePath_;
     const std::string_view* paramNames_{nullptr};
     const std::string_view* paramValues_{nullptr};

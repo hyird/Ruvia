@@ -60,6 +60,13 @@ public:
     App& setSendTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setMaxConnectionsPerWorker(std::optional<std::size_t> maxConnections);
     App& setKeepaliveRequests(std::optional<std::size_t> maxRequests);
+    // The deployment's handler deadline. Absent by
+    // default: an app that declares no deadline anywhere behaves exactly as
+    // before and arms nothing per request. A route may tighten the handler
+    // deadline with ruvia::Deadline<N> but never extend it -- the same rule
+    // setBodyLimit() follows.
+    App& setDeadline(std::optional<DeadlineConfig> config);
+
     // The deployment's request-body ceiling. A route may declare a smaller one
     // with ruvia::BodyLimit<N>; where both exist the STRICTER wins, and a route
     // can never raise this. That is the single rule for every policy with both
