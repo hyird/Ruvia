@@ -7,6 +7,8 @@
 #include <asio/posix/stream_descriptor.hpp>
 #endif
 
+#include <cstdint>
+#include <limits>
 #include <system_error>
 
 namespace ruvia::detail {
@@ -25,9 +27,10 @@ struct DbSlotSocket final {
     DbSlotSocket& operator=(const DbSlotSocket&) = delete;
 
 #if defined(_WIN32)
-    using NativeSocket = asio::ip::tcp::socket::native_handle_type;
+    using NativeSocket = std::uintptr_t;
     asio::ip::tcp::socket socket;
-    static constexpr NativeSocket kInvalidSocket = INVALID_SOCKET;
+    static constexpr NativeSocket kInvalidSocket =
+        std::numeric_limits<NativeSocket>::max();
 #else
     using NativeSocket = asio::posix::stream_descriptor::native_handle_type;
     asio::posix::stream_descriptor descriptor;

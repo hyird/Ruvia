@@ -50,8 +50,9 @@ std::error_code DbSlotSocket::ensureAssigned(NativeSocket fd) noexcept {
     }
     WSAPROTOCOL_INFOW protocolInfo{};
     int protocolInfoSize = static_cast<int>(sizeof(protocolInfo));
+    const auto source = static_cast<SOCKET>(fd);
     if (::getsockopt(
-            fd,
+            source,
             SOL_SOCKET,
             SO_PROTOCOL_INFOW,
             reinterpret_cast<char*>(&protocolInfo),
@@ -59,9 +60,9 @@ std::error_code DbSlotSocket::ensureAssigned(NativeSocket fd) noexcept {
         return std::error_code(WSAGetLastError(), std::system_category());
     }
     if (protocolInfo.iAddressFamily == AF_INET) {
-        socket.assign(asio::ip::tcp::v4(), fd, ec);
+        socket.assign(asio::ip::tcp::v4(), source, ec);
     } else if (protocolInfo.iAddressFamily == AF_INET6) {
-        socket.assign(asio::ip::tcp::v6(), fd, ec);
+        socket.assign(asio::ip::tcp::v6(), source, ec);
     } else {
         return std::make_error_code(std::errc::address_family_not_supported);
     }
