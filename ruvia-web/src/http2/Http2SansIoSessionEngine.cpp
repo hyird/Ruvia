@@ -238,7 +238,21 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         responseCodingPolicy = HttpResponseCodingPolicy::noAcceptableCoding();
     }
     const auto responseCodingAvailability = options.compression.has_value() ? HttpResponseCodingAvailability::kIdentityAndCompression : HttpResponseCodingAvailability::kIdentityOnly;
+    auto requestServices = baseServices;
     do {
+        const auto& resolution = selectedRoute->resolution();
+        const auto* resolved = resolution.resolved();
+
+        // Armed on the stream's own state so concurrent requests on one
+        // connection each get their own clock. It happens before every
+        // server-layer rejection below: custom onError/middleware is a handler
+        // too and must see the request stop token.
+        const auto handlerDeadline = effectiveHandlerDeadline(options.deadline ? options.deadline->handler : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
+        if (handlerDeadline > std::chrono::milliseconds::zero()) {
+            selectedRoute->armDeadline(baseServices.worker(), baseServices.stopToken(), handlerDeadline);
+            requestServices = baseServices.withStopToken(selectedRoute->deadline()->token()).withRequestDeadline(selectedRoute->deadline());
+        }
+
         const auto expectationPlan =
             streamState->expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
         if (const auto* rejection = expectationPlan.rejection()) {
@@ -247,11 +261,9 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 requestMemory,
                 copyHttpProtocolErrorInfo(
                     requestMemory.resource(), rejection->protocolError()),
-                baseServices);
+                requestServices);
             break;
         }
-        const auto& resolution = selectedRoute->resolution();
-        const auto* resolved = resolution.resolved();
 
         // Resolved per request: one HTTP/2 connection multiplexes many, each
         // carrying its own forwarding headers.
@@ -260,7 +272,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
             decideRequestRateLimit(baseServices.rateLimiter(), clientAddress);
         if (const auto* rejection = appRateLimit.rejection()) {
             response = co_await routes_->handleError(
-                request, requestMemory, rateLimitRejectionError(), baseServices);
+                request, requestMemory, rateLimitRejectionError(), requestServices);
             applyRateLimitRejectionHeaders(response, *rejection);
             break;
         }
@@ -273,15 +285,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 *streamSignal,
                 writeSignal_);
         }
-        auto dispatchServices = baseServices;
-        // Armed here, on the stream's own state, so concurrent requests on one
-        // connection each get their own clock. Nothing is armed when neither the
-        // deployment nor the route declared a deadline.
-        const auto handlerDeadline = effectiveHandlerDeadline(options.deadline ? options.deadline->handler : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
-        if (handlerDeadline > std::chrono::milliseconds::zero()) {
-            selectedRoute->armDeadline(baseServices.worker(), baseServices.stopToken(), handlerDeadline);
-            dispatchServices = dispatchServices.withStopToken(selectedRoute->deadline()->token()).withRequestDeadline(selectedRoute->deadline());
-        }
+        auto dispatchServices = requestServices;
         if (bodyReaderStorage) {
             dispatchServices =
                 dispatchServices.withStreamingRequestBody(bodyReaderStorage->facade());
@@ -302,7 +306,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                     ruvia::http_status::kNotAcceptable,
                     "not_acceptable",
                     "no acceptable response content coding"),
-                baseServices);
+                requestServices);
             break;
         }
         if (webSocketEndpoint != nullptr) {
@@ -390,7 +394,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 requestMemory,
                 copyHttpProtocolErrorInfo(
                     requestMemory.resource(), failure->protocolError()),
-                baseServices);
+                requestServices);
             failure->applyRequiredResponseHeaders(response);
         } else if (responseStreamEndpoint != nullptr) {
             Http2SansIoResponseStreamSink sink(
@@ -468,7 +472,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                         request,
                         requestMemory,
                         httpStaticFileCompressionError(compressionResult),
-                        baseServices);
+                        requestServices);
                 }
             }
         }
@@ -480,7 +484,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
             request,
             requestMemory,
             *error,
-            baseServices);
+            requestServices);
         preparation = prepareBufferedHttpResponse(request, responseCodingPolicy, response, options);
         if (httpBufferedResponsePreparationError(responseCodingPolicy, request, response, preparation.compressionResult()).has_value()) {
             // The negotiated coding could not be installed even on the

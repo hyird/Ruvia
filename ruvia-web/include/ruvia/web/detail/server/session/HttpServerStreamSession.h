@@ -192,6 +192,24 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     // request before its handler runs.
                     responseCodingPolicy = HttpResponseCodingPolicy::noAcceptableCoding();
                 }
+                // Reset per request: a keep-alive connection serves many, and
+                // each gets its own deadline or none. Resolve before any
+                // server-layer rejection below: a custom onError/onNotFound
+                // handler is a handler too and must see the request stop token.
+                requestDeadline.reset();
+                requestServices = baseRouteServices;
+                routeResolution = routes.resolve(parsed.request);
+                // Keyed on the client, not the hop: behind a trusted proxy every
+                // request would otherwise share the proxy's single key.
+                clientAddress = baseRouteServices.resolveConnInfo(parsed.request).client().address();
+                const auto* resolved = routeResolution.resolved();
+                const auto handlerDeadline = effectiveHandlerDeadline(options_.deadline ? options_.deadline->handler : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
+                if (handlerDeadline > std::chrono::milliseconds::zero()) {
+                    requestDeadline.emplace(stopToken_);
+                    requestDeadline->arm(workerHandle_, handlerDeadline);
+                    requestServices = baseRouteServices.withStopToken(requestDeadline->token()).withRequestDeadline(&*requestDeadline);
+                }
+
                 const auto expectationPlan = parsed.bodyPlan.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
                 if (const auto* rejection = expectationPlan.rejection()) {
                     // Expect extensions are valid HTTP syntax. The protocol parser
@@ -215,7 +233,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                                 ruvia::http_status::kNotAcceptable,
                                 "not_acceptable",
                                 "no acceptable response content coding"),
-                            baseRouteServices);
+                            requestServices);
                         // The redirect branch commits directly because its
                         // connection is intentionally closing; make the
                         // generated policy error terminal rather than letting
@@ -227,33 +245,11 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     scannerEntry.touch();
                     break;
                 }
-                // Reset per request: a keep-alive connection serves many, and
-                // each gets its own deadline or none.
-                requestDeadline.reset();
-                requestServices = baseRouteServices;
-                routeResolution = routes.resolve(parsed.request);
-                // Keyed on the client, not the hop: behind a trusted proxy every
-                // request would otherwise share the proxy's single key.
-                clientAddress = baseRouteServices.resolveConnInfo(parsed.request).client().address();
+
                 const auto appRateLimit = decideRequestRateLimit(&rateLimiter_, clientAddress);
                 if (const auto* rejection = appRateLimit.rejection()) {
                     closingRejection = Http1ClosingRejection::rateLimit(rateLimitRejectionError(), *rejection);
                     break;
-                }
-                const auto* resolved = routeResolution.resolved();
-
-                // Armed before the unmatched branch, not after it: a custom
-                // onNotFound/onError handler is a handler too and can hang the
-                // same way. Nothing is armed when neither the deployment nor the
-                // route declared a deadline, so a server without them pays one
-                // comparison. The object lives to the end of this iteration and
-                // its timer registration cancels on destruction, so a request
-                // that finishes early leaves nothing pending.
-                const auto handlerDeadline = effectiveHandlerDeadline(options_.deadline ? options_.deadline->handler : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
-                if (handlerDeadline > std::chrono::milliseconds::zero()) {
-                    requestDeadline.emplace(stopToken_);
-                    requestDeadline->arm(workerHandle_, handlerDeadline);
-                    requestServices = baseRouteServices.withStopToken(requestDeadline->token()).withRequestDeadline(&*requestDeadline);
                 }
 
                 if (resolved == nullptr) {
@@ -435,7 +431,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                         options_.blockingPool,
                         workerHandle_);
                     if (!compressionResult.compressed() && httpResponseNeedsNotAcceptable(responseCodingPolicy, parsed.request, response) && responseBody(response).file().has_value()) {
-                        response = co_await routes.handleError(parsed.request, requestMemory, httpStaticFileCompressionError(compressionResult), baseRouteServices);
+                        response = co_await routes.handleError(parsed.request, requestMemory, httpStaticFileCompressionError(compressionResult), requestServices);
                     }
                 }
                 connectionPlan = requireHttp1FinalResponseCommit(response, connectionPlan);

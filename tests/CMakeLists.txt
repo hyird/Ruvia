@@ -652,6 +652,8 @@ if(RUVIA_BUILD_WEB)
         web/server/notfound_keepalive.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_deadline_body_limit_wire
         web/server/deadline_body_limit_wire.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_deadline_error_handler_wire
+        web/server/deadline_error_handler_wire.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_http_client
         web/server/http_client.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_http_client_limits
