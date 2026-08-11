@@ -12,7 +12,81 @@ constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 }  // namespace
 
 detail::RouteResolution detail::RouteTable::resolve(const HttpRequest& request) const noexcept {
+    // An unclassified method can only be served by an extension route, and a
+    // classified one can only be served by the enum-indexed structures, so the
+    // two lookups never both run.
+    if (request.knownMethod() == HttpKnownMethod::kUnknown) {
+        return resolveExtensionMethod(request.method(), request.path());
+    }
     return resolve(request.knownMethod(), request.path());
+}
+
+detail::RouteResolution detail::RouteTable::resolveExtensionMethod(std::string_view methodToken, std::string_view path) const noexcept {
+    // Not registered anywhere means the server does not know this method, which
+    // is 501 and not this function's business -- dispatch decides that before
+    // asking about any particular resource.
+    if (!recognizesMethodToken(methodToken)) {
+        return RouteResolution{};
+    }
+    for (const auto index : extensionRouteIndices_) {
+        const auto& route = routes_[index];
+        // RFC 9110 9.1: the method token is case-sensitive.
+        if (route.methodToken() == methodToken && route.path() == path) {
+            return RouteResolution::resolved(route);
+        }
+    }
+
+    // The path exists under other methods, so this is 405 rather than 404. The
+    // mask cannot carry extension tokens; dispatch adds them to Allow from
+    // extensionMethodsFor().
+    auto methodMask = allowedMethods(path, HttpKnownMethod::kUnknown);
+    const bool extensionRoutes = hasExtensionRoutesFor(path);
+    if (methodMask != 0) {
+        methodMask |= 1U << methodIndex(HttpKnownMethod::kOptions);
+    }
+    return RouteResolution::methodNotAllowed(methodMask, extensionRoutes);
+}
+
+bool detail::RouteTable::recognizesMethodToken(std::string_view methodToken) const noexcept {
+    for (const auto index : extensionRouteIndices_) {
+        if (routes_[index].methodToken() == methodToken) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool detail::RouteTable::hasExtensionRoutesFor(std::string_view path) const noexcept {
+    for (const auto index : extensionRouteIndices_) {
+        if (routes_[index].path() == path) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::span<const std::string_view> detail::RouteTable::extensionMethodsFor(std::string_view path, std::span<std::string_view> buffer) const noexcept {
+    std::size_t count = 0;
+    for (const auto index : extensionRouteIndices_) {
+        if (count == buffer.size()) {
+            break;
+        }
+        const auto& route = routes_[index];
+        if (route.path() != path) {
+            continue;
+        }
+        bool duplicate = false;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (buffer[i] == route.methodToken()) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) {
+            buffer[count++] = route.methodToken();
+        }
+    }
+    return buffer.first(count);
 }
 
 detail::RouteResolution detail::RouteTable::resolve(HttpKnownMethod method, std::string_view path) const noexcept {
@@ -34,12 +108,14 @@ detail::RouteResolution detail::RouteTable::resolve(HttpKnownMethod method, std:
     }
 
     auto methodMask = allowedMethods(path, method);
+    // A resource may be served only by extension methods. It still exists, so
+    // an unsupported known method is 405 and OPTIONS must answer with Allow --
+    // the mask alone cannot tell that apart from no resource at all.
+    const bool extensionRoutes = hasExtensionRoutesFor(path);
     if (methodMask != 0) {
         methodMask |= 1U << methodIndex(HttpKnownMethod::kOptions);
-        return RouteResolution::methodNotAllowed(methodMask);
     }
-
-    return RouteResolution{};
+    return RouteResolution::methodNotAllowed(methodMask, extensionRoutes);
 }
 
 std::size_t detail::RouteTable::methodIndex(HttpKnownMethod method) noexcept {

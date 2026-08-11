@@ -15,7 +15,12 @@ void detail::RouteTable::buildPerfectHash() {
     std::pmr::vector<const RouteEntry*> exactRoutes(resource_);
     exactRoutes.reserve(routes_.size());
     for (const auto& route : routes_) {
-        if (!route.dynamic()) {
+        // Extension routes are resolved by the cold token scan, never by this
+        // index. They must also stay out of it: the hash is keyed on the method
+        // ENUM and the path, so two extension routes on one path -- which is
+        // ordinary, e.g. PROPFIND and PURGE on the same resource -- would be
+        // indistinguishable and no seed could ever separate them.
+        if (!route.dynamic() && route.method() != HttpKnownMethod::kUnknown) {
             exactRoutes.push_back(&route);
         }
     }

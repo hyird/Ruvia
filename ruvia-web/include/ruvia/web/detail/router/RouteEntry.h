@@ -16,6 +16,11 @@ class RouteEntry final {
 public:
     struct Init final {
         HttpKnownMethod method;
+        // Non-empty only for an extension-method route, where it is the exact,
+        // case-sensitive wire token (RFC 9110 9.1) and `method` is kUnknown.
+        // Known methods keep the enum as their identity so the routing fast
+        // path never compares strings.
+        std::string_view methodToken{};
         std::string_view path;
         RouteEndpoint endpoint;
         bool dynamic{false};
@@ -32,6 +37,11 @@ public:
 
     [[nodiscard]] HttpKnownMethod method() const noexcept {
         return method_;
+    }
+
+    // Empty unless this is an extension-method route.
+    [[nodiscard]] std::string_view methodToken() const noexcept {
+        return methodToken_;
     }
 
     [[nodiscard]] std::string_view path() const noexcept {
@@ -73,6 +83,7 @@ public:
 
 private:
     HttpKnownMethod method_;
+    std::pmr::string methodToken_;
     std::pmr::string path_;
     RouteEndpoint endpoint_;
     bool dynamic_{false};

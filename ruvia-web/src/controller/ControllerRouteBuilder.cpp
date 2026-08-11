@@ -92,6 +92,10 @@ void detail::ControllerRouteBuilder::registerRoute(HttpKnownMethod method, std::
     RouterImpl::from(impl_->router()).registerRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler), bodyMode, impl_->middlewares(), middlewares);
 }
 
+void detail::ControllerRouteBuilder::registerExtensionMethodRoute(std::string_view methodToken, std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> middlewares) const {
+    RouterImpl::from(impl_->router()).registerExtensionMethodRoute(methodToken, joinControllerPaths(impl_->prefix(), path), std::move(handler), bodyMode, impl_->middlewares(), middlewares);
+}
+
 void detail::ControllerRouteBuilder::registerResponseStreamRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares) const {
     RouterImpl::from(impl_->router()).registerResponseStreamRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler), impl_->middlewares(), middlewares);
 }

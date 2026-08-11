@@ -134,6 +134,17 @@ private:                                                                        
 
 #define RUVIA_OPTIONS(path, handler, ...) RuviaControllerAccess::addRoute(ruviaRouteScope, ::ruvia::HttpKnownMethod::kOptions, path, RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), ::ruvia::detail::RequestBodyMode::kBuffered, RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
+// An extension method, routed by its exact wire token: PROPFIND, PURGE, LOCK.
+// HTTP's method space is open (HttpKnownMethod is only this framework's fixed
+// classification, never the wire value), but routes were keyed on that enum, so
+// anything outside it answered 501 and could not be served at all.
+//
+// The token is case-sensitive per RFC 9110 9.1, must be a valid method token,
+// and must NOT be one of the classified methods -- those keep the enum as their
+// identity and their own macros. The path must be static: extension routes are
+// matched by a cold linear scan with no dynamic-segment index behind it.
+#define RUVIA_METHOD(method_token, path, handler, ...) RuviaControllerAccess::addExtensionMethodRoute(ruviaRouteScope, method_token, path, RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), ::ruvia::detail::RequestBodyMode::kBuffered, RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
+
 // Hono app.all: registers the handler for GET/POST/PUT/PATCH/DELETE/OPTIONS.
 #define RUVIA_ALL(path, handler, ...) \
     for (const auto ruviaRouteMethod : ::ruvia::detail::kRuviaAllRouteMethods) RuviaControllerAccess::addRoute(ruviaRouteScope, ruviaRouteMethod, path, RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), ::ruvia::detail::RequestBodyMode::kBuffered, RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())

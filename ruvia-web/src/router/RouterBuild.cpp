@@ -52,6 +52,7 @@ detail::RouteEntry::RouteEntry(std::pmr::memory_resource* resource, Init init)
 
 detail::RouteEntry::RouteEntry(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource, Init init)
     : method_(init.method),
+      methodToken_(init.methodToken, resource),
       path_(init.path, resource),
       endpoint_(std::move(init.endpoint)),
       dynamic_(init.dynamic),
@@ -64,6 +65,7 @@ detail::RouteTable::RouteTable(std::pmr::memory_resource* resource)
       middlewareFrames_(resource_),
       exactSlots_(resource_),
       dynamicRoots_{DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_)},
+      extensionRouteIndices_(resource_),
       dynamicNodeArena_(resource_),
       dynamicParamNames_(resource_) {}
 
@@ -106,7 +108,7 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
 
     for (const auto& pending : pendingRoutes_) {
         const auto pendingMiddlewares = pending.middlewares();
-        RouteEntry route(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{.method = pending.method(), .path = pending.path(), .endpoint = pending.endpoint().clone(table.resource_), .dynamic = pending.dynamic(), .middlewareOffset = 0, .middlewareCount = 0});
+        RouteEntry route(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{.method = pending.method(), .methodToken = pending.methodToken(), .path = pending.path(), .endpoint = pending.endpoint().clone(table.resource_), .dynamic = pending.dynamic(), .middlewareOffset = 0, .middlewareCount = 0});
         // App-wide middleware runs before controller/route middleware on every
         // matched route: each route's contiguous frame range starts with the
         // shared global instances.
@@ -176,6 +178,13 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
         }
         RouteEntry shadow(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{.method = HttpKnownMethod::kHead, .path = source.path(), .endpoint = source.endpoint().clone(table.resource_), .dynamic = source.dynamic(), .middlewareOffset = source.middlewareOffset(), .middlewareCount = source.middlewareCount()});
         table.routes_.push_back(std::move(shadow));
+    }
+
+    // After both passes, so the indices are stable for the table's lifetime.
+    for (std::size_t i = 0; i < table.routes_.size(); ++i) {
+        if (table.routes_[i].method() == HttpKnownMethod::kUnknown) {
+            table.extensionRouteIndices_.push_back(i);
+        }
     }
 
     table.buildAllowedMethodMask();

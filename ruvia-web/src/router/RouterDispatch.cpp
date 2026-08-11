@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <utility>
 
 #include "ruvia/web/StaticFiles.h"
@@ -20,14 +21,14 @@ namespace ruvia {
 
 namespace {
 
-void setAllowHeader(HttpResponse& response, std::uint32_t methodMask) {
-    detail::setResponseAllowHeader(response, methodMask);
+void setAllowHeader(HttpResponse& response, std::uint32_t methodMask, std::span<const std::string_view> extensionMethods = {}) {
+    detail::setResponseAllowHeader(response, methodMask, extensionMethods);
 }
 
-HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t methodMask) {
+HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t methodMask, std::span<const std::string_view> extensionMethods = {}) {
     HttpResponse response(memory.resource());
     response.status(ruvia::http_status::kNoContent);
-    setAllowHeader(response, methodMask);
+    setAllowHeader(response, methodMask, extensionMethods);
     return response;
 }
 
@@ -149,13 +150,31 @@ Task<detail::BufferedResponseDispatchResult> detail::RouteTable::dispatchRequest
             // add a resident HttpResponse-sized block.
             std::optional<HttpErrorInfo> error;
             std::uint32_t allowedMethods = 0;
-            if (request.knownMethod() == HttpKnownMethod::kUnknown) {
+            // Room for the extension tokens a 405 must name in Allow. Fixed and
+            // small: a resource carrying more distinct extension methods than
+            // this would be pathological, and truncating beats allocating on
+            // the error path.
+            std::string_view extensionMethodBuffer[8];
+            std::span<const std::string_view> extensionMethods;
+            if (request.knownMethod() == HttpKnownMethod::kUnknown && !recognizesMethodToken(request.method())) {
+                // RFC 9110 15.5.6/15.6.2: 405 says the method is known here but
+                // unsupported by this resource; a token no route registered is
+                // not known here at all, so it stays 501 whatever the path holds.
                 error = HttpErrorInfo(ruvia::http_status::kNotImplemented, {}, "method not implemented");
+            } else if (request.knownMethod() == HttpKnownMethod::kUnknown) {
+                if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
+                    error = HttpErrorInfo(ruvia::http_status::kMethodNotAllowed, {}, "method not allowed");
+                    allowedMethods = methodNotAllowed->allowedMethods();
+                    extensionMethods = extensionMethodsFor(request.path(), extensionMethodBuffer);
+                }
+                // Otherwise the method is known here but this path has nothing:
+                // an ordinary 404, which the fallback below produces.
             } else if (request.knownMethod() == HttpKnownMethod::kOptions && request.path() == "*") {
                 co_return detail::BufferedResponseDispatchResult::makeApplication(makeAllowNoContentResponse(memory, allowedMethodsForServer()));
             } else if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
+                extensionMethods = extensionMethodsFor(request.path(), extensionMethodBuffer);
                 if (request.knownMethod() == HttpKnownMethod::kOptions) {
-                    co_return detail::BufferedResponseDispatchResult::makeApplication(makeAllowNoContentResponse(memory, methodNotAllowed->allowedMethods()));
+                    co_return detail::BufferedResponseDispatchResult::makeApplication(makeAllowNoContentResponse(memory, methodNotAllowed->allowedMethods(), extensionMethods));
                 }
                 error = HttpErrorInfo(ruvia::http_status::kMethodNotAllowed, {}, "method not allowed");
                 allowedMethods = methodNotAllowed->allowedMethods();
@@ -163,8 +182,8 @@ Task<detail::BufferedResponseDispatchResult> detail::RouteTable::dispatchRequest
 
             if (error) {
                 auto response = co_await handleError(request, memory, *error, services);
-                if (allowedMethods != 0) {
-                    setAllowHeader(response, allowedMethods);
+                if (allowedMethods != 0 || !extensionMethods.empty()) {
+                    setAllowHeader(response, allowedMethods, extensionMethods);
                 }
                 co_return detail::BufferedResponseDispatchResult::makeApplication(std::move(response));
             }

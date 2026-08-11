@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -192,7 +193,7 @@ private:
     void materializeBody();
     void setHeaderStableView(std::string_view key, std::string_view value);
     void setHeaderUnsigned(std::string_view key, std::uint64_t value, std::uint32_t knownBit);
-    void setAllowHeader(std::uint32_t methodMask);
+    void setAllowHeader(std::uint32_t methodMask, std::span<const std::string_view> extensionMethods = {});
     void setContentRange(std::uint64_t offset, std::uint64_t length, std::uint64_t size);
     void setContentRangeUnsatisfied(std::uint64_t size);
     void setHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit);

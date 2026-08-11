@@ -117,6 +117,9 @@ public:
     RUVIA_GET("/whoami", whoami, TestingFacadeAuth);
     RUVIA_GET("/whoami-unbound", whoamiUnbound);
     RUVIA_GET("/report", report);
+    RUVIA_METHOD("PROPFIND", "/files", propfind);
+    RUVIA_METHOD("PURGE", "/files", purge);
+    RUVIA_METHOD("PROPFIND", "/dav-only", davOnly);
     RUVIA_ROUTES_END
 
 private:
@@ -156,6 +159,18 @@ private:
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
         const auto body = co_await c.req().json<TestingFacadeEcho>();
         co_return c.body(body.value().has_value() ? body.value()->view() : "missing");
+    }
+
+    ruvia::Task<ruvia::HttpResponse> propfind(ruvia::Context& c) {
+        co_return c.body(c.req().method());
+    }
+
+    ruvia::Task<ruvia::HttpResponse> purge(ruvia::Context& c) {
+        co_return c.body(std::string_view("purged"));
+    }
+
+    ruvia::Task<ruvia::HttpResponse> davOnly(ruvia::Context& c) {
+        co_return c.body(std::string_view("dav"));
     }
 
     ruvia::Task<ruvia::HttpResponse> whoami(ruvia::Context& c) {
@@ -547,7 +562,8 @@ RUVIA_TEST(testing_facade_unmatched_middleware_also_wraps_405_and_501) {
     // The Allow header the fallback sets must survive the chain.
     RUVIA_CHECK(wrongMethod.header("Allow").has_value());
 
-    const auto unknownMethod = app.request(ruvia::TestRequest::method("PROPFIND", "/t/hello"));
+    // A token no route registered: the server does not know it, so 501.
+    const auto unknownMethod = app.request(ruvia::TestRequest::method("FROBNICATE", "/t/hello"));
     RUVIA_CHECK_EQ(unknownMethod.status(), ruvia::http_status::kNotImplemented);
     RUVIA_CHECK(unknownMethod.header("X-Test-Always").has_value());
 }
@@ -589,4 +605,80 @@ RUVIA_TEST(testing_facade_security_headers_reach_unmatched_requests) {
     RUVIA_CHECK_EQ(*policy, std::string_view("default-src 'self'"));
     RUVIA_CHECK(missing.header("X-Content-Type-Options").has_value());
     RUVIA_CHECK(missing.header("X-Frame-Options").has_value());
+}
+
+RUVIA_TEST(testing_facade_routes_an_extension_method_by_its_exact_token) {
+    ruvia::TestApp app;
+
+    const auto propfind = app.request(ruvia::TestRequest::method("PROPFIND", "/t/files"));
+    RUVIA_CHECK_EQ(propfind.status(), ruvia::http_status::kOk);
+    // The handler sees the exact wire token, not a classification.
+    RUVIA_CHECK_EQ(propfind.body(), std::string_view("PROPFIND"));
+
+    const auto purge = app.request(ruvia::TestRequest::method("PURGE", "/t/files"));
+    RUVIA_CHECK_EQ(purge.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(purge.body(), std::string_view("purged"));
+}
+
+RUVIA_TEST(testing_facade_extension_method_tokens_are_case_sensitive) {
+    ruvia::TestApp app;
+    // RFC 9110 9.1: the method token is case-sensitive, so "propfind" is a
+    // different method from "PROPFIND" and no route registered it. 405 is
+    // reserved for a method the origin server knows (15.5.6), so an
+    // unregistered token is 501 no matter what the target path supports.
+    const auto response = app.request(ruvia::TestRequest::method("propfind", "/t/files"));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kNotImplemented);
+}
+
+RUVIA_TEST(testing_facade_extension_method_splits_404_from_501) {
+    ruvia::TestApp app;
+
+    // PROPFIND is registered somewhere, so the server knows it. A path with no
+    // route at all is then an ordinary 404 -- the method is not the problem.
+    const auto missingPath = app.request(ruvia::TestRequest::method("PROPFIND", "/t/nothing-here"));
+    RUVIA_CHECK_EQ(missingPath.status(), ruvia::http_status::kNotFound);
+
+    // A token no route registered is 501 even on a path that exists.
+    const auto unknownMethod = app.request(ruvia::TestRequest::method("FROBNICATE", "/t/files"));
+    RUVIA_CHECK_EQ(unknownMethod.status(), ruvia::http_status::kNotImplemented);
+}
+
+RUVIA_TEST(testing_facade_extension_method_on_a_known_path_is_405_not_501) {
+    ruvia::TestApp app;
+    // The resource exists under GET, so the method is the problem, not the URI.
+    const auto response = app.request(ruvia::TestRequest::method("PROPFIND", "/t/hello"));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kMethodNotAllowed);
+    const auto allow = response.header("Allow");
+    RUVIA_CHECK(allow.has_value());
+    RUVIA_CHECK(allow.has_value() && allow->find("GET") != std::string_view::npos);
+}
+
+RUVIA_TEST(testing_facade_allow_header_names_extension_methods) {
+    ruvia::TestApp app;
+
+    // A known method the path does not support: Allow must still name the
+    // extension methods it does, or it is not the full supported set.
+    const auto known = app.request(ruvia::TestRequest::post("/t/files"));
+    RUVIA_CHECK_EQ(known.status(), ruvia::http_status::kMethodNotAllowed);
+    const auto knownAllow = known.header("Allow");
+    RUVIA_CHECK(knownAllow.has_value());
+    RUVIA_CHECK(knownAllow.has_value() && knownAllow->find("PROPFIND") != std::string_view::npos);
+    RUVIA_CHECK(knownAllow.has_value() && knownAllow->find("PURGE") != std::string_view::npos);
+
+    // A path whose ONLY methods are extension ones must still answer 405 with a
+    // populated Allow rather than 404 or an empty header.
+    const auto davOnly = app.request(ruvia::TestRequest::method("PURGE", "/t/dav-only"));
+    RUVIA_CHECK_EQ(davOnly.status(), ruvia::http_status::kMethodNotAllowed);
+    const auto davAllow = davOnly.header("Allow");
+    RUVIA_CHECK(davAllow.has_value());
+    RUVIA_CHECK_EQ(davAllow.value_or(std::string_view{}), std::string_view("PROPFIND"));
+}
+
+RUVIA_TEST(testing_facade_options_reports_extension_methods_too) {
+    ruvia::TestApp app;
+    const auto response = app.request(ruvia::TestRequest::options("/t/files"));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kNoContent);
+    const auto allow = response.header("Allow");
+    RUVIA_CHECK(allow.has_value());
+    RUVIA_CHECK(allow.has_value() && allow->find("PROPFIND") != std::string_view::npos);
 }
