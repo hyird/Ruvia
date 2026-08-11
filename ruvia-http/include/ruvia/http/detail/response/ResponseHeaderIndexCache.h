@@ -33,7 +33,7 @@ using ResponseHeaderIndexCache = std::array<ResponseHeaderIndexSlot, Count>;
 
 template <std::size_t Count>
 inline void recordResponseHeaderIndex(ResponseHeaderIndexCache<Count>& cache, std::size_t slot, std::size_t index) noexcept {
-    if (slot >= cache.size()) {
+    if (slot >= Count) {
         return;
     }
     if (cache[slot] != kMissingResponseHeaderIndexSlot) {
@@ -48,7 +48,7 @@ inline void recordResponseHeaderIndex(ResponseHeaderIndexCache<Count>& cache, st
 
 template <typename HeaderPointer, std::size_t Count>
 [[nodiscard]] inline HeaderPointer findResponseHeaderIndexed(HeaderPointer begin, HeaderPointer end, const ResponseHeaderIndexCache<Count>& cache, std::size_t slot, std::string_view name, std::uint32_t knownBit) noexcept {
-    if (slot < cache.size()) {
+    if (slot < Count) {
         const auto index = cache[slot];
         if (responseHeaderIndexSlotHasValue(index)) {
             return begin + responseHeaderIndexSlotValue(index);

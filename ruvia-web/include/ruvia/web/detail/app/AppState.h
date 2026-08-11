@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/memory/PmrObject.h"
@@ -104,8 +105,14 @@ struct AppDocumentRootConfig final {
 };
 
 struct AppListenerConfig final {
-    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerOptions::ListenerTransport configuredTransport)
-        : address(configuredAddress, resource), port(configuredPort), transport(std::move(configuredTransport)) {}
+    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerOptions::PlainHttp)
+        : address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerOptions::PlainHttp>) {}
+
+    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerOptions::Tls configuredTransport)
+        : address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerOptions::Tls>, std::move(configuredTransport)) {}
+
+    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerOptions::RedirectHttpToHttps configuredTransport)
+        : address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerOptions::RedirectHttpToHttps>, configuredTransport) {}
 
     std::pmr::string address;
     std::uint16_t port;

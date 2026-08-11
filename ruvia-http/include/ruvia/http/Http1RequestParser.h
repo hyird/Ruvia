@@ -34,14 +34,16 @@ public:
 private:
     friend struct detail::Http1RequestParseResultAccess;
 
-    explicit constexpr Http1RequestNeedMore(std::optional<std::size_t> requiredTotalBytes) noexcept
+    constexpr Http1RequestNeedMore() noexcept = default;
+
+    explicit constexpr Http1RequestNeedMore(std::size_t requiredTotalBytes) noexcept
         : requiredTotalBytes_(requiredTotalBytes) {
         if (requiredTotalBytes_ && *requiredTotalBytes_ == 0) {
             std::terminate();
         }
     }
 
-    std::optional<std::size_t> requiredTotalBytes_;
+    std::optional<std::size_t> requiredTotalBytes_{};
 };
 
 // One completely framed HTTP/1 request. All views borrow the input passed to

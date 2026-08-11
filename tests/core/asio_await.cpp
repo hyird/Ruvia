@@ -24,9 +24,9 @@ ruvia::Task<void> exerciseSynchronousCompletion(bool& success) {
 }
 
 ruvia::Task<void> exerciseSynchronousVoid(bool& success) {
-    co_await ruvia::detail::asyncAsio([](auto handler) mutable {
+    (void)(co_await ruvia::detail::asyncAsio([](auto handler) mutable {
         handler(std::error_code{});
-    });
+    }));
     success = true;
 }
 
@@ -45,9 +45,9 @@ ruvia::Task<void> exerciseDeferredCompletion(asio::io_context& ioContext, bool& 
 // awaiter without a pending completion.
 ruvia::Task<void> exerciseInitiateFailure(bool& caught) {
     try {
-        co_await ruvia::detail::asyncAsio<void>([](auto) {
+        (void)(co_await ruvia::detail::asyncAsio<void>([](auto) {
             throw std::runtime_error("initiate failure");
-        });
+        }));
     } catch (const std::runtime_error&) {
         caught = true;
     }

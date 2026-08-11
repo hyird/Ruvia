@@ -71,20 +71,7 @@ RUVIA_TEST(context_parse_body_drops_proto_path_segments_without_trailing_dot) {
     bool rootProtoDropped = false;
     bool nestedProtoDropped = false;
     bool siblingKept = false;
-    asio::co_spawn(
-        io,
-        [&]() -> asio::awaitable<void> {
-            const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {
-                                                                                                    .dottedNames = ruvia::ContextRequest::DottedNamePolicy::kExpandPath,
-                                                                                                }));
-            rootProtoDropped = !static_cast<bool>(form.get("__proto__"));
-            const auto profile = form.object("profile");
-            nestedProtoDropped = !static_cast<bool>(profile.get("__proto__"));
-            const auto name = profile.get("name").value();
-            siblingKept = name.has_value() && *name == std::string_view("ok");
-            co_return;
-        }(),
-        asio::detached);
+    asio::co_spawn(io, parseProtoPathSegments(context, rootProtoDropped, nestedProtoDropped, siblingKept), asio::detached);
     io.run();
 
     RUVIA_CHECK(rootProtoDropped);
@@ -107,19 +94,7 @@ RUVIA_TEST(context_parse_body_dotted_trailing_empty_segment_is_not_child) {
     std::size_t childCount = 99;
     bool childFound = true;
     bool exactPathFound = false;
-    asio::co_spawn(
-        io,
-        [&]() -> asio::awaitable<void> {
-            const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {
-                                                                                                    .dottedNames = ruvia::ContextRequest::DottedNamePolicy::kExpandPath,
-                                                                                                }));
-            const auto profile = form.object("profile");
-            childCount = profile.count("name");
-            childFound = static_cast<bool>(profile.get("name"));
-            exactPathFound = static_cast<bool>(form.get("profile.name."));
-            co_return;
-        }(),
-        asio::detached);
+    asio::co_spawn(io, parseTrailingEmptyDotSegment(context, childCount, childFound, exactPathFound), asio::detached);
     io.run();
 
     RUVIA_CHECK_EQ(childCount, std::size_t{0});
@@ -240,18 +215,7 @@ RUVIA_TEST(context_parse_body_treats_empty_filename_parameter_as_file) {
     asio::io_context& io = ruvia::test::newTestIoContext();
     bool isFile = false;
     std::string filename = "unset";
-    asio::co_spawn(
-        io,
-        [&]() -> asio::awaitable<void> {
-            const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {}));
-            const auto upload = form.get("upload");
-            if (const auto* field = upload.field(); field != nullptr) {
-                isFile = field->isFile();
-                filename.assign(field->filename().data(), field->filename().size());
-            }
-            co_return;
-        }(),
-        asio::detached);
+    asio::co_spawn(io, parseEmptyFilenameUpload(context, isFile, filename), asio::detached);
     io.run();
 
     RUVIA_CHECK(isFile);
