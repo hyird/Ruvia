@@ -184,6 +184,25 @@ public:
     [[nodiscard]] std::pmr::string urlFor(std::string_view pattern, std::span<const std::string_view> values, std::pmr::memory_resource* resource) const;
     [[nodiscard]] RouteResolution resolve(const HttpRequest& request) const noexcept;
     [[nodiscard]] RouteResolution resolve(HttpKnownMethod method, std::string_view path) const noexcept;
+
+    // Extension-method routing, kept off every enum-indexed structure. The
+    // request's exact token is compared against a small cold list, which costs
+    // a known-method request nothing: both protocol drivers only reach it when
+    // classifyHttpMethod() returned kUnknown.
+    [[nodiscard]] RouteResolution resolveExtensionMethod(std::string_view methodToken, std::string_view path) const noexcept;
+
+    // Tokens of the extension routes registered on `path`, for the Allow header
+    // of a 405. Written into caller storage so no allocation outlives the call.
+    [[nodiscard]] std::span<const std::string_view> extensionMethodsFor(std::string_view path, std::span<std::string_view> buffer) const noexcept;
+    // Unique extension method tokens registered anywhere on the server, for the
+    // server-wide Allow header of OPTIONS *.
+    [[nodiscard]] std::span<const std::string_view> extensionMethodsForServer() const noexcept;
+    [[nodiscard]] bool hasExtensionRoutesFor(std::string_view path) const noexcept;
+
+    // Whether ANY route in the table uses this exact token. RFC 9110 15.5.6
+    // makes 405 conditional on the method being "known by the origin server",
+    // so a token nobody registered is 501 no matter what the target path holds.
+    [[nodiscard]] bool recognizesMethodToken(std::string_view methodToken) const noexcept;
     Task<HttpResponse> dispatch(const HttpRequest& request, RequestMemory& memory, ContextServices services = {}) const;
     Task<HttpResponse> dispatch(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services = {}) const;
     // Canonical buffered-response application dispatch for every server
@@ -244,7 +263,8 @@ private:
 
     void buildPerfectHash();
     void buildDynamicRoutes();
-    void buildAllowedMethodMask() noexcept;
+    void buildAllowedMethodMask();
+
 
     [[nodiscard]] static std::size_t methodIndex(HttpKnownMethod method) noexcept;
     [[nodiscard]] static bool isRoutableMethod(HttpKnownMethod method) noexcept;
@@ -309,6 +329,10 @@ private:
     // middlewares that declared they also run when no route matched. Kept as a
     // range rather than a separate vector so the fallback chain indexes frames
     // exactly the way a route's chain does.
+    // Indices into routes_ rather than pointers: routes_ is populated in two
+    // passes and this is built after both.
+    std::pmr::vector<std::size_t> extensionRouteIndices_;
+    std::pmr::vector<std::string_view> serverExtensionMethodTokens_;
     std::size_t unmatchedMiddlewareOffset_{0};
     std::size_t unmatchedMiddlewareCount_{0};
     std::pmr::vector<PerfectSlot> exactSlots_;

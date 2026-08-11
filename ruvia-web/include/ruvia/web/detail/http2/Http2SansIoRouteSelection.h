@@ -20,8 +20,13 @@ namespace ruvia::detail {
     auto& runtime = streamRuntimes.ensureAccepted(streamState);
     RouteResolution resolution;
     auto bodyMode = RequestBodyMode::kBuffered;
-    if (method != HttpKnownMethod::kUnknown && !path.empty()) {
-        resolution = routes.resolve(method, path);
+    if (!path.empty()) {
+        // An unclassified method can only be served by an extension route, and
+        // it is matched on the exact wire token -- the same split HTTP/1 makes
+        // in RouteTable::resolve(const HttpRequest&). Without this branch,
+        // extension routes would work over HTTP/1 and silently not over
+        // HTTP/2.
+        resolution = method == HttpKnownMethod::kUnknown ? routes.resolveExtensionMethod(streamState.requestMethod(), path) : routes.resolve(method, path);
     }
     const auto* resolved = resolution.resolved();
     if (resolved != nullptr) {

@@ -15,7 +15,12 @@ void detail::RouteTable::buildPerfectHash() {
     std::pmr::vector<const RouteEntry*> exactRoutes(resource_);
     exactRoutes.reserve(routes_.size());
     for (const auto& route : routes_) {
-        if (!route.dynamic()) {
+        // Extension routes are resolved by the cold token scan, never by this
+        // index. They must also stay out of it: the hash is keyed on the method
+        // ENUM and the path, so two extension routes on one path -- which is
+        // ordinary, e.g. PROPFIND and PURGE on the same resource -- would be
+        // indistinguishable and no seed could ever separate them.
+        if (!route.dynamic() && route.method() != HttpKnownMethod::kUnknown) {
             exactRoutes.push_back(&route);
         }
     }
@@ -68,15 +73,28 @@ void detail::RouteTable::buildPerfectHash() {
     throw std::logic_error("failed to build the static route index");
 }
 
-void detail::RouteTable::buildAllowedMethodMask() noexcept {
+void detail::RouteTable::buildAllowedMethodMask() {
     allowedMethodMask_ = 0;
     staticMethodMask_ = 0;
+    serverExtensionMethodTokens_.clear();
+    serverExtensionMethodTokens_.reserve(extensionRouteIndices_.size());
     for (const auto& route : routes_) {
         if (isRoutableMethod(route.method())) {
             const auto methodBit = 1U << methodIndex(route.method());
             allowedMethodMask_ |= methodBit;
             if (!route.dynamic()) {
                 staticMethodMask_ |= methodBit;
+            }
+        } else if (!route.methodToken().empty()) {
+            bool duplicate = false;
+            for (const auto token : serverExtensionMethodTokens_) {
+                if (token == route.methodToken()) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                serverExtensionMethodTokens_.push_back(route.methodToken());
             }
         }
     }

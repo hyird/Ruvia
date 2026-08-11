@@ -88,6 +88,34 @@ RUVIA_TEST(request_body_limit_distinguishes_absence_from_finite_values) {
     RUVIA_CHECK_EQ(bufferedLimit.maximum().value(), std::size_t{1024});
 }
 
+RUVIA_TEST(request_state_route_body_limit_only_tightens) {
+    // A route-declared ceiling narrows the server's...
+    const auto tightened = requestBodyByteLimit(RequestBodyMode::kBuffered, std::nullopt, 1024, 16);
+    RUVIA_CHECK(tightened.maximum().has_value());
+    RUVIA_CHECK_EQ(tightened.maximum().value(), std::size_t{16});
+
+    // ...but must never raise it: a route cannot lift the deployment-wide bound.
+    const auto clamped = requestBodyByteLimit(RequestBodyMode::kBuffered, std::nullopt, 1024, 4096);
+    RUVIA_CHECK(clamped.maximum().has_value());
+    RUVIA_CHECK_EQ(clamped.maximum().value(), std::size_t{1024});
+
+    // 0 means "not declared" and leaves the server's limit alone.
+    const auto undeclared = requestBodyByteLimit(RequestBodyMode::kBuffered, std::nullopt, 1024, 0);
+    RUVIA_CHECK_EQ(undeclared.maximum().value(), std::size_t{1024});
+
+    // On a stream route it also bounds an otherwise unlimited body.
+    const auto boundedStream = requestBodyByteLimit(RequestBodyMode::kStream, std::nullopt, 1024, 32);
+    RUVIA_CHECK(boundedStream.maximum().has_value());
+    RUVIA_CHECK_EQ(boundedStream.maximum().value(), std::size_t{32});
+    RUVIA_CHECK(!requestBodyByteLimit(RequestBodyMode::kStream, std::nullopt, 1024, 0).maximum().has_value());
+
+    // And narrows an explicit stream limit the same way.
+    const auto tightenedStream = requestBodyByteLimit(RequestBodyMode::kStream, std::optional<std::size_t>{2048}, 1024, 64);
+    RUVIA_CHECK_EQ(tightenedStream.maximum().value(), std::size_t{64});
+    const auto clampedStream = requestBodyByteLimit(RequestBodyMode::kStream, std::optional<std::size_t>{2048}, 1024, 8192);
+    RUVIA_CHECK_EQ(clampedStream.maximum().value(), std::size_t{2048});
+}
+
 RUVIA_TEST(request_state_content_length_exceeds_limit) {
     Http1ServerRequestParser parser;
     const auto over = parser.parseMessage("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 101\r\n\r\n").bodyPlan;

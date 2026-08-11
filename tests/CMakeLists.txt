@@ -365,6 +365,7 @@ ruvia_add_unit_suite(ruvia_web_unit_tests ruvia::web
     web/unit/app/dotenv_parser.cpp
     web/unit/app/server_options_validation.cpp
     web/unit/app/testing_facade.cpp
+    web/unit/app/route_middleware_config.cpp
 
     # web/unit/auth
     web/unit/auth/cookie_signature.cpp
@@ -658,6 +659,8 @@ if(RUVIA_BUILD_WEB)
         web/server/head_document_root.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_static_root_refresh
         web/server/static_root_refresh.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_stream_body_limit
+        web/server/stream_body_limit.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_head_stream_route
         web/server/head_stream_route.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_connection_failure

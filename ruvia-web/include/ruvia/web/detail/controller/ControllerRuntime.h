@@ -63,6 +63,10 @@ class ControllerRegistrationAccess final {
         scope.registerRoute(method, path, std::move(handler), bodyMode, middlewares);
     }
 
+    static void addExtensionMethodRoute(const ControllerRouteBuilder& scope, std::string_view methodToken, std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> middlewares) {
+        scope.registerExtensionMethodRoute(methodToken, path, std::move(handler), bodyMode, middlewares);
+    }
+
     static void addResponseStreamRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares) {
         scope.registerResponseStreamRoute(method, path, std::move(handler), middlewares);
     }

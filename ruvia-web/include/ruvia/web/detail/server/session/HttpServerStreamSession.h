@@ -282,7 +282,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     closingRejection = Http1ClosingRejection::error(HttpErrorInfo(ruvia::http_status::kNotAcceptable, "not_acceptable", "no acceptable response content coding"));
                     break;
                 }
-                const auto maxRequestBodyBytes = requestBodyByteLimit(endpoint.requestBodyMode(), options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes);
+                const auto maxRequestBodyBytes = requestBodyByteLimit(endpoint.requestBodyMode(), options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes, resolved->route().maxRequestBodyBytes());
                 if (const auto bodyFailure = contentLengthLimitFailure(parsed.bodyPlan, maxRequestBodyBytes)) {
                     closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(requestMemory.resource(), bodyFailure->protocolError()));
                     break;

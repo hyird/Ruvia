@@ -8,9 +8,11 @@ using namespace detail;
 
 detail::RouterImpl::PendingRoute::PendingRoute(std::pmr::memory_resource* resource, Init init)
     : method_(init.method),
+      methodToken_(init.methodToken, resource),
       path_(resource),
       endpoint_(std::move(init.endpoint)),
       dynamic_(init.dynamic),
+      maxRequestBodyBytes_(init.maxRequestBodyBytes),
       middlewares_(resource) {
     auto* const routeResource = path_.get_allocator().resource();
     if (init.path.get_allocator().resource() == routeResource) {
@@ -42,15 +44,55 @@ void detail::RouterImpl::registerWebSocketRoute(HttpKnownMethod method, std::pmr
     registerEndpoint(method, std::move(path), RouteEndpoint::webSocket(resource_, handler, webSocketOptions), controllerMiddlewares, routeMiddlewares);
 }
 
+namespace {
+
+// The tightest ceiling any of the route's middlewares declared. Several may:
+// a controller-wide one and a route-specific one, and the stricter must win
+// rather than the last registered.
+[[nodiscard]] std::size_t declaredRequestBodyLimit(std::span<const detail::ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const detail::ControllerMiddlewareDescriptor> routeMiddlewares) noexcept {
+    std::size_t limit = 0;
+    const auto consider = [&limit](std::span<const detail::ControllerMiddlewareDescriptor> descriptors) noexcept {
+        for (const auto& descriptor : descriptors) {
+            const auto declared = descriptor.requestBodyLimit();
+            if (declared != 0 && (limit == 0 || declared < limit)) {
+                limit = declared;
+            }
+        }
+    };
+    consider(controllerMiddlewares);
+    consider(routeMiddlewares);
+    return limit;
+}
+
+}  // namespace
+
 void detail::RouterImpl::registerEndpoint(HttpKnownMethod method, std::pmr::string path, RouteEndpoint endpoint, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
-    appendPendingRoute(PendingRoute(resource_, PendingRoute::Init{.method = method, .path = std::move(path), .endpoint = std::move(endpoint), .dynamic = false, .middlewares = materializeMiddlewares(controllerMiddlewares, routeMiddlewares)}));
+    registerEndpointWithToken(method, {}, std::move(path), std::move(endpoint), controllerMiddlewares, routeMiddlewares);
+}
+
+void detail::RouterImpl::registerEndpointWithToken(HttpKnownMethod method, std::string_view methodToken, std::pmr::string path, RouteEndpoint endpoint, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
+    appendPendingRoute(PendingRoute(resource_, PendingRoute::Init{.method = method, .methodToken = std::pmr::string(methodToken, resource_), .path = std::move(path), .endpoint = std::move(endpoint), .dynamic = false, .maxRequestBodyBytes = declaredRequestBodyLimit(controllerMiddlewares, routeMiddlewares), .middlewares = materializeMiddlewares(controllerMiddlewares, routeMiddlewares)}));
+}
+
+void detail::RouterImpl::registerExtensionMethodRoute(std::string_view methodToken, std::pmr::string path, RouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
+    if (!isValidHttpMethodToken(methodToken)) {
+        throw std::invalid_argument("extension route method must be a valid HTTP method token");
+    }
+    // A method the framework classifies keeps the enum as its identity, so the
+    // enum-indexed lookup stays the single authority for it. Accepting both
+    // spellings would mean two routes for one method that only one of the two
+    // lookups can ever find.
+    if (classifyHttpMethod(methodToken) != HttpKnownMethod::kUnknown) {
+        throw std::invalid_argument("extension route method is a known method; register it with its typed route macro");
+    }
+    registerEndpointWithToken(HttpKnownMethod::kUnknown, methodToken, std::move(path), RouteEndpoint::buffered(handler, bodyMode), controllerMiddlewares, routeMiddlewares);
 }
 
 void detail::RouterImpl::appendPendingRoute(PendingRoute route) {
     if (routeTable_) {
         throw std::logic_error("cannot register route after router finalize");
     }
-    validateRouteTarget(route.method(), route.path());
+    validateRouteTarget(route.method(), route.methodToken(), route.path());
     route.setDynamic(RouteTable::isDynamicPath(route.path()));
     pendingRoutes_.push_back(std::move(route));
 }
