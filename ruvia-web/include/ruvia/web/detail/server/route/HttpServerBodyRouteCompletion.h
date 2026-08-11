@@ -45,8 +45,8 @@ struct HttpLazyBufferedBodyRouteState final {
 };
 
 template <typename Stream>
-inline void prepareHttpLazyBufferedBodyRoute(HttpLazyBufferedBodyRouteState<Stream>& state, Http1RouteDispatch<Stream> d, std::string_view bodyAndPipeline) {
-    state.emplace(d.stream, d.memory.template allocator<char>(), d.requestMemory.resource(), bodyAndPipeline, d.parsed.bodyPlan, ProtocolByteLimit::limited(d.options.maxBufferedBodyBytes), d.scannerEntry);
+inline void prepareHttpLazyBufferedBodyRoute(HttpLazyBufferedBodyRouteState<Stream>& state, Http1RouteDispatch<Stream> d, ProtocolByteLimit bodyLimit, std::string_view bodyAndPipeline) {
+    state.emplace(d.stream, d.memory.template allocator<char>(), d.requestMemory.resource(), bodyAndPipeline, d.parsed.bodyPlan, bodyLimit, d.scannerEntry);
 }
 
 [[nodiscard]] inline std::string_view httpBodyAndPipeline(const Http1ServerRequestHeadReady& requestHead, const std::pmr::string& readBuffer, std::size_t usedBytes) noexcept {

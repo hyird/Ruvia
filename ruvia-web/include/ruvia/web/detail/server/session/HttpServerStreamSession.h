@@ -346,7 +346,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     std::exception_ptr bodySetupException;
                     HttpLazyBufferedBodyRouteState<Stream> bodyState;
                     try {
-                        prepareHttpLazyBufferedBodyRoute(bodyState, routeDispatch(), bodyAndPipeline);
+                        prepareHttpLazyBufferedBodyRoute(bodyState, routeDispatch(), maxRequestBodyBytes, bodyAndPipeline);
                     } catch (...) {
                         bodySetupException = std::current_exception();
                     }
