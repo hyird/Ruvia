@@ -181,6 +181,22 @@ App& App::setDefaultRateLimitPerWorker(std::optional<RateLimitRule> rule) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change the default rate limit per worker while app is running", [rule](detail::AppState& state) mutable { state.options.defaultRateLimitPerWorker = std::move(rule); });
 }
 
+App& App::setTrustedProxies(std::span<const std::string_view> cidrs) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change trusted proxies while app is running", [cidrs](detail::AppState& state) {
+        detail::TrustedProxySet parsed(detail::appResource());
+        for (const auto cidr : cidrs) {
+            detail::TrustedProxyBlock block;
+            if (!detail::parseTrustedProxyBlock(cidr, block)) {
+                // A typo here would silently trust nothing and leave every
+                // client identified as the proxy, so it fails startup instead.
+                throw std::invalid_argument("trusted proxy must be an IP address or CIDR block");
+            }
+            parsed.add(block);
+        }
+        state.options.trustedProxies = std::move(parsed);
+    });
+}
+
 App& App::setRateLimitSlotsPerWorker(std::size_t slotsPerWorker) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change rate-limit slots per worker while app is running", [slotsPerWorker](detail::AppState& state) {
         if (!std::has_single_bit(slotsPerWorker)) {

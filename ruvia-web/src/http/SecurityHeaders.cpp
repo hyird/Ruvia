@@ -70,12 +70,12 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& option
 
 void applySecurityHeaders(Context& context, const SecurityHeadersOptions& options) {
     const auto connection = getConnInfo(context);
-    applySecurityHeadersTo(context, options, connection.tls() != nullptr);
+    applySecurityHeadersTo(context, options, connection.secure());
 }
 
 Task<void> SecurityHeadersMiddleware::handle(Context& context, Next& next) {
     const auto connection = getConnInfo(context);
-    const bool secureTransport = connection.tls() != nullptr;
+    const bool secureTransport = connection.secure();
     applySecurityHeadersTo(context, options_, secureTransport);
     co_await next();
     applySecurityHeadersTo(detail::ContextAccess::responseStorage(context), options_, secureTransport);

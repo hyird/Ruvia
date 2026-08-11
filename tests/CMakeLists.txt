@@ -371,6 +371,7 @@ ruvia_add_unit_suite(ruvia_web_unit_tests ruvia::web
 
     # web/unit/http
     web/unit/http/conn_info.cpp
+    web/unit/http/trusted_proxy.cpp
     web/unit/http/context_capabilities.cpp
     web/unit/http/context_cookie.cpp
     web/unit/http/context_parse_body.cpp

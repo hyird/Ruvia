@@ -40,7 +40,8 @@ inline Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) 
             .withStopToken(stopToken_)
             .withWorkerStates(workerStates_)
             .withBlockingPool(options_.blockingPool)
-            .withDeferredStaticFileCompression(options_.compression.has_value() && options_.documentRoot.root != nullptr);
+            .withDeferredStaticFileCompression(options_.compression.has_value() && options_.documentRoot.root != nullptr)
+            .withTrustedProxies(options_.trustedProxies.empty() ? nullptr : &options_.trustedProxies);
         if (options_.env != nullptr) {
             baseServices = baseServices.withEnv(*options_.env);
         }

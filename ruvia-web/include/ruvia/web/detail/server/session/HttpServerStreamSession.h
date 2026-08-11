@@ -47,6 +47,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
     ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
     const auto& routes = routes_;
     const auto remoteAddress = baseRouteServices.connInfo().remote().address();
+    // Re-resolved per request: one keep-alive connection carries many requests,
+    // each with its own forwarding headers. Falls back to the peer until the
+    // first request line is parsed.
+    auto clientAddress = remoteAddress;
     Http1RequestSequence requestSequence(options_.keepaliveRequests);
     std::size_t usedBytes = 0;
     ConnectionWorkSet* workSet = nullptr;
@@ -218,7 +222,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     break;
                 }
                 routeResolution = routes.resolve(parsed.request);
-                const auto appRateLimit = decideRequestRateLimit(&rateLimiter_, remoteAddress);
+                // Keyed on the client, not the hop: behind a trusted proxy every
+                // request would otherwise share the proxy's single key.
+                clientAddress = baseRouteServices.resolveConnInfo(parsed.request).client().address();
+                const auto appRateLimit = decideRequestRateLimit(&rateLimiter_, clientAddress);
                 if (const auto* rejection = appRateLimit.rejection()) {
                     closingRejection = Http1ClosingRejection::rateLimit(rateLimitRejectionError(), *rejection);
                     break;
@@ -435,14 +442,14 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
             const auto writeResult = co_await writeResponse(stream, memory_, &responseHead, &fileChunk, response, responsePlan);
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
             if (const auto committedStatus = writeResult.committedStatus()) {
-                recordHttpAccess(options_.accessLog, parsed.request, remoteAddress, *committedStatus, requestStart);
+                recordHttpAccess(options_.accessLog, parsed.request, clientAddress, *committedStatus, requestStart);
             }
             if (writeResult.completed() == nullptr) {
                 co_return;
             }
         } else if (const auto* committed = requestCompletion->committedStream()) {
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
-            recordHttpAccess(options_.accessLog, parsed.request, remoteAddress, committed->status(), requestStart);
+            recordHttpAccess(options_.accessLog, parsed.request, clientAddress, committed->status(), requestStart);
         } else {
             throw std::logic_error("HTTP/1 request completion has no wire alternative");
         }
