@@ -30,12 +30,13 @@ namespace ruvia {
 // httpClient()'s sendRequest, runBlocking(). That covers the ordinary cause of
 // a stuck handler, which is a slow dependency.
 //
-// What it does NOT stop:
-//   - a handler awaiting nothing cancellable, a pure computation say;
-//   - a streaming producer's sleep(), which watches worker shutdown rather than
-//     this token, so a committed stream is unaffected.
+// What it does NOT stop: a handler awaiting nothing cancellable -- a pure
+// computation, or a wait the application built out of raw Asio without
+// threading a stop token through it. Every wait Ruvia hands a handler takes
+// one, a streaming producer's sleep() included, so what remains is code the
+// framework never sees.
 //
-// Those are not all equivalent to an unbounded connection. A handler that is
+// That is not equivalent to an unbounded connection. A handler that is
 // suspended still lets the worker run, so the connection scanner eventually
 // closes the socket through the active protocol phase: HTTP/1 dispatch after a
 // complete head uses keepaliveTimeout; HTTP/2 active stream runtimes use the

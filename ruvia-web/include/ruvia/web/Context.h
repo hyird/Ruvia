@@ -133,11 +133,11 @@ public:
     // that never mentions one.
     //
     // Cooperative by necessity: a suspended coroutine cannot be abandoned in
-    // C++, so this stops the WAITS rather than the handler. Work that awaits
-    // nothing cancellable is not stopped by it; if it is still suspended while
-    // the worker can run, the connection scanner's current protocol inactivity
-    // phase eventually drops the socket instead of answering on it. A streaming
-    // producer's sleep() watches worker shutdown rather than this token.
+    // C++, so this stops the WAITS rather than the handler. Every wait Ruvia
+    // hands a handler takes this token, streaming sleep() included; a wait the
+    // application built out of raw Asio without one is not stopped, and if it is
+    // still suspended while the worker can run, the connection scanner's current
+    // inactivity phase eventually drops the socket instead of answering on it.
     //
     // Historical note kept because it still holds: HTTP/1 cannot observe a peer
     // FIN while a handler is suspended without a concurrent transport read, so

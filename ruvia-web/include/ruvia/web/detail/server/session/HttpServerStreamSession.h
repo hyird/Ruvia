@@ -241,6 +241,21 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     break;
                 }
                 const auto* resolved = routeResolution.resolved();
+
+                // Armed before the unmatched branch, not after it: a custom
+                // onNotFound/onError handler is a handler too and can hang the
+                // same way. Nothing is armed when neither the deployment nor the
+                // route declared a deadline, so a server without them pays one
+                // comparison. The object lives to the end of this iteration and
+                // its timer registration cancels on destruction, so a request
+                // that finishes early leaves nothing pending.
+                const auto handlerDeadline = effectiveHandlerDeadline(options_.deadline ? options_.deadline->handler : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
+                if (handlerDeadline > std::chrono::milliseconds::zero()) {
+                    requestDeadline.emplace(stopToken_);
+                    requestDeadline->arm(workerHandle_, handlerDeadline);
+                    requestServices = baseRouteServices.withStopToken(requestDeadline->token()).withRequestDeadline(&*requestDeadline);
+                }
+
                 if (resolved == nullptr) {
                     if (const auto bodyFailure = contentLengthLimitFailure(parsed.bodyPlan, ProtocolByteLimit::limited(options_.maxBufferedBodyBytes))) {
                         closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(requestMemory.resource(), bodyFailure->protocolError()));
@@ -251,8 +266,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                         routeResolution,
                         requestMemory,
                         options_.documentRoot.binding(),
-                        baseRouteServices,
-                        baseRouteServices.deferredStaticFileCompression() ? StaticFileSelectionMode::kAllowDeferredCompression : StaticFileSelectionMode::kStrict);
+                        requestServices,
+                        requestServices.deferredStaticFileCompression() ? StaticFileSelectionMode::kAllowDeferredCompression : StaticFileSelectionMode::kStrict);
                     response = std::move(bufferedResult).takeResponse();
                     // An unresolved request never consumes its body, regardless
                     // of whether the shared Web dispatch selected a document-root
@@ -262,19 +277,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     requestCompletion.emplace(Http1SessionRequestCompletion::makeBufferedUnrestored(connectionPlan, requestHead->headerBytes()));
                     scannerEntry.touch();
                     break;
-                }
-
-                // Arm the handler deadline for this request only. Nothing is
-                // armed when neither the deployment nor the route declared one,
-                // so a server without deadlines pays one comparison. The object
-                // lives to the end of this iteration; its timer registration
-                // cancels on destruction, so a request that finishes early
-                // leaves nothing pending.
-                const auto handlerDeadline = effectiveHandlerDeadline(options_.deadline ? options_.deadline->handler : std::nullopt, resolved->route().deadlineMs());
-                if (handlerDeadline > std::chrono::milliseconds::zero()) {
-                    requestDeadline.emplace(stopToken_);
-                    requestDeadline->arm(workerHandle_, handlerDeadline);
-                    requestServices = baseRouteServices.withStopToken(requestDeadline->token()).withRequestDeadline(&*requestDeadline);
                 }
 
                 // One bundle of what every route dispatch below needs from
