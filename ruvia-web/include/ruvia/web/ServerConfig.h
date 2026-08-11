@@ -351,8 +351,9 @@ struct CorsConfig final {
 // cooperative -- see ruvia::Deadline for what that does and does not bound.
 //
 // A route may declare a shorter one with ruvia::Deadline<N>; it can never extend
-// this. A struct rather than a bare duration so the hard backstop for handlers
-// that await nothing cancellable can be added as a field here, rather than as a
+// this. A struct rather than a bare duration so a future field can narrow the
+// deadman switch that already covers a suspended handler (keepaliveTimeout)
+// down to something derived from this deadline, rather than arriving as a
 // second setter with its own name.
 struct DeadlineConfig final {
     std::optional<std::chrono::milliseconds> handler;

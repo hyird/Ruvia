@@ -30,12 +30,24 @@ namespace ruvia {
 // httpClient()'s sendRequest, runBlocking(). That covers the ordinary cause of
 // a stuck handler, which is a slow dependency.
 //
-// What it does NOT bound, and there is currently no backstop for either:
+// What it does NOT stop:
 //   - a handler awaiting nothing cancellable, a pure computation say;
 //   - a streaming producer's sleep(), which watches worker shutdown rather than
 //     this token, so a committed stream is unaffected.
-// Both hold the connection until the client gives up. Do not reach for this
-// expecting a hard timeout; it stops the WAITS, not the handler.
+//
+// Those are not unbounded, though. A connection whose handler is suspended
+// makes no I/O, so App::setKeepaliveTimeout()'s inactivity clock runs on it and
+// the scanner closes the socket -- the deadman switch for hung handlers that
+// predates this. The consequences differ, which is the whole reason to prefer a
+// deadline: the deadman switch drops the connection with no response, while a
+// deadline lets the handler unwind and answer.
+//
+// A handler that never suspends at all -- pure computation -- is not caught by
+// either. The scanner runs on the same single-threaded worker, so a handler
+// that will not yield prevents the scan that would have noticed it.
+//
+// Do not reach for this expecting a hard timeout; it stops the WAITS, not the
+// handler.
 //
 // Composition follows the one rule every policy with an app-wide and a
 // route-level form follows: the narrower scope may only TIGHTEN. A route cannot
