@@ -134,19 +134,15 @@ public:
     //
     // Cooperative by necessity: a suspended coroutine cannot be abandoned in
     // C++, so this stops the WAITS rather than the handler. Work that awaits
-    // nothing cancellable is not stopped by it; that case falls through to
-    // keepaliveTimeout's deadman switch, which drops the connection instead of
-    // answering on it. A streaming producer's sleep() watches worker shutdown
-    // rather than this token.
+    // nothing cancellable is not stopped by it; if it is still suspended while
+    // the worker can run, the connection scanner's current protocol inactivity
+    // phase eventually drops the socket instead of answering on it. A streaming
+    // producer's sleep() watches worker shutdown rather than this token.
     //
     // Historical note kept because it still holds: HTTP/1 cannot observe a peer
     // FIN while a handler is suspended without a concurrent transport read, so
     // this is not a promise of immediate client-disconnect detection.
     //
-    // Old comment, superseded: requested when this Context's worker begins stopping. HTTP/1 cannot
-    // observe a peer FIN while a handler is suspended without a concurrent
-    // transport read, so this is a worker-lifecycle token rather than a promise
-    // of immediate client-disconnect detection.
     [[nodiscard]] StopToken stopToken() const noexcept {
         return stopToken_;
     }

@@ -15,9 +15,9 @@ namespace ruvia {
 //     RUVIA_POST("/report", build, ruvia::Deadline<2000>);
 //
 // The server's phase timeouts bound reading the head, reading the body and
-// writing the response. Between them -- the handler's own execution -- was
-// unbounded, so a handler awaiting something that never completes held its
-// connection until the client gave up.
+// writing the response. They also provide a coarse socket-level deadman for a
+// handler that is suspended without doing I/O. This deadline adds the
+// cooperative route-level signal that lets that handler unwind and answer.
 //
 // This is COOPERATIVE, and the name says deadline rather than timeout for that
 // reason. A suspended coroutine cannot be abandoned in C++ without destroying a
@@ -35,12 +35,13 @@ namespace ruvia {
 //   - a streaming producer's sleep(), which watches worker shutdown rather than
 //     this token, so a committed stream is unaffected.
 //
-// Those are not unbounded, though. A connection whose handler is suspended
-// makes no I/O, so App::setKeepaliveTimeout()'s inactivity clock runs on it and
-// the scanner closes the socket -- the deadman switch for hung handlers that
-// predates this. The consequences differ, which is the whole reason to prefer a
-// deadline: the deadman switch drops the connection with no response, while a
-// deadline lets the handler unwind and answer.
+// Those are not all equivalent to an unbounded connection. A handler that is
+// suspended still lets the worker run, so the connection scanner eventually
+// closes the socket through the active protocol phase: HTTP/1 dispatch after a
+// complete head uses keepaliveTimeout; HTTP/2 active stream runtimes use the
+// payload phase and therefore clientBodyTimeout. The consequences differ, which
+// is the whole reason to prefer a deadline: the scanner drops the connection
+// with no response, while a deadline lets the handler unwind and answer.
 //
 // A handler that never suspends at all -- pure computation -- is not caught by
 // either. The scanner runs on the same single-threaded worker, so a handler

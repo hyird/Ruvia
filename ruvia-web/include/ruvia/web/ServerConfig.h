@@ -352,9 +352,9 @@ struct CorsConfig final {
 //
 // A route may declare a shorter one with ruvia::Deadline<N>; it can never extend
 // this. A struct rather than a bare duration so a future field can narrow the
-// deadman switch that already covers a suspended handler (keepaliveTimeout)
-// down to something derived from this deadline, rather than arriving as a
-// second setter with its own name.
+// protocol scanner deadman that already covers a suspended handler down to
+// something derived from this deadline, rather than arriving as a second setter
+// with its own name.
 struct DeadlineConfig final {
     std::optional<std::chrono::milliseconds> handler;
 };
