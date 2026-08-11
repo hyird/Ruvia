@@ -78,25 +78,21 @@ std::optional<std::string_view> ContextRequest::cookie(std::string_view name) co
     return context_->requestCookie(name);
 }
 
-namespace detail {
-
-const RequestNameValueList& requestHeaderFields(const ContextRequest& request) {
-    return request.context_->requestHeaders();
+const RequestNameValueList& ContextRequest::headerFields() const {
+    return context_->requestHeaders();
 }
 
-const RequestNameValueList& requestQueryFields(const ContextRequest& request) {
-    return request.context_->requestQuery();
+const RequestNameValueList& ContextRequest::queryFields() const {
+    return context_->requestQuery();
 }
 
-const RequestNameValueList& requestCookieFields(const ContextRequest& request) {
-    return request.context_->requestCookies();
+const RequestNameValueList& ContextRequest::cookieFields() const {
+    return context_->requestCookies();
 }
 
-const RequestNameValueList& requestParamFields(const ContextRequest& request) {
-    return request.context_->routeParams();
+const RequestNameValueList& ContextRequest::paramFields() const {
+    return context_->routeParams();
 }
-
-}  // namespace detail
 
 ScopedOperation<std::string_view> ContextRequest::text() const {
     return detail::makeScopedOperation(context_->operationScope_, context_->requestBody());
@@ -153,8 +149,8 @@ std::pmr::memory_resource* ContextRequest::resource() const noexcept {
     return context_->resource();
 }
 
-const detail::ValidatedModelBindings& ContextRequest::validatedModels() const noexcept {
-    return context_->validatedModels_;
+const detail::RequestBindings& ContextRequest::requestBindings() const noexcept {
+    return context_->requestBindings_;
 }
 
 }  // namespace ruvia

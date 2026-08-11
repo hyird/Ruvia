@@ -34,7 +34,7 @@
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/web/WebSocket.h"
-#include "ruvia/web/detail/model/rule/ValidatedValues.h"
+#include "ruvia/web/detail/http/context/RequestBindings.h"
 #include "ruvia/web/detail/integration/BlockingCapability.h"
 #include "ruvia/web/detail/integration/WorkerStateCapability.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
@@ -79,16 +79,12 @@ class Context final : public detail::BlockingCapability<Context>, public detail:
 private:
     friend class ContextRequest;
     friend struct detail::ContextAccess;
-    friend const RequestNameValueList& detail::requestHeaderFields(const ContextRequest& request);
-    friend const RequestNameValueList& detail::requestQueryFields(const ContextRequest& request);
-    friend const RequestNameValueList& detail::requestCookieFields(const ContextRequest& request);
-    friend const RequestNameValueList& detail::requestParamFields(const ContextRequest& request);
     friend ConnInfo getConnInfo(const Context& context) noexcept;
     friend struct detail::SessionAccess;
     template <typename T>
-    friend detail::ValidatedModelBinding<T> detail::bindValidatedModel(Context& context, const T& model);
+    friend detail::RequestBindingHandle<T> detail::bindValidatedModel(Context& context, const T& model);
     template <typename T>
-    friend detail::ValidatedModelBinding<T> detail::bindValidatedJsonModel(Context& context, const T& model, std::string_view rawJson);
+    friend detail::RequestBindingHandle<T> detail::bindValidatedJsonModel(Context& context, const T& model, std::string_view rawJson);
 
     Context(RequestMemory& memory, const HttpRequest& request, detail::ContextServices services) noexcept;
 
@@ -154,6 +150,49 @@ public:
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return memory_.resource();
+    }
+
+    // Request-scoped typed state: how a middleware hands a value it computed --
+    // an authenticated user, a resolved tenant, a trace span -- to everything it
+    // calls through next(). The counterpart of workerState<T>(), which lives for
+    // the worker's whole life and is shared by every request on it; this lives
+    // for one dynamic next() scope and is private to that request.
+    //
+    //   Task<void> handle(Context& c, Next& next) {
+    //       const auto user = authenticate(c);          // owned by this frame
+    //       const auto binding = c.bindRequestState(user);
+    //       co_await next();                            // handler sees it
+    //   }                                               // unbound here
+    //
+    // The binding stores the value by address and never copies it, so the bound
+    // object must outlive the returned handle -- keep both in the middleware's
+    // coroutine frame, as above. Binding a temporary is rejected at compile
+    // time. One type is one slot: binding T again inside a nested scope shadows
+    // the outer binding until the inner handle dies.
+    //
+    // Deliberately disjoint from req().validated<T>(): that answers "a validator
+    // produced and checked this", and hand-bound state must never be able to
+    // impersonate it.
+    template <typename T>
+    [[nodiscard]] RequestStateBinding<T> bindRequestState(const T& value) {
+        return requestBindings_.bindState(value);
+    }
+
+    template <typename T>
+        requires(!std::is_lvalue_reference_v<T>)
+    [[nodiscard]] RequestStateBinding<std::remove_cvref_t<T>> bindRequestState(T&&) = delete;
+
+    // Throws std::logic_error when nothing of this type is bound. Use
+    // tryRequestState<T>() where absence is a normal outcome -- an optional
+    // auth middleware, say.
+    template <typename T>
+    [[nodiscard]] const std::remove_cvref_t<T>& requestState() const {
+        return requestBindings_.getState<T>();
+    }
+
+    template <typename T>
+    [[nodiscard]] const std::remove_cvref_t<T>* tryRequestState() const noexcept {
+        return requestBindings_.tryGetState<T>();
     }
 
     [[nodiscard]] const Env& env() const noexcept;
@@ -353,7 +392,7 @@ private:
     std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
 
-    detail::ValidatedModelBindings validatedModels_;
+    detail::RequestBindings requestBindings_;
     // Declared last so it closes first, while every request-owned object and its
     // memory resource are still alive.
     mutable detail::ScopedOperationScope operationScope_;
@@ -362,13 +401,13 @@ private:
 namespace detail {
 
 template <typename T>
-ValidatedModelBinding<T> bindValidatedModel(Context& context, const T& model) {
-    return context.validatedModels_.bind(model);
+RequestBindingHandle<T> bindValidatedModel(Context& context, const T& model) {
+    return context.requestBindings_.bindValidated(model);
 }
 
 template <typename T>
-ValidatedModelBinding<T> bindValidatedJsonModel(Context& context, const T& model, std::string_view rawJson) {
-    return context.validatedModels_.bind(model, rawJson);
+RequestBindingHandle<T> bindValidatedJsonModel(Context& context, const T& model, std::string_view rawJson) {
+    return context.requestBindings_.bindValidated(model, rawJson);
 }
 
 }  // namespace detail

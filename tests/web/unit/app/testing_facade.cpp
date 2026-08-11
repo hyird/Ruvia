@@ -58,6 +58,23 @@ private:
     int level_;
 };
 
+struct TestingFacadeUser final {
+    std::string_view name;
+    int level{0};
+};
+
+// The pattern request-scoped bindings exist for: a middleware computes a value,
+// owns it in its own coroutine frame, and publishes it to everything downstream
+// of its next() for exactly that scope.
+class TestingFacadeAuth final : public ruvia::Middleware<TestingFacadeAuth> {
+public:
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+        const TestingFacadeUser user{.name = c.req().header("X-User").value_or("anonymous"), .level = 2};
+        const auto binding = c.bindRequestState(user);
+        co_await next();
+    }
+};
+
 class TestingFacadeController final : public ruvia::Controller<TestingFacadeController> {
 public:
     RUVIA_CONTROLLER_GROUP("/t")
@@ -69,6 +86,8 @@ public:
     RUVIA_GET("/count", count);
     RUVIA_POST("/echo", echo);
     RUVIA_GET("/boom", boom);
+    RUVIA_GET("/whoami", whoami, TestingFacadeAuth);
+    RUVIA_GET("/whoami-unbound", whoamiUnbound);
     RUVIA_ROUTES_END
 
 private:
@@ -108,6 +127,21 @@ private:
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
         const auto body = co_await c.req().json<TestingFacadeEcho>();
         co_return c.body(body.value().has_value() ? body.value()->view() : "missing");
+    }
+
+    ruvia::Task<ruvia::HttpResponse> whoami(ruvia::Context& c) {
+        const auto& user = c.requestState<TestingFacadeUser>();
+        std::pmr::string reply(c.resource());
+        reply.append(user.name);
+        reply.push_back('/');
+        reply.append(std::to_string(user.level));
+        co_return c.body(std::move(reply));
+    }
+
+    // No auth middleware on this route, so nothing is bound and the optional
+    // lookup must say so rather than throw.
+    ruvia::Task<ruvia::HttpResponse> whoamiUnbound(ruvia::Context& c) {
+        co_return c.body(c.tryRequestState<TestingFacadeUser>() == nullptr ? std::string_view("unbound") : std::string_view("bound"));
     }
 };
 
@@ -357,4 +391,24 @@ RUVIA_TEST(testing_facade_isolates_instances) {
     RUVIA_CHECK_EQ(firstCount.body(), std::string_view("1"));
     const auto secondCount = second.request(ruvia::TestRequest::get("/t/count"));
     RUVIA_CHECK_EQ(secondCount.body(), std::string_view("1"));
+}
+
+RUVIA_TEST(testing_facade_middleware_publishes_request_state_to_handler) {
+    ruvia::TestApp app;
+
+    const auto named = app.request(ruvia::TestRequest::get("/t/whoami").header("X-User", "ada"));
+    RUVIA_CHECK_EQ(named.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(named.body(), std::string_view("ada/2"));
+
+    // A second request gets its own binding, not the previous one's value --
+    // this is request scope, not worker scope.
+    const auto anonymous = app.request(ruvia::TestRequest::get("/t/whoami"));
+    RUVIA_CHECK_EQ(anonymous.body(), std::string_view("anonymous/2"));
+}
+
+RUVIA_TEST(testing_facade_request_state_is_absent_without_its_middleware) {
+    ruvia::TestApp app;
+    const auto response = app.request(ruvia::TestRequest::get("/t/whoami-unbound").header("X-User", "ada"));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(response.body(), std::string_view("unbound"));
 }

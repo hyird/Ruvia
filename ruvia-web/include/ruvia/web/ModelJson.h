@@ -12,7 +12,7 @@
 namespace ruvia {
 
 namespace detail {
-class ValidatedModelBindings;
+class RequestBindings;
 }
 
 // A request-scoped view of one validated JSON body. The typed value and the
@@ -30,7 +30,7 @@ public:
     }
 
 private:
-    friend class detail::ValidatedModelBindings;
+    friend class detail::RequestBindings;
 
     ValidatedJson(const T& value, std::string_view raw) noexcept
         : value_(&value),

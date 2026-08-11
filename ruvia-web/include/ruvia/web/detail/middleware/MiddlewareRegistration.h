@@ -9,7 +9,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Middleware.h"
 #include "ruvia/web/detail/util/RegistrationResource.h"
-#include "ruvia/web/detail/model/rule/ValidatedValues.h"
+#include "ruvia/web/detail/http/context/RequestBindings.h"
 #include "ruvia/web/detail/middleware/MiddlewareDescriptor.h"
 
 namespace ruvia::detail {
@@ -60,7 +60,7 @@ void destroyMiddleware(void* target) noexcept {
 template <typename MiddlewareT>
 [[nodiscard]] const void* middlewareValidatedModelTypeKey() noexcept {
     if constexpr (requires { typename MiddlewareT::RuviaValidationBody; }) {
-        return validatedValueTypeKey<typename MiddlewareT::RuviaValidationBody>();
+        return requestBindingTypeKey<typename MiddlewareT::RuviaValidationBody>();
     } else {
         return nullptr;
     }
