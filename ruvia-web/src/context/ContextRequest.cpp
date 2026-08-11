@@ -6,6 +6,7 @@
 #include "ruvia/web/ModelObject.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpAcceptMediaType.h"
+#include "ruvia/http/detail/field/HttpAcceptToken.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/detail/http/request/RequestFormAccess.h"
@@ -351,6 +352,79 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
         return true;
     }
     return bestSpecificity >= 0 && bestQuality > 0;
+}
+
+namespace {
+
+[[nodiscard]] std::string_view negotiationHeaderName(ContextRequest::Negotiable field) noexcept {
+    switch (field) {
+        case ContextRequest::Negotiable::kLanguage:
+            return "Accept-Language";
+        case ContextRequest::Negotiable::kEncoding:
+            return "Accept-Encoding";
+        case ContextRequest::Negotiable::kCharset:
+            return "Accept-Charset";
+        case ContextRequest::Negotiable::kMediaType:
+            break;
+    }
+    return "Accept";
+}
+
+}  // namespace
+
+std::optional<std::string_view> Context::requestNegotiate(ContextRequest::Negotiable field, std::span<const std::string_view> supported) const noexcept {
+    if (supported.empty()) {
+        return std::nullopt;
+    }
+
+    const auto headerName = negotiationHeaderName(field);
+    const bool mediaType = field == ContextRequest::Negotiable::kMediaType;
+    // Only Accept-Language does RFC 4647 prefix matching; an encoding or charset
+    // either is the offered token or is "*".
+    const bool prefixMatching = field == ContextRequest::Negotiable::kLanguage;
+
+    std::optional<std::string_view> best;
+    int bestSpecificity = -1;
+    int bestQuality = 0;
+    bool sawField = false;
+
+    for (const auto offered : supported) {
+        // Each candidate gets its own accumulator folded over every field line,
+        // for the same multi-line reason requestAccepts documents.
+        int specificity = -1;
+        int quality = 0;
+        for (const auto& header : request_.headers()) {
+            if (!detail::httpAsciiEqualsIgnoreCase(header.name(), headerName)) {
+                continue;
+            }
+            sawField = true;
+            if (header.value().empty()) {
+                continue;
+            }
+            if (mediaType) {
+                detail::httpAccumulateMediaTypeAcceptance(header.value(), offered, specificity, quality);
+            } else {
+                detail::httpAccumulateTokenAcceptance(header.value(), offered, prefixMatching, specificity, quality);
+            }
+        }
+        if (specificity < 0 || quality <= 0) {
+            continue;
+        }
+        // Strictly greater, so `supported` order breaks the client's ties and
+        // reads as the server's own preference.
+        if (quality > bestQuality) {
+            bestQuality = quality;
+            bestSpecificity = specificity;
+            best = offered;
+        }
+    }
+
+    // Absence alone means no preference; a present but empty field is an empty
+    // list that matches nothing, exactly as in requestAccepts.
+    if (!sawField) {
+        return supported.front();
+    }
+    return best;
 }
 
 Task<std::string_view> Context::requestBody() const {
