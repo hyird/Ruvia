@@ -24,6 +24,7 @@
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
+#include "ruvia/web/detail/integration/WorkerCancellationPost.h"
 
 namespace ruvia::detail {
 namespace {
@@ -100,12 +101,9 @@ std::chrono::system_clock::time_point cookieExpiration(
     return now + std::chrono::duration_cast<Clock::duration>(std::chrono::seconds(maxAgeSeconds));
 }
 
-std::pmr::memory_resource* stableHttpClientResponseResource(std::pmr::memory_resource* candidate, std::pmr::memory_resource* poolResource) noexcept {
-    candidate = httpPmrResourceOrDefault(candidate);
-    return candidate == poolResource ? poolResource : std::pmr::get_default_resource();
-}
-
 }  // namespace
+
+static_assert(workerCancellationPostIsInline<HttpClientOperationCancellationMailbox>);
 
 HttpClientPool::Connection::Connection(asio::io_context& ioContext, asio::ssl::context& tlsContext, const WorkerHandle& worker, std::pmr::memory_resource* resource)
     : resolver(ioContext), stream(ioContext, tlsContext), readBuffer(httpPmrResourceOrDefault(resource)),
@@ -128,6 +126,7 @@ HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& 
     configureTls();
     connections_.reserve(config_.connectionsPerWorker);
     for (std::size_t i = 0; i < config_.connectionsPerWorker; ++i) connections_.emplace_back(ioContext_, tlsContext_, worker_, resource_);
+    cancellationMailbox_ = std::make_shared<HttpClientOperationCancellationMailbox>(*this, worker_);
 }
 
 HttpClientPool::~HttpClientPool() { closeNow(); }
@@ -176,6 +175,7 @@ void HttpClientPool::close(Connection& connection) noexcept {
 }
 
 void HttpClientPool::closeNow() noexcept {
+    cancellationMailbox_->detach(*this);
     if (!scheduler_.close()) return;
     backgroundTasks_.requestStop();
     for (auto& connection : connections_) {
@@ -202,11 +202,6 @@ HttpClientStats HttpClientPool::stats() const noexcept {
 }
 
 std::uint16_t HttpClientPool::port() const noexcept { return httpClientPort(config_); }
-
-void HttpClientPool::setUserAgent(std::string_view userAgent) {
-    validateHttpClientUserAgent(userAgent);
-    config_.userAgent.assign(userAgent);
-}
 
 void HttpClientPool::addCookie(std::string_view name, std::string_view value) {
     if (!isValidHttpHeaderName(name) || !isValidCookieValue(value)) {
@@ -277,7 +272,7 @@ void HttpClientPool::appendAutomaticHeaders(const HttpClientRequest& request, st
             ++cookie;
         }
     }
-    const auto path = requestPathOnly(request.path());
+    const auto path = requestPathOnly(request.target());
     for (const auto& cookie : cookies_) {
         if (!cookie.persistent && !cookiesEnabled_) continue;
         if (cookie.secure && config_.scheme != HttpScheme::kHttps) continue;
@@ -302,7 +297,7 @@ void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, con
             !cookieDomainMatches(config_.host, parsed->domain) ||
             !canSerializeReceivedCookie(parsed->name, parsed->value)) continue;
 
-        const auto path = parsed->path.empty() || parsed->path.front() != '/' ? defaultCookiePath(request.path()) : parsed->path;
+        const auto path = parsed->path.empty() || parsed->path.front() != '/' ? defaultCookiePath(request.target()) : parsed->path;
         const bool securePrefixed = cookieNameStartsWithIgnoreCase(parsed->name, "__Secure-");
         const bool hostPrefixed = cookieNameStartsWithIgnoreCase(parsed->name, "__Host-");
         const bool namelessPrefix = parsed->name.empty() &&
@@ -400,6 +395,40 @@ void HttpClientPool::release(std::size_t index) noexcept {
     if (status == PoolLeaseReleaseStatus::kInvalidSlot || status == PoolLeaseReleaseStatus::kAlreadyReleased) std::terminate();
 }
 
+std::uint64_t HttpClientPool::nextCancellationId() noexcept {
+    if (++nextCancellationId_ == 0) {
+        ++nextCancellationId_;
+    }
+    return nextCancellationId_;
+}
+
+void HttpClientPool::cancelOperationById(std::uint64_t cancellationId) noexcept {
+    if (cancellationId == 0) {
+        return;
+    }
+    for (std::size_t index = 0; index < connections_.size(); ++index) {
+        auto& connection = connections_[index];
+        if (connection.cancellationId == cancellationId) {
+            connection.cancellationId = 0;
+            cancelOperation(index, connection.generation, AbortReason::kCancelled);
+            return;
+        }
+        auto& runtime = *connection.http2Runtime;
+        if (runtime.stateCancellationId == cancellationId) {
+            runtime.stateSignal.notify();
+            return;
+        }
+        const auto pending = std::ranges::find_if(runtime.pending, [cancellationId](const Http2PendingStream* stream) {
+            return stream->cancellationId == cancellationId;
+        });
+        if (pending != runtime.pending.end()) {
+            (*pending)->cancellationId = 0;
+            cancelHttp2Stream(connection, (*pending)->requestId, AbortReason::kCancelled);
+            return;
+        }
+    }
+}
+
 bool HttpClientPool::armDeadline(Connection& connection, const OperationTimeout& timeout, DeadlineKind kind) {
     connection.deadlineTimer->cancel();
     const auto remaining = timeout.remaining();
@@ -492,7 +521,6 @@ Task<std::size_t> HttpClientPool::readSome(Connection& connection, std::span<cha
 
 Task<void> HttpClientPool::ensureConnected(
     Connection& connection,
-    std::size_t index,
     const OperationTimeout& operationTimeout,
     const OperationTimeout& acquireTimeout,
     StopToken stopToken) {
@@ -515,33 +543,29 @@ Task<void> HttpClientPool::ensureConnected(
         Connection& connection;
         ~ConnectCancellationGeneration() { ++connection.generation; }
     } cancellationGeneration{connection};
-    std::shared_ptr<OperationCancellationState> cancellationState;
+    connection.cancellationId = 0;
+    std::uint64_t cancellationId = 0;
+    StopRegistration stopRegistration;
     if (stopToken.stoppable()) {
-        cancellationState = std::make_shared<OperationCancellationState>(*this, worker_, index, generation, AbortReason::kCancelled);
+        cancellationId = nextCancellationId();
+        connection.cancellationId = cancellationId;
+        stopToken.registerCallback(
+            stopRegistration,
+            WorkerCancellationPost<HttpClientOperationCancellationMailbox>(cancellationMailbox_, cancellationId));
     }
-    auto stopRegistration = stopToken.registerCallback([cancellationState] {
-        if (cancellationState == nullptr) {
-            return;
-        }
-        WorkerHandleAccess::deferOrTerminate(*cancellationState->worker, [cancellationState] {
-            auto* pool = cancellationState->pool.load(std::memory_order_acquire);
-            if (pool != nullptr) {
-                pool->cancelOperation(cancellationState->index, cancellationState->generation, cancellationState->reason);
-            }
-        });
-    });
     struct CancellationRegistrationGuard final {
-        std::shared_ptr<OperationCancellationState>& state;
+        Connection& connection;
+        std::uint64_t cancellationId;
         StopRegistration& registration;
 
         ~CancellationRegistrationGuard() {
-            if (state != nullptr) {
-                state->pool.store(nullptr, std::memory_order_release);
+            if (connection.cancellationId == cancellationId) {
+                connection.cancellationId = 0;
             }
             registration.reset();
         }
-    } cancellationRegistrationGuard{cancellationState, stopRegistration};
-    if (stopToken.stopRequested()) cancelOperation(index, generation, AbortReason::kCancelled);
+    } cancellationRegistrationGuard{connection, cancellationId, stopRegistration};
+    if (stopToken.stopRequested()) cancelOperationById(cancellationId);
     while (runtime.sessionTasks != 0 || !runtime.pending.empty()) {
         throwAbort(connection);
         co_await runtime.stateSignal.wait();
@@ -618,15 +642,6 @@ Task<void> HttpClientPool::ensureConnected(
 }
 
 Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, HttpClientOperationOptions options, std::pmr::memory_resource* responseResource) {
-    responseResource = stableHttpClientResponseResource(responseResource, resource_);
-    if (HttpClientRequestAccess::usesResource(request, resource_)) {
-        return executePrepared(std::move(request), std::move(options), responseResource);
-    }
-    auto ownedRequest = HttpClientRequestAccess::clone(request, resource_);
-    return executePrepared(std::move(ownedRequest), std::move(options), responseResource);
-}
-
-Task<HttpClientResponse> HttpClientPool::executePrepared(HttpClientRequest request, HttpClientOperationOptions options, std::pmr::memory_resource* responseResource) {
     responseResource = httpPmrResourceOrDefault(responseResource);
     const OperationTimeout timeout(options.timeout.has_value() ? options.timeout : config_.requestTimeout);
     const auto acquireTimeout = timeout.constrainedBy(config_.acquireTimeout);
@@ -649,11 +664,11 @@ Task<HttpClientResponse> HttpClientPool::executePrepared(HttpClientRequest reque
     auto& connection = lease.connection();
     bool discardConnection = true;
     try {
-        co_await ensureConnected(connection, index, timeout, acquireTimeout, options.stopToken);
+        co_await ensureConnected(connection, timeout, acquireTimeout, options.stopToken);
         HttpClientResponse response(responseResource);
         if (connection.protocol == WireProtocol::kHttp2) {
             discardConnection = false;
-            response = co_await executeHttp2(connection, index, request, timeout, options.stopToken, responseResource);
+            response = co_await executeHttp2(connection, request, timeout, options.stopToken, responseResource);
         } else {
             // A negotiated HTTP/1 connection can have several operations that
             // already hold outer HTTP/2-capacity slots. Waiting for this
@@ -708,33 +723,29 @@ Task<HttpClientResponse> HttpClientPool::executePrepared(HttpClientRequest reque
                 Connection& connection;
                 ~H1CancellationGeneration() { ++connection.generation; }
             } cancellationGeneration{connection};
-            std::shared_ptr<OperationCancellationState> cancellationState;
+            connection.cancellationId = 0;
+            std::uint64_t cancellationId = 0;
+            StopRegistration stopRegistration;
             if (options.stopToken.stoppable()) {
-                cancellationState = std::make_shared<OperationCancellationState>(*this, worker_, index, generation, AbortReason::kCancelled);
+                cancellationId = nextCancellationId();
+                connection.cancellationId = cancellationId;
+                options.stopToken.registerCallback(
+                    stopRegistration,
+                    WorkerCancellationPost<HttpClientOperationCancellationMailbox>(cancellationMailbox_, cancellationId));
             }
-            auto stopRegistration = options.stopToken.registerCallback([cancellationState] {
-                if (cancellationState == nullptr) {
-                    return;
-                }
-                WorkerHandleAccess::deferOrTerminate(*cancellationState->worker, [cancellationState] {
-                    auto* pool = cancellationState->pool.load(std::memory_order_acquire);
-                    if (pool != nullptr) {
-                        pool->cancelOperation(cancellationState->index, cancellationState->generation, cancellationState->reason);
-                    }
-                });
-            });
             struct H1CancellationRegistrationGuard final {
-                std::shared_ptr<OperationCancellationState>& state;
+                Connection& connection;
+                std::uint64_t cancellationId;
                 StopRegistration& registration;
 
                 ~H1CancellationRegistrationGuard() {
-                    if (state != nullptr) {
-                        state->pool.store(nullptr, std::memory_order_release);
+                    if (connection.cancellationId == cancellationId) {
+                        connection.cancellationId = 0;
                     }
                     registration.reset();
                 }
-            } cancellationRegistrationGuard{cancellationState, stopRegistration};
-            if (options.stopToken.stopRequested()) cancelOperation(index, generation, AbortReason::kCancelled);
+            } cancellationRegistrationGuard{connection, cancellationId, stopRegistration};
+            if (options.stopToken.stopRequested()) cancelOperationById(cancellationId);
             response = co_await executeHttp1(connection, request, timeout, responseResource);
         }
         retainResponseCookies(request, response);

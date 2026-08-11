@@ -107,9 +107,9 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     if (!analyzeHeaders(headers, headerFacts, error)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(error);
     }
-    const bool expectContinue = policy.continueExpectation() != nullptr;
-    const auto contentIndication = explicitContent && !contentBytes->value().empty() ? detail::HttpRequestContentIndication::kWillFollow : detail::HttpRequestContentIndication::kNoContent;
-    if (!detail::httpClientExpectationIsValid(expectContinue, contentIndication)) {
+    const bool expectContinue = policy.expectation() == HttpClientRequestExpectation::kContinue;
+    const auto contentIndication = explicitContent && !contentBytes->value().empty() ? HttpRequestContentIndication::kWillFollow : HttpRequestContentIndication::kNoContent;
+    if (!httpClientExpectationIsValid(expectContinue, contentIndication)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kExpectationWithoutContent);
     }
     if (explicitContent) {

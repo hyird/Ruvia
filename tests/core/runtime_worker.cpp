@@ -22,12 +22,58 @@
 #include <stdexcept>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
 
+template <typename T>
+concept HasRvalueIoContextBorrow = requires(T&& loop) { std::move(loop).ioContext(); };
+
 static_assert(std::move_constructible<ruvia::EventLoopAttachment>);
 static_assert(!std::assignable_from<ruvia::EventLoopAttachment&, ruvia::EventLoopAttachment&&>);
+static_assert(!HasRvalueIoContextBorrow<ruvia::EventLoop>);
+
+bool testPostOutcomeInvariantsAndEmptyCallbacks() {
+    bool acceptedTakeRejected = false;
+    try {
+        static_cast<void>(std::move(ruvia::PostResult::accept()).takeRejected());
+    } catch (const std::logic_error&) {
+        acceptedTakeRejected = true;
+    }
+
+    bool acceptedRejectionStatus = false;
+    try {
+        static_cast<void>(ruvia::PostResult::reject(ruvia::PostStatus::kAccepted, [] {}));
+    } catch (const std::invalid_argument&) {
+        acceptedRejectionStatus = true;
+    }
+
+    bool emptyRejectedTask = false;
+    try {
+        static_cast<void>(ruvia::PostResult::reject(ruvia::PostStatus::kQueueFull, {}));
+    } catch (const std::invalid_argument&) {
+        emptyRejectedTask = true;
+    }
+
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
+    const auto loop = loops.loop(0);
+    bool emptyPost = false;
+    using NullCallback = void (*)();
+    try {
+        static_cast<void>(loop.post(static_cast<NullCallback>(nullptr)));
+    } catch (const std::invalid_argument&) {
+        emptyPost = true;
+    }
+    bool emptyStopCallback = false;
+    try {
+        static_cast<void>(loop.onStop(static_cast<NullCallback>(nullptr)));
+    } catch (const std::invalid_argument&) {
+        emptyStopCallback = true;
+    }
+    loops.join();
+    return acceptedTakeRejected && acceptedRejectionStatus && emptyRejectedTask && emptyPost && emptyStopCallback;
+}
 
 ruvia::Task<void> waitForSignal(ruvia::detail::WorkerSignal& signal, bool& resumed, std::size_t& remaining, ruvia::EventLoopAttachment& attachment) {
     {
@@ -358,7 +404,15 @@ bool testExternalAttachmentHandlesContextDestruction() {
     }
     const bool postRejected = loop.post([] {}) == ruvia::PostStatus::kWorkerStopping;
     attachment.stop();
-    return ioContextRejected && executorRejected && postRejected;
+    return ioContextRejected && executorRejected && postRejected && !attachment.valid() && !loop.valid();
+}
+
+bool testJoinStopsRunningPool() {
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
+    const auto loop = loops.loop(0);
+    loops.start();
+    loops.join();
+    return !loop.accepting() && loop.post([] {}) == ruvia::PostStatus::kWorkerStopping;
 }
 
 bool testFailurePropagation() {
@@ -709,5 +763,5 @@ int main() {
         std::fflush(stdout);
         return passed;
     };
-    return run("worker_signal_is_worker_affine", testWorkerSignalIsWorkerAffine) && run("worker_signal_has_no_waiter_limit", testWorkerSignalHasNoArbitraryWaiterLimit) && run("worker_signal_rechecks_cold_wait_affinity", testWorkerSignalRechecksAffinityWhenColdWaitStarts) && run("dispatch_and_affinity", testDispatchAndAffinity) && run("bounded_mailbox", testBoundedMailbox) && run("external_event_loop_attachment", testExternalEventLoopAttachment) && run("external_attachment_retains_state_until_cleanup", testExternalAttachmentRetainsStateUntilContextCleanup) && run("external_attachment_handles_context_destruction", testExternalAttachmentHandlesContextDestruction) && run("failure_propagation", testFailurePropagation) && run("join_before_start_drains_on_owners", testJoinBeforeStartDrainsOnOwners) && run("stop_before_start_propagates_failure", testStopBeforeStartPropagatesFailure) && run("join_rejects_pool_worker", testJoinRejectsPoolWorker) && run("executor_failure_drains_shutdown_on_owners", testExecutorFailureDrainsShutdownOnOwners) && run("expired_handle", testExpiredHandle) && run("escaped_worker_handle_detaches", testEscapedWorkerHandleBecomesDetachedEndpoint) && run("failure_destroys_abandoned_mailbox_tasks", testFailureDestroysAbandonedMailboxTasks) && run("dispatcher_lifecycle_hooks_are_worker_affine", testDispatcherLifecycleHooksAreWorkerAffine) && run("stop_callback_failure_reaches_join", testStopCallbackFailureReachesJoin) && run("lifecycle_transitions_are_monotonic", testLifecycleTransitionsAreMonotonic) && run("concurrent_stop_has_one_initiator", testConcurrentStopHasOneInitiator) ? 0 : 1;
+    return run("post_outcome_invariants_and_empty_callbacks", testPostOutcomeInvariantsAndEmptyCallbacks) && run("worker_signal_is_worker_affine", testWorkerSignalIsWorkerAffine) && run("worker_signal_has_no_waiter_limit", testWorkerSignalHasNoArbitraryWaiterLimit) && run("worker_signal_rechecks_cold_wait_affinity", testWorkerSignalRechecksAffinityWhenColdWaitStarts) && run("dispatch_and_affinity", testDispatchAndAffinity) && run("bounded_mailbox", testBoundedMailbox) && run("external_event_loop_attachment", testExternalEventLoopAttachment) && run("external_attachment_retains_state_until_cleanup", testExternalAttachmentRetainsStateUntilContextCleanup) && run("external_attachment_handles_context_destruction", testExternalAttachmentHandlesContextDestruction) && run("join_stops_running_pool", testJoinStopsRunningPool) && run("failure_propagation", testFailurePropagation) && run("join_before_start_drains_on_owners", testJoinBeforeStartDrainsOnOwners) && run("stop_before_start_propagates_failure", testStopBeforeStartPropagatesFailure) && run("join_rejects_pool_worker", testJoinRejectsPoolWorker) && run("executor_failure_drains_shutdown_on_owners", testExecutorFailureDrainsShutdownOnOwners) && run("expired_handle", testExpiredHandle) && run("escaped_worker_handle_detaches", testEscapedWorkerHandleBecomesDetachedEndpoint) && run("failure_destroys_abandoned_mailbox_tasks", testFailureDestroysAbandonedMailboxTasks) && run("dispatcher_lifecycle_hooks_are_worker_affine", testDispatcherLifecycleHooksAreWorkerAffine) && run("stop_callback_failure_reaches_join", testStopCallbackFailureReachesJoin) && run("lifecycle_transitions_are_monotonic", testLifecycleTransitionsAreMonotonic) && run("concurrent_stop_has_one_initiator", testConcurrentStopHasOneInitiator) ? 0 : 1;
 }

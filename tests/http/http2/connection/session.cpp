@@ -491,8 +491,8 @@ RUVIA_TEST(http2_connection_accepts_huffman_block_larger_than_decoded_field_sect
     RUVIA_CHECK(!conn.nextEvent().has_value());
     const auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK_EQ(stream->requestHeaderCount(), std::size_t{1});
-    const auto expanded = stream->requestHeaderAt(0);
+    RUVIA_CHECK_EQ(stream->remoteHeaderCount(), std::size_t{1});
+    const auto expanded = stream->remoteHeaderAt(0);
     RUVIA_CHECK_EQ(expanded.name, std::string_view("x-huffman-expanded"));
     RUVIA_CHECK_EQ(expanded.value.size(), kDecodedValueBytes);
     RUVIA_CHECK(std::all_of(expanded.value.begin(), expanded.value.end(), [](char byte) { return static_cast<unsigned char>(byte) == kExpandedByte; }));
@@ -597,7 +597,7 @@ RUVIA_TEST(http2_connection_trace_allows_empty_terminal_framing) {
     const auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
     if (stream != nullptr) {
-        const auto expectation = stream->expectationPlan(ruvia::detail::HttpUnsupportedExpectationPolicy::kReject);
+        const auto expectation = stream->expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject);
         RUVIA_CHECK(expectation.noAction() != nullptr);
         RUVIA_CHECK(expectation.sendContinue() == nullptr);
     }
@@ -841,7 +841,7 @@ RUVIA_TEST(http2_connection_validates_outbound_cors_fields_transactionally) {
     RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
 }
 
-RUVIA_TEST(http2_connection_rejects_100_continue_without_following_content_transactionally) {
+RUVIA_TEST(http2_connection_owns_expect_header_and_gates_typed_continue_content) {
     std::pmr::monotonic_buffer_resource resource;
     const ruvia::HttpHeaderView expectContinue[] = {{"expect", "100-Continue"}};
     const ruvia::HttpHeaderView combinedExpectation[] = {{"expect", "extension, 100-Continue"}};
@@ -862,7 +862,11 @@ RUVIA_TEST(http2_connection_rejects_100_continue_without_following_content_trans
 
     checkRegularRejected(expectContinue, Http2RequestContent::none());
     checkRegularRejected(expectContinue, Http2RequestContent::knownLength(0));
+    checkRegularRejected(expectContinue, Http2RequestContent::knownLength(1));
+    checkRegularRejected(expectContinue, Http2RequestContent::streaming());
     checkRegularRejected(combinedExpectation, Http2RequestContent::knownLength(0));
+    const ruvia::HttpHeaderView extensionExpectation[] = {{"expect", "extension"}};
+    checkRegularRejected(extensionExpectation, Http2RequestContent::none());
 
     Http2Connection connectClient(&resource, ruvia::detail::Http2Role::kClient);
     beginClient(connectClient);
@@ -872,19 +876,29 @@ RUVIA_TEST(http2_connection_rejects_100_continue_without_following_content_trans
     RUVIA_CHECK(connectClient.pendingOutput().empty());
     RUVIA_CHECK(connectClient.stream(1) == nullptr);
 
-    const auto checkAccepted = [&resource, &ruvia_ctx](std::span<const ruvia::HttpHeaderView> headers, Http2RequestContent content) {
+    const auto checkTypedRejected = [&resource, &ruvia_ctx](Http2RequestContent content) {
         Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
         beginClient(client);
-        const auto accepted = client.submitRegularRequestHead("POST", "https", "example.test", "/upload", headers, content);
-        RUVIA_CHECK(accepted.submitted() != nullptr);
-        RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
-        RUVIA_CHECK(!client.pendingOutput().empty());
+        const auto rejected = client.submitRegularRequestHead("POST", "https", "example.test", "/upload", {}, content, ruvia::HttpClientRequestExpectation::kContinue);
+        RUVIA_CHECK(rejected.submitted() == nullptr);
+        RUVIA_CHECK(requestHeadSubmitError(rejected) == Http2RequestHeadSubmitError::kInvalidMessage);
+        RUVIA_CHECK(client.pendingOutput().empty());
+        RUVIA_CHECK(client.stream(1) == nullptr);
     };
 
-    checkAccepted(expectContinue, Http2RequestContent::knownLength(1));
-    checkAccepted(expectContinue, Http2RequestContent::streaming());
-    const ruvia::HttpHeaderView extensionExpectation[] = {{"expect", "extension"}};
-    checkAccepted(extensionExpectation, Http2RequestContent::none());
+    checkTypedRejected(Http2RequestContent::none());
+    checkTypedRejected(Http2RequestContent::knownLength(0));
+
+    Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
+    beginClient(client);
+    const auto accepted = client.submitRegularRequestHead("POST", "https", "example.test", "/upload", {}, Http2RequestContent::knownLength(1), ruvia::HttpClientRequestExpectation::kContinue);
+    RUVIA_CHECK(accepted.submitted() != nullptr);
+    const auto streamId = submittedRequestStreamId(accepted);
+    RUVIA_CHECK_EQ(streamId, std::uint32_t{1});
+    RUVIA_CHECK(client.submitData(streamId, "x", Http2EndStream::kEndStream) == Http2DataSubmitStatus::kExpectationPending);
+    RUVIA_CHECK(client.releaseRequestContent(streamId) == ruvia::detail::Http2RequestContentReleaseStatus::kReleased);
+    RUVIA_CHECK(client.releaseRequestContent(streamId) == ruvia::detail::Http2RequestContentReleaseStatus::kNotPending);
+    RUVIA_CHECK(client.submitData(streamId, "x", Http2EndStream::kEndStream) == Http2DataSubmitStatus::kAccepted);
 }
 
 RUVIA_TEST(http2_connection_rejects_upgrade_required_final_heads_transactionally) {
@@ -1204,14 +1218,20 @@ RUVIA_TEST(http2_connection_client_validates_interim_representation_field_syntax
         RUVIA_CHECK(client.feed(std::string_view(frame.data(), frame.size())) == Http2FeedResult::kAccepted);
 
         bool sawProtocolError = false;
+        bool sawInformationalHead = false;
         while (const auto event = client.nextEvent()) {
             if (const auto* closed = event->streamClosed()) {
                 sawProtocolError = closed->source() == Http2StreamCloseSource::kLocal && closed->error() == Http2ErrorCode::kProtocolError;
+            } else if (const auto* informational = event->informationalHead()) {
+                sawInformationalHead = true;
+                RUVIA_CHECK(informational->head().status() == ruvia::http_status::kEarlyHints);
+                RUVIA_CHECK_EQ(informational->head().headers().size(), std::size_t{1});
             } else {
                 RUVIA_CHECK(false);
             }
         }
         RUVIA_CHECK(sawProtocolError == rejected);
+        RUVIA_CHECK(sawInformationalHead != rejected);
         RUVIA_CHECK((client.stream(streamId) == nullptr) == rejected);
     };
 

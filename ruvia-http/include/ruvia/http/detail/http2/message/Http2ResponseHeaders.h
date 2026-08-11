@@ -160,7 +160,7 @@ inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std:
         return status;
     }
 
-    auto& headerBlock = stream.responseHeaderBlock();
+    auto& headerBlock = stream.localHeaderBlock();
     try {
         headerBlock.clear();
         HpackEncoder::encodeStatus(headerBlock, response.status());
@@ -219,7 +219,7 @@ inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std:
         }
     }
 
-    auto& headerBlock = stream.responseHeaderBlock();
+    auto& headerBlock = stream.localHeaderBlock();
     try {
         headerBlock.clear();
         HpackEncoder::encodeStatus(headerBlock, plan.bodyPlan().responseStatus());
@@ -247,8 +247,8 @@ inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std:
     return true;
 }
 
-inline void http2ReleaseResponseHeaderBlock(Http2StreamState& stream) {
-    clearPmrStringRetainingSmall(stream.responseHeaderBlock());
+inline void http2ReleaseLocalHeaderBlock(Http2StreamState& stream) {
+    clearPmrStringRetainingSmall(stream.localHeaderBlock());
 }
 
 inline void appendHttp2ResponseTrailers(std::pmr::string& trailerBlock, const HttpResponseTrailerSection& section) {

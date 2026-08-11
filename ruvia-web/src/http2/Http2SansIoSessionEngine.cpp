@@ -607,8 +607,8 @@ void Http2SansIoSessionEngine::drainEvents() {
     const auto onMessageHead = [&](const auto* messageHead) {
         const auto streamId = messageHead->streamId();
         ++acceptedRequestHeads_;
-        if (!connection_.draining() && options.keepaliveRequests.has_value() &&
-            acceptedRequestHeads_ >= *options.keepaliveRequests) {
+        if (!connection_.draining() && options.maxRequestsPerConnection.has_value() &&
+            acceptedRequestHeads_ >= *options.maxRequestsPerConnection) {
             connection_.beginDrain();
             wakeWriter();
         }

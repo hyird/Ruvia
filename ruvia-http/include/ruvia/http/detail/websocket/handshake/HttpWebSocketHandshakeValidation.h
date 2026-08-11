@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/Http1RequestBodyPlan.h"
+
 #include <cstdint>
 #include <variant>
 
@@ -10,7 +12,6 @@
 
 namespace ruvia::detail {
 
-class Http1RequestBodyPlan;
 class Http2StreamState;
 class HttpWebSocketHandshakeValidationResult;
 

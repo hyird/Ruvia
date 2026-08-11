@@ -82,7 +82,7 @@ void Http2Connection::takeOutput(std::pmr::string& into) {
 
 std::optional<Http2Event> Http2Connection::nextEvent() {
     if (eventOffset_ < events_.size()) {
-        return events_[eventOffset_++];
+        return std::move(events_[eventOffset_++]);
     }
     events_.clear();
     eventOffset_ = 0;

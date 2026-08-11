@@ -58,7 +58,7 @@ RUVIA_TEST(http_client_transfer_coding_before_final_chunked_is_typed) {
     const auto combined = parseHead("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked");
     const auto& combinedChunked = requireChunked(combined.plan());
     RUVIA_CHECK_EQ(combinedChunked.transferCodings().count, std::size_t{1});
-    RUVIA_CHECK(combinedChunked.transferCodings().values[0] == ruvia::detail::HttpTransferCoding::kGzip);
+    RUVIA_CHECK(combinedChunked.transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
     RUVIA_CHECK(combinedChunked.persistence() == Http1ClosePolicy::kAllowReuse);
 
     // Transfer-Encoding is list-based: split field lines retain wire order.
@@ -66,7 +66,7 @@ RUVIA_TEST(http_client_transfer_coding_before_final_chunked_is_typed) {
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: deflate\r\n"
         "Transfer-Encoding: chunked");
     const auto& splitChunked = requireChunked(split.plan());
-    RUVIA_CHECK(splitChunked.transferCodings().values[0] == ruvia::detail::HttpTransferCoding::kDeflate);
+    RUVIA_CHECK(splitChunked.transferCodings().values[0] == ruvia::HttpTransferCoding::kDeflate);
 }
 
 RUVIA_TEST(http_client_non_chunked_transfer_coding_is_close_delimited) {
@@ -137,7 +137,7 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     RUVIA_CHECK(chunkedZero.closeDelimited() == nullptr);
     if (chunkedZero.chunked() != nullptr) {
         RUVIA_CHECK_EQ(chunkedZero.chunked()->transferCodings().count, std::size_t{1});
-        RUVIA_CHECK(chunkedZero.chunked()->transferCodings().values[0] == ruvia::detail::HttpTransferCoding::kGzip);
+        RUVIA_CHECK(chunkedZero.chunked()->transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
     }
     RUVIA_CHECK_EQ(activePlanAlternativeCount(chunked.plan()), std::size_t{1});
 
@@ -146,7 +146,7 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     RUVIA_CHECK(transferCodedZero.closeDelimited() != nullptr);
     if (transferCodedZero.closeDelimited() != nullptr) {
         RUVIA_CHECK_EQ(transferCodedZero.closeDelimited()->transferCodings().count, std::size_t{1});
-        RUVIA_CHECK(transferCodedZero.closeDelimited()->transferCodings().values[0] == ruvia::detail::HttpTransferCoding::kGzip);
+        RUVIA_CHECK(transferCodedZero.closeDelimited()->transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
     }
 
     const auto unframed = parseHead("GET", "HTTP/1.1 205 Reset Content");
@@ -165,7 +165,7 @@ RUVIA_TEST(http_client_final_after_continue_does_not_cancel_released_content) {
     request.method = "POST";
     request.content = ruvia::HttpClientRequestContentView::bytes("payload");
     std::array<char, 512> requestHead;
-    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https("example.test"), request, requestHead, Http1ClientRequestWirePolicy::expectContinue());
+    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https("example.test"), request, requestHead, Http1ClientRequestWirePolicy(Http1ClosePolicy::kAllowReuse, ruvia::HttpClientRequestExpectation::kContinue));
     RUVIA_CHECK(prepared.prepared() != nullptr);
     if (prepared.prepared() == nullptr) {
         return;
@@ -175,7 +175,7 @@ RUVIA_TEST(http_client_final_after_continue_does_not_cancel_released_content) {
     const auto continueResponse = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     RUVIA_CHECK(continueResponse.parsed() != nullptr);
     if (continueResponse.parsed() != nullptr) {
-        RUVIA_CHECK(continueResponse.parsed()->plan().requestContentSignal() == Http1ClientRequestContentSignal::kContinue);
+        RUVIA_CHECK(continueResponse.parsed()->plan().requestContentSignal() == HttpClientRequestContentSignal::kContinue);
     }
 
     const auto finalResponse = parser.parse("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
@@ -191,7 +191,7 @@ RUVIA_TEST(http_client_closing_final_stops_unfinished_request_content) {
     request.method = "POST";
     request.content = ruvia::HttpClientRequestContentView::bytes("payload");
     std::array<char, 512> requestHead;
-    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https("example.test"), request, requestHead, Http1ClientRequestWirePolicy::expectContinue());
+    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https("example.test"), request, requestHead, Http1ClientRequestWirePolicy(Http1ClosePolicy::kAllowReuse, ruvia::HttpClientRequestExpectation::kContinue));
     RUVIA_CHECK(prepared.prepared() != nullptr);
     if (prepared.prepared() == nullptr) {
         return;
@@ -206,7 +206,7 @@ RUVIA_TEST(http_client_closing_final_stops_unfinished_request_content) {
         "Connection: close\r\nContent-Length: 0\r\n\r\n");
     RUVIA_CHECK(closingFinal.parsed() != nullptr);
     if (closingFinal.parsed() != nullptr) {
-        RUVIA_CHECK(closingFinal.parsed()->plan().requestContentSignal() == Http1ClientRequestContentSignal::kExchangeComplete);
+        RUVIA_CHECK(closingFinal.parsed()->plan().requestContentSignal() == HttpClientRequestContentSignal::kExchangeComplete);
         RUVIA_CHECK(requireKnownLength(closingFinal.parsed()->plan()).persistence() == Http1ClosePolicy::kCloseAfterResponse);
     }
 }

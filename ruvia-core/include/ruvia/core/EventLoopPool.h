@@ -55,7 +55,8 @@ public:
     [[nodiscard]] bool isCurrent() const noexcept;
     [[nodiscard]] WorkerId id() const noexcept;
 
-    [[nodiscard]] asio::io_context& ioContext() const;
+    [[nodiscard]] asio::io_context& ioContext() const&;
+    asio::io_context& ioContext() const&& = delete;
     [[nodiscard]] asio::io_context::executor_type executor() const;
     [[nodiscard]] WorkerHandle handle() const noexcept;
 
@@ -138,10 +139,10 @@ public:
 
     void start();
     void stop() noexcept;
-    // Waits for every worker to finish. If stop() happened before start(),
-    // join() creates short-lived owner threads to drain work accepted before
-    // shutdown and to run owner-affine stop callbacks. Calling join() from any
-    // worker owned by this pool is rejected before waiting on another thread.
+    // Stops the pool and waits for every worker to finish. If join() happens
+    // before start(), it creates short-lived owner threads to drain work accepted
+    // before shutdown and to run owner-affine stop callbacks. Calling join() from
+    // any worker owned by this pool throws logic_error before stopping the pool.
     void join();
 
     [[nodiscard]] std::size_t loopCount() const noexcept;

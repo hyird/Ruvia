@@ -1,0 +1,31 @@
+set(_version_file [=[@CMAKE_CURRENT_BINARY_DIR@/../ruviaConfigVersion.cmake]=])
+if(NOT EXISTS "${_version_file}")
+    message(FATAL_ERROR
+        "ruvia_guard_package_version_compatibility: missing ${_version_file}")
+endif()
+
+function(ruvia_check_package_version requested expected)
+    string(REPLACE "." ";" _parts "${requested}")
+    list(GET _parts 0 PACKAGE_FIND_VERSION_MAJOR)
+    list(GET _parts 1 PACKAGE_FIND_VERSION_MINOR)
+    list(GET _parts 2 PACKAGE_FIND_VERSION_PATCH)
+    set(PACKAGE_FIND_VERSION_COUNT 3)
+    set(PACKAGE_FIND_VERSION "${requested}")
+    unset(PACKAGE_FIND_VERSION_RANGE)
+    unset(PACKAGE_VERSION_COMPATIBLE)
+    unset(PACKAGE_VERSION_EXACT)
+    unset(PACKAGE_VERSION_UNSUITABLE)
+    include("${_version_file}")
+    if(expected AND NOT PACKAGE_VERSION_COMPATIBLE)
+        message(FATAL_ERROR
+            "ruvia_guard_package_version_compatibility: ${requested} should be compatible with @PROJECT_VERSION@")
+    endif()
+    if(NOT expected AND PACKAGE_VERSION_COMPATIBLE)
+        message(FATAL_ERROR
+            "ruvia_guard_package_version_compatibility: ${requested} must not cross the 0.2 compatibility line")
+    endif()
+endfunction()
+
+ruvia_check_package_version("0.2.0" TRUE)
+ruvia_check_package_version("0.1.6" FALSE)
+ruvia_check_package_version("0.3.0" FALSE)

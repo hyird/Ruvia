@@ -2,8 +2,11 @@
 
 #include <charconv>
 #include <cstdint>
+#include <memory_resource>
 #include <string_view>
+#include <vector>
 
+#include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/field/HttpInterimResponseValidation.h"
@@ -29,12 +32,14 @@ namespace {
 constexpr std::uint8_t kMaxHttp2InterimResponses = 8;
 
 struct Http2ResponseDecodeContext final {
-    explicit Http2ResponseDecodeContext(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction* transaction) noexcept
+    explicit Http2ResponseDecodeContext(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction* transaction, std::pmr::memory_resource* resource) noexcept
         : base(stream, transaction),
-          interimHeaders(HttpFieldListRole::kRecipient) {}
+          interimHeaders(HttpFieldListRole::kRecipient),
+          informationalFields(resource) {}
 
     Http2HeaderDecodeContext base;
     HttpInterimResponseHeaderValidator interimHeaders;
+    std::pmr::vector<HttpClientResponseHeader> informationalFields;
     std::optional<HttpStatusCode> status;
     bool sawRegular{false};
 };
@@ -76,7 +81,11 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
     if (context->status->isInformational()) {
         // Interim fields are validated but not stored. The shared incremental
         // validator keeps receive acceptance identical to both response writers.
-        return context->interimHeaders.validate(name, value) == HttpInterimResponseHeaderValidationStatus::kOk;
+        if (context->interimHeaders.validate(name, value) != HttpInterimResponseHeaderValidationStatus::kOk) {
+            return false;
+        }
+        context->informationalFields.push_back(HttpClientResponseHeaderAccess::make(name, value, context->informationalFields.get_allocator().resource()));
+        return true;
     }
     const auto kind = classifyRequestHeader(name);
     const auto responseKnownBit = classifyResponseHeaderName(name);
@@ -107,7 +116,7 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
             return false;
         }
     }
-    return stream.appendRequestHeader(name, value, kind);
+    return stream.appendRemoteHeader(name, value, kind);
 }
 
 }  // namespace
@@ -124,12 +133,12 @@ bool http2OnDecodedResponseTrailer(void* target, std::string_view name, std::str
     // rules. In particular, Accept-Ranges and ETag are explicitly trailer-safe,
     // while response controls such as Date and Location are not.
     return context.acceptRegularField() && http2IsValidDecodedResponseHeader(name, value) &&
-        !isForbiddenResponseTrailerName(name) && context.stream.appendRequestHeader(name, value, classifyRequestHeader(name));
+        !isForbiddenResponseTrailerName(name) && context.stream.appendRemoteHeader(name, value, classifyRequestHeader(name));
 }
 
 HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction) {
-    Http2ResponseDecodeContext context{stream, &streamTransaction};
-    const auto result = decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedResponseHeader(target, name, value); }, hpackTransaction);
+    Http2ResponseDecodeContext context{stream, &streamTransaction, resource_};
+    const auto result = decoder_.decode(stream.remoteHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedResponseHeader(target, name, value); }, hpackTransaction);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
@@ -146,8 +155,21 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
         if (stream.interimResponseCount() > kMaxHttp2InterimResponses) {
             return HeaderDecodeStatus::kProtocolError;
         }
+        reserveEventSlots(1);
+        auto head = HttpClientResponseHeadAccess::make(*context.status, HttpProtocolVersion::kHttp2, resource_);
+        auto& headers = HttpClientResponseHeadAccess::headers(head);
+        headers.reserve(context.informationalFields.size());
+        for (auto& field : context.informationalFields) {
+            headers.push_back(std::move(field));
+        }
+        std::optional<HttpClientRequestContentSignal> signal;
+        if (*context.status == http_status::kContinue && stream.releaseRequestContinue()) {
+            signal = HttpClientRequestContentSignal::kContinue;
+        }
+        events_.push_back(Http2Event::informationalHead(stream.id(), std::move(head), signal));
         return HeaderDecodeStatus::kOk;
     }
+    (void)stream.cancelPendingRequestContinue();
     if (!stream.setResponseStatus(*context.status)) {
         return HeaderDecodeStatus::kProtocolError;
     }
@@ -184,7 +206,7 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
     if (http2RemotePeerHalfClosed(stream) && !stream.remoteContent().terminalLengthValid()) {
         return HeaderDecodeStatus::kProtocolError;
     }
-    if (!stream.setResponseHeaderCount(stream.requestHeaderCount())) {
+    if (!stream.setRemoteInitialHeaderCount(stream.remoteHeaderCount())) {
         return HeaderDecodeStatus::kProtocolError;
     }
     return HeaderDecodeStatus::kOk;

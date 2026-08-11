@@ -13,6 +13,12 @@
 
 namespace ruvia::detail {
 
+void WorkerTimerCancellation::cancel() const noexcept {
+    if (dispatcher_ != nullptr && generation_ != 0) {
+        dispatcher_->requestTimerCancellation(slot_, generation_);
+    }
+}
+
 WorkerTimerRegistration::~WorkerTimerRegistration() {
     cancel();
 }
@@ -29,6 +35,13 @@ void WorkerTimerRegistration::cancel() noexcept {
 
 bool WorkerTimerRegistration::registered() const noexcept {
     return dispatcher_ != nullptr;
+}
+
+WorkerTimerCancellation WorkerTimerRegistration::cancellation() const& {
+    if (dispatcher_ == nullptr || generation_ == 0) {
+        throw std::logic_error("worker timer registration is not active");
+    }
+    return WorkerTimerCancellation(*dispatcher_, slot_, generation_);
 }
 
 void WorkerTimerRegistration::bind(WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept {
@@ -50,7 +63,7 @@ void WorkerDispatcher::scheduleTimer(WorkerTimerRegistration& registration, std:
     if (!attached()) {
         throw std::runtime_error("worker execution context is detached");
     }
-    if (impl_->timersStopping) {
+    if (impl_->timersStopping.load(std::memory_order_acquire)) {
         throw std::runtime_error("worker timer queue is stopping");
     }
 
@@ -107,7 +120,7 @@ void WorkerDispatcher::requestTimerCancellation(std::size_t slot, std::uint64_t 
     bool current = false;
     {
         std::lock_guard lock(impl_->mutex);
-        if (impl_->timersStopping || !impl_->contextAttached) {
+        if (impl_->timersStopping.load(std::memory_order_acquire) || !impl_->contextAttached) {
             return;
         }
         current = impl_->ioContext.get_executor().running_in_this_thread();
@@ -157,10 +170,9 @@ void WorkerDispatcher::cancelTimer(std::size_t slotIndex, std::uint64_t generati
 }
 
 void WorkerDispatcher::stopTimers() noexcept {
-    if (impl_->timersStopping) {
+    if (impl_->timersStopping.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
-    impl_->timersStopping = true;
     ++impl_->timerGeneration;
     impl_->timerArmed = false;
     std::error_code ignored;
@@ -211,7 +223,7 @@ void WorkerDispatcher::armTimer() {
             --impl_->staleTimerCount;
         }
     }
-    if (impl_->timersStopping || impl_->timers.empty()) {
+    if (impl_->timersStopping.load(std::memory_order_acquire) || impl_->timers.empty()) {
         return;
     }
     impl_->timer->expires_at(impl_->timers.front().deadline);

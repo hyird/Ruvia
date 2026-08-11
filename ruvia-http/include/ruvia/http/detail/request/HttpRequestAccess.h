@@ -72,9 +72,12 @@ struct HttpRequestAccess final {
         request.method_ = {};
         request.knownMethod_ = HttpKnownMethod::kUnknown;
         request.target_ = {};
+        request.scheme_ = {};
+        request.authority_ = {};
         request.path_ = {};
         request.queryString_ = {};
         request.protocolVersion_ = HttpProtocolVersion::kHttp11;
+        request.targetForm_ = ::ruvia::HttpRequestTargetForm::kOrigin;
         request.headerCount_ = 0;
         request.cachedHeaderBits_ = 0;
         request.body_ = {};
@@ -92,6 +95,18 @@ struct HttpRequestAccess final {
 
     static void setTarget(HttpRequest& request, std::string_view target) noexcept {
         request.target_ = target;
+    }
+
+    static void setScheme(HttpRequest& request, std::string_view scheme) noexcept {
+        request.scheme_ = scheme;
+    }
+
+    static void setAuthority(HttpRequest& request, std::string_view authority) noexcept {
+        request.authority_ = authority;
+    }
+
+    static void setTargetForm(HttpRequest& request, ::ruvia::HttpRequestTargetForm form) noexcept {
+        request.targetForm_ = form;
     }
 
     static void setPath(HttpRequest& request, std::string_view path) noexcept {

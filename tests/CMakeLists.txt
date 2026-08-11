@@ -151,6 +151,10 @@ configure_file(
     ${CMAKE_CURRENT_BINARY_DIR}/verify_package_install_consumer.cmake
     @ONLY)
 configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_package_version_compatibility.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/verify_package_version_compatibility.cmake
+    @ONLY)
+configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_test_layering.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/verify_test_layering.cmake
     @ONLY)
@@ -183,6 +187,11 @@ add_test(
         -DRUVIA_TEST_CONFIG=$<CONFIG>
         -P ${CMAKE_CURRENT_BINARY_DIR}/verify_package_install_consumer.cmake)
 set_tests_properties(ruvia_guard_package_install_consumer PROPERTIES TIMEOUT 180)
+
+add_test(
+    NAME ruvia_guard_package_version_compatibility
+    COMMAND ${CMAKE_COMMAND}
+        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_package_version_compatibility.cmake)
 
 add_test(
     NAME ruvia_guard_test_layering
@@ -498,6 +507,10 @@ if(RUVIA_ENABLE_POSTGRESQL)
 endif()
 
 if(RUVIA_ENABLE_MARIADB)
+    ruvia_add_test(ruvia_mariadb_cancellation web/server/mariadb_cancellation.cpp
+        LIB ruvia::web TIMEOUT 15 LABELS "database;mariadb")
+    ruvia_add_test(ruvia_mariadb_connect_failure web/server/mariadb_connect_failure.cpp
+        LIB ruvia::web TIMEOUT 15 LABELS "database;mariadb")
     ruvia_add_test(ruvia_mariadb_integration web/server/mariadb_integration.cpp
         LIB ruvia::web TIMEOUT 60 SERIAL LABELS "database;mariadb;integration")
     set_tests_properties(ruvia_mariadb_integration PROPERTIES SKIP_RETURN_CODE 77)
@@ -623,6 +636,8 @@ if(RUVIA_BUILD_WEB)
         web/guards/api_surface_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_web_blocking_api
         web/guards/blocking_api_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_web_cancellation_mailbox
+        web/guards/cancellation_mailbox_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_web_controller_api
         web/guards/controller_api_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_web_model_api

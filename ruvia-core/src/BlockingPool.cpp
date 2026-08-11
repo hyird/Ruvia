@@ -44,6 +44,8 @@ std::string_view describeBlockingStatus(BlockingStatus status) noexcept {
             return "blocking pool is stopped";
         case BlockingStatus::kWorkerStopping:
             return "worker is stopping";
+        case BlockingStatus::kCancelled:
+            return "blocking operation was cancelled";
         case BlockingStatus::kTimedOut:
             return "blocking operation timed out";
     }
@@ -52,7 +54,11 @@ std::string_view describeBlockingStatus(BlockingStatus status) noexcept {
 
 BlockingOperationRejected::BlockingOperationRejected(BlockingStatus status)
     : std::runtime_error(std::string(describeBlockingStatus(status))),
-      status_(status) {}
+      status_(status) {
+    if (status == BlockingStatus::kCompleted) {
+        throw std::invalid_argument("completed blocking operation was not rejected");
+    }
+}
 
 struct BlockingPool::ThreadState final {
     explicit ThreadState()
@@ -136,14 +142,18 @@ struct BlockingPool::Impl final {
         dropped.clear();
     }
 
-    static void join(std::pmr::vector<std::thread>& threads) noexcept {
+    static void throwIfCurrent(const std::pmr::vector<std::thread>& threads) {
+        if (std::ranges::any_of(threads, [](const std::thread& thread) {
+                return thread.joinable() && thread.get_id() == std::this_thread::get_id();
+            })) {
+            throw std::logic_error("cannot join a blocking pool from one of its threads");
+        }
+    }
+
+    static void join(std::pmr::vector<std::thread>& threads) {
+        throwIfCurrent(threads);
         for (auto& thread : threads) {
             if (thread.joinable()) {
-                if (thread.get_id() == std::this_thread::get_id()) {
-                    // Joining yourself deadlocks. A pool thread reaching here
-                    // means a task called join() on its own pool.
-                    std::terminate();
-                }
                 thread.join();
             }
         }
@@ -223,7 +233,9 @@ void BlockingPool::stop() noexcept {
     impl_->stop();
 }
 
-void BlockingPool::join() noexcept {
+void BlockingPool::join() {
+    Impl::throwIfCurrent(threads_->threads);
+    stop();
     Impl::join(threads_->threads);
 }
 

@@ -431,17 +431,17 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
 
     const auto peerData = frame(&resource, Http2FrameType::kData, 0, 1, "peer");
     (void)server.feed(std::string_view(peerData.data(), peerData.size()));
-    event = server.nextEvent().value();
-    RUVIA_CHECK(event.kind() == Http2EventKind::kTunnelData);
-    RUVIA_CHECK_EQ(event.tunnelData()->bytes(), std::string_view("peer"));
+    auto peerDataEvent = server.nextEvent().value();
+    RUVIA_CHECK(peerDataEvent.kind() == Http2EventKind::kTunnelData);
+    RUVIA_CHECK_EQ(peerDataEvent.tunnelData()->bytes(), std::string_view("peer"));
     drainEvents(server);
     server.consumeOutput(server.pendingOutput().size());
 
     const auto peerFin = frame(&resource, Http2FrameType::kData, ruvia::detail::kHttp2FlagEndStream, 1, "fin");
     (void)server.feed(std::string_view(peerFin.data(), peerFin.size()));
-    event = server.nextEvent().value();
-    RUVIA_CHECK(event.kind() == Http2EventKind::kTunnelData);
-    RUVIA_CHECK_EQ(event.tunnelData()->bytes(), std::string_view("fin"));
+    auto peerFinEvent = server.nextEvent().value();
+    RUVIA_CHECK(peerFinEvent.kind() == Http2EventKind::kTunnelData);
+    RUVIA_CHECK_EQ(peerFinEvent.tunnelData()->bytes(), std::string_view("fin"));
     RUVIA_CHECK(server.nextEvent().value().kind() == Http2EventKind::kTunnelEnd);
     RUVIA_CHECK(!server.nextEvent().has_value());
     server.consumeOutput(server.pendingOutput().size());

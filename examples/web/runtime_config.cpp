@@ -71,7 +71,7 @@ int main() {
         config.maxAge.emplace(std::chrono::seconds(600));
     }
 
-    app.setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setKeepaliveTimeout(std::chrono::seconds(75)).setConnectionScanInterval(std::chrono::seconds(1)).setClientHeaderTimeout(std::chrono::seconds(60)).setClientBodyTimeout(std::chrono::seconds(60)).setSendTimeout(std::chrono::seconds(60)).setMaxConnectionsPerWorker(10000).setKeepaliveRequests(1000).setBodyLimit(16 * 1024 * 1024).setStreamBodyLimit(std::nullopt).setMaxWebSocketMessageBytes(16 * 1024 * 1024).setMemoryPoolConfig(memory).setCompression(std::move(compression)).setCors(std::move(cors));
+    app.setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setIdleTimeout(std::chrono::seconds(75)).setConnectionScanInterval(std::chrono::seconds(1)).setRequestHeaderTimeout(std::chrono::seconds(60)).setRequestBodyTimeout(std::chrono::seconds(60)).setWriteTimeout(std::chrono::seconds(60)).setMaxConnectionsPerWorker(10000).setMaxRequestsPerConnection(1000).setBodyLimit(16 * 1024 * 1024).setStreamBodyLimit(std::nullopt).setMaxWebSocketMessageBytes(16 * 1024 * 1024).setMemoryPoolConfig(memory).setCompression(std::move(compression)).setCors(std::move(cors));
 
     const auto cert = pathOrEmpty(app.env().get("RUVIA_TLS_CERT"));
     const auto key = pathOrEmpty(app.env().get("RUVIA_TLS_KEY"));

@@ -112,7 +112,7 @@ public:
 
     ruvia::Task<ruvia::HttpResponse> setValue(ruvia::Context& c) {
         auto body = co_await c.req().text();
-        co_await c.redis().set(c.req().param("key").value_or(""), body);
+        (void)(co_await c.redis().set(c.req().param("key").value_or(""), body));
         co_return c.text("OK\n");
     }
 
@@ -153,13 +153,19 @@ public:
     ruvia::Task<ruvia::HttpResponse> strings(ruvia::Context& c) {
         const auto key = c.req().param("key").value_or("");
         const auto value = co_await c.req().text();
-        co_await c.redis().set(key, value);
+        (void)(co_await c.redis().set(key, value));
         ruvia::RedisSetOptions setOptions;
         setOptions.returnPrevious = true;
         auto previous = co_await c.redis().set(key, "fresh", setOptions);
-        co_await c.redis().setEx("ruvia:example:ttl", std::chrono::seconds(60), "ttl");
-        const auto inserted = co_await c.redis().setNx("ruvia:example:nx", "first");
-        auto replaced = co_await c.redis().getSet(key, "replaced");
+        ruvia::RedisSetOptions ttlOptions;
+        ttlOptions.expiration = ruvia::RedisSetExpiration::expiresAfter(std::chrono::seconds(60));
+        (void)(co_await c.redis().set("ruvia:example:ttl", "ttl", ttlOptions));
+        ruvia::RedisSetOptions insertOptions;
+        insertOptions.condition = ruvia::RedisSetCondition::kIfAbsent;
+        const auto inserted = co_await c.redis().set("ruvia:example:nx", "first", insertOptions);
+        ruvia::RedisSetOptions replaceOptions;
+        replaceOptions.returnPrevious = true;
+        auto replaced = co_await c.redis().set(key, "replaced", replaceOptions);
         const auto appended = co_await c.redis().append(key, "+tail");
         const auto length = co_await c.redis().strlen(key);
         auto deleted = co_await c.redis().getDel("ruvia:example:nx");
@@ -171,11 +177,11 @@ public:
 
         std::pmr::string body(c.allocator<char>());
         body.append("previous=");
-        body.append(previous.value_or(""));
+        body.append(previous.previous().value_or(""));
         body.append("\ninserted=");
-        appendBool(body, inserted);
+        appendBool(body, inserted.applied());
         body.append("\nreplaced=");
-        body.append(replaced.value_or(""));
+        body.append(replaced.previous().value_or(""));
         body.append("\nappended=");
         appendSigned(body, appended);
         body.append("\nlength=");
@@ -408,8 +414,8 @@ public:
 
     ruvia::Task<ruvia::HttpResponse> blockingPop(ruvia::Context& c) {
         const std::array<std::string_view, 1> keys{"ruvia:example:blocking"};
-        auto left = co_await c.redis().blpop(keys, std::chrono::seconds(1));
-        auto right = co_await c.redis().brpop(keys, std::chrono::seconds(1));
+        auto left = co_await c.redis().blpop(keys, ruvia::RedisBlockWait::forDuration(std::chrono::seconds(1)));
+        auto right = co_await c.redis().brpop(keys, ruvia::RedisBlockWait::forDuration(std::chrono::seconds(1)));
 
         std::pmr::string body(c.allocator<char>());
         body.append("left=");

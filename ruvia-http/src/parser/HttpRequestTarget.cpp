@@ -332,6 +332,7 @@ namespace {
     } else {
         output.path = path;
     }
+    output.scheme = scheme;
     output.query = query;
     output.authority = authority;
     output.defaultPort = httpUriSchemeDefaultPort(scheme);
@@ -367,6 +368,7 @@ bool parseRequestTarget(HttpKnownMethod method, std::string_view target, Request
             return false;
         }
         output.path = "*";
+        output.scheme = {};
         output.query = {};
         output.authority = {};
         output.defaultPort = 0;
@@ -378,6 +380,7 @@ bool parseRequestTarget(HttpKnownMethod method, std::string_view target, Request
             return false;
         }
         output.path = target;
+        output.scheme = {};
         output.query = {};
         output.authority = target;
         output.defaultPort = 0;
@@ -392,6 +395,7 @@ bool parseRequestTarget(HttpKnownMethod method, std::string_view target, Request
             return false;
         }
         const auto querySeparator = target.find('?');
+        output.scheme = {};
         output.path = querySeparator == std::string_view::npos ? target : target.substr(0, querySeparator);
         output.query = querySeparator == std::string_view::npos ? std::string_view{} : target.substr(querySeparator + 1);
         output.authority = {};

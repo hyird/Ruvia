@@ -31,6 +31,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/field/HttpCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/field/HttpFieldSyntax.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/field/HttpMethod.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Hpack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2Connection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionFlow.cpp
@@ -41,6 +42,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionSubmit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionSubmitRequest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2OutputBuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2PublicConnection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2Hpack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackDynamic.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackEncoder.cpp
@@ -71,6 +73,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketAccept.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketHandshakeFields.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketValidation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/WebSocketServerConnection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/WsConnection.cpp
 )
 add_library(ruvia::http ALIAS ruvia-http)
@@ -100,12 +103,15 @@ ruvia_install_target(ruvia-http http)
 ruvia_install_public_headers(http
     include/ruvia/http/BorrowedText.h
     include/ruvia/http/Cookies.h
+    include/ruvia/http/Hpack.h
     include/ruvia/http/ProtocolByteLimit.h
     include/ruvia/http/HttpProtocolError.h
     include/ruvia/http/HttpCache.h
     include/ruvia/http/HttpClient.h
     include/ruvia/http/HttpClientRedirect.h
     include/ruvia/http/HttpHeader.h
+    include/ruvia/http/HttpExpectations.h
+    include/ruvia/http/HttpTransferCoding.h
     include/ruvia/http/Http1InterimResponseWriter.h
     include/ruvia/http/HttpInterimResponse.h
     include/ruvia/http/HttpLimits.h
@@ -116,6 +122,9 @@ ruvia_install_public_headers(http
     include/ruvia/http/Http1ClientResponseParser.h
     include/ruvia/http/Http1ClosePolicy.h
     include/ruvia/http/Http1RequestParser.h
+    include/ruvia/http/Http1RequestBodyPlan.h
+    include/ruvia/http/Http2Framing.h
+    include/ruvia/http/Http2Connection.h
     include/ruvia/http/HttpRequest.h
     include/ruvia/http/HttpResponse.h
     include/ruvia/http/HttpStatus.h
@@ -124,6 +133,7 @@ ruvia_install_public_headers(http
     include/ruvia/http/Sse.h
     include/ruvia/http/UrlEncoding.h
     include/ruvia/http/WebSocketProtocol.h
+    include/ruvia/http/WebSocketServerConnection.h
 )
 
 ruvia_install_public_header_tree(http include/ruvia/http/detail)

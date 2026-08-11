@@ -1,7 +1,7 @@
-// Regression: sendTimeout must bound the response-write phase (kWriting), so a
+// Regression: writeTimeout must bound the response-write phase (kWriting), so a
 // slow-read client -- one that sends a request then stops reading -- cannot pin a
 // connection open indefinitely. A handler streams more data than any practical
-// socket buffer can hold; the client stops reading past sendTimeout, then drains.
+// socket buffer can hold; the client stops reading past writeTimeout, then drains.
 // The server must have closed the stuck write, observed as an eof after the
 // buffered prefix rather than a stall.
 
@@ -31,8 +31,8 @@
 using namespace std::chrono_literals;
 
 namespace {
-constexpr auto kSendTimeout = 200ms;
-// Past sendTimeout, so a stuck write is already closed when the client drains.
+constexpr auto kWriteTimeout = 200ms;
+// Past writeTimeout, so a stuck write is already closed when the client drains.
 constexpr auto kStallBeforeDrain = 700ms;
 constexpr int kClientReceiveBufferBytes = 1024;
 constexpr std::size_t kMaxResponseChunks = 1024;
@@ -56,7 +56,7 @@ int main() {
     routerImpl.finalize();
 
     ruvia::detail::HttpServerOptions options;
-    options.sendTimeout = kSendTimeout;
+    options.writeTimeout = kWriteTimeout;
     options.scanInterval = 50ms;
 
     ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, std::move(options));
@@ -99,10 +99,10 @@ int main() {
         }
 
         if (result == 0) {
-            // Do not read yet: let the write stall long enough for sendTimeout.
+            // Do not read yet: let the write stall long enough for writeTimeout.
             std::this_thread::sleep_for(kStallBeforeDrain);
 
-            // Drain: a stuck write that sendTimeout closed yields eof after the
+            // Drain: a stuck write that writeTimeout closed yields eof after the
             // buffered prefix; an unbounded write would keep the socket open and
             // the read would stall until the safety timer.
             bool closed = false;
@@ -126,7 +126,7 @@ int main() {
             if (!closed) {
                 std::fputs(
                     "response write to a non-reading client was not closed by "
-                    "sendTimeout: slow-read connections can be held open\n",
+                    "writeTimeout: slow-read connections can be held open\n",
                     stderr);
                 result = 3;
             }

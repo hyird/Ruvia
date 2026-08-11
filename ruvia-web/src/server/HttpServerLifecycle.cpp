@@ -125,7 +125,7 @@ void loadVerifyFile(asio::ssl::context& context, const std::pmr::string& filenam
 }
 
 [[nodiscard]] ConnectionScannerOptions makeConnectionScannerOptions(const HttpServerOptions& options) noexcept {
-    return ConnectionScannerOptions{.scanInterval = options.scanInterval, .idleTimeout = options.keepaliveTimeout, .initialReadTimeout = options.clientHeaderTimeout, .payloadReadTimeout = options.clientBodyTimeout, .writeTimeout = options.sendTimeout};
+    return ConnectionScannerOptions{.scanInterval = options.scanInterval, .idleTimeout = options.idleTimeout, .initialReadTimeout = options.requestHeaderTimeout, .payloadReadTimeout = options.requestBodyTimeout, .writeTimeout = options.writeTimeout};
 }
 
 }  // namespace
@@ -380,11 +380,6 @@ void HttpServer::failWorker(std::exception_ptr failure) noexcept {
 }
 
 void HttpServer::runIoContext() noexcept {
-    httpClients_.bindCurrent();
-    struct UnbindHttpClients final {
-        HttpClientRegistry& registry;
-        ~UnbindHttpClients() { registry.unbindCurrent(); }
-    } unbindHttpClients{httpClients_};
     bool workerFailed = false;
     try {
         workerDispatcher_->runContext(

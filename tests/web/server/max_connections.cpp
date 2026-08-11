@@ -3,7 +3,7 @@
 // counted connection ends -- a leaked count would wedge the acceptor.
 //
 // A connection is held "counted" by sending only a partial request head, so the
-// session stays open waiting out clientHeaderTimeout. An over-limit connection
+// session stays open waiting out requestHeaderTimeout. An over-limit connection
 // is instead closed immediately (well under that timeout); timing the close
 // distinguishes rejection from an admitted connection merely awaiting a request.
 
@@ -47,7 +47,7 @@ int main() {
 
     ruvia::detail::HttpServerOptions options;
     options.maxConnections = 1;
-    options.clientHeaderTimeout = kHeaderTimeout;
+    options.requestHeaderTimeout = kHeaderTimeout;
 
     ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
     server.start();

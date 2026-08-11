@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/redis/RedisHandleCommandOps.h"
 
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
+#include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 
 namespace ruvia::detail {
@@ -12,32 +13,25 @@ Task<void> executeRedisPing(RedisCommandExecutor executor, std::pmr::vector<std:
     }
 }
 
-Task<std::optional<std::pmr::string>> executeRedisSetWithOptions(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, bool returnPrevious, std::pmr::memory_resource* resource) {
+Task<RedisSetResult> executeRedisSet(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, RedisSetOptions options, std::pmr::memory_resource* resource) {
     auto reply = co_await executeOwnedRedisCommand(std::move(executor), std::move(args), resource);
     throwIfRedisError(reply);
     if (reply.null()) {
-        co_return std::nullopt;
+        const bool applied = options.returnPrevious &&
+            (!options.condition.has_value() || *options.condition == RedisSetCondition::kIfAbsent);
+        co_return RedisTypesAccess::setResult(applied);
     }
     const auto text = redisValueString(reply);
-    if (!returnPrevious) {
+    if (!options.returnPrevious) {
         if (!httpAsciiEqualsIgnoreCase(text, "OK")) {
             throw RedisError(RedisError::Code::kCommandError, "unexpected redis set reply");
         }
-        co_return std::nullopt;
+        co_return RedisTypesAccess::setResult(true);
     }
-    co_return std::pmr::string(text.data(), text.size(), resource);
-}
-
-Task<bool> executeRedisSetNx(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
-    auto reply = co_await executeOwnedRedisCommand(std::move(executor), std::move(args), resource);
-    throwIfRedisError(reply);
-    if (reply.null()) {
-        co_return false;
-    }
-    if (!httpAsciiEqualsIgnoreCase(redisValueString(reply), "OK")) {
-        throw RedisError(RedisError::Code::kProtocolError, "unexpected redis set nx reply");
-    }
-    co_return true;
+    const bool applied = !options.condition.has_value() || *options.condition != RedisSetCondition::kIfAbsent;
+    co_return RedisTypesAccess::setResult(
+        applied,
+        std::pmr::string(text.data(), text.size(), resource));
 }
 
 Task<bool> executeRedisIntegerBool(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {

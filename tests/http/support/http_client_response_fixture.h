@@ -24,7 +24,7 @@ namespace http_client_response_test {
 
 using ruvia::Http1ClosePolicy;
 using ruvia::Http1ClientRequestContentCompletionStatus;
-using ruvia::Http1ClientRequestContentSignal;
+using ruvia::HttpClientRequestContentSignal;
 using ruvia::Http1ClientRequestWirePolicy;
 using ruvia::Http1ClientResponseParseError;
 using ruvia::Http1ClientResponseParser;
@@ -60,7 +60,7 @@ inline Http1ClientResponseParseResult parseWire(std::string_view method, std::st
     ruvia::HttpClientRequestView request;
     request.method = method;
     request.headers = requestHeaders;
-    const auto preparedResult = method == "CONNECT" ? ruvia::Http1ClientRequestWriter().prepareConnect(origin, requestHeaders, requestHead, Http1ClientRequestWirePolicy::withoutExpectation(closePolicy)) : ruvia::Http1ClientRequestWriter().prepare(origin, request, requestHead, Http1ClientRequestWirePolicy::withoutExpectation(closePolicy));
+    const auto preparedResult = method == "CONNECT" ? ruvia::Http1ClientRequestWriter().prepareConnect(origin, requestHeaders, requestHead, Http1ClientRequestWirePolicy(closePolicy)) : ruvia::Http1ClientRequestWriter().prepare(origin, request, requestHead, Http1ClientRequestWirePolicy(closePolicy));
     const auto* prepared = preparedResult.prepared();
     if (prepared == nullptr) {
         throw std::runtime_error("test request could not be prepared");
@@ -189,9 +189,9 @@ concept HasResponseContentLength = requires(const T& value) { value.contentLengt
 
 template <typename T>
 concept HasResponseTransferCodings = requires(const T& value) {
-    { value.transferCodings() } -> std::same_as<ruvia::detail::HttpTransferCodings>;
+    { value.transferCodings() } -> std::same_as<ruvia::HttpTransferCodings>;
 } && requires(const T&& value) {
-    { std::move(value).transferCodings() } -> std::same_as<ruvia::detail::HttpTransferCodings>;
+    { std::move(value).transferCodings() } -> std::same_as<ruvia::HttpTransferCodings>;
 };
 
 template <typename T>

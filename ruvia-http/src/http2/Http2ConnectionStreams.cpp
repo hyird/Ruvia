@@ -56,7 +56,7 @@ void Http2Connection::detachActiveHeaderBlock(Http2StreamState& stream) {
     discardedHeaderStream_.emplace(stream.id(), resource_);
     // Both strings use the connection resource, so the partial compressed block moves
     // without allocation. Future CONTINUATION fragments complete it in detached state.
-    discardedHeaderStream_->requestHeaderBlock().swap(stream.requestHeaderBlock());
+    discardedHeaderStream_->remoteHeaderBlock().swap(stream.remoteHeaderBlock());
     discardedHeaderAction_ = DiscardedHeaderAction::kIgnore;
     headerContinuation_.start(stream.id(), Http2HeaderBlockKind::kDiscarded);
 }
@@ -109,7 +109,7 @@ void Http2Connection::discardDeferredStreamState(std::uint32_t streamId) {
     std::erase_if(pendingSends_, [streamId](const Http2PendingSend& pending) { return pending.streamId == streamId; });
     std::erase(drainedDataStreams_, streamId);
     if (auto* stream = streams_.find(streamId); stream != nullptr) {
-        http2ReleaseResponseHeaderBlock(*stream);
+        http2ReleaseLocalHeaderBlock(*stream);
     }
 }
 

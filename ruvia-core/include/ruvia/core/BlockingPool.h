@@ -106,10 +106,11 @@ public:
     // cannot be -- but nothing waits for their queued successors. Idempotent
     // and safe from any thread.
     void stop() noexcept;
-    // Waits for the threads to leave their loops. Call stop() first (or let the
-    // destructor do so); joining from a pool thread is a deadlock and is
-    // rejected instead. The destructor deliberately does not call join().
-    void join() noexcept;
+    // Stops the pool and waits for its threads to leave their loops. Joining
+    // from one of this pool's own threads would deadlock and throws logic_error
+    // before changing the pool's state.
+    // The destructor deliberately does not join already-running callables.
+    void join();
 
 private:
     struct Impl;
@@ -130,6 +131,9 @@ enum class BlockingStatus : std::uint8_t {
     // left to deliver a result to. The callable may or may not have run; its
     // result, if any, was discarded on the pool thread.
     kWorkerStopping,
+    // The caller's stop token fired first. The callable may still be running;
+    // its eventual result is discarded just like a timed-out result.
+    kCancelled,
     // The caller stopped waiting first. The callable keeps running -- a
     // blocking call cannot be interrupted -- and its result is discarded when
     // it finishes. This releases the caller's request, not the pool thread.
@@ -143,17 +147,22 @@ enum class BlockingStatus : std::uint8_t {
 // unchanged instead -- it is the operation's result.
 class BlockingOperationRejected final : public std::runtime_error {
 public:
-    explicit BlockingOperationRejected(BlockingStatus status);
-
     [[nodiscard]] BlockingStatus status() const noexcept {
         return status_;
     }
 
 private:
+    template <typename>
+    friend class BlockingResult;
+
+    explicit BlockingOperationRejected(BlockingStatus status);
+
     BlockingStatus status_;
 };
 
 namespace detail {
+
+struct BlockingResultAccess;
 
 template <typename T>
 struct BlockingPayload final {
@@ -196,8 +205,17 @@ public:
     }
 
     void answer(BlockingPayload<T>&& payload) {
-        answered_ = true;
-        (void)completion_.complete(std::move(payload));
+        try {
+            (void)completion_.complete(std::move(payload));
+            answered_ = true;
+        } catch (...) {
+            BlockingPayload<T> failure;
+            failure.error = std::current_exception();
+            // An error-only payload has no T to move, so it remains transportable
+            // even when moving the callable's result was what failed above.
+            (void)completion_.complete(std::move(failure));
+            answered_ = true;
+        }
     }
 
 private:
@@ -212,17 +230,10 @@ private:
 template <typename T>
 class BlockingResult final {
 public:
-    explicit BlockingResult(BlockingStatus status) noexcept {
-        payload_.status = status;
-    }
-
-    explicit BlockingResult(detail::BlockingPayload<T>&& payload) noexcept
-        : payload_(std::move(payload)) {}
-
     BlockingResult(const BlockingResult&) = delete;
     BlockingResult& operator=(const BlockingResult&) = delete;
-    BlockingResult(BlockingResult&&) noexcept = default;
-    BlockingResult& operator=(BlockingResult&&) noexcept = default;
+    BlockingResult(BlockingResult&&) = default;
+    BlockingResult& operator=(BlockingResult&&) = default;
 
     [[nodiscard]] BlockingStatus status() const noexcept {
         return payload_.status;
@@ -238,9 +249,10 @@ public:
         return payload_.error != nullptr;
     }
 
-    [[nodiscard]] const std::exception_ptr& error() const noexcept {
+    [[nodiscard]] const std::exception_ptr& error() const& noexcept {
         return payload_.error;
     }
+    const std::exception_ptr& error() const&& = delete;
 
     // Rethrows what the callable threw, or throws BlockingOperationRejected if
     // it never ran.
@@ -257,13 +269,45 @@ public:
     }
 
 private:
+    friend struct detail::BlockingResultAccess;
+
+    explicit BlockingResult(BlockingStatus status) noexcept {
+        payload_.status = status;
+    }
+
+    explicit BlockingResult(detail::BlockingPayload<T>&& payload) noexcept(std::is_nothrow_move_constructible_v<detail::BlockingPayload<T>>)
+        : payload_(std::move(payload)) {}
+
     detail::BlockingPayload<T> payload_;
 };
 
 namespace detail {
 
+struct BlockingResultAccess final {
+    template <typename T>
+    [[nodiscard]] static BlockingResult<T> rejected(BlockingStatus status) {
+        if (status == BlockingStatus::kCompleted) {
+            throw std::logic_error("completed blocking result requires a payload");
+        }
+        return BlockingResult<T>(status);
+    }
+
+    template <typename T>
+    [[nodiscard]] static BlockingResult<T> completed(BlockingPayload<T>&& payload) {
+        if (payload.status != BlockingStatus::kCompleted) {
+            throw std::logic_error("blocking payload requires completed status");
+        }
+        if constexpr (!std::is_void_v<T>) {
+            if (payload.error == nullptr && !payload.value.has_value()) {
+                throw std::logic_error("completed blocking payload requires a value or error");
+            }
+        }
+        return BlockingResult<T>(std::move(payload));
+    }
+};
+
 template <typename Fn>
-[[nodiscard]] auto runBlockingUntil(BlockingPool& pool, WorkerHandle worker, std::optional<std::chrono::steady_clock::duration> timeout, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
+[[nodiscard]] auto runBlockingUntil(BlockingPool& pool, WorkerHandle worker, std::optional<std::chrono::steady_clock::duration> timeout, StopToken stopToken, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
     using Result = std::invoke_result_t<Fn&>;
     using Payload = BlockingPayload<Result>;
     static_assert(std::is_void_v<Result> || std::is_move_constructible_v<Result>, "a blocking callable's result travels back to the worker by move");
@@ -280,7 +324,7 @@ template <typename Fn>
     try {
         channel.emplace(makeOneShot<Payload>(std::move(worker), processResource()));
     } catch (const std::runtime_error&) {
-        co_return BlockingResult<Result>(BlockingStatus::kWorkerStopping);
+        co_return BlockingResultAccess::rejected<Result>(BlockingStatus::kWorkerStopping);
     }
     auto& [completion, receiver] = *channel;
     const auto submitted = pool.submit([guard = BlockingCompletionGuard<Result>(std::move(completion)), call = std::move(fn)]() mutable {
@@ -297,19 +341,31 @@ template <typename Fn>
         guard.answer(std::move(payload));
     });
     if (submitted != BlockingSubmitStatus::kAccepted) {
-        co_return BlockingResult<Result>(submitted == BlockingSubmitStatus::kQueueFull ? BlockingStatus::kQueueFull : BlockingStatus::kPoolStopped);
+        co_return BlockingResultAccess::rejected<Result>(submitted == BlockingSubmitStatus::kQueueFull ? BlockingStatus::kQueueFull : BlockingStatus::kPoolStopped);
     }
 
-    auto waited = timeout.has_value() ? co_await receiver.waitFor(*timeout) : co_await receiver.wait();
+    auto waited = timeout.has_value() ? co_await receiver.waitFor(*timeout, std::move(stopToken)) : co_await receiver.wait(std::move(stopToken));
     if (auto* payload = waited.value(); payload != nullptr) {
-        co_return BlockingResult<Result>(std::move(*payload));
+        if (payload->status != BlockingStatus::kCompleted) {
+            co_return BlockingResultAccess::rejected<Result>(payload->status);
+        }
+        try {
+            co_return BlockingResultAccess::completed<Result>(std::move(*payload));
+        } catch (...) {
+            Payload failure;
+            failure.error = std::current_exception();
+            co_return BlockingResultAccess::completed<Result>(std::move(failure));
+        }
     }
     if (waited.timedOut() != nullptr) {
-        co_return BlockingResult<Result>(BlockingStatus::kTimedOut);
+        co_return BlockingResultAccess::rejected<Result>(BlockingStatus::kTimedOut);
+    }
+    if (waited.cancelled() != nullptr) {
+        co_return BlockingResultAccess::rejected<Result>(BlockingStatus::kCancelled);
     }
     // Closed cannot happen -- this coroutine owns the receiver and is the only
     // waiter -- so anything else is the worker going away under the operation.
-    co_return BlockingResult<Result>(BlockingStatus::kWorkerStopping);
+    co_return BlockingResultAccess::rejected<Result>(BlockingStatus::kWorkerStopping);
 }
 
 }  // namespace detail
@@ -327,7 +383,12 @@ template <typename Fn>
 // consumes the result.
 template <typename Fn>
 [[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
-    return detail::runBlockingUntil(pool, std::move(worker), std::nullopt, std::move(fn));
+    return detail::runBlockingUntil(pool, std::move(worker), std::nullopt, {}, std::move(fn));
+}
+
+template <typename Fn>
+[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, StopToken stopToken, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
+    return detail::runBlockingUntil(pool, std::move(worker), std::nullopt, std::move(stopToken), std::move(fn));
 }
 
 // The same, but the caller stops waiting after `timeout` and gets kTimedOut.
@@ -340,7 +401,12 @@ template <typename Rep, typename Period, typename Fn>
     // duration_cast can overflow for a valid user duration such as hours::max(),
     // turning a long deadline into an immediate timeout. Use the same saturating
     // conversion as worker timers so all bounded waits share one interpretation.
-    return detail::runBlockingUntil(pool, std::move(worker), detail::workerTimerSaturatingDurationCast(timeout), std::move(fn));
+    return detail::runBlockingUntil(pool, std::move(worker), detail::workerTimerSaturatingDurationCast(timeout), {}, std::move(fn));
+}
+
+template <typename Rep, typename Period, typename Fn>
+[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, std::chrono::duration<Rep, Period> timeout, StopToken stopToken, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
+    return detail::runBlockingUntil(pool, std::move(worker), detail::workerTimerSaturatingDurationCast(timeout), std::move(stopToken), std::move(fn));
 }
 
 }  // namespace ruvia

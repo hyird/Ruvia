@@ -20,6 +20,8 @@ public:
     DbHandle(const DbHandle& other) noexcept;
     DbHandle& operator=(const DbHandle&) = delete;
 
+    [[nodiscard]] DbHandle withOptions(DbOperationOptions options) const;
+
     ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {}) const;
     ScopedOperation<DbRows> query(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
     ScopedOperation<DbExecResult> execute(std::string_view sql, std::span<const DbValue> params = {}) const;
@@ -77,13 +79,14 @@ private:
     friend class detail::DbRegistry;
 
     DbHandle(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;
-    static Task<DbRows> queryPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
-    static Task<DbExecResult> executePrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
-    static Task<DbStreamResult> queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope);
-    static Task<DbTransaction> beginTransactionPrepared(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope);
+    static Task<DbRows> queryPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, DbOperationOptions options);
+    static Task<DbExecResult> executePrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, DbOperationOptions options);
+    static Task<DbStreamResult> queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope, DbOperationOptions options);
+    static Task<DbTransaction> beginTransactionPrepared(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope, DbOperationOptions options);
 
     detail::DbPoolRef client_;
     std::pmr::memory_resource* resource_;
+    DbOperationOptions options_;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 };
 

@@ -9,7 +9,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/coding/HttpTransferCoding.h"
+#include "ruvia/http/HttpTransferCoding.h"
 #include "ruvia/http/Http1ClientRequestWriter.h"
 
 namespace ruvia {
@@ -38,17 +38,6 @@ enum class Http1ClientRequestContentPhase : std::uint8_t {
 // For an informational response, kReuse means the same exchange can await its
 // final response; it does not make the connection poolable before that final.
 // Close-delimited responses, tunnels, and upgrades are separate alternatives.
-
-// Request-content lifecycle signal. It is deliberately separate from wait
-// duration: an external I/O runtime owns the finite Expect timeout policy. A
-// reusable early final does not cancel content already released by Continue,
-// but a response that closes the connection stops any unfinished content. A
-// duplicate or late 100 after completion is ignored. Most response heads emit
-// no event, represented by an empty optional rather than a non-event enum.
-enum class Http1ClientRequestContentSignal : std::uint8_t {
-    kContinue,
-    kExchangeComplete,
-};
 
 // Result of notifying the exchange that the external runtime finished writing
 // every byte in the prepared request content plan. This event is required before
@@ -118,7 +107,7 @@ class Http1ClientChunkedResponse final {
 public:
     // Transfer codings preceding the terminal chunked framing. The runtime
     // removes chunk framing first and then drives this decoder list.
-    [[nodiscard]] constexpr detail::HttpTransferCodings transferCodings() const noexcept {
+    [[nodiscard]] constexpr HttpTransferCodings transferCodings() const noexcept {
         return transferCodings_;
     }
 
@@ -129,11 +118,11 @@ public:
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    constexpr Http1ClientChunkedResponse(detail::HttpTransferCodings transferCodings, Http1ClosePolicy persistence) noexcept
+    constexpr Http1ClientChunkedResponse(HttpTransferCodings transferCodings, Http1ClosePolicy persistence) noexcept
         : transferCodings_(transferCodings),
           persistence_(persistence) {}
 
-    detail::HttpTransferCodings transferCodings_;
+    HttpTransferCodings transferCodings_;
     Http1ClosePolicy persistence_;
 };
 
@@ -142,17 +131,17 @@ public:
     // Any non-chunked transfer coding is decoded after EOF delimits the message.
     // This alternative always consumes through EOF and always closes; it exposes
     // no independent persistence field that could contradict those facts.
-    [[nodiscard]] constexpr detail::HttpTransferCodings transferCodings() const noexcept {
+    [[nodiscard]] constexpr HttpTransferCodings transferCodings() const noexcept {
         return transferCodings_;
     }
 
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    explicit constexpr Http1ClientCloseDelimitedResponse(detail::HttpTransferCodings transferCodings) noexcept
+    explicit constexpr Http1ClientCloseDelimitedResponse(HttpTransferCodings transferCodings) noexcept
         : transferCodings_(transferCodings) {}
 
-    detail::HttpTransferCodings transferCodings_;
+    HttpTransferCodings transferCodings_;
 };
 
 // A 205 response has an ordinary HTTP/1 message-body framing phase, unlike
@@ -248,7 +237,7 @@ public:
     }
     const Http1ClientProtocolUpgrade* protocolUpgrade() const&& = delete;
 
-    [[nodiscard]] constexpr std::optional<Http1ClientRequestContentSignal> requestContentSignal() const noexcept {
+    [[nodiscard]] constexpr std::optional<HttpClientRequestContentSignal> requestContentSignal() const noexcept {
         return requestContentSignal_;
     }
 
@@ -257,12 +246,12 @@ private:
 
     using State = std::variant<Http1ClientInformationalResponse, Http1ClientResponseWithoutContent, Http1ClientResponseWithZeroContent, Http1ClientKnownLengthResponse, Http1ClientChunkedResponse, Http1ClientCloseDelimitedResponse, Http1ClientConnectTunnel, Http1ClientProtocolUpgrade>;
 
-    Http1ClientResponsePlan(State state, std::optional<Http1ClientRequestContentSignal> requestContentSignal) noexcept
+    Http1ClientResponsePlan(State state, std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept
         : state_(std::move(state)),
           requestContentSignal_(requestContentSignal) {}
 
     State state_;
-    std::optional<Http1ClientRequestContentSignal> requestContentSignal_;
+    std::optional<HttpClientRequestContentSignal> requestContentSignal_;
 };
 
 // Protocol failures are typed and allocation-free. Resource exhaustion can

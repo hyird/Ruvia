@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -80,8 +81,8 @@ struct WorkerDispatcher::Impl {
     std::size_t tail{0};
     std::size_t size{0};
     WorkerId workerId{0};
-    bool accepting{true};
-    bool contextAttached{true};
+    std::atomic_bool accepting{true};
+    std::atomic_bool contextAttached{true};
     bool drainScheduled{false};
     bool abandonDrain{false};
     std::vector<std::weak_ptr<WorkerShutdownListener>> shutdownListeners;
@@ -92,7 +93,7 @@ struct WorkerDispatcher::Impl {
     std::uint64_t timerGeneration{0};
     bool timerArmed{false};
     bool dispatchingTimers{false};
-    bool timersStopping{false};
+    std::atomic_bool timersStopping{false};
     std::size_t staleTimerCount{0};
 };
 

@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -28,8 +27,7 @@ struct HttpClientRequestAccess;
 }
 
 class Context;
-class HttpClient;
-using HttpClientPtr = std::shared_ptr<HttpClient>;
+class HttpClientHandle;
 
 enum class HttpClientProtocol : std::uint8_t {
     kNegotiate,
@@ -105,10 +103,10 @@ public:
 
     HttpClientRequest& setMethod(HttpKnownMethod method);
     HttpClientRequest& setMethod(std::string_view method);
-    HttpClientRequest& setPath(std::string_view path);
+    HttpClientRequest& setTarget(std::string_view target);
     HttpClientRequest& addHeader(std::string_view name, std::string_view value);
     HttpClientRequest& removeHeader(std::string_view name);
-    HttpClientRequest& setContentTypeString(std::string_view contentType);
+    HttpClientRequest& setContentType(std::string_view contentType);
     HttpClientRequest& addCookie(std::string_view name, std::string_view value);
     HttpClientRequest& setBody(std::string_view body);
     HttpClientRequest& setBody(std::span<const std::byte> body);
@@ -116,13 +114,13 @@ public:
 
     [[nodiscard]] std::string_view method() const& noexcept { return method_; }
     [[nodiscard]] std::string_view method() const&& = delete;
-    [[nodiscard]] std::string_view path() const& noexcept { return path_; }
-    [[nodiscard]] std::string_view path() const&& = delete;
+    [[nodiscard]] std::string_view target() const& noexcept { return target_; }
+    [[nodiscard]] std::string_view target() const&& = delete;
     [[nodiscard]] std::string_view body() const& noexcept { return body_; }
     [[nodiscard]] std::string_view body() const&& = delete;
 
 private:
-    friend class HttpClient;
+    friend class HttpClientHandle;
     friend struct detail::HttpClientRequestAccess;
 
     struct Header final {
@@ -135,7 +133,7 @@ private:
     explicit HttpClientRequest(std::pmr::memory_resource* resource);
 
     std::pmr::string method_;
-    std::pmr::string path_;
+    std::pmr::string target_;
     std::pmr::vector<Header> headers_;
     std::pmr::string body_;
     bool hasBody_{false};
@@ -164,16 +162,16 @@ public:
     HttpClientResponse(HttpClientResponse&&) noexcept = default;
     HttpClientResponse& operator=(HttpClientResponse&&) noexcept = default;
 
-    [[nodiscard]] HttpStatusCode statusCode() const noexcept { return status_; }
+    [[nodiscard]] HttpStatusCode status() const noexcept { return status_; }
     [[nodiscard]] HttpProtocolVersion protocolVersion() const noexcept { return protocolVersion_; }
     [[nodiscard]] std::span<const HttpClientHeader> headers() const& noexcept { return headers_; }
     [[nodiscard]] std::span<const HttpClientHeader> headers() const&& = delete;
     [[nodiscard]] std::span<const HttpClientHeader> trailers() const& noexcept { return trailers_; }
     [[nodiscard]] std::span<const HttpClientHeader> trailers() const&& = delete;
-    [[nodiscard]] std::optional<std::string_view> getHeader(std::string_view name) const& noexcept;
-    [[nodiscard]] std::optional<std::string_view> getHeader(std::string_view) const&& = delete;
-    [[nodiscard]] std::optional<std::string_view> getTrailer(std::string_view name) const& noexcept;
-    [[nodiscard]] std::optional<std::string_view> getTrailer(std::string_view) const&& = delete;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view) const&& = delete;
+    [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const& noexcept;
+    [[nodiscard]] std::optional<std::string_view> trailer(std::string_view) const&& = delete;
     [[nodiscard]] std::string_view body() const& noexcept { return body_; }
     [[nodiscard]] std::string_view body() const&& = delete;
 
@@ -190,50 +188,41 @@ private:
 };
 
 struct HttpClientStats {
-    std::size_t requestsBuffered{0};
-    std::size_t requestsInFlight{0};
+    std::size_t bufferedRequests{0};
+    std::size_t inFlightRequests{0};
     std::size_t completedRequests{0};
     std::size_t failedRequests{0};
     std::size_t bytesSent{0};
     std::size_t bytesReceived{0};
 };
 
-class HttpClient final : private detail::ScopedCapabilityNode {
+class HttpClientHandle final : private detail::ScopedCapabilityNode {
 public:
-    HttpClient(const HttpClient& other);
-    HttpClient& operator=(const HttpClient&) = delete;
+    HttpClientHandle(const HttpClientHandle& other);
+    HttpClientHandle& operator=(const HttpClientHandle&) = delete;
 
-    [[nodiscard]] static HttpClientPtr newHttpClient(std::string_view origin, HttpClientConfig config = {});
     [[nodiscard]] HttpClientRequest newRequest() const;
-    [[nodiscard]] HttpClient withOptions(HttpClientOperationOptions options) const;
-    [[nodiscard]] Task<HttpClientResponse> sendRequest(HttpClientRequest request, HttpClientOperationOptions options = {}) const;
-    [[nodiscard]] Task<HttpClientResponse> sendRequest(HttpClientRequest request, std::chrono::milliseconds timeout) const;
-    [[nodiscard]] HttpClientStats stats() const noexcept;
-    [[nodiscard]] std::size_t requestsBufferSize() const noexcept;
-    [[nodiscard]] std::size_t outstandingRequests() const noexcept;
-    [[nodiscard]] std::size_t bytesSent() const noexcept;
-    [[nodiscard]] std::size_t bytesReceived() const noexcept;
+    [[nodiscard]] HttpClientHandle withOptions(HttpClientOperationOptions options) const;
+    [[nodiscard]] ScopedOperation<HttpClientResponse> sendRequest(HttpClientRequest request, HttpClientOperationOptions options = {}) const;
+    [[nodiscard]] ScopedOperation<HttpClientResponse> sendRequest(HttpClientRequest request, std::chrono::milliseconds timeout) const;
+    [[nodiscard]] HttpClientStats stats() const;
+    [[nodiscard]] std::size_t bufferedRequests() const;
+    [[nodiscard]] std::size_t outstandingRequests() const;
+    [[nodiscard]] std::size_t bytesSent() const;
+    [[nodiscard]] std::size_t bytesReceived() const;
     [[nodiscard]] std::string_view host() const&;
     [[nodiscard]] std::string_view host() const&& = delete;
     [[nodiscard]] std::uint16_t port() const;
     [[nodiscard]] bool secure() const;
     [[nodiscard]] bool onDefaultPort() const;
-    void setUserAgent(std::string_view userAgent) const;
-    void enableCookies(bool enabled = true) const;
-    void addCookie(std::string_view name, std::string_view value) const;
-
 private:
     friend class detail::HttpClientRegistry;
-    HttpClient(detail::HttpClientPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope) noexcept;
-    HttpClient(std::uint64_t dynamicId, HttpClientConfig config);
+    HttpClientHandle(detail::HttpClientPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
-    [[nodiscard]] detail::HttpClientPool& resolvePool() const;
 
     detail::HttpClientPool* pool_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
     HttpClientOperationOptions options_;
-    std::uint64_t dynamicId_{0};
-    mutable HttpClientConfig dynamicConfig_;
 };
 
 }  // namespace ruvia

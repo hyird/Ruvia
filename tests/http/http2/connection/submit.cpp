@@ -97,7 +97,7 @@ RUVIA_TEST(http2_connection_response_head_does_not_publish_local_phase_before_ou
     // Keep HPACK staging allocation-free so the injected failure lands at the
     // outbound reservation, after semantic header preparation but before any
     // response lifecycle state is allowed to publish.
-    stream->responseHeaderBlock().reserve(64 * 1024);
+    stream->localHeaderBlock().reserve(64 * 1024);
     const std::string largeValue(64'000, 'x');
     ruvia::HttpResponse response(&resource);
     response.status(ruvia::http_status::kOk);
@@ -113,7 +113,7 @@ RUVIA_TEST(http2_connection_response_head_does_not_publish_local_phase_before_ou
 
     RUVIA_CHECK(allocationFailed);
     RUVIA_CHECK(conn.pendingOutput().empty());
-    RUVIA_CHECK(stream->responseHeaderBlock().empty());
+    RUVIA_CHECK(stream->localHeaderBlock().empty());
     RUVIA_CHECK(stream->localContent().unset() != nullptr);
     RUVIA_CHECK(stream->localSend().headPending() != nullptr);
 
@@ -155,7 +155,7 @@ RUVIA_TEST(http2_connection_websocket_handshake_clears_staged_block_on_encoding_
 
     // Let the fixed :status/date fields fit, then fail while appending the large
     // selected subprotocol. The connection must not retain a partial HPACK block.
-    stream->responseHeaderBlock().reserve(128);
+    stream->localHeaderBlock().reserve(128);
     const std::string largeProtocol(512, 'p');
     ruvia::detail::Http1ServerRequestParser negotiationParser;
     const std::string negotiationBytes = std::string("GET /ws HTTP/1.1\r\n"
@@ -175,7 +175,7 @@ RUVIA_TEST(http2_connection_websocket_handshake_clears_staged_block_on_encoding_
 
     RUVIA_CHECK(allocationFailed);
     RUVIA_CHECK(conn.pendingOutput().empty());
-    RUVIA_CHECK(stream->responseHeaderBlock().empty());
+    RUVIA_CHECK(stream->localHeaderBlock().empty());
     RUVIA_CHECK(stream->tunnel().pending() != nullptr);
     RUVIA_CHECK(stream->localSend().headPending() != nullptr);
 
@@ -183,7 +183,7 @@ RUVIA_TEST(http2_connection_websocket_handshake_clears_staged_block_on_encoding_
     auto retryNegotiation = ruvia::detail::makeWebSocketServerNegotiation(negotiationRequest.request, largeProtocol, &resource);
     const auto retried = conn.submitWebSocketHandshake(1, std::move(retryNegotiation));
     RUVIA_CHECK(retried.submitted() != nullptr);
-    RUVIA_CHECK(stream->responseHeaderBlock().empty());
+    RUVIA_CHECK(stream->localHeaderBlock().empty());
     RUVIA_CHECK(stream->tunnel().open() != nullptr);
     RUVIA_CHECK(!conn.pendingOutput().empty());
 }
@@ -913,7 +913,7 @@ RUVIA_TEST(http2_connection_rejects_invalid_response_trailer_field_names_before_
         RUVIA_CHECK(stream != nullptr);
         if (stream != nullptr) {
             RUVIA_CHECK(stream->localSend().headPending() != nullptr);
-            RUVIA_CHECK(stream->responseHeaderBlock().empty());
+            RUVIA_CHECK(stream->localHeaderBlock().empty());
         }
     };
 
@@ -931,10 +931,10 @@ RUVIA_TEST(http2_connection_rejects_invalid_response_trailer_field_names_before_
     RUVIA_CHECK(!conn.pendingOutput().empty());
 }
 
-// A 1xx interim head is validated and skipped (no events, stream not decoded); the
-// following 200 head is the one surfaced. Hand-encoded server bytes drive the client.
+// Every 1xx head is observable, but only the final head completes the request-body
+// decision. Hand-encoded server bytes drive the client.
 
-RUVIA_TEST(http2_connection_client_role_interim_response_skipped) {
+RUVIA_TEST(http2_connection_client_role_surfaces_early_hints_separately) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection client(&resource, Http2Role::kClient);
     client.beginConnection();
@@ -969,12 +969,25 @@ RUVIA_TEST(http2_connection_client_role_interim_response_skipped) {
     }
     (void)client.feed(std::string_view(bytes.data(), bytes.size()));
 
-    int heads = 0;
+    int informationalHeads = 0;
+    int finalHeads = 0;
     std::string body;
     bool end = false;
     while (const auto event = client.nextEvent()) {
-        if (event->messageHead() != nullptr) {
-            ++heads;
+        if (const auto* informational = event->informationalHead()) {
+            ++informationalHeads;
+            RUVIA_CHECK(informational->head().status() == ruvia::http_status::kEarlyHints);
+            RUVIA_CHECK(informational->head().protocolVersion() == ruvia::HttpProtocolVersion::kHttp2);
+            RUVIA_CHECK_EQ(informational->head().headers().size(), std::size_t{1});
+            if (!informational->head().headers().empty()) {
+                RUVIA_CHECK(informational->head().headers()[0].name() == "link");
+                RUVIA_CHECK(informational->head().headers()[0].value() == "</style.css>; rel=preload");
+            }
+            RUVIA_CHECK(!informational->requestContentSignal().has_value());
+        }
+        if (const auto* head = event->messageHead()) {
+            ++finalHeads;
+            RUVIA_CHECK(!head->requestContentSignal().has_value());
         }
         if (const auto* bodyChunk = event->messageBodyChunk()) {
             body.append(bodyChunk->bytes().data(), bodyChunk->bytes().size());
@@ -983,7 +996,8 @@ RUVIA_TEST(http2_connection_client_role_interim_response_skipped) {
             end = true;
         }
     }
-    RUVIA_CHECK_EQ(heads, 1);  // only the final head is surfaced
+    RUVIA_CHECK_EQ(informationalHeads, 1);
+    RUVIA_CHECK_EQ(finalHeads, 1);
     RUVIA_CHECK(body == "ok");
     RUVIA_CHECK(end);
     auto* stream = client.stream(streamId);
@@ -995,6 +1009,66 @@ RUVIA_TEST(http2_connection_client_role_interim_response_skipped) {
     }
     RUVIA_CHECK_EQ(static_cast<int>(stream->interimResponseCount()), 1);
     RUVIA_CHECK(!client.connectionError().has_value());
+}
+
+RUVIA_TEST(http2_connection_continue_releases_only_the_pending_request_body_gate) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(&resource, Http2Role::kClient);
+    handshake(client);
+
+    const auto request = client.submitRegularRequestHead("POST", "https", "example.test", "/upload", {}, Http2RequestContent::knownLength(1), ruvia::HttpClientRequestExpectation::kContinue);
+    RUVIA_CHECK(request.submitted() != nullptr);
+    const auto streamId = submittedRequestStreamId(request);
+    client.consumeOutput(client.pendingOutput().size());
+    RUVIA_CHECK(client.submitData(streamId, "x", Http2EndStream::kEndStream) == Http2DataSubmitStatus::kExpectationPending);
+
+    std::pmr::string hints(&resource);
+    HpackEncoder::encodeStatus(hints, ruvia::http_status::kEarlyHints);
+    const auto hintsFrame = headersFrame(&resource, streamId, ruvia::detail::kHttp2FlagEndHeaders, hints);
+    RUVIA_CHECK(client.feed(hintsFrame) == Http2FeedResult::kAccepted);
+    const auto hintsEvent = client.nextEvent();
+    RUVIA_CHECK(hintsEvent.has_value());
+    if (hintsEvent) {
+        RUVIA_CHECK(hintsEvent->informationalHead() != nullptr);
+        RUVIA_CHECK(!hintsEvent->informationalHead()->requestContentSignal().has_value());
+    }
+    RUVIA_CHECK(client.submitData(streamId, "x", Http2EndStream::kEndStream) == Http2DataSubmitStatus::kExpectationPending);
+
+    std::pmr::string continueBlock(&resource);
+    HpackEncoder::encodeStatus(continueBlock, ruvia::http_status::kContinue);
+    const auto continueFrame = headersFrame(&resource, streamId, ruvia::detail::kHttp2FlagEndHeaders, continueBlock);
+    RUVIA_CHECK(client.feed(continueFrame) == Http2FeedResult::kAccepted);
+    const auto continueEvent = client.nextEvent();
+    RUVIA_CHECK(continueEvent.has_value());
+    if (continueEvent) {
+        RUVIA_CHECK(continueEvent->informationalHead() != nullptr);
+        RUVIA_CHECK(continueEvent->informationalHead()->requestContentSignal() == ruvia::HttpClientRequestContentSignal::kContinue);
+    }
+    RUVIA_CHECK(client.submitData(streamId, "x", Http2EndStream::kEndStream) == Http2DataSubmitStatus::kAccepted);
+}
+
+RUVIA_TEST(http2_connection_final_response_cancels_a_pending_request_body_gate) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(&resource, Http2Role::kClient);
+    handshake(client);
+
+    const auto request = client.submitRegularRequestHead("POST", "https", "example.test", "/upload", {}, Http2RequestContent::knownLength(1), ruvia::HttpClientRequestExpectation::kContinue);
+    RUVIA_CHECK(request.submitted() != nullptr);
+    const auto streamId = submittedRequestStreamId(request);
+    client.consumeOutput(client.pendingOutput().size());
+
+    std::pmr::string finalBlock(&resource);
+    HpackEncoder::encodeStatus(finalBlock, ruvia::http_status::kExpectationFailed);
+    const auto finalFrame = headersFrame(&resource, streamId, static_cast<std::uint8_t>(ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream), finalBlock);
+    RUVIA_CHECK(client.feed(finalFrame) == Http2FeedResult::kAccepted);
+    const auto finalHead = client.nextEvent();
+    RUVIA_CHECK(finalHead.has_value());
+    if (finalHead) {
+        RUVIA_CHECK(finalHead->messageHead() != nullptr);
+        RUVIA_CHECK(finalHead->messageHead()->requestContentSignal() == ruvia::HttpClientRequestContentSignal::kExchangeComplete);
+    }
+    RUVIA_CHECK(client.nextEvent()->messageEnd() != nullptr);
+    RUVIA_CHECK(client.submitData(streamId, "x", Http2EndStream::kEndStream) == Http2DataSubmitStatus::kInvalidState);
 }
 
 RUVIA_TEST(http2_connection_client_rejects_te_in_every_response_head) {

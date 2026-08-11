@@ -151,12 +151,15 @@ public:
         HttpRequestAccess::setMethod(request, method);
         HttpRequestAccess::setProtocolVersion(request, HttpProtocolVersion::kHttp2);
         HttpRequestAccess::setTarget(request, target);
+        HttpRequestAccess::setScheme(request, stream.requestScheme());
+        HttpRequestAccess::setAuthority(request, stream.hasAuthority() ? stream.requestAuthority() : std::string_view{});
+        HttpRequestAccess::setTargetForm(request, ::ruvia::HttpRequestTargetForm::kHttp2);
         HttpRequestAccess::setPath(request, targetParts.path);
         HttpRequestAccess::setQueryString(request, targetParts.queryString);
         HttpRequestAccess::setBody(request, body);
 
-        for (std::size_t i = 0; i < stream.requestHeaderCount(); ++i) {
-            const auto header = stream.requestHeaderAt(i);
+        for (std::size_t i = 0; i < stream.remoteHeaderCount(); ++i) {
+            const auto header = stream.remoteHeaderAt(i);
             if (!addHeader(request, header.name, header.value, header.kind)) {
                 return Http2RequestBuildResult::makeFailure(Http2RequestBuildFailure::Kind::kTooManyHeaders);
             }

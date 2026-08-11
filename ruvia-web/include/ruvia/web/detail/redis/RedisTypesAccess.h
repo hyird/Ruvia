@@ -11,6 +11,10 @@
 namespace ruvia::detail {
 
 struct RedisTypesAccess final {
+    [[nodiscard]] static RedisSetResult setResult(bool applied, std::optional<std::pmr::string> previous = std::nullopt) {
+        return RedisSetResult(applied, std::move(previous));
+    }
+
     [[nodiscard]] static constexpr RedisScanCursor scanCursor(std::uint64_t value) noexcept {
         return RedisScanCursor(value);
     }

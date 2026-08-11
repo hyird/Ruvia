@@ -606,8 +606,8 @@ RUVIA_TEST(http2_connection_client_head_representation_length_survives_trailer_t
     RUVIA_CHECK(known != nullptr);
     RUVIA_CHECK_EQ(known->declaredLength(), std::size_t{10});
     RUVIA_CHECK(stream->remoteContent().metadataOnlyKnownLength() != nullptr);
-    RUVIA_CHECK_EQ(stream->requestHeaderCount(), std::size_t{1});
-    RUVIA_CHECK(stream->responseHeaderCount() == std::optional<std::size_t>{1});
+    RUVIA_CHECK_EQ(stream->remoteHeaderCount(), std::size_t{1});
+    RUVIA_CHECK(stream->remoteInitialHeaderCount() == std::optional<std::size_t>{1});
 
     std::pmr::string trailers(&resource);
     HpackEncoder::encodeHeader(trailers, "server-timing", "db;dur=4");
@@ -618,9 +618,9 @@ RUVIA_TEST(http2_connection_client_head_representation_length_survives_trailer_t
     RUVIA_CHECK(!client.connectionError().has_value());
     RUVIA_CHECK(client.pendingOutput().empty());
     RUVIA_CHECK(client.stream(streamId)->remoteReceive().endStream() != nullptr);
-    RUVIA_CHECK_EQ(client.stream(streamId)->requestHeaderCount(), std::size_t{2});
-    RUVIA_CHECK(client.stream(streamId)->responseHeaderCount() == std::optional<std::size_t>{1});
-    const auto storedTrailer = client.stream(streamId)->requestHeaderAt(1);
+    RUVIA_CHECK_EQ(client.stream(streamId)->remoteHeaderCount(), std::size_t{2});
+    RUVIA_CHECK(client.stream(streamId)->remoteInitialHeaderCount() == std::optional<std::size_t>{1});
+    const auto storedTrailer = client.stream(streamId)->remoteHeaderAt(1);
     RUVIA_CHECK_EQ(storedTrailer.name, std::string_view("server-timing"));
     RUVIA_CHECK_EQ(storedTrailer.value, std::string_view("db;dur=4"));
 

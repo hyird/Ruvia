@@ -11,15 +11,15 @@
 
 namespace {
 
-using ruvia::detail::httpClientExpectationIsValid;
+using ruvia::httpClientExpectationIsValid;
 using ruvia::detail::HttpConnectionOptions;
 using ruvia::detail::HttpFieldListParseStatus;
 using ruvia::detail::HttpFieldListRole;
 using ruvia::detail::httpFindSemicolonParameterIgnoreCase;
 using ruvia::detail::httpFindSemicolonParameterQuotedIgnoreCase;
-using ruvia::detail::HttpRequestContentIndication;
-using ruvia::detail::HttpRequestExpectations;
-using ruvia::detail::HttpUnsupportedExpectationPolicy;
+using ruvia::HttpRequestContentIndication;
+using ruvia::HttpRequestExpectations;
+using ruvia::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::HttpUpgradeProtocols;
 
 // {close, keepAlive, upgrade, te} after recipient-side parsing.

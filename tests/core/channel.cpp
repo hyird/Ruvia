@@ -17,9 +17,13 @@
 #include <type_traits>
 #include <utility>
 
+template <typename T>
+concept HasRvalueWorkerBorrow = requires(T&& receiver) { std::move(receiver).worker(); };
+
 static_assert(!std::is_default_constructible_v<ruvia::ChannelReceiver<int>>);
 static_assert(std::is_move_constructible_v<ruvia::ChannelReceiver<int>>);
 static_assert(!std::is_move_assignable_v<ruvia::ChannelReceiver<int>>);
+static_assert(!HasRvalueWorkerBorrow<ruvia::ChannelReceiver<int>>);
 
 namespace {
 

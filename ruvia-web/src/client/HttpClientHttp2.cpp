@@ -11,6 +11,7 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
+#include "ruvia/web/detail/integration/WorkerCancellationPost.h"
 
 namespace ruvia::detail {
 namespace {
@@ -99,13 +100,13 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
             auto* stream = connection.http2->stream(head->streamId());
             if (pending == nullptr || stream == nullptr || pending->complete || pending->error) continue;
             if (!stream->responseStatus()) continue;  // Validated informational response.
-            const auto responseHeaderCount = stream->responseHeaderCount().value_or(stream->requestHeaderCount());
+            const auto responseHeaderCount = stream->remoteInitialHeaderCount().value_or(stream->remoteHeaderCount());
             pending->response.status_ = *stream->responseStatus();
             pending->response.protocolVersion_ = HttpProtocolVersion::kHttp2;
             pending->response.headers_.clear();
             pending->response.headers_.reserve(responseHeaderCount);
             for (std::size_t i = 0; i < responseHeaderCount; ++i) {
-                const auto header = stream->requestHeaderAt(i);
+                const auto header = stream->remoteHeaderAt(i);
                 pending->response.headers_.push_back(HttpClientHeaderAccess::make(
                     header.name, header.value, pending->response.headers_.get_allocator().resource()));
             }
@@ -130,9 +131,9 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                     contentSemanticsPresent = stream->remoteContent().metadataOnlyWithoutLength() == nullptr &&
                         stream->remoteContent().metadataOnlyKnownLength() == nullptr;
                     pending->response.trailers_.clear();
-                    pending->response.trailers_.reserve(stream->requestHeaderCount() - std::min(stream->requestHeaderCount(), pending->responseHeaderCount));
-                    for (std::size_t i = pending->responseHeaderCount; i < stream->requestHeaderCount(); ++i) {
-                        const auto trailer = stream->requestHeaderAt(i);
+                    pending->response.trailers_.reserve(stream->remoteHeaderCount() - std::min(stream->remoteHeaderCount(), pending->responseHeaderCount));
+                    for (std::size_t i = pending->responseHeaderCount; i < stream->remoteHeaderCount(); ++i) {
+                        const auto trailer = stream->remoteHeaderAt(i);
                         pending->response.trailers_.push_back(HttpClientHeaderAccess::make(
                             trailer.name, trailer.value, pending->response.trailers_.get_allocator().resource()));
                     }
@@ -371,32 +372,34 @@ Task<void> HttpClientPool::waitForHttp2SessionStop(
                 if (outcome == WorkerTimerOutcome::kExpired) runtime.stateSignal.notify();
             });
     }
-    std::shared_ptr<Http2RuntimeCancellationState> cancellationState;
+    std::uint64_t cancellationId = 0;
+    StopRegistration stopRegistration;
     if (stopToken.stoppable()) {
-        cancellationState = std::make_shared<Http2RuntimeCancellationState>(runtime, worker_);
-    }
-    auto stopRegistration = stopToken.registerCallback([cancellationState] {
-        if (cancellationState == nullptr) {
-            return;
+        if (runtime.stateCancellationWaiters++ == 0) {
+            runtime.stateCancellationId = nextCancellationId();
         }
-        WorkerHandleAccess::deferOrTerminate(*cancellationState->worker, [cancellationState] {
-            auto* notifiedRuntime = cancellationState->runtime.load(std::memory_order_acquire);
-            if (notifiedRuntime != nullptr) {
-                notifiedRuntime->stateSignal.notify();
-            }
-        });
-    });
+        cancellationId = runtime.stateCancellationId;
+        stopToken.registerCallback(
+            stopRegistration,
+            WorkerCancellationPost<HttpClientOperationCancellationMailbox>(cancellationMailbox_, cancellationId));
+    }
     struct CancellationRegistrationGuard final {
-        std::shared_ptr<Http2RuntimeCancellationState>& state;
+        Http2Runtime& runtime;
+        std::uint64_t cancellationId;
         StopRegistration& registration;
 
         ~CancellationRegistrationGuard() {
-            if (state != nullptr) {
-                state->runtime.store(nullptr, std::memory_order_release);
+            if (cancellationId != 0) {
+                if (runtime.stateCancellationWaiters == 0 || runtime.stateCancellationId != cancellationId) {
+                    std::terminate();
+                }
+                if (--runtime.stateCancellationWaiters == 0) {
+                    runtime.stateCancellationId = 0;
+                }
             }
             registration.reset();
         }
-    } cancellationRegistrationGuard{cancellationState, stopRegistration};
+    } cancellationRegistrationGuard{runtime, cancellationId, stopRegistration};
     while (runtime.sessionTasks != 0 || !runtime.pending.empty()) {
         if (stopToken.stopRequested()) {
             throw HttpClientError(HttpClientError::Code::kCancelled,
@@ -410,7 +413,7 @@ Task<void> HttpClientPool::waitForHttp2SessionStop(
     }
 }
 
-Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, std::size_t index, const HttpClientRequest& request, const OperationTimeout& timeout, StopToken stopToken, std::pmr::memory_resource* responseResource) {
+Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, const HttpClientRequest& request, const OperationTimeout& timeout, StopToken stopToken, std::pmr::memory_resource* responseResource) {
     std::pmr::vector<HttpHeaderView> headers(resource_);
     auto source = HttpClientRequestAccess::view(request, headers);
     std::pmr::string cookieHeader(resource_);
@@ -431,7 +434,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, st
                 runtime.writeSignal.notify();
             }
             co_await waitForHttp2SessionStop(connection, timeout, stopToken);
-            co_await ensureConnected(connection, index, timeout, timeout, stopToken);
+            co_await ensureConnected(connection, timeout, timeout, stopToken);
             if (connection.protocol != WireProtocol::kHttp2) {
                 throw HttpClientError(HttpClientError::Code::kProtocolUnavailable, "upstream no longer negotiated HTTP/2");
             }
@@ -449,33 +452,28 @@ Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, st
                     if (outcome == WorkerTimerOutcome::kExpired) cancelHttp2Stream(connection, requestId, AbortReason::kTimeout);
                 });
         }
-        std::shared_ptr<Http2StreamCancellationState> cancellationState;
+        std::uint64_t cancellationId = 0;
+        StopRegistration stopRegistration;
         if (stopToken.stoppable()) {
-            cancellationState = std::make_shared<Http2StreamCancellationState>(*this, worker_, connection, pending.requestId, AbortReason::kCancelled);
+            cancellationId = nextCancellationId();
+            pending.cancellationId = cancellationId;
+            stopToken.registerCallback(
+                stopRegistration,
+                WorkerCancellationPost<HttpClientOperationCancellationMailbox>(cancellationMailbox_, cancellationId));
         }
-        auto stopRegistration = stopToken.registerCallback([cancellationState] {
-            if (cancellationState == nullptr) {
-                return;
-            }
-            WorkerHandleAccess::deferOrTerminate(*cancellationState->worker, [cancellationState] {
-                auto* pool = cancellationState->pool.load(std::memory_order_acquire);
-                if (pool != nullptr) {
-                    pool->cancelHttp2Stream(*cancellationState->connection, cancellationState->requestId, cancellationState->reason);
-                }
-            });
-        });
         struct StreamCancellationRegistrationGuard final {
-            std::shared_ptr<Http2StreamCancellationState>& state;
+            Http2PendingStream& pending;
+            std::uint64_t cancellationId;
             StopRegistration& registration;
 
             ~StreamCancellationRegistrationGuard() {
-                if (state != nullptr) {
-                    state->pool.store(nullptr, std::memory_order_release);
+                if (pending.cancellationId == cancellationId) {
+                    pending.cancellationId = 0;
                 }
                 registration.reset();
             }
-        } cancellationRegistrationGuard{cancellationState, stopRegistration};
-        if (stopToken.stopRequested()) cancelHttp2Stream(connection, pending.requestId, AbortReason::kCancelled);
+        } cancellationRegistrationGuard{pending, cancellationId, stopRegistration};
+        if (stopToken.stopRequested()) cancelOperationById(cancellationId);
 
         for (;;) {
             if (pending.error) break;

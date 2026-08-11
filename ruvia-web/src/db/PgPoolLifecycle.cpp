@@ -23,27 +23,37 @@ PostgreSqlPool::ConnectionSlot::~ConnectionSlot() {
 PostgreSqlPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept = default;
 PostgreSqlPool::ConnectionSlot& PostgreSqlPool::ConnectionSlot::operator=(ConnectionSlot&&) noexcept = default;
 
-PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, DbConfigStorage config, std::pmr::memory_resource* resource)
+PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, DbConfigStorage config, std::pmr::memory_resource* resource, const WorkerHandle* worker)
     : ioContext_(ioContext),
       config_(std::move(config)),
       resource_(pmrResourceOrDefault(resource)),
       slots_(resource_),
-      scheduler_(1, resource_) {
+      scheduler_(1, resource_),
+      worker_(worker == nullptr ? WorkerHandle{} : *worker) {
     validateDbConfig(config_);
     if (config_.driver != DbDriver::kPostgreSql) {
         throw std::invalid_argument("PostgreSQL pool requires the PostgreSQL driver");
     }
     slots_.reserve(1);
     slots_.emplace_back(ioContext_, resource_);
+    if (worker_.valid()) {
+        slots_.back().cancellationState = makeDbOperationCancellationState(worker_, *this, 0);
+    }
 }
 
 PostgreSqlPool::~PostgreSqlPool() {
+    for (auto& slot : slots_) {
+        if (slot.cancellationState != nullptr) {
+            slot.cancellationState->detach(this);
+        }
+    }
     closeNow();
 }
 
 Task<void> PostgreSqlPool::connect() {
+    const OperationTimeout operationTimeout(std::nullopt);
     for (auto& slot : slots_) {
-        co_await connectUnlocked(slot);
+        co_await connectUnlocked(slot, operationTimeout);
     }
 }
 
@@ -55,9 +65,8 @@ void PostgreSqlPool::closeNow() noexcept {
 }
 
 void PostgreSqlPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
-    if (config_.acquireTimeout.has_value()) {
-        scheduler_.scanDeadlines(now);
-    }
+    // A per-operation timeout may constrain acquire even when DbConfig does not.
+    scheduler_.scanDeadlines(now);
     for (auto& slot : slots_) {
         if (!slot.deadline.expire(now).has_value()) {
             continue;
@@ -71,12 +80,12 @@ void PostgreSqlPool::scanDeadlines(std::chrono::steady_clock::time_point now) no
     }
 }
 
-bool PostgreSqlPool::hasAnyTimeout() const noexcept {
-    return dbConfigHasAnyTimeout(config_);
+bool PostgreSqlPool::needsDeadlineScan() const noexcept {
+    return true;
 }
 
-Task<std::size_t> PostgreSqlPool::acquireSlot() {
-    return acquireDbSlot(*this);
+Task<std::size_t> PostgreSqlPool::acquireSlot(const OperationTimeout& timeout, StopToken stopToken) {
+    return acquireDbSlot(*this, timeout, std::move(stopToken));
 }
 
 void PostgreSqlPool::releaseSlot(std::size_t slot) noexcept {
@@ -89,21 +98,16 @@ void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
     if (slot.waitActive) {
         if (slot.waitSocket != nullptr) {
             // The wait callback lives in the suspended Task frame and still
-            // refers to this wrapper. Detaching cancels the Asio operation
-            // without closing the driver-owned fd; final disposal is performed
-            // by the coroutine's failure path after the callback.
-            if (!slot.waitSocket->release()) {
-                std::terminate();
-            }
+            // refers to this wrapper. Cancel the wait on ASIO's duplicate;
+            // final disposal follows after the callback drains.
+            slot.waitSocket->cancel();
         }
         return;
     }
 
     if (slot.waitSocket != nullptr) {
         slot.waitSocket->cancel();
-        if (!slot.waitSocket->release()) {
-            std::terminate();
-        }
+        slot.waitSocket->reset();
         slot.waitSocket.reset();
     }
     clearSlotDeadline(slot);
@@ -113,6 +117,24 @@ void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
     }
     slot.connected = false;
     slot.closeRequested = false;
+}
+
+void PostgreSqlPool::cancelOperation(std::size_t slotIndex, std::uint64_t generation) noexcept {
+    if (slotIndex >= slots_.size()) {
+        std::terminate();
+    }
+    auto& slot = slots_[slotIndex];
+    if (slot.operationGeneration != generation) {
+        return;
+    }
+    slot.abortReason = DbSlotAbortReason::kCancelled;
+    closeSlot(slot);
+}
+
+void PostgreSqlPool::throwIfCancelled(const ConnectionSlot& slot) const {
+    if (slot.abortReason == DbSlotAbortReason::kCancelled) {
+        throw DbError(DbError::Code::kCancelled, "database operation cancelled");
+    }
 }
 
 void PostgreSqlPool::setSlotDeadline(ConnectionSlot& slot, std::optional<std::chrono::milliseconds> timeout) noexcept {

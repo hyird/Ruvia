@@ -33,10 +33,6 @@ public:
         return self().command("GETDEL", key);
     }
 
-    Derived& getSet(std::string_view key, std::string_view value) {
-        return self().command("GETSET", key, value);
-    }
-
     Derived& append(std::string_view key, std::string_view value) {
         return self().command("APPEND", key, value);
     }

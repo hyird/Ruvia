@@ -158,12 +158,9 @@ std::pmr::vector<std::pmr::string> redisEvalArgs(std::string_view command, std::
     return args;
 }
 
-std::pmr::vector<std::pmr::string> redisBlockingPopArgs(std::string_view command, std::span<const std::string_view> keys, std::chrono::seconds timeout, std::pmr::memory_resource* resource) {
+std::pmr::vector<std::pmr::string> redisBlockingPopArgs(std::string_view command, std::span<const std::string_view> keys, RedisBlockWait wait, std::pmr::memory_resource* resource) {
     if (keys.empty()) {
         throw std::invalid_argument("redis blocking pop requires at least one key");
-    }
-    if (timeout.count() < 0) {
-        throw std::invalid_argument("redis blocking pop timeout must not be negative");
     }
     std::pmr::vector<std::pmr::string> args(resource);
     args.reserve(keys.size() + 2);
@@ -171,28 +168,22 @@ std::pmr::vector<std::pmr::string> redisBlockingPopArgs(std::string_view command
     for (const auto key : keys) {
         emplaceRedisString(args, key);
     }
-    args.emplace_back(redisSecondsString(timeout, resource));
+    std::pmr::string timeout(resource);
+    if (const auto duration = wait.duration(); duration.has_value()) {
+        const auto milliseconds = duration->count();
+        appendRedisNumber(timeout, milliseconds / 1000);
+        const auto remainder = milliseconds % 1000;
+        if (remainder != 0) {
+            timeout.push_back('.');
+            timeout.push_back(static_cast<char>('0' + remainder / 100));
+            timeout.push_back(static_cast<char>('0' + (remainder / 10) % 10));
+            timeout.push_back(static_cast<char>('0' + remainder % 10));
+        }
+    } else {
+        timeout.push_back('0');
+    }
+    args.emplace_back(std::move(timeout));
     return args;
-}
-
-std::optional<std::chrono::milliseconds> redisBlockingPopClientTimeout(std::chrono::seconds timeout) noexcept {
-    if (timeout <= std::chrono::seconds::zero()) {
-        return std::nullopt;
-    }
-
-    using Milliseconds = std::chrono::milliseconds;
-    constexpr auto kMillisecondsPerSecond = Milliseconds(std::chrono::seconds(1)).count();
-    constexpr auto kMaximumMilliseconds = Milliseconds::max().count();
-    const auto seconds = timeout.count();
-    if (seconds > kMaximumMilliseconds / kMillisecondsPerSecond) {
-        return Milliseconds::max();
-    }
-
-    const auto milliseconds = static_cast<Milliseconds::rep>(seconds) * kMillisecondsPerSecond;
-    if (milliseconds > kMaximumMilliseconds - kMillisecondsPerSecond) {
-        return Milliseconds::max();
-    }
-    return Milliseconds(milliseconds + kMillisecondsPerSecond);
 }
 
 std::pmr::vector<std::pmr::string> redisXReadGroupArgs(std::string_view group, std::string_view consumer, std::span<const RedisStreamReadView> streams, const RedisXReadGroupOptions& options, std::pmr::memory_resource* resource) {

@@ -2,7 +2,7 @@
 
 #include <memory_resource>
 
-#include "ruvia/web/HttpClient.h"
+#include "ruvia/web/HttpClientHandle.h"
 
 namespace ruvia::detail {
 

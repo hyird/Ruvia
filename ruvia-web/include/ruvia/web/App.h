@@ -9,7 +9,6 @@
 #include <optional>
 #include <span>
 #include <string_view>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -18,7 +17,7 @@
 #include "ruvia/web/Dotenv.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ErrorHandlers.h"
-#include "ruvia/web/HttpClient.h"
+#include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/WebWorker.h"
@@ -53,13 +52,13 @@ public:
     App& setWorkersPerListener(std::size_t workersPerListener);
     App& setSignalShutdown(bool enabled);
     App& setWorkerMailboxCapacity(std::size_t capacity);
-    App& setKeepaliveTimeout(std::optional<std::chrono::milliseconds> timeout);
+    App& setIdleTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setConnectionScanInterval(std::chrono::milliseconds interval);
-    App& setClientHeaderTimeout(std::optional<std::chrono::milliseconds> timeout);
-    App& setClientBodyTimeout(std::optional<std::chrono::milliseconds> timeout);
-    App& setSendTimeout(std::optional<std::chrono::milliseconds> timeout);
+    App& setRequestHeaderTimeout(std::optional<std::chrono::milliseconds> timeout);
+    App& setRequestBodyTimeout(std::optional<std::chrono::milliseconds> timeout);
+    App& setWriteTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setMaxConnectionsPerWorker(std::optional<std::size_t> maxConnections);
-    App& setKeepaliveRequests(std::optional<std::size_t> maxRequests);
+    App& setMaxRequestsPerConnection(std::optional<std::size_t> maxRequests);
     // The deployment's handler deadline. Absent by
     // default: an app that declares no deadline anywhere behaves exactly as
     // before and arms nothing per request. A route may tighten the handler

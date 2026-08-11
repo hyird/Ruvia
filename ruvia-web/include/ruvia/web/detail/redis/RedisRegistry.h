@@ -2,6 +2,7 @@
 
 #include "ruvia/web/redis/Redis.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
+#include "ruvia/web/detail/integration/WorkerCancellationPost.h"
 #include "ruvia/core/WorkerHandle.h"
 
 #ifndef RUVIA_ENABLE_REDIS
@@ -69,6 +70,9 @@ struct RedisReaderDeleter final {
     void operator()(redisReader* reader) const noexcept;
 };
 
+class RedisPool;
+using RedisOperationCancellationMailbox = WorkerCancellationMailbox<RedisPool>;
+
 struct RedisCommandArgsView final {
     std::span<const std::pmr::string> args;
 };
@@ -94,6 +98,7 @@ public:
 private:
     friend class ::ruvia::RedisHandle;
     friend class ::ruvia::RedisPipeline;
+    friend class WorkerCancellationMailbox<RedisPool>;
 
     struct Connection final {
         explicit Connection(asio::io_context& ioContext, std::pmr::memory_resource* resource);
@@ -113,7 +118,7 @@ private:
         bool connected{false};
         enum class AbortReason : std::uint8_t { kNone, kCancelled };
         AbortReason abortReason{AbortReason::kNone};
-        std::uint64_t operationGeneration{0};
+        std::uint64_t cancellationId{0};
         enum class DeadlineKind : std::uint8_t { kResolve, kSocket };
         OperationDeadline<DeadlineKind> deadline;
         std::unique_ptr<WorkerTimerRegistration, PmrObjectDeleter<WorkerTimerRegistration>> deadlineTimer;
@@ -151,7 +156,8 @@ private:
     Task<std::pmr::vector<RedisValue>> executePipelineImpl(CommandSource commands, RedisOperationOptions options, std::pmr::memory_resource* resource);
     Task<std::error_code> asyncSocketWrite(Connection& connection, const OperationTimeout& timeout);
     Task<AsioCompletion<std::size_t>> asyncSocketReadSome(Connection& connection, std::span<char> buffer, const OperationTimeout& timeout);
-    void cancelOperation(std::size_t index, std::uint64_t generation) noexcept;
+    [[nodiscard]] std::uint64_t nextCancellationId() noexcept;
+    void cancelOperationById(std::uint64_t cancellationId) noexcept;
     void throwIfCancelled(const Connection& connection) const;
     asio::io_context& ioContext_;
     const WorkerHandle* worker_;
@@ -159,6 +165,8 @@ private:
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Connection> connections_;
     PoolLeaseScheduler scheduler_;
+    std::shared_ptr<RedisOperationCancellationMailbox> cancellationMailbox_;
+    std::uint64_t nextCancellationId_{0};
 };
 
 struct RedisCommandExecutor final {

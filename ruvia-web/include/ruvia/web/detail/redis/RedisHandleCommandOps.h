@@ -13,9 +13,7 @@ namespace ruvia::detail {
 
 Task<void> executeRedisPing(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
 
-Task<std::optional<std::pmr::string>> executeRedisSetWithOptions(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, bool returnPrevious, std::pmr::memory_resource* resource);
-
-Task<bool> executeRedisSetNx(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
+Task<RedisSetResult> executeRedisSet(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, RedisSetOptions options, std::pmr::memory_resource* resource);
 
 Task<bool> executeRedisIntegerBool(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
 

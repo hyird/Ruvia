@@ -490,18 +490,16 @@ RUVIA_TEST(redis_integer_bool_rejects_non_boolean_integers) {
     RUVIA_CHECK(throwsRedisError([&] { (void)redisValueIntegerBool(RedisTypesAccess::integerValue(-1, resource)); }));
 }
 
-RUVIA_TEST(redis_blocking_pop_timeout_is_saturating_and_nonnegative) {
+RUVIA_TEST(redis_blocking_pop_uses_the_shared_block_wait_type) {
     using ruvia::detail::redisBlockingPopArgs;
-    using ruvia::detail::redisBlockingPopClientTimeout;
-    using std::chrono::milliseconds;
-    using std::chrono::seconds;
-
-    RUVIA_CHECK(!redisBlockingPopClientTimeout(seconds::zero()).has_value());
-    RUVIA_CHECK_EQ(*redisBlockingPopClientTimeout(seconds(2)), milliseconds(3000));
-    RUVIA_CHECK_EQ(*redisBlockingPopClientTimeout(seconds::max()), milliseconds::max());
 
     const std::array<std::string_view, 1> keys{"queue"};
-    RUVIA_CHECK(throwsOn([&] { (void)redisBlockingPopArgs("BLPOP", keys, seconds(-1), std::pmr::get_default_resource()); }));
+    const auto finite = redisBlockingPopArgs(
+        "BLPOP", keys, ruvia::RedisBlockWait::forDuration(std::chrono::milliseconds(1500)), std::pmr::get_default_resource());
+    RUVIA_CHECK_EQ(std::string_view(finite.back()), std::string_view("1.500"));
+    const auto infinite = redisBlockingPopArgs(
+        "BRPOP", keys, ruvia::RedisBlockWait::indefinitely(), std::pmr::get_default_resource());
+    RUVIA_CHECK_EQ(std::string_view(infinite.back()), std::string_view("0"));
 }
 
 RUVIA_TEST(redis_xreadgroup_builds_group_block_and_parallel_stream_arguments) {

@@ -1,16 +1,20 @@
 #pragma once
 
+#include "ruvia/core/StopToken.h"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <variant>
 #include <vector>
+#include <utility>
 
 namespace ruvia {
 
@@ -22,12 +26,28 @@ enum class DbDriver : std::uint8_t {
     kPostgreSql,
 };
 
-struct DbConfig {
-    DbDriver driver{DbDriver::kMariaDb};
+class DbConfig final {
+public:
+#ifdef RUVIA_ENABLE_MARIADB
+    [[nodiscard]] static DbConfig mariaDb() {
+        return DbConfig(DbDriver::kMariaDb, 3306);
+    }
+#endif
+
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    [[nodiscard]] static DbConfig postgreSql() {
+        return DbConfig(DbDriver::kPostgreSql, 5432);
+    }
+#endif
+
+    [[nodiscard]] DbDriver driver() const noexcept {
+        return driver_;
+    }
+
     // Host name or unbracketed address only; keep the port in port.
     std::string host{"127.0.0.1"};
     // Must be non-zero.
-    std::uint16_t port{3306};
+    std::uint16_t port;
     std::string username;
     std::string password;
     std::string database;
@@ -38,16 +58,36 @@ struct DbConfig {
     std::optional<std::chrono::milliseconds> queryTimeout;
     std::optional<std::chrono::milliseconds> acquireTimeout;
 
-    [[nodiscard]] static DbConfig mariaDb() {
-        return DbConfig{};
+private:
+    DbConfig(DbDriver driver, std::uint16_t defaultPort) noexcept
+        : port(defaultPort), driver_(driver) {}
+
+    DbDriver driver_;
+};
+
+struct DbOperationOptions final {
+    std::optional<std::chrono::milliseconds> timeout;
+    StopToken stopToken;
+};
+
+class DbError final : public std::runtime_error {
+public:
+    enum class Code : std::uint8_t {
+        kTimeout,
+        kCancelled,
+        kClosing,
+    };
+
+    DbError(Code code, std::string message)
+        : std::runtime_error(std::move(message)),
+          code_(code) {}
+
+    [[nodiscard]] Code code() const noexcept {
+        return code_;
     }
 
-    [[nodiscard]] static DbConfig postgreSql() {
-        DbConfig config;
-        config.driver = DbDriver::kPostgreSql;
-        config.port = 5432;
-        return config;
-    }
+private:
+    Code code_;
 };
 
 namespace detail {

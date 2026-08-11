@@ -3,11 +3,10 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
+#include "ruvia/web/detail/integration/WorkerCancellationPost.h"
 #include <asio/error.hpp>
 
-#include <atomic>
 #include <limits>
-#include <memory>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -20,17 +19,9 @@ namespace {
     return args;
 }
 
-struct RedisOperationCancellationState final {
-    RedisOperationCancellationState(RedisPool& poolValue, const WorkerHandle& workerValue, std::size_t indexValue, std::uint64_t generationValue) noexcept
-        : pool(&poolValue), worker(&workerValue), index(indexValue), generation(generationValue) {}
-
-    std::atomic<RedisPool*> pool;
-    const WorkerHandle* worker;
-    std::size_t index;
-    std::uint64_t generation;
-};
-
 }  // namespace
+
+static_assert(workerCancellationPostIsInline<RedisOperationCancellationMailbox>);
 
 Task<RedisValue> RedisPool::executeOwned(std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource, RedisOperationOptions options) {
     return executeWithTimeoutImpl(std::move(args), std::move(options), resource);
@@ -43,33 +34,25 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(ArgSource args, RedisOperatio
     ConnectionGuard guard(*this, index);
     auto& connection = guard.connection();
     connection.abortReason = Connection::AbortReason::kNone;
-    const auto generation = ++connection.operationGeneration;
-    std::shared_ptr<RedisOperationCancellationState> cancellationState;
+    connection.cancellationId = 0;
+    std::uint64_t cancellationId = 0;
+    StopRegistration stopRegistration;
     if (options.stopToken.stoppable()) {
-        cancellationState = std::make_shared<RedisOperationCancellationState>(*this, *worker_, index, generation);
-    }
-    auto stopRegistration = options.stopToken.registerCallback([cancellationState] {
-        if (cancellationState == nullptr) {
-            return;
+        if (cancellationMailbox_ == nullptr) {
+            std::terminate();
         }
-        WorkerHandleAccess::deferOrTerminate(*cancellationState->worker, [cancellationState] {
-            auto* pool = cancellationState->pool.load(std::memory_order_acquire);
-            if (pool != nullptr) {
-                pool->cancelOperation(cancellationState->index, cancellationState->generation);
-            }
-        });
-    });
+        cancellationId = nextCancellationId();
+        connection.cancellationId = cancellationId;
+        options.stopToken.registerCallback(
+            stopRegistration,
+            WorkerCancellationPost<RedisOperationCancellationMailbox>(cancellationMailbox_, cancellationId));
+    }
     if (options.stopToken.stopRequested()) {
-        cancelOperation(index, generation);
+        cancelOperationById(cancellationId);
     }
     auto finishCancellation = [&]() noexcept {
-        if (cancellationState != nullptr) {
-            cancellationState->pool.store(nullptr, std::memory_order_release);
-        }
-        if (connection.operationGeneration == generation) {
-            if (++connection.operationGeneration == 0) {
-                ++connection.operationGeneration;
-            }
+        if (connection.cancellationId == cancellationId) {
+            connection.cancellationId = 0;
         }
         stopRegistration.reset();
     };
@@ -118,33 +101,25 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(CommandSource 
     ConnectionGuard guard(*this, index);
     auto& connection = guard.connection();
     connection.abortReason = Connection::AbortReason::kNone;
-    const auto generation = ++connection.operationGeneration;
-    std::shared_ptr<RedisOperationCancellationState> cancellationState;
+    connection.cancellationId = 0;
+    std::uint64_t cancellationId = 0;
+    StopRegistration stopRegistration;
     if (options.stopToken.stoppable()) {
-        cancellationState = std::make_shared<RedisOperationCancellationState>(*this, *worker_, index, generation);
-    }
-    auto stopRegistration = options.stopToken.registerCallback([cancellationState] {
-        if (cancellationState == nullptr) {
-            return;
+        if (cancellationMailbox_ == nullptr) {
+            std::terminate();
         }
-        WorkerHandleAccess::deferOrTerminate(*cancellationState->worker, [cancellationState] {
-            auto* pool = cancellationState->pool.load(std::memory_order_acquire);
-            if (pool != nullptr) {
-                pool->cancelOperation(cancellationState->index, cancellationState->generation);
-            }
-        });
-    });
+        cancellationId = nextCancellationId();
+        connection.cancellationId = cancellationId;
+        options.stopToken.registerCallback(
+            stopRegistration,
+            WorkerCancellationPost<RedisOperationCancellationMailbox>(cancellationMailbox_, cancellationId));
+    }
     if (options.stopToken.stopRequested()) {
-        cancelOperation(index, generation);
+        cancelOperationById(cancellationId);
     }
     auto finishCancellation = [&]() noexcept {
-        if (cancellationState != nullptr) {
-            cancellationState->pool.store(nullptr, std::memory_order_release);
-        }
-        if (connection.operationGeneration == generation) {
-            if (++connection.operationGeneration == 0) {
-                ++connection.operationGeneration;
-            }
+        if (connection.cancellationId == cancellationId) {
+            connection.cancellationId = 0;
         }
         stopRegistration.reset();
     };
@@ -194,16 +169,26 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(CommandSource 
     }
 }
 
-void RedisPool::cancelOperation(std::size_t index, std::uint64_t generation) noexcept {
-    if (index >= connections_.size()) {
-        std::terminate();
+std::uint64_t RedisPool::nextCancellationId() noexcept {
+    if (++nextCancellationId_ == 0) {
+        ++nextCancellationId_;
     }
-    auto& connection = connections_[index];
-    if (connection.operationGeneration != generation) {
+    return nextCancellationId_;
+}
+
+void RedisPool::cancelOperationById(std::uint64_t cancellationId) noexcept {
+    if (cancellationId == 0) {
         return;
     }
-    connection.abortReason = Connection::AbortReason::kCancelled;
-    close(connection);
+    for (auto& connection : connections_) {
+        if (connection.cancellationId != cancellationId) {
+            continue;
+        }
+        connection.cancellationId = 0;
+        connection.abortReason = Connection::AbortReason::kCancelled;
+        close(connection);
+        return;
+    }
 }
 
 void RedisPool::throwIfCancelled(const Connection& connection) const {

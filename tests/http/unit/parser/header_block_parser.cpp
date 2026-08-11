@@ -16,15 +16,15 @@ using ruvia::HttpParseError;
 using ruvia::detail::findHttpHeaderEnd;
 using ruvia::detail::HttpContentLengthParseStatus;
 using ruvia::detail::HttpContentLengthState;
-using ruvia::detail::HttpTransferCoding;
+using ruvia::HttpTransferCoding;
 using ruvia::detail::HttpTransferEncodingParseStatus;
 using ruvia::detail::HttpTransferEncodingState;
 
 template <typename T>
 concept HasValueSemanticTransferCodings = requires(const T& value) {
-    { value.transferCodings() } -> std::same_as<ruvia::detail::HttpTransferCodings>;
+    { value.transferCodings() } -> std::same_as<ruvia::HttpTransferCodings>;
 } && requires(const T&& value) {
-    { std::move(value).transferCodings() } -> std::same_as<ruvia::detail::HttpTransferCodings>;
+    { std::move(value).transferCodings() } -> std::same_as<ruvia::HttpTransferCodings>;
 };
 
 static_assert(HasValueSemanticTransferCodings<ruvia::detail::HttpNonChunkedTransferEncoding>);
@@ -39,7 +39,7 @@ struct Parsed final {
     bool hasContentLength;
     std::size_t contentLength;
     std::size_t transferCodingCount;
-    ruvia::detail::HttpTransferCoding firstTransferCoding;
+    ruvia::HttpTransferCoding firstTransferCoding;
     bool hasTe;
 };
 
@@ -51,7 +51,7 @@ Parsed parse(std::string_view head) {
     const auto transferEncoding = block.transferEncoding.value();
     const auto* finalChunked = transferEncoding.has_value() ? transferEncoding->finalChunked() : nullptr;
     const auto* nonChunked = transferEncoding.has_value() ? transferEncoding->nonChunked() : nullptr;
-    ruvia::detail::HttpTransferCodings transferCodings;
+    ruvia::HttpTransferCodings transferCodings;
     if (finalChunked != nullptr) {
         transferCodings = finalChunked->transferCodings();
     } else if (nonChunked != nullptr) {
@@ -304,7 +304,7 @@ RUVIA_TEST(header_block_accepts_one_transfer_coding_before_final_chunked) {
     RUVIA_CHECK(!gzipChunked.error.has_value());
     RUVIA_CHECK(gzipChunked.sawChunked);
     RUVIA_CHECK_EQ(gzipChunked.transferCodingCount, std::size_t{1});
-    RUVIA_CHECK(gzipChunked.firstTransferCoding == ruvia::detail::HttpTransferCoding::kGzip);
+    RUVIA_CHECK(gzipChunked.firstTransferCoding == ruvia::HttpTransferCoding::kGzip);
 
     const auto split = parse(
         "POST / HTTP/1.1\r\nHost: x\r\n"
@@ -312,7 +312,7 @@ RUVIA_TEST(header_block_accepts_one_transfer_coding_before_final_chunked) {
     RUVIA_CHECK(!split.error.has_value());
     RUVIA_CHECK(split.sawChunked);
     RUVIA_CHECK_EQ(split.transferCodingCount, std::size_t{1});
-    RUVIA_CHECK(split.firstTransferCoding == ruvia::detail::HttpTransferCoding::kDeflate);
+    RUVIA_CHECK(split.firstTransferCoding == ruvia::HttpTransferCoding::kDeflate);
 
     // A lone non-chunked coding is recorded here, then rejected by the request-level
     // body planner because request Transfer-Encoding requires final chunked framing.
@@ -320,7 +320,7 @@ RUVIA_TEST(header_block_accepts_one_transfer_coding_before_final_chunked) {
     RUVIA_CHECK(!lone.error.has_value());
     RUVIA_CHECK(!lone.sawChunked);
     RUVIA_CHECK_EQ(lone.transferCodingCount, std::size_t{1});
-    RUVIA_CHECK(lone.firstTransferCoding == ruvia::detail::HttpTransferCoding::kGzip);
+    RUVIA_CHECK(lone.firstTransferCoding == ruvia::HttpTransferCoding::kGzip);
 }
 
 RUVIA_TEST(header_block_rejects_smuggling_transfer_encodings) {

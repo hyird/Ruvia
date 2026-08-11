@@ -2,19 +2,26 @@
 #include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/MoveOnlyFunction.h"
 #include "ruvia/core/version.h"
+#include "ruvia/core/detail/util/NativePath.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 #include <array>
 #include <concepts>
+#include <filesystem>
 #include <memory>
 #include <memory_resource>
 #include <string_view>
 #include <utility>
 
 template <typename T>
-concept ExposesRvalueRequestMemoryBorrow = requires(T&& memory) { std::move(memory).resource(); } || requires(T&& memory) { std::move(memory).template allocator<>(); };
+concept ExposesRvalueMemoryBorrow = requires(T&& memory) { std::move(memory).resource(); } || requires(T&& memory) { std::move(memory).template allocator<>(); };
 
-static_assert(!ExposesRvalueRequestMemoryBorrow<ruvia::RequestMemory>);
+template <typename T>
+concept ExposesRvalueNativePathBorrow = requires(T&& path) { ruvia::detail::nativePathView(std::move(path)); };
+
+static_assert(!ExposesRvalueMemoryBorrow<ruvia::WorkerMemory>);
+static_assert(!ExposesRvalueMemoryBorrow<ruvia::RequestMemory>);
+static_assert(!ExposesRvalueNativePathBorrow<std::filesystem::path>);
 
 static_assert(RUVIA_VERSION_MAJOR == RUVIA_EXPECTED_VERSION_MAJOR);
 static_assert(RUVIA_VERSION_MINOR == RUVIA_EXPECTED_VERSION_MINOR);
@@ -29,6 +36,12 @@ int main() {
     ruvia::MoveOnlyFunction<int(int)> add([offset = std::make_unique<int>(4)](int value) { return value + *offset; });
     auto moved = std::move(add);
     if (add || !moved || moved(3) != 7) {
+        return 1;
+    }
+
+    using NullFunction = void (*)();
+    ruvia::MoveOnlyFunction<void()> nullFunction(static_cast<NullFunction>(nullptr));
+    if (nullFunction) {
         return 1;
     }
 

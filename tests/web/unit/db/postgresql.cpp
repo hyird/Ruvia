@@ -59,7 +59,7 @@ private:
 
 RUVIA_TEST(postgresql_config_factory_selects_driver_and_port) {
     const auto config = ruvia::DbConfig::postgreSql();
-    RUVIA_CHECK(config.driver == ruvia::DbDriver::kPostgreSql);
+    RUVIA_CHECK(config.driver() == ruvia::DbDriver::kPostgreSql);
     RUVIA_CHECK(config.port == 5432);
     RUVIA_CHECK(!throwsInvalidArgument([&] { ruvia::detail::validateDbConfig(config); }));
 }

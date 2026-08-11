@@ -41,7 +41,7 @@ public:
     ChannelSendResult(const ChannelSendResult&) = delete;
     ChannelSendResult& operator=(const ChannelSendResult&) = delete;
     ChannelSendResult(ChannelSendResult&&) noexcept(std::is_nothrow_move_constructible_v<T>) = default;
-    ChannelSendResult& operator=(ChannelSendResult&&) noexcept(std::is_nothrow_move_assignable_v<T>) = default;
+    ChannelSendResult& operator=(ChannelSendResult&&) noexcept(std::is_nothrow_move_constructible_v<T> && std::is_nothrow_move_assignable_v<T>) = default;
 
     [[nodiscard]] ChannelSendStatus status() const noexcept {
         return status_;
@@ -314,12 +314,13 @@ public:
     // The worker every receive must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from
     // receiver has no bound worker and cannot answer this query.
-    [[nodiscard]] const WorkerHandle& worker() const noexcept {
+    [[nodiscard]] const WorkerHandle& worker() const& noexcept {
         if (!state_) {
             std::terminate();
         }
         return state_->worker;
     }
+    const WorkerHandle& worker() const&& = delete;
 
     void close() const {
         ChannelSender<T>(state_).close();
