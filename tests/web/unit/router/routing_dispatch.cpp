@@ -298,6 +298,7 @@ RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/a"), RouteHandler(nullptr, &okHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.registerRoute(HttpKnownMethod::kPost, path("/b"), RouteHandler(nullptr, &okHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
+    impl.registerExtensionMethodRoute("PROPFIND", path("/c"), RouteHandler(nullptr, &okHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.finalize();
     const auto& table = impl.routeTable();
 
@@ -318,4 +319,5 @@ RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
     const auto allow = response.header("Allow").value_or(std::string_view{});
     RUVIA_CHECK(allow.find("GET") != std::string_view::npos);
     RUVIA_CHECK(allow.find("POST") != std::string_view::npos);
+    RUVIA_CHECK(allow.find("PROPFIND") != std::string_view::npos);
 }

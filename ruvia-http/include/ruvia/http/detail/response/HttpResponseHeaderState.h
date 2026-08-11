@@ -1,4 +1,5 @@
 #pragma once
+#include <span>
 #include "ruvia/http/HttpResponse.h"
 
 #include <cstddef>
@@ -44,8 +45,8 @@ struct HttpResponseHeaderStateAccess final {
         response.setHeaderUnsigned(key, value, knownBit);
     }
 
-    static void setAllow(HttpResponse& response, std::uint32_t methodMask) {
-        response.setAllowHeader(methodMask);
+    static void setAllow(HttpResponse& response, std::uint32_t methodMask, std::span<const std::string_view> extensionMethods = {}) {
+        response.setAllowHeader(methodMask, extensionMethods);
     }
 
     static void setContentRange(HttpResponse& response, std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
@@ -111,8 +112,8 @@ inline void setResponseHeaderUnsigned(HttpResponse& response, std::string_view k
     HttpResponseHeaderStateAccess::setUnsigned(response, key, value, knownBit);
 }
 
-inline void setResponseAllowHeader(HttpResponse& response, std::uint32_t methodMask) {
-    HttpResponseHeaderStateAccess::setAllow(response, methodMask);
+inline void setResponseAllowHeader(HttpResponse& response, std::uint32_t methodMask, std::span<const std::string_view> extensionMethods = {}) {
+    HttpResponseHeaderStateAccess::setAllow(response, methodMask, extensionMethods);
 }
 
 inline void setResponseContentRange(HttpResponse& response, std::uint64_t offset, std::uint64_t length, std::uint64_t size) {

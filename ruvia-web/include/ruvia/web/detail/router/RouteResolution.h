@@ -106,8 +106,14 @@ public:
         return RouteResolution(ResolvedRoute(route, std::move(match)));
     }
 
-    [[nodiscard]] static RouteResolution methodNotAllowed(std::uint32_t allowedMethods) noexcept {
-        if (allowedMethods == 0) {
+    // An empty mask used to mean "no resource here", because a resource that
+    // existed always had at least one representable method. Extension-method
+    // routes break that: the resource exists but the mask -- which only spans
+    // the classified methods -- cannot say so. `resourceExists` carries that
+    // fact separately, so an extension-only path answers 405 with an Allow
+    // built from its tokens instead of collapsing to 404.
+    [[nodiscard]] static RouteResolution methodNotAllowed(std::uint32_t allowedMethods, bool resourceExists = false) noexcept {
+        if (allowedMethods == 0 && !resourceExists) {
             return RouteResolution();
         }
         return RouteResolution(RouteMethodNotAllowed(allowedMethods));

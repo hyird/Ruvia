@@ -26,16 +26,30 @@ struct RouteRateLimitOptions final {
 
 }  // namespace detail
 
-template <typename Derived>
-class RouteRateLimitMiddleware : public Middleware<Derived> {
+// A per-route rate limit, configured through the type:
+//
+//     RUVIA_GET("/ready", ready, ruvia::RouteRateLimit<10, 1000>);
+//
+// Route and controller middleware lists name types, so a middleware registered
+// there is default constructed and cannot take constructor arguments. Carrying
+// the configuration as template parameters is how such a middleware is
+// configured -- the values are constexpr, the type stays default constructible,
+// and the chain is still finalized at startup with nothing allocated per
+// request. A comma inside the template argument list is fine: the route macro
+// pastes its arguments back together.
+//
+// The limit is scoped to the route it is registered on and keyed on the client
+// address, so two routes carrying the same numbers count independently.
+template <std::size_t MaxRequests, std::int64_t WindowMs>
+class RouteRateLimit final : public Middleware<RouteRateLimit<MaxRequests, WindowMs>> {
 public:
+    static_assert(MaxRequests > 0, "route rate limit max requests must be greater than 0");
+    static_assert(WindowMs > 0, "route rate limit window must be greater than 0ms");
+
     static constexpr bool ruviaUsesRouteRateLimit = true;
 
     Task<void> handle(Context& context, Next& next) {
-        static_assert(Derived::ruviaRateLimitMaxRequests > 0, "route rate limit max requests must be greater than 0");
-        static_assert(Derived::ruviaRateLimitWindowMs > 0, "route rate limit window must be greater than 0ms");
-
-        if (!detail::applyRouteRateLimit(context, routeRateLimitOptions())) {
+        if (!detail::applyRouteRateLimit(context, options())) {
             co_return;
         }
 
@@ -43,20 +57,10 @@ public:
     }
 
 private:
-    [[nodiscard]] static const detail::RouteRateLimitOptions& routeRateLimitOptions() noexcept {
-        static constexpr auto options = detail::routeRateLimitOptions(Derived::ruviaRateLimitMaxRequests, Derived::ruviaRateLimitWindowMs);
-        return options;
+    [[nodiscard]] static const detail::RouteRateLimitOptions& options() noexcept {
+        static constexpr auto value = detail::routeRateLimitOptions(MaxRequests, WindowMs);
+        return value;
     }
 };
 
 }  // namespace ruvia
-
-// The only named entry point for a per-route rate limit. Derived middleware
-// declares its own name (RUVIA_ROUTE_RATE_LIMIT(ReadyRateLimit, 10, 1000)) so
-// it can be registered like any other middleware type.
-#define RUVIA_ROUTE_RATE_LIMIT(name, max_requests, window_ms)                    \
-    class name final : public ::ruvia::RouteRateLimitMiddleware<name> {          \
-    public:                                                                      \
-        static constexpr ::std::size_t ruviaRateLimitMaxRequests = max_requests; \
-        static constexpr ::std::int64_t ruviaRateLimitWindowMs = window_ms;      \
-    }

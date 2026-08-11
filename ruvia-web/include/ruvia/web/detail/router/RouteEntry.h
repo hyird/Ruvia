@@ -16,9 +16,16 @@ class RouteEntry final {
 public:
     struct Init final {
         HttpKnownMethod method;
+        // Non-empty only for an extension-method route, where it is the exact,
+        // case-sensitive wire token (RFC 9110 9.1) and `method` is kUnknown.
+        // Known methods keep the enum as their identity so the routing fast
+        // path never compares strings.
+        std::string_view methodToken{};
         std::string_view path;
         RouteEndpoint endpoint;
         bool dynamic{false};
+        // 0 = no route-declared ceiling; the server default applies.
+        std::size_t maxRequestBodyBytes{0};
         std::size_t middlewareOffset{0};
         std::size_t middlewareCount{0};
     };
@@ -34,6 +41,11 @@ public:
         return method_;
     }
 
+    // Empty unless this is an extension-method route.
+    [[nodiscard]] std::string_view methodToken() const noexcept {
+        return methodToken_;
+    }
+
     [[nodiscard]] std::string_view path() const noexcept {
         return path_;
     }
@@ -44,6 +56,13 @@ public:
 
     [[nodiscard]] bool dynamic() const noexcept {
         return dynamic_;
+    }
+
+    // A ceiling declared by one of this route's middlewares, or 0 for none.
+    // Read before the body is accepted, so it bounds what is buffered rather
+    // than what a handler later sees.
+    [[nodiscard]] std::size_t maxRequestBodyBytes() const noexcept {
+        return maxRequestBodyBytes_;
     }
 
     [[nodiscard]] std::span<const std::string_view> paramNames() const noexcept {
@@ -73,9 +92,11 @@ public:
 
 private:
     HttpKnownMethod method_;
+    std::pmr::string methodToken_;
     std::pmr::string path_;
     RouteEndpoint endpoint_;
     bool dynamic_{false};
+    std::size_t maxRequestBodyBytes_{0};
     std::span<const std::string_view> paramNames_{};
     std::size_t middlewareOffset_{0};
     std::size_t middlewareCount_{0};

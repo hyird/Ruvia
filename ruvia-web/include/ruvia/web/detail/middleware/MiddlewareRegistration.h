@@ -89,6 +89,19 @@ template <typename MiddlewareT>
     }
 }
 
+// A request-body ceiling this middleware declares for the routes it is on, or 0
+// for none. Read by the server BEFORE the body is accepted, which is why it
+// cannot simply be code inside handle(): by the time a middleware runs, the
+// bytes it would have rejected are already buffered.
+template <typename MiddlewareT>
+[[nodiscard]] constexpr std::size_t middlewareRequestBodyLimit() noexcept {
+    if constexpr (requires { MiddlewareT::ruviaRequestBodyLimitBytes; }) {
+        return MiddlewareT::ruviaRequestBodyLimitBytes;
+    } else {
+        return 0;
+    }
+}
+
 // Registers one middleware type together with the arguments every instance of
 // it is constructed from. Arguments are decayed and copied once, at
 // registration; a middleware is built per router materialization, so they must
@@ -114,7 +127,7 @@ template <typename MiddlewareT, typename... Args>
 
     using ArgsT = std::tuple<std::decay_t<Args>...>;
     const auto* stored = constructPmrObject<ArgsT>(registrationResource(), std::forward<Args>(args)...);
-    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddleware<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>(), middlewareRunsOnUnmatchedRequests<MiddlewareT>());
+    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddleware<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>(), middlewareRunsOnUnmatchedRequests<MiddlewareT>(), middlewareRequestBodyLimit<MiddlewareT>());
 }
 
 }  // namespace ruvia::detail

@@ -29,7 +29,9 @@ Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute(Http1RouteDispat
     std::exception_ptr exception;
     std::optional<BodyReaderBinding<StreamBodyReader<Stream>>> bodyReader;
     try {
-        bodyReader.emplace(d.stream, d.memory.template allocator<char>(), bodyAndPipeline, d.parsed.bodyPlan, requestBodyByteLimit(RequestBodyMode::kStream, d.options.maxStreamBodyBytes, d.options.maxBufferedBodyBytes), d.scannerEntry);
+        const auto* resolved = routeResolution.resolved();
+        const auto routeLimit = resolved != nullptr ? resolved->route().maxRequestBodyBytes() : std::size_t{0};
+        bodyReader.emplace(d.stream, d.memory.template allocator<char>(), bodyAndPipeline, d.parsed.bodyPlan, requestBodyByteLimit(RequestBodyMode::kStream, d.options.maxStreamBodyBytes, d.options.maxBufferedBodyBytes, routeLimit), d.scannerEntry);
         d.response = co_await d.routes.dispatch(d.parsed.request, routeResolution, d.requestMemory, d.baseRouteServices.withStreamingRequestBody(bodyReader->facade()));
     } catch (...) {
         exception = std::current_exception();

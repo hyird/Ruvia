@@ -185,16 +185,23 @@ std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlew
     return frames;
 }
 
-void detail::RouterImpl::validateRouteTarget(HttpKnownMethod method, std::string_view path) const {
-    if (!RouteTable::isRoutableMethod(method)) {
+void detail::RouterImpl::validateRouteTarget(HttpKnownMethod method, std::string_view methodToken, std::string_view path) const {
+    // An extension route carries kUnknown plus a token; anything else must sit
+    // in the enum-indexed fast path.
+    if (methodToken.empty() && !RouteTable::isRoutableMethod(method)) {
         throw std::invalid_argument("route method must be routable");
+    }
+    // Extension routes are matched by a linear scan over a cold list, which has
+    // no dynamic-segment index behind it.
+    if (!methodToken.empty() && RouteTable::isDynamicPath(path)) {
+        throw std::invalid_argument("extension method routes must use a static path");
     }
     if (path.find('?') != std::string_view::npos || !ruvia::detail::isValidOriginFormTarget(path)) {
         throw std::invalid_argument("route path must be an origin-form path without query");
     }
 
     for (const auto& route : pendingRoutes_) {
-        if (route.method() == method && route.path() == path) {
+        if (route.method() == method && route.methodToken() == methodToken && route.path() == path) {
             throw std::invalid_argument("duplicate route registration");
         }
     }

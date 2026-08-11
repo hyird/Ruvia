@@ -61,7 +61,11 @@ void writeContentRangeUnsatisfiedHeaderValue(HttpResponseHeader& header, std::ui
     }
 }
 
-[[nodiscard]] std::size_t allowHeaderValueSize(std::uint32_t methodMask) noexcept {
+// The mask names the methods this library classifies; extensionMethods carries
+// the exact wire tokens of any others the resource supports. RFC 9110 10.2.1
+// requires Allow to list every supported method, and an extension method has no
+// bit to occupy, so it has to travel alongside the mask rather than inside it.
+[[nodiscard]] std::size_t allowHeaderValueSize(std::uint32_t methodMask, std::span<const std::string_view> extensionMethods) noexcept {
     std::size_t size = 0;
     std::size_t count = 0;
     for (std::size_t i = 0; i < kAllowHeaderMethodSlots; ++i) {
@@ -71,10 +75,14 @@ void writeContentRangeUnsatisfiedHeaderValue(HttpResponseHeader& header, std::ui
         size += knownHttpMethodToken(static_cast<HttpKnownMethod>(i)).size();
         ++count;
     }
+    for (const auto token : extensionMethods) {
+        size += token.size();
+        ++count;
+    }
     return count > 1 ? size + (count - 1) * 2 : size;
 }
 
-void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask) {
+void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask, std::span<const std::string_view> extensionMethods) {
     auto* cursor = detail::responseHeaderValueBegin(header);
     auto* const end = detail::responseHeaderValueEnd(header);
     bool first = true;
@@ -88,6 +96,13 @@ void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask)
         first = false;
         appendHeaderValueLiteral(cursor, knownHttpMethodToken(static_cast<HttpKnownMethod>(i)));
     }
+    for (const auto token : extensionMethods) {
+        if (!first) {
+            appendHeaderValueLiteral(cursor, ", ");
+        }
+        first = false;
+        appendHeaderValueLiteral(cursor, token);
+    }
     if (cursor != end) {
         throw std::logic_error("failed to format HTTP Allow header");
     }
@@ -95,9 +110,9 @@ void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask)
 
 }  // namespace
 
-void HttpResponse::setAllowHeader(std::uint32_t methodMask) {
-    auto& header = prepareHeaderValueStorage("Allow", allowHeaderValueSize(methodMask), detail::kResponseHeaderAllow);
-    writeAllowHeaderValue(header, methodMask);
+void HttpResponse::setAllowHeader(std::uint32_t methodMask, std::span<const std::string_view> extensionMethods) {
+    auto& header = prepareHeaderValueStorage("Allow", allowHeaderValueSize(methodMask, extensionMethods), detail::kResponseHeaderAllow);
+    writeAllowHeaderValue(header, methodMask, extensionMethods);
 }
 
 void HttpResponse::setContentRange(std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
