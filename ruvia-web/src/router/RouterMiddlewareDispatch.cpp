@@ -128,13 +128,13 @@ Task<HttpResponse> detail::RouteTable::runUnmatchedChain(Context& context, const
     if (unmatchedMiddlewareCount_ == 0) {
         return terminal(context);
     }
-    return [](const RouteTable* table, Context* context, const UnmatchedTerminal* terminal) -> Task<HttpResponse> {
-        co_await table->invokeUnmatchedMiddlewareAt(0, *context, *terminal);
-        if (detail::ContextAccess::hasResponse(*context)) {
-            co_return detail::ContextAccess::takeResponse(*context);
+    return [](const RouteTable* table, Context* unmatchedContext, const UnmatchedTerminal* unmatchedTerminal) -> Task<HttpResponse> {
+        co_await table->invokeUnmatchedMiddlewareAt(0, *unmatchedContext, *unmatchedTerminal);
+        if (detail::ContextAccess::hasResponse(*unmatchedContext)) {
+            co_return detail::ContextAccess::takeResponse(*unmatchedContext);
         }
-        if (auto exception = context->exception()) {
-            co_return co_await table->handleException(*context, exception);
+        if (auto exception = unmatchedContext->exception()) {
+            co_return co_await table->handleException(*unmatchedContext, exception);
         }
         throw std::logic_error("context is not finalized; middleware must set a response or await next()");
     }(this, &context, &terminal);

@@ -353,6 +353,7 @@ ruvia_add_unit_suite(ruvia_http_unit_tests ruvia::http
     # support
     support/test_main.cpp
 )
+set_tests_properties(ruvia_http_unit_tests PROPERTIES TIMEOUT 300)
 endif()
 
 if(RUVIA_BUILD_WEB)
