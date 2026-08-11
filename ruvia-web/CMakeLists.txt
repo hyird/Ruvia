@@ -31,6 +31,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextCookies.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextConnInfo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextFileResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextRedirect.cpp
@@ -84,6 +85,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseCompression.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpStaticFileCompression.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerAccept.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/TrustedProxies.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerLifecycle.cpp
 )
 

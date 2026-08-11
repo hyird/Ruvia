@@ -18,6 +18,7 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ServerConfig.h"
+#include "ruvia/web/detail/server/TrustedProxies.h"
 #include "ruvia/web/detail/http/CorsOptions.h"
 #include "ruvia/web/detail/server/DocumentRootBinding.h"
 
@@ -168,6 +169,9 @@ struct HttpServerOptions final {
     std::optional<CompressionConfig> compression{std::in_place};
     std::optional<CorsOptions> cors;
     DocumentRoot documentRoot;
+    // Peers whose forwarding headers may be believed. Empty by default, so an
+    // unconfigured server treats every direct peer as the client.
+    TrustedProxySet trustedProxies;
     AccessLogSink accessLog;
     const Env* env{nullptr};
     // Process-wide, owned by App::run() and shared by every worker. Null when

@@ -5,7 +5,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <initializer_list>
 #include <optional>
+#include <span>
+#include <string_view>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -83,6 +86,22 @@ public:
     // std::invalid_argument instead of silently choosing by call order.
     App& onError(std::string_view prefix, HttpErrorHandler handler);
     App& onNotFound(std::string_view prefix, HttpNotFoundHandler handler);
+    // Peers whose forwarding headers name the real client. Accepts addresses
+    // and CIDR blocks ("10.0.0.0/8", "2001:db8::/32", "127.0.0.1"); a malformed
+    // entry throws std::invalid_argument at configuration time rather than
+    // silently trusting nothing.
+    //
+    // Empty by default, and that default is the safe one: X-Forwarded-For is
+    // client-controlled, so believing it from an arbitrary peer would let any
+    // caller pick its own rate-limit key and claim a secure scheme. Configure
+    // this ONLY with the addresses of proxies you operate, and the request's
+    // ConnInfo::client()/scheme() then reflect the original caller.
+    App& setTrustedProxies(std::span<const std::string_view> cidrs);
+
+    App& setTrustedProxies(std::initializer_list<std::string_view> cidrs) {
+        return setTrustedProxies(std::span<const std::string_view>(cidrs.begin(), cidrs.size()));
+    }
+
     App& setDefaultRateLimitPerWorker(std::optional<RateLimitRule> rule);
     App& setRateLimitSlotsPerWorker(std::size_t slotsPerWorker);
     App& onAccess(AccessLogCallback callback);

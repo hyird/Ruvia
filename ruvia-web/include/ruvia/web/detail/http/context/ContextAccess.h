@@ -18,7 +18,7 @@ inline Context::Context(RequestMemory& memory, const HttpRequest& request, detai
 inline Context::Context(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, const std::string_view* paramNames, const std::string_view* paramValues, std::size_t paramCount, std::uintptr_t routeRateLimitScope, detail::ContextServices services) noexcept
     : memory_(memory),
       request_(request),
-      connInfo_(services.connInfo()),
+      connInfo_(services.resolveConnInfo(request)),
       worker_(services.worker()),
       stopToken_(services.stopToken()),
       routePath_(routePath),
