@@ -331,11 +331,11 @@ RUVIA_TEST(context_lazy_request_caches_share_one_typed_storage_owner) {
     auto context = ruvia::detail::ContextAccess::make(memory, request, "/items/:id", names, values, 1, 0);
     RUVIA_CHECK(ruvia::detail::ContextAccess::requestStorage(context) == nullptr);
 
-    (void)ruvia::detail::requestHeaderFields(context.req());
+    (void)context.req().headerFields();
     const auto* const owner = ruvia::detail::ContextAccess::requestStorage(context);
     RUVIA_CHECK(owner != nullptr);
-    (void)ruvia::detail::requestQueryFields(context.req());
-    (void)ruvia::detail::requestCookieFields(context.req());
-    (void)ruvia::detail::requestParamFields(context.req());
+    (void)context.req().queryFields();
+    (void)context.req().cookieFields();
+    (void)context.req().paramFields();
     RUVIA_CHECK(ruvia::detail::ContextAccess::requestStorage(context) == owner);
 }

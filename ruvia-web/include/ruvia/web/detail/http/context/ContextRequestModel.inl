@@ -99,12 +99,12 @@ ScopedOperation<std::optional<T>> ContextRequest::formIf() const {
 
 template <typename T>
 inline const T& ContextRequest::validated() const {
-    return validatedModels().get<T>();
+    return requestBindings().getValidated<T>();
 }
 
 template <typename T>
 inline ValidatedJson<T> ContextRequest::validatedJson() const {
-    return validatedModels().getJson<T>();
+    return requestBindings().getValidatedJson<T>();
 }
 
 }  // namespace ruvia
