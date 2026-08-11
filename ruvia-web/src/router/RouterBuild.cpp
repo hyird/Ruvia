@@ -64,9 +64,9 @@ detail::RouteTable::RouteTable(std::pmr::memory_resource* resource)
     : resource_(detail::pmrResourceOrDefault(resource)),
       routes_(resource_),
       middlewareFrames_(resource_),
+      extensionRouteIndices_(resource_),
       exactSlots_(resource_),
       dynamicRoots_{DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_)},
-      extensionRouteIndices_(resource_),
       dynamicNodeArena_(resource_),
       dynamicParamNames_(resource_) {}
 

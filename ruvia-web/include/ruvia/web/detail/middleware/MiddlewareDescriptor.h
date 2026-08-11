@@ -100,8 +100,8 @@ private:
           args_(args),
           validatedModelTypeKey_(validatedModelTypeKey),
           usesRouteRateLimit_(usesRouteRateLimit),
-          runsOnUnmatchedRequests_(runsOnUnmatchedRequests),
-          requestBodyLimit_(requestBodyLimit) {}
+          requestBodyLimit_(requestBodyLimit),
+          runsOnUnmatchedRequests_(runsOnUnmatchedRequests) {}
 
     Invoke invoke_{nullptr};
     Create create_{nullptr};
