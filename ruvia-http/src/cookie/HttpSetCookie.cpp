@@ -198,6 +198,7 @@ std::optional<HttpSetCookieView> parseSetCookie(std::string_view value) noexcept
         if (argument.size() > kMaxReceivedCookieAttributeBytes) {
             // Ignore this cookie-av and continue with later attributes.
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "Path")) {
+            if (!detail::isValidCookieAttribute(argument)) return std::nullopt;
             result.path = argument;
             result.hasPathAttribute = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "Domain")) {

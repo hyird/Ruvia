@@ -23,6 +23,8 @@ namespace {
 // finish climbs to the cap and trips, while legitimate cancels interleaved with
 // completed responses keep refilling the budget and never trip.
 constexpr std::uint32_t kHttp2MaxUnprocessedResets = 1000;
+constexpr char kHttp2RapidResetGoawayDebug[] = "excessive stream resets";
+constexpr std::size_t kHttp2RapidResetGoawayBytes = kHttp2FrameHeaderBytes + 8 + sizeof(kHttp2RapidResetGoawayDebug) - 1;
 
 }  // namespace
 
@@ -60,14 +62,15 @@ void Http2Connection::detachActiveHeaderBlock(Http2StreamState& stream) {
 }
 
 void Http2Connection::unpinStream(std::uint32_t streamId) {
-    std::erase(pinnedStreams_, streamId);
     auto* stream = streams_.find(streamId);
     if (stream == nullptr) {
+        std::erase(pinnedStreams_, streamId);
         return;  // never created, or already removed
     }
     if (stream->isAborted()) {
         // The abnormal terminal transition already returned flow-control debt and
         // discarded deferred sends. The pin only kept request-view storage alive.
+        std::erase(pinnedStreams_, streamId);
         releaseLocalRequestStream(*stream);
         streams_.remove(streamId);
         return;
@@ -76,13 +79,14 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
     if (http2StreamIsClosed(*stream)) {
         // Both protocol halves are closed and the owner lease is gone: normal
         // completion can finally release storage and refill the rapid-reset budget.
+        flushWindowDebt(*stream);
         detachActiveHeaderBlock(*stream);
         discardDeferredStreamState(streamId);
-        flushWindowDebt(*stream);
         readyQueue_.remove(streamId);
         closedStreams_.remember(streamId, Http2StreamCloseSource::kLocal);
         ++completedResponses_;
         releaseLocalRequestStreamIfClosed(*stream);
+        std::erase(pinnedStreams_, streamId);
         streams_.remove(streamId);
         return;
     }
@@ -90,8 +94,15 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
     // Releasing the last owner while either protocol half is still open must not
     // silently erase the stream. Abort it explicitly so the peer observes a legal
     // terminal transition and the table cannot leak an ownerless half-open stream.
+    // Keep the pin until submitReset() finishes: if appending the RST_STREAM throws,
+    // the caller still owns request-view storage and can retry unpinning.
     const auto error = stream->localSend().endStreamCommitted() != nullptr ? Http2ErrorCode::kNoError : Http2ErrorCode::kCancel;
     (void)submitReset(streamId, error);
+    std::erase(pinnedStreams_, streamId);
+    if (auto* retainedStream = streams_.find(streamId); retainedStream != nullptr && retainedStream->isAborted()) {
+        releaseLocalRequestStream(*retainedStream);
+        streams_.remove(streamId);
+    }
 }
 
 void Http2Connection::discardDeferredStreamState(std::uint32_t streamId) {
@@ -189,6 +200,21 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
         return true;
     }
     const auto error = static_cast<Http2ErrorCode>(http2Read32(reinterpret_cast<const unsigned char*>(payload.data())));
+    // Rapid-reset budget (CVE-2023-44487): count peer resets and trip if they run too far
+    // ahead of the responses this connection has actually let complete.
+    const auto resetCountAfterThisFrame = static_cast<std::uint64_t>(peerResetStreams_) + 1U;
+    const auto resetBudget = static_cast<std::uint64_t>(completedResponses_) + kHttp2MaxUnprocessedResets;
+    const bool rapidResetBudgetExceeded = resetCountAfterThisFrame > resetBudget;
+    if (rapidResetBudgetExceeded) {
+        std::size_t closeOutputBytes = 0;
+        if (stream != nullptr) {
+            const auto debt = stream->windowDebt();
+            if (debt != 0 && connectionReceiveCredit_.readyAfter(debt)) {
+                closeOutputBytes = kHttp2WindowUpdateFrameBytes;
+            }
+        }
+        output_.reserveAdditional(closeOutputBytes + kHttp2RapidResetGoawayBytes);
+    }
     if (!closeStream(header.streamId, Http2StreamCloseSource::kPeer, error)) {
         // A reset can race with one sent by this endpoint. RFC 9113 requires
         // minimal processing in that state, but the no-op neither opened a
@@ -196,11 +222,9 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
         // rapid-reset lifecycle budget.
         return true;
     }
-    // Rapid-reset budget (CVE-2023-44487): count peer resets and trip if they run too far
-    // ahead of the responses this connection has actually let complete.
     ++peerResetStreams_;
-    if (peerResetStreams_ > completedResponses_ + kHttp2MaxUnprocessedResets) {
-        appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "excessive stream resets");
+    if (rapidResetBudgetExceeded) {
+        appendGoaway(Http2ErrorCode::kEnhanceYourCalm, kHttp2RapidResetGoawayDebug);
         return false;
     }
     return true;

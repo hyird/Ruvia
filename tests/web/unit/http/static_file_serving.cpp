@@ -785,6 +785,16 @@ RUVIA_TEST(static_file_type_policy_has_closed_exact_alternatives) {
     }
     RUVIA_CHECK(emptyOnlyThrew);
 
+    for (const std::string_view invalid : {"", ".", "..", "a/b", "a\\b"}) {
+        bool invalidTypeThrew = false;
+        try {
+            (void)ruvia::StaticFileTypePolicy::only({invalid});
+        } catch (const std::invalid_argument&) {
+            invalidTypeThrew = true;
+        }
+        RUVIA_CHECK(invalidTypeThrew);
+    }
+
     namespace fs = std::filesystem;
     const auto dir = fs::temp_directory_path() / "ruvia_static_file_type_policy";
     fs::remove_all(dir);
@@ -1711,6 +1721,61 @@ RUVIA_TEST(static_root_rejects_empty_custom_mime_type) {
         rejected = true;
     }
     RUVIA_CHECK(rejected);
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_root_rejects_invalid_static_header_options_at_construction) {
+    namespace fs = std::filesystem;
+    using ruvia::StaticMimeType;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_invalid_header_options_dir";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    std::ofstream(dir / "data.custom") << "content";
+
+    const auto rejects = [&dir, &ruvia_ctx](StaticRootOptions options) {
+        bool rejected = false;
+        try {
+            StaticRoot root(dir, std::move(options));
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    };
+
+    {
+        StaticRootOptions options;
+        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        options.cacheControl = " private";
+        rejects(std::move(options));
+    }
+    {
+        StaticRootOptions options;
+        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        options.defaultContentType = "text plain";
+        rejects(std::move(options));
+    }
+    {
+        StaticRootOptions options;
+        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        StaticMimeType mime;
+        mime.extension = ".custom";
+        mime.contentType = "text plain";
+        options.mimeTypes.push_back(std::move(mime));
+        rejects(std::move(options));
+    }
+    for (const std::string_view invalidExtension : {"", ".", "..", "nested/custom", "nested\\custom"}) {
+        StaticRootOptions options;
+        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        StaticMimeType mime;
+        mime.extension = std::string(invalidExtension);
+        mime.contentType = "text/plain";
+        options.mimeTypes.push_back(std::move(mime));
+        rejects(std::move(options));
+    }
+
     fs::remove_all(dir);
 }
 

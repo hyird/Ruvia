@@ -9,6 +9,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/util/HttpOws.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
 
@@ -27,6 +28,36 @@ enum class HttpConnectionOption : std::uint8_t { kClose = 1U << 0, kKeepAlive = 
 [[nodiscard]] inline bool httpConnectionOptionConflictsWithManagedField(std::string_view option) noexcept {
     if (httpAsciiEqualsIgnoreCase(option, "Host") || httpAsciiEqualsIgnoreCase(option, "Expect") || httpAsciiEqualsIgnoreCase(option, "Trailer")) {
         return true;
+    }
+    switch (classifyRequestHeader(option)) {
+        case RequestHeaderKind::kOther:
+        case RequestHeaderKind::kConnection:
+        case RequestHeaderKind::kTransferEncoding:
+        case RequestHeaderKind::kUpgrade:
+            break;
+        case RequestHeaderKind::kAccept:
+        case RequestHeaderKind::kAcceptEncoding:
+        case RequestHeaderKind::kAccessControlRequestHeaders:
+        case RequestHeaderKind::kAccessControlRequestMethod:
+        case RequestHeaderKind::kAuthorization:
+        case RequestHeaderKind::kContentEncoding:
+        case RequestHeaderKind::kContentLength:
+        case RequestHeaderKind::kContentType:
+        case RequestHeaderKind::kCookie:
+        case RequestHeaderKind::kExpect:
+        case RequestHeaderKind::kHost:
+        case RequestHeaderKind::kIfMatch:
+        case RequestHeaderKind::kIfModifiedSince:
+        case RequestHeaderKind::kIfNoneMatch:
+        case RequestHeaderKind::kIfRange:
+        case RequestHeaderKind::kIfUnmodifiedSince:
+        case RequestHeaderKind::kOrigin:
+        case RequestHeaderKind::kRange:
+        case RequestHeaderKind::kSecWebSocketKey:
+        case RequestHeaderKind::kSecWebSocketProtocol:
+        case RequestHeaderKind::kSecWebSocketVersion:
+        case RequestHeaderKind::kUserAgent:
+            return true;
     }
     const auto knownBit = classifyResponseHeaderName(option);
     return knownBit != 0 && knownBit != kResponseHeaderConnection && knownBit != kResponseHeaderTransferEncoding;

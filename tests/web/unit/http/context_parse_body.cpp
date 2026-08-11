@@ -27,6 +27,106 @@ RUVIA_TEST(context_parse_body_drops_prototype_pollution_keys) {
     RUVIA_CHECK(protoDropped);
 }
 
+RUVIA_TEST(context_parse_body_rejects_invalid_options) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    ruvia::ContextRequest::ParseBodyOptions badRepeated;
+    badRepeated.repeatedScalars = static_cast<ruvia::ContextRequest::RepeatedScalarPolicy>(42);
+    bool repeatedRejected = false;
+    try {
+        (void)context.req().parseBody(badRepeated);
+    } catch (const std::invalid_argument&) {
+        repeatedRejected = true;
+    }
+    RUVIA_CHECK(repeatedRejected);
+
+    ruvia::ContextRequest::ParseBodyOptions badDotted;
+    badDotted.dottedNames = static_cast<ruvia::ContextRequest::DottedNamePolicy>(42);
+    bool dottedRejected = false;
+    try {
+        (void)context.req().parseBody(badDotted);
+    } catch (const std::invalid_argument&) {
+        dottedRejected = true;
+    }
+    RUVIA_CHECK(dottedRejected);
+}
+
+RUVIA_TEST(context_parse_body_drops_proto_path_segments_without_trailing_dot) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::setBody(request, "__proto__=root&profile.__proto__=nested&profile.name=ok");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    bool rootProtoDropped = false;
+    bool nestedProtoDropped = false;
+    bool siblingKept = false;
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {
+                                                                                                    .dottedNames = ruvia::ContextRequest::DottedNamePolicy::kExpandPath,
+                                                                                                }));
+            rootProtoDropped = !static_cast<bool>(form.get("__proto__"));
+            const auto profile = form.object("profile");
+            nestedProtoDropped = !static_cast<bool>(profile.get("__proto__"));
+            const auto name = profile.get("name").value();
+            siblingKept = name.has_value() && *name == std::string_view("ok");
+            co_return;
+        }(),
+        asio::detached);
+    io.run();
+
+    RUVIA_CHECK(rootProtoDropped);
+    RUVIA_CHECK(nestedProtoDropped);
+    RUVIA_CHECK(siblingKept);
+}
+
+RUVIA_TEST(context_parse_body_dotted_trailing_empty_segment_is_not_child) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::setBody(request, "profile.name.=bad");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    std::size_t childCount = 99;
+    bool childFound = true;
+    bool exactPathFound = false;
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {
+                                                                                                    .dottedNames = ruvia::ContextRequest::DottedNamePolicy::kExpandPath,
+                                                                                                }));
+            const auto profile = form.object("profile");
+            childCount = profile.count("name");
+            childFound = static_cast<bool>(profile.get("name"));
+            exactPathFound = static_cast<bool>(form.get("profile.name."));
+            co_return;
+        }(),
+        asio::detached);
+    io.run();
+
+    RUVIA_CHECK_EQ(childCount, std::size_t{0});
+    RUVIA_CHECK(!childFound);
+    RUVIA_CHECK(exactPathFound);
+}
+
 RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
@@ -118,6 +218,46 @@ RUVIA_TEST(context_parse_body_keeps_every_repeated_file_part) {
     RUVIA_CHECK(sawA && sawB);                  // neither upload dropped
 }
 
+RUVIA_TEST(context_parse_body_treats_empty_filename_parameter_as_file) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    // The filename parameter is present even though its value is empty.
+    // Classification as a file must depend on parameter presence, not string length.
+    HttpRequestAccess::setBody(request,
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"upload\"; filename=\"\"\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "\r\n"
+        "data\r\n"
+        "--BOUNDARY--\r\n");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    bool isFile = false;
+    std::string filename = "unset";
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {}));
+            const auto upload = form.get("upload");
+            if (const auto* field = upload.field(); field != nullptr) {
+                isFile = field->isFile();
+                filename.assign(field->filename().data(), field->filename().size());
+            }
+            co_return;
+        }(),
+        asio::detached);
+    io.run();
+
+    RUVIA_CHECK(isFile);
+    RUVIA_CHECK_EQ(filename, std::string());
+}
+
 RUVIA_TEST(context_parse_body_rejects_a_flood_of_fields) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
@@ -139,6 +279,47 @@ RUVIA_TEST(context_parse_body_rejects_a_flood_of_fields) {
 
     RUVIA_CHECK(rejected);
     RUVIA_CHECK_EQ(status, 413);
+}
+
+RUVIA_TEST(context_parse_body_multipart_field_cap_preempts_later_part_parsing) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::setBody(request,
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"first\"\r\n"
+        "\r\n"
+        "ok\r\n"
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data\r\n"
+        "\r\n"
+        "malformed later part\r\n"
+        "--BOUNDARY--\r\n");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    auto parseStatus = [&context]() -> ruvia::Task<int> {
+        try {
+            (void)co_await context.req().parseBody({.maxFields = 0});
+            co_return 0;
+        } catch (const ruvia::HttpError& error) {
+            co_return error.info().status().value();
+        } catch (const ruvia::HttpProtocolError& error) {
+            co_return error.status().value();
+        }
+    };
+
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(parseStatus()), asio::use_future);
+    io.run();
+
+    // The multipart form maxFields cap is a memory-amplification guard. It must
+    // fire as soon as the first parsed field exceeds the cap instead of parsing
+    // later parts first and surfacing an unrelated malformed-part 400.
+    RUVIA_CHECK_EQ(future.get(), 413);
 }
 
 RUVIA_TEST(context_parse_body_all_retains_duplicates_and_selects_last_value) {

@@ -528,7 +528,8 @@ public:
     // is absent exactly when the target URI has no authority information. HTTP(S)
     // origin-form requires Host-compatible authority without userinfo; other
     // schemes use the complete RFC 3986 authority grammar and may carry an empty
-    // path. Asterisk-form OPTIONS requires std::nullopt.
+    // path. Asterisk-form OPTIONS itself has no authority component, but a direct
+    // HTTP/2 sender may still carry request authority in :authority.
     [[nodiscard]] Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view method, std::string_view scheme, std::optional<std::string_view> authority, std::string_view path, std::span<const HttpHeaderView> headers, Http2RequestContent content);
     // The submitted head is queued for later HPACK encoding, so every view must
     // outlive the call; a temporary owning string would be destroyed while the

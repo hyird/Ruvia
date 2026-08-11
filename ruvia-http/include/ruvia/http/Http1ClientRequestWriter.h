@@ -213,6 +213,7 @@ enum class Http1ClientRequestPrepareError : std::uint8_t {
     kContentForbiddenForMethod,
     kOptionsContentTypeRequired,
     kHeaderTooLarge,
+    kInvalidClosePolicy,
 };
 
 [[nodiscard]] std::string_view http1ClientRequestPrepareErrorMessage(Http1ClientRequestPrepareError error) noexcept;

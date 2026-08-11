@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/field/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
@@ -94,13 +95,15 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
     if (responseKnownBit == kResponseHeaderContentEncoding && !isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kRecipient)) {
         return false;
     }
+    if (name == "trailer" && !isValidHttpResponseTrailerFieldValue(value, HttpFieldListRole::kRecipient)) {
+        return false;
+    }
     if (responseKnownBit == kResponseHeaderContentLength) {
-        std::size_t parsed = 0;
-        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
-        if (ec != std::errc{} || ptr != value.data() + value.size()) {
+        HttpContentLengthState contentLength;
+        if (contentLength.parseField(value) != HttpContentLengthParseStatus::kOk) {
             return false;
         }
-        if (!stream.declareRemoteContentLength(parsed)) {
+        if (!stream.declareRemoteContentLength(*contentLength.value())) {
             return false;
         }
     }

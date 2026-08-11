@@ -84,13 +84,11 @@ void detail::RouterImpl::validateNoDynamicRouteConflict(std::span<const PendingR
     }
 }
 
-// HEAD mirrors GET for buffered AND response-stream routes (RFC 9110 9.3.2:
-// same header section, no content). Buffered responses strip the body at the
-// writer; a streaming route runs its handler until the first body write, which
-// completes head-only. WebSocket routes stay GET-only: their handshake is an
-// upgrade, and a HEAD probe must not enter it.
+// HEAD mirrors only buffered GET routes. Streaming, SSE, and WebSocket handlers
+// have explicit stream lifecycles and must not be entered by an implicit HEAD
+// shadow.
 [[nodiscard]] static bool eligibleForHeadShadow(const detail::RouteEndpoint& endpoint) noexcept {
-    return endpoint.buffered() != nullptr || endpoint.responseStream() != nullptr;
+    return endpoint.buffered() != nullptr;
 }
 
 void detail::RouterImpl::buildRouteTable(RouteTable& table) const {

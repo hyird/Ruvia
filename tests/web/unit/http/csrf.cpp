@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -61,6 +62,16 @@ static_assert(!CanForgeSecureTokenResult<std::string_view>);
 
 bool isLowerHex(char c) noexcept {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+}
+
+template <typename Fn>
+bool throwsInvalid(Fn&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::invalid_argument&) {
+        return true;
+    }
 }
 
 struct CsrfOutcome final {
@@ -123,6 +134,13 @@ RUVIA_TEST(csrf_token_is_48_lowercase_hex_chars) {
     for (const char c : token) {
         RUVIA_CHECK(isLowerHex(c));
     }
+}
+
+RUVIA_TEST(csrf_custom_names_validate_at_construction) {
+    RUVIA_CHECK(!throwsInvalid([] { (void)ruvia::CsrfProtection("APP-XSRF", "X-APP-XSRF"); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::CsrfProtection("", "X-XSRF-TOKEN"); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::CsrfProtection("bad;name", "X-XSRF-TOKEN"); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::CsrfProtection("XSRF-TOKEN", "Bad Header"); }));
 }
 
 RUVIA_TEST(csrf_token_requires_a_large_enough_buffer) {

@@ -115,6 +115,12 @@ private:
           close_(close),
           abort_(abort) {}
 
+    void requireActive() const {
+        if (!operationScope_.active()) {
+            throw std::logic_error("websocket lifetime has expired");
+        }
+    }
+
     ScopedOperation<void> write(WebSocketOpcode opcode, std::string_view payload);
     ScopedOperation<void> writeOwned(WebSocketOpcode opcode, std::pmr::string payload);
 

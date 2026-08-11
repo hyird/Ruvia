@@ -15,6 +15,7 @@
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 
 namespace {
 
@@ -161,6 +162,49 @@ RUVIA_TEST(http1_response_head_rejects_representation_plan_mismatch) {
     RUVIA_CHECK_EQ(plan.contentLength(), std::uint64_t{3});
 }
 
+RUVIA_TEST(http1_response_head_validates_trailer_field_names) {
+    const auto rejects = [&ruvia_ctx](std::string_view value) {
+        HttpResponse response(std::pmr::new_delete_resource());
+        ruvia::detail::setResponseHeaderStableView(response, "Trailer", value);
+        RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(response); }));
+    };
+
+    rejects("Content-Length");
+    rejects("X-Checksum, bad field");
+    rejects(",");
+
+    HttpResponse valid(std::pmr::new_delete_resource());
+    valid.header("Trailer", "ETag, X-Checksum");
+    const auto validHead = emitChunkedStreamHead(valid);
+    RUVIA_CHECK(validHead.find("Trailer: ETag, X-Checksum\r\n") != std::string_view::npos);
+
+    HttpResponse empty(std::pmr::new_delete_resource());
+    empty.header("Trailer", "");
+    RUVIA_CHECK(!throwsInvalid([&] { (void)emitBufferedHead(empty); }));
+}
+
+RUVIA_TEST(http1_response_head_rejects_non_empty_trailer_without_chunked_framing) {
+    HttpResponse buffered(std::pmr::new_delete_resource());
+    buffered.header("Trailer", "ETag");
+    RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(buffered); }));
+
+    HttpResponse knownLength(std::pmr::new_delete_resource());
+    knownLength.header("Trailer", "ETag");
+    RUVIA_CHECK(throwsInvalid([&] { (void)emitKnownLengthStreamHead(knownLength, 5); }));
+
+    HttpResponse closeDelimited(std::pmr::new_delete_resource());
+    closeDelimited.header("Trailer", "ETag");
+    RUVIA_CHECK(throwsInvalid([&] { (void)emitCloseDelimitedStreamHead(closeDelimited); }));
+
+    HttpResponse head(std::pmr::new_delete_resource());
+    head.header("Trailer", "ETag");
+    RUVIA_CHECK(throwsInvalid([&] { (void)emitChunkedStreamHead(head, HttpKnownMethod::kHead); }));
+
+    HttpResponse chunked(std::pmr::new_delete_resource());
+    chunked.header("Trailer", "ETag");
+    RUVIA_CHECK(!throwsInvalid([&] { (void)emitChunkedStreamHead(chunked); }));
+}
+
 RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
     using ruvia::Http1ClosePolicy;
     using ruvia::detail::Http1ServerRequestParser;
@@ -290,6 +334,14 @@ RUVIA_TEST(response_head_suppresses_auto_content_length) {
     RUVIA_CHECK(head.find("Transfer-Encoding: chunked\r\n") != std::string_view::npos);
     RUVIA_CHECK(head.find("gzip") == std::string_view::npos);
     RUVIA_CHECK_EQ(countOccurrences(head, "Transfer-Encoding: "), std::size_t{1});
+}
+
+RUVIA_TEST(http1_response_head_rejects_http10_chunked_payload_plan) {
+    HttpResponse response(std::pmr::new_delete_resource());
+    response.body("hello");
+    const auto plan = http1ChunkedResponseStreamHeadPlan(httpResponseBodyPlan(HttpKnownMethod::kGet, response.status()), connectionPlanFor(ruvia::HttpProtocolVersion::kHttp10));
+
+    RUVIA_CHECK(throwsInvalid([&] { (void)emitHead(response, plan); }));
 }
 
 RUVIA_TEST(http1_known_length_stream_owns_canonical_length_and_status_semantics) {
@@ -472,4 +524,20 @@ RUVIA_TEST(response_head_rejects_oversized_field_section) {
         // The generated Date and Content-Length fields also consume slots.
         (void)emitBufferedHead(generatedOverflow);
     }));
+}
+
+RUVIA_TEST(response_head_rejects_malformed_header_name_and_value) {
+    HttpResponse badName(std::pmr::new_delete_resource());
+    ruvia::detail::setResponseHeaderStableView(badName, "Bad Name", "value");
+    RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(badName); }));
+
+    HttpResponse badValue(std::pmr::new_delete_resource());
+    ruvia::detail::setResponseHeaderStableView(badValue, "X-Test", std::string_view("bad\r\nvalue", 10));
+    RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(badValue); }));
+}
+
+RUVIA_TEST(response_head_rejects_request_only_te_field) {
+    HttpResponse response(std::pmr::new_delete_resource());
+    ruvia::detail::setResponseHeaderStableView(response, "TE", "trailers");
+    RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(response); }));
 }

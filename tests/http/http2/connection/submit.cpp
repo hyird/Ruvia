@@ -2,6 +2,8 @@
 
 #include <new>
 
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+
 // Http2Connection: submitting request and response heads.
 
 namespace {
@@ -124,6 +126,66 @@ RUVIA_TEST(http2_connection_response_head_does_not_publish_local_phase_before_ou
     RUVIA_CHECK(retried.submitted() != nullptr);
     RUVIA_CHECK(stream->localContent().unbounded() != nullptr);
     RUVIA_CHECK(stream->localSend().responseContentOpen() != nullptr);
+}
+
+RUVIA_TEST(http2_connection_websocket_handshake_clears_staged_block_on_encoding_failure) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    HpackEncoder::encodeHeader(block, ":method", "CONNECT");
+    HpackEncoder::encodeHeader(block, ":protocol", "websocket");
+    HpackEncoder::encodeHeader(block, ":scheme", "https");
+    HpackEncoder::encodeHeader(block, ":path", "/ws");
+    HpackEncoder::encodeHeader(block, ":authority", "example.com");
+    HpackEncoder::encodeHeader(block, "sec-websocket-version", "13");
+    const auto headers = headersFrame(&resource, 1, ruvia::detail::kHttp2FlagEndHeaders, std::string_view(block.data(), block.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(headers.data(), headers.size())) == Http2FeedResult::kAccepted);
+    while (conn.nextEvent().has_value()) {
+    }
+    conn.consumeOutput(conn.pendingOutput().size());
+
+    auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream == nullptr) {
+        return;
+    }
+    RUVIA_CHECK(stream->tunnel().pending() != nullptr);
+
+    // Let the fixed :status/date fields fit, then fail while appending the large
+    // selected subprotocol. The connection must not retain a partial HPACK block.
+    stream->responseHeaderBlock().reserve(128);
+    const std::string largeProtocol(512, 'p');
+    ruvia::detail::Http1ServerRequestParser negotiationParser;
+    const std::string negotiationBytes = std::string("GET /ws HTTP/1.1\r\n"
+                                                     "Host: example.test\r\n"
+                                                     "Sec-WebSocket-Protocol: ") +
+        largeProtocol + "\r\n\r\n";
+    const auto negotiationRequest = negotiationParser.parseMessage(std::string_view(negotiationBytes));
+    auto negotiation = ruvia::detail::makeWebSocketServerNegotiation(negotiationRequest.request, largeProtocol, &resource);
+
+    resource.rejectAllocations();
+    bool allocationFailed = false;
+    try {
+        (void)conn.submitWebSocketHandshake(1, std::move(negotiation));
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(conn.pendingOutput().empty());
+    RUVIA_CHECK(stream->responseHeaderBlock().empty());
+    RUVIA_CHECK(stream->tunnel().pending() != nullptr);
+    RUVIA_CHECK(stream->localSend().headPending() != nullptr);
+
+    resource.rejectAllocations(false);
+    auto retryNegotiation = ruvia::detail::makeWebSocketServerNegotiation(negotiationRequest.request, largeProtocol, &resource);
+    const auto retried = conn.submitWebSocketHandshake(1, std::move(retryNegotiation));
+    RUVIA_CHECK(retried.submitted() != nullptr);
+    RUVIA_CHECK(stream->responseHeaderBlock().empty());
+    RUVIA_CHECK(stream->tunnel().open() != nullptr);
+    RUVIA_CHECK(!conn.pendingOutput().empty());
 }
 #endif  // !_MSC_VER
 
@@ -831,6 +893,42 @@ RUVIA_TEST(http2_connection_streaming_rejects_invalid_content_length_before_head
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
     RUVIA_CHECK_EQ(requireLocalKnownLength(*stream).declaredLength(), std::uint64_t{5});
+}
+
+RUVIA_TEST(http2_connection_rejects_invalid_response_trailer_field_names_before_hpack) {
+    std::pmr::monotonic_buffer_resource resource;
+
+    const auto checkRejected = [&resource, &ruvia_ctx](std::string_view value) {
+        Http2Connection conn(&resource);
+        handshake(conn);
+        driveGetRequest(conn, &resource);
+
+        ruvia::HttpResponse response(&resource);
+        response.status(ruvia::http_status::kOk);
+        ruvia::detail::setResponseHeaderStableView(response, "Trailer", value);
+        const auto result = submitBufferedResponseHead(conn, 1, response);
+        RUVIA_CHECK(responseHeadSubmitFailureMessage(result) == "invalid HTTP/2 response head message");
+        RUVIA_CHECK(conn.pendingOutput().empty());
+        auto* stream = conn.stream(1);
+        RUVIA_CHECK(stream != nullptr);
+        if (stream != nullptr) {
+            RUVIA_CHECK(stream->localSend().headPending() != nullptr);
+            RUVIA_CHECK(stream->responseHeaderBlock().empty());
+        }
+    };
+
+    checkRejected("Content-Length");
+    checkRejected("X-Checksum, bad field");
+    checkRejected(",");
+
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveGetRequest(conn, &resource);
+    ruvia::HttpResponse valid(&resource);
+    valid.status(ruvia::http_status::kOk);
+    valid.header("Trailer", "ETag, X-Checksum");
+    RUVIA_CHECK(responseHeadSubmitted(submitBufferedResponseHead(conn, 1, valid)));
+    RUVIA_CHECK(!conn.pendingOutput().empty());
 }
 
 // A 1xx interim head is validated and skipped (no events, stream not decoded); the

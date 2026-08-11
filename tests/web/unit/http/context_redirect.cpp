@@ -41,6 +41,16 @@ using ruvia::detail::responseBody;
     HttpRequestAccess::setResource(request, memory.resource()); \
     auto context = ContextAccess::make(memory, request)
 
+template <typename Fn>
+bool throwsOn(Fn&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::exception&) {
+        return true;
+    }
+}
+
 }  // namespace
 
 RUVIA_TEST(context_connection_info_is_adapter_owned) {
@@ -70,6 +80,18 @@ RUVIA_TEST(context_redirect_sets_verbatim_ascii_location_and_status) {
     RUVIA_CHECK_EQ(response.header("Location"), std::string_view("https://example.com/path?q=1"));
 }
 
+RUVIA_TEST(context_redirect_accepts_only_redirect_statuses) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+
+    for (const auto status : {ruvia::http_status::kMovedPermanently, ruvia::http_status::kFound, ruvia::http_status::kSeeOther, ruvia::http_status::kTemporaryRedirect, ruvia::http_status::kPermanentRedirect}) {
+        RUVIA_CHECK_EQ(context.redirect("/next", status).status(), status);
+    }
+
+    RUVIA_CHECK(throwsOn([&] { (void)context.redirect("/next", ruvia::http_status::kOk); }));
+    RUVIA_CHECK(throwsOn([&] { (void)context.redirect("/next", ruvia::http_status::kNotModified); }));
+    RUVIA_CHECK(throwsOn([&] { (void)context.redirect("/next", ruvia::http_status::kNotFound); }));
+}
+
 RUVIA_TEST(context_redirect_percent_encodes_non_ascii_location) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
     // A UTF-8 'é' (0xC3 0xA9) is percent-encoded while the URI structure
@@ -77,6 +99,12 @@ RUVIA_TEST(context_redirect_percent_encodes_non_ascii_location) {
     const auto response = context.redirect(std::string_view("https://example.com/caf\xC3\xA9"), ruvia::http_status::kTemporaryRedirect);
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kTemporaryRedirect);
     RUVIA_CHECK_EQ(response.header("Location"), std::string_view("https://example.com/caf%C3%A9"));
+}
+
+RUVIA_TEST(context_redirect_percent_encodes_invalid_ascii_uri_bytes) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    const auto response = context.redirect("/a b/100%off?q=\"x y\"\\z", ruvia::http_status::kFound);
+    RUVIA_CHECK_EQ(response.header("Location"), std::string_view("/a%20b/100%25off?q=%22x%20y%22%5Cz"));
 }
 
 RUVIA_TEST(context_redirect_preserves_existing_percent_escapes_when_encoding) {
@@ -94,6 +122,21 @@ RUVIA_TEST(context_redirect_preserves_existing_percent_escapes_when_encoding) {
     RUVIA_CHECK_EQ(malformed.header("Location"), std::string_view("https://example.com/100%25off/caf%C3%A9"));
 }
 
+RUVIA_TEST(context_redirect_preserves_ipv6_literal_brackets_when_encoding) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    const auto response = context.redirect(std::string_view("https://[2001:db8::1]/caf\xC3\xA9"), ruvia::http_status::kFound);
+    RUVIA_CHECK_EQ(response.header("Location"), std::string_view("https://[2001:db8::1]/caf%C3%A9"));
+}
+
+RUVIA_TEST(context_redirect_percent_encodes_square_brackets_outside_ip_literal) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    const auto response = context.redirect("/items[0]?filter=[x]#section[1]", ruvia::http_status::kFound);
+    RUVIA_CHECK_EQ(response.header("Location"), std::string_view("/items%5B0%5D?filter=%5Bx%5D#section%5B1%5D"));
+
+    const auto absolute = context.redirect(std::string_view("https://[2001:db8::1]/items[0]?filter=[x]"), ruvia::http_status::kFound);
+    RUVIA_CHECK_EQ(absolute.header("Location"), std::string_view("https://[2001:db8::1]/items%5B0%5D?filter=%5Bx%5D"));
+}
+
 RUVIA_TEST(context_redirect_rejects_crlf_header_injection) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
     // A CRLF in the location must not split the response: header-value
@@ -106,6 +149,11 @@ RUVIA_TEST(context_redirect_rejects_crlf_header_injection) {
         threw = true;
     }
     RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(context_redirect_rejects_crlf_even_when_location_needs_encoding) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    RUVIA_CHECK(throwsOn([&] { (void)context.redirect(std::string_view("https://example.com/caf\xC3\xA9\r\nX-Injected: y"), ruvia::http_status::kFound); }));
 }
 
 RUVIA_TEST(context_body_sets_body_and_status) {
@@ -161,6 +209,18 @@ RUVIA_TEST(context_rejects_informational_and_non_http_final_statuses) {
         }
         RUVIA_CHECK(threw);
     }
+}
+
+RUVIA_TEST(context_error_normalizes_non_error_status_before_response_state) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    context.header("X-Trace", "1");
+
+    const auto ok = context.error(ruvia::http_status::kOk, "bad", "not an error");
+    RUVIA_CHECK_EQ(ok.status(), ruvia::http_status::kInternalServerError);
+    RUVIA_CHECK_EQ(ok.header("X-Trace"), std::string_view("1"));
+
+    const auto redirect = context.error(ruvia::http_status::kTemporaryRedirect, "bad", "not an error");
+    RUVIA_CHECK_EQ(redirect.status(), ruvia::http_status::kInternalServerError);
 }
 
 RUVIA_TEST(context_response_metadata_uses_http_response_validation) {

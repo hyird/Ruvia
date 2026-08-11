@@ -3,6 +3,7 @@
 #include <array>
 #include <algorithm>
 #include <charconv>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <ranges>
@@ -58,6 +59,18 @@ bool cookiePathMatches(std::string_view requestPath, std::string_view cookiePath
     return requestPath.size() == cookiePath.size() || cookiePath.back() == '/' || requestPath[cookiePath.size()] == '/';
 }
 
+bool isValidReceivedCookieRequestValue(std::string_view value) noexcept {
+    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+        value.remove_prefix(1);
+        value.remove_suffix(1);
+    }
+    return isValidCookieValue(value);
+}
+
+bool canSerializeReceivedCookie(std::string_view name, std::string_view value) noexcept {
+    return (name.empty() || isValidHttpHeaderName(name)) && isValidReceivedCookieRequestValue(value);
+}
+
 std::size_t httpClientSchedulerSlots(const HttpClientConfigStorage& config) {
     if (config.protocol == HttpClientProtocol::kHttp1Only) return config.connectionsPerWorker;
     if (config.maxConcurrentHttp2StreamsPerConnection > std::numeric_limits<std::size_t>::max() / config.connectionsPerWorker) {
@@ -85,6 +98,11 @@ std::chrono::system_clock::time_point cookieExpiration(
     const std::chrono::duration<long double> available{Clock::time_point::max() - now};
     if (requested >= available) return Clock::time_point::max();
     return now + std::chrono::duration_cast<Clock::duration>(std::chrono::seconds(maxAgeSeconds));
+}
+
+std::pmr::memory_resource* stableHttpClientResponseResource(std::pmr::memory_resource* candidate, std::pmr::memory_resource* poolResource) noexcept {
+    candidate = httpPmrResourceOrDefault(candidate);
+    return candidate == poolResource ? poolResource : std::pmr::get_default_resource();
 }
 
 }  // namespace
@@ -185,6 +203,11 @@ HttpClientStats HttpClientPool::stats() const noexcept {
 
 std::uint16_t HttpClientPool::port() const noexcept { return httpClientPort(config_); }
 
+void HttpClientPool::setUserAgent(std::string_view userAgent) {
+    validateHttpClientUserAgent(userAgent);
+    config_.userAgent.assign(userAgent);
+}
+
 void HttpClientPool::addCookie(std::string_view name, std::string_view value) {
     if (!isValidHttpHeaderName(name) || !isValidCookieValue(value)) {
         throw std::invalid_argument("invalid HTTP client cookie");
@@ -200,7 +223,10 @@ void HttpClientPool::addCookie(std::string_view name, std::string_view value) {
         throw std::length_error("HTTP client cookie jar capacity exceeded");
     }
     if (match == cookies_.end()) cookies_.emplace_back(name, value, resource_);
-    else match->value.assign(value);
+    else {
+        std::pmr::string replacementValue(value, resource_);
+        match->value.swap(replacementValue);
+    }
     cookieBytes_ = cookieBytes_ - replacedBytes + replacementBytes;
 }
 
@@ -273,7 +299,8 @@ void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, con
         if (!headerNameEquals(header.name(), "set-cookie")) continue;
         const auto parsed = parseSetCookie(header.value());
         if (!parsed || (parsed->secure && config_.scheme != HttpScheme::kHttps) ||
-            !cookieDomainMatches(config_.host, parsed->domain)) continue;
+            !cookieDomainMatches(config_.host, parsed->domain) ||
+            !canSerializeReceivedCookie(parsed->name, parsed->value)) continue;
 
         const auto path = parsed->path.empty() || parsed->path.front() != '/' ? defaultCookiePath(request.path()) : parsed->path;
         const bool securePrefixed = cookieNameStartsWithIgnoreCase(parsed->name, "__Secure-");
@@ -284,7 +311,7 @@ void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, con
         if (namelessPrefix || (parsed->sameSiteNone && !parsed->secure) ||
             (securePrefixed && (!parsed->secure || config_.scheme != HttpScheme::kHttps)) ||
             (hostPrefixed && (!parsed->secure || config_.scheme != HttpScheme::kHttps ||
-                !parsed->hasPathAttribute || path != "/" || !parsed->domain.empty()))) continue;
+                !parsed->hasPathAttribute || parsed->path != "/" || !parsed->domain.empty()))) continue;
         std::optional<std::chrono::system_clock::time_point> expires;
         bool remove = false;
         if (parsed->maxAgeSeconds) {
@@ -323,6 +350,16 @@ void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, con
             ? 0
             : cookieStorageBytes(match->name, match->value, match->path, match->domain);
         if (!cookieCapacityAvailable(replacedBytes, replacementBytes, match == cookies_.end())) continue;
+        auto makeStoredCookie = [&]() {
+            StoredCookie cookie(parsed->name, parsed->value, resource_);
+            cookie.path.assign(path);
+            cookie.domain.assign(parsed->domain);
+            cookie.expires = expires;
+            cookie.secure = parsed->secure;
+            cookie.hostOnly = parsedHostOnly;
+            cookie.persistent = false;
+            return cookie;
+        };
         if (match == cookies_.end()) {
             // RFC 6265 section 5.4 sends longer paths first and uses creation
             // order as the tie-breaker. Keep the jar in that order when it is
@@ -330,19 +367,20 @@ void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, con
             const auto insertion = std::ranges::find_if(cookies_, [path](const StoredCookie& cookie) {
                 return cookie.path.size() < path.size();
             });
-            auto& cookie = *cookies_.emplace(insertion, parsed->name, parsed->value, resource_);
-            cookie.path.assign(path);
-            cookie.domain.assign(parsed->domain);
-            cookie.expires = expires;
-            cookie.secure = parsed->secure;
-            cookie.hostOnly = parsedHostOnly;
-            cookie.persistent = false;
+            const auto insertionIndex = static_cast<std::size_t>(insertion - cookies_.begin());
+            auto cookie = makeStoredCookie();
+            cookies_.reserve(cookies_.size() + 1);
+            cookies_.emplace(cookies_.begin() + static_cast<std::ptrdiff_t>(insertionIndex), std::move(cookie));
         } else {
-            match->value.assign(parsed->value);
-            match->domain.assign(parsed->domain);
-            match->expires = expires;
-            match->secure = parsed->secure;
-            match->hostOnly = parsedHostOnly;
+            auto replacement = makeStoredCookie();
+            match->name.swap(replacement.name);
+            match->value.swap(replacement.value);
+            match->path.swap(replacement.path);
+            match->domain.swap(replacement.domain);
+            std::swap(match->expires, replacement.expires);
+            std::swap(match->secure, replacement.secure);
+            std::swap(match->hostOnly, replacement.hostOnly);
+            std::swap(match->persistent, replacement.persistent);
         }
         cookieBytes_ = cookieBytes_ - replacedBytes + replacementBytes;
     }
@@ -477,11 +515,32 @@ Task<void> HttpClientPool::ensureConnected(
         Connection& connection;
         ~ConnectCancellationGeneration() { ++connection.generation; }
     } cancellationGeneration{connection};
-    auto stopRegistration = stopToken.registerCallback([this, index, generation] {
-        WorkerHandleAccess::deferOrTerminate(worker_, [this, index, generation] {
-            cancelOperation(index, generation, AbortReason::kCancelled);
+    std::shared_ptr<OperationCancellationState> cancellationState;
+    if (stopToken.stoppable()) {
+        cancellationState = std::make_shared<OperationCancellationState>(*this, worker_, index, generation, AbortReason::kCancelled);
+    }
+    auto stopRegistration = stopToken.registerCallback([cancellationState] {
+        if (cancellationState == nullptr) {
+            return;
+        }
+        WorkerHandleAccess::deferOrTerminate(*cancellationState->worker, [cancellationState] {
+            auto* pool = cancellationState->pool.load(std::memory_order_acquire);
+            if (pool != nullptr) {
+                pool->cancelOperation(cancellationState->index, cancellationState->generation, cancellationState->reason);
+            }
         });
     });
+    struct CancellationRegistrationGuard final {
+        std::shared_ptr<OperationCancellationState>& state;
+        StopRegistration& registration;
+
+        ~CancellationRegistrationGuard() {
+            if (state != nullptr) {
+                state->pool.store(nullptr, std::memory_order_release);
+            }
+            registration.reset();
+        }
+    } cancellationRegistrationGuard{cancellationState, stopRegistration};
     if (stopToken.stopRequested()) cancelOperation(index, generation, AbortReason::kCancelled);
     while (runtime.sessionTasks != 0 || !runtime.pending.empty()) {
         throwAbort(connection);
@@ -559,6 +618,15 @@ Task<void> HttpClientPool::ensureConnected(
 }
 
 Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, HttpClientOperationOptions options, std::pmr::memory_resource* responseResource) {
+    responseResource = stableHttpClientResponseResource(responseResource, resource_);
+    if (HttpClientRequestAccess::usesResource(request, resource_)) {
+        return executePrepared(std::move(request), std::move(options), responseResource);
+    }
+    auto ownedRequest = HttpClientRequestAccess::clone(request, resource_);
+    return executePrepared(std::move(ownedRequest), std::move(options), responseResource);
+}
+
+Task<HttpClientResponse> HttpClientPool::executePrepared(HttpClientRequest request, HttpClientOperationOptions options, std::pmr::memory_resource* responseResource) {
     responseResource = httpPmrResourceOrDefault(responseResource);
     const OperationTimeout timeout(options.timeout.has_value() ? options.timeout : config_.requestTimeout);
     const auto acquireTimeout = timeout.constrainedBy(config_.acquireTimeout);
@@ -640,9 +708,32 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, Http
                 Connection& connection;
                 ~H1CancellationGeneration() { ++connection.generation; }
             } cancellationGeneration{connection};
-            auto stopRegistration = options.stopToken.registerCallback([this, index, generation] {
-                WorkerHandleAccess::deferOrTerminate(worker_, [this, index, generation] { cancelOperation(index, generation, AbortReason::kCancelled); });
+            std::shared_ptr<OperationCancellationState> cancellationState;
+            if (options.stopToken.stoppable()) {
+                cancellationState = std::make_shared<OperationCancellationState>(*this, worker_, index, generation, AbortReason::kCancelled);
+            }
+            auto stopRegistration = options.stopToken.registerCallback([cancellationState] {
+                if (cancellationState == nullptr) {
+                    return;
+                }
+                WorkerHandleAccess::deferOrTerminate(*cancellationState->worker, [cancellationState] {
+                    auto* pool = cancellationState->pool.load(std::memory_order_acquire);
+                    if (pool != nullptr) {
+                        pool->cancelOperation(cancellationState->index, cancellationState->generation, cancellationState->reason);
+                    }
+                });
             });
+            struct H1CancellationRegistrationGuard final {
+                std::shared_ptr<OperationCancellationState>& state;
+                StopRegistration& registration;
+
+                ~H1CancellationRegistrationGuard() {
+                    if (state != nullptr) {
+                        state->pool.store(nullptr, std::memory_order_release);
+                    }
+                    registration.reset();
+                }
+            } cancellationRegistrationGuard{cancellationState, stopRegistration};
             if (options.stopToken.stopRequested()) cancelOperation(index, generation, AbortReason::kCancelled);
             response = co_await executeHttp1(connection, request, timeout, responseResource);
         }

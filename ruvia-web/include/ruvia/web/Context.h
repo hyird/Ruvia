@@ -259,11 +259,12 @@ public:
 
     [[nodiscard]] HttpResponse error(HttpStatusCode statusCode, std::string_view code, std::string_view message, std::string_view statusText = {}) const;
 
-    [[nodiscard]] Task<HttpResponse> notFound();
+    [[nodiscard]] ScopedOperation<HttpResponse> notFound();
 
 private:
     [[nodiscard]] HttpResponse streamingHead(std::string_view contentType = {}) const;
 
+    [[nodiscard]] Task<HttpResponse> notFoundTask();
     [[nodiscard]] Task<std::string_view> requestBody() const;
     Task<void> requestDiscardBody() const;
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> requestMultipart() const;

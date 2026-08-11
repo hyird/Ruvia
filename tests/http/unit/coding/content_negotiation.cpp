@@ -13,6 +13,7 @@ using ruvia::detail::HttpContentCoding;
 using ruvia::detail::HttpResponseCodingCandidates;
 using ruvia::detail::HttpResponseCodingQualities;
 using ruvia::detail::HttpResponseCodingSelection;
+using ruvia::detail::httpParseQualityValue;
 
 // Reference form: one full Accept-Encoding scan per coding. The aggregate
 // single-pass update must produce identical qualities.
@@ -67,6 +68,23 @@ RUVIA_TEST(response_coding_single_pass_matches_per_coding_scans) {
     }
 }
 
+RUVIA_TEST(qvalue_parser_rejects_more_than_three_fraction_digits_for_one) {
+    RUVIA_CHECK_EQ(httpParseQualityValue("1"), 1000);
+    RUVIA_CHECK_EQ(httpParseQualityValue("1."), 1000);
+    RUVIA_CHECK_EQ(httpParseQualityValue("1.000"), 1000);
+    RUVIA_CHECK_EQ(httpParseQualityValue("0.123"), 123);
+    RUVIA_CHECK_EQ(httpParseQualityValue("1.0000"), -1);
+    RUVIA_CHECK_EQ(httpParseQualityValue("1.00000"), -1);
+
+    HttpResponseCodingQualities qualities;
+    qualities.update("identity;q=0.5, gzip;q=1.0000");
+    const auto result = HttpResponseCodingSelection::select(qualities);
+    RUVIA_CHECK(result.selected() != nullptr);
+    if (const auto* selected = result.selected()) {
+        RUVIA_CHECK(selected->coding() == HttpContentCoding::kIdentity);
+    }
+}
+
 RUVIA_TEST(response_coding_selection_end_to_end) {
     const auto select = [](std::string_view header) {
         HttpResponseCodingQualities qualities;
@@ -114,7 +132,7 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     // OWS around the weight delimiter itself is explicitly allowed.
     RUVIA_CHECK(select("identity;q=0.5, gzip \t; \tq=0.8") == HttpContentCoding::kGzip);
     // No acceptable coding is an explicit protocol outcome, not identity.
-    for (const auto header : {std::string_view{"identity;q=0"}, std::string_view{"*;q=0"}, std::string_view{}}) {
+    for (const auto header : {std::string_view{"identity;q=0"}, std::string_view{"*;q=0"}}) {
         HttpResponseCodingQualities qualities;
         qualities.update(header);
         const auto result = HttpResponseCodingSelection::select(qualities);
@@ -123,6 +141,16 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
         if (const auto* failure = result.failure()) {
             RUVIA_CHECK(failure->error() == ruvia::detail::HttpResponseCodingSelectionError::kNoAcceptableCoding);
         }
+    }
+    HttpResponseCodingQualities explicitEmpty;
+    explicitEmpty.update("");
+    const auto emptySelectsIdentity = HttpResponseCodingSelection::select(explicitEmpty);
+    RUVIA_CHECK(emptySelectsIdentity.selected() != nullptr);
+    if (const auto* selected = emptySelectsIdentity.selected()) {
+        RUVIA_CHECK(selected->coding() == HttpContentCoding::kIdentity);
+        RUVIA_CHECK(selected->identityAccepted());
+        RUVIA_CHECK(selected->accepts(HttpContentCoding::kIdentity));
+        RUVIA_CHECK(!selected->accepts(HttpContentCoding::kGzip));
     }
     HttpResponseCodingQualities noHeader;
     const auto implicitIdentity = HttpResponseCodingSelection::select(noHeader);
@@ -133,6 +161,23 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
         RUVIA_CHECK(selected->accepts(HttpContentCoding::kIdentity));
         RUVIA_CHECK(selected->accepts(HttpContentCoding::kGzip));
     }
+
+    auto gzipOnly = HttpResponseCodingCandidates::empty();
+    gzipOnly.include(HttpContentCoding::kGzip);
+    const auto absentHeaderGzip = HttpResponseCodingSelection::select(noHeader, gzipOnly);
+    RUVIA_CHECK(absentHeaderGzip.selected() != nullptr);
+    if (const auto* selected = absentHeaderGzip.selected()) {
+        RUVIA_CHECK(selected->coding() == HttpContentCoding::kGzip);
+        RUVIA_CHECK(selected->accepts(HttpContentCoding::kGzip));
+    }
+
+    HttpResponseCodingQualities emptyHeader;
+    emptyHeader.update("");
+    // An explicitly empty Accept-Encoding allows only an uncoded representation,
+    // so a response policy with only gzip has no acceptable candidate.
+    const auto explicitEmptyGzip = HttpResponseCodingSelection::select(emptyHeader, gzipOnly);
+    RUVIA_CHECK(explicitEmptyGzip.selected() == nullptr);
+    RUVIA_CHECK(explicitEmptyGzip.failure() != nullptr);
 }
 
 RUVIA_TEST(response_coding_selection_retains_client_preference_until_representation_policy) {

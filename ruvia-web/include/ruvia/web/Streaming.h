@@ -26,6 +26,7 @@ struct StreamingAccess;
 class BodyReader final {
 private:
     friend struct detail::StreamingAccess;
+    friend class MultipartReader;
 
     struct Token final {};
 
@@ -125,6 +126,12 @@ private:
         releaseContext_(target_);
     }
 
+    void requireActive() const {
+        if (!operationScope_.active()) {
+            throw std::logic_error("response stream lifetime has expired");
+        }
+    }
+
     [[nodiscard]] bool committed() const noexcept {
         return committed_(target_);
     }
@@ -143,14 +150,19 @@ private:
     friend class SseWriter;
 };
 
-class SseWriter final {
+class SseWriter final : private detail::ScopedCapabilityNode {
 public:
+    SseWriter(const SseWriter& other) noexcept;
+    SseWriter& operator=(const SseWriter&) = delete;
+    SseWriter(SseWriter&& other) noexcept;
+    SseWriter& operator=(SseWriter&&) = delete;
+
     ScopedOperation<void> write(const SseMessage& message);
 
     ScopedOperation<TimerSleepResult> sleep(std::chrono::milliseconds duration);
 
     [[nodiscard]] bool aborted() const noexcept {
-        return writer_.aborted();
+        return writer_ == nullptr || writer_->aborted();
     }
 
     ScopedOperation<void> end(std::span<const HttpHeaderView> trailers = {});
@@ -159,10 +171,11 @@ private:
     friend class Context;
     friend struct detail::StreamingAccess;
 
-    explicit SseWriter(ResponseStreamWriter& writer) noexcept
-        : writer_(writer) {}
+    explicit SseWriter(ResponseStreamWriter& writer) noexcept;
+    [[nodiscard]] ResponseStreamWriter& writer() const;
+    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
-    ResponseStreamWriter& writer_;
+    ResponseStreamWriter* writer_;
 };
 
 }  // namespace ruvia

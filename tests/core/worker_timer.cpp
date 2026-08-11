@@ -157,6 +157,93 @@ bool timerImmediateShutdownWorks() {
     return true;
 }
 
+bool stoppedDispatcherCanOutliveContext() {
+    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
+    ruvia::WorkerHandle worker;
+    {
+        asio::io_context ioContext;
+        dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
+        worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+        dispatcher->stopTimers();
+    }
+    dispatcher.reset();
+    worker = ruvia::WorkerHandle{};
+    return true;
+}
+
+bool timerRegistrationResetAfterStopDoesNotQueueCancellation() {
+    asio::io_context ioContext;
+    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    auto registration = std::make_unique<ruvia::detail::WorkerTimerRegistration>();
+    std::size_t cancelled = 0;
+    std::size_t expired = 0;
+
+    asio::post(ioContext, [&] {
+        ruvia::detail::WorkerHandleAccess::scheduleTimer(
+            worker,
+            *registration,
+            std::chrono::steady_clock::now() + std::chrono::hours(1),
+            [&](ruvia::detail::WorkerTimerOutcome outcome) {
+                if (outcome == ruvia::detail::WorkerTimerOutcome::kCancelled) {
+                    ++cancelled;
+                } else if (outcome == ruvia::detail::WorkerTimerOutcome::kExpired) {
+                    ++expired;
+                }
+            });
+        dispatcher->stopTimers();
+        ioContext.stop();
+    });
+    ioContext.run();
+    if (cancelled != 1 || expired != 0) {
+        dispatcher->detachContext();
+        return false;
+    }
+
+    ioContext.restart();
+    while (ioContext.poll() != 0) {
+    }
+
+    registration.reset();
+
+    ioContext.restart();
+    const auto queuedHandlers = ioContext.poll();
+    dispatcher->detachContext();
+    return queuedHandlers == 0 && cancelled == 1 && expired == 0;
+}
+
+bool offWorkerCancellationAfterContextStopDoesNotExpireLater() {
+    asio::io_context ioContext;
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
+    auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    auto registration = std::make_unique<ruvia::detail::WorkerTimerRegistration>();
+    bool expired = false;
+    bool cancelled = false;
+
+    asio::post(ioContext, [&] {
+        ruvia::detail::WorkerHandleAccess::scheduleTimer(
+            worker,
+            *registration,
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(1),
+            [&](ruvia::detail::WorkerTimerOutcome outcome) {
+                expired = outcome == ruvia::detail::WorkerTimerOutcome::kExpired;
+                cancelled = outcome == ruvia::detail::WorkerTimerOutcome::kCancelled;
+            });
+        ioContext.stop();
+    });
+    ioContext.run();
+
+    // The cancellation request is issued outside the worker while the context is
+    // stopped. It still has to remove the active timer slot; otherwise a later
+    // restart can fire a callback owned by an already-destroyed registration.
+    registration.reset();
+
+    ioContext.restart();
+    ioContext.run_for(std::chrono::milliseconds(20));
+    dispatcher->detachContext();
+    return !expired && cancelled;
+}
+
 ruvia::Task<void> markAfterSleep(ruvia::WorkerHandle worker, bool& completed, bool& reportedElapsed) {
     reportedElapsed = co_await ruvia::sleepFor(worker, std::chrono::hours(1)) == ruvia::TimerSleepResult::kElapsed;
     completed = true;
@@ -229,7 +316,8 @@ ruvia::Task<void> exerciseSlotReuse(ruvia::WorkerHandle worker, bool& success) {
 }  // namespace
 
 int main() {
-    if (!discriminatedWaitStateWorks() || !saturatingTimerDeadlineWorks() || !saturatingTimerDurationCastWorks() || !timerImmediateShutdownWorks()) {
+    if (!discriminatedWaitStateWorks() || !saturatingTimerDeadlineWorks() || !saturatingTimerDurationCastWorks() || !timerImmediateShutdownWorks() || !stoppedDispatcherCanOutliveContext() || !timerRegistrationResetAfterStopDoesNotQueueCancellation() ||
+        !offWorkerCancellationAfterContextStopDoesNotExpireLater()) {
         return 1;
     }
     asio::io_context ioContext;

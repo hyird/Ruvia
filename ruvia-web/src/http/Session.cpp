@@ -33,7 +33,6 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
         co_return;
     }
 
-    auto& response = detail::ContextAccess::responseStorage(c);
     const auto connection = getConnInfo(c);
     const bool secure = connection.tls() != nullptr;
     if (const auto* cleared = state.cleared()) {
@@ -43,6 +42,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
             key.append(cleared->oldId->data(), cleared->oldId->size());
             (void)(co_await c.redis(redisAlias_.view()).del(key));
         }
+        auto& response = detail::ContextAccess::responseStorage(c);
         detail::appendExpiredSessionCookieHeader(response, c.resource(), secure);
         co_return;
     }
@@ -72,23 +72,35 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
             co_return;
         }
         existingId = token->value();
-        detail::appendSessionCookieHeader(response, c.resource(), existingId, secure);
     }
 
-    // Do not destroy a recognized session until a replacement id exists. An
-    // RNG failure returns 500 above while leaving the old session usable.
-    if (!oldIdToDelete.empty()) {
-        std::pmr::string oldKey(c.resource());
-        oldKey.append("sess:");
-        oldKey.append(oldIdToDelete.data(), oldIdToDelete.size());
-        (void)(co_await c.redis(redisAlias_.view()).del(oldKey));
-    }
-
-    if (!existingId.empty()) {
-        std::pmr::string key(c.resource());
-        key.append("sess:");
-        key.append(existingId.data(), existingId.size());
-        co_await c.redis(redisAlias_.view()).setEx(key, std::chrono::seconds(86400), data);
+    // Do not publish a newly minted id until its blob has been persisted, and do
+    // not destroy a recognized session until its replacement exists. An RNG,
+    // Redis SETEX, or Redis DEL failure leaves the client's previous cookie
+    // untouched instead of returning a Set-Cookie for a missing session.
+    const auto commitPlan = detail::sessionCommitPlan(existingId, oldIdToDelete, mintNewId);
+    for (std::size_t i = 0; i < commitPlan.count; ++i) {
+        switch (commitPlan.steps[i]) {
+            case detail::SessionCommitStep::kPersistCurrent: {
+                std::pmr::string key(c.resource());
+                key.append("sess:");
+                key.append(existingId.data(), existingId.size());
+                co_await c.redis(redisAlias_.view()).setEx(key, std::chrono::seconds(86400), data);
+                break;
+            }
+            case detail::SessionCommitStep::kDeleteOld: {
+                std::pmr::string oldKey(c.resource());
+                oldKey.append("sess:");
+                oldKey.append(oldIdToDelete.data(), oldIdToDelete.size());
+                (void)(co_await c.redis(redisAlias_.view()).del(oldKey));
+                break;
+            }
+            case detail::SessionCommitStep::kPublishCurrentCookie: {
+                auto& response = detail::ContextAccess::responseStorage(c);
+                detail::appendSessionCookieHeader(response, c.resource(), existingId, secure);
+                break;
+            }
+        }
     }
 }
 

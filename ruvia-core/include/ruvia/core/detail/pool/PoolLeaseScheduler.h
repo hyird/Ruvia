@@ -7,10 +7,12 @@
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 #include "ruvia/core/memory/PmrResource.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -63,6 +65,14 @@ public:
     Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds>, StopToken, WorkerHandle&&) = delete;
 
 private:
+    struct AcquireCancellationState final {
+        AcquireCancellationState(PoolWaiterQueue& queueValue, std::uint64_t waiterIdValue) noexcept
+            : queue(&queueValue), waiterId(waiterIdValue) {}
+
+        std::atomic<PoolWaiterQueue*> queue;
+        std::uint64_t waiterId;
+    };
+
     class AcquireReservation final {
     public:
         explicit AcquireReservation(PoolLeaseScheduler& scheduler) noexcept
@@ -132,9 +142,19 @@ private:
             });
         }
 
-        auto stopRegistration = stopToken.registerCallback([worker, queue = &scheduler.waiters_, waiterId] {
-            WorkerHandleAccess::deferOrTerminate(*worker, [queue, waiterId] {
-                (void)queue->cancel(waiterId);
+        std::shared_ptr<AcquireCancellationState> cancellationState;
+        if (stopToken.stoppable()) {
+            cancellationState = std::make_shared<AcquireCancellationState>(scheduler.waiters_, waiterId);
+        }
+        auto stopRegistration = stopToken.registerCallback([worker, cancellationState] {
+            if (cancellationState == nullptr) {
+                return;
+            }
+            WorkerHandleAccess::deferOrTerminate(*worker, [cancellationState] {
+                auto* queue = cancellationState->queue.load(std::memory_order_acquire);
+                if (queue != nullptr) {
+                    (void)queue->cancel(cancellationState->waiterId);
+                }
             });
         });
         if (stopToken.stoppable()) {
@@ -144,6 +164,9 @@ private:
         }
 
         auto result = co_await waiter;
+        if (cancellationState != nullptr) {
+            cancellationState->queue.store(nullptr, std::memory_order_release);
+        }
         deadlineTimer.cancel();
         stopRegistration.reset();
         co_return result;

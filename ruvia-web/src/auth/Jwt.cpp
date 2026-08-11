@@ -165,18 +165,28 @@ JwtPayload jwtDecodeUnverified(std::string_view token, std::pmr::memory_resource
 }
 
 std::optional<std::string_view> jwtBearerToken(std::string_view authorization) noexcept {
-    constexpr std::string_view prefix = "Bearer ";
-    if (authorization.size() <= prefix.size()) {
+    constexpr std::string_view scheme = "Bearer";
+    if (authorization.size() <= scheme.size()) {
         return std::nullopt;
     }
-    for (std::size_t i = 0; i < prefix.size(); ++i) {
+    for (std::size_t i = 0; i < scheme.size(); ++i) {
         const auto left = authorization[i] >= 'A' && authorization[i] <= 'Z' ? authorization[i] + 32 : authorization[i];
-        const auto right = prefix[i] >= 'A' && prefix[i] <= 'Z' ? prefix[i] + 32 : prefix[i];
+        const auto right = scheme[i] >= 'A' && scheme[i] <= 'Z' ? scheme[i] + 32 : scheme[i];
         if (left != right) {
             return std::nullopt;
         }
     }
-    return authorization.substr(prefix.size());
+    if (authorization[scheme.size()] != ' ') {
+        return std::nullopt;
+    }
+    auto tokenOffset = scheme.size();
+    while (tokenOffset < authorization.size() && authorization[tokenOffset] == ' ') {
+        ++tokenOffset;
+    }
+    if (tokenOffset == authorization.size()) {
+        return std::nullopt;
+    }
+    return authorization.substr(tokenOffset);
 }
 
 }  // namespace ruvia

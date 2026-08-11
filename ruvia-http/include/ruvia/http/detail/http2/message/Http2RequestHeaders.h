@@ -1,13 +1,14 @@
 #pragma once
 
-#include <charconv>
 #include <string_view>
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
@@ -45,8 +46,10 @@ struct Http2HeaderDecodeContext final {
 }
 
 // RFC 9110 defines both http-URI and https-URI with a mandatory authority.
-// Asterisk-form OPTIONS is server-wide and is the deliberate exception: its
-// target contains no authority information (RFC 9113 section 8.3.1).
+// Asterisk-form OPTIONS is server-wide: the request target itself contains no
+// authority information (RFC 9113 section 8.3.1). A direct HTTP/2 sender may
+// still convey the target URI authority separately via :authority; when present,
+// callers validate it with http2IsValidRequestAuthority().
 [[nodiscard]] inline bool http2RegularRequestRequiresAuthority(std::string_view scheme, std::string_view path) noexcept {
     return path != "*" && http2IsHttpRequestScheme(scheme);
 }
@@ -162,9 +165,11 @@ struct Http2HeaderDecodeContext final {
         return http2AppendCookieHeaderValue(stream, value);
     }
     if (kind == RequestHeaderKind::kExpect) {
-        // Expect is an extensible semantic list, not an HTTP/2 field-block
-        // validity condition. Preserve unsupported members for the Web product's
-        // 417 policy while still accepting the conformant header section.
+        if (!isValidReceivedHttpExpectFieldValue(value)) {
+            return false;
+        }
+        // Expect is an extensible semantic list. Preserve unsupported but
+        // syntactically valid members for the Web product's 417 policy.
         stream.parseRequestExpectationField(value);
     }
     if (kind == RequestHeaderKind::kContentType) {
@@ -175,18 +180,20 @@ struct Http2HeaderDecodeContext final {
     if (kind == RequestHeaderKind::kContentEncoding && !isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kRecipient)) {
         return false;
     }
-    if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0) {
+    if (name == "trailer" && !isValidHttpRequestTrailerFieldValue(value, HttpFieldListRole::kRecipient)) {
+        return false;
+    }
+    if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0 && kind != RequestHeaderKind::kContentLength) {
         if (!stream.markSingletonRequestHeader(singletonBit)) {
             return false;
         }
     }
     if (kind == RequestHeaderKind::kContentLength) {
-        std::size_t parsed = 0;
-        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
-        if (ec != std::errc{} || ptr != value.data() + value.size()) {
+        HttpContentLengthState contentLength;
+        if (contentLength.parseField(value) != HttpContentLengthParseStatus::kOk) {
             return false;
         }
-        if (!stream.declareRemoteContentLength(parsed)) {
+        if (!stream.declareRemoteContentLength(*contentLength.value())) {
             return false;
         }
     }

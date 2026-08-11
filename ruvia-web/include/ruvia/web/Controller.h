@@ -13,7 +13,9 @@
 
 namespace ruvia::detail {
 
-// Methods covered by RUVIA_ALL; HEAD is served by the implicit GET fallback.
+// Methods covered by RUVIA_ALL. HEAD is intentionally omitted: buffered GET
+// routes receive an implicit HEAD shadow during route-table build, while
+// streaming/SSE/WebSocket routes require an explicit HEAD route.
 inline constexpr std::array kRuviaAllRouteMethods = {HttpKnownMethod::kGet, HttpKnownMethod::kPost, HttpKnownMethod::kPut, HttpKnownMethod::kPatch, HttpKnownMethod::kDelete, HttpKnownMethod::kOptions};
 
 // Startup-only holder for the RUVIA_ON method list; the macro pastes the

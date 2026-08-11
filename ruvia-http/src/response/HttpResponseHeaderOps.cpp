@@ -3,6 +3,7 @@
 #include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/util/HttpNumberFormat.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
@@ -32,7 +33,9 @@ void writeUnsignedHeaderValue(HttpResponseHeader& header, std::uint64_t value) {
 void validateConnectionControlField(std::string_view name, std::string_view value) {
     if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
         detail::HttpConnectionOptions options;
-        if (options.parseField(value, detail::HttpFieldListRole::kSender) != detail::HttpFieldListParseStatus::kOk) {
+        if (options.parseField(value, detail::HttpFieldListRole::kSender, [](std::string_view option) noexcept {
+                return !detail::httpConnectionOptionConflictsWithManagedField(option);
+            }) != detail::HttpFieldListParseStatus::kOk) {
             throw std::invalid_argument("invalid HTTP Connection header");
         }
     } else if (detail::httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
@@ -40,6 +43,8 @@ void validateConnectionControlField(std::string_view name, std::string_view valu
         if (protocols.parseField(value, detail::HttpFieldListRole::kSender, [](const detail::HttpUpgradeProtocol&) noexcept { return true; }) != detail::HttpFieldListParseStatus::kOk) {
             throw std::invalid_argument("invalid HTTP Upgrade header");
         }
+    } else if (detail::httpAsciiEqualsIgnoreCase(name, "TE")) {
+        throw std::invalid_argument("TE is not a response field");
     }
 }
 
@@ -122,6 +127,9 @@ void HttpResponse::header(std::string_view key, std::string_view value, HeaderOp
     }
     if (knownBit == detail::kResponseHeaderContentEncoding && !detail::isValidHttpContentEncodingFieldValue(value, detail::HttpFieldListRole::kSender)) {
         throw std::invalid_argument("invalid HTTP Content-Encoding header");
+    }
+    if (detail::httpAsciiEqualsIgnoreCase(key, "Trailer") && !detail::isValidHttpResponseTrailerFieldValue(value, detail::HttpFieldListRole::kSender)) {
+        throw std::invalid_argument("invalid HTTP Trailer header");
     }
     if (options.append) {
         if (detail::responseHeaderAppendForbidden(knownBit)) {

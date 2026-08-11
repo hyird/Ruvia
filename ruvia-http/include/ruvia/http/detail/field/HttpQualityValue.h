@@ -24,7 +24,7 @@ namespace ruvia::detail {
         int quality = value[0] == '1' ? 1000 : 0;
         if (value[0] == '1') {
             for (std::size_t i = 2; i < value.size(); ++i) {
-                if (value[i] != '0') {
+                if (i > 4 || value[i] != '0') {
                     return -1;
                 }
             }

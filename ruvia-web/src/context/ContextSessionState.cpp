@@ -17,8 +17,9 @@ void ContextSessionState::loadRecognized(std::string_view data) {
     if (presented == nullptr) {
         throw std::logic_error("recognized session requires a presented id");
     }
+    auto dataCopy = copy(data);
     auto id = std::move(presented->id);
-    value_.template emplace<SessionLoaded>(std::move(id), copy(data));
+    value_.template emplace<SessionLoaded>(std::move(id), std::move(dataCopy));
 }
 
 void ContextSessionState::set(std::string_view data) {
@@ -27,8 +28,9 @@ void ContextSessionState::set(std::string_view data) {
         return;
     }
     if (auto* loadedState = std::get_if<SessionLoaded>(&value_)) {
+        auto dataCopy = copy(data);
         auto id = std::move(loadedState->id);
-        value_.template emplace<SessionPersistExisting>(std::move(id), copy(data));
+        value_.template emplace<SessionPersistExisting>(std::move(id), std::move(dataCopy));
         return;
     }
     if (auto* existing = std::get_if<SessionPersistExisting>(&value_)) {
@@ -52,8 +54,9 @@ void ContextSessionState::set(std::string_view data) {
             value_.template emplace<SessionPersistNew>(copy(data));
             return;
         }
+        auto dataCopy = copy(data);
         auto oldId = std::move(*cleared->oldId);
-        value_.template emplace<SessionRotate>(std::move(oldId), copy(data));
+        value_.template emplace<SessionRotate>(std::move(oldId), std::move(dataCopy));
         return;
     }
     value_.template emplace<SessionPersistNew>(copy(data));

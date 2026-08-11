@@ -66,6 +66,34 @@ RUVIA_TEST(http_client_rejects_invalid_or_repeated_content_type) {
     RUVIA_CHECK_EQ(valid.head.headers().front().value(), std::string_view("application/json; charset=utf-8"));
 }
 
+RUVIA_TEST(http_client_rejects_invalid_trailer_field_names_in_response_head) {
+    for (const std::string_view value : {"Content-Length", "X-Checksum, bad field"}) {
+        std::string head = "HTTP/1.1 200 OK\r\nTrailer: ";
+        head.append(value);
+        head.append("\r\nContent-Length: 0");
+        RUVIA_CHECK(parseFailureError("GET", head) == Http1ClientResponseParseError::kInvalidHeader);
+    }
+
+    RUVIA_CHECK(parseFailureError("GET",
+                    "HTTP/1.1 200 OK\r\n"
+                    "Trailer: ETag, X-Checksum\r\n"
+                    "Content-Length: 0") == Http1ClientResponseParseError::kInvalidHeader);
+
+    const auto valid = parseResponse("GET",
+        "HTTP/1.1 200 OK\r\n"
+        "Trailer: ETag, X-Checksum\r\n"
+        "Transfer-Encoding: chunked");
+    RUVIA_CHECK_EQ(valid.head.headers().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(valid.head.headers().front().name(), std::string_view("Trailer"));
+}
+
+RUVIA_TEST(http_client_rejects_request_only_te_in_final_response_head) {
+    RUVIA_CHECK(parseFailureError("GET",
+                    "HTTP/1.1 200 OK\r\n"
+                    "TE: trailers\r\n"
+                    "Content-Length: 0") == Http1ClientResponseParseError::kInvalidHeader);
+}
+
 RUVIA_TEST(http_client_response_parser_need_more_is_distinct) {
     const auto result = parseWire("GET", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n");
     RUVIA_CHECK(result.needMore() != nullptr);

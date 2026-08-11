@@ -182,6 +182,23 @@ RUVIA_TEST(byte_range_allows_ows_after_equals) {
     }
 }
 
+RUVIA_TEST(byte_range_trims_field_value_ows) {
+    const auto trailing = resolveHttpByteRange("bytes=10-19 \t", 100);
+    const auto wrapped = resolveHttpByteRange(" \tbytes=20-29\t ", 100);
+    const auto* trailingRange = trailing.resolved();
+    const auto* wrappedRange = wrapped.resolved();
+    RUVIA_CHECK(trailingRange != nullptr);
+    RUVIA_CHECK(wrappedRange != nullptr);
+    if (trailingRange != nullptr) {
+        RUVIA_CHECK_EQ(trailingRange->offset(), std::uint64_t{10});
+        RUVIA_CHECK_EQ(trailingRange->length(), std::uint64_t{10});
+    }
+    if (wrappedRange != nullptr) {
+        RUVIA_CHECK_EQ(wrappedRange->offset(), std::uint64_t{20});
+        RUVIA_CHECK_EQ(wrappedRange->length(), std::uint64_t{10});
+    }
+}
+
 RUVIA_TEST(byte_range_huge_decimal_numerals_preserve_semantics) {
     // RFC 9110 §14.1.2 requires recipients to prevent conversion overflow.
     // Numerals beyond uint64_t still have obvious semantics against a uint64_t

@@ -104,10 +104,15 @@ RUVIA_TEST(http_client_no_body_precedence_ignores_framing_fields) {
         "Transfer-Encoding: custom-coding");
     RUVIA_CHECK(notModified.plan().withoutContent() != nullptr);
 
-    const auto noContent = parseHead("GET",
-        "HTTP/1.1 204 No Content\r\nContent-Length: invalid\r\n"
-        "Transfer-Encoding: custom-coding");
+    const auto noContent = parseHead("GET", "HTTP/1.1 204 No Content");
     RUVIA_CHECK(noContent.plan().withoutContent() != nullptr);
+}
+
+RUVIA_TEST(http_client_204_rejects_framing_fields) {
+    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 204 No Content\r\nContent-Length: 0"));
+    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 204 No Content\r\nContent-Length: invalid"));
+    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 204 No Content\r\nTransfer-Encoding: chunked"));
+    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 204 No Content\r\nTransfer-Encoding: custom-coding"));
 }
 
 RUVIA_TEST(http_client_205_owns_zero_content_framing) {

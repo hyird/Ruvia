@@ -21,6 +21,7 @@
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/static/StaticFileTypes.h"
 #include "ruvia/web/detail/server/file/HttpNativeFile.h"
+#include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
 
 // A document root indexed once at construction: the directory is walked, every
 // servable file recorded with the metadata a response needs, and lookups after
@@ -31,24 +32,6 @@ namespace {
 
 // Above this many indexed entries a lookup binary-searches instead of scanning.
 inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
-
-[[nodiscard]] bool validHeaderValue(std::string_view value) noexcept {
-    return std::ranges::none_of(value, [](char c) noexcept { return c == '\r' || c == '\n' || c == '\0'; });
-}
-
-void validateOptions(const StaticRootOptions& options) {
-    if (!validHeaderValue(options.cacheControl) || !validHeaderValue(options.defaultContentType)) {
-        throw std::invalid_argument("invalid static file header value");
-    }
-    for (const auto& mime : options.mimeTypes) {
-        if (mime.extension.empty() || mime.contentType.empty() || !validHeaderValue(mime.contentType)) {
-            throw std::invalid_argument("invalid static file mime type");
-        }
-    }
-    if (options.indexFile.find('/') != std::string_view::npos || options.indexFile.find('\\') != std::string_view::npos || options.indexFile == "." || options.indexFile == "..") {
-        throw std::invalid_argument("invalid static file index name");
-    }
-}
 
 // A relative path (generic '/'-separated form) whose first component or any
 // component after a '/' begins with '.' is hidden. Serving these by default
@@ -279,7 +262,7 @@ bool detail::StaticRootAccess::sameSnapshot(const StaticRoot& left, const Static
 StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions options)
     : state_(makeStaticRootState()) {
     detail::normalizeMimeTypes(options.mimeTypes);
-    validateOptions(options);
+    detail::validateStaticRootOptions(options);
 
     std::error_code ec;
     auto& state = *state_;

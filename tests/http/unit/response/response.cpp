@@ -243,6 +243,20 @@ RUVIA_TEST(response_move_assignment_transfers_one_resource_domain) {
     RUVIA_CHECK(sourceResource.allocations() > 0);
 }
 
+RUVIA_TEST(response_moved_from_known_header_index_is_cleared) {
+    HttpResponse source(std::pmr::new_delete_resource());
+    source.header("X-Prefix", "keeps known header off slot zero");
+    source.header("Content-Type", "text/plain");
+
+    HttpResponse moved(std::move(source));
+    RUVIA_CHECK_EQ(moved.header("Content-Type"), std::string_view("text/plain"));
+
+    // The moved-from object no longer owns any headers. Its known-header index
+    // must be cleared with the header table; otherwise an indexed lookup can
+    // read a stale inline descriptor that was memcpy-moved into `moved`.
+    RUVIA_CHECK(!source.header("Content-Type").has_value());
+}
+
 RUVIA_TEST(response_status_code_range_validated) {
     auto response = makeResponse();
     RUVIA_CHECK(throwsInvalid([&] { response.status(ruvia::http_status::kContinue); }));
@@ -323,6 +337,39 @@ RUVIA_TEST(response_set_cookie_append_replaces_same_wire_name) {
     RUVIA_CHECK(hasNew);
     RUVIA_CHECK(hasTheme);
     RUVIA_CHECK(hasUpper);  // cookie-name is case-sensitive
+}
+
+RUVIA_TEST(response_set_cookie_append_preserves_same_name_different_scope) {
+    auto response = makeResponse();
+    response.header("Set-Cookie", "session=root-old; Path=/");
+    response.header("Set-Cookie", "session=admin; Path=/admin", HttpResponse::HeaderOptions{true});
+    response.header("Set-Cookie", "session=domain-old; Path=/; Domain=.Example.COM", HttpResponse::HeaderOptions{true});
+    response.header("Set-Cookie", "session=root-new; Path=/", HttpResponse::HeaderOptions{true});
+    response.header("Set-Cookie", "session=domain-new; Domain=example.com; Path=/", HttpResponse::HeaderOptions{true});
+
+    std::size_t count = 0;
+    bool hasRootOld = false;
+    bool hasRootNew = false;
+    bool hasAdmin = false;
+    bool hasDomainOld = false;
+    bool hasDomainNew = false;
+    for (const auto& header : response.headers()) {
+        if (header.name() != std::string_view("Set-Cookie")) {
+            continue;
+        }
+        ++count;
+        hasRootOld = hasRootOld || header.value() == "session=root-old; Path=/";
+        hasRootNew = hasRootNew || header.value() == "session=root-new; Path=/";
+        hasAdmin = hasAdmin || header.value() == "session=admin; Path=/admin";
+        hasDomainOld = hasDomainOld || header.value() == "session=domain-old; Path=/; Domain=.Example.COM";
+        hasDomainNew = hasDomainNew || header.value() == "session=domain-new; Domain=example.com; Path=/";
+    }
+    RUVIA_CHECK_EQ(count, std::size_t{3});
+    RUVIA_CHECK(!hasRootOld);
+    RUVIA_CHECK(hasRootNew);
+    RUVIA_CHECK(hasAdmin);
+    RUVIA_CHECK(!hasDomainOld);
+    RUVIA_CHECK(hasDomainNew);
 }
 
 RUVIA_TEST(response_plain_set_collapses_prior_appended_fields) {
@@ -480,6 +527,20 @@ RUVIA_TEST(response_header_rejects_invalid_content_encoding_syntax) {
     }
 }
 
+RUVIA_TEST(response_header_rejects_invalid_trailer_field_names) {
+    auto response = makeResponse();
+
+    for (const std::string_view invalid : {"Content-Length", "X-Checksum, bad field", ","}) {
+        RUVIA_CHECK(throwsInvalid([&] { response.header("Trailer", invalid); }));
+        RUVIA_CHECK(throwsInvalid([&] { response.header("Trailer", invalid, HttpResponse::HeaderOptions{true}); }));
+    }
+
+    RUVIA_CHECK(!throwsInvalid([&] { response.header("Trailer", "ETag, X-Checksum"); }));
+    RUVIA_CHECK_EQ(response.header("Trailer"), std::string_view("ETag, X-Checksum"));
+
+    RUVIA_CHECK(!throwsInvalid([&] { response.header("Trailer", "Server-Timing", HttpResponse::HeaderOptions{true}); }));
+}
+
 RUVIA_TEST(response_header_rejects_name_and_value_injection) {
     auto response = makeResponse();
     // The developer-facing header setter is the header-injection chokepoint: a CR or
@@ -507,9 +568,14 @@ RUVIA_TEST(response_header_rejects_invalid_connection_control_lists) {
     for (const auto value : {"close,", ", Upgrade", "close;invalid", ""}) {
         RUVIA_CHECK(throwsInvalid([&] { response.header("Connection", value); }));
     }
+    for (const auto value : {"Content-Length", "Date", "Trailer", "Authorization", "Cookie", "Range"}) {
+        RUVIA_CHECK(throwsInvalid([&] { response.header("Connection", value); }));
+    }
     for (const auto value : {"websocket/", ", websocket", ""}) {
         RUVIA_CHECK(throwsInvalid([&] { response.header("Upgrade", value); }));
     }
+    RUVIA_CHECK(throwsInvalid([&] { response.header("TE", "trailers"); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("TE", "trailers", HttpResponse::HeaderOptions{true}); }));
 
     RUVIA_CHECK(!throwsInvalid([&] {
         response.header("Connection", "keep-alive, Upgrade");

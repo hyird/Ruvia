@@ -251,7 +251,7 @@ class detail::DbMigrationRunner final {
 public:
     [[nodiscard]] static Task<DbMigrationReport> run(asio::io_context& ioContext, detail::DbMigrationDeadlineScanner& scanner, detail::DbConfigStorage config, std::span<const DbMigration> migrations, DbMigrationOptionsStorage options, std::pmr::memory_resource* resource) {
         auto* resolved = detail::pmrResourceOrDefault(resource);
-        detail::validateMigrationList(migrations);
+        detail::validateMigrationList(migrations, config.driver);
         if (!detail::isValidMigrationTableName(options.table, config.driver)) {
             throw std::invalid_argument("database migration table has an invalid backend identifier");
         }

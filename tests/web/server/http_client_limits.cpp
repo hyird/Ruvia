@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdio>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -50,6 +51,64 @@ private:
     }
 
     std::size_t allocations_{0};
+};
+
+class CloseTrackingResource final : public std::pmr::memory_resource {
+public:
+    void close() noexcept { closed_ = true; }
+    [[nodiscard]] std::size_t allocationsAfterClose() const noexcept { return allocationsAfterClose_; }
+    [[nodiscard]] std::size_t deallocationsAfterClose() const noexcept { return deallocationsAfterClose_; }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (closed_) ++allocationsAfterClose_;
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        if (closed_) ++deallocationsAfterClose_;
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::size_t allocationsAfterClose_{0};
+    std::size_t deallocationsAfterClose_{0};
+    bool closed_{false};
+};
+
+class FailSelectedLargeAllocationResource final : public std::pmr::memory_resource {
+public:
+    void failAllocationSizeRange(std::size_t minimum, std::size_t maximum) noexcept {
+        failMinimumBytes_ = minimum;
+        failMaximumBytes_ = maximum;
+    }
+    void disableFailures() noexcept {
+        failMinimumBytes_ = std::nullopt;
+        failMaximumBytes_ = std::nullopt;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (failMinimumBytes_.has_value() && bytes >= *failMinimumBytes_ &&
+            bytes <= failMaximumBytes_.value_or(std::numeric_limits<std::size_t>::max())) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::optional<std::size_t> failMinimumBytes_;
+    std::optional<std::size_t> failMaximumBytes_;
 };
 
 class OneShotServer final {
@@ -177,6 +236,155 @@ ruvia::HttpClientConfig plainConfig(std::uint16_t port) {
     return config;
 }
 
+template <typename Exercise>
+int runRequestOnly(Exercise exercise) {
+    asio::io_context io;
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
+    auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    ruvia::WorkerMemory memory;
+    auto config = plainConfig(1);
+    config.userAgent.clear();
+    ruvia::detail::HttpClientConfigStorage stored(config, memory.resource());
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(stored)};
+    ruvia::detail::HttpClientRegistry registry(
+        io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+
+    FailSelectedLargeAllocationResource requestResource;
+    int result = 0;
+    {
+        ruvia::detail::ScopedOperationScope scope;
+        const auto client = registry.get(&requestResource, scope);
+        result = exercise(client, requestResource);
+        scope.close();
+    }
+
+    registry.closeNow();
+    dispatcher->detachContext();
+    return result;
+}
+
+int testColdRequestTaskDoesNotTouchOperationArenaAfterScopeClose() {
+    asio::io_context io;
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
+    auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    ruvia::WorkerMemory memory;
+    auto config = plainConfig(1);
+    ruvia::detail::HttpClientConfigStorage stored(config, memory.resource());
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(stored)};
+    ruvia::detail::HttpClientRegistry registry(
+        io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+
+    CloseTrackingResource operationResource;
+    std::optional<ruvia::Task<ruvia::HttpClientResponse>> escaped;
+    {
+        ruvia::detail::ScopedOperationScope scope;
+        auto client = registry.get(&operationResource, scope);
+        auto request = client.newRequest();
+        request.addHeader("x-cold", std::string(4096, 'h'));
+        request.setBody(std::string(4096, 'x'));
+        escaped.emplace(client.sendRequest(std::move(request)));
+        scope.close();
+    }
+    operationResource.close();
+    escaped.reset();
+    if (operationResource.deallocationsAfterClose() != 0) return 1;
+
+    registry.closeNow();
+    dispatcher->detachContext();
+    return 0;
+}
+
+int testMoveAssignedRequestTaskDoesNotTouchOperationArenaAfterScopeClose() {
+    asio::io_context io;
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
+    auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    ruvia::WorkerMemory memory;
+    auto config = plainConfig(1);
+    ruvia::detail::HttpClientConfigStorage stored(config, memory.resource());
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(stored)};
+    ruvia::detail::HttpClientRegistry registry(
+        io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+
+    CloseTrackingResource operationResource;
+    std::optional<ruvia::Task<ruvia::HttpClientResponse>> escaped;
+    {
+        ruvia::detail::ScopedOperationScope scope;
+        auto poolClient = registry.get(memory.resource(), scope);
+        auto operationClient = registry.get(&operationResource, scope);
+
+        auto operationRequest = operationClient.newRequest();
+        operationRequest.addHeader("x-moved", std::string(4096, 'h'));
+        operationRequest.setBody(std::string(4096, 'x'));
+
+        auto request = poolClient.newRequest();
+        request = std::move(operationRequest);
+        escaped.emplace(poolClient.sendRequest(std::move(request)));
+        scope.close();
+    }
+    operationResource.close();
+    escaped.reset();
+    if (operationResource.deallocationsAfterClose() != 0) return 1;
+
+    registry.closeNow();
+    dispatcher->detachContext();
+    return 0;
+}
+
+int testStartedRequestTaskDoesNotTouchOperationArenaAfterScopeClose() {
+    OneShotServer server([](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (!error) writeResponse(socket, std::string(4096, 'r'));
+    });
+
+    asio::io_context io;
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
+    auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    ruvia::WorkerMemory memory;
+    auto config = plainConfig(server.port());
+    ruvia::detail::HttpClientConfigStorage stored(config, memory.resource());
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(stored)};
+    ruvia::detail::HttpClientRegistry registry(
+        io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+
+    CloseTrackingResource operationResource;
+    std::optional<ruvia::Task<ruvia::HttpClientResponse>> escaped;
+    {
+        ruvia::detail::ScopedOperationScope scope;
+        auto client = registry.get(&operationResource, scope);
+        auto request = client.newRequest();
+        request.addHeader("x-started", std::string(4096, 'h'));
+        request.setBody(std::string(4096, 'x'));
+        escaped.emplace(client.sendRequest(std::move(request)));
+        scope.close();
+    }
+    operationResource.close();
+
+    auto exercise = [&]() -> ruvia::Task<int> {
+        auto response = co_await std::move(*escaped);
+        escaped.reset();
+        if (response.body().size() != 4096) co_return 1;
+        if (operationResource.allocationsAfterClose() != 0) co_return 2;
+        if (operationResource.deallocationsAfterClose() != 0) co_return 3;
+        co_return 0;
+    };
+    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
+    io.run();
+    const auto result = future.get();
+
+    registry.closeNow();
+    dispatcher->detachContext();
+    return result;
+}
+
 int testOperationArena() {
     OneShotServer server([](asio::ip::tcp::socket& socket) {
         std::error_code error;
@@ -194,7 +402,7 @@ int testOperationArena() {
             const auto afterRequest = resource->allocations();
             auto response = co_await client.sendRequest(std::move(request));
             if (response.body().size() != 4096) co_return 2;
-            co_return resource->allocations() > afterRequest ? 0 : 3;
+            co_return resource->allocations() == afterRequest ? 0 : 3;
         });
 }
 
@@ -273,6 +481,48 @@ int testTransferCodedResponse() {
             request.addHeader("Connection", "TE").addHeader("TE", "gzip");
             auto response = co_await client.sendRequest(std::move(request));
             co_return response.body() == "decoded transfer body" ? 0 : 1;
+        });
+}
+
+int testContentEncodedResponse() {
+    const auto encoded = gzipContent("decoded content body");
+    OneShotServer server([encoded](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) return;
+        writeResponse(socket, encoded, "Content-Encoding: gzip\r\n");
+    });
+    auto config = plainConfig(server.port());
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            auto request = client.newRequest();
+            auto response = co_await client.sendRequest(std::move(request));
+            co_return response.body() == "decoded content body" ? 0 : 1;
+        });
+}
+
+int testContentEncodedResponseLimitAppliesAfterDecode() {
+    const std::string decoded(4096, 'z');
+    const auto encoded = gzipContent(decoded);
+    OneShotServer server([encoded](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) return;
+        writeResponse(socket, encoded, "Content-Encoding: gzip\r\n");
+    });
+    auto config = plainConfig(server.port());
+    config.maxResponseBytes = encoded.size() + 8;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            try {
+                auto request = client.newRequest();
+                (void)co_await client.sendRequest(std::move(request));
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 0 : 2;
+            }
+            co_return 1;
         });
 }
 
@@ -476,6 +726,140 @@ int testCookieCapacity() {
     return 2;
 }
 
+int testRequestCookieAppendFailureDoesNotRetainPartialHeader() {
+    return runRequestOnly([](const ruvia::HttpClient& client, FailSelectedLargeAllocationResource& requestResource) {
+        auto request = client.newRequest();
+        request.addCookie("a", "1");
+
+        const std::string largeName(700, 'n');
+        requestResource.failAllocationSizeRange(512, 2048);
+        bool allocationFailed = false;
+        try {
+            request.addCookie(largeName, "2");
+        } catch (const std::bad_alloc&) {
+            allocationFailed = true;
+        }
+        requestResource.disableFailures();
+
+        std::pmr::vector<ruvia::HttpHeaderView> headers(std::pmr::get_default_resource());
+        const auto view = ruvia::detail::HttpClientRequestAccess::view(request, headers);
+        std::size_t cookieHeaderCount = 0;
+        std::string_view cookieHeader;
+        for (const auto& header : view.headers) {
+            if (header.name() == "cookie") {
+                ++cookieHeaderCount;
+                cookieHeader = header.value();
+            }
+        }
+
+        int result = 0;
+        if (!allocationFailed) {
+            result = 1;
+        } else if (cookieHeaderCount != 1 || cookieHeader != "a=1") {
+            result = 2;
+        }
+        return result;
+    });
+}
+
+int testSetContentTypeFailurePreservesPreviousHeader() {
+    return runRequestOnly([](const ruvia::HttpClient& client, FailSelectedLargeAllocationResource& requestResource) {
+        auto request = client.newRequest();
+        request.setContentTypeString("text/plain");
+
+        const std::string longContentType = "text/plain; x=" + std::string(700, 'x');
+        requestResource.failAllocationSizeRange(512, 2048);
+        bool allocationFailed = false;
+        try {
+            request.setContentTypeString(longContentType);
+        } catch (const std::bad_alloc&) {
+            allocationFailed = true;
+        }
+        requestResource.disableFailures();
+
+        std::pmr::vector<ruvia::HttpHeaderView> headers(std::pmr::get_default_resource());
+        const auto view = ruvia::detail::HttpClientRequestAccess::view(request, headers);
+        std::size_t contentTypeCount = 0;
+        std::string_view contentType;
+        for (const auto& header : view.headers) {
+            if (header.name() == "content-type") {
+                ++contentTypeCount;
+                contentType = header.value();
+            }
+        }
+
+        if (!allocationFailed) return 1;
+        return contentTypeCount == 1 && contentType == "text/plain" ? 0 : 2;
+    });
+}
+
+int testUserAgentSetterRejectsInvalidHeaderValue() {
+    auto config = plainConfig(1);
+    CountingResource operationResource;
+    const auto scopedResult = runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            client.setUserAgent("safe-agent");
+            try {
+                client.setUserAgent("Ruvia\r\nInjected: yes");
+            } catch (const std::invalid_argument&) {
+                co_return 0;
+            }
+            co_return 1;
+        });
+    if (scopedResult != 0) return 1;
+
+    auto dynamic = ruvia::HttpClient::newHttpClient("http://127.0.0.1", config);
+    dynamic->setUserAgent("safe-agent");
+    try {
+        dynamic->setUserAgent("Ruvia\r\nInjected: yes");
+    } catch (const std::invalid_argument&) {
+        return 0;
+    }
+    return 2;
+}
+
+int testOperationOptionsRejectNonpositiveTimeout() {
+    auto rejectsInvalidArgument = [](auto action) {
+        try {
+            action();
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+
+    auto config = plainConfig(1);
+    CountingResource operationResource;
+    const auto scopedResult = runClient(config, operationResource,
+        [rejectsInvalidArgument](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            if (!rejectsInvalidArgument([&client] {
+                    (void)client.withOptions(ruvia::HttpClientOperationOptions{.timeout = 0ms});
+                })) co_return 1;
+            if (!rejectsInvalidArgument([&client] {
+                    auto request = client.newRequest();
+                    (void)client.sendRequest(std::move(request), 0ms);
+                })) co_return 2;
+            if (!rejectsInvalidArgument([&client] {
+                    auto request = client.newRequest();
+                    (void)client.sendRequest(
+                        std::move(request),
+                        ruvia::HttpClientOperationOptions{.timeout = -1ms});
+                })) co_return 3;
+            co_return 0;
+        });
+    if (scopedResult != 0) return scopedResult;
+
+    auto dynamic = ruvia::HttpClient::newHttpClient("http://127.0.0.1", config);
+    if (!rejectsInvalidArgument([&dynamic] {
+            (void)dynamic->withOptions(ruvia::HttpClientOperationOptions{.timeout = 0ms});
+        })) return 4;
+    if (!rejectsInvalidArgument([&dynamic] {
+            auto request = dynamic->newRequest();
+            (void)dynamic->sendRequest(std::move(request), -1ms);
+        })) return 5;
+    return 0;
+}
+
 int testAutomaticCookieCapacity() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
@@ -503,6 +887,71 @@ int testAutomaticCookieCapacity() {
             auto secondResponse = co_await client.sendRequest(std::move(second));
             co_return secondResponse.body() == "bounded" ? 0 : 2;
         });
+}
+
+int testAutomaticCookieInsertionFailureDoesNotRetainPartialCookie() {
+    const std::string longPath = "/" + std::string(900, 'p');
+    TwoShotServer server([longPath](asio::ip::tcp::socket& socket, unsigned exchange) {
+        std::error_code error;
+        const auto head = readHead(socket, error);
+        if (error) return;
+        if (exchange == 0) {
+            writeResponse(socket, "seeded", "Set-Cookie: bad=1; Path=" + longPath + "\r\n");
+            return;
+        }
+        writeResponse(socket, head.find("bad=1") == std::string::npos ? "clean" : "leaked");
+    });
+
+    asio::io_context io;
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
+    auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+
+    FailSelectedLargeAllocationResource poolResource;
+    CountingResource operationResource;
+    auto config = plainConfig(server.port());
+    config.cookiesEnabled = true;
+    config.maxCookieBytesPerWorker = 64 * 1024;
+    config.userAgent.clear();
+
+    ruvia::detail::HttpClientConfigStorage stored(config, &poolResource);
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", &poolResource), std::move(stored)};
+    ruvia::detail::HttpClientRegistry registry(
+        io, worker, &poolResource,
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+
+    auto task = [&]() -> ruvia::Task<int> {
+        ruvia::detail::ScopedOperationScope scope;
+        auto poolClient = registry.get(&poolResource, scope);
+        auto operationClient = registry.get(&operationResource, scope);
+
+        auto first = poolClient.newRequest();
+        poolResource.failAllocationSizeRange(512, 2048);
+        bool storageAllocationFailed = false;
+        try {
+            (void)co_await operationClient.sendRequest(std::move(first));
+        } catch (const std::bad_alloc&) {
+            // Expected: the cookie storage allocation failed after the response
+            // was parsed. The jar must remain as if that Set-Cookie was ignored.
+            storageAllocationFailed = true;
+        }
+        poolResource.disableFailures();
+
+        auto second = poolClient.newRequest();
+        auto secondResponse = co_await operationClient.sendRequest(std::move(second));
+        scope.close();
+        registry.closeNow();
+        co_await registry.join();
+        if (!storageAllocationFailed) co_return 2;
+        co_return secondResponse.body() == "clean" ? 0 : 1;
+    };
+    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(task()), asio::use_future);
+    io.run();
+    const auto result = future.get();
+
+    registry.closeNow();
+    dispatcher->detachContext();
+    return result;
 }
 
 int testCookieHostOnlyIdentity() {
@@ -622,6 +1071,42 @@ int testNamelessResponseCookie() {
             auto second = client.newRequest();
             auto secondResponse = co_await client.sendRequest(std::move(second));
             co_return secondResponse.body() == "serialized" ? 0 : 2;
+        });
+}
+
+int testAutomaticCookieJarRejectsPairsThatCannotBeSerialized() {
+    TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
+        std::error_code error;
+        const auto head = readHead(socket, error);
+        if (error) return;
+        if (exchange == 0) {
+            writeResponse(socket, "seeded",
+                "Set-Cookie: bad name=1; Path=/\r\n"
+                "Set-Cookie: spaced=bad value; Path=/\r\n"
+                "Set-Cookie: quoted=\"good\"; Path=/\r\n"
+                "Set-Cookie: good=ok; Path=/\r\n");
+            return;
+        }
+        const bool keptSerializable =
+            head.find("quoted=\"good\"") != std::string::npos &&
+            head.find("good=ok") != std::string::npos;
+        const bool droppedUnserializable =
+            head.find("bad name=1") == std::string::npos &&
+            head.find("spaced=bad value") == std::string::npos;
+        writeResponse(socket,
+            keptSerializable && droppedUnserializable ? "filtered" : "leaked");
+    });
+    auto config = plainConfig(server.port());
+    config.cookiesEnabled = true;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            auto first = client.newRequest();
+            auto firstResponse = co_await client.sendRequest(std::move(first));
+            if (firstResponse.body() != "seeded") co_return 1;
+            auto second = client.newRequest();
+            auto secondResponse = co_await client.sendRequest(std::move(second));
+            co_return secondResponse.body() == "filtered" ? 0 : 2;
         });
 }
 
@@ -747,30 +1232,76 @@ int testHttp1ResponseTrailers() {
         });
 }
 
+int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
+    OneShotServer server([](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) return;
+        constexpr std::string_view response =
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Connection: Upgrade\r\n"
+            "Upgrade: websocket\r\n"
+            "\r\n";
+        asio::write(socket, asio::buffer(response), error);
+    });
+    auto config = plainConfig(server.port());
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClient& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
+            auto request = client.newRequest();
+            request.setMethod(ruvia::HttpKnownMethod::kPost)
+                .addHeader("Connection", "Upgrade")
+                .addHeader("Upgrade", "websocket")
+                .setBody("payload");
+            try {
+                (void)co_await client.sendRequest(std::move(request));
+            } catch (const ruvia::HttpClientError& error) {
+                if (error.code() != ruvia::HttpClientError::Code::kProtocolError) co_return 1;
+                const std::string_view message(error.what());
+                if (message == "HTTP tunnel and protocol upgrade responses require a dedicated API") co_return 0;
+                if (message == "invalid Switching Protocols response") co_return 2;
+                co_return 3;
+            }
+            co_return 4;
+        });
+}
+
 }  // namespace
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 19> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 31> checks{{
+            {&testColdRequestTaskDoesNotTouchOperationArenaAfterScopeClose, "cold request task arena lifetime"},
+            {&testMoveAssignedRequestTaskDoesNotTouchOperationArenaAfterScopeClose, "move-assigned request task arena lifetime"},
+            {&testStartedRequestTaskDoesNotTouchOperationArenaAfterScopeClose, "started request task arena lifetime"},
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testClosingInformationalResponse, "closing informational response"},
             {&testTransferCodedResponse, "transfer-coded response"},
+            {&testContentEncodedResponse, "content-encoded response"},
+            {&testContentEncodedResponseLimitAppliesAfterDecode, "content-encoded response decoded limit"},
             {&testWriteTimeout, "HTTP/1 write timeout"},
             {&testNegotiatedHttp1AcquireTimeout, "negotiated HTTP/1 acquire timeout"},
             {&testStopTokenCancellation, "stop-token cancellation"},
             {&testConnectStopTokenCancellation, "connect stop-token cancellation"},
             {&testRegistryRejectsDynamicPoolsAfterClose, "registry close gate"},
             {&testCookieCapacity, "cookie capacity"},
+            {&testRequestCookieAppendFailureDoesNotRetainPartialHeader, "request cookie append failure rollback"},
+            {&testSetContentTypeFailurePreservesPreviousHeader, "content-type failure rollback"},
+            {&testUserAgentSetterRejectsInvalidHeaderValue, "user-agent setter validation"},
+            {&testOperationOptionsRejectNonpositiveTimeout, "operation timeout validation"},
             {&testAutomaticCookieCapacity, "automatic cookie capacity"},
+            {&testAutomaticCookieInsertionFailureDoesNotRetainPartialCookie, "automatic cookie insertion failure rollback"},
             {&testCookieHostOnlyIdentity, "cookie host-only identity"},
             {&testCookiePathOrdering, "cookie path ordering"},
             {&testLargeCookieMaxAge, "large cookie Max-Age"},
             {&testNamelessResponseCookie, "nameless response cookie"},
+            {&testAutomaticCookieJarRejectsPairsThatCannotBeSerialized, "automatic cookie serialization filter"},
             {&testFarFutureCookieExpires, "far-future cookie Expires"},
             {&testCookieStorageSecurityConstraints, "cookie storage security constraints"},
             {&testIpCookieDomainSuffixRejection, "IP cookie domain suffix rejection"},
             {&testHttp1ResponseTrailers, "HTTP/1 response trailers"},
+            {&testHttp1ImmediateBodyUpgradeMarksRequestComplete, "HTTP/1 immediate body upgrade completion"},
         }};
         for (const auto& [check, name] : checks) {
             if (const auto result = check(); result != 0) {

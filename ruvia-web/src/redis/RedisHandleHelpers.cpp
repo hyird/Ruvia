@@ -7,6 +7,46 @@
 #include <utility>
 
 namespace ruvia::detail {
+namespace {
+
+[[nodiscard]] bool isRedisToken(std::string_view value, std::string_view token) {
+    return httpAsciiEqualsIgnoreCase(value, token);
+}
+
+[[nodiscard]] bool xreadOptionsContainBlocking(std::span<const std::string_view> args, std::size_t firstOption, bool allowNoAck) {
+    for (std::size_t i = firstOption; i < args.size();) {
+        const auto token = args[i];
+        if (isRedisToken(token, "STREAMS")) {
+            return false;
+        }
+        if (isRedisToken(token, "BLOCK")) {
+            return true;
+        }
+        if (isRedisToken(token, "COUNT")) {
+            i += 2;
+            continue;
+        }
+        if (allowNoAck && isRedisToken(token, "NOACK")) {
+            ++i;
+            continue;
+        }
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] bool xreadCommandIsBlocking(std::span<const std::string_view> args) {
+    return xreadOptionsContainBlocking(args, 1, false);
+}
+
+[[nodiscard]] bool xreadGroupCommandIsBlocking(std::span<const std::string_view> args) {
+    if (args.size() < 4 || !isRedisToken(args[1], "GROUP")) {
+        return false;
+    }
+    return xreadOptionsContainBlocking(args, 4, true);
+}
+
+}  // namespace
 
 std::string_view redisValueString(const RedisValue& value) {
     if (value.kind() == RedisValue::Kind::kError) {
@@ -26,6 +66,17 @@ std::int64_t redisValueInteger(const RedisValue& value) {
         throw RedisError(RedisError::Code::kProtocolError, "redis reply is not an integer");
     }
     return value.integer();
+}
+
+bool redisValueIntegerBool(const RedisValue& value) {
+    const auto integer = redisValueInteger(value);
+    if (integer == 0) {
+        return false;
+    }
+    if (integer == 1) {
+        return true;
+    }
+    throw RedisError(RedisError::Code::kProtocolError, "redis boolean reply is not 0 or 1");
 }
 
 std::span<const RedisValue> redisValueArray(const RedisValue& value) {
@@ -66,7 +117,28 @@ bool validateRedisPooledCommand(std::span<const std::string_view> args, bool all
         throw std::invalid_argument("redis command requires a command name");
     }
     const auto command = args.front();
-    constexpr std::string_view stateful[]{"AUTH", "SELECT", "MULTI", "EXEC", "DISCARD", "WATCH", "UNWATCH", "SUBSCRIBE", "PSUBSCRIBE", "SSUBSCRIBE", "UNSUBSCRIBE", "PUNSUBSCRIBE", "SUNSUBSCRIBE", "MONITOR", "QUIT", "RESET"};
+    constexpr std::string_view stateful[]{
+        "ASKING",
+        "AUTH",
+        "CLIENT",
+        "DISCARD",
+        "EXEC",
+        "HELLO",
+        "MONITOR",
+        "MULTI",
+        "PSUBSCRIBE",
+        "PUNSUBSCRIBE",
+        "QUIT",
+        "READONLY",
+        "READWRITE",
+        "RESET",
+        "SELECT",
+        "SSUBSCRIBE",
+        "SUBSCRIBE",
+        "SUNSUBSCRIBE",
+        "UNWATCH",
+        "WATCH",
+    };
     for (const auto name : stateful) {
         if (httpAsciiEqualsIgnoreCase(command, name)) {
             throw std::invalid_argument("stateful redis commands are not allowed through pooled command()");
@@ -78,13 +150,11 @@ bool validateRedisPooledCommand(std::span<const std::string_view> args, bool all
     for (const auto name : alwaysBlocking) {
         blocking = blocking || httpAsciiEqualsIgnoreCase(command, name);
     }
-    if (httpAsciiEqualsIgnoreCase(command, "XREAD") || httpAsciiEqualsIgnoreCase(command, "XREADGROUP")) {
-        for (const auto arg : args.subspan(1)) {
-            if (httpAsciiEqualsIgnoreCase(arg, "STREAMS")) {
-                break;
-            }
-            blocking = blocking || httpAsciiEqualsIgnoreCase(arg, "BLOCK");
-        }
+    if (httpAsciiEqualsIgnoreCase(command, "XREAD")) {
+        blocking = blocking || xreadCommandIsBlocking(args);
+    }
+    if (httpAsciiEqualsIgnoreCase(command, "XREADGROUP")) {
+        blocking = blocking || xreadGroupCommandIsBlocking(args);
     }
     if (blocking && !allowBlocking) {
         throw std::invalid_argument("blocking redis command is not allowed in a pipeline or transaction");
@@ -140,7 +210,7 @@ Task<std::pmr::vector<bool>> redisBoolArrayCommand(RedisCommandExecutor executor
     output.reserve(items.size());
     for (const auto& item : items) {
         throwIfRedisError(item);
-        output.emplace_back(redisValueInteger(item) != 0);
+        output.emplace_back(redisValueIntegerBool(item));
     }
     co_return output;
 }

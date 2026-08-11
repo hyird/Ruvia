@@ -45,6 +45,7 @@ RUVIA_TEST(set_cookie_parser_rejects_invalid_received_cookie) {
     RUVIA_CHECK(!ruvia::parseSetCookie("=").has_value());
     RUVIA_CHECK(!ruvia::parseSetCookie("name=bad\x01value").has_value());
     RUVIA_CHECK(!ruvia::parseSetCookie("name=value; Domain=bad_domain").has_value());
+    RUVIA_CHECK(!ruvia::parseSetCookie("name=value; Path=/bad\tpath").has_value());
 
     std::string oversized(4097, 'v');
     RUVIA_CHECK(!ruvia::parseSetCookie(oversized).has_value());

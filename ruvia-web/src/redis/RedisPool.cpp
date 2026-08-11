@@ -5,7 +5,9 @@
 #include "ruvia/web/detail/redis/RedisProtocol.h"
 #include <asio/error.hpp>
 
+#include <atomic>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -17,6 +19,16 @@ namespace {
 [[nodiscard]] std::span<const std::pmr::string> redisArgSpan(const std::pmr::vector<std::pmr::string>& args) noexcept {
     return args;
 }
+
+struct RedisOperationCancellationState final {
+    RedisOperationCancellationState(RedisPool& poolValue, const WorkerHandle& workerValue, std::size_t indexValue, std::uint64_t generationValue) noexcept
+        : pool(&poolValue), worker(&workerValue), index(indexValue), generation(generationValue) {}
+
+    std::atomic<RedisPool*> pool;
+    const WorkerHandle* worker;
+    std::size_t index;
+    std::uint64_t generation;
+};
 
 }  // namespace
 
@@ -32,15 +44,28 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(ArgSource args, RedisOperatio
     auto& connection = guard.connection();
     connection.abortReason = Connection::AbortReason::kNone;
     const auto generation = ++connection.operationGeneration;
-    auto stopRegistration = options.stopToken.registerCallback([pool = this, index, generation] {
-        WorkerHandleAccess::deferOrTerminate(*pool->worker_, [pool, index, generation] {
-            pool->cancelOperation(index, generation);
+    std::shared_ptr<RedisOperationCancellationState> cancellationState;
+    if (options.stopToken.stoppable()) {
+        cancellationState = std::make_shared<RedisOperationCancellationState>(*this, *worker_, index, generation);
+    }
+    auto stopRegistration = options.stopToken.registerCallback([cancellationState] {
+        if (cancellationState == nullptr) {
+            return;
+        }
+        WorkerHandleAccess::deferOrTerminate(*cancellationState->worker, [cancellationState] {
+            auto* pool = cancellationState->pool.load(std::memory_order_acquire);
+            if (pool != nullptr) {
+                pool->cancelOperation(cancellationState->index, cancellationState->generation);
+            }
         });
     });
     if (options.stopToken.stopRequested()) {
         cancelOperation(index, generation);
     }
     auto finishCancellation = [&]() noexcept {
+        if (cancellationState != nullptr) {
+            cancellationState->pool.store(nullptr, std::memory_order_release);
+        }
         if (connection.operationGeneration == generation) {
             if (++connection.operationGeneration == 0) {
                 ++connection.operationGeneration;
@@ -94,15 +119,28 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(CommandSource 
     auto& connection = guard.connection();
     connection.abortReason = Connection::AbortReason::kNone;
     const auto generation = ++connection.operationGeneration;
-    auto stopRegistration = options.stopToken.registerCallback([pool = this, index, generation] {
-        WorkerHandleAccess::deferOrTerminate(*pool->worker_, [pool, index, generation] {
-            pool->cancelOperation(index, generation);
+    std::shared_ptr<RedisOperationCancellationState> cancellationState;
+    if (options.stopToken.stoppable()) {
+        cancellationState = std::make_shared<RedisOperationCancellationState>(*this, *worker_, index, generation);
+    }
+    auto stopRegistration = options.stopToken.registerCallback([cancellationState] {
+        if (cancellationState == nullptr) {
+            return;
+        }
+        WorkerHandleAccess::deferOrTerminate(*cancellationState->worker, [cancellationState] {
+            auto* pool = cancellationState->pool.load(std::memory_order_acquire);
+            if (pool != nullptr) {
+                pool->cancelOperation(cancellationState->index, cancellationState->generation);
+            }
         });
     });
     if (options.stopToken.stopRequested()) {
         cancelOperation(index, generation);
     }
     auto finishCancellation = [&]() noexcept {
+        if (cancellationState != nullptr) {
+            cancellationState->pool.store(nullptr, std::memory_order_release);
+        }
         if (connection.operationGeneration == generation) {
             if (++connection.operationGeneration == 0) {
                 ++connection.operationGeneration;

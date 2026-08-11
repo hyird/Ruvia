@@ -268,10 +268,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
 
                 const auto& route = resolved->route();
                 const auto& endpoint = route.endpoint();
-                if (responseCodingPolicy.negotiationFailed() && (endpoint.webSocket() != nullptr || endpoint.responseStream() != nullptr)) {
-                    // A stream/upgrade commits its representation before a
-                    // buffered status can be inspected. Preserve the old
-                    // pre-commit rejection for those routes.
+                if (responseCodingPolicy.negotiationFailed() && endpoint.responseStream() != nullptr) {
+                    // A response stream commits its representation before a
+                    // buffered status can be inspected. WebSocket upgrades do
+                    // not select an HTTP response representation.
                     closingRejection = Http1ClosingRejection::error(HttpErrorInfo(ruvia::http_status::kNotAcceptable, "not_acceptable", "no acceptable response content coding"));
                     break;
                 }
@@ -392,16 +392,19 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
             // replacement so its Content-Length/framing cannot describe the
             // pre-compression file.
             if (baseRouteServices.deferredStaticFileCompression() && responseBody(response).file().has_value()) {
-                const auto compressionResult = co_await tryCompressStaticFileResponse(
-                    response,
-                    *responseCodingPolicy.selection(),
-                    parsed.request.knownMethod(),
-                    *options_.compression,
-                    options_.documentRoot.runtimeOptions.onDemandCompressionMaxBytes,
-                    options_.blockingPool,
-                    workerHandle_);
-                if (!compressionResult.compressed() && httpResponseNeedsNotAcceptable(responseCodingPolicy, parsed.request, response) && responseBody(response).file().has_value()) {
-                    response = co_await routes.handleError(parsed.request, requestMemory, httpStaticFileCompressionError(compressionResult), baseRouteServices);
+                const auto* const responseCodingSelection = responseCodingPolicy.selection();
+                if (responseCodingSelection != nullptr) {
+                    const auto compressionResult = co_await tryCompressStaticFileResponse(
+                        response,
+                        *responseCodingSelection,
+                        parsed.request.knownMethod(),
+                        *options_.compression,
+                        options_.documentRoot.runtimeOptions.onDemandCompressionMaxBytes,
+                        options_.blockingPool,
+                        workerHandle_);
+                    if (!compressionResult.compressed() && httpResponseNeedsNotAcceptable(responseCodingPolicy, parsed.request, response) && responseBody(response).file().has_value()) {
+                        response = co_await routes.handleError(parsed.request, requestMemory, httpStaticFileCompressionError(compressionResult), baseRouteServices);
+                    }
                 }
                 connectionPlan = requireHttp1FinalResponseCommit(response, connectionPlan);
                 requestCompletion = requestCompletion->withBufferedConnectionPlan(connectionPlan);

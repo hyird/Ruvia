@@ -1,6 +1,7 @@
 #pragma once
 
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -156,6 +157,11 @@ std::optional<T> Env::parseArithmeticValue(std::string_view value) noexcept {
     const auto [ptr, ec] = std::from_chars(first, last, parsed);
     if (ec != std::errc{} || ptr != last) {
         return std::nullopt;
+    }
+    if constexpr (std::is_floating_point_v<T>) {
+        if (!std::isfinite(parsed)) {
+            return std::nullopt;
+        }
     }
 
     return parsed;

@@ -503,7 +503,10 @@ RUVIA_TEST(jwt_base64url_rejects_unrepresentable_capacity_hint) {
 
 RUVIA_TEST(jwt_bearer_token_extraction) {
     RUVIA_CHECK(jwtBearerToken("Bearer abc.def.ghi").value() == std::string_view("abc.def.ghi"));
+    RUVIA_CHECK(jwtBearerToken("Bearer    abc.def.ghi").value() == std::string_view("abc.def.ghi"));
     RUVIA_CHECK(jwtBearerToken("bearer xyz").value() == std::string_view("xyz"));  // scheme is case-insensitive
     RUVIA_CHECK(!jwtBearerToken("Basic abc").has_value());
     RUVIA_CHECK(!jwtBearerToken("Bearer").has_value());  // scheme only, no token
+    RUVIA_CHECK(!jwtBearerToken("Bearer    ").has_value());
+    RUVIA_CHECK(!jwtBearerToken("Bearer\tabc").has_value());  // auth-param separator is SP, not HTAB
 }

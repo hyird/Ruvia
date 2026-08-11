@@ -129,9 +129,9 @@ struct PreparedFixture final {
         : result(Http1ClientRequestWriter().prepare(origin, request, buffer, policy)) {}
 };
 
-[[nodiscard]] Http1ClientRequestPrepareError prepareError(const HttpClientRequestView& request) {
+[[nodiscard]] Http1ClientRequestPrepareError prepareError(const HttpClientRequestView& request, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy::withoutExpectation()) {
     std::array<char, 512> buffer;
-    const auto result = Http1ClientRequestWriter().prepare(HttpOriginView::https("example.test"), request, buffer);
+    const auto result = Http1ClientRequestWriter().prepare(HttpOriginView::https("example.test"), request, buffer, policy);
     const auto* failure = result.failure();
     if (failure == nullptr) {
         throw std::runtime_error("test expected request preparation to fail");
@@ -364,7 +364,7 @@ RUVIA_TEST(http1_client_request_writer_owns_hop_by_hop_field_contracts) {
         RUVIA_CHECK(prepareError(request) == test.error);
     }
 
-    for (const std::string_view connectionOptions : {"Host", "close, content-length", "EXPECT, keep-alive", "Cache-Control", "Trailer"}) {
+    for (const std::string_view connectionOptions : {"Host", "close, content-length", "EXPECT, keep-alive", "Cache-Control", "Trailer", "Authorization", "Cookie", "Range"}) {
         const ruvia::HttpHeaderView connection("Connection", connectionOptions);
         HttpClientRequestView request;
         request.method = "POST";
@@ -403,7 +403,7 @@ RUVIA_TEST(http1_client_request_writer_validates_te_capabilities_and_weights) {
         return std::nullopt;
     };
 
-    for (const std::string_view valid : {"", "trailers", "gzip", "deflate;q=0.5", "x-gzip ; q=1.000", "gzip;q=0, trailers"}) {
+    for (const std::string_view valid : {"", "trailers", "gzip", "deflate;q=0.5", "deflate;Q=0.5", "x-gzip ; q=1.000", "gzip;q=0, trailers"}) {
         RUVIA_CHECK(!prepareWithTe(valid).has_value());
     }
 
@@ -444,6 +444,25 @@ RUVIA_TEST(http1_client_request_writer_enforces_expect_content_semantics) {
     if (fixture.result.prepared() != nullptr) {
         RUVIA_CHECK(fixture.result.prepared()->contentPlan().continueGated() != nullptr);
         RUVIA_CHECK(fixture.result.prepared()->head().find("Expect: 100-continue\r\n") != std::string_view::npos);
+    }
+}
+
+RUVIA_TEST(http1_client_request_writer_rejects_invalid_close_policy) {
+    HttpClientRequestView request;
+    const auto invalidWithoutExpectation = Http1ClientRequestWirePolicy::withoutExpectation(static_cast<Http1ClosePolicy>(0xFF));
+    const auto invalidExpectContinue = Http1ClientRequestWirePolicy::expectContinue(static_cast<Http1ClosePolicy>(0xFF));
+    RUVIA_CHECK(prepareError(request, invalidWithoutExpectation) == Http1ClientRequestPrepareError::kInvalidClosePolicy);
+    RUVIA_CHECK(prepareError(request, invalidExpectContinue) == Http1ClientRequestPrepareError::kInvalidClosePolicy);
+
+    std::array<char, 512> buffer{};
+    const auto connect = Http1ClientRequestWriter().prepareConnect(
+        HttpOriginView::https("example.test"),
+        std::span<const ruvia::HttpHeaderView>{},
+        buffer,
+        invalidWithoutExpectation);
+    RUVIA_CHECK(connect.failure() != nullptr);
+    if (connect.failure() != nullptr) {
+        RUVIA_CHECK(connect.failure()->error() == Http1ClientRequestPrepareError::kInvalidClosePolicy);
     }
 }
 

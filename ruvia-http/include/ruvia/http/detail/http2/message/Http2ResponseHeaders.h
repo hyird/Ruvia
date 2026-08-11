@@ -115,6 +115,22 @@ inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std:
     HpackEncoder::encodeHeader(headerBlock, known.name.empty() ? http2LowerHeaderName(name, lowerNameStack, lowerNameScratch) : known.name, value);
 }
 
+[[nodiscard]] inline bool http2IsValidEncodedResponseHeader(std::string_view name, std::string_view value, std::uint32_t knownBit) noexcept {
+    if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) || http2FieldValueHasLeadingOrTrailingWhitespace(value) || http2IsForbiddenResponseConnectionField(name)) {
+        return false;
+    }
+    if (knownBit == kResponseHeaderContentType && !isValidHttpContentTypeFieldValue(value)) {
+        return false;
+    }
+    if (knownBit == kResponseHeaderContentEncoding && !isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kSender)) {
+        return false;
+    }
+    if (httpAsciiEqualsIgnoreCase(name, "Trailer") && !isValidHttpResponseTrailerFieldValue(value, HttpFieldListRole::kSender)) {
+        return false;
+    }
+    return true;
+}
+
 [[nodiscard]] inline Http2InterimResponseHeaderEncodeStatus validateHttp2InterimResponseHeaders(const HttpInterimResponseHead& response) noexcept {
     if (response.headers().size() > kMaxHttpHeaderFields) {
         return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
@@ -132,7 +148,7 @@ inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std:
         const auto name = header.name();
         // RFC 9113 forbids connection-specific fields in HTTP/2. Common 1xx
         // content/framing and singleton validation has already run above.
-        if (http2IsForbiddenResponseConnectionField(name) || !sectionSize.add(name, header.value())) {
+        if (http2IsForbiddenResponseConnectionField(name) || http2FieldValueHasLeadingOrTrailingWhitespace(header.value()) || !sectionSize.add(name, header.value())) {
             return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
         }
     }
@@ -174,11 +190,12 @@ inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std:
     }
     std::size_t fieldCount = 0;
     for (const auto& header : response.headers()) {
-        if (responseHeaderKnownBit(header) == kResponseHeaderContentLength) {
+        const auto knownBit = responseHeaderKnownBit(header);
+        if (knownBit == kResponseHeaderContentLength) {
             continue;
         }
         ++fieldCount;
-        if (fieldCount > kMaxHttpHeaderFields || !sectionSize.add(header.name(), header.value())) {
+        if (fieldCount > kMaxHttpHeaderFields || !http2IsValidEncodedResponseHeader(header.name(), header.value(), knownBit) || !sectionSize.add(header.name(), header.value())) {
             return false;
         }
     }

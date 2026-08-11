@@ -2,6 +2,7 @@
 
 #include "ruvia/web/detail/util/RegistrationResource.h"
 #include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -187,6 +188,9 @@ std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlew
 void detail::RouterImpl::validateRouteTarget(HttpKnownMethod method, std::string_view path) const {
     if (!RouteTable::isRoutableMethod(method)) {
         throw std::invalid_argument("route method must be routable");
+    }
+    if (path.find('?') != std::string_view::npos || !ruvia::detail::isValidOriginFormTarget(path)) {
+        throw std::invalid_argument("route path must be an origin-form path without query");
     }
 
     for (const auto& route : pendingRoutes_) {

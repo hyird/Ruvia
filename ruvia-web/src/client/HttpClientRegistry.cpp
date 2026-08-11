@@ -24,6 +24,34 @@ HttpClientRequestView HttpClientRequestAccess::view(const HttpClientRequest& req
     return result;
 }
 
+bool HttpClientRequestAccess::usesResource(const HttpClientRequest& request, std::pmr::memory_resource* resource) noexcept {
+    auto* const resolved = httpPmrResourceOrDefault(resource);
+    if (request.method_.get_allocator().resource() != resolved ||
+        request.path_.get_allocator().resource() != resolved ||
+        request.headers_.get_allocator().resource() != resolved ||
+        request.body_.get_allocator().resource() != resolved) {
+        return false;
+    }
+    return std::ranges::all_of(request.headers_, [resolved](const HttpClientRequest::Header& header) noexcept {
+        return header.name.get_allocator().resource() == resolved &&
+            header.value.get_allocator().resource() == resolved;
+    });
+}
+
+HttpClientRequest HttpClientRequestAccess::clone(const HttpClientRequest& request, std::pmr::memory_resource* resource) {
+    auto* targetResource = httpPmrResourceOrDefault(resource);
+    HttpClientRequest copy(targetResource);
+    copy.method_.assign(request.method_);
+    copy.path_.assign(request.path_);
+    copy.headers_.reserve(request.headers_.size());
+    for (const auto& header : request.headers_) {
+        copy.headers_.emplace_back(header.name, header.value, targetResource);
+    }
+    copy.body_.assign(request.body_);
+    copy.hasBody_ = request.hasBody_;
+    return copy;
+}
+
 HttpClientRegistry::HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions)
     : ioContext_(ioContext), worker_(worker), resource_(httpPmrResourceOrDefault(resource)), pools_(resource_), aliasIndex_(resource_) {
     pools_.reserve(definitions.size());

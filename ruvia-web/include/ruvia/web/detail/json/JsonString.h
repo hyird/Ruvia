@@ -32,6 +32,14 @@ namespace ruvia::detail {
     return true;
 }
 
+[[nodiscard]] inline bool isJsonHighSurrogate(std::uint32_t codeUnit) noexcept {
+    return codeUnit >= 0xD800 && codeUnit <= 0xDBFF;
+}
+
+[[nodiscard]] inline bool isJsonLowSurrogate(std::uint32_t codeUnit) noexcept {
+    return codeUnit >= 0xDC00 && codeUnit <= 0xDFFF;
+}
+
 // Length (1-4) of the well-formed UTF-8 sequence beginning at input[i] (whose
 // lead byte is >= 0x80), or 0 if the bytes there are not valid UTF-8. Enforces the
 // Unicode 3.9 Table 3-7 constraints: no overlong forms (C0/C1, E0 80-9F, F0 80-8F),
@@ -129,8 +137,19 @@ private:
                 continue;
             }
             if (escape == 'u') {
-                std::uint32_t ignored = 0;
-                if (i + 5 >= remaining.size() || !readJsonHex4(remaining.substr(i + 2), ignored)) {
+                std::uint32_t codeUnit = 0;
+                if (i + 5 >= remaining.size() || !readJsonHex4(remaining.substr(i + 2), codeUnit)) {
+                    return std::nullopt;
+                }
+                if (isJsonHighSurrogate(codeUnit)) {
+                    std::uint32_t low = 0;
+                    if (i + 11 >= remaining.size() || remaining[i + 6] != '\\' || remaining[i + 7] != 'u' || !readJsonHex4(remaining.substr(i + 8), low) || !isJsonLowSurrogate(low)) {
+                        return std::nullopt;
+                    }
+                    i += 12;
+                    continue;
+                }
+                if (isJsonLowSurrogate(codeUnit)) {
                     return std::nullopt;
                 }
                 i += 6;
@@ -240,17 +259,17 @@ void appendUtf8(OutputT& output, std::uint32_t codePoint) {
                     return std::nullopt;
                 }
                 i += 4;
-                if (codePoint >= 0xD800 && codePoint <= 0xDBFF) {
+                if (isJsonHighSurrogate(codePoint)) {
                     if (i + 6 >= input.size() || input[i + 1] != '\\' || input[i + 2] != 'u') {
                         return std::nullopt;
                     }
                     std::uint32_t low = 0;
-                    if (!readJsonHex4(input.substr(i + 3), low) || low < 0xDC00 || low > 0xDFFF) {
+                    if (!readJsonHex4(input.substr(i + 3), low) || !isJsonLowSurrogate(low)) {
                         return std::nullopt;
                     }
                     i += 6;
                     codePoint = 0x10000 + (((codePoint - 0xD800) << 10) | (low - 0xDC00));
-                } else if (codePoint >= 0xDC00 && codePoint <= 0xDFFF) {
+                } else if (isJsonLowSurrogate(codePoint)) {
                     return std::nullopt;
                 }
                 appendUtf8(output, codePoint);

@@ -90,6 +90,15 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     }
 }
 
+[[nodiscard]] bool isValidHttp1ClosePolicy(Http1ClosePolicy policy) noexcept {
+    switch (policy) {
+        case Http1ClosePolicy::kAllowReuse:
+        case Http1ClosePolicy::kCloseAfterResponse:
+            return true;
+    }
+    return false;
+}
+
 [[nodiscard]] Http1ClientRequestPrepareResult prepareRequest(const HttpOriginView& origin, std::string_view method, std::string_view target, bool connect, std::span<const HttpHeaderView> headers, HttpClientRequestContentView content, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) noexcept {
     RequestHeaderFacts headerFacts;
     Http1ClientRequestPrepareError error = Http1ClientRequestPrepareError::kInvalidHeader;
@@ -210,11 +219,16 @@ std::string_view http1ClientRequestPrepareErrorMessage(Http1ClientRequestPrepare
             return "OPTIONS content requires Content-Type";
         case Http1ClientRequestPrepareError::kHeaderTooLarge:
             return "HTTP/1 client request header is too large";
+        case Http1ClientRequestPrepareError::kInvalidClosePolicy:
+            return "invalid HTTP/1 client close policy";
     }
     return "invalid HTTP/1 client request";
 }
 
 Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOriginView& origin, const HttpClientRequestView& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const noexcept {
+    if (!isValidHttp1ClosePolicy(policy.closePolicy())) {
+        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidClosePolicy);
+    }
     if (!isValidHttpMethodToken(request.method)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidMethod);
     }
@@ -228,6 +242,9 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOrig
 }
 
 Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const noexcept {
+    if (!isValidHttp1ClosePolicy(policy.closePolicy())) {
+        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidClosePolicy);
+    }
     if (tunnelOrigin.port() == 0) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidConnectOrigin);
     }

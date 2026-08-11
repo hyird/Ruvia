@@ -14,6 +14,12 @@ namespace ruvia {
 
 namespace {
 
+void requirePositiveRedisTtl(std::chrono::seconds ttl, const char* message) {
+    if (ttl.count() <= 0) {
+        throw std::invalid_argument(message);
+    }
+}
+
 Task<RedisTtl> redisTtlCommand(detail::RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource, bool secondsPrecision) {
     const auto value = co_await detail::redisIntegerCommand(std::move(executor), std::move(args), resource);
     if (value == -2) {
@@ -127,6 +133,7 @@ ScopedOperation<void> RedisHandle::mset(std::span<const std::pair<std::string_vi
 
 ScopedOperation<void> RedisHandle::setEx(std::string_view key, std::chrono::seconds ttl, std::string_view value) const {
     requireActive();
+    requirePositiveRedisTtl(ttl, "redis setEx TTL must be greater than zero");
     auto ttlValue = detail::redisSecondsString(ttl, resource_);
     return scoped(detail::redisOkCommand(executor(), detail::ownRedisArgs({"SETEX", key, std::string_view(ttlValue), value}, resource_), resource_));
 }
@@ -210,6 +217,7 @@ ScopedOperation<bool> RedisHandle::renameNx(std::string_view key, std::string_vi
 
 ScopedOperation<bool> RedisHandle::expire(std::string_view key, std::chrono::seconds ttl) const {
     requireActive();
+    requirePositiveRedisTtl(ttl, "redis expire TTL must be greater than zero");
     auto ttlValue = detail::redisSecondsString(ttl, resource_);
     return scoped(detail::executeRedisIntegerBool(executor(), detail::ownRedisArgs({"EXPIRE", key, std::string_view(ttlValue)}, resource_), resource_));
 }

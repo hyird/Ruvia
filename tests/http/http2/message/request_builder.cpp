@@ -112,6 +112,35 @@ RUVIA_TEST(h2_request_builder_preserves_explicit_empty_non_http_path) {
     RUVIA_CHECK(request.queryString().empty());
 }
 
+RUVIA_TEST(h2_request_builder_does_not_forge_host_when_authority_absent) {
+    auto request = HttpRequestAccess::make();
+    auto stream = makeStream();
+    stream.assignRequestMethod("GET");
+    stream.assignRequestScheme("git+ssh");
+    stream.markScheme(0);
+    stream.assignRequestPath("");
+    stream.markPath();
+
+    RUVIA_CHECK(buildRequest(stream, request));
+    RUVIA_CHECK(!request.header("host").has_value());
+}
+
+RUVIA_TEST(h2_request_builder_preserves_explicit_empty_authority_as_empty_host) {
+    auto request = HttpRequestAccess::make();
+    auto stream = makeStream();
+    stream.assignRequestMethod("GET");
+    stream.assignRequestScheme("git+ssh");
+    stream.markScheme(0);
+    stream.assignRequestAuthority("");
+    stream.markAuthority();
+    stream.assignRequestPath("");
+    stream.markPath();
+
+    RUVIA_CHECK(buildRequest(stream, request));
+    RUVIA_CHECK(request.header("host").has_value());
+    RUVIA_CHECK(request.header("host")->empty());
+}
+
 RUVIA_TEST(h2_request_builder_rejects_explicit_empty_http_path) {
     auto request = HttpRequestAccess::make();
     auto stream = makeStream();
@@ -162,6 +191,7 @@ RUVIA_TEST(h2_request_builder_failure_owns_protocol_status_and_diagnostic) {
     tooManyHeaders.assignRequestMethod("GET");
     tooManyHeaders.assignRequestPath("/");
     tooManyHeaders.assignRequestAuthority("example.com");
+    tooManyHeaders.markAuthority();
     for (std::size_t i = 0; i < ruvia::kMaxHttpHeaderFields; ++i) {
         RUVIA_CHECK(tooManyHeaders.appendRequestHeader("x-test", "value", RequestHeaderKind::kOther));
     }
@@ -180,6 +210,7 @@ RUVIA_TEST(h2_request_builder_standard_connect_keeps_authority_form_target) {
     auto stream = makeStream();
     stream.assignRequestMethod("CONNECT");
     stream.assignRequestAuthority("proxy.example:443");
+    stream.markAuthority();
     RUVIA_CHECK(stream.beginStandardConnect());
 
     RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kConnect);
@@ -198,6 +229,7 @@ RUVIA_TEST(h2_request_builder_does_not_forge_host_from_generic_authority) {
     stream.assignRequestMethod("GET");
     stream.assignRequestScheme("git+ssh");
     stream.assignRequestAuthority("deploy:secret@example.test:9418");
+    stream.markAuthority();
     stream.assignRequestPath("/repository");
 
     RUVIA_CHECK(buildRequest(stream, request));
@@ -210,6 +242,7 @@ RUVIA_TEST(h2_request_builder_generic_extended_connect_retains_connect_method) {
     stream.assignRequestMethod("CONNECT");
     stream.setProtocol("connect-udp");
     stream.assignRequestAuthority("masque.example");
+    stream.markAuthority();
     stream.assignRequestPath("/.well-known/masque/udp?target=origin.example");
     RUVIA_CHECK(stream.beginExtendedConnect());
 
@@ -229,6 +262,7 @@ RUVIA_TEST(h2_request_builder_generic_extended_connect_preserves_empty_path) {
     stream.assignRequestScheme("custom+transport");
     stream.markScheme(0);
     stream.assignRequestAuthority("user:secret@example.test");
+    stream.markAuthority();
     stream.assignRequestPath("");
     stream.markPath();
     RUVIA_CHECK(stream.beginExtendedConnect());
@@ -246,6 +280,7 @@ RUVIA_TEST(h2_request_builder_websocket_extended_connect_maps_only_route_method)
     stream.assignRequestMethod("CONNECT");
     stream.setProtocol("WebSocket");
     stream.assignRequestAuthority("ws.example");
+    stream.markAuthority();
     stream.assignRequestPath("/chat");
     RUVIA_CHECK(stream.beginExtendedConnect());
 

@@ -207,6 +207,14 @@ RUVIA_TEST(rate_limit_rule_rejects_invalid_fixed_windows) {
     }
     RUVIA_CHECK(zeroWindowRejected);
 
+    bool invalidOverflowPolicyRejected = false;
+    try {
+        (void)RateLimitRule::fixedWindow(1, std::chrono::milliseconds(1), static_cast<RateLimitOverflowPolicy>(0xFF));
+    } catch (const std::invalid_argument&) {
+        invalidOverflowPolicyRejected = true;
+    }
+    RUVIA_CHECK(invalidOverflowPolicyRejected);
+
     const auto valid = RateLimitRule::fixedWindow(100, std::chrono::seconds(60), RateLimitOverflowPolicy::kAllow);
     RUVIA_CHECK_EQ(valid.maxRequests(), std::size_t{100});
     RUVIA_CHECK(valid.window() == std::chrono::milliseconds(60000));
@@ -267,4 +275,10 @@ RUVIA_TEST(rate_limit_key_groups_ipv6_by_64_prefix) {
 
     // IPv4-mapped IPv6 must NOT collapse to one /64 -- each mapped host stays distinct.
     RUVIA_CHECK(rateLimitKey("::ffff:203.0.113.7") != rateLimitKey("::ffff:203.0.113.8"));
+
+    // Scoped IPv6 addresses carry an interface/zone identifier. That scope is
+    // part of the peer identity for link-local addresses, so it must not be
+    // stripped by the /64 grouping path.
+    RUVIA_CHECK_EQ(rateLimitKey("fe80::1%1"), std::string("fe80::1%1"));
+    RUVIA_CHECK(rateLimitKey("fe80::1%1") != rateLimitKey("fe80::1%2"));
 }

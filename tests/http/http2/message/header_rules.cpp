@@ -7,6 +7,7 @@
 namespace {
 
 using ruvia::detail::http2HeaderNameHasUppercase;
+using ruvia::detail::http2FieldValueHasLeadingOrTrailingWhitespace;
 using ruvia::detail::http2IsForbiddenConnectionHeader;
 using ruvia::detail::http2IsForbiddenRequestTrailerHeader;
 using ruvia::detail::http2IsForbiddenResponseConnectionField;
@@ -46,6 +47,15 @@ RUVIA_TEST(http2_forbidden_connection_headers) {
 RUVIA_TEST(http2_valid_regular_header) {
     RUVIA_CHECK(http2IsValidRegularHeader("content-type", "text/html"));
     RUVIA_CHECK(http2IsValidRegularHeader("x-custom", "value"));
+    RUVIA_CHECK(!http2FieldValueHasLeadingOrTrailingWhitespace(""));
+    RUVIA_CHECK(!http2FieldValueHasLeadingOrTrailingWhitespace("value"));
+    RUVIA_CHECK(http2FieldValueHasLeadingOrTrailingWhitespace(" value"));
+    RUVIA_CHECK(http2FieldValueHasLeadingOrTrailingWhitespace("value "));
+    RUVIA_CHECK(http2FieldValueHasLeadingOrTrailingWhitespace("\tvalue"));
+    RUVIA_CHECK(http2FieldValueHasLeadingOrTrailingWhitespace("value\t"));
+    // RFC 9113 §8.2.1: HTTP/2 field values cannot start or end with SP/HTAB.
+    RUVIA_CHECK(!http2IsValidRegularHeader("x-custom", " value"));
+    RUVIA_CHECK(!http2IsValidRegularHeader("x-custom", "value "));
     // A pseudo-header or an empty name is not a valid regular header.
     RUVIA_CHECK(!http2IsValidRegularHeader(":path", "/"));
     RUVIA_CHECK(!http2IsValidRegularHeader("", "value"));

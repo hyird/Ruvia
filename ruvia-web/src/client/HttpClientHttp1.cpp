@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 
 #include <array>
+#include <exception>
 
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
@@ -28,12 +29,16 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
         throw HttpClientError(HttpClientError::Code::kInvalidRequest,
             preparedResult.failure() ? std::string(http1ClientRequestPrepareErrorMessage(preparedResult.failure()->error())) : "HTTP request head is too large");
     }
+    Http1ClientResponseParser parser(*prepared, responseResource);
     co_await write(connection, prepared->head(), timeout);
     if (const auto* content = prepared->contentPlan().immediate()) {
         co_await write(connection, content->bytes(), timeout);
+        if (!content->bytes().empty() &&
+            parser.completeRequestContent() != Http1ClientRequestContentCompletionStatus::kCompleted) {
+            std::terminate();
+        }
     }
 
-    Http1ClientResponseParser parser(*prepared, responseResource);
     HttpClientResponse response(responseResource);
     std::array<char, 16384> input{};
     for (;;) {
@@ -142,8 +147,10 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
             connection.readBuffer.append(input.data(), bytes);
         };
         bool closeAfter = false;
+        bool contentSemanticsPresent = false;
 
         if (const auto* known = parsed->plan().knownLength()) {
+            contentSemanticsPresent = true;
             if (known->contentLength() > config_.maxResponseBytes) {
                 throw HttpClientError(HttpClientError::Code::kResponseTooLarge, "HTTP response exceeds configured byte limit");
             }
@@ -152,6 +159,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
             connection.readBuffer.erase(0, known->contentLength());
             closeAfter = known->persistence() == Http1ClosePolicy::kCloseAfterResponse;
         } else if (const auto* chunked = parsed->plan().chunked()) {
+            contentSemanticsPresent = true;
             configureTransferDecoder(chunked->transferCodings());
             Http1ChunkedBodyDecoder decoder(transferDecoder
                     ? ProtocolByteLimit::unlimited()
@@ -168,6 +176,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
             finishTransferDecoder();
             closeAfter = chunked->persistence() == Http1ClosePolicy::kCloseAfterResponse;
         } else if (const auto* closeDelimited = parsed->plan().closeDelimited()) {
+            contentSemanticsPresent = true;
             configureTransferDecoder(closeDelimited->transferCodings());
             appendTransferDecoded(connection.readBuffer);
             connection.readBuffer.clear();
@@ -179,6 +188,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
             finishTransferDecoder();
             closeAfter = true;
         } else if (const auto* zero = parsed->plan().zeroContent()) {
+            contentSemanticsPresent = true;
             if (const auto* zeroKnown = zero->knownLength()) {
                 while (connection.readBuffer.size() < zeroKnown->contentLength()) co_await readMore();
                 if (zeroKnown->contentLength() != 0) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
@@ -221,6 +231,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
             throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP tunnel and protocol upgrade responses require a dedicated API");
         }
         if (!connection.readBuffer.empty()) throw HttpClientError(HttpClientError::Code::kProtocolError, "unexpected bytes after HTTP response");
+        decodeResponseContentEncoding(response, contentSemanticsPresent, config_.maxResponseBytes, responseResource);
         if (closeAfter) close(connection);
         co_return response;
     }

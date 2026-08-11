@@ -1,5 +1,8 @@
 #include "ruvia/web/SecurityHeaders.h"
 
+#include <stdexcept>
+
+#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 
@@ -26,6 +29,13 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& option
         target.header(name, value);
     };
 
+    const auto setSecureTransportHeader = [&setHeader, secureTransport](std::string_view name, std::string_view value, bool skipEmpty) {
+        if (!secureTransport && detail::httpAsciiEqualsIgnoreCase(name, "Strict-Transport-Security")) {
+            return;
+        }
+        setHeader(name, value, skipEmpty);
+    };
+
     if (options.contentTypeOptions) {
         setHeader("X-Content-Type-Options", "nosniff", true);
     }
@@ -43,6 +53,8 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& option
             break;
         case LegacyXssFilterPolicy::kOmitHeader:
             break;
+        default:
+            throw std::invalid_argument("legacy XSS filter policy is invalid");
     }
 
     setHeader("Content-Security-Policy", options.contentSecurityPolicy, true);
@@ -50,7 +62,7 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& option
     setHeader("Permissions-Policy", options.permissionsPolicy, true);
 
     for (const auto& header : options.customHeaders) {
-        setHeader(header.name, header.value, false);
+        setSecureTransportHeader(header.name, header.value, false);
     }
 }
 

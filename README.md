@@ -178,9 +178,10 @@ ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
 ```
 
 `HttpClientResponse` owns status, protocol version, headers, trailers, and
-buffered body in its operation memory resource. `maxResponseBytes` bounds that
-body; use `trailers()` or `getTrailer()` after completion to inspect HTTP/2
-trailing fields. On HTTP/1, a request timeout or explicit `StopToken`
+buffered body in stable PMR storage; it does not borrow from the request builder
+or caller stack. `maxResponseBytes` bounds that body; use `trailers()` or
+`getTrailer()` after completion to inspect HTTP/2 trailing fields. On HTTP/1, a
+request timeout or explicit `StopToken`
 cancellation closes and discards that socket. On HTTP/2 it submits
 `RST_STREAM(CANCEL)` for only the affected stream, so unrelated multiplexed
 requests can continue. A connection I/O/protocol failure or `writeTimeout`

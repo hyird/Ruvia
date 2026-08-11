@@ -2,9 +2,12 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/http/BorrowedText.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Middleware.h"
 #include "ruvia/web/Next.h"
+
+#include <stdexcept>
 
 namespace ruvia {
 
@@ -18,9 +21,16 @@ namespace ruvia {
 // and "X-XSRF-TOKEN" and can be rebranded per app.
 class CsrfProtection final : public Middleware<CsrfProtection> {
 public:
-    explicit CsrfProtection(::ruvia::BorrowedText cookieName = "XSRF-TOKEN", ::ruvia::BorrowedText headerName = "X-XSRF-TOKEN") noexcept
+    explicit CsrfProtection(::ruvia::BorrowedText cookieName = "XSRF-TOKEN", ::ruvia::BorrowedText headerName = "X-XSRF-TOKEN")
         : cookieName_(cookieName),
-          headerName_(headerName) {}
+          headerName_(headerName) {
+        if (!isValidHttpHeaderName(cookieName_.view())) {
+            throw std::invalid_argument("CSRF cookie name must be a valid HTTP token");
+        }
+        if (!isValidHttpHeaderName(headerName_.view())) {
+            throw std::invalid_argument("CSRF header name must be a valid HTTP field name");
+        }
+    }
 
     Task<void> handle(Context& c, Next& next);
 

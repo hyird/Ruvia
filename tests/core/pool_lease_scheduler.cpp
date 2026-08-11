@@ -8,10 +8,56 @@
 #include <asio/post.hpp>
 
 #include <chrono>
+#include <coroutine>
+#include <exception>
 #include <memory>
 #include <optional>
 
 namespace {
+
+class AcquireProbeTask final {
+public:
+    struct promise_type final {
+        [[nodiscard]] AcquireProbeTask get_return_object() noexcept {
+            return AcquireProbeTask(std::coroutine_handle<promise_type>::from_promise(*this));
+        }
+
+        [[nodiscard]] std::suspend_always initial_suspend() const noexcept {
+            return {};
+        }
+
+        [[nodiscard]] std::suspend_always final_suspend() const noexcept {
+            return {};
+        }
+
+        void return_void() const noexcept {}
+
+        [[noreturn]] void unhandled_exception() const noexcept {
+            std::terminate();
+        }
+    };
+
+    AcquireProbeTask(const AcquireProbeTask&) = delete;
+    AcquireProbeTask& operator=(const AcquireProbeTask&) = delete;
+
+    ~AcquireProbeTask() {
+        handle_.destroy();
+    }
+
+    void start() const noexcept {
+        handle_.resume();
+    }
+
+    [[nodiscard]] bool done() const noexcept {
+        return handle_.done();
+    }
+
+private:
+    explicit AcquireProbeTask(std::coroutine_handle<promise_type> handle) noexcept
+        : handle_(handle) {}
+
+    std::coroutine_handle<promise_type> handle_;
+};
 
 ruvia::Task<void> exerciseLeaseAndClose(ruvia::detail::PoolLeaseScheduler& scheduler, asio::io_context& ioContext, bool& success) {
     {
@@ -77,6 +123,42 @@ ruvia::Task<void> exerciseAcquireCancellation(ruvia::detail::PoolLeaseScheduler&
     success = result.cancelled() != nullptr;
 }
 
+AcquireProbeTask observeAcquireClosedAfterStaleCancellation(ruvia::detail::PoolLeaseScheduler& scheduler, ruvia::StopToken stopToken, const ruvia::WorkerHandle& worker, bool& closed) {
+    const auto result = co_await scheduler.acquire(std::nullopt, std::move(stopToken), worker);
+    closed = result.closed() != nullptr;
+}
+
+bool exerciseCompletedAcquireIgnoresStalePostedCancellation(asio::io_context& ioContext, const ruvia::WorkerHandle& worker) {
+    bool closed = false;
+    {
+        ruvia::detail::PoolLeaseScheduler scheduler(0);
+        ruvia::detail::StopSource source;
+        auto probe = observeAcquireClosedAfterStaleCancellation(scheduler, source.token(), worker, closed);
+
+        probe.start();
+        if (probe.done()) {
+            return false;
+        }
+
+        source.requestStop();
+        if (probe.done()) {
+            return false;
+        }
+
+        if (!scheduler.close() || !probe.done() || !closed) {
+            return false;
+        }
+    }
+
+    // The stop request above queued a worker cancellation before the acquire was
+    // closed. It runs after the scheduler has been destroyed, so it must observe
+    // the acquire's expired cancellation state instead of dereferencing the old
+    // intrusive queue.
+    ioContext.restart();
+    ioContext.run();
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -96,6 +178,7 @@ int main() {
     asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exerciseSaturatedAcquireTimeout(saturatedTimeoutScheduler, ioContext, saturatedTimeoutSuccess)), asio::detached);
     asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exerciseAcquireCancellation(cancellationScheduler, ioContext, worker, cancellationSuccess)), asio::detached);
     ioContext.run();
+    const bool staleCancellationSuccess = exerciseCompletedAcquireIgnoresStalePostedCancellation(ioContext, worker);
     dispatcher->close();
-    return leaseSuccess && timeoutSuccess && saturatedTimeoutSuccess && cancellationSuccess ? 0 : 1;
+    return leaseSuccess && timeoutSuccess && saturatedTimeoutSuccess && cancellationSuccess && staleCancellationSuccess ? 0 : 1;
 }

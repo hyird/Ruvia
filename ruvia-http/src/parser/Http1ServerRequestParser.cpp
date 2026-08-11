@@ -86,6 +86,12 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer, std::si
     // disposition is already derived from the parsed Connection fields and is
     // tightened to close by body/response policy later.
     state.connectionPlan = protocolVersion == HttpProtocolVersion::kHttp11 ? http1PlanHttp11RequestConnection(block.connectionOptions) : http1PlanHttp10RequestConnection(block.connectionOptions);
+    if (block.upgradeProtocols.hasField() && !block.connectionOptions.upgrade()) {
+        return fail(HttpParseError::kInvalidConnection);
+    }
+    if (block.teHeaderPresent && !block.connectionOptions.te()) {
+        return fail(HttpParseError::kInvalidConnection);
+    }
 
     RequestTargetView targetView;
     if (!parseRequestTarget(knownMethod, target, targetView)) {
@@ -121,6 +127,9 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer, std::si
     const auto* finalChunked = transferEncoding.has_value() ? transferEncoding->finalChunked() : nullptr;
     if (transferEncoding.has_value() && finalChunked == nullptr) {
         return fail(HttpParseError::kInvalidTransferEncoding);
+    }
+    if (block.nonEmptyTrailerHeaderPresent && finalChunked == nullptr) {
+        return fail(HttpParseError::kInvalidHeader);
     }
 
     // RFC 9112 section 6.1: Transfer-Encoding in an HTTP/1.0 request must be treated

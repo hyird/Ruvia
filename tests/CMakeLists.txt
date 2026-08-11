@@ -660,6 +660,8 @@ if(RUVIA_BUILD_WEB)
         web/server/head_stream_route.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_connection_failure
         web/server/connection_failure.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_error_static_file
+        web/server/error_static_file.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_worker_state
         web/server/worker_state.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_http2_head_stream_route
@@ -670,6 +672,8 @@ if(RUVIA_BUILD_WEB)
         web/server/pipeline_request_views.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_tls_keepalive_deadline
         web/server/tls_keepalive_deadline.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_websocket
+        web/server/websocket.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_keepalive_idle_timeout
         web/server/keepalive_idle_timeout.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_write_timeout

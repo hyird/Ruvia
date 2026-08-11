@@ -49,10 +49,6 @@ namespace ruvia::detail {
     return true;
 }
 
-[[nodiscard]] inline constexpr bool isSqlWhitespace(char character) noexcept {
-    return character == ' ' || character == '\t' || character == '\r' || character == '\n';
-}
-
 // MariaDB's collations are PAD SPACE, including the binary one the migrations
 // table pins, so "v1" and "v1 " are one id there and two everywhere else. An id
 // wrapped in whitespace is a typo in every case that matters, so it is refused
@@ -94,22 +90,80 @@ namespace ruvia::detail {
 // backend syntax error pointing at the second statement, which reads like the
 // SQL is wrong rather than the packaging. A trailing separator is accepted by
 // both, so only a separator with statement text after it is refused.
-[[nodiscard]] inline bool hasTrailingSqlOnly(std::string_view sql, std::size_t after) noexcept {
-    for (auto index = after; index < sql.size(); ++index) {
+[[nodiscard]] inline std::size_t skipMigrationTrailingComment(std::string_view sql, std::size_t index, DbDriver driver) noexcept {
+    if (index >= sql.size()) {
+        return index;
+    }
+    if (driver == DbDriver::kMariaDb && sql[index] == '#') {
+        return skipSqlLineComment(sql, index + 1);
+    }
+    if (driver == DbDriver::kMariaDb
+            ? isMariaDbDoubleDashComment(sql, index)
+            : (sql[index] == '-' && index + 1 < sql.size() && sql[index + 1] == '-')) {
+        return skipSqlLineComment(sql, index + 2);
+    }
+    if (sql[index] == '/' && index + 1 < sql.size() && sql[index + 1] == '*') {
+        return skipSqlBlockComment(sql, index);
+    }
+    return index;
+}
+
+[[nodiscard]] inline bool hasTrailingSqlOnly(std::string_view sql, std::size_t after, DbDriver driver) noexcept {
+    for (auto index = after; index < sql.size();) {
         if (!isSqlWhitespace(sql[index])) {
-            return false;
+            const auto next = skipMigrationTrailingComment(sql, index, driver);
+            if (next == index) {
+                return false;
+            }
+            index = next;
+            continue;
         }
+        ++index;
     }
     return true;
+}
+
+[[nodiscard]] inline bool hasMigrationStatementText(std::string_view sql, DbDriver driver) noexcept {
+    for (auto index = std::size_t{0}; index < sql.size();) {
+        if (isSqlWhitespace(sql[index]) || sql[index] == ';') {
+            ++index;
+            continue;
+        }
+        const auto next = skipMigrationTrailingComment(sql, index, driver);
+        if (next != index) {
+            index = next;
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] inline std::size_t findMigrationStatementSeparator(std::string_view sql, DbDriver driver) {
+    switch (driver) {
+        case DbDriver::kMariaDb:
+            return findSqlSyntaxByte(sql, ';');
+        case DbDriver::kPostgreSql:
+            return findPostgreSqlSyntaxByte(sql, ';');
+        default:
+            throw std::invalid_argument("database driver is invalid");
+    }
 }
 
 // Validates a developer-supplied migration list before it is applied: every id
 // must be non-empty, at most 190 bytes (the indexed schema column width), have
 // non-empty single-statement SQL, and be unique -- a duplicate id would run the
 // wrong migration.
-inline void validateMigrationList(std::span<const DbMigration> migrations) {
+inline void validateMigrationList(std::span<const DbMigration> migrations, DbDriver driver) {
     for (std::size_t i = 0; i < migrations.size(); ++i) {
         const auto& migration = migrations[i];
+        switch (migration.atomicity()) {
+            case DbMigrationAtomicity::kTransactional:
+            case DbMigrationAtomicity::kUnwrapped:
+                break;
+            default:
+                throw std::invalid_argument("database migration atomicity is invalid");
+        }
         if (migration.id().empty()) {
             throw std::invalid_argument("database migration id must not be empty");
         }
@@ -119,11 +173,11 @@ inline void validateMigrationList(std::span<const DbMigration> migrations) {
         if (hasSurroundingWhitespace(migration.id())) {
             throw std::invalid_argument("database migration id must not begin or end with whitespace");
         }
-        if (migration.sql().empty()) {
+        if (!hasMigrationStatementText(migration.sql(), driver)) {
             throw std::invalid_argument("database migration SQL must not be empty");
         }
-        const auto separator = findPostgreSqlSyntaxByte(migration.sql(), ';');
-        if (separator != std::string_view::npos && !hasTrailingSqlOnly(migration.sql(), separator + 1)) {
+        const auto separator = findMigrationStatementSeparator(migration.sql(), driver);
+        if (separator != std::string_view::npos && !hasTrailingSqlOnly(migration.sql(), separator + 1, driver)) {
             throw std::invalid_argument("database migration must contain exactly one SQL statement");
         }
         for (std::size_t j = i + 1; j < migrations.size(); ++j) {
@@ -132,6 +186,10 @@ inline void validateMigrationList(std::span<const DbMigration> migrations) {
             }
         }
     }
+}
+
+inline void validateMigrationList(std::span<const DbMigration> migrations) {
+    validateMigrationList(migrations, DbDriver::kPostgreSql);
 }
 
 }  // namespace ruvia::detail

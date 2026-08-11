@@ -48,7 +48,7 @@ namespace {
 
 void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
     const detail::SetCookiePlan plan(name, value, options);
-    auto& header = detail::upsertResponseSetCookieUninitializedValue(responseState_.activeResponse(), plan.wirePrefix(), plan.name(), plan.size());
+    auto& header = detail::upsertResponseSetCookieUninitializedValue(responseState_.activeResponse(), plan.wirePrefix(), plan.name(), plan.path(), plan.domain(), plan.size());
     plan.write(detail::responseHeaderValueBegin(header));
 }
 

@@ -8,10 +8,13 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/detail/client/HttpClientContentEncoding.h"
 #include "ruvia/http/detail/cookie/CookieValidation.h"
+#include "ruvia/http/detail/parser/HttpUriGrammar.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
@@ -49,6 +52,34 @@ std::size_t configuredCookieBytes(const HttpClientConfig& config) noexcept {
     return total;
 }
 
+std::vector<std::pair<std::string, std::string>> updatedDynamicClientCookies(
+    const HttpClientConfig& config,
+    std::string_view name,
+    std::string_view value) {
+    if (!isValidHttpHeaderName(name) || !detail::isValidCookieValue(value)) {
+        throw std::invalid_argument("invalid HTTP client cookie");
+    }
+
+    auto replacement = config.cookies;
+    const auto match = std::ranges::find_if(replacement, [name](const auto& cookie) { return cookie.first == name; });
+    const auto replacedBytes = match == replacement.end()
+        ? 0
+        : cookieStorageBytes(match->first, match->second);
+    const auto retainedBytes = configuredCookieBytes(config) - replacedBytes;
+    const auto replacementBytes = cookieStorageBytes(name, value);
+    if ((match == replacement.end() && replacement.size() >= config.maxCookiesPerWorker) ||
+        retainedBytes > config.maxCookieBytesPerWorker ||
+        replacementBytes > config.maxCookieBytesPerWorker - retainedBytes) {
+        throw std::length_error("HTTP client cookie jar capacity exceeded");
+    }
+    if (match == replacement.end()) {
+        replacement.emplace_back(name, value);
+    } else {
+        match->second.assign(value);
+    }
+    return replacement;
+}
+
 HttpClientConfig parseHttpClientOrigin(std::string_view origin, HttpClientConfig config) {
     if (origin.size() >= 8 && detail::httpAsciiEqualsIgnoreCase(origin.substr(0, 8), "https://")) {
         config.scheme = HttpScheme::kHttps;
@@ -76,6 +107,7 @@ HttpClientConfig parseHttpClientOrigin(std::string_view origin, HttpClientConfig
         const auto closing = authority.find(']');
         if (closing == std::string_view::npos) throw std::invalid_argument("HTTP client IPv6 origin is invalid");
         host = authority.substr(1, closing - 1);
+        if (!detail::isValidIpv6Literal(host)) throw std::invalid_argument("HTTP client IPv6 origin is invalid");
         const auto remainder = authority.substr(closing + 1);
         if (!remainder.empty()) {
             if (remainder.front() != ':') throw std::invalid_argument("HTTP client origin authority is invalid");
@@ -141,6 +173,38 @@ std::optional<std::string_view> HttpClientResponse::getTrailer(std::string_view 
     return match == trailers_.end() ? std::nullopt : std::optional<std::string_view>(match->value());
 }
 
+namespace detail {
+
+void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response, bool contentSemanticsPresent, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
+    if (!contentSemanticsPresent) {
+        return;
+    }
+    const auto parsedCoding = httpClientContentCodingOf(response.headers_);
+    const auto* coding = parsedCoding.coding();
+    if (coding == nullptr) {
+        throw HttpClientError(HttpClientError::Code::kProtocolError, "unsupported HTTP response Content-Encoding");
+    }
+    if (*coding == HttpContentCoding::kIdentity) {
+        return;
+    }
+    auto decoded = decodeHttpContent(*coding, response.body_, maxDecodedBytes, resource);
+    if (auto* content = decoded.decoded()) {
+        auto bytes = std::move(*content).takeBytes();
+        response.body_.swap(bytes);
+        return;
+    }
+    const auto* failure = decoded.failure();
+    if (failure != nullptr && failure->error() == HttpContentDecodeError::kDecodedSizeExceeded) {
+        throw HttpClientError(HttpClientError::Code::kResponseTooLarge, "HTTP response exceeds configured byte limit");
+    }
+    if (failure != nullptr && failure->error() == HttpContentDecodeError::kDecoderFailure) {
+        throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP response content-coding decoder failed");
+    }
+    throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid HTTP response Content-Encoding");
+}
+
+}  // namespace detail
+
 HttpClientRequest::HttpClientRequest(std::pmr::memory_resource* resource)
     : method_("GET", detail::httpPmrResourceOrDefault(resource)),
       path_("/", detail::httpPmrResourceOrDefault(resource)),
@@ -182,8 +246,12 @@ HttpClientRequest& HttpClientRequest::removeHeader(std::string_view name) {
 }
 
 HttpClientRequest& HttpClientRequest::setContentTypeString(std::string_view contentType) {
+    auto* const resource = headers_.get_allocator().resource();
+    Header replacement("content-type", contentType, resource);
+    headers_.reserve(headers_.size() + 1);
     removeHeader("content-type");
-    return addHeader("content-type", contentType);
+    headers_.push_back(std::move(replacement));
+    return *this;
 }
 
 HttpClientRequest& HttpClientRequest::addCookie(std::string_view name, std::string_view value) {
@@ -191,17 +259,22 @@ HttpClientRequest& HttpClientRequest::addCookie(std::string_view name, std::stri
         throw std::invalid_argument("invalid HTTP client request cookie");
     }
     const auto match = std::ranges::find_if(headers_, [](const Header& header) { return headerNameEquals(header.name, "cookie"); });
+    auto* const resource = headers_.get_allocator().resource();
+    auto appendCookiePair = [name, value](std::pmr::string& target) {
+        if (!target.empty()) target.append("; ");
+        target.append(name);
+        target.push_back('=');
+        target.append(value);
+    };
     if (match == headers_.end()) {
-        headers_.emplace_back("cookie", "", headers_.get_allocator().resource());
-        headers_.back().value.reserve(name.size() + value.size() + 1);
-        headers_.back().value.append(name);
-        headers_.back().value.push_back('=');
-        headers_.back().value.append(value);
+        std::pmr::string cookieValue(resource);
+        appendCookiePair(cookieValue);
+        headers_.emplace_back("cookie", "", resource);
+        headers_.back().value.swap(cookieValue);
     } else {
-        if (!match->value.empty()) match->value.append("; ");
-        match->value.append(name);
-        match->value.push_back('=');
-        match->value.append(value);
+        std::pmr::string cookieValue(match->value, resource);
+        appendCookiePair(cookieValue);
+        match->value.swap(cookieValue);
     }
     return *this;
 }
@@ -239,6 +312,7 @@ void HttpClient::expireCapability(detail::ScopedCapabilityNode& capability) noex
 }
 
 HttpClient HttpClient::withOptions(HttpClientOperationOptions options) const {
+    detail::validateHttpClientOperationOptions(options);
     if (dynamicId_ == 0) requireActive();
     HttpClient copy(*this);
     copy.options_ = std::move(options);
@@ -272,6 +346,7 @@ detail::HttpClientPool& HttpClient::resolvePool() const {
 Task<HttpClientResponse> HttpClient::sendRequest(HttpClientRequest request, HttpClientOperationOptions options) const {
     if (!options.timeout.has_value()) options.timeout = options_.timeout;
     if (!options.stopToken.stoppable()) options.stopToken = options_.stopToken;
+    detail::validateHttpClientOperationOptions(options);
     return resolvePool().execute(
         std::move(request), std::move(options), detail::httpPmrResourceOrDefault(resource_));
 }
@@ -320,12 +395,13 @@ bool HttpClient::onDefaultPort() const {
 }
 
 void HttpClient::setUserAgent(std::string_view userAgent) const {
+    detail::validateHttpClientUserAgent(userAgent);
     if (dynamicId_ != 0) {
+        std::string replacement(userAgent);
         if (auto* registry = detail::HttpClientRegistry::current()) {
-            registry->getOrCreate(dynamicId_, dynamicConfig_).setUserAgent(userAgent);
-        } else {
-            dynamicConfig_.userAgent.assign(userAgent);
+            registry->getOrCreate(dynamicId_, dynamicConfig_).setUserAgent(replacement);
         }
+        dynamicConfig_.userAgent.swap(replacement);
         return;
     }
     requireActive();
@@ -336,9 +412,8 @@ void HttpClient::enableCookies(bool enabled) const {
     if (dynamicId_ != 0) {
         if (auto* registry = detail::HttpClientRegistry::current()) {
             registry->getOrCreate(dynamicId_, dynamicConfig_).enableCookies(enabled);
-        } else {
-            dynamicConfig_.cookiesEnabled = enabled;
         }
+        dynamicConfig_.cookiesEnabled = enabled;
         return;
     }
     requireActive();
@@ -347,25 +422,11 @@ void HttpClient::enableCookies(bool enabled) const {
 
 void HttpClient::addCookie(std::string_view name, std::string_view value) const {
     if (dynamicId_ != 0) {
-        if (!isValidHttpHeaderName(name) || !detail::isValidCookieValue(value)) throw std::invalid_argument("invalid HTTP client cookie");
+        auto replacement = updatedDynamicClientCookies(dynamicConfig_, name, value);
         if (auto* registry = detail::HttpClientRegistry::current()) {
             registry->getOrCreate(dynamicId_, dynamicConfig_).addCookie(name, value);
-        } else {
-            const auto match = std::ranges::find_if(dynamicConfig_.cookies, [name](const auto& cookie) { return cookie.first == name; });
-            const auto replacedBytes = match == dynamicConfig_.cookies.end()
-                ? 0
-                : cookieStorageBytes(match->first, match->second);
-            const auto retainedBytes = configuredCookieBytes(dynamicConfig_) - replacedBytes;
-            const auto replacementBytes = cookieStorageBytes(name, value);
-            if ((match == dynamicConfig_.cookies.end() &&
-                    dynamicConfig_.cookies.size() >= dynamicConfig_.maxCookiesPerWorker) ||
-                retainedBytes > dynamicConfig_.maxCookieBytesPerWorker ||
-                replacementBytes > dynamicConfig_.maxCookieBytesPerWorker - retainedBytes) {
-                throw std::length_error("HTTP client cookie jar capacity exceeded");
-            }
-            if (match == dynamicConfig_.cookies.end()) dynamicConfig_.cookies.emplace_back(name, value);
-            else match->second.assign(value);
         }
+        dynamicConfig_.cookies.swap(replacement);
         return;
     }
     requireActive();

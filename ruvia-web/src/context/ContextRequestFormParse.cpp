@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ruvia/http/detail/parser/MultipartBoundary.h"
+#include "ruvia/http/detail/parser/MultipartDelimiter.h"
 #include "ruvia/web/detail/http/request/RequestFormAccess.h"
 #include "ruvia/web/detail/http/request/RequestFieldParsing.h"
 #include "ruvia/web/detail/http/request/RequestFieldsAccess.h"
@@ -24,29 +25,35 @@ namespace {
 [[nodiscard]] bool fieldNameHasProtoObject(std::string_view name) noexcept {
     std::size_t offset = 0;
     for (;;) {
-        const auto found = name.find("__proto__.", offset);
-        if (found == std::string_view::npos) {
-            return false;
-        }
-        if (found == 0 || name[found - 1] == '.') {
+        const auto dot = name.find('.', offset);
+        const auto segment = dot == std::string_view::npos ? name.substr(offset) : name.substr(offset, dot - offset);
+        if (segment == "__proto__") {
             return true;
         }
-        offset = found + 1;
+        if (dot == std::string_view::npos) {
+            return false;
+        }
+        offset = dot + 1;
     }
 }
 
 void assignDotPath(ContextRequest::RequestFormField& field, std::pmr::memory_resource* resource) {
     auto& path = detail::RequestFormFieldAccess::path(field);
     path.clear();
-    std::string_view remaining = field.name();
-    while (!remaining.empty()) {
-        const auto dot = remaining.find('.');
-        const auto segment = dot == std::string_view::npos ? remaining : remaining.substr(0, dot);
+    const auto name = field.name();
+    if (name.empty()) {
+        return;
+    }
+
+    std::size_t offset = 0;
+    for (;;) {
+        const auto dot = name.find('.', offset);
+        const auto segment = dot == std::string_view::npos ? name.substr(offset) : name.substr(offset, dot - offset);
         path.emplace_back(std::pmr::string(segment.data(), segment.size(), resource));
         if (dot == std::string_view::npos) {
             break;
         }
-        remaining.remove_prefix(dot + 1);
+        offset = dot + 1;
     }
 }
 
@@ -154,10 +161,40 @@ void compactParsedBodyFields(std::pmr::vector<ContextRequest::RequestFormField>&
     return detail::RequestFormDataAccess::fromFields(std::move(fields));
 }
 
+void countMultipartPart(std::size_t& parts, std::size_t maxFields) {
+    ++parts;
+    if (parts > maxFields) {
+        detail::throwTooManyFormFields();
+    }
+}
+
+void enforceMultipartFieldCap(std::string_view requestBody, const MultipartBoundary& boundary, std::size_t maxFields) {
+    const auto initial = detail::httpFindInitialMultipartDelimiter(requestBody, boundary, true);
+    const auto* firstPart = initial.part();
+    if (firstPart == nullptr) {
+        return;
+    }
+
+    std::size_t parts = 0;
+    countMultipartPart(parts, maxFields);
+    std::size_t cursor = firstPart->offset() + firstPart->lineBytes();
+    for (;;) {
+        const auto next = detail::httpFindMultipartBodyDelimiter(requestBody.substr(cursor), boundary, true);
+        if (const auto* part = next.part()) {
+            countMultipartPart(parts, maxFields);
+            cursor += part->offset() + part->lineBytes();
+            continue;
+        }
+        return;
+    }
+}
+
 [[nodiscard]] ContextRequest::RequestFormData parseMultipartFormBody(std::string_view requestBody, MultipartBoundary boundary, std::pmr::memory_resource* resource, ContextRequest::ParseBodyOptions options) {
+    enforceMultipartFieldCap(requestBody, boundary, options.maxFields);
+
     auto parts = parseCompleteMultipartBody(requestBody, std::move(boundary), resource);
     std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
-    fields.reserve(parts.size());
+    fields.reserve(boundedFieldReserve(parts.size()));
     for (const auto& part : parts) {
         const auto partName = part.name();
         const auto partBody = part.body();
@@ -169,7 +206,7 @@ void compactParsedBodyFields(std::pmr::vector<ContextRequest::RequestFormField>&
         // text/plain. Surface that effective type to the form consumer rather
         // than an empty string (the raw multipart parts API stays faithful).
         std::pmr::string contentType = partContentType.empty() ? std::pmr::string("text/plain", resource) : std::pmr::string(partContentType.data(), partContentType.size(), resource);
-        appendParsedBodyField(fields, detail::RequestFormFieldAccess::make(resource, std::move(name), std::pmr::string(partBody.data(), partBody.size(), resource), std::pmr::string(partFilename.data(), partFilename.size(), resource), std::move(contentType), !partFilename.empty(), array), options);
+        appendParsedBodyField(fields, detail::RequestFormFieldAccess::make(resource, std::move(name), std::pmr::string(partBody.data(), partBody.size(), resource), std::pmr::string(partFilename.data(), partFilename.size(), resource), std::move(contentType), part.hasFilename(), array), options);
     }
     compactParsedBodyFields(fields, options);
     return detail::RequestFormDataAccess::fromFields(std::move(fields));

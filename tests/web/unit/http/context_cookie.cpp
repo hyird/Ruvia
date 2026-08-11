@@ -53,6 +53,42 @@ RUVIA_TEST(context_set_cookie_serializes_all_attributes) {
                                                                          "Expires=Fri, 13 Feb 2009 23:31:30 GMT; Secure; SameSite=None"));
 }
 
+RUVIA_TEST(context_set_cookie_preserves_same_name_different_path) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    ruvia::CookieOptions root;
+    root.path = "/";
+    ruvia::CookieOptions admin;
+    admin.path = "/admin";
+    context.setCookie("session", "root-old", root);
+    context.setCookie("session", "admin", admin);
+    context.setCookie("session", "root-new", root);
+    const auto response = context.text("ok");
+
+    std::size_t count = 0;
+    bool hasRootOld = false;
+    bool hasRootNew = false;
+    bool hasAdmin = false;
+    for (const auto& header : response.headers()) {
+        if (header.name() != std::string_view("Set-Cookie")) {
+            continue;
+        }
+        ++count;
+        hasRootOld = hasRootOld || header.value() == "session=root-old; Path=/";
+        hasRootNew = hasRootNew || header.value() == "session=root-new; Path=/";
+        hasAdmin = hasAdmin || header.value() == "session=admin; Path=/admin";
+    }
+    RUVIA_CHECK_EQ(count, std::size_t{2});
+    RUVIA_CHECK(!hasRootOld);
+    RUVIA_CHECK(hasRootNew);
+    RUVIA_CHECK(hasAdmin);
+}
+
 RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     WorkerMemory worker;
     HttpRequest writeRequest = HttpRequestAccess::make();

@@ -95,7 +95,7 @@ MultipartBodyParseResult parseMultipartBody(std::string_view body, MultipartBoun
     for (;;) {
         auto result = parser.poll();
         if (const auto* part = result.part()) {
-            parts.push_back(detail::MultipartPartAccess::makeDecoded(part->name(), part->filename(), part->contentType(), part->body(), resource));
+            parts.push_back(detail::MultipartPartAccess::makeDecoded(part->name(), part->filename(), part->contentType(), part->body(), part->hasFilename(), resource));
             continue;
         }
         if (result.done() != nullptr) {
@@ -286,9 +286,10 @@ MultipartParser::StepResult MultipartParser::processHeaders() {
         currentName_.clear();
         detail::httpAppendDecodedQuotedPairs(currentName_, partHeaders->name());
         currentFilename_.clear();
+        currentFilenamePresent_ = partHeaders->hasFilename();
         currentContentType_.clear();
         currentContentTypeView_ = {};
-        if (!partHeaders->filename().empty()) {
+        if (currentFilenamePresent_) {
             detail::httpAppendDecodedQuotedPairs(currentFilename_, partHeaders->filename());
         }
         if (!partHeaders->contentType().empty()) {
@@ -308,7 +309,7 @@ MultipartParser::StepResult MultipartParser::processHeaders() {
 
 MultipartStreamPart MultipartParser::makePart(std::string_view body, bool partEnd) {
     const auto phase = nextChunkIsFirst_ ? (partEnd ? MultipartChunkPhase::kComplete : MultipartChunkPhase::kFirst) : (partEnd ? MultipartChunkPhase::kLast : MultipartChunkPhase::kMiddle);
-    auto part = detail::MultipartStreamPartAccess::make(currentName_, currentFilename_, currentContentTypeView_, body, phase);
+    auto part = detail::MultipartStreamPartAccess::make(currentName_, currentFilename_, currentContentTypeView_, body, phase, currentFilenamePresent_);
     nextChunkIsFirst_ = false;
     return part;
 }

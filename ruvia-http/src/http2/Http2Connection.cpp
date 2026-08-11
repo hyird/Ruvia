@@ -276,9 +276,15 @@ bool Http2Connection::processPriority(const Http2FrameHeader& header, std::strin
         // RFC 9113 section 6.3 makes malformed PRIORITY length a stream error,
         // unlike most fixed-size connection-control frames. Do not terminate
         // unrelated multiplexed streams for one bad advisory frame.
-        output_.appendRstStream(header.streamId, Http2ErrorCode::kFrameSizeError);
-        if (stream != nullptr) {
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kFrameSizeError);
+        const auto outputCheckpoint = output_.checkpoint();
+        try {
+            output_.appendRstStream(header.streamId, Http2ErrorCode::kFrameSizeError);
+            if (stream != nullptr) {
+                closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kFrameSizeError);
+            }
+        } catch (...) {
+            output_.rollbackTo(outputCheckpoint);
+            throw;
         }
         return true;
     }
@@ -424,16 +430,22 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
             appendGoaway(Http2ErrorCode::kProtocolError, "unexpected PUSH_PROMISE");
             return false;
         default:
-            if (header.streamId != 0) {
-                if (auto* stream = findStream(header.streamId); stream != nullptr && !http2StreamIsClosed(*stream) && stream->tunnel().open() != nullptr) {
-                    // RFC 9113 8.5 narrows connected streams to DATA and the three
-                    // stream-management frame types, even though unknown frames are
-                    // normally ignored elsewhere.
+        if (header.streamId != 0) {
+            if (auto* stream = findStream(header.streamId); stream != nullptr && !http2StreamIsClosed(*stream) && stream->tunnel().open() != nullptr) {
+                // RFC 9113 8.5 narrows connected streams to DATA and the three
+                // stream-management frame types, even though unknown frames are
+                // normally ignored elsewhere.
+                const auto outputCheckpoint = output_.checkpoint();
+                try {
                     output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
                     closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
+                } catch (...) {
+                    output_.rollbackTo(outputCheckpoint);
+                    throw;
                 }
             }
-            return true;
+        }
+        return true;
     }
 }
 

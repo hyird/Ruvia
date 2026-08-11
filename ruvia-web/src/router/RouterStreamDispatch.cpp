@@ -80,9 +80,9 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(const 
 
     if (exception != nullptr) {
         // Head-only completion is a control signal from the writer, not a
-        // failure: the committed head already ended the message (HEAD served
-        // by a streaming GET route), the handler was merely stopped at its
-        // first body write. Finish the stream as a normal head-only success.
+        // failure: the committed head already ended the message, and the
+        // handler was merely stopped at its first body write. Finish the stream
+        // as a normal head-only success.
         bool headOnlyComplete = false;
         if (responseStreamOutput != nullptr && detail::StreamingAccess::committed(responseStreamOutput->writer())) {
             try {

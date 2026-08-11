@@ -362,6 +362,202 @@ RUVIA_TEST(http2_connection_header_event_publication_allocation_failure_retries_
     RUVIA_CHECK(!conn.nextEvent().has_value());
 }
 
+RUVIA_TEST(http2_connection_single_frame_new_peer_headers_event_failure_is_retryable) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeRequest(block, "GET", "https", "/", "example.com");
+    const auto frame = headersFrame(&resource, 1, ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream, std::string_view(block.data(), block.size()));
+
+    resource.rejectAllocationsOfSize(2 * sizeof(ruvia::detail::Http2Event));
+    bool allocationFailed = false;
+    try {
+        (void)conn.feed(std::string_view(frame.data(), frame.size()));
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(conn.stream(1) == nullptr);
+    RUVIA_CHECK(!conn.headerBlockInProgress());
+    RUVIA_CHECK(conn.pendingOutput().empty());
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+
+    resource.clearAllocationSizeRejection();
+    RUVIA_CHECK(conn.feed(std::string_view(frame.data(), frame.size())) == Http2FeedResult::kAccepted);
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+    RUVIA_CHECK(conn.stream(1) != nullptr);
+}
+
+RUVIA_TEST(http2_connection_rejected_connect_response_output_is_retryable_on_event_allocation_failure) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
+    handshake(client);
+
+    const auto request = client.submitConnectRequestHead("example.test:443");
+    RUVIA_CHECK(request.submitted() != nullptr);
+    client.consumeOutput(client.pendingOutput().size());
+
+    std::pmr::string block(&resource);
+    HpackEncoder::encodeHeader(block, ":status", "403");
+    const auto response = headersFrame(&resource, 1, ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream, std::string_view(block.data(), block.size()));
+
+    resource.rejectAllocationsOfSize(2 * sizeof(ruvia::detail::Http2Event));
+    bool allocationFailed = false;
+    try {
+        (void)client.feed(std::string_view(response.data(), response.size()));
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(client.pendingOutput().empty());
+    auto* stream = client.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        RUVIA_CHECK(stream->tunnel().pending() != nullptr);
+    }
+    RUVIA_CHECK(!client.nextEvent().has_value());
+
+    resource.clearAllocationSizeRejection();
+    RUVIA_CHECK(client.feed(std::string_view(response.data(), response.size())) == Http2FeedResult::kAccepted);
+    const auto out = client.pendingOutput();
+    RUVIA_CHECK_EQ(out.size(), std::size_t{ruvia::detail::kHttp2FrameHeaderBytes});
+    if (out.size() >= ruvia::detail::kHttp2FrameHeaderBytes) {
+        const auto localEnd = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+        RUVIA_CHECK_EQ(localEnd.type, static_cast<std::uint8_t>(Http2FrameType::kData));
+        RUVIA_CHECK_EQ(localEnd.streamId, std::uint32_t{1});
+        RUVIA_CHECK((localEnd.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
+    }
+    const auto head = client.nextEvent();
+    RUVIA_CHECK(head.has_value());
+    if (head.has_value()) {
+        RUVIA_CHECK(head->kind() == Http2EventKind::kMessageHead);
+    }
+    const auto end = client.nextEvent();
+    RUVIA_CHECK(end.has_value());
+    if (end.has_value()) {
+        RUVIA_CHECK(end->kind() == Http2EventKind::kMessageEnd);
+    }
+    RUVIA_CHECK(!client.nextEvent().has_value());
+}
+
+RUVIA_TEST(http2_connection_connect_response_tunnel_end_allocation_failure_is_retryable) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection server(&resource);
+    handshake(server);
+
+    std::pmr::string block(&resource);
+    HpackEncoder::encodeHeader(block, ":method", "CONNECT");
+    HpackEncoder::encodeHeader(block, ":authority", "example.test:443");
+    const auto request = headersFrame(&resource, 1, ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream, std::string_view(block.data(), block.size()));
+    RUVIA_CHECK(server.feed(std::string_view(request.data(), request.size())) == Http2FeedResult::kAccepted);
+
+    auto* stream = server.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        RUVIA_CHECK(stream->tunnel().pending() != nullptr);
+        RUVIA_CHECK(stream->remoteReceive().connectPendingEndStream() != nullptr);
+    }
+
+    ruvia::HttpResponse accepted(&resource);
+    accepted.status(ruvia::http_status::kOk);
+
+    resource.rejectAllocationsOfSize(2 * sizeof(ruvia::detail::Http2Event));
+    bool allocationFailed = false;
+    try {
+        (void)server.submitConnectResponseHead(1, accepted);
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(server.pendingOutput().empty());
+    stream = server.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        RUVIA_CHECK(stream->tunnel().pending() != nullptr);
+        RUVIA_CHECK(stream->remoteReceive().connectPendingEndStream() != nullptr);
+    }
+
+    const auto head = server.nextEvent();
+    RUVIA_CHECK(head.has_value());
+    if (head.has_value()) {
+        RUVIA_CHECK(head->kind() == Http2EventKind::kMessageHead);
+    }
+    RUVIA_CHECK(!server.nextEvent().has_value());
+
+    resource.clearAllocationSizeRejection();
+    RUVIA_CHECK(server.submitConnectResponseHead(1, accepted) == Http2SubmitStatus::kAccepted);
+    RUVIA_CHECK(!server.pendingOutput().empty());
+    const auto tunnelEnd = server.nextEvent();
+    RUVIA_CHECK(tunnelEnd.has_value());
+    if (tunnelEnd.has_value()) {
+        RUVIA_CHECK(tunnelEnd->kind() == Http2EventKind::kTunnelEnd);
+    }
+    RUVIA_CHECK(!server.nextEvent().has_value());
+}
+
+RUVIA_TEST(http2_connection_final_continuation_retry_rolls_back_appended_fragment) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string first(&resource);
+    HpackEncoder::encodeHeader(first, ":method", "GET");
+    HpackEncoder::encodeHeader(first, ":scheme", "https");
+    HpackEncoder::encodeHeader(first, ":path", "/");
+
+    std::pmr::string final(&resource);
+    HpackEncoder::encodeHeader(final, ":authority", "example.com");
+
+    const auto head = headersFrame(&resource, 1, ruvia::detail::kHttp2FlagEndStream, first);
+    const auto finalContinuation = continuationFrame(&resource, 1, ruvia::detail::kHttp2FlagEndHeaders, final);
+    RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) == Http2FeedResult::kAccepted);
+    RUVIA_CHECK(conn.headerBlockInProgress());
+
+    auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        stream->requestHeaderBlock().reserve(first.size() + final.size());
+    }
+
+    resource.rejectAllocations();
+    bool allocationFailed = false;
+    try {
+        (void)conn.feed(std::string_view(finalContinuation.data(), finalContinuation.size()));
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(conn.headerBlockInProgress());
+    stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        RUVIA_CHECK_EQ(stream->requestHeaderBlock().size(), first.size());
+    }
+
+    resource.rejectAllocations(false);
+    RUVIA_CHECK(conn.feed(std::string_view(finalContinuation.data(), finalContinuation.size())) == Http2FeedResult::kAccepted);
+    RUVIA_CHECK(!conn.headerBlockInProgress());
+    const auto headEvent = conn.nextEvent();
+    RUVIA_CHECK(headEvent.has_value());
+    if (headEvent.has_value()) {
+        RUVIA_CHECK(headEvent->kind() == Http2EventKind::kMessageHead);
+    }
+    const auto endEvent = conn.nextEvent();
+    RUVIA_CHECK(endEvent.has_value());
+    if (endEvent.has_value()) {
+        RUVIA_CHECK(endEvent->kind() == Http2EventKind::kMessageEnd);
+    }
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+    RUVIA_CHECK(conn.stream(1) != nullptr);
+}
+
 RUVIA_TEST(http2_connection_client_response_event_publication_allocation_failure_retries_block) {
     ToggleRejectingMemoryResource resource;
     Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
@@ -523,6 +719,46 @@ RUVIA_TEST(http2_connection_data_publication_is_retryable_on_event_allocation_fa
     RUVIA_CHECK(!conn.nextEvent().has_value());
 }
 
+RUVIA_TEST(http2_connection_short_terminal_data_reset_is_retryable_on_close_event_allocation_failure) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    const auto head = postHeadFrame(&resource, "10");
+    RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) == Http2FeedResult::kAccepted);
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+
+    const auto data = dataFrame(&resource, 1, ruvia::detail::kHttp2FlagEndStream, "short");
+    auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream == nullptr) {
+        return;
+    }
+
+    resource.rejectAllocationsOfSize(2 * sizeof(ruvia::detail::Http2Event));
+    bool allocationFailed = false;
+    try {
+        (void)conn.feed(std::string_view(data.data(), data.size()));
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(conn.pendingOutput().empty());
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+    RUVIA_CHECK_EQ(stream->receiveWindow(), static_cast<std::int32_t>(ruvia::detail::Http2LocalSettings::kInitialWindowSize));
+    RUVIA_CHECK_EQ(stream->windowDebt(), std::uint32_t{0});
+    RUVIA_CHECK_EQ(stream->remoteContent().allowedKnownLength()->receivedBytes(), std::size_t{0});
+
+    resource.clearAllocationSizeRejection();
+    RUVIA_CHECK(conn.feed(std::string_view(data.data(), data.size())) == Http2FeedResult::kAccepted);
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageBodyChunk);
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kStreamClosed);
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+    RUVIA_CHECK_EQ(conn.stream(1), nullptr);
+}
+
 RUVIA_TEST(http2_connection_new_peer_headers_buffering_is_retryable_on_allocation_failure) {
     ToggleRejectingMemoryResource resource;
     Http2Connection conn(&resource);
@@ -646,6 +882,214 @@ RUVIA_TEST(http2_connection_stream_close_publication_is_retryable_on_event_alloc
             RUVIA_CHECK(closed->error() == Http2ErrorCode::kCancel);
         }
     }
+}
+
+RUVIA_TEST(http2_connection_malformed_priority_reset_is_retryable_on_event_allocation_failure) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
+    handshake(client);
+
+    const auto request = client.submitRegularRequestHead("GET", "https", "example.test", "/", {}, Http2RequestContent::none());
+    RUVIA_CHECK(request.submitted() != nullptr);
+    client.consumeOutput(client.pendingOutput().size());
+
+    char priority[9 + 4]{};
+    ruvia::detail::http2EncodeFrameHeader(priority, 4, Http2FrameType::kPriority, 0, 1);
+    ruvia::detail::http2Write32(priority + 9, 0);
+
+    resource.rejectAllocations();
+    bool allocationFailed = false;
+    try {
+        (void)client.feed(std::string_view(priority, sizeof(priority)));
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(client.pendingOutput().empty());
+    RUVIA_CHECK(client.stream(1) != nullptr);
+    RUVIA_CHECK(!client.nextEvent().has_value());
+
+    resource.rejectAllocations(false);
+    RUVIA_CHECK(client.feed(std::string_view(priority, sizeof(priority))) == Http2FeedResult::kAccepted);
+    const auto out = client.pendingOutput();
+    const auto reset = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+    RUVIA_CHECK_EQ(reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    RUVIA_CHECK_EQ(reset.streamId, std::uint32_t{1});
+    RUVIA_CHECK(client.stream(1) == nullptr);
+    const auto event = client.nextEvent();
+    RUVIA_CHECK(event.has_value());
+    if (event.has_value()) {
+        RUVIA_CHECK(event->streamClosed() != nullptr);
+    }
+}
+
+RUVIA_TEST(http2_connection_zero_window_update_reset_is_retryable_on_event_allocation_failure) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
+    handshake(client);
+
+    const auto request = client.submitRegularRequestHead("GET", "https", "example.test", "/", {}, Http2RequestContent::none());
+    RUVIA_CHECK(request.submitted() != nullptr);
+    client.consumeOutput(client.pendingOutput().size());
+
+    char windowUpdate[ruvia::detail::kHttp2WindowUpdateFrameBytes]{};
+    ruvia::detail::http2WriteWindowUpdate(windowUpdate, 1, 0);
+
+    resource.rejectAllocations();
+    bool allocationFailed = false;
+    try {
+        (void)client.feed(std::string_view(windowUpdate, sizeof(windowUpdate)));
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(client.pendingOutput().empty());
+    RUVIA_CHECK(client.stream(1) != nullptr);
+    RUVIA_CHECK(!client.nextEvent().has_value());
+
+    resource.rejectAllocations(false);
+    RUVIA_CHECK(client.feed(std::string_view(windowUpdate, sizeof(windowUpdate))) == Http2FeedResult::kAccepted);
+    const auto out = client.pendingOutput();
+    const auto reset = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+    RUVIA_CHECK_EQ(reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    RUVIA_CHECK_EQ(reset.streamId, std::uint32_t{1});
+    RUVIA_CHECK(client.stream(1) == nullptr);
+    const auto event = client.nextEvent();
+    RUVIA_CHECK(event.has_value());
+    if (event.has_value()) {
+        RUVIA_CHECK(event->streamClosed() != nullptr);
+    }
+}
+
+RUVIA_TEST(http2_connection_submit_reset_rolls_back_rst_when_window_credit_allocation_fails) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    const auto head = postHeadFrame(&resource, "");
+    RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) == Http2FeedResult::kAccepted);
+    const auto headEvent = conn.nextEvent();
+    RUVIA_CHECK(headEvent.has_value());
+    if (headEvent.has_value()) {
+        RUVIA_CHECK(headEvent->kind() == Http2EventKind::kMessageHead);
+    }
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+
+    std::uint32_t remainingDebt = ruvia::detail::kHttp2ReceiveWindowUpdateThreshold;
+    const std::string body(ruvia::detail::Http2LocalSettings::kMaxFrameSize, 'x');
+    while (remainingDebt != 0) {
+        const auto chunkBytes = static_cast<std::size_t>(std::min<std::uint32_t>(remainingDebt, ruvia::detail::Http2LocalSettings::kMaxFrameSize));
+        const auto data = dataFrame(&resource, 1, 0, std::string_view(body.data(), chunkBytes));
+        RUVIA_CHECK(conn.feed(std::string_view(data.data(), data.size())) == Http2FeedResult::kAccepted);
+        const auto dataEvent = conn.nextEvent();
+        RUVIA_CHECK(dataEvent.has_value());
+        if (dataEvent.has_value()) {
+            RUVIA_CHECK(dataEvent->kind() == Http2EventKind::kMessageBodyChunk);
+        }
+        RUVIA_CHECK(!conn.nextEvent().has_value());
+        remainingDebt -= static_cast<std::uint32_t>(chunkBytes);
+    }
+
+    auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        RUVIA_CHECK_EQ(stream->windowDebt(), ruvia::detail::kHttp2ReceiveWindowUpdateThreshold);
+    }
+
+    std::pmr::string drainedOutput(&resource);
+    conn.takeOutput(drainedOutput);  // leave a small output buffer where RST fits but WINDOW_UPDATE does not
+
+    resource.rejectAllocations();
+    bool allocationFailed = false;
+    try {
+        (void)conn.submitReset(1, Http2ErrorCode::kCancel);
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(conn.pendingOutput().empty());
+    stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        RUVIA_CHECK(!stream->isAborted());
+        RUVIA_CHECK_EQ(stream->windowDebt(), ruvia::detail::kHttp2ReceiveWindowUpdateThreshold);
+    }
+
+    resource.rejectAllocations(false);
+    RUVIA_CHECK(conn.submitReset(1, Http2ErrorCode::kCancel) == Http2SubmitStatus::kAccepted);
+    const auto out = conn.pendingOutput();
+    RUVIA_CHECK_EQ(out.size(), std::size_t{2 * ruvia::detail::kHttp2WindowUpdateFrameBytes});
+    const auto reset = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+    RUVIA_CHECK_EQ(reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    const auto update = ruvia::detail::http2ParseFrameHeader(out.substr(ruvia::detail::kHttp2WindowUpdateFrameBytes, 9));
+    RUVIA_CHECK_EQ(update.type, static_cast<std::uint8_t>(Http2FrameType::kWindowUpdate));
+    RUVIA_CHECK_EQ(update.streamId, std::uint32_t{0});
+    RUVIA_CHECK(conn.stream(1) == nullptr);
+}
+
+RUVIA_TEST(http2_connection_rapid_reset_goaway_allocation_failure_is_retryable) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeGetRequest(block);
+
+    char rst[9 + 4]{};
+    for (std::uint32_t sid = 1; sid < 1U + 2U * 1000U; sid += 2) {
+        const auto head = headersFrame(&resource, sid, ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream, std::string_view(block.data(), block.size()));
+        RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) == Http2FeedResult::kAccepted);
+        while (conn.nextEvent().has_value()) {
+        }
+        conn.consumeOutput(conn.pendingOutput().size());
+
+        ruvia::detail::http2EncodeFrameHeader(rst, 4, Http2FrameType::kRstStream, 0, sid);
+        ruvia::detail::http2Write32(rst + 9, 0);
+        RUVIA_CHECK(conn.feed(std::string_view(rst, sizeof(rst))) == Http2FeedResult::kAccepted);
+        while (conn.nextEvent().has_value()) {
+        }
+        conn.consumeOutput(conn.pendingOutput().size());
+    }
+
+    const std::uint32_t trippingStreamId = 1U + 2U * 1000U;
+    const auto head = headersFrame(&resource, trippingStreamId, ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream, std::string_view(block.data(), block.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) == Http2FeedResult::kAccepted);
+    while (conn.nextEvent().has_value()) {
+    }
+    conn.consumeOutput(conn.pendingOutput().size());
+    RUVIA_CHECK(conn.stream(trippingStreamId) != nullptr);
+
+    ruvia::detail::http2EncodeFrameHeader(rst, 4, Http2FrameType::kRstStream, 0, trippingStreamId);
+    ruvia::detail::http2Write32(rst + 9, 0);
+
+    std::pmr::string drainedOutput(&resource);
+    conn.takeOutput(drainedOutput);  // swap a small empty buffer into output_
+
+    resource.rejectAllocations();
+    bool allocationFailed = false;
+    try {
+        (void)conn.feed(std::string_view(rst, sizeof(rst)));
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(!conn.connectionError().has_value());
+    RUVIA_CHECK(conn.pendingOutput().empty());
+    auto* stream = conn.stream(trippingStreamId);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        RUVIA_CHECK(!stream->isAborted());
+    }
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+
+    resource.rejectAllocations(false);
+    RUVIA_CHECK(conn.feed(std::string_view(rst, sizeof(rst))) == Http2FeedResult::kProtocolFailure);
+    RUVIA_CHECK(conn.connectionError() == Http2ErrorCode::kEnhanceYourCalm);
+    RUVIA_CHECK_EQ(firstGoawayError(conn.pendingOutput()), kEnhanceYourCalm);
 }
 
 RUVIA_TEST(http2_connection_peer_goaway_publication_is_retryable_on_allocation_failure) {
@@ -914,6 +1358,48 @@ RUVIA_TEST(http2_connection_submit_data_blocks_then_drains_on_window) {
     RUVIA_CHECK(conn.submitData(1, "later", Http2EndStream::kEndStream) == Http2DataSubmitStatus::kAccepted);
     RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{10});
     RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{10});
+}
+
+RUVIA_TEST(http2_connection_queued_terminal_data_closes_stream_after_drain) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshakeWithWindow(conn, 3);
+    driveGetRequest(conn, &resource);
+
+    ruvia::HttpResponse response(&resource);
+    response.status(ruvia::http_status::kOk);
+    response.header("Content-Length", "5");
+    const auto headResult = conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+    RUVIA_CHECK(responseHeadSubmitted(headResult));
+    conn.consumeOutput(conn.pendingOutput().size());
+
+    const char body[5] = {'h', 'e', 'l', 'l', 'o'};
+    RUVIA_CHECK(conn.submitData(1, std::string_view(body, 5), Http2EndStream::kEndStream) == Http2DataSubmitStatus::kQueued);
+    auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    RUVIA_CHECK(stream->localSend().endStreamQueued() != nullptr);
+    RUVIA_CHECK(stream->localSend().endStreamCommitted() == nullptr);
+    RUVIA_CHECK(conn.submitData(1, "again", Http2EndStream::kKeepOpen) == Http2DataSubmitStatus::kInvalidState);
+
+    const auto firstOutput = conn.pendingOutput();
+    const auto firstData = ruvia::detail::http2ParseFrameHeader(firstOutput.substr(0, 9));
+    RUVIA_CHECK_EQ(firstData.type, static_cast<std::uint8_t>(Http2FrameType::kData));
+    RUVIA_CHECK_EQ(firstData.length, static_cast<std::uint32_t>(3));
+    RUVIA_CHECK((firstData.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
+    conn.consumeOutput(firstOutput.size());
+
+    char windowUpdate[ruvia::detail::kHttp2WindowUpdateFrameBytes];
+    ruvia::detail::http2WriteWindowUpdate(windowUpdate, 1, 10);
+    RUVIA_CHECK(conn.feed(std::string_view(windowUpdate, sizeof(windowUpdate))) == ruvia::detail::Http2FeedResult::kAccepted);
+
+    const auto secondOutput = conn.pendingOutput();
+    const auto secondData = ruvia::detail::http2ParseFrameHeader(secondOutput.substr(0, 9));
+    RUVIA_CHECK_EQ(secondData.type, static_cast<std::uint8_t>(Http2FrameType::kData));
+    RUVIA_CHECK_EQ(secondData.length, static_cast<std::uint32_t>(2));
+    RUVIA_CHECK((secondData.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
+    RUVIA_CHECK(stream->localSend().endStreamQueued() == nullptr);
+    RUVIA_CHECK(stream->localSend().endStreamCommitted() != nullptr);
+    RUVIA_CHECK(conn.submitData(1, "again", Http2EndStream::kKeepOpen) == Http2DataSubmitStatus::kInvalidState);
 }
 
 #if !defined(_MSC_VER)

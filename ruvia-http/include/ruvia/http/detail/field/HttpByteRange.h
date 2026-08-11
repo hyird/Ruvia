@@ -12,6 +12,7 @@
 #include <variant>
 
 #include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/detail/util/HttpOws.h"
 
 namespace ruvia::detail {
 
@@ -105,6 +106,8 @@ private:
 };
 
 [[nodiscard]] inline HttpByteRangeResolution resolveHttpByteRange(std::string_view fieldValue, std::uint64_t representationLength) noexcept {
+    fieldValue = httpTrimOws(fieldValue);
+
     constexpr std::string_view unit = "bytes";
     constexpr std::size_t separatorOffset = unit.size();
     if (fieldValue.size() <= separatorOffset + 1 || fieldValue[separatorOffset] != '=' || !httpAsciiEqualsIgnoreCase(fieldValue.substr(0, separatorOffset), unit)) {
@@ -136,12 +139,11 @@ private:
         return ec == std::errc{} ? std::optional<std::uint64_t>(parsed) : std::nullopt;
     };
 
-    auto spec = fieldValue.substr(separatorOffset + 1);
+    auto spec = httpTrimOws(fieldValue.substr(separatorOffset + 1));
     // RFC 9110 erratum 7306 restores the OWS that is shown by the normative
     // examples after '=' but was accidentally omitted from the published ABNF.
-    while (!spec.empty() && (spec.front() == ' ' || spec.front() == '\t')) {
-        spec.remove_prefix(1);
-    }
+    // Trim both ends here so direct detail/helper callers and HTTP parser
+    // callers apply the same field-value OWS policy.
     // This helper deliberately resolves one range. A valid range set requiring
     // multipart/byteranges is ignored as an unsupported server capability.
     if (spec.find(',') != std::string_view::npos) {

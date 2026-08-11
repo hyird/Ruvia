@@ -1,77 +1,11 @@
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpLimits.h"
 
 namespace ruvia::detail {
-namespace {
-
-[[nodiscard]] bool isForbiddenChunkTrailer(std::string_view name) noexcept {
-    switch (classifyRequestHeader(name)) {
-        case RequestHeaderKind::kHost:
-        case RequestHeaderKind::kContentLength:
-        case RequestHeaderKind::kTransferEncoding:
-        case RequestHeaderKind::kConnection:
-        case RequestHeaderKind::kContentEncoding:
-        case RequestHeaderKind::kContentType:
-        case RequestHeaderKind::kCookie:
-        case RequestHeaderKind::kExpect:
-        case RequestHeaderKind::kIfMatch:
-        case RequestHeaderKind::kIfModifiedSince:
-        case RequestHeaderKind::kIfNoneMatch:
-        case RequestHeaderKind::kIfRange:
-        case RequestHeaderKind::kIfUnmodifiedSince:
-        case RequestHeaderKind::kRange:
-        case RequestHeaderKind::kUpgrade:
-        case RequestHeaderKind::kAuthorization:
-        case RequestHeaderKind::kAccessControlRequestHeaders:
-        case RequestHeaderKind::kAccessControlRequestMethod:
-        case RequestHeaderKind::kOrigin:
-            return true;
-        case RequestHeaderKind::kOther:
-        case RequestHeaderKind::kAccept:
-        case RequestHeaderKind::kAcceptEncoding:
-        case RequestHeaderKind::kUserAgent:
-        case RequestHeaderKind::kSecWebSocketKey:
-        case RequestHeaderKind::kSecWebSocketProtocol:
-        case RequestHeaderKind::kSecWebSocketVersion:
-            break;
-    }
-
-    switch (name.size()) {
-        case 2:
-            return httpAsciiEqualsIgnoreCase(name, "TE");
-        case 7:
-            return httpAsciiEqualsIgnoreCase(name, "Trailer");
-        case 10:
-            return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") || httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
-        case 12:
-            return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
-        case 13:
-            // The common classified forbidden fields are caught above; keep the
-            // less common trailer-forbidden names here without growing the hot
-            // request known-header table.
-            return httpAsciiEqualsIgnoreCase(name, "Cache-Control") || httpAsciiEqualsIgnoreCase(name, "Accept-Ranges") || httpAsciiEqualsIgnoreCase(name, "Content-Range");
-        case 16:
-            // Proxy-Connection completes the connection-specific set that must not
-            // arrive late in a trailer (Connection / Keep-Alive / Transfer-Encoding
-            // / Upgrade are all rejected above): a non-standard but widely honored
-            // hop-by-hop control. Over HTTP/1 the trailer check is the only guard,
-            // exactly as for Upgrade; the HTTP/2 path already bans it as a
-            // connection-specific header. Content-Encoding is also caught by the
-            // classified path above and is repeated here only defensively.
-            return httpAsciiEqualsIgnoreCase(name, "Content-Encoding") || httpAsciiEqualsIgnoreCase(name, "Proxy-Connection");
-        case 18:
-            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate");
-        case 19:
-            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization");
-        default:
-            return false;
-    }
-}
-
-}  // namespace
 
 HttpChunkTrailerParseResult HttpChunkTrailerParser::fail(HttpChunkScanError error) noexcept {
     failure_ = error;
@@ -103,7 +37,7 @@ HttpChunkTrailerParseResult HttpChunkTrailerParser::next() noexcept {
     const auto name = line.substr(0, colon);
     const auto value = httpTrimOws(line.substr(colon + 1));
     if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) ||
-        isForbiddenChunkTrailer(name)) {
+        isForbiddenHttpRequestTrailerName(name)) {
         return fail(HttpChunkScanError::kInvalidTrailer);
     }
     cursor_ = lineEnd == std::string_view::npos ? trailers_.size() : lineEnd + 2;

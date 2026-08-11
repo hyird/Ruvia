@@ -125,7 +125,10 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
             releasedData = true;
         } else if (const auto* end = event->messageEnd()) {
             if (auto* pending = findPending(end->streamId()); pending != nullptr && !pending->error) {
+                bool contentSemanticsPresent = true;
                 if (auto* stream = connection.http2->stream(end->streamId())) {
+                    contentSemanticsPresent = stream->remoteContent().metadataOnlyWithoutLength() == nullptr &&
+                        stream->remoteContent().metadataOnlyKnownLength() == nullptr;
                     pending->response.trailers_.clear();
                     pending->response.trailers_.reserve(stream->requestHeaderCount() - std::min(stream->requestHeaderCount(), pending->responseHeaderCount));
                     for (std::size_t i = pending->responseHeaderCount; i < stream->requestHeaderCount(); ++i) {
@@ -134,7 +137,12 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                             trailer.name, trailer.value, pending->response.trailers_.get_allocator().resource()));
                     }
                 }
-                pending->complete = true;
+                try {
+                    decodeResponseContentEncoding(pending->response, contentSemanticsPresent, config_.maxResponseBytes, pending->response.body_.get_allocator().resource());
+                    pending->complete = true;
+                } catch (const HttpClientError& error) {
+                    pending->error = error.code();
+                }
                 pending->signal.notify();
             }
             runtime.stateSignal.notify();
@@ -363,9 +371,32 @@ Task<void> HttpClientPool::waitForHttp2SessionStop(
                 if (outcome == WorkerTimerOutcome::kExpired) runtime.stateSignal.notify();
             });
     }
-    auto stopRegistration = stopToken.registerCallback([this, &runtime] {
-        WorkerHandleAccess::deferOrTerminate(worker_, [&runtime] { runtime.stateSignal.notify(); });
+    std::shared_ptr<Http2RuntimeCancellationState> cancellationState;
+    if (stopToken.stoppable()) {
+        cancellationState = std::make_shared<Http2RuntimeCancellationState>(runtime, worker_);
+    }
+    auto stopRegistration = stopToken.registerCallback([cancellationState] {
+        if (cancellationState == nullptr) {
+            return;
+        }
+        WorkerHandleAccess::deferOrTerminate(*cancellationState->worker, [cancellationState] {
+            auto* notifiedRuntime = cancellationState->runtime.load(std::memory_order_acquire);
+            if (notifiedRuntime != nullptr) {
+                notifiedRuntime->stateSignal.notify();
+            }
+        });
     });
+    struct CancellationRegistrationGuard final {
+        std::shared_ptr<Http2RuntimeCancellationState>& state;
+        StopRegistration& registration;
+
+        ~CancellationRegistrationGuard() {
+            if (state != nullptr) {
+                state->runtime.store(nullptr, std::memory_order_release);
+            }
+            registration.reset();
+        }
+    } cancellationRegistrationGuard{cancellationState, stopRegistration};
     while (runtime.sessionTasks != 0 || !runtime.pending.empty()) {
         if (stopToken.stopRequested()) {
             throw HttpClientError(HttpClientError::Code::kCancelled,
@@ -418,11 +449,32 @@ Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, st
                     if (outcome == WorkerTimerOutcome::kExpired) cancelHttp2Stream(connection, requestId, AbortReason::kTimeout);
                 });
         }
-        auto stopRegistration = stopToken.registerCallback([this, &connection, requestId = pending.requestId] {
-            WorkerHandleAccess::deferOrTerminate(worker_, [this, &connection, requestId] {
-                cancelHttp2Stream(connection, requestId, AbortReason::kCancelled);
+        std::shared_ptr<Http2StreamCancellationState> cancellationState;
+        if (stopToken.stoppable()) {
+            cancellationState = std::make_shared<Http2StreamCancellationState>(*this, worker_, connection, pending.requestId, AbortReason::kCancelled);
+        }
+        auto stopRegistration = stopToken.registerCallback([cancellationState] {
+            if (cancellationState == nullptr) {
+                return;
+            }
+            WorkerHandleAccess::deferOrTerminate(*cancellationState->worker, [cancellationState] {
+                auto* pool = cancellationState->pool.load(std::memory_order_acquire);
+                if (pool != nullptr) {
+                    pool->cancelHttp2Stream(*cancellationState->connection, cancellationState->requestId, cancellationState->reason);
+                }
             });
         });
+        struct StreamCancellationRegistrationGuard final {
+            std::shared_ptr<Http2StreamCancellationState>& state;
+            StopRegistration& registration;
+
+            ~StreamCancellationRegistrationGuard() {
+                if (state != nullptr) {
+                    state->pool.store(nullptr, std::memory_order_release);
+                }
+                registration.reset();
+            }
+        } cancellationRegistrationGuard{cancellationState, stopRegistration};
         if (stopToken.stopRequested()) cancelHttp2Stream(connection, pending.requestId, AbortReason::kCancelled);
 
         for (;;) {
@@ -461,7 +513,6 @@ Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, st
 
         while (!pending.complete && !pending.error && !pending.retryable) co_await pending.signal.wait();
         deadlineTimer.cancel();
-        stopRegistration.reset();
         const bool retryable = pending.retryable;
         const auto error = pending.error;
         auto response = std::move(pending.response);

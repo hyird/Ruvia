@@ -257,6 +257,26 @@ RUVIA_TEST(routing_rejects_duplicate_route_registration) {
     RUVIA_CHECK(r.matches("/x"));
 }
 
+RUVIA_TEST(routing_rejects_invalid_route_paths_at_registration) {
+    const auto rejects = [](std::string_view route) {
+        ruvia::detail::Router router;
+        auto& impl = ruvia::detail::RouterImpl::from(router);
+        try {
+            addRoute(impl, HttpKnownMethod::kGet, route);
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+
+    RUVIA_CHECK(rejects(""));
+    RUVIA_CHECK(rejects("relative"));
+    RUVIA_CHECK(rejects("*"));
+    RUVIA_CHECK(rejects("/x?debug=1"));
+    RUVIA_CHECK(rejects("/bad path"));
+    RUVIA_CHECK(rejects("/x#fragment"));
+}
+
 RUVIA_TEST(routing_rejects_registration_after_finalize) {
     Router r;
     addRoute(r.impl, HttpKnownMethod::kGet, "/x");

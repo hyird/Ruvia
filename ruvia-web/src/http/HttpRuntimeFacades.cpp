@@ -81,6 +81,27 @@ ruvia::Task<void> closeWebSocketOwned(void* target, ruvia::Task<void> (*close)(v
 
 namespace ruvia {
 
+SseWriter::SseWriter(const SseWriter& other) noexcept
+    : detail::ScopedCapabilityNode(other),
+      writer_(other.writer_) {}
+
+SseWriter::SseWriter(SseWriter&& other) noexcept
+    : detail::ScopedCapabilityNode(std::move(other)),
+      writer_(std::exchange(other.writer_, nullptr)) {}
+
+SseWriter::SseWriter(ResponseStreamWriter& writer) noexcept
+    : detail::ScopedCapabilityNode(writer.operationScope_, &SseWriter::expireCapability),
+      writer_(writer.operationScope_.active() ? &writer : nullptr) {}
+
+ResponseStreamWriter& SseWriter::writer() const {
+    requireActive();
+    return *writer_;
+}
+
+void SseWriter::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
+    static_cast<SseWriter&>(capability).writer_ = nullptr;
+}
+
 WebSocket& Context::webSocket() const {
     const auto* output = responseOutput_.webSocket();
     if (output == nullptr) {
@@ -132,37 +153,43 @@ ScopedOperation<std::optional<std::string_view>> BodyReader::read() {
 }
 
 ScopedOperation<void> ResponseStreamWriter::write(std::string_view chunk) {
+    requireActive();
     std::pmr::string owned(chunk, detail::processResource());
     return writeOwned(std::move(owned));
 }
 
 ScopedOperation<void> ResponseStreamWriter::writeOwned(std::pmr::string chunk) {
+    requireActive();
     return detail::makeScopedOperation(operationScope_, ::writeOwned(target_, write_, std::move(chunk), outputActive_));
 }
 
 ScopedOperation<void> ResponseStreamWriter::writeln(std::string_view chunk) {
+    requireActive();
     std::pmr::string owned(chunk, detail::processResource());
     owned.push_back('\n');
     return writeOwned(std::move(owned));
 }
 
 ScopedOperation<TimerSleepResult> ResponseStreamWriter::sleep(std::chrono::milliseconds duration) {
+    requireActive();
     return detail::makeScopedOperation(operationScope_, sleep_(target_, duration));
 }
 
 ScopedOperation<void> ResponseStreamWriter::end(std::span<const HttpHeaderView> trailers) {
+    requireActive();
     return detail::makeScopedOperation(operationScope_, endOwned(target_, end_, OwnedTrailers(trailers, detail::processResource()), outputActive_));
 }
 
 ScopedOperation<TimerSleepResult> SseWriter::sleep(std::chrono::milliseconds duration) {
-    return writer_.sleep(duration);
+    return writer().sleep(duration);
 }
 
 ScopedOperation<void> SseWriter::end(std::span<const HttpHeaderView> trailers) {
-    return writer_.end(trailers);
+    return writer().end(trailers);
 }
 
 ScopedOperation<std::optional<WebSocketMessage>> WebSocket::read() {
+    requireActive();
     return detail::makeScopedOperation(operationScope_, read_(target_));
 }
 
@@ -199,27 +226,34 @@ ScopedOperation<void> WebSocket::pingOwned(std::pmr::string payload) {
 }
 
 ScopedOperation<void> WebSocket::close(std::uint16_t code, std::string_view reason) {
+    requireActive();
     std::pmr::string owned(reason, detail::processResource());
     return detail::makeScopedOperation(operationScope_, closeWebSocketOwned(target_, close_, code, std::move(owned)));
 }
 
 void WebSocket::abort() noexcept {
+    if (!operationScope_.active()) {
+        return;
+    }
     abort_(target_);
 }
 
 ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::string_view payload) {
+    requireActive();
     std::pmr::string owned(payload, detail::processResource());
     return writeOwned(opcode, std::move(owned));
 }
 
 ScopedOperation<void> WebSocket::writeOwned(WebSocketOpcode opcode, std::pmr::string payload) {
+    requireActive();
     return detail::makeScopedOperation(operationScope_, writeWebSocketOwned(target_, write_, opcode, std::move(payload)));
 }
 
 ScopedOperation<void> SseWriter::write(const SseMessage& message) {
+    auto& streamWriter = writer();
     std::pmr::string frame(detail::processResource());
     detail::formatSseMessage(frame, message);
-    return writer_.writeOwned(std::move(frame));
+    return streamWriter.writeOwned(std::move(frame));
 }
 
 }  // namespace ruvia

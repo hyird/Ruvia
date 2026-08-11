@@ -103,6 +103,8 @@ public:
                 return "invalid HTTP Upgrade header";
             case Http1FinalResponseControlPlanError::kUpgradeRequired:
                 return "Upgrade Required response requires an Upgrade protocol";
+            case Http1FinalResponseControlPlanError::kTeFieldForbidden:
+                return "TE is not a response field";
         }
         return "unknown HTTP final response commit failure";
     }

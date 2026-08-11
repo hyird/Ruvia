@@ -269,11 +269,15 @@ HttpResponse Context::htmlStaticView(std::string_view body) const {
 
 HttpResponse Context::error(HttpStatusCode statusCode, std::string_view code, std::string_view message, std::string_view statusText) const {
     auto response = detail::makeDefaultErrorResponse(resource(), HttpErrorInfo(statusCode, code, message, statusText));
-    applyResponseState(response, statusCode);
+    applyResponseState(response, response.status());
     return response;
 }
 
-Task<HttpResponse> Context::notFound() {
+ScopedOperation<HttpResponse> Context::notFound() {
+    return detail::makeScopedOperation(operationScope_, notFoundTask());
+}
+
+Task<HttpResponse> Context::notFoundTask() {
     if (notFoundHandler_ != nullptr) {
         co_return co_await notFoundHandler_(*this);
     }

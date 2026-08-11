@@ -15,7 +15,7 @@ namespace detail {
 
 // Raised by a body write on a stream whose committed head already completed
 // the message because the request method/response status suppresses content
-// (a HEAD request served by a GET streaming route, a 304, ...). This is a
+// (an explicit HEAD streaming route, a 304, ...). This is a
 // control signal, not an error: the response head on the wire is complete and
 // correct. It deterministically stops the handler -- including an infinite
 // SSE loop -- at its first body write; dispatch recognizes the type and

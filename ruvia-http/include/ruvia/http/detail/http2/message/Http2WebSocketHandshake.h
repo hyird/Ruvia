@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
 #include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
@@ -22,7 +23,7 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] inline HttpWebSocketHandshakeValidationResult validateHttp2WebSocketHandshake(const Http2StreamState& stream, const HttpRequest& request) noexcept {
-    if (!http2IsPendingWebSocketConnect(stream) || stream.remoteContent().allowedWithoutLength() == nullptr) {
+    if (!http2IsPendingWebSocketConnect(stream) || !http2RemoteFinalHeadDecoded(stream) || http2RemotePeerHalfClosed(stream) || stream.remoteContent().allowedWithoutLength() == nullptr) {
         return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
     }
 
@@ -50,14 +51,19 @@ namespace ruvia::detail {
 }
 
 inline void http2EncodeWebSocketHandshakeHeaders(std::pmr::string& headerBlock, const WebSocketServerNegotiation& negotiation) {
-    headerBlock.clear();
-    HpackEncoder::encodeStatus(headerBlock, http_status::kOk);
-    HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kDate, cachedDateValue());
-    if (!negotiation.subprotocol().empty()) {
-        HpackEncoder::encodeHeader(headerBlock, "sec-websocket-protocol", negotiation.subprotocol());
-    }
-    if (!negotiation.extensions().empty()) {
-        HpackEncoder::encodeHeader(headerBlock, "sec-websocket-extensions", negotiation.extensions());
+    try {
+        headerBlock.clear();
+        HpackEncoder::encodeStatus(headerBlock, http_status::kOk);
+        HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kDate, cachedDateValue());
+        if (!negotiation.subprotocol().empty()) {
+            HpackEncoder::encodeHeader(headerBlock, "sec-websocket-protocol", negotiation.subprotocol());
+        }
+        if (!negotiation.extensions().empty()) {
+            HpackEncoder::encodeHeader(headerBlock, "sec-websocket-extensions", negotiation.extensions());
+        }
+    } catch (...) {
+        headerBlock.clear();
+        throw;
     }
 }
 

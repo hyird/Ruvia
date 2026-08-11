@@ -2,7 +2,9 @@
 
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/http/detail/cookie/CookieValidation.h"
@@ -10,8 +12,26 @@
 
 namespace ruvia::detail {
 
+inline void validateHttpClientUserAgent(std::string_view userAgent) {
+    if (!userAgent.empty() && !isValidHttpHeaderValue(userAgent)) {
+        throw std::invalid_argument("http client user agent is invalid");
+    }
+}
+
+inline void validateHttpClientOperationOptions(const HttpClientOperationOptions& options) {
+    ensurePositiveOptionalDuration(options.timeout, "http client operation timeout must be greater than zero");
+}
+
 template <typename Config>
 void validateHttpClientConfig(const Config& config) {
+    if (config.scheme != HttpScheme::kHttp && config.scheme != HttpScheme::kHttps) {
+        throw std::invalid_argument("http client scheme is invalid");
+    }
+    if (config.protocol != HttpClientProtocol::kNegotiate &&
+        config.protocol != HttpClientProtocol::kHttp1Only &&
+        config.protocol != HttpClientProtocol::kHttp2Only) {
+        throw std::invalid_argument("http client protocol is invalid");
+    }
     ensureConfigHost(config.host, "http client host must not be empty", "http client host is invalid", kSeparatedPortHostRules);
     std::string wireHost;
     if (config.host.find(':') != std::string_view::npos) {
@@ -35,6 +55,7 @@ void validateHttpClientConfig(const Config& config) {
     if ((config.certificateChainFile.empty()) != (config.privateKeyFile.empty())) {
         throw std::invalid_argument("http client certificate chain and private key must be configured together");
     }
+    validateHttpClientUserAgent(config.userAgent);
     if (config.cookies.size() > config.maxCookiesPerWorker) {
         throw std::invalid_argument("configured HTTP client cookies exceed the per-worker cookie limit");
     }

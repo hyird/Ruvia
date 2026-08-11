@@ -26,6 +26,8 @@ inline void validateDbConfig(const Config& config) {
 #else
             break;
 #endif
+        default:
+            throw std::invalid_argument("database driver is invalid");
     }
 }
 

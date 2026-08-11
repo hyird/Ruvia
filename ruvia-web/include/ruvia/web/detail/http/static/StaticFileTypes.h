@@ -14,6 +14,7 @@
 namespace ruvia::detail {
 
 // Sort and de-duplicate configured values so lookups can binary-search them.
+[[nodiscard]] bool isValidStaticFileExtension(std::string_view extension) noexcept;
 void normalizeMimeTypes(std::vector<StaticMimeType>& mimeTypes);
 void normalizeFileTypes(std::vector<std::string>& fileTypes);
 

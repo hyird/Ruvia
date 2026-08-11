@@ -44,6 +44,7 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
     Http2StreamState* stream = nullptr;
     bool newPeerStream = false;
     bool createdPeerStream = false;
+    const auto previousLastStreamId = lastStreamId_;
     std::optional<DiscardedHeaderAction> discardedAction;
     if (auto* existing = findStream(header.streamId); existing != nullptr) {
         if (existing->isAborted()) {
@@ -173,6 +174,7 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
     }
 
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
+        const auto outputCheckpoint = output_.checkpoint();
         try {
             Http2StreamHeaderDecodeTransaction transaction{*stream, role_ == Http2Role::kServer};
             auto hpackTransaction = decoder_.beginTransaction();
@@ -188,8 +190,15 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             hpackTransaction.commit();
             http2ResetHeaderBlock(*stream);
         } catch (...) {
+            output_.rollbackTo(outputCheckpoint);
             if (recordedHeadEndStream) {
                 (void)stream->rollbackRemoteHeadEndStreamForRetry();
+            }
+            if (createdPeerStream) {
+                streams_.remove(header.streamId);
+            }
+            if (newPeerStream) {
+                lastStreamId_ = previousLastStreamId;
             }
             throw;
         }
@@ -217,16 +226,22 @@ bool Http2Connection::processTrailerHeaders(Http2StreamState& stream, const Http
     }
 
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
+        const auto outputCheckpoint = output_.checkpoint();
         Http2StreamHeaderDecodeTransaction transaction{stream, false};
         auto hpackTransaction = decoder_.beginTransaction();
-        const auto status = finishTrailerBlock(stream, transaction, hpackTransaction);
-        if (status != HeaderDecodeStatus::kOk) {
-            transaction.rollback();
-            return handleHeaderDecodeFailure(stream, status, &hpackTransaction);
+        try {
+            const auto status = finishTrailerBlock(stream, transaction, hpackTransaction);
+            if (status != HeaderDecodeStatus::kOk) {
+                transaction.rollback();
+                return handleHeaderDecodeFailure(stream, status, &hpackTransaction);
+            }
+            transaction.commit();
+            hpackTransaction.commit();
+            http2ResetHeaderBlock(stream);
+        } catch (...) {
+            output_.rollbackTo(outputCheckpoint);
+            throw;
         }
-        transaction.commit();
-        hpackTransaction.commit();
-        http2ResetHeaderBlock(stream);
     } else {
         headerContinuation_.start(stream.id(), Http2HeaderBlockKind::kTrailers);
     }
@@ -265,17 +280,19 @@ bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::s
             return false;
         }
     }
-    if (!http2AppendHeaderBlock(*stream, payload)) {
-        // The accumulated HEADERS+CONTINUATION block overflowed the buffer cap; the
-        // partial block cannot be decoded, so skipping it would desync HPACK for the
-        // whole connection -- COMPRESSION_ERROR (RFC 9113 §4.3), not a stream reset.
-        appendGoaway(Http2ErrorCode::kCompressionError, "field block not decompressed");
-        return false;
-    }
-    (void)headerContinuation_.recordContinuationFrame();
-    if ((header.flags & kHttp2FlagEndHeaders) != 0) {
-        const auto continuationCheckpoint = headerContinuation_.checkpoint();
-        try {
+    const auto continuationCheckpoint = headerContinuation_.checkpoint();
+    const auto headerBlockCheckpoint = stream->requestHeaderBlock().size();
+    const auto outputCheckpoint = output_.checkpoint();
+    try {
+        if (!http2AppendHeaderBlock(*stream, payload)) {
+            // The accumulated HEADERS+CONTINUATION block overflowed the buffer cap; the
+            // partial block cannot be decoded, so skipping it would desync HPACK for the
+            // whole connection -- COMPRESSION_ERROR (RFC 9113 §4.3), not a stream reset.
+            appendGoaway(Http2ErrorCode::kCompressionError, "field block not decompressed");
+            return false;
+        }
+        (void)headerContinuation_.recordContinuationFrame();
+        if ((header.flags & kHttp2FlagEndHeaders) != 0) {
             const auto completedKind = headerContinuation_.finishKind();
             if (completedKind == Http2HeaderBlockKind::kDiscarded) {
                 return finishDiscardedHeaderBlock();
@@ -306,13 +323,17 @@ bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::s
                 hpackTransaction.commit();
                 http2ResetHeaderBlock(*stream);
             }
-        } catch (...) {
-            // `finishKind()` is a commit of the continuation latch. Decode and
-            // subsequent event/output reservation remain fallible, so restore the
-            // latch before rethrowing; the caller may retry this exact final frame.
-            headerContinuation_.restore(continuationCheckpoint);
-            throw;
         }
+    } catch (...) {
+        // Appending this CONTINUATION fragment is part of the same retryable frame
+        // transaction as decoding and event/output publication. If a later
+        // allocation fails, the caller will retry the exact same frame; restore the
+        // compressed block prefix as well as the continuation latch so the fragment
+        // is not decoded twice.
+        output_.rollbackTo(outputCheckpoint);
+        stream->requestHeaderBlock().resize(headerBlockCheckpoint);
+        headerContinuation_.restore(continuationCheckpoint);
+        throw;
     }
     return true;
 }

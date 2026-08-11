@@ -20,6 +20,19 @@
 #include "ruvia/web/detail/server/file/HttpFileOpen.h"
 
 namespace ruvia::detail {
+namespace {
+
+void submitResetNoThrow(Http2Connection& connection, std::uint32_t streamId, Http2ErrorCode error) noexcept {
+    try {
+        (void)connection.submitReset(streamId, error);
+    } catch (...) {
+        // Failure to serialize RESET_STREAM is already rolled back by
+        // Http2Connection. This writer reports the local failure through its typed
+        // result; the owning session may still retry during stream cleanup.
+    }
+}
+
+}  // namespace
 
 Http2BufferedResponseWriter::Http2BufferedResponseWriter(Http2Connection& connection, Http2SansIoStreamRuntimeTable& streamRuntimes, WorkerMemory& worker, WorkerSignal& writeSignal) noexcept
     : connection_(&connection),
@@ -81,7 +94,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(std::u
         }
         // Invalid final metadata cannot leave an open peer stream waiting for a
         // response that the transactional head submission rejected.
-        (void)connection_->submitReset(streamId, Http2ErrorCode::kInternalError);
+        submitResetNoThrow(*connection_, streamId, Http2ErrorCode::kInternalError);
         wakeWriter();
         co_return Http2BufferedResponseWriteResult::makeFailedBeforeCommit();
     }
@@ -102,7 +115,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(std::u
         }
         if (!ready) {
             // The committed Content-Length can no longer be honoured.
-            (void)connection_->submitReset(streamId, Http2ErrorCode::kInternalError);
+            submitResetNoThrow(*connection_, streamId, Http2ErrorCode::kInternalError);
             wakeWriter();
             co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
         }
@@ -119,7 +132,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(std::u
             input.read(fileChunk.data(), static_cast<std::streamsize>(next));
             const auto readBytes = input.gcount();
             if (readBytes <= 0) {
-                (void)connection_->submitReset(streamId, Http2ErrorCode::kInternalError);
+                submitResetNoThrow(*connection_, streamId, Http2ErrorCode::kInternalError);
                 wakeWriter();
                 co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
             }
@@ -129,7 +142,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(std::u
                 co_return Http2BufferedResponseWriteResult::makePeerAbortedAfterCommit(committedStatus);
             }
             if (result == DataWriteResult::kFailed) {
-                (void)connection_->submitReset(streamId, Http2ErrorCode::kInternalError);
+                submitResetNoThrow(*connection_, streamId, Http2ErrorCode::kInternalError);
                 wakeWriter();
                 co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
             }
@@ -148,7 +161,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(std::u
             co_return Http2BufferedResponseWriteResult::makePeerAbortedAfterCommit(committedStatus);
         }
         if (result == DataWriteResult::kFailed) {
-            (void)connection_->submitReset(streamId, Http2ErrorCode::kInternalError);
+            submitResetNoThrow(*connection_, streamId, Http2ErrorCode::kInternalError);
             wakeWriter();
             co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
         }

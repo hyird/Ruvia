@@ -478,9 +478,9 @@ inline ruvia::Task<void> streamCommitThenThrow(void*, ruvia::Context& context) {
 
 namespace routing_test {
 
-// Simulates the real sinks' body-suppressed commit (a HEAD request served by a
-// streaming GET route): the head commits, then the first body write raises the
-// head-only completion signal instead of accepting the chunk.
+// Simulates the real sinks' body-suppressed commit for an explicit HEAD stream
+// route: the head commits, then the first body write raises the head-only
+// completion signal instead of accepting the chunk.
 inline bool g_headOnlyHandlerResumedPastFirstWrite = false;
 
 inline ruvia::Task<void> headOnlyWrite(void* target, std::string_view) {
@@ -510,7 +510,7 @@ struct HeadOnlyDispatchObservation final {
 inline HeadOnlyDispatchObservation dispatchHeadOnlyStream(std::span<const ControllerMiddlewareDescriptor> middlewares) {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    impl.registerResponseStreamRoute(HttpKnownMethod::kGet, path("/head-only-stream"), ruvia::detail::RouteStreamHandler(nullptr, &headOnlyProbeStreamHandler), std::span<const ControllerMiddlewareDescriptor>{}, middlewares);
+    impl.registerResponseStreamRoute(HttpKnownMethod::kHead, path("/head-only-stream"), ruvia::detail::RouteStreamHandler(nullptr, &headOnlyProbeStreamHandler), std::span<const ControllerMiddlewareDescriptor>{}, middlewares);
     impl.finalize();
     const auto& table = impl.routeTable();
 

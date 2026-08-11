@@ -392,6 +392,9 @@ RUVIA_TEST(http_client_connection_fields_use_recipient_list_semantics) {
     RUVIA_CHECK(parseFailureError("GET",
                     "HTTP/1.1 200 OK\r\nUpgrade: websocket/\r\n"
                     "Content-Length: 0") == Http1ClientResponseParseError::kInvalidUpgrade);
+    RUVIA_CHECK(parseFailureError("GET",
+                    "HTTP/1.1 200 OK\r\nUpgrade: websocket\r\n"
+                    "Content-Length: 0") == Http1ClientResponseParseError::kInvalidConnection);
 
     const ruvia::HttpHeaderView offered[] = {
         {"Connection", "Upgrade"},
@@ -406,7 +409,7 @@ RUVIA_TEST(http_client_connection_fields_use_recipient_list_semantics) {
 }
 
 RUVIA_TEST(http_client_rejects_end_to_end_connection_options) {
-    for (const std::string_view option : {"Content-Length", "DATE", "Set-Cookie"}) {
+    for (const std::string_view option : {"Content-Length", "DATE", "Set-Cookie", "Authorization", "Cookie", "Range"}) {
         std::string response = "HTTP/1.1 200 OK\r\nConnection: ";
         response.append(option);
         response.append("\r\nContent-Length: 0");

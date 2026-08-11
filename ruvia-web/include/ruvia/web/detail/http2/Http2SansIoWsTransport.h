@@ -112,7 +112,12 @@ public:
     }
 
     void abort() noexcept {
-        (void)connection_.submitReset(streamId_, Http2ErrorCode::kCancel);
+        try {
+            (void)connection_.submitReset(streamId_, Http2ErrorCode::kCancel);
+        } catch (...) {
+            // abort() is best-effort teardown; callers cannot observe reset
+            // serialization failure on this noexcept cleanup path.
+        }
         signal_.wake();
         wakeWriter();
     }

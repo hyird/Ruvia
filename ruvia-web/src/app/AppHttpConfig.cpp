@@ -1,5 +1,7 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/app/AppConfigMutation.h"
+#include "ruvia/web/detail/http/static/StaticFileTypes.h"
+#include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"
 #include "ruvia/core/detail/util/NativePath.h"
 
@@ -61,11 +63,15 @@ App& App::setDocumentRoot(DocumentRootConfig config) {
         if (config.staticOptions.indexFile.empty()) {
             config.staticOptions.indexFile = "index.html";
         }
+        detail::normalizeMimeTypes(config.staticOptions.mimeTypes);
+        detail::validateStaticRootOptions(config.staticOptions);
 
-        auto& documentRootConfig = state.documentRootConfig.emplace(detail::appResource());
-        detail::assignNativePath(documentRootConfig.root, config.root);
-        documentRootConfig.staticOptions = copyStaticRootOptionsToAppResource(config.staticOptions);
-        documentRootConfig.runtimeOptions = config.runtimeOptions;
+        detail::AppDocumentRootConfig replacement(detail::appResource());
+        detail::assignNativePath(replacement.root, config.root);
+        replacement.staticOptions = copyStaticRootOptionsToAppResource(config.staticOptions);
+        replacement.runtimeOptions = config.runtimeOptions;
+
+        state.documentRootConfig = std::move(replacement);
     });
 }
 

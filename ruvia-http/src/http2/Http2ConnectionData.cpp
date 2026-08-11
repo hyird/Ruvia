@@ -58,8 +58,8 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             output_.reserveAdditional(frameCount * kHttp2WindowUpdateFrameBytes);
         }
     };
-    const auto reserveStreamError = [this, &reserveEvents]() {
-        reserveEvents(1);
+    const auto reserveStreamError = [this, &reserveEvents](std::size_t extraEvents = 0) {
+        reserveEvents(1 + extraEvents);
         // RST_STREAM plus at most one WINDOW_UPDATE from closeStream's flushed
         // stream debt and one from this frame's dropped connection credit.
         output_.reserveAdditional(kHttp2FrameHeaderBytes + 4 + 2 * kHttp2WindowUpdateFrameBytes);
@@ -182,10 +182,8 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             // pre-reserved publication batch; the close path flushes the matching
             // receive debt, so this branch must not return the same bytes again via
             // releaseDroppedDataConnectionWindow().
-            reserveStreamError();
-            if (!data.empty()) {
-                reserveEvents(1);
-            } else if (flowBytes > 0) {
+            reserveStreamError(data.empty() ? 0 : 1);
+            if (data.empty() && flowBytes > 0) {
                 reserveConsumedCredit(nullptr, static_cast<std::uint32_t>(flowBytes));
             }
             debitConnection();
