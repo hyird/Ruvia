@@ -13,11 +13,22 @@ namespace ruvia {
 
 detail::MariaDbPool::ConnectionSlot::ConnectionSlot(asio::io_context& ioContext, std::pmr::memory_resource* resource)
     : resolver(ioContext),
-      waitSocket(nullptr, SlotSocketDeleter{detail::pmrResourceOrDefault(resource)}) {}
+      waitSocket(nullptr, SlotSocketDeleter{detail::pmrResourceOrDefault(resource)}),
+      socketQuarantine(detail::makePmrObject<detail::DbSlotSocketQuarantine>(
+          detail::processResource(),
+          ioContext)) {}
 
 detail::MariaDbPool::ConnectionSlot::~ConnectionSlot() {
     if (waitActive) {
         std::terminate();
+    }
+    if (waitSocket != nullptr) {
+        socketQuarantine->retain(std::move(*waitSocket), connection);
+        waitSocket.reset();
+        connection = nullptr;
+        // Deliberately abandon the process-backed node: its socket destructor
+        // and mysql_close() must not both close the same native handle.
+        (void)socketQuarantine.release();
     }
 }
 detail::MariaDbPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept = default;
@@ -112,8 +123,8 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
             }
         } else if (slot.waitSocket != nullptr) {
             // Keep the wrapper and driver connection alive until every queued
-            // wait completion has run. Cancelling the ASIO-owned duplicate
-            // wakes the coroutine without touching MariaDB's original socket.
+            // wait completion has run. Cancellation wakes the coroutine; it
+            // releases the borrowed socket before completing slot teardown.
             slot.waitSocket->cancel();
         }
         return;
@@ -129,9 +140,14 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
         }
     }
     clearSlotDeadline(slot);
-    // Close ASIO's duplicate before MariaDB closes its original socket.
     if (slot.waitSocket != nullptr) {
-        slot.waitSocket->reset();
+        // release() leaves the wrapper attached on failure. Keep both objects
+        // in the slot so a later close attempt can retry without either owner
+        // closing the native socket behind the other.
+        if (slot.waitSocket->release()) {
+            (void)scheduler_.close();
+            return;
+        }
         slot.waitSocket.reset();
     }
     if (slot.connection != nullptr) {

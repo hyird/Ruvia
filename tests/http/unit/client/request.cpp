@@ -27,10 +27,18 @@ using ruvia::HttpClientRequestView;
 using ruvia::HttpClientRequestContentView;
 using ruvia::HttpOriginView;
 
-class RejectingMemoryResource final : public std::pmr::memory_resource {
+class RejectingCharacterStorageResource final : public std::pmr::memory_resource {
 private:
-    void* do_allocate(std::size_t, std::size_t) override { throw std::bad_alloc(); }
-    void do_deallocate(void*, std::size_t, std::size_t) override {}
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        // MSVC's debug STL allocates an iterator proxy from the container's
+        // resource before the string buffer. Let that bookkeeping through so
+        // the injected failure lands on the Upgrade character storage itself.
+        if (alignment == alignof(char)) throw std::bad_alloc();
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+    void do_deallocate(void* value, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(value, bytes, alignment);
+    }
     [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
@@ -563,7 +571,7 @@ RUVIA_TEST(http1_client_request_writer_returns_exact_buffer_requirement_without_
 }
 
 RUVIA_TEST(http1_client_upgrade_state_allocation_failure_leaves_head_buffer_untouched) {
-    RejectingMemoryResource rejecting;
+    RejectingCharacterStorageResource rejecting;
     const std::array headers{
         ruvia::HttpHeaderView{"Connection", "Upgrade"},
         ruvia::HttpHeaderView{"Upgrade", "a-valid-protocol-token-that-exceeds-small-string-storage"},

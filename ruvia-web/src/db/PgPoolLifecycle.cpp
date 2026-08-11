@@ -13,11 +13,22 @@ namespace ruvia::detail {
 
 PostgreSqlPool::ConnectionSlot::ConnectionSlot(asio::io_context& ioContext, std::pmr::memory_resource* resource)
     : resolver(ioContext),
-      waitSocket(nullptr, SlotSocketDeleter{pmrResourceOrDefault(resource)}) {}
+      waitSocket(nullptr, SlotSocketDeleter{pmrResourceOrDefault(resource)}),
+      socketQuarantine(makePmrObject<DbSlotSocketQuarantine>(
+          processResource(),
+          ioContext)) {}
 
 PostgreSqlPool::ConnectionSlot::~ConnectionSlot() {
     if (waitActive) {
         std::terminate();
+    }
+    if (waitSocket != nullptr) {
+        socketQuarantine->retain(std::move(*waitSocket), connection);
+        waitSocket.reset();
+        connection = nullptr;
+        // Deliberately abandon the process-backed node: its socket destructor
+        // and PQfinish() must not both close the same native handle.
+        (void)socketQuarantine.release();
     }
 }
 PostgreSqlPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept = default;
@@ -98,16 +109,21 @@ void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
     if (slot.waitActive) {
         if (slot.waitSocket != nullptr) {
             // The wait callback lives in the suspended Task frame and still
-            // refers to this wrapper. Cancel the wait on ASIO's duplicate;
-            // final disposal follows after the callback drains.
+            // refers to this wrapper. Cancel it now; final disposal follows
+            // after the callback drains and releases the borrowed socket.
             slot.waitSocket->cancel();
         }
         return;
     }
 
     if (slot.waitSocket != nullptr) {
-        slot.waitSocket->cancel();
-        slot.waitSocket->reset();
+        // release() leaves the wrapper attached on failure. Keep both objects
+        // in the slot so a later close attempt can retry without either owner
+        // closing the native socket behind the other.
+        if (slot.waitSocket->release()) {
+            (void)scheduler_.close();
+            return;
+        }
         slot.waitSocket.reset();
     }
     clearSlotDeadline(slot);

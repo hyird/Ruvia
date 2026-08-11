@@ -593,7 +593,7 @@ if(RUVIA_BUILD_CORE)
         add_test(NAME ruvia_worker_wait_wake_${_probe}_violation
             COMMAND ruvia_worker_wait_wake_violation ${_probe})
         set_tests_properties(ruvia_worker_wait_wake_${_probe}_violation
-            PROPERTIES WILL_FAIL TRUE)
+            PROPERTIES WILL_FAIL TRUE TIMEOUT 10)
     endforeach()
 
     ruvia_validate_test_sources(ruvia_worker_signal_violation ruvia::core

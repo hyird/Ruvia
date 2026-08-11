@@ -458,7 +458,7 @@ RUVIA_TEST(mariadb_wait_deadline_uses_the_earliest_source) {
 }
 #endif
 
-RUVIA_TEST(db_slot_socket_reset_cancels_wait_and_preserves_driver_socket) {
+RUVIA_TEST(db_slot_socket_cancel_drains_before_release_and_preserves_driver_socket) {
     asio::io_context ioContext;
     asio::ip::tcp::acceptor acceptor(
         ioContext,
@@ -468,15 +468,17 @@ RUVIA_TEST(db_slot_socket_reset_cancels_wait_and_preserves_driver_socket) {
     asio::ip::tcp::socket peerSocket(ioContext);
     acceptor.accept(peerSocket);
 
+    std::error_code driverReleaseError;
     const auto source = static_cast<ruvia::detail::DbSlotSocket::NativeSocket>(
-        driverSocket.native_handle());
+        driverSocket.release(driverReleaseError));
+    RUVIA_CHECK(!driverReleaseError);
     ruvia::detail::DbSlotSocket waitSocket(ioContext);
     RUVIA_CHECK(!waitSocket.ensureAssigned(source));
 #if defined(_WIN32)
     RUVIA_CHECK(static_cast<ruvia::detail::DbSlotSocket::NativeSocket>(
-                    waitSocket.socket.native_handle()) != source);
+                    waitSocket.socket.native_handle()) == source);
 #else
-    RUVIA_CHECK(waitSocket.descriptor.native_handle() != source);
+    RUVIA_CHECK(waitSocket.descriptor.native_handle() == source);
 #endif
 
     int completions = 0;
@@ -496,11 +498,15 @@ RUVIA_TEST(db_slot_socket_reset_cancels_wait_and_preserves_driver_socket) {
             waitError = error;
         });
 #endif
-    waitSocket.reset();
+    waitSocket.cancel();
     ioContext.run();
     RUVIA_CHECK_EQ(completions, 1);
     RUVIA_CHECK(waitError == asio::error::operation_aborted);
+    RUVIA_CHECK(!waitSocket.release());
 
+    std::error_code driverAssignError;
+    driverSocket.assign(asio::ip::tcp::v4(), source, driverAssignError);
+    RUVIA_CHECK(!driverAssignError);
     constexpr std::array<char, 2> payload{'o', 'k'};
     std::array<char, payload.size()> received{};
     asio::write(driverSocket, asio::buffer(payload));
@@ -516,7 +522,7 @@ RUVIA_TEST(db_slot_socket_reports_invalid_driver_socket) {
     RUVIA_CHECK(error == std::errc::bad_file_descriptor);
 }
 
-RUVIA_TEST(db_slot_socket_survives_driver_socket_closing_first) {
+RUVIA_TEST(db_slot_socket_releases_before_driver_socket_closes) {
     asio::io_context ioContext;
     asio::ip::tcp::acceptor acceptor(
         ioContext,
@@ -526,21 +532,26 @@ RUVIA_TEST(db_slot_socket_survives_driver_socket_closing_first) {
     asio::ip::tcp::socket peerSocket(ioContext);
     acceptor.accept(peerSocket);
 
+    std::error_code driverReleaseError;
     const auto source = static_cast<ruvia::detail::DbSlotSocket::NativeSocket>(
-        driverSocket.native_handle());
+        driverSocket.release(driverReleaseError));
+    RUVIA_CHECK(!driverReleaseError);
     {
         ruvia::detail::DbSlotSocket waitSocket(ioContext);
         RUVIA_CHECK(!waitSocket.ensureAssigned(source));
 #if defined(_WIN32)
         RUVIA_CHECK(static_cast<ruvia::detail::DbSlotSocket::NativeSocket>(
-                        waitSocket.socket.native_handle()) != source);
+                        waitSocket.socket.native_handle()) == source);
 #else
-        RUVIA_CHECK(waitSocket.descriptor.native_handle() != source);
+        RUVIA_CHECK(waitSocket.descriptor.native_handle() == source);
 #endif
+        RUVIA_CHECK(!waitSocket.release());
+        std::error_code driverAssignError;
+        driverSocket.assign(asio::ip::tcp::v4(), source, driverAssignError);
+        RUVIA_CHECK(!driverAssignError);
         std::error_code closeError;
         driverSocket.close(closeError);
         RUVIA_CHECK(!closeError);
-        waitSocket.reset();
     }
 
     std::array<char, 1> byte{};

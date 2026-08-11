@@ -69,6 +69,7 @@ namespace ruvia::detail {
 inline constexpr std::string_view kDefaultDbAlias = "default";
 
 struct DbSlotSocket;
+struct DbSlotSocketQuarantine;
 
 #ifdef RUVIA_ENABLE_MARIADB
 
@@ -117,10 +118,12 @@ public:
         ConnectionSlot& operator=(ConnectionSlot&&) noexcept;
 
         using SlotSocketDeleter = PmrObjectDeleter<DbSlotSocket>;
+        using SlotSocketQuarantineDeleter = PmrObjectDeleter<DbSlotSocketQuarantine>;
 
         asio::ip::tcp::resolver resolver;
         st_mysql* connection{nullptr};
         std::unique_ptr<DbSlotSocket, SlotSocketDeleter> waitSocket;
+        std::unique_ptr<DbSlotSocketQuarantine, SlotSocketQuarantineDeleter> socketQuarantine;
         std::coroutine_handle<> deadlineContinuation{};
         bool connected{false};
         // Shutdown may request closure while an async descriptor wait still
@@ -225,10 +228,12 @@ private:
         ConnectionSlot& operator=(ConnectionSlot&&) noexcept;
 
         using SlotSocketDeleter = PmrObjectDeleter<DbSlotSocket>;
+        using SlotSocketQuarantineDeleter = PmrObjectDeleter<DbSlotSocketQuarantine>;
 
         asio::ip::tcp::resolver resolver;
         pg_conn* connection{nullptr};
         std::unique_ptr<DbSlotSocket, SlotSocketDeleter> waitSocket;
+        std::unique_ptr<DbSlotSocketQuarantine, SlotSocketQuarantineDeleter> socketQuarantine;
         bool connected{false};
         bool waitActive{false};
         bool closeRequested{false};

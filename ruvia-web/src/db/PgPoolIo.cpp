@@ -23,6 +23,9 @@ Task<DbResolvedAddresses> PostgreSqlPool::resolveHost(ConnectionSlot& slot, cons
 }
 
 Task<void> PostgreSqlPool::connectUnlocked(ConnectionSlot& slot, const OperationTimeout& operationTimeout) {
+    if (scheduler_.closing()) {
+        throw DbError(DbError::Code::kClosing, DbDriver::kPostgreSql, "database client is closing");
+    }
     if (slot.connected) {
         co_return;
     }
@@ -174,8 +177,8 @@ Task<void> PostgreSqlPool::waitForPostgreSql(ConnectionSlot& slot, bool read, co
         }
     }
     // PQ* may replace or close the native socket during the next poll. Ensure
-    // ASIO no longer owns a duplicate before returning to libpq.
-    slot.waitSocket->reset();
+    // ASIO no longer owns it before returning to libpq.
+    const auto releaseError = slot.waitSocket->release();
     const bool operationExpired = deadline.expired() || slot.deadline.expired();
     clearSlotDeadline(slot);
     throwIfCancelled(slot);
@@ -202,6 +205,13 @@ Task<void> PostgreSqlPool::waitForPostgreSql(ConnectionSlot& slot, bool read, co
         } catch (const std::runtime_error& error) {
             throw DbError(DbError::Code::kIoError, DbDriver::kPostgreSql, error.what());
         }
+    }
+    if (releaseError) {
+        throw DbError(
+            DbError::Code::kIoError,
+            DbDriver::kPostgreSql,
+            "detaching PostgreSQL connection socket: " + releaseError.message(),
+            releaseError.value());
     }
 }
 

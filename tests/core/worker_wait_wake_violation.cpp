@@ -5,14 +5,11 @@
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 
-#include <atomic>
 #include <coroutine>
 #include <cstdlib>
 #include <exception>
 #include <memory>
-#include <semaphore>
 #include <string_view>
-#include <thread>
 #include <utility>
 
 namespace {
@@ -57,47 +54,37 @@ private:
     std::coroutine_handle<promise_type> handle_;
 };
 
-class GatedMove final {
+// The API's by-value parameter is initialized directly from the call-site
+// prvalue. Its first move therefore occurs only after send()/complete() has
+// accepted the worker, at the exact boundary before the waiter is woken.
+class DetachDispatcherOnMove final {
 public:
-    explicit GatedMove(int value) noexcept
-        : value_(value) {}
+    explicit DetachDispatcherOnMove(
+        std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher) noexcept
+        : dispatcher_(std::move(dispatcher)) {}
 
-    GatedMove(const GatedMove&) = delete;
-    GatedMove& operator=(const GatedMove&) = delete;
-    GatedMove& operator=(GatedMove&&) = delete;
+    DetachDispatcherOnMove(const DetachDispatcherOnMove&) = delete;
+    DetachDispatcherOnMove& operator=(const DetachDispatcherOnMove&) = delete;
+    DetachDispatcherOnMove& operator=(DetachDispatcherOnMove&&) = delete;
 
-    GatedMove(GatedMove&& other) noexcept
-        : value_(std::exchange(other.value_, 0)) {
-        if (blockNext_.exchange(false, std::memory_order_acq_rel)) {
-            moveEntered_.release();
-            moveReleased_.acquire();
+    DetachDispatcherOnMove(DetachDispatcherOnMove&& other) noexcept
+        : dispatcher_(std::move(other.dispatcher_)) {
+        if (dispatcher_ != nullptr) {
+            dispatcher_->detachContext();
         }
     }
 
-    static void blockNextMove() noexcept {
-        blockNext_.store(true, std::memory_order_release);
-    }
-
-    static void waitUntilMoveEntered() {
-        moveEntered_.acquire();
-    }
-
-    static void releaseMove() noexcept {
-        moveReleased_.release();
-    }
-
 private:
-    int value_;
-    static inline std::atomic_bool blockNext_{false};
-    static inline std::binary_semaphore moveEntered_{0};
-    static inline std::binary_semaphore moveReleased_{0};
+    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher_;
 };
 
-ManualOwner waitForOneShot(ruvia::OneShotReceiver<GatedMove>& receiver) {
+ManualOwner waitForOneShot(
+    ruvia::OneShotReceiver<DetachDispatcherOnMove>& receiver) {
     (void)co_await receiver.wait();
 }
 
-ManualOwner waitForChannel(ruvia::ChannelReceiver<GatedMove>& receiver) {
+ManualOwner waitForChannel(
+    ruvia::ChannelReceiver<DetachDispatcherOnMove>& receiver) {
     (void)co_await receiver.receive();
 }
 
@@ -111,67 +98,74 @@ void runDispatchFailureProbe(StartWait startWait, Complete complete) {
     asio::post(ioContext, [&owner] { owner.start(); });
     ioContext.run();
 
-    GatedMove::blockNextMove();
-    std::thread completing([complete = std::move(complete)]() mutable {
-        try {
-            complete();
-        } catch (...) {
-            // The old implementation propagated defer() after detaching the
-            // waiter. That is not recoverable, so returning an exception is the
-            // contract failure this death probe must distinguish.
-            std::_Exit(EXIT_SUCCESS);
-        }
-        std::_Exit(EXIT_SUCCESS);
-    });
-
-    GatedMove::waitUntilMoveEntered();
-    dispatcher->detachContext();
-    GatedMove::releaseMove();
-    completing.join();
+    std::set_terminate([] { std::_Exit(86); });
+    try {
+        complete(dispatcher);
+    } catch (...) {
+        // Propagating dispatch failure is not the terminal contract being
+        // tested. Exit before suspended-owner cleanup can mask that failure.
+    }
+    std::_Exit(EXIT_SUCCESS);
 }
 
 void probeOneShot() {
-    std::shared_ptr<ruvia::OneShotCompletion<GatedMove>> completion;
-    std::shared_ptr<ruvia::OneShotReceiver<GatedMove>> receiver;
-    runDispatchFailureProbe(
-        [&](ruvia::WorkerHandle worker) {
-            auto pair = ruvia::makeOneShot<GatedMove>(std::move(worker));
-            completion = std::make_shared<ruvia::OneShotCompletion<GatedMove>>(
-                std::move(pair.first));
-            receiver =
-                std::make_shared<ruvia::OneShotReceiver<GatedMove>>(
-                    std::move(pair.second));
-            return waitForOneShot(*receiver);
-        },
-        [&] { (void)completion->complete(GatedMove(1)); });
-}
-
-void probeChannel() {
-    std::shared_ptr<ruvia::ChannelSender<GatedMove>> sender;
-    std::shared_ptr<ruvia::ChannelReceiver<GatedMove>> receiver;
+    std::shared_ptr<ruvia::OneShotCompletion<DetachDispatcherOnMove>> completion;
+    std::shared_ptr<ruvia::OneShotReceiver<DetachDispatcherOnMove>> receiver;
     runDispatchFailureProbe(
         [&](ruvia::WorkerHandle worker) {
             auto pair =
-                ruvia::makeChannel<GatedMove>(std::move(worker), 1);
-            sender = std::make_shared<ruvia::ChannelSender<GatedMove>>(
-                std::move(pair.first));
+                ruvia::makeOneShot<DetachDispatcherOnMove>(std::move(worker));
+            completion = std::make_shared<
+                ruvia::OneShotCompletion<DetachDispatcherOnMove>>(
+                    std::move(pair.first));
             receiver =
-                std::make_shared<ruvia::ChannelReceiver<GatedMove>>(
-                    std::move(pair.second));
+                std::make_shared<
+                    ruvia::OneShotReceiver<DetachDispatcherOnMove>>(
+                        std::move(pair.second));
+            return waitForOneShot(*receiver);
+        },
+        [&](std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher) {
+            (void)completion->complete(
+                DetachDispatcherOnMove(std::move(dispatcher)));
+        });
+}
+
+void probeChannel() {
+    std::shared_ptr<ruvia::ChannelSender<DetachDispatcherOnMove>> sender;
+    std::shared_ptr<ruvia::ChannelReceiver<DetachDispatcherOnMove>> receiver;
+    runDispatchFailureProbe(
+        [&](ruvia::WorkerHandle worker) {
+            auto pair =
+                ruvia::makeChannel<DetachDispatcherOnMove>(
+                    std::move(worker), 1);
+            sender =
+                std::make_shared<
+                    ruvia::ChannelSender<DetachDispatcherOnMove>>(
+                        std::move(pair.first));
+            receiver =
+                std::make_shared<
+                    ruvia::ChannelReceiver<DetachDispatcherOnMove>>(
+                        std::move(pair.second));
             return waitForChannel(*receiver);
         },
-        [&] { (void)sender->send(GatedMove(1)); });
+        [&](std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher) {
+            (void)sender->send(
+                DetachDispatcherOnMove(std::move(dispatcher)));
+        });
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::set_terminate([] { std::_Exit(86); });
     const std::string_view probe(argc > 1 ? argv[1] : "one_shot");
-    if (probe == "channel") {
-        probeChannel();
-    } else {
-        probeOneShot();
+    try {
+        if (probe == "channel") {
+            probeChannel();
+        } else {
+            probeOneShot();
+        }
+    } catch (...) {
+        return EXIT_SUCCESS;
     }
     return EXIT_SUCCESS;
 }

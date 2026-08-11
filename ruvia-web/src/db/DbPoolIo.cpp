@@ -42,6 +42,9 @@ Task<detail::DbResolvedAddresses> detail::MariaDbPool::resolveHost(ConnectionSlo
 }
 
 Task<void> detail::MariaDbPool::connectUnlocked(ConnectionSlot& slot, const OperationTimeout& operationTimeout) {
+    if (scheduler_.closing()) {
+        throw DbError(DbError::Code::kClosing, DbDriver::kMariaDb, "database client is closing");
+    }
     if (slot.connected) {
         co_return;
     }
@@ -107,10 +110,14 @@ Task<void> detail::MariaDbPool::connectUnlocked(ConnectionSlot& slot, const Oper
             throw mysqlSocketError("binding MariaDB connection socket", error);
         }
         const auto nonBlockingError = slot.waitSocket->makeNonBlocking();
-        slot.waitSocket->reset();
+        const auto releaseError = slot.waitSocket->release();
         if (nonBlockingError) {
             throw mysqlSocketError(
                 "making MariaDB connection socket non-blocking", nonBlockingError);
+        }
+        if (releaseError) {
+            throw mysqlSocketError(
+                "detaching MariaDB connection socket", releaseError);
         }
         slot.connected = true;
     } catch (...) {
@@ -373,10 +380,10 @@ Task<int> detail::MariaDbPool::waitForMysql(ConnectionSlot& slot, int status, co
             expired = slot.deadline.expired();
         }
     }
-    // The driver may reuse or close its socket in mysql_*_cont(). Dispose the
-    // ASIO duplicate only after all readiness handlers have drained, and before
-    // returning control to that continuation.
-    slot.waitSocket->reset();
+    // The driver may reuse or close its socket in mysql_*_cont(). Detach ASIO
+    // only after all readiness handlers have drained, and before returning
+    // control to that continuation.
+    const auto releaseError = slot.waitSocket->release();
     const bool operationExpired = deadline.expired() ||
         (selectedDeadline.source == detail::MysqlWaitDeadlineSource::kOperation && expired);
     clearSlotDeadline(slot);
@@ -404,6 +411,9 @@ Task<int> detail::MariaDbPool::waitForMysql(ConnectionSlot& slot, int status, co
     }
     if (socketFailure) {
         throw mysqlSocketError("waiting for MariaDB socket", socketFailure);
+    }
+    if (releaseError) {
+        throw mysqlSocketError("detaching MariaDB wait socket", releaseError);
     }
     co_return result;
 }

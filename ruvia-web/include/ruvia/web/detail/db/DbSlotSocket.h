@@ -7,26 +7,27 @@
 #include <asio/posix/stream_descriptor.hpp>
 #endif
 
-#include <cstdint>
-#include <limits>
 #include <system_error>
 
 namespace ruvia::detail {
 
 // Transient ASIO wrapper around a database driver's native connection socket.
 //
-// MariaDB and libpq retain ownership of their native socket. ASIO waits on a
-// duplicate owned solely by this wrapper, so cleanup never depends on
-// basic_socket::release(), whose Windows IOCP cleanup can fail after cancellation
-// or after the driver has already closed its handle, and can never create two
-// owners of the driver's handle.
+// MariaDB and libpq retain ownership of their native socket. ASIO borrows that
+// socket only while a readiness wait is active. Every handler must drain and
+// release() must detach ASIO before the driver is called again or closes it.
 struct DbSlotSocket final {
     explicit DbSlotSocket(asio::io_context& ioContext);
+    DbSlotSocket(DbSlotSocket&& other) noexcept;
+    DbSlotSocket& operator=(DbSlotSocket&& other) noexcept;
+
+    DbSlotSocket(const DbSlotSocket&) = delete;
+    DbSlotSocket& operator=(const DbSlotSocket&) = delete;
 
 #if defined(_WIN32)
-    using NativeSocket = std::uintptr_t;
+    using NativeSocket = asio::ip::tcp::socket::native_handle_type;
     asio::ip::tcp::socket socket;
-    static constexpr NativeSocket kInvalidSocket = std::numeric_limits<NativeSocket>::max();
+    static constexpr NativeSocket kInvalidSocket = INVALID_SOCKET;
 #else
     using NativeSocket = asio::posix::stream_descriptor::native_handle_type;
     asio::posix::stream_descriptor descriptor;
@@ -41,9 +42,22 @@ struct DbSlotSocket final {
     // supposed to start it.
     [[nodiscard]] std::error_code makeNonBlocking() noexcept;
     void cancel() noexcept;
-    // Closes only the ASIO-owned duplicate. The driver's original socket stays
-    // valid until mysql_close()/PQfinish() disposes it.
-    void reset() noexcept;
+    // Cancels pending waits and returns ownership to the database driver.
+    // A failure leaves the wrapper attached so its caller can defer teardown
+    // instead of risking a second close of the driver's handle.
+    [[nodiscard]] std::error_code release() noexcept;
+};
+
+// Preallocated fallback for an unrecoverable Windows IOCP detach failure. The
+// pool abandons a retained node for process lifetime instead of invoking either
+// the wrapper destructor or driver cleanup while both know the same handle.
+struct DbSlotSocketQuarantine final {
+    explicit DbSlotSocketQuarantine(asio::io_context& ioContext);
+
+    void retain(DbSlotSocket&& value, void* driver) noexcept;
+
+    DbSlotSocket socket;
+    void* driverConnection{nullptr};
 };
 
 }  // namespace ruvia::detail
