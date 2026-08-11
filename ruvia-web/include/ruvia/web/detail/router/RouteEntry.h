@@ -26,6 +26,8 @@ public:
         bool dynamic{false};
         // 0 = no route-declared ceiling; the server default applies.
         std::size_t maxRequestBodyBytes{0};
+        // 0 = no route-declared deadline; the app-wide one applies.
+        std::int64_t deadlineMs{0};
         std::size_t middlewareOffset{0};
         std::size_t middlewareCount{0};
     };
@@ -65,6 +67,11 @@ public:
         return maxRequestBodyBytes_;
     }
 
+    // A handler deadline declared by one of this route's middlewares, or 0.
+    [[nodiscard]] std::int64_t deadlineMs() const noexcept {
+        return deadlineMs_;
+    }
+
     [[nodiscard]] std::span<const std::string_view> paramNames() const noexcept {
         return paramNames_;
     }
@@ -97,6 +104,7 @@ private:
     RouteEndpoint endpoint_;
     bool dynamic_{false};
     std::size_t maxRequestBodyBytes_{0};
+    std::int64_t deadlineMs_{0};
     std::span<const std::string_view> paramNames_{};
     std::size_t middlewareOffset_{0};
     std::size_t middlewareCount_{0};

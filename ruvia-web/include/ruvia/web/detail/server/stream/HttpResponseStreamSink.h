@@ -70,7 +70,7 @@ public:
     template <typename Sink>
     friend Task<void> responseStreamEndThunk(void*, std::span<const HttpHeaderView>);
     template <typename Sink>
-    friend Task<TimerSleepResult> responseStreamSleepThunk(void*, std::chrono::milliseconds);
+    friend Task<TimerSleepResult> responseStreamSleepThunk(void*, std::chrono::milliseconds, const StopToken&);
     template <typename Sink>
     friend void responseStreamBindContextThunk(void*, Context*, ResponseStreamState::StreamingHeadThunk);
     template <typename Sink>
@@ -135,8 +135,8 @@ private:
         scannerEntry_.touch();
     }
 
-    Task<TimerSleepResult> sleep(std::chrono::milliseconds duration) {
-        const auto result = co_await sleepFor(*worker_, duration);
+    Task<TimerSleepResult> sleep(std::chrono::milliseconds duration, const StopToken& stopToken) {
+        const auto result = co_await sleepFor(*worker_, duration, stopToken);
         if (result == TimerSleepResult::kElapsed) {
             scannerEntry_.touch();
         }

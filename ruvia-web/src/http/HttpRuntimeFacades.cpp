@@ -172,7 +172,7 @@ ScopedOperation<void> ResponseStreamWriter::writeln(std::string_view chunk) {
 
 ScopedOperation<TimerSleepResult> ResponseStreamWriter::sleep(std::chrono::milliseconds duration) {
     requireActive();
-    return detail::makeScopedOperation(operationScope_, sleep_(target_, duration));
+    return detail::makeScopedOperation(operationScope_, sleep_(target_, duration, stopToken_));
 }
 
 ScopedOperation<void> ResponseStreamWriter::end(std::span<const HttpHeaderView> trailers) {

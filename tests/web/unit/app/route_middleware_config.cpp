@@ -27,6 +27,15 @@ public:
     }
 };
 
+// Takes no configuration at all, so it is named bare in a route's list.
+class PlainMiddleware final : public ruvia::Middleware<PlainMiddleware> {
+public:
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+        co_await next();
+        c.header("X-Plain", "on");
+    }
+};
+
 // Two NTTPs: the comma lives inside the template argument list.
 template <int A, int B>
 class ConfiguredByTwoValues final : public ruvia::Middleware<ConfiguredByTwoValues<A, B>> {
@@ -43,9 +52,12 @@ public:
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/one", one, ConfiguredByType<2>);
     RUVIA_GET("/two", two, ConfiguredByTwoValues<10, 1000>);
-    RUVIA_GET("/limited", limited, ruvia::RouteRateLimit<10, 1000>);
+    RUVIA_GET("/limited", limited, ruvia::RateLimit<10, 1000>);
     RUVIA_POST("/small", small, ruvia::BodyLimit<16>);
     RUVIA_POST("/default", defaultBody);
+    // Unparameterized and parameterized entries in ONE list: both are types, so
+    // the typename pack takes them together and a bare name needs no braces.
+    RUVIA_POST("/mixed", mixed, ConfiguredByType<2>, PlainMiddleware, ruvia::BodyLimit<32>, ruvia::RateLimit<10, 1000>);
     RUVIA_ROUTES_END
 private:
     ruvia::Task<ruvia::HttpResponse> one(ruvia::Context& c) { co_return c.text("one"); }
@@ -55,6 +67,10 @@ private:
     ruvia::Task<ruvia::HttpResponse> small(ruvia::Context& c) {
         const auto body = co_await c.req().text();
         co_return c.body(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> mixed(ruvia::Context& c) {
+        co_return c.text("mixed");
     }
 
     ruvia::Task<ruvia::HttpResponse> defaultBody(ruvia::Context& c) {
@@ -79,7 +95,7 @@ RUVIA_TEST(route_middleware_carries_its_configuration_in_the_type) {
 
 RUVIA_TEST(route_rate_limit_is_configured_without_a_generated_type) {
     ruvia::TestApp app;
-    // RouteRateLimit<max, window> replaces the RUVIA_ROUTE_RATE_LIMIT macro,
+    // RateLimit<max, window> replaces the RUVIA_ROUTE_RATE_LIMIT macro,
     // whose only purpose was minting a named type to carry these two numbers.
     // TestApp has no rate limiter, so the middleware must pass the request
     // through rather than reject it.
@@ -102,4 +118,14 @@ RUVIA_TEST(route_body_limit_is_declared_through_the_type) {
     const auto unlimited = app.request(ruvia::TestRequest::post("/route-config/default").body(oversizeForRoute));
     RUVIA_CHECK_EQ(unlimited.status(), ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(unlimited.body().size(), std::size_t{64});
+}
+
+RUVIA_TEST(route_middleware_list_mixes_bare_and_parameterized_types) {
+    ruvia::TestApp app;
+    const auto response = app.request(ruvia::TestRequest::post("/route-config/mixed").body("x"));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(response.body(), std::string_view("mixed"));
+    // The bare entry ran alongside the parameterized ones.
+    RUVIA_CHECK_EQ(response.header("X-Plain").value_or(std::string_view{}), std::string_view("on"));
+    RUVIA_CHECK_EQ(response.header("X-Config").value_or(std::string_view{}), std::string_view("two"));
 }

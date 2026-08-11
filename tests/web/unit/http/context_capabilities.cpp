@@ -98,7 +98,7 @@ ruvia::Task<void> endOutput(void*, std::span<const ruvia::HttpHeaderView>) {
     co_return;
 }
 
-ruvia::Task<ruvia::TimerSleepResult> sleepOutput(void*, std::chrono::milliseconds) {
+ruvia::Task<ruvia::TimerSleepResult> sleepOutput(void*, std::chrono::milliseconds, const ruvia::StopToken&) {
     co_return ruvia::TimerSleepResult::kElapsed;
 }
 

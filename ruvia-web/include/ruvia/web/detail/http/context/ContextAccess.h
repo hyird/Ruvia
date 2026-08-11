@@ -21,6 +21,7 @@ inline Context::Context(RequestMemory& memory, const HttpRequest& request, std::
       connInfo_(services.resolveConnInfo(request)),
       worker_(services.worker()),
       stopToken_(services.stopToken()),
+      requestDeadline_(services.requestDeadline()),
       routePath_(routePath),
       paramNames_(paramNames),
       paramValues_(paramValues),

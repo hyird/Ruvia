@@ -129,7 +129,7 @@ public:
         co_return;
     }
 
-    Task<ruvia::TimerSleepResult> sleep(std::chrono::milliseconds) {
+    Task<ruvia::TimerSleepResult> sleep(std::chrono::milliseconds, const ruvia::StopToken&) {
         co_return ruvia::TimerSleepResult::kElapsed;
     }
 

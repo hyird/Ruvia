@@ -13,6 +13,7 @@ detail::RouterImpl::PendingRoute::PendingRoute(std::pmr::memory_resource* resour
       endpoint_(std::move(init.endpoint)),
       dynamic_(init.dynamic),
       maxRequestBodyBytes_(init.maxRequestBodyBytes),
+      deadlineMs_(init.deadlineMs),
       middlewares_(resource) {
     auto* const routeResource = path_.get_allocator().resource();
     if (init.path.get_allocator().resource() == routeResource) {
@@ -64,6 +65,23 @@ namespace {
     return limit;
 }
 
+// The strictest deadline any of the route's middlewares declared, by the same
+// rule the body limit uses: a narrower scope may only tighten.
+[[nodiscard]] std::int64_t declaredDeadlineMs(std::span<const detail::ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const detail::ControllerMiddlewareDescriptor> routeMiddlewares) noexcept {
+    std::int64_t deadline = 0;
+    const auto consider = [&deadline](std::span<const detail::ControllerMiddlewareDescriptor> descriptors) noexcept {
+        for (const auto& descriptor : descriptors) {
+            const auto declared = descriptor.deadlineMs();
+            if (declared != 0 && (deadline == 0 || declared < deadline)) {
+                deadline = declared;
+            }
+        }
+    };
+    consider(controllerMiddlewares);
+    consider(routeMiddlewares);
+    return deadline;
+}
+
 }  // namespace
 
 void detail::RouterImpl::registerEndpoint(HttpKnownMethod method, std::pmr::string path, RouteEndpoint endpoint, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
@@ -71,7 +89,7 @@ void detail::RouterImpl::registerEndpoint(HttpKnownMethod method, std::pmr::stri
 }
 
 void detail::RouterImpl::registerEndpointWithToken(HttpKnownMethod method, std::string_view methodToken, std::pmr::string path, RouteEndpoint endpoint, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
-    appendPendingRoute(PendingRoute(resource_, PendingRoute::Init{.method = method, .methodToken = std::pmr::string(methodToken, resource_), .path = std::move(path), .endpoint = std::move(endpoint), .dynamic = false, .maxRequestBodyBytes = declaredRequestBodyLimit(controllerMiddlewares, routeMiddlewares), .middlewares = materializeMiddlewares(controllerMiddlewares, routeMiddlewares)}));
+    appendPendingRoute(PendingRoute(resource_, PendingRoute::Init{.method = method, .methodToken = std::pmr::string(methodToken, resource_), .path = std::move(path), .endpoint = std::move(endpoint), .dynamic = false, .maxRequestBodyBytes = declaredRequestBodyLimit(controllerMiddlewares, routeMiddlewares), .deadlineMs = declaredDeadlineMs(controllerMiddlewares, routeMiddlewares), .middlewares = materializeMiddlewares(controllerMiddlewares, routeMiddlewares)}));
 }
 
 void detail::RouterImpl::registerExtensionMethodRoute(std::string_view methodToken, std::pmr::string path, RouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
