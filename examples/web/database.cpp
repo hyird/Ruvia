@@ -3,13 +3,11 @@
 // database feature.
 
 #include <array>
-#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string_view>
-#include <system_error>
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/db/Db.h"
@@ -97,7 +95,7 @@ private:
 
     static ruvia::Task<void> loadUserFound(ruvia::Context& c, bool& found) {
         auto result = co_await c.db().query(driver_ == ruvia::DbDriver::kPostgreSql ? "SELECT id, name FROM users WHERE id = $1" : "SELECT id, name FROM users WHERE id = ?", c.req().param("id").value_or(""));
-        found = !result.rows().empty();
+        found = !result.empty();
         co_return;
     }
 
@@ -105,7 +103,7 @@ private:
         auto rows = co_await c.db().queryStream("SELECT name FROM users ORDER BY id");
         while (auto row = co_await rows.read()) {
             if (!row->empty()) {
-                body.append((*row)[0].text());
+                body.append((*row)["name"].value().value_or(""));
                 body.push_back('\n');
             }
         }
@@ -115,15 +113,10 @@ private:
     static ruvia::Task<void> insertUser(ruvia::Context& c, std::string_view name, std::uint64_t& id) {
         if (driver_ == ruvia::DbDriver::kPostgreSql) {
             auto result = co_await c.db().query("INSERT INTO users(name) VALUES ($1) RETURNING id", name);
-            const auto rows = result.rows();
-            if (rows.empty() || rows.front().empty()) {
+            if (result.empty() || result.front().empty()) {
                 throw std::runtime_error("PostgreSQL INSERT did not return an id");
             }
-            const auto value = rows.front()[0].text();
-            const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), id);
-            if (ec != std::errc{} || ptr != value.data() + value.size()) {
-                throw std::runtime_error("PostgreSQL returned an invalid id");
-            }
+            id = result.front()["id"].as<std::uint64_t>().value();
         } else {
             const auto result = co_await c.db().execute("INSERT INTO users(name) VALUES (?)", name);
             id = result.lastInsertId().value_or(0);

@@ -20,10 +20,6 @@ public:                                                                         
         : T(owner.resource()) {}                                                                                                                  \
                                                                                                                                                   \
 private:                                                                                                                                         \
-    template <typename, typename>                                                                                                                 \
-    friend struct ::ruvia::JsonBody;                                                                                                              \
-    template <typename, typename>                                                                                                                 \
-    friend struct ::ruvia::FormBody;                                                                                                              \
     friend struct ::ruvia::detail::ModelValidationAccess;                                                                                        \
     friend struct ::ruvia::detail::ModelJsonAccess;                                                                                              \
     friend struct ::ruvia::detail::ModelParseAccess;                                                                                             \
@@ -97,6 +93,18 @@ private:                                                                        
         if (!form) return ::std::nullopt;                                                                                                         \
         return ruviaMaterializeFormInput(                                                                                                         \
             ::ruvia::detail::makeFormModelInput(form->view(), resource));                                                                         \
+    }                                                                                                                                             \
+    static ::std::optional<T> ruviaParseFormBodyOwned(                                                                                           \
+        ::std::string_view body, ::std::pmr::memory_resource* resource) {                                                                         \
+        auto form = ::ruvia::FormObject::parse(body, resource);                                                                                   \
+        if (!form) return ::std::nullopt;                                                                                                         \
+        auto ruviaModel = ruviaMaterializeFormInput(                                                                                              \
+            ::ruvia::detail::makeFormModelInput(                                                                                                  \
+                form->view(),                                                                                                                     \
+                resource,                                                                                                                         \
+                ::ruvia::detail::ModelStringStorage::kOwned));                                                                                    \
+        if (!ruviaModel || !::ruvia::detail::ModelValidationAccess::structureValid(*ruviaModel)) return ::std::nullopt;                           \
+        return ruviaModel;                                                                                                                        \
     }                                                                                                                                             \
     static ::std::optional<T> ruviaParseFormFields(                                                                                              \
         const ::ruvia::RequestNameValueList& fields,                                                                                              \
@@ -201,7 +209,8 @@ private:                                                                        
                                 ::ruvia::detail::ResolvedPmrResourceTag{},                                                                        \
                                 value,                                                                                                            \
                                 ruviaEncoding,                                                                                                    \
-                                ruviaResource);                                                                                                   \
+                                ruviaResource,                                                                                                    \
+                                ruviaInput.stringStorage());                                                                                      \
                             if (ruviaValue) {                                                                                                     \
                                 ruviaSlot.emplaceParsed(::std::move(*ruviaValue));                                                                \
                             } else {                                                                                                              \

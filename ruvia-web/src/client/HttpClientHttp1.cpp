@@ -23,13 +23,14 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
     const auto origin = config_.scheme == HttpScheme::kHttps
         ? HttpOriginView::https(wireHost, httpClientPort(config_))
         : HttpOriginView::http(wireHost, httpClientPort(config_));
-    auto preparedResult = Http1ClientRequestWriter().prepare(origin, source, std::span<char>(connection.writeBuffer.data(), connection.writeBuffer.size()));
+    auto preparedResult = Http1ClientRequestWriter(responseResource).prepare(origin, source,
+        std::span<char>(connection.writeBuffer.data(), connection.writeBuffer.size()));
     const auto* prepared = preparedResult.prepared();
     if (!prepared) {
         throw HttpClientError(HttpClientError::Code::kInvalidRequest,
             preparedResult.failure() ? std::string(http1ClientRequestPrepareErrorMessage(preparedResult.failure()->error())) : "HTTP request head is too large");
     }
-    Http1ClientResponseParser parser(*prepared, responseResource);
+    Http1ClientResponseParser parser(prepared->exchangeState(), responseResource);
     co_await write(connection, prepared->head(), timeout);
     if (const auto* content = prepared->contentPlan().immediate()) {
         co_await write(connection, content->bytes(), timeout);
@@ -69,7 +70,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
         response.status_ = parsed->head().status();
         response.protocolVersion_ = parsed->head().protocolVersion();
         response.headers_.reserve(parsed->head().headers().size());
-        for (const auto& header : parsed->head().headers()) response.headers_.push_back(HttpClientHeaderAccess::make(header.name(), header.value(), responseResource));
+        for (const auto& header : parsed->head().headers()) response.headers_.push_back(HttpClientResponseHeaderAccess::make(header.name(), header.value(), responseResource));
         connection.readBuffer.erase(0, consumedHead);
 
         const auto appendChecked = [&](std::string_view bytes) {
@@ -131,7 +132,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
             for (;;) {
                 const auto trailer = trailerParser.next();
                 if (const auto* field = trailer.field()) {
-                    response.trailers_.push_back(HttpClientHeaderAccess::make(
+                    response.trailers_.push_back(HttpClientResponseHeaderAccess::make(
                         field->name(), field->value(), responseResource));
                     continue;
                 }
@@ -149,6 +150,10 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
         bool closeAfter = false;
         bool contentSemanticsPresent = false;
 
+        auto chunkedPlan = parsed->plan().chunked();
+        auto closeDelimitedPlan = parsed->plan().closeDelimited();
+        bool framingHandled = false;
+        bool requireEmptyContent = false;
         if (const auto* known = parsed->plan().knownLength()) {
             contentSemanticsPresent = true;
             if (known->contentLength() > config_.maxResponseBytes) {
@@ -158,9 +163,27 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
             appendChecked(std::string_view(connection.readBuffer).substr(0, known->contentLength()));
             connection.readBuffer.erase(0, known->contentLength());
             closeAfter = known->persistence() == Http1ClosePolicy::kCloseAfterResponse;
-        } else if (const auto* chunked = parsed->plan().chunked()) {
+            framingHandled = true;
+        } else if (const auto* zero = parsed->plan().zeroContent()) {
             contentSemanticsPresent = true;
-            configureTransferDecoder(chunked->transferCodings());
+            requireEmptyContent = true;
+            if (const auto* zeroKnown = zero->knownLength()) {
+                while (connection.readBuffer.size() < zeroKnown->contentLength()) co_await readMore();
+                if (zeroKnown->contentLength() != 0) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
+                closeAfter = zeroKnown->persistence() == Http1ClosePolicy::kCloseAfterResponse;
+                framingHandled = true;
+            } else if (zero->chunked()) {
+                chunkedPlan = zero->chunked();
+            } else if (zero->closeDelimited()) {
+                closeDelimitedPlan = zero->closeDelimited();
+            } else {
+                throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid HTTP 205 response framing");
+            }
+        }
+
+        if (!framingHandled && chunkedPlan != nullptr) {
+            contentSemanticsPresent = true;
+            configureTransferDecoder(chunkedPlan->transferCodings());
             Http1ChunkedBodyDecoder decoder(transferDecoder
                     ? ProtocolByteLimit::unlimited()
                     : ProtocolByteLimit::limited(config_.maxResponseBytes));
@@ -174,10 +197,11 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
                 if (decoded.needMore() || connection.readBuffer.empty()) co_await readMore();
             }
             finishTransferDecoder();
-            closeAfter = chunked->persistence() == Http1ClosePolicy::kCloseAfterResponse;
-        } else if (const auto* closeDelimited = parsed->plan().closeDelimited()) {
+            closeAfter = chunkedPlan->persistence() == Http1ClosePolicy::kCloseAfterResponse;
+            framingHandled = true;
+        } else if (!framingHandled && closeDelimitedPlan != nullptr) {
             contentSemanticsPresent = true;
-            configureTransferDecoder(closeDelimited->transferCodings());
+            configureTransferDecoder(closeDelimitedPlan->transferCodings());
             appendTransferDecoded(connection.readBuffer);
             connection.readBuffer.clear();
             for (;;) {
@@ -187,48 +211,18 @@ Task<HttpClientResponse> HttpClientPool::executeHttp1(Connection& connection, co
             }
             finishTransferDecoder();
             closeAfter = true;
-        } else if (const auto* zero = parsed->plan().zeroContent()) {
-            contentSemanticsPresent = true;
-            if (const auto* zeroKnown = zero->knownLength()) {
-                while (connection.readBuffer.size() < zeroKnown->contentLength()) co_await readMore();
-                if (zeroKnown->contentLength() != 0) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
-                closeAfter = zeroKnown->persistence() == Http1ClosePolicy::kCloseAfterResponse;
-            } else if (const auto* zeroChunked = zero->chunked()) {
-                configureTransferDecoder(zeroChunked->transferCodings());
-                Http1ChunkedBodyDecoder decoder(transferDecoder
-                        ? ProtocolByteLimit::unlimited()
-                        : ProtocolByteLimit::limited(config_.maxResponseBytes));
-                for (;;) {
-                    auto decoded = decoder.decode(connection.readBuffer);
-                    if (const auto* body = decoded.bodyChunk()) appendTransferDecoded(body->bytes());
-                    if (const auto* complete = decoded.complete()) retainTrailers(complete->trailers());
-                    connection.readBuffer.erase(0, decoded.consumedBytes());
-                    if (decoded.failure()) throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid chunked HTTP response");
-                    if (decoded.complete()) break;
-                    if (decoded.needMore() || connection.readBuffer.empty()) co_await readMore();
-                }
-                finishTransferDecoder();
-                if (!response.body_.empty()) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
-                closeAfter = zeroChunked->persistence() == Http1ClosePolicy::kCloseAfterResponse;
-            } else if (const auto* zeroCloseDelimited = zero->closeDelimited()) {
-                configureTransferDecoder(zeroCloseDelimited->transferCodings());
-                appendTransferDecoded(connection.readBuffer);
-                connection.readBuffer.clear();
-                for (;;) {
-                    const auto bytes = co_await readSome(connection, input, timeout, true);
-                    if (bytes == 0) break;
-                    appendTransferDecoded(std::string_view(input.data(), bytes));
-                }
-                finishTransferDecoder();
-                if (!response.body_.empty()) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
-                closeAfter = true;
+            framingHandled = true;
+        }
+
+        if (!framingHandled) {
+            if (const auto* without = parsed->plan().withoutContent()) {
+                closeAfter = without->persistence() == Http1ClosePolicy::kCloseAfterResponse;
             } else {
-                throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid HTTP 205 response framing");
+                throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP tunnel and protocol upgrade responses require a dedicated API");
             }
-        } else if (const auto* without = parsed->plan().withoutContent()) {
-            closeAfter = without->persistence() == Http1ClosePolicy::kCloseAfterResponse;
-        } else {
-            throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP tunnel and protocol upgrade responses require a dedicated API");
+        }
+        if (requireEmptyContent && !response.body_.empty()) {
+            throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
         }
         if (!connection.readBuffer.empty()) throw HttpClientError(HttpClientError::Code::kProtocolError, "unexpected bytes after HTTP response");
         decodeResponseContentEncoding(response, contentSemanticsPresent, config_.maxResponseBytes, responseResource);

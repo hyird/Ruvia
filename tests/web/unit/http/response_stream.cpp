@@ -5,14 +5,14 @@
 
 namespace {
 
-ruvia::Task<void> writeOwnedChunk(ruvia::ResponseStreamWriter& writer) {
+ruvia::Task<void> writePrebuiltChunk(ruvia::ResponseStreamWriter& writer) {
     std::pmr::string chunk("owned-chunk", ruvia::detail::processResource());
-    co_await writer.writeOwned(std::move(chunk));
+    co_await writer.write(std::move(chunk));
 }
 
-ruvia::Task<void> writeOwnedTextFrame(ruvia::WebSocket& socket) {
+ruvia::Task<void> writePrebuiltTextFrame(ruvia::WebSocket& socket) {
     std::pmr::string payload("owned-frame", ruvia::detail::processResource());
-    co_await socket.textOwned(std::move(payload));
+    co_await socket.text(std::move(payload));
 }
 
 }  // namespace
@@ -130,12 +130,12 @@ RUVIA_TEST(websocket_stored_operation_owns_temporary_payload) {
     RUVIA_CHECK_EQ(capture.writes[0], std::string("owned-payload"));
 }
 
-RUVIA_TEST(response_stream_write_owned_transfers_prebuilt_chunk) {
+RUVIA_TEST(response_stream_pmr_overload_transfers_prebuilt_chunk) {
     CaptureStreamSink sink;
     auto writer = makeWriter(sink);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writeOwnedChunk(writer)), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writePrebuiltChunk(writer)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -143,12 +143,12 @@ RUVIA_TEST(response_stream_write_owned_transfers_prebuilt_chunk) {
     RUVIA_CHECK_EQ(sink.writes[0], std::string("owned-chunk"));
 }
 
-RUVIA_TEST(websocket_text_owned_transfers_prebuilt_payload) {
+RUVIA_TEST(websocket_text_pmr_overload_transfers_prebuilt_payload) {
     CaptureWebSocket capture;
     auto socket = ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writeOwnedTextFrame(socket)), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writePrebuiltTextFrame(socket)), asio::use_future);
     ctx.run();
     future.get();
 

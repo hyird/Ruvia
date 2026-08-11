@@ -247,10 +247,27 @@ void Http2Connection::flushWindowDebt(Http2StreamState& stream) {
     }
 }
 
-void Http2Connection::releaseReceivedData(std::uint32_t streamId) {
+bool Http2Connection::releaseReceivedData(std::uint32_t streamId, std::uint32_t bytes) {
     auto* stream = findStream(streamId);
     if (stream == nullptr) {
-        return;  // debt (if any) died with the stream; nothing left to credit
+        return false;  // debt (if any) died with the stream; nothing left to credit
+    }
+    if (!stream->takeWindowDebt(bytes)) {
+        return false;
+    }
+    try {
+        queueConsumedDataCredit(stream, bytes);
+    } catch (...) {
+        stream->addWindowDebt(bytes);
+        throw;
+    }
+    return true;
+}
+
+void Http2Connection::releaseAllReceivedData(std::uint32_t streamId) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr) {
+        return;
     }
     const auto debt = stream->takeWindowDebt();
     if (debt == 0) {

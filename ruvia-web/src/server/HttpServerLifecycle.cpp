@@ -486,7 +486,7 @@ Task<void> HttpServer::staticRootRefreshLoop() {
         StaticRootOptions rootOptions;
         try {
             // Both operations copy PMR-backed configuration. They are outside
-            // runBlocking because the source snapshot is worker-owned, but a
+            // tryRunBlocking because the source snapshot is worker-owned, but a
             // transient allocation failure here is still a refresh failure,
             // not a reason to terminate the listener and discard its last
             // complete index.
@@ -498,7 +498,7 @@ Task<void> HttpServer::staticRootRefreshLoop() {
         }
         DocumentRootPtr candidate(nullptr, PmrObjectDeleter<StaticRoot>{processResource()});
         try {
-            auto rebuilt = co_await ruvia::runBlocking(*options_.blockingPool, workerHandle_, [rootPath = std::move(rootPath), rootOptions = std::move(rootOptions)]() mutable {
+            auto rebuilt = co_await ruvia::tryRunBlocking(*options_.blockingPool, workerHandle_, [rootPath = std::move(rootPath), rootOptions = std::move(rootOptions)]() mutable {
                 return makePmrObject<StaticRoot>(processResource(), rootPath, std::move(rootOptions));
             });
             if (!rebuilt.completed()) {

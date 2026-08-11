@@ -8,8 +8,8 @@ namespace ruvia::detail {
 
 struct HttpClientConfigStorage final {
     HttpClientConfigStorage(const HttpClientConfig& source, std::pmr::memory_resource* resource)
-        : host(source.host, resource),
-          scheme(source.scheme), port(source.port), connectionsPerWorker(source.connectionsPerWorker), maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection), maxBufferedRequestsPerWorker(source.maxBufferedRequestsPerWorker),
+        : host(source.host(), resource),
+          scheme(source.scheme()), port(source.port()), connectionsPerWorker(source.connectionsPerWorker), maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection), maxBufferedRequestsPerWorker(source.maxBufferedRequestsPerWorker),
           maxCookiesPerWorker(source.maxCookiesPerWorker), maxCookieBytesPerWorker(source.maxCookieBytesPerWorker),
           connectTimeout(source.connectTimeout), writeTimeout(source.writeTimeout), requestTimeout(source.requestTimeout), acquireTimeout(source.acquireTimeout),
           maxResponseBytes(source.maxResponseBytes), protocol(source.protocol), verifyCertificate(source.verifyCertificate),

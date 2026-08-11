@@ -425,6 +425,11 @@ public:
     // Pull the next protocol event. nullopt means the queue is drained; every
     // materialized event contains exactly one typed payload.
     [[nodiscard]] std::optional<Http2Event> nextEvent();
+    // Facades that must perform fallible event materialization use peek/commit so
+    // an exception never consumes the only protocol notification for a stream.
+    [[nodiscard]] Http2Event* peekEvent() & noexcept;
+    [[nodiscard]] Http2Event* peekEvent() && = delete;
+    void consumeEvent() noexcept;
 
     // Access an assembled request head / stream for the owner to build an HttpRequest.
     [[nodiscard]] Http2StreamState* stream(std::uint32_t streamId) & noexcept;
@@ -579,7 +584,8 @@ public:
     // delivered DATA event for this stream, transfer the debt into batched
     // connection/stream credit. WINDOW_UPDATE is emitted only at the shared
     // half-window threshold. Safe when the stream is gone.
-    void releaseReceivedData(std::uint32_t streamId);
+    [[nodiscard]] bool releaseReceivedData(std::uint32_t streamId, std::uint32_t bytes);
+    void releaseAllReceivedData(std::uint32_t streamId);
     // Runtime timeout/manual release for an Expect-gated request body. A later
     // 100 response remains observable but emits no duplicate Continue signal.
     [[nodiscard]] Http2RequestContentReleaseStatus releaseRequestContent(std::uint32_t streamId) noexcept;

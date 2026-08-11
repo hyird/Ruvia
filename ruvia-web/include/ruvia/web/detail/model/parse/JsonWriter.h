@@ -8,13 +8,22 @@
 #include <cstddef>
 #include <limits>
 #include <memory_resource>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <type_traits>
 
 namespace ruvia::detail {
 
 struct ModelJsonAccess final {
+    template <typename ModelT>
+    [[nodiscard]] static std::optional<ModelT> parseOwned(
+        std::string_view body,
+        std::pmr::memory_resource* resource) {
+        return ModelT::ruviaParseJsonBodyOwned(body, resource);
+    }
+
     template <typename ModelT>
     [[nodiscard]] static std::size_t sizeHint(const ModelT& model) {
         return model.ruviaJsonSizeHint();

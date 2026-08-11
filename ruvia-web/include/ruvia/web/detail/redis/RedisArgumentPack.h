@@ -2,8 +2,7 @@
 
 #include <concepts>
 #include <cstddef>
-
-#include "ruvia/http/detail/util/BorrowedView.h"
+#include <string_view>
 
 namespace ruvia::detail {
 
@@ -11,11 +10,11 @@ namespace ruvia::detail {
 // string_view is not itself convertible to string_view, so a caller that already
 // holds a contiguous sequence still selects the span overload.
 //
-// Owning-string temporaries are excluded here rather than accepted and deleted
-// later: unlike DbValue, std::string_view has no deleted constructor to lean on,
-// so admitting them would silently borrow text that dies with the argument.
+// Variadic entry points synchronously clone every view into operation- or
+// batch-owned storage, so owning-string temporaries remain alive long enough.
+// Explicit span/view APIs keep their existing caller-owned lifetime contract.
 template <typename Arg>
-concept RedisArgument = std::convertible_to<Arg&&, std::string_view> && !HttpTemporaryOwningCharString<Arg>;
+concept RedisArgument = std::convertible_to<Arg&&, std::string_view>;
 
 template <typename... Args>
 concept RedisArgumentPack = sizeof...(Args) > 0 && (RedisArgument<Args> && ...);
@@ -25,8 +24,5 @@ concept RedisArgumentPack = sizeof...(Args) > 0 && (RedisArgument<Args> && ...);
 // wire level; requiring an even count turns that into a compile error.
 template <typename... Args>
 concept RedisPairArgumentPack = RedisArgumentPack<Args...> && sizeof...(Args) % 2 == 0;
-
-template <typename... Args>
-concept RedisTemporaryOwningArgumentPack = sizeof...(Args) > 0 && (HttpTemporaryOwningCharString<Args> || ...);
 
 }  // namespace ruvia::detail

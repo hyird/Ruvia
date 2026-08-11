@@ -95,6 +95,7 @@ void Http2SansIoSessionEngine::writerWriteFailed(std::error_code error) noexcept
 
 void Http2SansIoSessionEngine::writerCompleted(std::exception_ptr exception) noexcept {
     if (exception != nullptr) {
+        lifecycle_.recordWriterFailure(std::move(exception));
         terminate(std::make_error_code(std::errc::operation_canceled));
     }
     writerTaskDone_ = true;
@@ -512,10 +513,12 @@ Task<void> Http2SansIoSessionEngine::dispatchOne(std::uint32_t streamId) {
     try {
         co_await dispatchOneInner(streamId);
     } catch (...) {
+        const auto failure = std::current_exception();
         auto* live = connection_.stream(streamId);
         if (live != nullptr && !live->isAborted()) {
             resetStreamNoThrow(streamId, Http2ErrorCode::kInternalError);
         }
+        session_.options().connectionFailure.invoke(remoteAddress_, failure);
     }
     (void)streamRuntimes_.remove(streamId);
     unpinStreamNoThrow(streamId);
@@ -770,7 +773,7 @@ void Http2SansIoSessionEngine::drainEvents() {
         }
     }
     for (std::size_t i = 0; i < copiedBodyStreamCount; ++i) {
-        connection_.releaseReceivedData(copiedBodyStreams[i]);
+        connection_.releaseAllReceivedData(copiedBodyStreams[i]);
     }
     if (copiedBodyStreamCount != 0) {
         wakeWriter();
@@ -802,6 +805,7 @@ Task<void> Http2SansIoSessionEngine::finish() {
     while (!writerTaskDone_) {
         co_await writerFinished_.wait();
     }
+    lifecycle_.rethrowWriterFailure();
 }
 
 }  // namespace ruvia::detail

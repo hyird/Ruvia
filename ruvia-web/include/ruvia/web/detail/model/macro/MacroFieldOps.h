@@ -7,6 +7,25 @@
 // macro expands each descriptor into both the member/accessor declaration and
 // the schema entry, so a field cannot be omitted from parsing or serialization.
 
+#define RUVIA_MODEL_DECLARE_CONST_ACCESSOR_true(field)                  \
+    [[nodiscard]] const RuviaFieldType_##field& field() const& {        \
+        return ruviaField_##field##_.requiredValue();                   \
+    }                                                                   \
+    [[nodiscard]] const RuviaFieldType_##field& field() const&& = delete;
+
+#define RUVIA_MODEL_DECLARE_CONST_ACCESSOR_false(field)                                \
+    [[nodiscard]] const ::std::optional<RuviaFieldType_##field>& field() const& noexcept { \
+        return ruviaField_##field##_.value();                                           \
+    }                                                                                   \
+    [[nodiscard]] const ::std::optional<RuviaFieldType_##field>& field() const&& = delete;
+
+#define RUVIA_MODEL_DECLARE_RESET_true(field)
+
+#define RUVIA_MODEL_DECLARE_RESET_false(field) \
+    void field##Reset() noexcept {               \
+        ruviaField_##field##_.reset();           \
+    }
+
 #define RUVIA_MODEL_DECLARE_FIELD_IMPL(required, wire, field, type, ...)                                                                                                                                                                                                                                                                                          \
 private:                                                                                                                                                                                                                                                                                                                                                          \
     using RuviaFieldType_##field = RUVIA_MODEL_UNPAREN type;                                                                                                                                                                                                                                                                                                      \
@@ -15,17 +34,12 @@ private:                                                                        
     ::ruvia::detail::model::ModelField<RuviaFieldType_##field, required, RuviaFieldOptions_##field> ruviaField_##field##_{wire, ::ruvia::detail::model::ModelOptions{__VA_ARGS__}};                                                                                                                                                                               \
                                                                                                                                                                                                                                                                                                                                                                   \
 public:                                                                                                                                                                                                                                                                                                                                                           \
-    [[nodiscard]] const ::std::optional<RuviaFieldType_##field>& field() const& noexcept {                                                                                                                                                                                                                                                                        \
-        return ruviaField_##field##_.value();                                                                                                                                                                                                                                                                                                                     \
-    }                                                                                                                                                                                                                                                                                                                                                             \
-    [[nodiscard]] const ::std::optional<RuviaFieldType_##field>& field() const&& = delete;                                                                                                                                                                                                                                                                        \
+    RUVIA_MODEL_CAT(RUVIA_MODEL_DECLARE_CONST_ACCESSOR_, required)(field)                                                                                                                                                                                                                                                                                           \
     [[nodiscard]] RuviaFieldType_##field& field##Ensure() & {                                                                                                                                                                                                                                                                                                     \
         return ruviaField_##field##_.ensure(ruviaResource_);                                                                                                                                                                                                                                                                                                      \
     }                                                                                                                                                                                                                                                                                                                                                             \
     [[nodiscard]] RuviaFieldType_##field& field##Ensure() && = delete;                                                                                                                                                                                                                                                                                            \
-    void field##Reset() noexcept {                                                                                                                                                                                                                                                                                                                                \
-        ruviaField_##field##_.reset();                                                                                                                                                                                                                                                                                                                            \
-    }                                                                                                                                                                                                                                                                                                                                                             \
+    RUVIA_MODEL_CAT(RUVIA_MODEL_DECLARE_RESET_, required)(field)                                                                                                                                                                                                                                                                                                   \
     template <typename RuviaFieldValueT>                                                                                                                                                                                                                                                                                                                          \
         requires((::ruvia::detail::isRuviaString<RuviaFieldType_##field> && (::std::is_convertible_v<RuviaFieldValueT &&, ::std::string_view> || ::std::constructible_from<RuviaFieldType_##field, RuviaFieldValueT &&>)) || (!::ruvia::detail::isRuviaString<RuviaFieldType_##field> && ::std::constructible_from<RuviaFieldType_##field, RuviaFieldValueT &&>)) \
     auto& field(RuviaFieldValueT&& value) & {                                                                                                                                                                                                                                                                                                                     \

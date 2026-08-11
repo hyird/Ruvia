@@ -4,6 +4,7 @@
 #include "ruvia/http/detail/util/AsciiCase.h"
 
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace ruvia::detail {
@@ -50,7 +51,7 @@ namespace {
 
 std::string_view redisValueString(const RedisValue& value) {
     if (value.kind() == RedisValue::Kind::kError) {
-        throw RedisError(RedisError::Code::kCommandError, value.string());
+        throw RedisError(RedisError::Code::kCommandError, value.error());
     }
     if (value.kind() != RedisValue::Kind::kString) {
         throw RedisError(RedisError::Code::kProtocolError, "redis reply is not a string");
@@ -60,7 +61,7 @@ std::string_view redisValueString(const RedisValue& value) {
 
 std::int64_t redisValueInteger(const RedisValue& value) {
     if (value.kind() == RedisValue::Kind::kError) {
-        throw RedisError(RedisError::Code::kCommandError, value.string());
+        throw RedisError(RedisError::Code::kCommandError, value.error());
     }
     if (value.kind() != RedisValue::Kind::kInteger) {
         throw RedisError(RedisError::Code::kProtocolError, "redis reply is not an integer");
@@ -81,7 +82,7 @@ bool redisValueIntegerBool(const RedisValue& value) {
 
 std::span<const RedisValue> redisValueArray(const RedisValue& value) {
     if (value.kind() == RedisValue::Kind::kError) {
-        throw RedisError(RedisError::Code::kCommandError, value.string());
+        throw RedisError(RedisError::Code::kCommandError, value.error());
     }
     if (value.kind() != RedisValue::Kind::kArray) {
         throw RedisError(RedisError::Code::kProtocolError, "redis reply is not an array");
@@ -91,23 +92,19 @@ std::span<const RedisValue> redisValueArray(const RedisValue& value) {
 
 void throwIfRedisError(const RedisValue& value) {
     if (value.kind() == RedisValue::Kind::kError) {
-        throw RedisError(RedisError::Code::kCommandError, value.string());
+        throw RedisError(RedisError::Code::kCommandError, value.error());
     }
 }
 
-void validateRedisOperationOptions(const RedisOperationOptions& options) {
-    if (options.timeout.has_value() && options.timeout->count() <= 0) {
-        throw std::invalid_argument("redis operation timeout must be greater than zero");
+void throwIfRedisTransactionReplyError(const RedisValue& value, std::size_t index) {
+    if (value.kind() != RedisValue::Kind::kError) {
+        return;
     }
-}
-
-RedisOperationOptions mergeRedisOperationOptions(const RedisOperationOptions& base, RedisOperationOptions overrides) {
-    RedisOperationOptions merged = base;
-    if (overrides.timeout.has_value() && (!merged.timeout.has_value() || *overrides.timeout < *merged.timeout)) {
-        merged.timeout = overrides.timeout;
-    }
-    merged.stopToken = combineStopTokens(base.stopToken, std::move(overrides.stopToken));
-    return merged;
+    std::string message("redis transaction reply ");
+    message.append(std::to_string(index));
+    message.append(": ");
+    message.append(value.error());
+    throw RedisError(RedisError::Code::kCommandError, message);
 }
 
 bool validateRedisPooledCommand(std::span<const std::string_view> args, bool allowBlocking) {
@@ -164,7 +161,7 @@ Task<RedisValue> executeOwnedRedisCommand(RedisCommandExecutor executor, std::pm
     return executor.pool->executeOwned(std::move(args), resource, std::move(executor.options));
 }
 
-Task<RedisValue> executeOwnedRedisCommand(RedisPool& pool, std::pmr::vector<std::pmr::string> args, RedisOperationOptions options, std::pmr::memory_resource* resource) {
+Task<RedisValue> executeOwnedRedisCommand(RedisPool& pool, std::pmr::vector<std::pmr::string> args, OperationOptions options, std::pmr::memory_resource* resource) {
     return pool.executeOwned(std::move(args), resource, std::move(options));
 }
 

@@ -72,7 +72,12 @@ template <typename NumberT>
 }
 
 template <typename T>
-[[nodiscard]] std::optional<T> parseFormValue(ResolvedPmrResourceTag, std::string_view input, FormValueEncoding encoding, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::optional<T> parseFormValue(
+    ResolvedPmrResourceTag,
+    std::string_view input,
+    FormValueEncoding encoding,
+    std::pmr::memory_resource* resource,
+    ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) {
     using FieldT = std::remove_cvref_t<T>;
 
     std::optional<std::pmr::string> decodedStorage;
@@ -87,6 +92,9 @@ template <typename T>
 
     if constexpr (isRuviaString<FieldT>) {
         if (!decodedStorage.has_value()) {
+            if (stringStorage == ModelStringStorage::kOwned) {
+                return FieldT(decoded, resource);
+            }
             return ModelValueFactory::makeString(decoded, resource);
         }
         FieldT value = makeRequestValue<FieldT>(ResolvedPmrResourceTag{}, resource);
@@ -118,8 +126,12 @@ template <typename T>
 }
 
 template <typename T>
-[[nodiscard]] std::optional<T> parseFormValue(std::string_view input, FormValueEncoding encoding, std::pmr::memory_resource* resource) {
-    return parseFormValue<T>(ResolvedPmrResourceTag{}, input, encoding, pmrResourceOrDefault(resource));
+[[nodiscard]] std::optional<T> parseFormValue(
+    std::string_view input,
+    FormValueEncoding encoding,
+    std::pmr::memory_resource* resource,
+    ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) {
+    return parseFormValue<T>(ResolvedPmrResourceTag{}, input, encoding, pmrResourceOrDefault(resource), stringStorage);
 }
 
 }  // namespace ruvia::detail

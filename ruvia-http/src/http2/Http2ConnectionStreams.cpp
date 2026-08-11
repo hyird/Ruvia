@@ -68,8 +68,10 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
         return;  // never created, or already removed
     }
     if (stream->isAborted()) {
-        // The abnormal terminal transition already returned flow-control debt and
-        // discarded deferred sends. The pin only kept request-view storage alive.
+        // A pinned stream may still have exact public DATA credits in flight.
+        // Returning the owner lease is the fallback that settles any abandoned
+        // debt before storage is finally removed.
+        flushWindowDebt(*stream);
         std::erase(pinnedStreams_, streamId);
         releaseLocalRequestStream(*stream);
         streams_.remove(streamId);
@@ -98,11 +100,14 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
     // the caller still owns request-view storage and can retry unpinning.
     const auto error = stream->localSend().endStreamCommitted() != nullptr ? Http2ErrorCode::kNoError : Http2ErrorCode::kCancel;
     (void)submitReset(streamId, error);
-    std::erase(pinnedStreams_, streamId);
     if (auto* retainedStream = streams_.find(streamId); retainedStream != nullptr && retainedStream->isAborted()) {
+        flushWindowDebt(*retainedStream);
         releaseLocalRequestStream(*retainedStream);
+        std::erase(pinnedStreams_, streamId);
         streams_.remove(streamId);
+        return;
     }
+    std::erase(pinnedStreams_, streamId);
 }
 
 void Http2Connection::discardDeferredStreamState(std::uint32_t streamId) {
@@ -123,8 +128,11 @@ bool Http2Connection::closeStreamImpl(std::uint32_t streamId, Http2StreamCloseSo
         if (notification == CloseNotification::kEmitEvent) {
             reserveEventSlots(1);
         }
-        if (const auto debt = stream->windowDebt(); debt != 0 && connectionReceiveCredit_.readyAfter(debt)) {
-            output_.reserveAdditional(kHttp2WindowUpdateFrameBytes);
+        if (!isPinned(streamId)) {
+            const auto debt = stream->windowDebt();
+            if (debt != 0 && connectionReceiveCredit_.readyAfter(debt)) {
+                output_.reserveAdditional(kHttp2WindowUpdateFrameBytes);
+            }
         }
     }
     if (stream != nullptr && !stream->isAborted()) {
@@ -141,9 +149,12 @@ bool Http2Connection::closeStreamImpl(std::uint32_t streamId, Http2StreamCloseSo
     if (notification == CloseNotification::kEmitEvent) {
         events_.push_back(Http2Event::streamClosed(streamId, source, error));
     }
-    // A pin protects request views only. Protocol resources and connection-level
-    // flow credit are released immediately even if a sleeping handler retains storage.
-    flushWindowDebt(*stream);
+    // A public DATA credit is exact: a pinned closed stream remains the ledger
+    // until the credit is acknowledged or its token is abandoned. Unpinned
+    // internal consumers retain the historical eager cleanup behavior.
+    if (!isPinned(streamId)) {
+        flushWindowDebt(*stream);
+    }
     closedStreams_.remember(streamId, source);
     if (!isPinned(streamId)) {
         streams_.remove(streamId);

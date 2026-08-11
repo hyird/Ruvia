@@ -171,7 +171,7 @@ RUVIA_TEST(http_client_final_after_continue_does_not_cancel_released_content) {
         return;
     }
 
-    Http1ClientResponseParser parser(*prepared.prepared());
+    Http1ClientResponseParser parser(prepared.prepared()->exchangeState());
     const auto continueResponse = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     RUVIA_CHECK(continueResponse.parsed() != nullptr);
     if (continueResponse.parsed() != nullptr) {
@@ -197,7 +197,7 @@ RUVIA_TEST(http_client_closing_final_stops_unfinished_request_content) {
         return;
     }
 
-    Http1ClientResponseParser parser(*prepared.prepared());
+    Http1ClientResponseParser parser(prepared.prepared()->exchangeState());
     const auto continueResponse = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     RUVIA_CHECK(continueResponse.parsed() != nullptr);
 

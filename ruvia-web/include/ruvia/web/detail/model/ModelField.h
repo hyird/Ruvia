@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -48,6 +49,15 @@ public:
     }
 
     [[nodiscard]] const std::optional<ValueT>& value() const&& = delete;
+
+    [[nodiscard]] const ValueT& requiredValue() const& requires Required {
+        if (!value_) {
+            throw std::logic_error("required model field has no value");
+        }
+        return *value_;
+    }
+
+    [[nodiscard]] const ValueT& requiredValue() const&& requires Required = delete;
 
     [[nodiscard]] ValueT& ensure(std::pmr::memory_resource* resource) {
         if (!value_) {

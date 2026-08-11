@@ -9,11 +9,14 @@
 #include "ruvia/web/detail/util/CallableRef.h"
 
 #include <chrono>
+#include <concepts>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 namespace ruvia {
 
@@ -60,18 +63,25 @@ public:
     /// output lane; starting another output operation before the current one
     /// completes throws std::logic_error.
     ///
-    /// write()/writeln() copy the chunk into process-owned PMR storage before
-    /// returning. Hot-path producers that already hold a buffer in request-owned
-    /// storage should build it with the request arena and move it in through
-    /// writeOwned() to skip that copy.
+    /// The string_view overload copies the chunk into process-owned PMR storage
+    /// before returning. Hot-path producers that already hold a buffer in
+    /// request-owned storage can move it into the PMR-string overload to skip
+    /// that copy.
     ScopedOperation<void> write(std::string_view chunk);
 
-    ScopedOperation<void> writeln(std::string_view chunk);
+    template <typename Text>
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
+                 std::constructible_from<std::string_view, Text&&>)
+    ScopedOperation<void> write(Text&& chunk) {
+        return write(std::string_view(std::forward<Text>(chunk)));
+    }
 
     /// Zero-copy write: takes ownership of an already-allocated chunk and
     /// transfers it into the output lane without copying. Build the chunk with
     /// a request-owned arena (Context::resource()) for hot-path streaming.
-    ScopedOperation<void> writeOwned(std::pmr::string chunk);
+    ScopedOperation<void> write(std::pmr::string&& chunk);
+
+    ScopedOperation<void> writeln(std::string_view chunk);
 
     /// Suspends the stream producer. The result is kElapsed for a normal
     /// delay, or kStopRequested when the owning worker is shutting down or the

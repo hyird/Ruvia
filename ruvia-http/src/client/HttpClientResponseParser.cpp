@@ -120,13 +120,13 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(std::string_view
     // Remove the terminal CRLF CRLF. The last field line then has the same
     // shape as every preceding line except that it has no trailing delimiter.
     const auto headSection = buffer.substr(0, headerBytes - 4);
-    auto parsedHead = detail::parseHttp1ClientResponseHeadFields(headSection, request_);
+    auto parsedHead = detail::parseHttp1ClientResponseHeadFields(headSection, exchangeState_);
     if (const auto* parseError = std::get_if<Http1ClientResponseParseError>(&parsedHead)) {
         return fail(*parseError);
     }
     const auto& parsed = std::get<detail::Http1ClientParsedResponseHead>(parsedHead);
 
-    auto planning = detail::planHttp1ClientResponse(request_, parsed, requestContentPhase_);
+    auto planning = detail::planHttp1ClientResponse(exchangeState_, parsed, requestContentPhase_);
     if (const auto* planningError = std::get_if<Http1ClientResponseParseError>(&planning)) {
         return fail(*planningError);
     }

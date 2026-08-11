@@ -91,9 +91,9 @@ public:
     void closeNow() noexcept;
     void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept;
     [[nodiscard]] bool needsDeadlineScan() const noexcept;
-    Task<RedisValue> executeOwned(std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource, RedisOperationOptions options = {});
-    Task<std::pmr::vector<RedisValue>> executePipeline(std::span<const RedisPipeline::Command> commands, RedisOperationOptions options, std::pmr::memory_resource* resource);
-    Task<std::pmr::vector<RedisValue>> executePipeline(std::span<const RedisCommandArgsView> commands, RedisOperationOptions options, std::pmr::memory_resource* resource);
+    Task<RedisValue> executeOwned(std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource, OperationOptions options = {});
+    Task<std::pmr::vector<RedisValue>> executePipeline(std::span<const RedisPipeline::Command> commands, OperationOptions options, std::pmr::memory_resource* resource);
+    Task<std::pmr::vector<RedisValue>> executePipeline(std::span<const RedisCommandArgsView> commands, OperationOptions options, std::pmr::memory_resource* resource);
 
 private:
     friend class ::ruvia::RedisHandle;
@@ -116,7 +116,7 @@ private:
         std::unique_ptr<redisReader, RedisReaderDeleter> reader;
         std::size_t replyBytes{0};
         bool connected{false};
-        enum class AbortReason : std::uint8_t { kNone, kCancelled };
+        enum class AbortReason : std::uint8_t { kNone, kCancelled, kClosing };
         AbortReason abortReason{AbortReason::kNone};
         std::uint64_t cancellationId{0};
         enum class DeadlineKind : std::uint8_t { kResolve, kSocket };
@@ -151,14 +151,14 @@ private:
     Task<void> authenticate(Connection& connection, const OperationTimeout& connectTimeout);
     Task<RedisValue> readReply(Connection& connection, const OperationTimeout& timeout, std::pmr::memory_resource* resource);
     template <typename ArgSource>
-    Task<RedisValue> executeWithTimeoutImpl(ArgSource args, RedisOperationOptions options, std::pmr::memory_resource* resource);
+    Task<RedisValue> executeWithTimeoutImpl(ArgSource args, OperationOptions options, std::pmr::memory_resource* resource);
     template <typename CommandSource>
-    Task<std::pmr::vector<RedisValue>> executePipelineImpl(CommandSource commands, RedisOperationOptions options, std::pmr::memory_resource* resource);
+    Task<std::pmr::vector<RedisValue>> executePipelineImpl(CommandSource commands, OperationOptions options, std::pmr::memory_resource* resource);
     Task<std::error_code> asyncSocketWrite(Connection& connection, const OperationTimeout& timeout);
     Task<AsioCompletion<std::size_t>> asyncSocketReadSome(Connection& connection, std::span<char> buffer, const OperationTimeout& timeout);
     [[nodiscard]] std::uint64_t nextCancellationId() noexcept;
     void cancelOperationById(std::uint64_t cancellationId) noexcept;
-    void throwIfCancelled(const Connection& connection) const;
+    void throwIfAborted(const Connection& connection) const;
     asio::io_context& ioContext_;
     const WorkerHandle* worker_;
     RedisConfigStorage config_;
@@ -171,7 +171,7 @@ private:
 
 struct RedisCommandExecutor final {
     RedisPool* pool{nullptr};
-    RedisOperationOptions options;
+    OperationOptions options;
 };
 
 class RedisRegistry final {

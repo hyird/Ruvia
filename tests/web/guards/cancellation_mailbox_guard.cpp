@@ -1,5 +1,4 @@
 #include <atomic>
-#include <cassert>
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
@@ -28,6 +27,12 @@ using CancellationMailbox = ruvia::detail::WorkerCancellationMailbox<Cancellatio
 
 static_assert(ruvia::detail::workerCancellationPostIsInline<CancellationMailbox>);
 
+void check(bool condition) {
+    if (!condition) {
+        std::abort();
+    }
+}
+
 }  // namespace
 
 void* operator new(std::size_t size) {
@@ -52,7 +57,7 @@ int main() {
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     CancellationOwner owner;
     auto mailbox = std::make_shared<CancellationMailbox>(owner, worker);
-    ruvia::detail::StopSource source;
+    ruvia::StopSource source;
     ruvia::StopRegistration registration;
 
     const auto allocationsBeforeRegistration = allocationCount.load(std::memory_order_relaxed);
@@ -60,20 +65,20 @@ int main() {
     source.token().registerCallback(
         registration,
         ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 41));
-    assert(mailbox.use_count() == ownersBeforeRegistration);
+    check(mailbox.use_count() == ownersBeforeRegistration);
     ruvia::MoveOnlyFunction<void()> queuedDispatch(
         ruvia::detail::WorkerCancellationDispatch<CancellationMailbox>(mailbox, 42));
-    assert(allocationCount.load(std::memory_order_relaxed) == allocationsBeforeRegistration);
+    check(allocationCount.load(std::memory_order_relaxed) == allocationsBeforeRegistration);
     registration.reset();
 
     ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 41)();
     ioContext.run();
-    assert(owner.lastOperationId == 41);
+    check(owner.lastOperationId == 41);
 
     queuedDispatch();
-    assert(owner.lastOperationId == 42);
+    check(owner.lastOperationId == 42);
 
-    ruvia::detail::StopSource onWorkerSource;
+    ruvia::StopSource onWorkerSource;
     ruvia::StopRegistration onWorkerRegistration;
     onWorkerSource.token().registerCallback(
         onWorkerRegistration,
@@ -86,11 +91,11 @@ int main() {
     });
     ioContext.restart();
     dispatcher->runContext();
-    assert(observedInline);
+    check(observedInline);
 
     mailbox->detach(owner);
     ruvia::detail::WorkerCancellationDispatch<CancellationMailbox>(mailbox, 43)();
-    assert(owner.lastOperationId == 44);
+    check(owner.lastOperationId == 44);
     dispatcher->detachContext();
     return 0;
 }

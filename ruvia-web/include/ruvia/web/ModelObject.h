@@ -269,7 +269,7 @@ public:
 
 private:
     friend ModelInput makeJsonModelInput(std::string_view body, std::pmr::memory_resource* resource, ModelStringStorage stringStorage) noexcept;
-    friend ModelInput makeFormModelInput(std::string_view body, std::pmr::memory_resource* resource) noexcept;
+    friend ModelInput makeFormModelInput(std::string_view body, std::pmr::memory_resource* resource, ModelStringStorage stringStorage) noexcept;
     friend ModelInput makeFormFieldsModelInput(const RequestNameValueList& fields, std::pmr::memory_resource* resource) noexcept;
 
     ModelInput(ModelInputKind kind, std::string_view body, std::pmr::memory_resource* resource = nullptr, ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) noexcept
@@ -297,8 +297,11 @@ private:
     return ModelInput(ModelInputKind::kJson, body, resource, stringStorage);
 }
 
-[[nodiscard]] inline ModelInput makeFormModelInput(std::string_view body, std::pmr::memory_resource* resource) noexcept {
-    return ModelInput(ModelInputKind::kForm, body, resource);
+[[nodiscard]] inline ModelInput makeFormModelInput(
+    std::string_view body,
+    std::pmr::memory_resource* resource,
+    ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) noexcept {
+    return ModelInput(ModelInputKind::kForm, body, resource, stringStorage);
 }
 
 [[nodiscard]] inline ModelInput makeFormFieldsModelInput(const RequestNameValueList& fields, std::pmr::memory_resource* resource) noexcept {

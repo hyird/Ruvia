@@ -40,7 +40,7 @@ int main() {
     if (preparedRequest == nullptr) {
         return 3;
     }
-    ruvia::Http1ClientResponseParser responseParser(*preparedRequest);
+    ruvia::Http1ClientResponseParser responseParser(preparedRequest->exchangeState());
     const auto responseResult = responseParser.parse("HTTP/1.1 204 No Content\r\n\r\n");
     const auto* responseHead = responseResult.parsed();
     return origin.host().empty() || origin.port() != 443 || origin.scheme() != ruvia::HttpScheme::kHttps || responseHead == nullptr || responseHead->head().status() != ruvia::http_status::kNoContent || responseHead->plan().withoutContent() == nullptr ? 3 : 0;

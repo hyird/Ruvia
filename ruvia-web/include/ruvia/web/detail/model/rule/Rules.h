@@ -74,8 +74,10 @@ private:
                     if (!structureValid(element)) return false;
                 }
             }
+            return true;
+        } else {
+            return true;
         }
-        return true;
     }
 
     template <typename ValueT, typename ValidatorT>

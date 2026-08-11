@@ -22,6 +22,55 @@ struct ModelParseAccess final {
     [[nodiscard]] static std::optional<ModelT> parseValue(std::string_view& input, std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage) {
         return ModelT::ruviaParseJsonValue(input, resource, depth, stringStorage);
     }
+
+    template <typename ModelT>
+    [[nodiscard]] static std::optional<ModelT> parseJsonBorrowed(
+        std::string_view body,
+        std::pmr::memory_resource* resource) {
+        return ModelT::ruviaParseJsonBody(body, resource);
+    }
+
+    template <typename ModelT>
+    [[nodiscard]] static std::optional<ModelT> parseJsonBorrowedPartial(
+        std::string_view body,
+        std::pmr::memory_resource* resource) {
+        return ModelT::ruviaParseJsonBodyPartial(body, resource);
+    }
+
+    template <typename ModelT>
+    [[nodiscard]] static std::optional<ModelT> parseFormOwned(
+        std::string_view body,
+        std::pmr::memory_resource* resource) {
+        return ModelT::ruviaParseFormBodyOwned(body, resource);
+    }
+
+    template <typename ModelT>
+    [[nodiscard]] static std::optional<ModelT> parseFormBorrowed(
+        std::string_view body,
+        std::pmr::memory_resource* resource) {
+        return ModelT::ruviaParseFormBody(body, resource);
+    }
+
+    template <typename ModelT>
+    [[nodiscard]] static std::optional<ModelT> parseFormBorrowedPartial(
+        std::string_view body,
+        std::pmr::memory_resource* resource) {
+        return ModelT::ruviaParseFormBodyPartial(body, resource);
+    }
+
+    template <typename ModelT>
+    [[nodiscard]] static std::optional<ModelT> parseFormFields(
+        const RequestNameValueList& fields,
+        std::pmr::memory_resource* resource) {
+        return ModelT::ruviaParseFormFields(fields, resource);
+    }
+
+    template <typename ModelT>
+    [[nodiscard]] static std::optional<ModelT> parseFormFieldsPartial(
+        const RequestNameValueList& fields,
+        std::pmr::memory_resource* resource) {
+        return ModelT::ruviaParseFormFieldsPartial(fields, resource);
+    }
 };
 
 template <typename T>

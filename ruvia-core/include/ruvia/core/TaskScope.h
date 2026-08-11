@@ -106,7 +106,7 @@ private:
 
     const WorkerHandle& worker_;
     std::pmr::memory_resource* resource_;
-    detail::StopSource stopSource_;
+    StopSource stopSource_;
     Node* head_{nullptr};
     std::size_t active_{0};
     Lifecycle lifecycle_;

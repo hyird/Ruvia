@@ -163,9 +163,17 @@ Task<void> runHttp2SansIoSessionImpl(
         engine.terminate(readerTerminalError);
     }
 
-    co_await engine.finish();
+    std::exception_ptr finishFailure;
+    try {
+        co_await engine.finish();
+    } catch (...) {
+        finishFailure = std::current_exception();
+    }
     if (readerFailure != nullptr) {
         std::rethrow_exception(readerFailure);
+    }
+    if (finishFailure != nullptr) {
+        std::rethrow_exception(finishFailure);
     }
 }
 

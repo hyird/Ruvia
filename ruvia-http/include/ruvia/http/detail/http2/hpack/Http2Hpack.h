@@ -13,6 +13,8 @@
 
 namespace ruvia::detail {
 
+class HpackDecodeResult;
+
 enum class HpackDecodeError { kNeedMore, kIntegerOverflow, kInvalidIndex, kInvalidString, kInvalidHuffman, kDynamicTableSize, kCallbackRejected };
 
 class HpackDecoded final {

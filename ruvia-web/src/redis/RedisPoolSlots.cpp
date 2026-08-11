@@ -38,7 +38,7 @@ Task<std::size_t> RedisPool::acquire(const OperationTimeout& timeout, StopToken 
         throw RedisError(RedisError::Code::kCancelled, "redis operation cancelled");
     }
     if (result.closed() != nullptr) {
-        throw RedisError(RedisError::Code::kIoError, "redis pool is closing");
+        throw RedisError(RedisError::Code::kClosing, "redis pool is closing");
     }
 
     const auto* acquired = result.acquired();

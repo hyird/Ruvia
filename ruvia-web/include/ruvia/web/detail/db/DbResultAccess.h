@@ -28,6 +28,10 @@ struct DbResultAccess final {
         return result.fields_;
     }
 
+    [[nodiscard]] static std::pmr::vector<std::pmr::string>& columnNames(DbRows& result) noexcept {
+        return result.columnNames_;
+    }
+
     static void ownRawResult(DbRows& result, void* raw, void (*release)(void*) noexcept) noexcept {
         if (raw == nullptr || release == nullptr || std::holds_alternative<DbRows::OwnedRawResult>(result.rawResult_)) {
             std::terminate();
@@ -55,8 +59,17 @@ struct DbResultAccess final {
         return row.ownedFields();
     }
 
-    [[nodiscard]] static DbRow borrowedRow(const DbField* fields, std::size_t size, std::pmr::memory_resource* resource) {
-        return DbRow(fields, size, resource);
+    [[nodiscard]] static std::pmr::vector<std::pmr::string>& ownedColumnNames(DbRow& row) noexcept {
+        return row.ownedColumnNames();
+    }
+
+    [[nodiscard]] static DbRow borrowedRow(
+        const DbField* fields,
+        std::size_t size,
+        const std::pmr::string* columnNames,
+        std::size_t columnCount,
+        std::pmr::memory_resource* resource) {
+        return DbRow(fields, size, columnNames, columnCount, resource);
     }
 };
 

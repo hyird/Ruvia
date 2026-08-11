@@ -144,8 +144,8 @@ RUVIA_TEST(context_request_query_fields_preserve_duplicates_for_model_binding) {
     RUVIA_CHECK_EQ(fields.size(), std::size_t{3});
     RUVIA_CHECK_EQ(*fields.get("message"), std::string_view("second"));
 
-    RUVIA_CHECK(!ruvia::FormBody<AccessorSurfaceRequest>::parseFields(fields, requestMemory.resource()).has_value());
-    const auto parsed = ruvia::FormBody<AccessorSurfaceRequest>::parseFieldsPartial(fields, requestMemory.resource());
+    RUVIA_CHECK(!ruvia::detail::ModelParseAccess::parseFormFields<AccessorSurfaceRequest>(fields, requestMemory.resource()).has_value());
+    const auto parsed = ruvia::detail::ModelParseAccess::parseFormFieldsPartial<AccessorSurfaceRequest>(fields, requestMemory.resource());
     RUVIA_CHECK(parsed.has_value());
     if (!parsed) {
         return;

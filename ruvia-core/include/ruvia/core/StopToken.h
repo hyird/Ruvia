@@ -13,6 +13,7 @@
 namespace ruvia {
 
 class StopToken;
+class StopSource;
 [[nodiscard]] StopToken combineStopTokens(StopToken first, StopToken second);
 
 namespace detail {
@@ -66,14 +67,14 @@ private:
     StopCallbackState* state_;
 };
 
-class StopSource;
-
 }  // namespace detail
 
 class StopRegistration final {
 public:
     StopRegistration() noexcept = default;
-    ~StopRegistration() = default;
+    ~StopRegistration() {
+        reset();
+    }
 
     StopRegistration(const StopRegistration&) = delete;
     StopRegistration& operator=(const StopRegistration&) = delete;
@@ -81,19 +82,47 @@ public:
     StopRegistration& operator=(StopRegistration&&) = delete;
 
     void reset() noexcept {
-        secondCallback_.reset();
-        firstCallback_.reset();
-        callbackState_.reset();
-        registered_ = false;
-        owner_.reset();
+        auto phase = phase_.load(std::memory_order_acquire);
+        for (;;) {
+            if (phase == RegistrationPhase::kIdle || phase == RegistrationPhase::kResetPending || phase == RegistrationPhase::kResetting) {
+                return;
+            }
+            if (phase == RegistrationPhase::kRegistering) {
+                if (phase_.compare_exchange_weak(
+                        phase,
+                        RegistrationPhase::kResetPending,
+                        std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
+                    return;
+                }
+                continue;
+            }
+            if (phase_.compare_exchange_weak(
+                    phase,
+                    RegistrationPhase::kResetting,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                clearRegistration();
+                phase_.store(RegistrationPhase::kIdle, std::memory_order_release);
+                return;
+            }
+        }
     }
 
     [[nodiscard]] bool registered() const noexcept {
-        return registered_;
+        return phase_.load(std::memory_order_acquire) == RegistrationPhase::kRegistered;
     }
 
 private:
     friend class StopToken;
+
+    enum class RegistrationPhase : unsigned char {
+        kIdle,
+        kRegistering,
+        kRegistered,
+        kResetPending,
+        kResetting,
+    };
 
     StopRegistration(std::stop_token first, std::stop_token second, std::shared_ptr<const void> owner, MoveOnlyFunction<void()> callback) {
         registerCallbacks(std::move(first), std::move(second), std::move(owner), std::move(callback));
@@ -107,6 +136,15 @@ private:
             detail::StopCallback(std::move(callback))();
             return;
         }
+
+        auto expected = RegistrationPhase::kIdle;
+        if (!phase_.compare_exchange_strong(
+                expected,
+                RegistrationPhase::kRegistering,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            std::terminate();
+        }
         owner_ = std::move(owner);
         callbackState_.emplace(std::move(callback));
         if (first.stop_possible()) {
@@ -115,16 +153,36 @@ private:
         if (second.stop_possible()) {
             secondCallback_.emplace(std::move(second), detail::StopCallbackRef(*callbackState_));
         }
-        registered_ = firstCallback_.has_value() || secondCallback_.has_value();
+
+        expected = RegistrationPhase::kRegistering;
+        if (phase_.compare_exchange_strong(
+                expected,
+                RegistrationPhase::kRegistered,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            return;
+        }
+        if (expected != RegistrationPhase::kResetPending) {
+            std::terminate();
+        }
+        clearRegistration();
+        phase_.store(RegistrationPhase::kIdle, std::memory_order_release);
+    }
+
+    void clearRegistration() noexcept {
+        secondCallback_.reset();
+        firstCallback_.reset();
+        callbackState_.reset();
+        owner_.reset();
     }
 
     // The bridge owner outlives both callback registrations. Destruction and
     // reset run in the reverse order explicitly required by that contract.
+    std::atomic<RegistrationPhase> phase_{RegistrationPhase::kIdle};
     std::shared_ptr<const void> owner_;
     std::optional<detail::StopCallbackState> callbackState_;
     std::optional<std::stop_callback<detail::StopCallbackRef>> firstCallback_;
     std::optional<std::stop_callback<detail::StopCallbackRef>> secondCallback_;
-    bool registered_{false};
 };
 
 class StopToken final {
@@ -158,7 +216,7 @@ public:
     }
 
 private:
-    friend class detail::StopSource;
+    friend class StopSource;
     friend StopToken combineStopTokens(StopToken first, StopToken second);
 
     explicit StopToken(std::stop_token token, std::shared_ptr<const void> owner = {}) noexcept
@@ -178,8 +236,6 @@ private:
     // owns the upstream registrations that feed one of the inline tokens.
     std::shared_ptr<const void> owner_;
 };
-
-namespace detail {
 
 class StopSource final {
 public:
@@ -204,6 +260,8 @@ public:
 private:
     std::stop_source source_;
 };
+
+namespace detail {
 
 class CombinedStopState final {
 public:

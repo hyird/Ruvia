@@ -59,11 +59,11 @@ RedisHandle::RedisHandle(const RedisHandle& other) noexcept
       resource_(other.resource_),
       operationOptions_(other.operationOptions_) {}
 
-RedisHandle RedisHandle::withOptions(RedisOperationOptions options) const {
+RedisHandle RedisHandle::withOptions(OperationOptions options) const {
     requireActive();
-    detail::validateRedisOperationOptions(options);
+    detail::validateOperationOptions(options);
     RedisHandle configured(*this);
-    configured.operationOptions_ = detail::mergeRedisOperationOptions(operationOptions_, std::move(options));
+    configured.operationOptions_ = detail::mergeOperationOptions(operationOptions_, std::move(options));
     return configured;
 }
 
@@ -83,16 +83,15 @@ void RedisHandle::expireCapability(detail::ScopedCapabilityNode& capability) noe
     handle.operationOptions_ = {};
 }
 
-ScopedOperation<RedisValue> RedisHandle::command(std::span<const std::string_view> args, RedisOperationOptions options) const {
+ScopedOperation<RedisValue> RedisHandle::command(std::span<const std::string_view> args) const {
     requireActive();
-    options = detail::mergeRedisOperationOptions(operationOptions_, std::move(options));
-    detail::validateRedisOperationOptions(options);
     const bool blocking = detail::validateRedisPooledCommand(args, true);
     auto& selectedPool = blocking ? *blockingPool_ : *pool_;
-    if (blocking && !options.stopToken.stoppable() && !options.timeout.has_value()) {
+    if (blocking && !operationOptions_.stopToken.stoppable() && !operationOptions_.timeout.has_value()) {
         throw std::invalid_argument("raw blocking redis command requires a StopToken or finite operation timeout");
     }
-    return scoped(detail::executeOwnedRedisCommand(selectedPool, detail::ownRedisArgs(args, resource_), std::move(options), resource_));
+    return scoped(detail::executeOwnedRedisCommand(
+        selectedPool, detail::ownRedisArgs(args, resource_), operationOptions_, resource_));
 }
 
 ScopedOperation<void> RedisHandle::ping() const {

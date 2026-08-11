@@ -72,17 +72,17 @@ bool discriminatedWaitStateWorks() {
         return false;
     }
     const auto earlyResult = early.takeValue();
-    if (earlyResult.value() == nullptr || *earlyResult.value() != 3) {
+    if (!earlyResult.hasValue() || earlyResult.value() != 3) {
         return false;
     }
 
     ruvia::detail::WorkerWaitAwaitState<int> suspended;
     const auto continuation = std::noop_coroutine();
-    if (!suspended.suspend(continuation) || !suspended.complete(ruvia::detail::WorkerWaitResultAccess::timedOut<int>()) || suspended.continuation() != continuation) {
+    if (!suspended.suspend(continuation) || !suspended.complete(ruvia::detail::WorkerWaitResultAccess::outcome<int>(ruvia::WorkerWaitStatus::kTimedOut)) || suspended.continuation() != continuation) {
         return false;
     }
     const auto suspendedResult = suspended.takeValue();
-    if (suspendedResult.timedOut() == nullptr) {
+    if (suspendedResult.status() != ruvia::WorkerWaitStatus::kTimedOut) {
         return false;
     }
 
@@ -100,7 +100,7 @@ bool discriminatedWaitStateWorks() {
         return false;
     }
     const auto recovered = recovering.takeValue();
-    return recovered.value() != nullptr && recovered.value()->value() == 7;
+    return recovered.hasValue() && recovered.value().value() == 7;
 }
 
 bool saturatingTimerDeadlineWorks() {
@@ -378,13 +378,13 @@ ruvia::Task<void> exerciseStoppableSleep(const ruvia::WorkerHandle& worker, bool
 
 
     // Not stopped: the sleep runs to completion and reports elapsed.
-    ruvia::detail::StopSource idle;
+    ruvia::StopSource idle;
     if (co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1), idle.token()) != ruvia::TimerSleepResult::kElapsed) {
         co_return;
     }
 
     // Already stopped before the call: must not suspend for the full duration.
-    ruvia::detail::StopSource stopped;
+    ruvia::StopSource stopped;
     stopped.requestStop();
     const auto before = std::chrono::steady_clock::now();
     if (co_await ruvia::sleepFor(worker, std::chrono::seconds(30), stopped.token()) != ruvia::TimerSleepResult::kStopRequested) {
@@ -397,7 +397,7 @@ ruvia::Task<void> exerciseStoppableSleep(const ruvia::WorkerHandle& worker, bool
     // Stopped while suspended: the deferred cancel has to cut a sleep that is
     // already parked on the timer queue, which is the case the whole overload
     // exists for.
-    ruvia::detail::StopSource inflight;
+    ruvia::StopSource inflight;
     ruvia::detail::WorkerHandleAccess::defer(worker, [&inflight] { inflight.requestStop(); });
     const auto parked = std::chrono::steady_clock::now();
     if (co_await ruvia::sleepFor(worker, std::chrono::seconds(30), inflight.token()) != ruvia::TimerSleepResult::kStopRequested) {
@@ -411,7 +411,7 @@ ruvia::Task<void> exerciseStoppableSleep(const ruvia::WorkerHandle& worker, bool
     // timer generation back to this worker; the dispatcher borrow stays valid
     // through callback teardown without copying shared ownership into the
     // awaiter.
-    ruvia::detail::StopSource crossThread;
+    ruvia::StopSource crossThread;
     std::thread stopper([&crossThread] {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
         crossThread.requestStop();
@@ -425,7 +425,7 @@ ruvia::Task<void> exerciseStoppableSleep(const ruvia::WorkerHandle& worker, bool
 
     // A stop that arrives long after the sleep already finished must be a
     // no-op, not a use-after-free of the awaiter's timer registration.
-    ruvia::detail::StopSource late;
+    ruvia::StopSource late;
     if (co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1), late.token()) != ruvia::TimerSleepResult::kElapsed) {
         co_return;
     }

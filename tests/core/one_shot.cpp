@@ -18,7 +18,7 @@
 #include <utility>
 
 template <typename T>
-concept HasAnyRvalueWorkerWaitAccessor = requires(T&& result) { std::move(result).value(); } || requires(T&& result) { std::move(result).closed(); } || requires(T&& result) { std::move(result).workerStopping(); } || requires(T&& result) { std::move(result).timedOut(); } || requires(T&& result) { std::move(result).cancelled(); };
+concept HasRvalueWorkerWaitValue = requires(T&& result) { std::move(result).value(); };
 
 template <typename T>
 concept HasRvalueWorkerBorrow = requires(T&& receiver) { std::move(receiver).worker(); };
@@ -26,8 +26,11 @@ concept HasRvalueWorkerBorrow = requires(T&& receiver) { std::move(receiver).wor
 static_assert(!std::is_default_constructible_v<ruvia::OneShotReceiver<int>>);
 static_assert(std::is_move_constructible_v<ruvia::OneShotReceiver<int>>);
 static_assert(!std::is_move_assignable_v<ruvia::OneShotReceiver<int>>);
-static_assert(!HasAnyRvalueWorkerWaitAccessor<ruvia::WorkerWaitResult<int>>);
+static_assert(!HasRvalueWorkerWaitValue<ruvia::WorkerWaitResult<int>>);
 static_assert(!HasRvalueWorkerBorrow<ruvia::OneShotReceiver<int>>);
+static_assert(std::is_same_v<decltype(std::declval<const ruvia::WorkerWaitResult<int>&>().status()), ruvia::WorkerWaitStatus>);
+static_assert(std::is_same_v<decltype(std::declval<const ruvia::WorkerWaitResult<int>&>().value()), const int&>);
+static_assert(!std::is_constructible_v<ruvia::WorkerWaitResult<int>, ruvia::WorkerWaitStatus>);
 
 namespace {
 
@@ -57,12 +60,12 @@ private:
 
 ruvia::Task<void> waitForValue(ruvia::OneShotReceiver<int>& receiver, int expected, bool& success) {
     const auto result = co_await receiver.waitFor(std::chrono::seconds(1));
-    success = result.value() != nullptr && *result.value() == expected;
+    success = result.status() == ruvia::WorkerWaitStatus::kValue && result.hasValue() && result.value() == expected;
 }
 
 ruvia::Task<void> waitForWorkerStopping(ruvia::OneShotReceiver<int>& receiver, bool& success) {
     const auto result = co_await receiver.wait();
-    success = result.workerStopping() != nullptr;
+    success = result.status() == ruvia::WorkerWaitStatus::kWorkerStopping && !result.hasValue();
 }
 
 ruvia::Task<ruvia::WorkerWaitResult<int>> makeColdWaitAfterReceiverClose(ruvia::WorkerHandle worker, bool timed) {
@@ -76,7 +79,7 @@ ruvia::Task<ruvia::WorkerWaitResult<int>> makeColdWaitAfterReceiverClose(ruvia::
 ruvia::Task<void> verifyColdReceiverTasks(ruvia::Task<ruvia::WorkerWaitResult<int>> wait, ruvia::Task<ruvia::WorkerWaitResult<int>> timedWait, bool& success) {
     const auto coldClosed = co_await std::move(wait);
     const auto timedColdClosed = co_await std::move(timedWait);
-    success = coldClosed.closed() != nullptr && timedColdClosed.closed() != nullptr;
+    success = coldClosed.status() == ruvia::WorkerWaitStatus::kClosed && timedColdClosed.status() == ruvia::WorkerWaitStatus::kClosed;
 }
 
 ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
@@ -94,7 +97,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
             co_return;
         }
         const auto result = co_await receiver.wait();
-        if (result.value() == nullptr || result.value()->value() != 6) {
+        if (!result.hasValue() || result.value().value() != 6) {
             co_return;
         }
     }
@@ -107,7 +110,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
             co_return;
         }
         const auto result = co_await receiver.wait();
-        if (result.value() == nullptr || *result.value() != 7) {
+        if (!result.hasValue() || result.value() != 7) {
             co_return;
         }
     }
@@ -115,39 +118,39 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     {
         auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
         const auto timeout = co_await receiver.waitFor(std::chrono::milliseconds(1));
-        if (timeout.timedOut() == nullptr || !completion.complete(9).accepted()) {
+        if (timeout.status() != ruvia::WorkerWaitStatus::kTimedOut || !completion.complete(9).accepted()) {
             co_return;
         }
         const auto late = co_await receiver.wait();
-        if (late.value() == nullptr || *late.value() != 9) {
+        if (!late.hasValue() || late.value() != 9) {
             co_return;
         }
     }
 
     {
-        ruvia::detail::StopSource source;
+        ruvia::StopSource source;
         auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
         ruvia::detail::WorkerHandleAccess::defer(worker, [&source] { source.requestStop(); });
         const auto cancelled = co_await receiver.wait(source.token());
-        if (cancelled.cancelled() == nullptr || !completion.complete(11).accepted()) {
+        if (cancelled.status() != ruvia::WorkerWaitStatus::kCancelled || !completion.complete(11).accepted()) {
             co_return;
         }
         const auto late = co_await receiver.wait();
-        if (late.value() == nullptr || *late.value() != 11) {
+        if (!late.hasValue() || late.value() != 11) {
             co_return;
         }
     }
 
     {
-        ruvia::detail::StopSource source;
+        ruvia::StopSource source;
         source.requestStop();
         auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
         const auto cancelled = co_await receiver.waitFor(std::chrono::seconds(1), source.token());
-        if (cancelled.cancelled() == nullptr || !completion.complete(12).accepted()) {
+        if (cancelled.status() != ruvia::WorkerWaitStatus::kCancelled || !completion.complete(12).accepted()) {
             co_return;
         }
         const auto late = co_await receiver.wait();
-        if (late.value() == nullptr || *late.value() != 12) {
+        if (!late.hasValue() || late.value() != 12) {
             co_return;
         }
     }
@@ -157,7 +160,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
         receiver.close();
         const auto closed = co_await receiver.wait();
         const auto rejected = completion.complete(10);
-        if (closed.closed() == nullptr || rejected.status() != ruvia::OneShotCompleteStatus::kReceiverClosed || rejected.rejected() == nullptr || *rejected.rejected() != 10) {
+        if (closed.status() != ruvia::WorkerWaitStatus::kClosed || rejected.status() != ruvia::OneShotCompleteStatus::kReceiverClosed || rejected.rejected() == nullptr || *rejected.rejected() != 10) {
             co_return;
         }
     }

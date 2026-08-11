@@ -3,7 +3,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <utility>
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
@@ -19,25 +18,30 @@ inline void validateHttpClientUserAgent(std::string_view userAgent) {
     }
 }
 
-inline void validateHttpClientOperationOptions(const HttpClientOperationOptions& options) {
-    ensurePositiveOptionalDuration(options.timeout, "http client operation timeout must be greater than zero");
-}
-
-[[nodiscard]] inline HttpClientOperationOptions mergeHttpClientOperationOptions(
-    const HttpClientOperationOptions& base,
-    HttpClientOperationOptions overrides) {
-    HttpClientOperationOptions merged = base;
-    if (overrides.timeout.has_value() &&
-        (!merged.timeout.has_value() || *overrides.timeout < *merged.timeout)) {
-        merged.timeout = overrides.timeout;
-    }
-    merged.stopToken = combineStopTokens(base.stopToken, std::move(overrides.stopToken));
-    return merged;
-}
-
 template <typename Config>
 void validateHttpClientConfig(const Config& config) {
-    if (config.scheme != HttpScheme::kHttp && config.scheme != HttpScheme::kHttps) {
+    const auto scheme = [&]() {
+        if constexpr (requires { config.scheme(); }) {
+            return config.scheme();
+        } else {
+            return config.scheme;
+        }
+    }();
+    const auto host = [&]() -> std::string_view {
+        if constexpr (requires { config.host(); }) {
+            return config.host();
+        } else {
+            return config.host;
+        }
+    }();
+    const auto port = [&]() {
+        if constexpr (requires { config.port(); }) {
+            return config.port();
+        } else {
+            return config.port;
+        }
+    }();
+    if (scheme != HttpScheme::kHttp && scheme != HttpScheme::kHttps) {
         throw std::invalid_argument("http client scheme is invalid");
     }
     if (config.protocol != HttpClientProtocol::kNegotiate &&
@@ -45,15 +49,18 @@ void validateHttpClientConfig(const Config& config) {
         config.protocol != HttpClientProtocol::kHttp2Only) {
         throw std::invalid_argument("http client protocol is invalid");
     }
-    ensureConfigHost(config.host, "http client host must not be empty", "http client host is invalid", kSeparatedPortHostRules);
+    ensureConfigHost(host, "http client host must not be empty", "http client host is invalid", kSeparatedPortHostRules);
+    if (port == 0) {
+        throw std::invalid_argument("http client port must be greater than zero");
+    }
     std::string wireHost;
-    if (config.host.find(':') != std::string_view::npos) {
-        wireHost.reserve(config.host.size() + 2);
+    if (host.find(':') != std::string_view::npos) {
+        wireHost.reserve(host.size() + 2);
         wireHost.push_back('[');
-        wireHost.append(config.host);
+        wireHost.append(host);
         wireHost.push_back(']');
     } else {
-        wireHost.assign(config.host);
+        wireHost.assign(host);
     }
     if (!isValidHttpHost(wireHost)) {
         throw std::invalid_argument("http client host is invalid");
@@ -90,13 +97,13 @@ void validateHttpClientConfig(const Config& config) {
         }
         ++cookieBytes;  // Every configured cookie is stored with the default "/" path.
     }
-    if (config.scheme == HttpScheme::kHttp && config.protocol == HttpClientProtocol::kNegotiate) {
+    if (scheme == HttpScheme::kHttp && config.protocol == HttpClientProtocol::kNegotiate) {
         return;
     }
 }
 
 [[nodiscard]] inline std::uint16_t httpClientPort(const HttpClientConfigStorage& config) noexcept {
-    return config.port != 0 ? config.port : (config.scheme == HttpScheme::kHttps ? 443 : 80);
+    return config.port;
 }
 
 [[nodiscard]] inline std::pmr::string httpClientWireHost(

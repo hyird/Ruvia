@@ -81,12 +81,29 @@ void Http2Connection::takeOutput(std::pmr::string& into) {
 // --- event queue --------------------------------------------------------------
 
 std::optional<Http2Event> Http2Connection::nextEvent() {
+    auto* event = peekEvent();
+    if (event == nullptr) {
+        return std::nullopt;
+    }
+    auto result = std::optional<Http2Event>(std::move(*event));
+    consumeEvent();
+    return result;
+}
+
+Http2Event* Http2Connection::peekEvent() & noexcept {
     if (eventOffset_ < events_.size()) {
-        return std::move(events_[eventOffset_++]);
+        return &events_[eventOffset_];
     }
     events_.clear();
     eventOffset_ = 0;
-    return std::nullopt;
+    return nullptr;
+}
+
+void Http2Connection::consumeEvent() noexcept {
+    if (eventOffset_ >= events_.size()) {
+        std::terminate();
+    }
+    ++eventOffset_;
 }
 
 void Http2Connection::reserveEventSlots(std::size_t count) {

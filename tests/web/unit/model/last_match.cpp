@@ -5,7 +5,7 @@
 
 RUVIA_TEST(model_factory_materializes_before_publication) {
     std::pmr::monotonic_buffer_resource modelResource;
-    const auto parsed = ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":"ready"})", &modelResource);
+    const auto parsed = ruvia::fromJson<AccessorSurfaceRequest>(R"({"message":"ready"})", &modelResource);
     RUVIA_CHECK(parsed.has_value());
     if (parsed.has_value()) {
         const AccessorSurfaceRequest& model = *parsed;
@@ -17,15 +17,15 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
         RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(model) == ruvia::detail::ModelFieldState::kParsed);
     }
 
-    RUVIA_CHECK(!ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":42})", std::pmr::get_default_resource()).has_value());
-    const auto invalidField = ruvia::JsonBody<AccessorSurfaceRequest>::parsePartial(R"({"message":42})", std::pmr::get_default_resource());
+    RUVIA_CHECK(!ruvia::fromJson<AccessorSurfaceRequest>(R"({"message":42})", std::pmr::get_default_resource()).has_value());
+    const auto invalidField = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<AccessorSurfaceRequest>(R"({"message":42})", std::pmr::get_default_resource());
     RUVIA_CHECK(invalidField.has_value());
     if (invalidField.has_value()) {
         RUVIA_CHECK(!invalidField->message().has_value());
         RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(*invalidField) == ruvia::detail::ModelFieldState::kInvalidType);
     }
 
-    const auto malformed = ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":"incomplete")", &modelResource);
+    const auto malformed = ruvia::fromJson<AccessorSurfaceRequest>(R"({"message":"incomplete")", &modelResource);
     RUVIA_CHECK(!malformed.has_value());
 
     AccessorSurfaceResponse response(&modelResource);
@@ -42,19 +42,13 @@ RUVIA_TEST(unified_model_parses_and_serializes_nested_arrays_and_optional_fields
     }
     input.assign(input.size(), 'x');
 
-    RUVIA_CHECK(parsed->primary().has_value());
-    RUVIA_CHECK(parsed->items().has_value());
+    RUVIA_CHECK_EQ(std::uint32_t(parsed->primary().id()), std::uint32_t{1});
+    RUVIA_CHECK_EQ(parsed->items().size(), std::size_t{1});
     RUVIA_CHECK(parsed->tags().has_value());
-    if (parsed->primary()) {
-        RUVIA_CHECK(parsed->primary()->id().has_value());
-        RUVIA_CHECK(!parsed->primary()->label().has_value());
-    }
-    if (parsed->items()) {
-        RUVIA_CHECK_EQ(parsed->items()->size(), std::size_t{1});
-        RUVIA_CHECK((*parsed->items())[0].label().has_value());
-        if ((*parsed->items())[0].label()) {
-            RUVIA_CHECK_EQ((*parsed->items())[0].label()->view(), std::string_view("two"));
-        }
+    RUVIA_CHECK(!parsed->primary().label().has_value());
+    RUVIA_CHECK(parsed->items()[0].label().has_value());
+    if (parsed->items()[0].label()) {
+        RUVIA_CHECK_EQ(parsed->items()[0].label()->view(), std::string_view("two"));
     }
     if (parsed->tags()) {
         RUVIA_CHECK_EQ(parsed->tags()->size(), std::size_t{2});

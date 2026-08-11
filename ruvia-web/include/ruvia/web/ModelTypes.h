@@ -40,61 +40,14 @@ struct JsonBody : std::false_type {};
 
 template <typename T>
     requires requires { typename T::RuviaModelSchema; }
-struct JsonBody<T, void> : std::true_type {
-    static std::optional<T> parse(std::string_view body, std::pmr::memory_resource* resource) {
-        return T::ruviaParseJsonBody(body, resource);
-    }
-
-    static std::optional<T> parseOwned(std::string_view body, std::pmr::memory_resource* resource) {
-        return T::ruviaParseJsonBodyOwned(body, resource);
-    }
-
-    static std::optional<T> parsePartial(std::string_view body, std::pmr::memory_resource* resource) {
-        return T::ruviaParseJsonBodyPartial(body, resource);
-    }
-
-    static std::optional<T> parseDepth(std::string_view body, std::pmr::memory_resource* resource, std::size_t depth, detail::ModelStringStorage stringStorage = detail::ModelStringStorage::kBorrowed) {
-        if constexpr (requires { T::ruviaParseJsonBodyDepth(body, resource, depth, stringStorage); }) {
-            return T::ruviaParseJsonBodyDepth(body, resource, depth, stringStorage);
-        } else {
-            (void)depth;
-            (void)stringStorage;
-            return T::ruviaParseJsonBody(body, resource);
-        }
-    }
-
-    static std::optional<T> parseDepthPartial(std::string_view body, std::pmr::memory_resource* resource, std::size_t depth, detail::ModelStringStorage stringStorage = detail::ModelStringStorage::kBorrowed) {
-        return T::ruviaParseJsonBodyDepthPartial(body, resource, depth, stringStorage);
-    }
-};
+struct JsonBody<T, void> : std::true_type {};
 
 template <typename T, typename = void>
 struct FormBody : std::false_type {};
 
 template <typename T>
     requires requires { typename T::RuviaModelSchema; }
-struct FormBody<T, void> : std::true_type {
-    static std::optional<T> parse(std::string_view body, std::pmr::memory_resource* resource) {
-        return T::ruviaParseFormBody(body, resource);
-    }
-
-    static std::optional<T> parsePartial(std::string_view body, std::pmr::memory_resource* resource) {
-        return T::ruviaParseFormBodyPartial(body, resource);
-    }
-
-    static std::optional<T> parseFields(const RequestNameValueList& fields, std::pmr::memory_resource* resource) {
-        if constexpr (requires { T::ruviaParseFormFields(fields, resource); }) {
-            return T::ruviaParseFormFields(fields, resource);
-        } else {
-            (void)fields;
-            (void)resource;
-            return std::nullopt;
-        }
-    }
-    static std::optional<T> parseFieldsPartial(const RequestNameValueList& fields, std::pmr::memory_resource* resource) {
-        return T::ruviaParseFormFieldsPartial(fields, resource);
-    }
-};
+struct FormBody<T, void> : std::true_type {};
 
 template <std::size_t N>
 struct FixedString {

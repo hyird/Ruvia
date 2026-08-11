@@ -1,13 +1,7 @@
 #include "ruvia/web/detail/db/DbSlotSocket.h"
 
 #include <system_error>
-
-#if defined(_WIN32)
-#include <processthreadsapi.h>
-#else
-#include <fcntl.h>
-#include <unistd.h>
-#endif
+#include <utility>
 
 namespace ruvia::detail {
 
@@ -19,80 +13,86 @@ DbSlotSocket::DbSlotSocket(asio::io_context& ioContext)
 }
 #endif
 
-bool DbSlotSocket::ensureAssigned(NativeSocket fd) noexcept {
+DbSlotSocket::DbSlotSocket(DbSlotSocket&& other) noexcept
+#if defined(_WIN32)
+    : socket(std::move(other.socket)),
+#else
+    : descriptor(std::move(other.descriptor)),
+#endif
+      native(std::exchange(other.native, kInvalidSocket)) {}
+
+DbSlotSocket& DbSlotSocket::operator=(DbSlotSocket&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+#if defined(_WIN32)
+    socket = std::move(other.socket);
+#else
+    descriptor = std::move(other.descriptor);
+#endif
+    native = std::exchange(other.native, kInvalidSocket);
+    return *this;
+}
+
+std::error_code DbSlotSocket::ensureAssigned(NativeSocket fd) noexcept {
     if (fd == kInvalidSocket) {
-        return false;
+        return std::make_error_code(std::errc::bad_file_descriptor);
     }
     std::error_code ec;
 #if defined(_WIN32)
     if (socket.is_open()) {
         if (native == fd) {
-            return true;
+            return {};
         }
-        reset();
+        if (const auto releaseError = release(); releaseError) {
+            return releaseError;
+        }
     }
     WSAPROTOCOL_INFOW protocolInfo{};
+    int protocolInfoSize = static_cast<int>(sizeof(protocolInfo));
     const auto source = static_cast<SOCKET>(fd);
-    if (WSADuplicateSocketW(source, GetCurrentProcessId(), &protocolInfo) != 0) {
-        return false;
+    if (::getsockopt(
+            source,
+            SOL_SOCKET,
+            SO_PROTOCOL_INFOW,
+            reinterpret_cast<char*>(&protocolInfo),
+            &protocolInfoSize) == SOCKET_ERROR) {
+        return std::error_code(WSAGetLastError(), std::system_category());
     }
-    if (protocolInfo.iAddressFamily != AF_INET && protocolInfo.iAddressFamily != AF_INET6) {
-        return false;
-    }
-    const auto duplicate = WSASocketW(
-        FROM_PROTOCOL_INFO,
-        FROM_PROTOCOL_INFO,
-        FROM_PROTOCOL_INFO,
-        &protocolInfo,
-        0,
-        WSA_FLAG_OVERLAPPED);
-    if (duplicate == INVALID_SOCKET) {
-        return false;
-    }
-    const auto protocol = protocolInfo.iAddressFamily == AF_INET6
-        ? asio::ip::tcp::v6()
-        : asio::ip::tcp::v4();
-    socket.assign(protocol, duplicate, ec);
-    if (ec) {
-        (void)closesocket(duplicate);
+    if (protocolInfo.iAddressFamily == AF_INET) {
+        socket.assign(asio::ip::tcp::v4(), source, ec);
+    } else if (protocolInfo.iAddressFamily == AF_INET6) {
+        socket.assign(asio::ip::tcp::v6(), source, ec);
+    } else {
+        return std::make_error_code(std::errc::address_family_not_supported);
     }
 #else
     if (descriptor.is_open()) {
         if (native == fd) {
-            return true;
+            return {};
         }
-        reset();
+        if (const auto releaseError = release(); releaseError) {
+            return releaseError;
+        }
     }
-    const auto duplicate = ::dup(fd);
-    if (duplicate < 0) {
-        return false;
-    }
-    const auto descriptorFlags = ::fcntl(duplicate, F_GETFD);
-    if (descriptorFlags < 0 || ::fcntl(duplicate, F_SETFD, descriptorFlags | FD_CLOEXEC) < 0) {
-        (void)::close(duplicate);
-        return false;
-    }
-    descriptor.assign(duplicate, ec);
-    if (ec) {
-        (void)::close(duplicate);
-    }
+    descriptor.assign(fd, ec);
 #endif
     if (ec) {
         native = kInvalidSocket;
-        return false;
+        return ec;
     }
     native = fd;
-    return true;
+    return {};
 }
 
-bool DbSlotSocket::makeNonBlocking() noexcept {
+std::error_code DbSlotSocket::makeNonBlocking() noexcept {
     std::error_code ec;
 #if defined(_WIN32)
     socket.native_non_blocking(true, ec);
 #else
     descriptor.native_non_blocking(true, ec);
 #endif
-    return !ec;
+    return ec;
 }
 
 void DbSlotSocket::cancel() noexcept {
@@ -104,14 +104,36 @@ void DbSlotSocket::cancel() noexcept {
 #endif
 }
 
-void DbSlotSocket::reset() noexcept {
-    std::error_code ignored;
+std::error_code DbSlotSocket::release() noexcept {
 #if defined(_WIN32)
-    socket.close(ignored);
+    if (socket.is_open()) {
+        std::error_code ec;
+        (void)socket.release(ec);
+        if (ec) {
+            return ec;
+        }
+    }
 #else
-    descriptor.close(ignored);
+    try {
+        if (descriptor.is_open()) {
+            (void)descriptor.release();
+        }
+    } catch (const std::system_error& error) {
+        return error.code();
+    } catch (...) {
+        return std::make_error_code(std::errc::io_error);
+    }
 #endif
     native = kInvalidSocket;
+    return {};
+}
+
+DbSlotSocketQuarantine::DbSlotSocketQuarantine(asio::io_context& ioContext)
+    : socket(ioContext) {}
+
+void DbSlotSocketQuarantine::retain(DbSlotSocket&& value, void* driver) noexcept {
+    socket = std::move(value);
+    driverConnection = driver;
 }
 
 }  // namespace ruvia::detail

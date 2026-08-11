@@ -1,5 +1,7 @@
 #include "http_client_response_fixture.h"
 
+#include <optional>
+
 // HTTP/1 client responses: the exchange around it: interim responses, Expect, upgrades and tunnels.
 
 RUVIA_TEST(http_client_informational_response_enforces_shared_field_contract) {
@@ -43,7 +45,7 @@ RUVIA_TEST(http_client_limits_informational_responses_per_exchange) {
         return;
     }
 
-    Http1ClientResponseParser parser(*prepared.prepared());
+    Http1ClientResponseParser parser(prepared.prepared()->exchangeState());
     constexpr std::string_view earlyHints = "HTTP/1.1 103 Early Hints\r\n\r\n";
     for (std::size_t i = 0; i < ruvia::detail::kMaxHttpClientInterimResponses; ++i) {
         const auto interim = parser.parse(earlyHints);
@@ -78,7 +80,7 @@ RUVIA_TEST(http_client_expect_continue_is_one_stateful_exchange_contract) {
     }
     RUVIA_CHECK(prepared->contentPlan().continueGated() != nullptr);
 
-    Http1ClientResponseParser parser(*prepared);
+    Http1ClientResponseParser parser(prepared->exchangeState());
     auto earlyHints = parser.parse("HTTP/1.1 103 Early Hints\r\n\r\n");
     RUVIA_CHECK(earlyHints.parsed() != nullptr);
     if (earlyHints.parsed() != nullptr) {
@@ -123,7 +125,7 @@ RUVIA_TEST(http_client_closing_informational_response_ends_exchange) {
         return;
     }
 
-    Http1ClientResponseParser getParser(*getPrepared.prepared());
+    Http1ClientResponseParser getParser(getPrepared.prepared()->exchangeState());
     const auto earlyHints = getParser.parse("HTTP/1.1 103 Early Hints\r\nConnection: close\r\n\r\n");
     RUVIA_CHECK(earlyHints.parsed() != nullptr);
     if (earlyHints.parsed() != nullptr) {
@@ -149,14 +151,14 @@ RUVIA_TEST(http_client_closing_informational_response_ends_exchange) {
         return;
     }
 
-    Http1ClientResponseParser postParser(*postPrepared.prepared());
+    Http1ClientResponseParser postParser(postPrepared.prepared()->exchangeState());
     const auto closingContinue = postParser.parse("HTTP/1.1 100 Continue\r\nConnection: close\r\n\r\n");
     RUVIA_CHECK(closingContinue.parsed() != nullptr);
     if (closingContinue.parsed() != nullptr) {
         RUVIA_CHECK(closingContinue.parsed()->plan().requestContentSignal() == HttpClientRequestContentSignal::kExchangeComplete);
     }
 
-    Http1ClientResponseParser closingHintsParser(*postPrepared.prepared());
+    Http1ClientResponseParser closingHintsParser(postPrepared.prepared()->exchangeState());
     const auto closingHints = closingHintsParser.parse("HTTP/1.1 103 Early Hints\r\nConnection: close\r\n\r\n");
     RUVIA_CHECK(closingHints.parsed() != nullptr);
     if (closingHints.parsed() != nullptr) {
@@ -170,7 +172,7 @@ RUVIA_TEST(http_client_closing_informational_response_ends_exchange) {
         return;
     }
 
-    Http1ClientResponseParser requestCloseParser(*requestClosePrepared.prepared());
+    Http1ClientResponseParser requestCloseParser(requestClosePrepared.prepared()->exchangeState());
     const auto nonClosingHints = requestCloseParser.parse("HTTP/1.1 103 Early Hints\r\n\r\n");
     RUVIA_CHECK(nonClosingHints.parsed() != nullptr);
     if (nonClosingHints.parsed() != nullptr) {
@@ -198,14 +200,14 @@ RUVIA_TEST(http_client_expect_final_cancels_only_pending_request_content) {
         return;
     }
 
-    Http1ClientResponseParser parser(*prepared.prepared());
+    Http1ClientResponseParser parser(prepared.prepared()->exchangeState());
     const auto finalResponse = parser.parse("HTTP/1.1 417 Expectation Failed\r\nContent-Length: 0\r\n\r\n");
     RUVIA_CHECK(finalResponse.parsed() != nullptr);
     if (finalResponse.parsed() != nullptr) {
         RUVIA_CHECK(finalResponse.parsed()->plan().requestContentSignal() == HttpClientRequestContentSignal::kExchangeComplete);
     }
 
-    Http1ClientResponseParser completedParser(*prepared.prepared());
+    Http1ClientResponseParser completedParser(prepared.prepared()->exchangeState());
     RUVIA_CHECK(completedParser.completeRequestContent() == Http1ClientRequestContentCompletionStatus::kCompleted);
     const auto completedFinal = completedParser.parse("HTTP/1.1 417 Expectation Failed\r\nContent-Length: 0\r\n\r\n");
     RUVIA_CHECK(completedFinal.parsed() != nullptr);
@@ -233,7 +235,7 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     if (rejectedPrepared.prepared() == nullptr) {
         return;
     }
-    Http1ClientResponseParser rejectedParser(*rejectedPrepared.prepared());
+    Http1ClientResponseParser rejectedParser(rejectedPrepared.prepared()->exchangeState());
     const auto rejected = rejectedParser.parse(switching);
     RUVIA_CHECK(rejected.failure() != nullptr);
     if (rejected.failure() != nullptr) {
@@ -254,7 +256,7 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     if (completedWithoutContinuePrepared.prepared() == nullptr) {
         return;
     }
-    Http1ClientResponseParser completedWithoutContinueParser(*completedWithoutContinuePrepared.prepared());
+    Http1ClientResponseParser completedWithoutContinueParser(completedWithoutContinuePrepared.prepared()->exchangeState());
     RUVIA_CHECK(completedWithoutContinueParser.completeRequestContent() == Http1ClientRequestContentCompletionStatus::kCompleted);
     const auto completedWithoutContinue = completedWithoutContinueParser.parse(switching);
     RUVIA_CHECK(completedWithoutContinue.failure() != nullptr);
@@ -268,7 +270,7 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     if (lateContinuePrepared.prepared() == nullptr) {
         return;
     }
-    Http1ClientResponseParser lateContinueParser(*lateContinuePrepared.prepared());
+    Http1ClientResponseParser lateContinueParser(lateContinuePrepared.prepared()->exchangeState());
     RUVIA_CHECK(lateContinueParser.completeRequestContent() == Http1ClientRequestContentCompletionStatus::kCompleted);
     const auto lateContinue = lateContinueParser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     RUVIA_CHECK(lateContinue.parsed() != nullptr);
@@ -287,7 +289,7 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     if (pendingPrepared.prepared() == nullptr) {
         return;
     }
-    Http1ClientResponseParser pendingParser(*pendingPrepared.prepared());
+    Http1ClientResponseParser pendingParser(pendingPrepared.prepared()->exchangeState());
     const auto pendingContinue = pendingParser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     RUVIA_CHECK(pendingContinue.parsed() != nullptr);
     const auto pendingUpgrade = pendingParser.parse(switching);
@@ -302,7 +304,7 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     if (acceptedPrepared.prepared() == nullptr) {
         return;
     }
-    Http1ClientResponseParser acceptedParser(*acceptedPrepared.prepared());
+    Http1ClientResponseParser acceptedParser(acceptedPrepared.prepared()->exchangeState());
     const auto continueResponse = acceptedParser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     RUVIA_CHECK(continueResponse.parsed() != nullptr);
     RUVIA_CHECK(acceptedParser.completeRequestContent() == Http1ClientRequestContentCompletionStatus::kCompleted);
@@ -332,7 +334,7 @@ RUVIA_TEST(http_client_upgrade_requires_complete_request_content) {
     if (incompletePrepared.prepared() == nullptr) {
         return;
     }
-    Http1ClientResponseParser incompleteParser(*incompletePrepared.prepared());
+    Http1ClientResponseParser incompleteParser(incompletePrepared.prepared()->exchangeState());
     const auto incomplete = incompleteParser.parse(switching);
     RUVIA_CHECK(incomplete.failure() != nullptr);
     if (incomplete.failure() != nullptr) {
@@ -345,7 +347,7 @@ RUVIA_TEST(http_client_upgrade_requires_complete_request_content) {
     if (completePrepared.prepared() == nullptr) {
         return;
     }
-    Http1ClientResponseParser completeParser(*completePrepared.prepared());
+    Http1ClientResponseParser completeParser(completePrepared.prepared()->exchangeState());
     RUVIA_CHECK(completeParser.completeRequestContent() == Http1ClientRequestContentCompletionStatus::kCompleted);
     const auto complete = completeParser.parse(switching);
     RUVIA_CHECK(complete.parsed() != nullptr);
@@ -485,4 +487,45 @@ RUVIA_TEST(http_client_successful_connect_transitions_to_tunnel) {
     // Methods are case-sensitive. A custom lowercase token is not CONNECT.
     const auto lowercase = parseHead("connect", "HTTP/1.1 200 OK");
     RUVIA_CHECK(lowercase.plan().closeDelimited() != nullptr);
+}
+
+RUVIA_TEST(http1_client_exchange_state_owns_every_long_lived_response_fact) {
+    std::optional<ruvia::Http1ClientExchangeState> headExchange;
+    std::array<char, 512> headWire{};
+    std::string method = "HEAD";
+    {
+        ruvia::HttpClientRequestView request{.method = method, .target = "/resource"};
+        const auto prepared = ruvia::Http1ClientRequestWriter().prepare(
+            ruvia::HttpOriginView::https("example.test"), request, headWire);
+        if (prepared.prepared() == nullptr) throw std::runtime_error("HEAD request preparation failed");
+        headExchange.emplace(prepared.prepared()->exchangeState());
+    }
+    method.assign("GET");
+    ruvia::Http1ClientResponseParser headParser(std::move(*headExchange));
+    auto headResult = headParser.parse("HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n");
+    if (headResult.parsed() == nullptr) throw std::runtime_error("HEAD response parsing failed");
+    RUVIA_CHECK(headResult.parsed()->plan().withoutContent() != nullptr);
+
+    std::optional<ruvia::Http1ClientExchangeState> upgradeExchange;
+    std::array<char, 512> upgradeWire{};
+    std::string connection = "Upgrade";
+    std::string protocol = "websocket";
+    {
+        const std::array headers{
+            ruvia::HttpHeaderView{"Connection", connection},
+            ruvia::HttpHeaderView{"Upgrade", protocol},
+        };
+        ruvia::HttpClientRequestView request{.method = "GET", .target = "/socket", .headers = headers};
+        const auto prepared = ruvia::Http1ClientRequestWriter().prepare(
+            ruvia::HttpOriginView::https("example.test"), request, upgradeWire);
+        if (prepared.prepared() == nullptr) throw std::runtime_error("Upgrade request preparation failed");
+        upgradeExchange.emplace(prepared.prepared()->exchangeState());
+    }
+    connection.assign("close");
+    protocol.assign("not-websocket");
+    ruvia::Http1ClientResponseParser upgradeParser(std::move(*upgradeExchange));
+    auto upgradeResult = upgradeParser.parse(
+        "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
+    if (upgradeResult.parsed() == nullptr) throw std::runtime_error("Upgrade response parsing failed");
+    RUVIA_CHECK(upgradeResult.parsed()->plan().protocolUpgrade() != nullptr);
 }

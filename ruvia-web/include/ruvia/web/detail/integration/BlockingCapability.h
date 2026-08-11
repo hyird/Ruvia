@@ -35,13 +35,9 @@ public:
     // std::logic_error when no pool was configured.
     template <typename Fn>
     [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(Fn fn) const {
-        auto result = co_await tryRunBlocking(std::move(fn));
-        if constexpr (std::is_void_v<std::invoke_result_t<Fn&>>) {
-            std::move(result).value();
-            co_return;
-        } else {
-            co_return std::move(result).value();
-        }
+        const auto& self = static_cast<const Derived&>(*this);
+        return ruvia::runBlocking(
+            self.blockingPool(), self.blockingWorker(), self.blockingStopToken(), std::move(fn));
     }
 
     // With a deadline on the wait: a callable that has not returned within
@@ -51,13 +47,9 @@ public:
     // self-owned exactly as above.
     template <typename Rep, typename Period, typename Fn>
     [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const {
-        auto result = co_await tryRunBlocking(timeout, std::move(fn));
-        if constexpr (std::is_void_v<std::invoke_result_t<Fn&>>) {
-            std::move(result).value();
-            co_return;
-        } else {
-            co_return std::move(result).value();
-        }
+        const auto& self = static_cast<const Derived&>(*this);
+        return ruvia::runBlocking(
+            self.blockingPool(), self.blockingWorker(), timeout, self.blockingStopToken(), std::move(fn));
     }
 
     // runBlocking() without the exceptions: the result carries the status, so
@@ -67,14 +59,14 @@ public:
     template <typename Fn>
     [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(Fn fn) const {
         const auto& self = static_cast<const Derived&>(*this);
-        return ruvia::runBlocking(
+        return ruvia::tryRunBlocking(
             self.blockingPool(), self.blockingWorker(), self.blockingStopToken(), std::move(fn));
     }
 
     template <typename Rep, typename Period, typename Fn>
     [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const {
         const auto& self = static_cast<const Derived&>(*this);
-        return ruvia::runBlocking(
+        return ruvia::tryRunBlocking(
             self.blockingPool(), self.blockingWorker(), timeout, self.blockingStopToken(), std::move(fn));
     }
 

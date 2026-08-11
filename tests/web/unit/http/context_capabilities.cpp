@@ -215,7 +215,7 @@ RUVIA_TEST(context_exposes_the_server_shutdown_stop_token) {
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
     auto request = makeRequest(memory.resource());
-    ruvia::detail::StopSource source;
+    ruvia::StopSource source;
     const auto token = source.token();
     const auto services = ruvia::detail::ContextServices{}.withStopToken(token);
     const auto context = ruvia::detail::ContextAccess::make(memory, request, services);

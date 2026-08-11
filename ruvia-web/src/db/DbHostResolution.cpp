@@ -17,21 +17,31 @@ void appendListSeparator(std::pmr::string& output) {
 
 }  // namespace
 
-DbResolvedAddresses collectDbResolvedAddresses(const asio::ip::tcp::resolver::results_type& results, std::pmr::memory_resource* resource) {
+DbResolvedAddresses collectDbResolvedAddresses(
+    const asio::ip::tcp::resolver::results_type& results,
+    DbDriver driver,
+    std::pmr::memory_resource* resource) {
     const auto resolved = pmrResourceOrDefault(resource);
     DbResolvedAddresses addresses(resolved);
     for (const auto& result : results) {
         std::error_code error;
         const auto address = result.endpoint().address().to_string(error);
         if (error) {
-            throw std::system_error(error, "formatting resolved database address failed");
+            throw DbError(
+                DbError::Code::kResolveFailed,
+                driver,
+                std::system_error(error, "formatting resolved database address failed").what(),
+                error.value());
         }
         if (std::ranges::none_of(addresses, [&address](const std::pmr::string& existing) { return std::string_view(existing) == address; })) {
             addresses.emplace_back(address.data(), address.size());
         }
     }
     if (addresses.empty()) {
-        throw std::runtime_error("database host resolved to no addresses");
+        throw DbError(
+            DbError::Code::kResolveFailed,
+            driver,
+            "database host resolved to no addresses");
     }
     return addresses;
 }

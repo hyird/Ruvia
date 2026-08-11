@@ -27,8 +27,16 @@ public:
     DbRows& operator=(DbRows&&) = delete;
     ~DbRows();
 
-    [[nodiscard]] std::span<const DbRow> rows() const& noexcept;
-    [[nodiscard]] std::span<const DbRow> rows() const&& = delete;
+    [[nodiscard]] bool empty() const noexcept;
+    [[nodiscard]] std::size_t size() const noexcept;
+    [[nodiscard]] const DbRow& operator[](std::size_t index) const& noexcept;
+    [[nodiscard]] const DbRow& operator[](std::size_t index) const&& = delete;
+    [[nodiscard]] const DbRow* begin() const& noexcept;
+    [[nodiscard]] const DbRow* begin() const&& = delete;
+    [[nodiscard]] const DbRow* end() const& noexcept;
+    [[nodiscard]] const DbRow* end() const&& = delete;
+    [[nodiscard]] const DbRow& front() const& noexcept;
+    [[nodiscard]] const DbRow& front() const&& = delete;
 
 private:
     friend struct detail::DbResultAccess;
@@ -49,6 +57,7 @@ private:
 
     std::pmr::vector<DbRow> rows_;
     std::pmr::vector<DbField> fields_;
+    std::pmr::vector<std::pmr::string> columnNames_;
     std::variant<NoRawResult, OwnedRawResult> rawResult_;
 };
 
@@ -95,17 +104,17 @@ private:
     friend class detail::PostgreSqlPool;
 
     struct Lease final {
-        Lease(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, DbOperationOptions options) noexcept;
+        Lease(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
 
         detail::DbPoolRef client;
         std::size_t slot;
         void* result;
         std::pmr::memory_resource* resource;
-        DbOperationOptions options;
+        OperationOptions options;
     };
 
     DbStreamResult() noexcept = default;
-    DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, DbOperationOptions options) noexcept;
+    DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
     void reset() noexcept;
     void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;

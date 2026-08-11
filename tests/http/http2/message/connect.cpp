@@ -608,7 +608,7 @@ RUVIA_TEST(http2_connect_open_tunnel_batches_owner_released_window_credit) {
     RUVIA_CHECK(!server.nextEvent().has_value());
     RUVIA_CHECK(server.pendingOutput().empty());
 
-    server.releaseReceivedData(1);
+    server.releaseAllReceivedData(1);
     // Owner acknowledgement transfers the four octets into both live receive
     // scopes, but neither emits a frame before the batching threshold.
     RUVIA_CHECK(server.pendingOutput().empty());

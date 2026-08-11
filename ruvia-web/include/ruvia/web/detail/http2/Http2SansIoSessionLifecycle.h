@@ -1,5 +1,8 @@
 #pragma once
 
+#include <exception>
+#include <utility>
+
 namespace ruvia::detail {
 
 enum class Http2SansIoSessionPhase {
@@ -55,8 +58,21 @@ public:
         }
     }
 
+    void recordWriterFailure(std::exception_ptr failure) noexcept {
+        if (writerFailure_ == nullptr) {
+            writerFailure_ = std::move(failure);
+        }
+    }
+
+    void rethrowWriterFailure() const {
+        if (writerFailure_ != nullptr) {
+            std::rethrow_exception(writerFailure_);
+        }
+    }
+
 private:
     Http2SansIoSessionPhase phase_{Http2SansIoSessionPhase::kRunning};
+    std::exception_ptr writerFailure_;
 };
 
 }  // namespace ruvia::detail

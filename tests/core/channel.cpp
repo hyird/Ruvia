@@ -24,6 +24,8 @@ static_assert(!std::is_default_constructible_v<ruvia::ChannelReceiver<int>>);
 static_assert(std::is_move_constructible_v<ruvia::ChannelReceiver<int>>);
 static_assert(!std::is_move_assignable_v<ruvia::ChannelReceiver<int>>);
 static_assert(!HasRvalueWorkerBorrow<ruvia::ChannelReceiver<int>>);
+static_assert(std::is_same_v<decltype(std::declval<const ruvia::ChannelReceiver<int>&>().receive(std::declval<ruvia::StopToken>())), ruvia::Task<ruvia::WorkerWaitResult<int>>>);
+static_assert(std::is_same_v<decltype(std::declval<const ruvia::ChannelReceiver<int>&>().receiveFor(std::chrono::seconds(1), std::declval<ruvia::StopToken>())), ruvia::Task<ruvia::WorkerWaitResult<int>>>);
 
 namespace {
 
@@ -54,18 +56,24 @@ private:
 ruvia::Task<void> receiveLast(ruvia::ChannelReceiver<int>& receiver, bool& success) {
     const auto value = co_await receiver.receive();
     const auto closed = co_await receiver.receive();
-    success = value.value() != nullptr && *value.value() == 3 && closed.closed() != nullptr;
+    success = value.hasValue() && value.value() == 3 && closed.status() == ruvia::WorkerWaitStatus::kClosed;
 }
 
 ruvia::Task<void> receiveQueuedThenStopping(ruvia::ChannelReceiver<int>& receiver, bool& success) {
     const auto value = co_await receiver.receive();
     const auto stopping = co_await receiver.receive();
-    success = value.value() != nullptr && *value.value() == 9 && stopping.workerStopping() != nullptr;
+    success = value.hasValue() && value.value() == 9 && stopping.status() == ruvia::WorkerWaitStatus::kWorkerStopping;
 }
 
 ruvia::Task<void> receiveThrowingMove(ruvia::ChannelReceiver<ThrowingMove>& receiver, bool& success) {
     const auto result = co_await receiver.receive();
-    success = result.value() != nullptr && result.value()->value() == 6;
+    success = result.hasValue() && result.value().value() == 6;
+}
+
+ruvia::Task<void> receiveAfterLateCancellation(ruvia::ChannelReceiver<int>& receiver, ruvia::StopToken stopToken, bool& success) {
+    const auto first = co_await receiver.receive(std::move(stopToken));
+    const auto second = co_await receiver.receive();
+    success = first.hasValue() && first.value() == 1 && second.hasValue() && second.value() == 2;
 }
 
 ruvia::Task<ruvia::WorkerWaitResult<int>> makeColdReceiveAfterReceiverClose(ruvia::WorkerHandle worker, bool timed) {
@@ -79,10 +87,61 @@ ruvia::Task<ruvia::WorkerWaitResult<int>> makeColdReceiveAfterReceiverClose(ruvi
 ruvia::Task<void> verifyColdReceiverTasks(ruvia::Task<ruvia::WorkerWaitResult<int>> receive, ruvia::Task<ruvia::WorkerWaitResult<int>> timedReceive, bool& success) {
     const auto coldClosed = co_await std::move(receive);
     const auto timedColdClosed = co_await std::move(timedReceive);
-    success = coldClosed.closed() != nullptr && timedColdClosed.closed() != nullptr;
+    success = coldClosed.status() == ruvia::WorkerWaitStatus::kClosed && timedColdClosed.status() == ruvia::WorkerWaitStatus::kClosed;
 }
 
 ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
+    {
+        ruvia::StopSource source;
+        auto [cancelSender, cancelReceiver] = ruvia::makeChannel<int>(worker, 1);
+        std::binary_semaphore receiverScheduled{0};
+        std::thread stopper([&] {
+            receiverScheduled.acquire();
+            source.requestStop();
+        });
+        ruvia::detail::WorkerHandleAccess::defer(worker, [&receiverScheduled] { receiverScheduled.release(); });
+        const auto cancelled = co_await cancelReceiver.receiveFor(std::chrono::seconds(1), source.token());
+        stopper.join();
+        if (cancelled.status() != ruvia::WorkerWaitStatus::kCancelled || !cancelSender.send(5).accepted()) {
+            co_return;
+        }
+        const auto recovered = co_await cancelReceiver.receive();
+        if (!recovered.hasValue() || recovered.value() != 5) {
+            co_return;
+        }
+    }
+
+    {
+        ruvia::StopSource source;
+        source.requestStop();
+        auto [cancelSender, cancelReceiver] = ruvia::makeChannel<int>(worker, 1);
+        const auto cancelled = co_await cancelReceiver.receive(source.token());
+        if (cancelled.status() != ruvia::WorkerWaitStatus::kCancelled) {
+            co_return;
+        }
+    }
+
+    {
+        ruvia::StopSource source;
+        auto [lateSender, lateReceiver] = ruvia::makeChannel<int>(worker, 1);
+        bool generationSafe = false;
+        ruvia::TaskScope scope(worker);
+        scope.spawn(receiveAfterLateCancellation(lateReceiver, source.token(), generationSafe));
+        if (!lateSender.send(1).accepted()) {
+            co_return;
+        }
+        source.requestStop();
+        ruvia::detail::WorkerHandleAccess::defer(worker, [&lateSender] {
+            if (!lateSender.send(2).accepted()) {
+                std::terminate();
+            }
+        });
+        co_await scope.join();
+        if (!generationSafe) {
+            co_return;
+        }
+    }
+
     auto [sender, receiver] = ruvia::makeChannel<int>(worker, 2);
     auto activeReceiver = std::move(receiver);
     const auto send1 = sender.send(1);
@@ -94,11 +153,11 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
 
     const auto first = co_await activeReceiver.receive();
     const auto second = co_await activeReceiver.receive();
-    if (first.value() == nullptr || *first.value() != 1 || second.value() == nullptr || *second.value() != 2) {
+    if (!first.hasValue() || first.value() != 1 || !second.hasValue() || second.value() != 2) {
         co_return;
     }
     const auto timeout = co_await activeReceiver.receiveFor(std::chrono::milliseconds(1));
-    if (timeout.timedOut() == nullptr) {
+    if (timeout.status() != ruvia::WorkerWaitStatus::kTimedOut) {
         co_return;
     }
 

@@ -166,7 +166,10 @@ bool detail::DbRegistry::needsDeadlineScan() const noexcept {
 
 DbHandle detail::DbRegistry::get(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
     if (!defaultClientIndex_.has_value()) {
-        throw std::logic_error("default database is not configured");
+        throw DbError(
+            DbError::Code::kNotConfigured,
+            std::nullopt,
+            "default database is not configured");
     }
     return DbHandle(poolRef(clients_[*defaultClientIndex_].client), resource, operationScope);
 }
@@ -176,7 +179,10 @@ DbHandle detail::DbRegistry::get(std::string_view alias, std::pmr::memory_resour
     if (match != aliasIndex_.end() && std::string_view(clients_[*match].alias) == alias) {
         return DbHandle(poolRef(clients_[*match].client), resource, operationScope);
     }
-    throw std::logic_error("database is not configured");
+    throw DbError(
+        DbError::Code::kNotConfigured,
+        std::nullopt,
+        "database is not configured");
 }
 
 }  // namespace ruvia

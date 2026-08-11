@@ -161,9 +161,7 @@ default. Cleartext uses HTTP/1.1 unless `kHttp2Only` explicitly requests h2
 prior knowledge.
 
 ```cpp
-ruvia::HttpClientConfig upstream;
-upstream.host = "api.example.com";
-upstream.scheme = ruvia::HttpScheme::kHttps;
+auto upstream = ruvia::HttpClientConfig::https("api.example.com");
 upstream.connectionsPerWorker = 2;
 upstream.maxConcurrentHttp2StreamsPerConnection = 100;
 upstream.maxBufferedRequestsPerWorker = 1024;
@@ -179,13 +177,11 @@ in PMR memory, so no borrowed input needs to survive suspension:
 ```cpp
 ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
     auto client = c.httpClient("upstream");
-    auto request = client.newRequest();
-    request.setMethod(ruvia::HttpKnownMethod::kGet)
-        .setTarget("/v1/data");
+    auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/v1/data");
 
-    auto operation = client.sendRequest(std::move(request), {
+    auto operation = client.withOptions({
         .timeout = std::chrono::seconds(2),
-    });
+    }).sendRequest(std::move(request));
     auto response = co_await std::move(operation);
     c.status(response.status());
     co_return c.body(response.body());
@@ -225,9 +221,9 @@ RFC 9113 prior knowledge when `kHttp2Only` is selected. HTTP/1.1
 `Upgrade: h2c` is not performed implicitly, so a server that only accepts the
 Upgrade transition must be configured for HTTP/1 or exposed through TLS/ALPN.
 
-The Controller-facing surface provides `newRequest()`, `setMethod()`,
-`setTarget()`, `addHeader()`, `setBody()`, `sendRequest()`, origin inspection,
-buffer/outstanding counts, and byte counters. Requests are awaited as scoped
+The Controller-facing surface provides `newRequest(method, target)`,
+`setHeader()`, `appendHeader()`, `setBody()`, `sendRequest()`, origin inspection,
+and a single `stats()` snapshot. Requests are awaited as scoped
 coroutine operations; there are no blocking overloads or callback ownership model.
 All pool configuration is immutable after startup. A handle automatically
 observes its request or worker stop token; an explicit operation token is
@@ -409,7 +405,9 @@ Web job contract:
 
 `TaskScope`, worker-bound `sleepFor`, bounded `Channel`, and `OneShot` are also
 provided by `ruvia::core`; their deadlines share the worker's single timer
-queue. `App::onStop()` hooks run once for explicitly enabled signal shutdown,
+queue. Standalone operations can create a `StopSource`, pass its `token()` to
+channel, one-shot, timer, or blocking waits, and call `requestStop()` from any
+thread. `App::onStop()` hooks run once for explicitly enabled signal shutdown,
 direct `App::stop()`, and worker failure before the worker-local Web resources
 are closed.
 
@@ -467,9 +465,10 @@ resumed immediately and the pool result is discarded. A callable may therefore
 finish after `App::run()` or a `BlockingPool` destructor returns, so its captures
 must remain self-contained. Call `BlockingPool::join()` explicitly when an
 owner needs a completion barrier. `BlockingPool` is a `ruvia::core` type and
-can be used directly with `ruvia::runBlocking(pool, worker, fn)` outside the Web
-framework. `App::setBlockingPool()` is absent by default: an application that
-never offloads should not pay for idle threads.
+can be used directly outside Web; both layers use `runBlocking(...)` for the
+throwing form and `tryRunBlocking(...)` for the status-returning form.
+`App::setBlockingPool()` is absent by default: an application that never
+offloads should not pay for idle threads.
 
 ## Static Files and Compression
 
@@ -609,15 +608,31 @@ and so on; MariaDB parameters use `?`. A `?` inside a string literal, a quoted
 identifier or a comment is data, not a placeholder. For generated PostgreSQL
 keys, use `INSERT ... RETURNING id` and read the returned row.
 
-`query()` returns `DbRows`, which exposes only the row set. `execute()` returns
+`query()` returns `DbRows`, which is directly iterable and indexable. A `DbRow`
+supports both positional and exact column-name lookup. `DbField::value()` returns
+an optional text view so SQL NULL is distinct from an empty string, while
+`as<T>()` converts strings, booleans, integers, and floating-point values and
+throws `DbConversionError` on malformed input. `execute()` returns
 `DbExecResult`, which exposes `affectedRows()` and an optional
 `lastInsertId()`; the latter is present only when the backend supplies that
 concept. Use `query()` for PostgreSQL statements with `RETURNING`.
 
-`DbConfig`'s timeouts are enforced by the client: an expired `queryTimeout`
-fails the operation and drops the connection, whatever the server is still
-doing with the statement. A timeout left unset is disabled, so a stalled
-backend then waits indefinitely.
+`DbConfig` defaults connect, query, and pool-acquire timeouts to 5 seconds,
+30 seconds, and 5 seconds. An expired `queryTimeout` fails the operation and
+drops the connection, whatever the server is still doing with the statement;
+explicit `std::nullopt` requests an unbounded wait. Database failures throw
+`DbError`; it exposes a stable code, the driver when a backend was selected,
+and, when available, the backend's native code and SQLSTATE.
+
+For one operation, bind a tighter timeout or an additional stop token to the
+handle before starting it; DB, Redis, and outbound HTTP all use this same
+`withOptions(OperationOptions)` shape:
+
+```cpp
+auto rows = co_await c.db().withOptions({
+    .timeout = std::chrono::seconds(2),
+}).query("SELECT name FROM users WHERE id = $1", userId);
+```
 
 ### Migrations
 
@@ -781,7 +796,8 @@ commands (`blpop()`, `brpop()`, and blocking `xreadGroup()`) and blocking raw
 commands are routed to the isolated pool automatically, so application code does
 not maintain a second alias. `RedisHandle::withOptions()` applies an end-to-end
 timeout and `StopToken` to typed commands and is inherited by pipelines and
-transactions; `exec(options)` can refine one batch. Redis defaults bound connect,
+transactions. Commands and batch execution do not accept a second per-call
+operation policy. Redis defaults bound connect,
 pool acquisition, and command execution, while `std::nullopt` explicitly disables
 an individual default. Deadlines use worker timers rather than maintenance-scan
 granularity. Cancelling active I/O closes and discards only its socket, and that
@@ -803,12 +819,13 @@ and `RUVIA_OPTIONAL_FIELD` may be absent. Route middleware keeps the Hono-style
 typed `c.req().validated<T>()` API, while `c.req().validatedJson<T>()` also exposes the
 validated original bytes through `raw()` for JSONB passthrough. See the compiled
 [`models_validation.cpp`](examples/web/models_validation.cpp) example for the
-complete API. `JsonBody<T>::parse()` and `FormBody<T>::parse()` reject required
-fields that are missing, mistyped, or duplicated, including those inside nested
-JSON models and arrays. Diagnostic code can opt into `parsePartial()` (or
-`parseFieldsPartial()`) to retain field states and build structured validation
-errors; normal application parsing remains strict. `RUVIA_RULE` adds route-level
-business constraints after this structural check.
+complete API. `fromJson<T>()` and `fromForm<T>()` return owning models and reject
+required fields that are missing, mistyped, or duplicated, including those
+inside nested JSON models and arrays. A `RUVIA_FIELD` getter returns `const T&` directly;
+only a `RUVIA_OPTIONAL_FIELD` getter returns `const std::optional<T>&` and has a
+generated reset operation. Route validation keeps partial field-state parsing
+inside the framework so the public parsing contract stays strict and owning.
+`RUVIA_RULE` adds route-level business constraints after this structural check.
 
 `TestApp` uses the production route graph and enforces route body and rate
 limits. It throws `std::logic_error` before dispatching a route with a

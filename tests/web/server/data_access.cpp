@@ -1,6 +1,7 @@
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <exception>
 #include <future>
 #include <memory_resource>
@@ -101,7 +102,10 @@ int testResolvedDatabaseHostLists() {
     std::pmr::monotonic_buffer_resource memory;
     const std::array endpoints{asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 3306), asio::ip::tcp::endpoint(asio::ip::make_address("::1"), 3306), asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 3306)};
     const auto results = asio::ip::tcp::resolver::results_type::create(endpoints.begin(), endpoints.end(), "database.internal", "3306");
-    const auto addresses = ruvia::detail::collectDbResolvedAddresses(results, &memory);
+    const auto addresses = ruvia::detail::collectDbResolvedAddresses(
+        results,
+        ruvia::DbDriver::kMariaDb,
+        &memory);
     if (addresses.size() != 2 || addresses[0] != "127.0.0.1" || addresses[1] != "::1") {
         return 1;
     }
@@ -157,7 +161,11 @@ int testWorkerAffinityAndAutomaticShutdown() {
         try {
             (void)context.db();
             throw std::runtime_error("an unconfigured worker database unexpectedly resolved");
-        } catch (const std::logic_error&) {
+        } catch (const ruvia::DbError& error) {
+            if (error.code() != ruvia::DbError::Code::kNotConfigured ||
+                error.driver().has_value()) {
+                throw;
+            }
         }
 #endif
 #ifdef RUVIA_ENABLE_REDIS
@@ -766,9 +774,11 @@ int testRedisPipelineAcceptsAnExactOperationTimeout() {
     auto completedFuture = completed.get_future();
     const auto posted = service.post([&completed](ruvia::DataAccessContext& context) -> ruvia::Task<void> {
         try {
-            auto pipeline = context.redis().pipeline();
+            auto pipeline = context.redis()
+                                .withOptions({.timeout = std::chrono::milliseconds(250)})
+                                .pipeline();
             pipeline.command("PING");
-            (void)co_await std::move(pipeline).exec({.timeout = std::chrono::milliseconds(250)});
+            (void)co_await std::move(pipeline).exec();
             completed.set_value(1);
         } catch (const ruvia::RedisError& error) {
             completed.set_value(error.code() == ruvia::RedisError::Code::kTimeout ? 0 : 2);
@@ -797,7 +807,7 @@ int testRedisCancellationDiscardsSocketAndReconnects() {
     auto options = ruvia::DataAccessOptions{};
     options.redis.push_back(ruvia::DataAccessRedisConfig{"default", std::move(redis)});
     ruvia::DataAccessService service(loops.loop(0), std::move(options));
-    ruvia::detail::StopSource operationStop;
+    ruvia::StopSource operationStop;
 
     auto ready = service.connect();
     loops.start();
@@ -809,10 +819,9 @@ int testRedisCancellationDiscardsSocketAndReconnects() {
         const std::array streams{ruvia::RedisStreamReadView{.stream = "events", .id = ">"}};
         bool cancelled = false;
         try {
-            auto redisHandle = context.redis();
+            auto redisHandle = context.redis().withOptions({.stopToken = operationStop.token()});
             ruvia::RedisXReadGroupOptions readOptions;
             readOptions.block = ruvia::RedisBlockWait::indefinitely();
-            readOptions.operation.stopToken = operationStop.token();
             (void)co_await redisHandle.xreadGroup("g", "c", streams, std::move(readOptions));
         } catch (const ruvia::RedisError& error) {
             if (error.code() != ruvia::RedisError::Code::kCancelled) {
@@ -1093,7 +1102,11 @@ int main() {
         }
 #endif
         return 0;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "data access test failed: %s\n", error.what());
+        return 100;
     } catch (...) {
+        std::fprintf(stderr, "data access test failed with a non-standard exception\n");
         return 100;
     }
 }

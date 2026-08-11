@@ -1,37 +1,17 @@
 #include "ruvia/web/redis/Redis.h"
 
-#include "ruvia/core/memory/ProcessResource.h"
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace ruvia {
 
 RedisError::RedisError(Code code, std::string_view message)
-    : code_(code),
-      message_(message, detail::processResource()) {}
-
-RedisError::RedisError(const RedisError& other)
-    : code_(other.code_),
-      message_(other.message_, detail::processResource()) {}
-
-RedisError& RedisError::operator=(const RedisError& other) {
-    if (this != &other) {
-        code_ = other.code_;
-        message_ = other.message_;
-    }
-    return *this;
-}
-
-const char* RedisError::what() const noexcept {
-    return message_.c_str();
-}
+    : std::runtime_error(std::string(message)),
+      code_(code) {}
 
 RedisError::Code RedisError::code() const noexcept {
     return code_;
-}
-
-std::string_view RedisError::message() const& noexcept {
-    return message_;
 }
 
 RedisValue::RedisValue(std::pmr::memory_resource* resource)
@@ -50,8 +30,15 @@ bool RedisValue::null() const noexcept {
 }
 
 std::string_view RedisValue::string() const& {
-    if (kind_ != Kind::kString && kind_ != Kind::kError) {
+    if (kind_ != Kind::kString) {
         throw std::logic_error("redis value is not a string");
+    }
+    return string_;
+}
+
+std::string_view RedisValue::error() const& {
+    if (kind_ != Kind::kError) {
+        throw std::logic_error("redis value is not an error");
     }
     return string_;
 }

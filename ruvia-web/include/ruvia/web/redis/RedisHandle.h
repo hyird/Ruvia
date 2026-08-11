@@ -26,9 +26,9 @@ public:
 
     // Returns a request-scoped view whose policy is applied to every typed
     // command and inherited by pipelines and transactions created from it.
-    [[nodiscard]] RedisHandle withOptions(RedisOperationOptions options) const;
+    [[nodiscard]] RedisHandle withOptions(OperationOptions options) const;
 
-    ScopedOperation<RedisValue> command(std::span<const std::string_view> args, RedisOperationOptions options = {}) const;
+    ScopedOperation<RedisValue> command(std::span<const std::string_view> args) const;
     ScopedOperation<RedisValue> command(std::initializer_list<std::string_view> args) const = delete;
 
     ScopedOperation<void> ping() const;
@@ -110,8 +110,8 @@ public:
     ScopedOperation<std::pmr::string> scriptLoad(std::string_view script) const;
     ScopedOperation<std::pmr::vector<bool>> scriptExists(std::span<const std::string_view> sha1s) const;
     ScopedOperation<std::pmr::vector<bool>> scriptExists(std::initializer_list<std::string_view> sha1s) const = delete;
-    ScopedOperation<std::optional<RedisKeyValue>> blpop(std::span<const std::string_view> keys, RedisBlockWait wait, RedisOperationOptions options = {}) const;
-    ScopedOperation<std::optional<RedisKeyValue>> brpop(std::span<const std::string_view> keys, RedisBlockWait wait, RedisOperationOptions options = {}) const;
+    ScopedOperation<std::optional<RedisKeyValue>> blpop(std::span<const std::string_view> keys, RedisBlockWait wait) const;
+    ScopedOperation<std::optional<RedisKeyValue>> brpop(std::span<const std::string_view> keys, RedisBlockWait wait) const;
     ScopedOperation<std::optional<RedisXReadGroupResult>> xreadGroup(std::string_view group, std::string_view consumer, std::span<const RedisStreamReadView> streams, RedisXReadGroupOptions options = {}) const;
 
     // Multi-argument commands as ordinary arguments: mget(a, b, c) instead of a
@@ -128,13 +128,6 @@ public:
     [[nodiscard]] ScopedOperation<RedisValue> command(Args&&... args) const {
         const std::string_view views[]{std::string_view(args)...};
         return command(std::span<const std::string_view>(views));
-    }
-
-    template <typename... Args>
-        requires detail::RedisArgumentPack<Args...>
-    [[nodiscard]] ScopedOperation<RedisValue> command(RedisOperationOptions options, Args&&... args) const {
-        const std::string_view views[]{std::string_view(args)...};
-        return command(std::span<const std::string_view>(views), std::move(options));
     }
 
     template <typename... Keys>
@@ -228,7 +221,7 @@ private:
     detail::RedisPool* pool_;
     detail::RedisPool* blockingPool_;
     std::pmr::memory_resource* resource_;
-    RedisOperationOptions operationOptions_;
+    OperationOptions operationOptions_;
 };
 
 }  // namespace ruvia

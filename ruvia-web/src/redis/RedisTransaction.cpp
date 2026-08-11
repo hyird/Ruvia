@@ -43,7 +43,7 @@ RedisTransaction& RedisTransaction::unwatch() {
 }
 
 
-Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(detail::RedisPool& pool, RedisOperationOptions options, std::pmr::memory_resource* resource, std::pmr::vector<RedisPipeline::Command> watches, std::pmr::vector<RedisPipeline::Command> commands) {
+Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(detail::RedisPool& pool, OperationOptions options, std::pmr::memory_resource* resource, std::pmr::vector<RedisPipeline::Command> watches, std::pmr::vector<RedisPipeline::Command> commands) {
     std::pmr::vector<detail::RedisCommandArgsView> framed(resource);
     framed.reserve(watches.size() + commands.size() + 2);
     auto appendCommandView = [&framed](const RedisPipeline::Command& command) { framed.emplace_back(command.args); };
@@ -59,13 +59,13 @@ Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(detail::RedisP
     appendCommandView(exec);
 
     auto replies = co_await pool.executePipeline(std::span<const detail::RedisCommandArgsView>(framed), std::move(options), resource);
-    if (replies.empty() || replies.back().kind() == RedisValue::Kind::kError) {
-        throw RedisError(RedisError::Code::kCommandError, "redis transaction failed");
+    if (replies.empty()) {
+        throw RedisError(
+            RedisError::Code::kProtocolError,
+            "redis transaction returned no replies");
     }
-    for (std::size_t i = 0; i + 1 < replies.size(); ++i) {
-        if (replies[i].kind() == RedisValue::Kind::kError) {
-            throw RedisError(RedisError::Code::kCommandError, "redis transaction failed");
-        }
+    for (std::size_t i = 0; i < replies.size(); ++i) {
+        detail::throwIfRedisTransactionReplyError(replies[i], i);
     }
     auto execReply = std::move(replies.back());
     if (execReply.null()) {
@@ -84,15 +84,16 @@ Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(detail::RedisP
 }
 
 ScopedOperation<std::pmr::vector<RedisValue>> RedisTransaction::exec() && {
-    return std::move(*this).exec(RedisOperationOptions{});
-}
-
-ScopedOperation<std::pmr::vector<RedisValue>> RedisTransaction::exec(RedisOperationOptions options) && {
-    detail::validateRedisOperationOptions(options);
-    options = detail::mergeRedisOperationOptions(pipeline_.operationOptions_, std::move(options));
     auto* commandResource = pipeline_.resource();
     auto& pool = pipeline_.consumePool();
-    return detail::makeScopedOperation(pipeline_.operationScope(), executeOwned(pool, std::move(options), commandResource, std::move(watches_), std::move(pipeline_.commands_)));
+    return detail::makeScopedOperation(
+        pipeline_.operationScope(),
+        executeOwned(
+            pool,
+            pipeline_.operationOptions_,
+            commandResource,
+            std::move(watches_),
+            std::move(pipeline_.commands_)));
 }
 
 }  // namespace ruvia
