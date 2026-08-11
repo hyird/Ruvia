@@ -6,14 +6,17 @@
 // finalizes the production route table, and dispatches TestRequests through
 // the real buffered dispatch pipeline: routing, controller/route/global
 // middleware, validators, prefix and app-wide notFound/onError fallbacks,
-// urlFor, and worker state all behave exactly as they do in a running server.
+// urlFor, route body limits, route rate limits, and worker state all behave as
+// they do in a running server.
 // No socket is opened and no worker thread is started; request() runs the
 // handler coroutine to completion synchronously and copies the response out.
 //
 // Scope: buffered-response routes (including 404/405/501/OPTIONS fallbacks).
 // Streaming/SSE/WebSocket routes and handlers that await worker-bound
 // services (timers, db(), redis(), runBlocking()) need a running server; drive
-// those with a loopback HttpServer instead.
+// those with a loopback HttpServer instead. A route Deadline is rejected with
+// std::logic_error before dispatch because this facade has no worker timer and
+// must not silently turn a bounded production route into an unbounded test.
 
 #include <cstddef>
 #include <memory>
@@ -181,8 +184,9 @@ public:
     TestApp& onNotFound(std::string_view prefix, HttpNotFoundHandler handler);
 
     // Dispatches one request through the production route table and returns
-    // the copied-out response. Never throws for request-level failures --
-    // handler exceptions become the same error responses a server would send.
+    // the copied-out response. Request-level failures become the same error
+    // responses a server would send. Throws std::logic_error when the selected
+    // route declares a Deadline, which cannot be simulated without a worker.
     [[nodiscard]] TestResponse request(const TestRequest& request);
 
 private:

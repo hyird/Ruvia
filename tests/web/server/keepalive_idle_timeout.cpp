@@ -1,16 +1,16 @@
 // Regression: an idle keep-alive connection (one request served, no bytes of the
-// next request received yet) must be governed by keepaliveTimeout -- nginx
-// keepalive_timeout semantics -- not clientHeaderTimeout. Previously the idle
-// wait for the next request ran under kReadingInitial (clientHeaderTimeout), so a
-// connection with a long keepaliveTimeout was still dropped one clientHeaderTimeout
+// next request received yet) must be governed by idleTimeout -- nginx
+// keepalive_timeout semantics -- not requestHeaderTimeout. Previously the idle
+// wait for the next request ran under kReadingInitial (requestHeaderTimeout), so a
+// connection with a long idleTimeout was still dropped one requestHeaderTimeout
 // after the previous response.
 //
-// The server uses a short clientHeaderTimeout and a long keepaliveTimeout. After
+// The server uses a short requestHeaderTimeout and a long idleTimeout. After
 // one request the client idles and watches the socket: the connection must NOT be
-// closed within a window that is well past clientHeaderTimeout but far under
-// keepaliveTimeout. The read is driven by a safety timer so a close is observed
+// closed within a window that is well past requestHeaderTimeout but far under
+// idleTimeout. The read is driven by a safety timer so a close is observed
 // as an eof rather than a hang. (The connection's FIRST request is still bounded
-// by clientHeaderTimeout -- see server_max_connections.)
+// by requestHeaderTimeout -- see server_max_connections.)
 
 #include <chrono>
 #include <cstdio>
@@ -34,8 +34,8 @@ namespace {
 
 // Short header deadline, long keepalive deadline; the observation window sits
 // between them so the two outcomes are unambiguous.
-constexpr auto kClientHeaderTimeout = 200ms;
-constexpr auto kKeepaliveTimeout = 3s;
+constexpr auto kRequestHeaderTimeout = 200ms;
+constexpr auto kIdleTimeout = 3s;
 constexpr auto kObserveWindow = 700ms;
 
 }  // namespace
@@ -45,8 +45,8 @@ int main() {
     ruvia::detail::RouteTable routes(resource);  // empty -> 404, keep-alive
 
     ruvia::detail::HttpServerOptions options;
-    options.clientHeaderTimeout = kClientHeaderTimeout;
-    options.keepaliveTimeout = kKeepaliveTimeout;
+    options.requestHeaderTimeout = kRequestHeaderTimeout;
+    options.idleTimeout = kIdleTimeout;
     options.scanInterval = 50ms;
 
     ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, std::move(options));
@@ -75,8 +75,8 @@ int main() {
             }
         }
 
-        // Idle past clientHeaderTimeout, well under keepaliveTimeout. A close in
-        // this window means the idle wait is (wrongly) bounded by clientHeaderTimeout.
+        // Idle past requestHeaderTimeout, well under idleTimeout. A close in
+        // this window means the idle wait is (wrongly) bounded by requestHeaderTimeout.
         if (result == 0) {
             bool closed = false;
             char buf[64];
@@ -94,8 +94,8 @@ int main() {
             if (closed) {
                 std::fputs(
                     "idle keep-alive connection was closed within the observation "
-                    "window: the idle wait is bounded by clientHeaderTimeout, not "
-                    "keepaliveTimeout\n",
+                    "window: the idle wait is bounded by requestHeaderTimeout, not "
+                    "idleTimeout\n",
                     stderr);
                 result = 3;
             }

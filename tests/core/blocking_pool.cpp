@@ -15,7 +15,15 @@
 #include <semaphore>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <utility>
+
+template <typename T>
+concept HasRvalueBlockingError = requires(T&& result) { std::move(result).error(); };
+
+static_assert(!std::is_constructible_v<ruvia::BlockingResult<int>, ruvia::BlockingStatus>);
+static_assert(!std::is_constructible_v<ruvia::BlockingOperationRejected, ruvia::BlockingStatus>);
+static_assert(!HasRvalueBlockingError<ruvia::BlockingResult<int>>);
 
 namespace {
 
@@ -42,6 +50,21 @@ struct ThreadGate final {
         }
         started.acquire();
     }
+};
+
+class ThrowOnSecondMove final {
+public:
+    ThrowOnSecondMove() = default;
+    ThrowOnSecondMove(const ThrowOnSecondMove&) = delete;
+    ThrowOnSecondMove& operator=(const ThrowOnSecondMove&) = delete;
+    ThrowOnSecondMove(ThrowOnSecondMove&&) {
+        if (moves.fetch_add(1, std::memory_order_relaxed) + 1 == 2) {
+            throw std::runtime_error("second move failed");
+        }
+    }
+    ThrowOnSecondMove& operator=(ThrowOnSecondMove&&) = delete;
+
+    static inline std::atomic_int moves{0};
 };
 
 Task<void> exerciseResults(BlockingPool& pool, WorkerHandle worker, bool& success) {
@@ -78,6 +101,38 @@ Task<void> exerciseResults(BlockingPool& pool, WorkerHandle worker, bool& succes
     }
     const auto pointer = std::move(owned).value();
     success = pointer != nullptr && *pointer == 7;
+}
+
+Task<void> exerciseThrowingMoveResult(BlockingPool& pool, WorkerHandle worker, bool& success) {
+    ThrowOnSecondMove::moves.store(0, std::memory_order_relaxed);
+    auto result = co_await ruvia::runBlocking(pool, worker, std::chrono::seconds(1), [] { return ThrowOnSecondMove{}; });
+    if (result.status() != BlockingStatus::kCompleted || !result.failed() || result.error() == nullptr) {
+        co_return;
+    }
+    try {
+        static_cast<void>(std::move(result).value());
+    } catch (const std::runtime_error& error) {
+        success = std::string_view(error.what()) == "second move failed";
+    }
+}
+
+Task<void> exerciseCancellation(BlockingPool& pool, WorkerHandle worker, ThreadGate& gate, ruvia::detail::StopSource& source, std::atomic_bool& callableFinished, bool& success) {
+    auto result = co_await ruvia::runBlocking(pool, worker, std::chrono::seconds(30), source.token(), [&] {
+        gate.started.release();
+        gate.release.acquire();
+        callableFinished.store(true, std::memory_order_release);
+        return 12;
+    });
+    if (result.status() != BlockingStatus::kCancelled || result.completed() || result.failed()) {
+        gate.release.release();
+        co_return;
+    }
+    try {
+        static_cast<void>(std::move(result).value());
+    } catch (const ruvia::BlockingOperationRejected& error) {
+        success = error.status() == BlockingStatus::kCancelled;
+    }
+    gate.release.release();
 }
 
 // A wedged callable must not pin its caller forever: the wait has a deadline,
@@ -236,7 +291,7 @@ bool testDestructionDoesNotJoinRunningCallable() {
     return returnedBeforeCallable && callableFinished;
 }
 
-bool testExplicitJoinWaitsForRunningCallable() {
+bool testJoinStopsAndWaitsForRunningCallable() {
     auto startedPromise = std::make_shared<std::promise<void>>();
     auto started = startedPromise->get_future();
     std::promise<void> releasePromise;
@@ -254,7 +309,6 @@ bool testExplicitJoinWaitsForRunningCallable() {
     started.wait();
 
     std::thread joiner([&pool, &joinedPromise] {
-        pool.stop();
         pool.join();
         joinedPromise.set_value();
     });
@@ -265,11 +319,33 @@ bool testExplicitJoinWaitsForRunningCallable() {
     return joinWaited && joined.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;
 }
 
+bool testJoinRejectsPoolThreadBeforeStopping() {
+    BlockingPool pool(BlockingPoolOptions{.threadCount = 1, .queueCapacity = 1});
+    std::promise<bool> completed;
+    auto result = completed.get_future();
+    if (pool.submit([&] {
+            bool rejected = false;
+            try {
+                pool.join();
+            } catch (const std::logic_error& error) {
+                rejected = std::string_view(error.what()) == "cannot join a blocking pool from one of its threads";
+            }
+            const auto stillAccepting = pool.submit([] {}) == BlockingSubmitStatus::kAccepted;
+            completed.set_value(rejected && stillAccepting);
+        }) != BlockingSubmitStatus::kAccepted) {
+        return false;
+    }
+    const bool rejected = result.get();
+    pool.join();
+    return rejected;
+}
+
 }  // namespace
 
 int main() {
     bool results = false;
     bool workerStaysFree = false;
+    bool throwingMoveResult = false;
     {
         BlockingPool pool(BlockingPoolOptions{.threadCount = 2});
         asio::io_context ioContext;
@@ -280,9 +356,34 @@ int main() {
         ioContext.restart();
         asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exerciseWorkerStaysFree(pool, worker, workerStaysFree)), asio::detached);
         ioContext.run();
+        ioContext.restart();
+        asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exerciseThrowingMoveResult(pool, worker, throwingMoveResult)), asio::detached);
+        ioContext.run();
         dispatcher->close();
         dispatcher->stopTimers();
     }
+
+    bool cancelled = false;
+    std::atomic_bool cancelledCallableFinished{false};
+    {
+        ThreadGate gate;
+        ruvia::detail::StopSource source;
+        BlockingPool pool(BlockingPoolOptions{.threadCount = 1});
+        asio::io_context ioContext;
+        const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
+        const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+        std::thread canceller([&] {
+            gate.started.acquire();
+            source.requestStop();
+        });
+        asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exerciseCancellation(pool, worker, gate, source, cancelledCallableFinished, cancelled)), asio::detached);
+        ioContext.run();
+        canceller.join();
+        pool.join();
+        dispatcher->close();
+        dispatcher->stopTimers();
+    }
+    cancelled = cancelled && cancelledCallableFinished.load(std::memory_order_acquire);
 
     bool timeout = false;
     {
@@ -386,7 +487,8 @@ int main() {
     }
 
     const bool destructionDoesNotJoin = testDestructionDoesNotJoinRunningCallable();
-    const bool explicitJoinWaits = testExplicitJoinWaitsForRunningCallable();
-    const bool allPassed = results && workerStaysFree && timeout && saturatingTimeout && stoppedPool && queueFull && workerStopping && stoppedWorker && rejectsEmptyTask && destructionDoesNotJoin && explicitJoinWaits;
+    const bool joinStopsAndWaits = testJoinStopsAndWaitsForRunningCallable();
+    const bool joinRejectsPoolThread = testJoinRejectsPoolThreadBeforeStopping();
+    const bool allPassed = results && workerStaysFree && throwingMoveResult && cancelled && timeout && saturatingTimeout && stoppedPool && queueFull && workerStopping && stoppedWorker && rejectsEmptyTask && destructionDoesNotJoin && joinStopsAndWaits && joinRejectsPoolThread;
     return allPassed ? 0 : 1;
 }

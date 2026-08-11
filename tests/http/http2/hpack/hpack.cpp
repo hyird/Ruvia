@@ -419,7 +419,7 @@ RUVIA_TEST(hpack_header_callback_allocation_failure_rolls_back_stream_state) {
     RUVIA_CHECK(allocationFailed);
     RUVIA_CHECK(!stream.hasMethod());
     RUVIA_CHECK(!stream.hasPath());
-    RUVIA_CHECK_EQ(stream.requestHeaderCount(), std::size_t{0});
+    RUVIA_CHECK_EQ(stream.remoteHeaderCount(), std::size_t{0});
 
     resource.rejectAllocations(false);
     {

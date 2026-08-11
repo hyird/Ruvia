@@ -22,13 +22,14 @@ namespace ruvia {
 // This is COOPERATIVE, and the name says deadline rather than timeout for that
 // reason. A suspended coroutine cannot be abandoned in C++ without destroying a
 // frame something else still points at, so nothing is forcibly aborted. What
-// happens is that Context::stopToken() is stopped, and every wait that TAKES
-// that token returns at once. The handler then unwinds normally and onError
+// happens is that Context::stopToken() is stopped, and every framework wait
+// bound to that token returns at once. The handler then unwinds normally and onError
 // turns it into whatever that failure should be.
 //
-// What it bounds, precisely: waits you pass c.stopToken() to -- db(), redis(),
-// httpClient()'s sendRequest, runBlocking(). That covers the ordinary cause of
-// a stuck handler, which is a slow dependency.
+// What it bounds, precisely: db(), redis(), httpClient().sendRequest(), and
+// runBlocking() automatically observe the request token. Explicit operation
+// tokens are combined with it instead of replacing it. That covers the ordinary
+// cause of a stuck handler, which is a slow dependency.
 //
 // What it does NOT stop: a handler awaiting nothing cancellable -- a pure
 // computation, or a wait the application built out of raw Asio without
@@ -39,8 +40,8 @@ namespace ruvia {
 // That is not equivalent to an unbounded connection. A handler that is
 // suspended still lets the worker run, so the connection scanner eventually
 // closes the socket through the active protocol phase: HTTP/1 dispatch after a
-// complete head uses keepaliveTimeout; HTTP/2 active stream runtimes use the
-// payload phase and therefore clientBodyTimeout. The consequences differ, which
+// complete head uses idleTimeout; HTTP/2 active stream runtimes use the
+// payload phase and therefore requestBodyTimeout. The consequences differ, which
 // is the whole reason to prefer a deadline: the scanner drops the connection
 // with no response, while a deadline lets the handler unwind and answer.
 //

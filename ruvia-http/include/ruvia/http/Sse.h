@@ -24,8 +24,8 @@ struct SseMessage final {
     std::optional<std::uint32_t> retry;
 };
 
-namespace detail {
+// Replace `frame` with one complete UTF-8 event-stream block. Invalid event/id
+// line syntax throws std::invalid_argument; allocation follows frame's resource.
 void formatSseMessage(std::pmr::string& frame, const SseMessage& message);
-}  // namespace detail
 
 }  // namespace ruvia

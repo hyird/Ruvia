@@ -152,45 +152,42 @@ reverse-proxy product API.
 
 ## Outbound HTTP Client
 
-Create and retain one client for each origin, as with Drogon. The facade is safe
-to share, while every Web worker lazily creates its own bounded connection pool;
-no client socket or protocol state crosses worker threads. Do not construct a
-new client for every request, because that intentionally creates a distinct
-pool. HTTPS negotiates HTTP/2 with ALPN and falls back to HTTP/1.1 by default.
-Cleartext uses HTTP/1.1 unless `kHttp2Only` explicitly requests h2 prior
-knowledge.
+Register each origin before `App::run()`. Every Web worker creates one bounded
+pool for each registered alias; no client socket, cookie jar, or protocol state
+crosses worker threads. `Context::httpClient()` returns a request-scoped
+`HttpClientHandle`, so it cannot escape dispatch or be mistaken for a globally
+shared client. HTTPS negotiates HTTP/2 with ALPN and falls back to HTTP/1.1 by
+default. Cleartext uses HTTP/1.1 unless `kHttp2Only` explicitly requests h2
+prior knowledge.
 
 ```cpp
-const auto upstream = [] {
-    ruvia::HttpClientConfig config;
-    config.connectionsPerWorker = 2;
-    config.maxConcurrentHttp2StreamsPerConnection = 100;
-    config.maxBufferedRequestsPerWorker = 1024;
-    config.maxCookiesPerWorker = 256;
-    config.maxCookieBytesPerWorker = 32 * 1024;
-    config.writeTimeout = std::chrono::seconds(30);
-    config.requestTimeout = std::chrono::seconds(10);
-    return ruvia::HttpClient::newHttpClient(
-        "https://api.example.com", std::move(config));
-}();
+ruvia::HttpClientConfig upstream;
+upstream.host = "api.example.com";
+upstream.scheme = ruvia::HttpScheme::kHttps;
+upstream.connectionsPerWorker = 2;
+upstream.maxConcurrentHttp2StreamsPerConnection = 100;
+upstream.maxBufferedRequestsPerWorker = 1024;
+upstream.writeTimeout = std::chrono::seconds(30);
+upstream.requestTimeout = std::chrono::seconds(10);
+ruvia::app().useHttpClient("upstream", std::move(upstream));
 ```
 
-Handlers use an origin-bound client and request builder, matching Drogon's
-client/request/send workflow. The builder owns method, path, headers, and body
+Handlers use an origin-bound handle and request builder. The builder owns method,
+target, headers, and body
 in PMR memory, so no borrowed input needs to survive suspension:
 
 ```cpp
 ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
-    auto request = upstream->newRequest();
+    auto client = c.httpClient("upstream");
+    auto request = client.newRequest();
     request.setMethod(ruvia::HttpKnownMethod::kGet)
-        .setPath("/v1/data");
+        .setTarget("/v1/data");
 
-    auto operation = upstream->sendRequest(std::move(request), {
+    auto operation = client.sendRequest(std::move(request), {
         .timeout = std::chrono::seconds(2),
-        .stopToken = c.stopToken(),
     });
     auto response = co_await std::move(operation);
-    c.status(response.statusCode());
+    c.status(response.status());
     co_return c.body(response.body());
 }
 ```
@@ -198,7 +195,7 @@ ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
 `HttpClientResponse` owns status, protocol version, headers, trailers, and
 buffered body in stable PMR storage; it does not borrow from the request builder
 or caller stack. `maxResponseBytes` bounds that body; use `trailers()` or
-`getTrailer()` after completion to inspect HTTP/2 trailing fields. On HTTP/1, a
+`trailer()` after completion to inspect HTTP/2 trailing fields. On HTTP/1, a
 request timeout or explicit `StopToken`
 cancellation closes and discards that socket. On HTTP/2 it submits
 `RST_STREAM(CANCEL)` for only the affected stream, so unrelated multiplexed
@@ -228,24 +225,22 @@ RFC 9113 prior knowledge when `kHttp2Only` is selected. HTTP/1.1
 `Upgrade: h2c` is not performed implicitly, so a server that only accepts the
 Upgrade transition must be configured for HTTP/1 or exposed through TLS/ALPN.
 
-The Controller-facing surface follows Drogon's client model where it fits the
-Ruvia runtime: `newRequest()`, `setMethod()`, `setPath()`, `addHeader()`,
-`setBody()`, `sendRequest()`, cookies, user-agent control, origin inspection,
-buffer/outstanding counts, and byte counters are available. Ruvia intentionally
-uses only `Task`/`co_await`: it does not expose Drogon's blocking overload or a
-second callback ownership model on Web workers. The factory facade resolves the
-calling Web worker without exposing its event loop; `sendRequest()` must run on
-a Ruvia Web worker. `App::useHttpClient()` plus `Context::httpClient()` remains
-available for centrally named configuration.
+The Controller-facing surface provides `newRequest()`, `setMethod()`,
+`setTarget()`, `addHeader()`, `setBody()`, `sendRequest()`, origin inspection,
+buffer/outstanding counts, and byte counters. Requests are awaited as scoped
+coroutine operations; there are no blocking overloads or callback ownership model.
+All pool configuration is immutable after startup. A handle automatically
+observes its request or worker stop token; an explicit operation token is
+combined with that ambient token rather than replacing it.
 
 Automatic cookies are disabled by default. Set `cookiesEnabled = true` in the
 startup configuration to retain matching `Set-Cookie` response fields and send
-them on later requests. `client.addCookie()` adds an explicit worker-local
-cookie regardless of that flag. `maxCookiesPerWorker` and
+them on later requests. `request.addCookie()` adds a cookie to one request;
+`HttpClientConfig::cookies` seeds every worker-local jar at startup.
+`maxCookiesPerWorker` and
 `maxCookieBytesPerWorker` bound each worker-local jar; automatic cookies beyond
-either bound are ignored, while an explicit `addCookie()` reports a capacity
-error. Configure a shared factory client before starting workers when behavior
-must be identical on every Web worker.
+either bound are ignored, while invalid or over-capacity startup configuration
+is rejected before workers start.
 
 ## Core Runtime
 
@@ -599,7 +594,7 @@ then run `ctest --test-dir build -C Release --output-on-failure`.
 
 ## Database Drivers
 
-MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction and migration APIs. Each worker owns exactly one database connection. Select the driver when constructing its configuration:
+MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction and migration APIs. Each worker owns exactly one database connection. `DbConfig` has no driver-neutral default constructor: select an enabled driver through its factory, which also supplies that backend's default port:
 
 ```cpp
 auto config = ruvia::DbConfig::postgreSql(); // port 5432
@@ -609,7 +604,7 @@ config.database = "app";
 app.useDb(std::move(config));
 ```
 
-Enable its matching CMake feature first. PostgreSQL parameters use `$1`, `$2`,
+The matching factory exists only when its CMake feature is enabled. PostgreSQL parameters use `$1`, `$2`,
 and so on; MariaDB parameters use `?`. A `?` inside a string literal, a quoted
 identifier or a comment is data, not a placeholder. For generated PostgreSQL
 keys, use `INSERT ... RETURNING id` and read the returned row.
@@ -794,22 +789,47 @@ pool slot reconnects before its next command. An infinite block therefore
 requires either a stoppable token or a finite command timeout. A request handler
 can pass `c.stopToken()` to stop work when its server worker shuts down.
 
+All SET modes use `set(key, value, RedisSetOptions)` and return
+`RedisSetResult`: `applied()` reports whether the write happened and
+`previous()` carries the old value when `returnPrevious` is requested. Expiry,
+NX/XX, and GET behavior are options rather than separate `setEx()`, `setNx()`,
+or `getSet()` commands. `blpop()` and `brpop()` take `RedisBlockWait`, using
+`forDuration()` for a finite Redis wait or `indefinitely()` for an explicit
+unbounded wait.
+
 Models are ordinary structs with one schema for JSON parsing, validation, and
 serialization. They support nested models and arrays; `RUVIA_FIELD` is required
 and `RUVIA_OPTIONAL_FIELD` may be absent. Route middleware keeps the Hono-style
 typed `c.req().validated<T>()` API, while `c.req().validatedJson<T>()` also exposes the
 validated original bytes through `raw()` for JSONB passthrough. See the compiled
 [`models_validation.cpp`](examples/web/models_validation.cpp) example for the
-complete API. `SecurityHeadersOptions` defaults to `LegacyXssFilterPolicy::kDisable`, emitting `X-XSS-Protection: 0` because obsolete browser filters can create security issues; `kOmitHeader` omits that header, while Content Security Policy remains the modern content control.
+complete API. `JsonBody<T>::parse()` and `FormBody<T>::parse()` reject required
+fields that are missing, mistyped, or duplicated, including those inside nested
+JSON models and arrays. Diagnostic code can opt into `parsePartial()` (or
+`parseFieldsPartial()`) to retain field states and build structured validation
+errors; normal application parsing remains strict. `RUVIA_RULE` adds route-level
+business constraints after this structural check.
+
+`TestApp` uses the production route graph and enforces route body and rate
+limits. It throws `std::logic_error` before dispatching a route with a
+`Deadline`, because its synchronous no-worker execution cannot simulate that
+timer without silently weakening production policy.
+
+`SecurityHeadersOptions` defaults to `LegacyXssFilterPolicy::kDisable`, emitting `X-XSS-Protection: 0` because obsolete browser filters can create security issues; `kOmitHeader` omits that header, while Content Security Policy remains the modern content control.
 
 ## HTTP Protocol Library
 
 `ruvia::http` can be used without the runtime or Web framework. It provides
 HTTP message types and helpers, HTTP/1 request and response parsing/writing,
-the server/client-role `Http2Connection` state machine, HPACK, WebSocket
-protocol state, multipart parsing, SSE formatting, range and
-conditional-request helpers, cookies, content negotiation, redirects, and
-content decoding.
+multipart parsing, range and conditional-request helpers, cookies, content
+negotiation, redirects, and content decoding. The supported protocol-driver
+entry points are `<ruvia/http/Http2Connection.h>` and
+`<ruvia/http/Http2Framing.h>` for HTTP/2, `<ruvia/http/Hpack.h>` for HPACK,
+and `<ruvia/http/WebSocketServerConnection.h>` for the server-side WebSocket
+driver and its typed events. The WebSocket driver accepts masked client frames
+and emits unmasked server frames; it does not claim a client role. SSE messages
+are formatted through `ruvia::formatSseMessage()` from
+`<ruvia/http/Sse.h>`.
 
 The library is sans-I/O: callers feed bytes, consume typed results/events, and drive
 transport I/O themselves. It contains no App, Context, Router, socket,
@@ -818,11 +838,21 @@ integration. Content-Encoding parsing distinguishes identity, one supported
 coding, and an unsupported coding stack; Web request decoding reports the
 latter as HTTP 415.
 
+`HttpRequest` preserves `scheme()`, `authority()`, and `targetForm()` alongside
+the original target. Its header view is protocol-semantic rather than a raw
+wire block: HTTP/1 target authority can replace Host, while HTTP/2 pseudo-fields
+are exposed separately and Cookie fields are coalesced. Query lookup is explicit:
+`lastRawQueryValue()` compares encoded keys, returns the encoded value, performs
+no form-style `+` conversion, and chooses the last duplicate.
+
 Borrowed outbound-client models say so in their names: `HttpOriginView`,
 `HttpClientRequestView`, `HttpClientRequestContentView`, and
 `HttpClientRequestBytesView`. Their referenced storage must remain alive until
 the external sans-I/O driver finishes using it; response-head values remain
 owned PMR results.
+
+Headers below `ruvia/http/detail/` are internal component contracts used by
+Ruvia's own targets and are not a supported application API.
 
 ## License
 

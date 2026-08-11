@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ruvia/web/detail/db/DbConfigValidation.h"
@@ -211,23 +212,25 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     using ruvia::detail::validateDbConfig;
     using std::chrono::milliseconds;
 
-    static_assert(std::same_as<decltype(DbConfig{}.connectTimeout), std::optional<milliseconds>>);
-    static_assert(std::same_as<decltype(DbConfig{}.readTimeout), std::optional<milliseconds>>);
-    static_assert(std::same_as<decltype(DbConfig{}.writeTimeout), std::optional<milliseconds>>);
-    static_assert(std::same_as<decltype(DbConfig{}.queryTimeout), std::optional<milliseconds>>);
-    static_assert(std::same_as<decltype(DbConfig{}.acquireTimeout), std::optional<milliseconds>>);
+    static_assert(!std::default_initializable<DbConfig>);
+    static_assert(std::same_as<decltype(std::declval<DbConfig&>().connectTimeout), std::optional<milliseconds>>);
+    static_assert(std::same_as<decltype(std::declval<DbConfig&>().readTimeout), std::optional<milliseconds>>);
+    static_assert(std::same_as<decltype(std::declval<DbConfig&>().writeTimeout), std::optional<milliseconds>>);
+    static_assert(std::same_as<decltype(std::declval<DbConfig&>().queryTimeout), std::optional<milliseconds>>);
+    static_assert(std::same_as<decltype(std::declval<DbConfig&>().acquireTimeout), std::optional<milliseconds>>);
 
-    // A default config is valid; absent timeouts are disabled explicitly.
-    RUVIA_CHECK(!throwsOn([] { validateDbConfig(DbConfig{}); }));
+    // A driver factory supplies the backend's valid default port; absent
+    // timeouts are disabled explicitly.
+    RUVIA_CHECK(!throwsOn([] { validateDbConfig(DbConfig::mariaDb()); }));
 
     // Host and port each have a required-value guard.
     RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
+        auto c = DbConfig::mariaDb();
         c.host.clear();
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
+        auto c = DbConfig::mariaDb();
         c.port = 0;
         validateDbConfig(c);
     }));
@@ -235,52 +238,52 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     // Every configured timeout must be positive. Zero cannot silently recover the
     // former sentinel convention, and the whole fold must validate every field.
     RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
+        auto c = DbConfig::mariaDb();
         c.connectTimeout = milliseconds(0);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
+        auto c = DbConfig::mariaDb();
         c.readTimeout = milliseconds(0);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
+        auto c = DbConfig::mariaDb();
         c.writeTimeout = milliseconds(0);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
+        auto c = DbConfig::mariaDb();
         c.queryTimeout = milliseconds(0);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
+        auto c = DbConfig::mariaDb();
         c.acquireTimeout = milliseconds(0);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
+        auto c = DbConfig::mariaDb();
         c.connectTimeout = milliseconds(-1);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
+        auto c = DbConfig::mariaDb();
         c.readTimeout = milliseconds(-1);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
+        auto c = DbConfig::mariaDb();
         c.writeTimeout = milliseconds(-1);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
+        auto c = DbConfig::mariaDb();
         c.queryTimeout = milliseconds(-1);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
+        auto c = DbConfig::mariaDb();
         c.acquireTimeout = milliseconds(-1);
         validateDbConfig(c);
     }));

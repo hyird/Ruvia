@@ -493,8 +493,10 @@ private:
 
 class CancelledRedisBlockServer final {
 public:
-    CancelledRedisBlockServer()
+    explicit CancelledRedisBlockServer(bool expectReconnect = true)
         : acceptor_(ioContext_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+          port_(acceptor_.local_endpoint().port()),
+          expectReconnect_(expectReconnect),
           commandReadFuture_(commandRead_.get_future()),
           thread_([this] { run(); }) {}
 
@@ -507,7 +509,7 @@ public:
     }
 
     [[nodiscard]] std::uint16_t port() const {
-        return acceptor_.local_endpoint().port();
+        return port_;
     }
 
     void waitUntilBlocked() {
@@ -544,6 +546,9 @@ private:
             if (!closedError) {
                 throw std::runtime_error("cancelled redis socket remained open");
             }
+            if (!expectReconnect_) {
+                return;
+            }
 
             asio::ip::tcp::socket reconnected(ioContext_);
             acceptor_.accept(reconnected);
@@ -564,6 +569,8 @@ private:
 
     asio::io_context ioContext_;
     asio::ip::tcp::acceptor acceptor_;
+    std::uint16_t port_;
+    bool expectReconnect_;
     std::promise<void> commandRead_;
     std::future<void> commandReadFuture_;
     std::thread thread_;
@@ -842,6 +849,58 @@ int testRedisCancellationDiscardsSocketAndReconnects() {
     return result;
 }
 
+int testRedisAmbientCancellationWinsSameWorkerServiceClose() {
+    CancelledRedisBlockServer server(false);
+    auto redis = ruvia::RedisConfig{};
+    redis.host = "127.0.0.1";
+    redis.port = server.port();
+    redis.poolSizePerWorker = 1;
+
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 4});
+    auto options = ruvia::DataAccessOptions{};
+    options.redis.push_back(ruvia::DataAccessRedisConfig{"default", std::move(redis)});
+    ruvia::DataAccessService service(loops.loop(0), std::move(options));
+
+    auto ready = service.connect();
+    loops.start();
+    ready.get();
+
+    std::promise<int> completed;
+    auto completedFuture = completed.get_future();
+    const auto operation = service.post([&completed](ruvia::DataAccessContext& context) -> ruvia::Task<void> {
+        const std::array streams{ruvia::RedisStreamReadView{.stream = "events", .id = ">"}};
+        try {
+            ruvia::RedisXReadGroupOptions readOptions;
+            readOptions.block = ruvia::RedisBlockWait::indefinitely();
+            (void)co_await context.redis().xreadGroup("g", "c", streams, std::move(readOptions));
+            completed.set_value(1);
+        } catch (const ruvia::RedisError& error) {
+            completed.set_value(error.code() == ruvia::RedisError::Code::kCancelled ? 0 : 2);
+        }
+    });
+    if (!operation.accepted()) {
+        loops.stop();
+        loops.join();
+        return 3;
+    }
+
+    server.waitUntilBlocked();
+    const auto close = service.post([&service](ruvia::DataAccessContext&) -> ruvia::Task<void> {
+        service.close();
+        co_return;
+    });
+    if (!close.accepted()) {
+        loops.stop();
+        loops.join();
+        return 4;
+    }
+
+    const auto result = completedFuture.get();
+    loops.stop();
+    loops.join();
+    return result;
+}
+
 int testRedisBlockingPoolDoesNotInheritOrdinaryCommandTimeout() {
     DelayedRedisBlockReplyServer server;
     auto redis = ruvia::RedisConfig{};
@@ -1023,11 +1082,14 @@ int main() {
         if (const auto result = testRedisCancellationDiscardsSocketAndReconnects(); result != 0) {
             return 98 + result;
         }
-        if (const auto result = testRedisBlockingPoolDoesNotInheritOrdinaryCommandTimeout(); result != 0) {
+        if (const auto result = testRedisAmbientCancellationWinsSameWorkerServiceClose(); result != 0) {
             return 99 + result;
         }
-        if (const auto result = testRedisConnectTimeoutIncludesStartupCommands(); result != 0) {
+        if (const auto result = testRedisBlockingPoolDoesNotInheritOrdinaryCommandTimeout(); result != 0) {
             return 100 + result;
+        }
+        if (const auto result = testRedisConnectTimeoutIncludesStartupCommands(); result != 0) {
+            return 101 + result;
         }
 #endif
         return 0;

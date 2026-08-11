@@ -304,7 +304,7 @@ WorkerId EventLoop::id() const noexcept {
     return state_ ? state_->handle.id() : 0;
 }
 
-asio::io_context& EventLoop::ioContext() const {
+asio::io_context& EventLoop::ioContext() const& {
     if (!state_ || state_->ioContext == nullptr) {
         if (state_) {
             throw std::logic_error("event loop execution context is detached");
@@ -326,6 +326,9 @@ EventLoopStopRegistration EventLoop::registerStopCallback(MoveOnlyFunction<void(
     if (!state_) {
         throw std::logic_error("cannot register a stop callback on an invalid event loop");
     }
+    if (!callback) {
+        throw std::invalid_argument("event loop stop callback must be callable");
+    }
     auto listener = std::make_shared<EventLoopStopListener>(state_->handle, std::move(callback), state_->failureSink);
     detail::WorkerHandleAccess::registerShutdownListener(state_->handle, listener);
     return EventLoopStopRegistration(std::move(listener));
@@ -342,7 +345,7 @@ EventLoopAttachment::EventLoopAttachment(EventLoopAttachment&& other) noexcept
     : state_(std::move(other.state_)) {}
 
 bool EventLoopAttachment::valid() const noexcept {
-    return state_ != nullptr;
+    return state_ != nullptr && state_->handle.valid();
 }
 
 EventLoop EventLoopAttachment::loop() const noexcept {
@@ -491,9 +494,7 @@ void EventLoopPool::join() {
     if (std::ranges::any_of(impl_->loops, [](const auto& loop) { return loop->dispatcher->isCurrent(); })) {
         throw std::logic_error("cannot join an event loop pool from one of its workers");
     }
-    if (impl_->lifecycle.state() == detail::RuntimeLifecycle::State::kReady) {
-        impl_->stop();
-    }
+    impl_->stop();
     if (impl_->lifecycle.state() == detail::RuntimeLifecycle::State::kStopping) {
         try {
             // stop() before start() still owes accepted mailbox work and

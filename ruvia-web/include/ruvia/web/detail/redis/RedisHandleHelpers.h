@@ -56,8 +56,7 @@ void appendRedisScanOptions(std::pmr::vector<std::pmr::string>& args, const Redi
 [[nodiscard]] RedisZScanResult parseRedisZScanResult(const RedisValue& value, std::pmr::memory_resource* resource);
 
 [[nodiscard]] std::pmr::vector<std::pmr::string> redisEvalArgs(std::string_view command, std::string_view script, std::span<const std::string_view> keys, std::span<const std::string_view> argv, std::pmr::memory_resource* resource);
-[[nodiscard]] std::pmr::vector<std::pmr::string> redisBlockingPopArgs(std::string_view command, std::span<const std::string_view> keys, std::chrono::seconds timeout, std::pmr::memory_resource* resource);
-[[nodiscard]] std::optional<std::chrono::milliseconds> redisBlockingPopClientTimeout(std::chrono::seconds timeout) noexcept;
+[[nodiscard]] std::pmr::vector<std::pmr::string> redisBlockingPopArgs(std::string_view command, std::span<const std::string_view> keys, RedisBlockWait wait, std::pmr::memory_resource* resource);
 [[nodiscard]] std::optional<RedisKeyValue> parseRedisBlockingPopReply(const RedisValue& value, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::vector<std::pmr::string> redisXReadGroupArgs(std::string_view group, std::string_view consumer, std::span<const RedisStreamReadView> streams, const RedisXReadGroupOptions& options, std::pmr::memory_resource* resource);
 [[nodiscard]] std::optional<RedisXReadGroupResult> parseRedisXReadGroupReply(const RedisValue& value, std::pmr::memory_resource* resource);

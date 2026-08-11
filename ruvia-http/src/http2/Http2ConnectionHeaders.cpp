@@ -15,7 +15,7 @@ namespace ruvia::detail {
 
 HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction) {
     Http2HeaderDecodeContext context{stream, &streamTransaction};
-    const auto result = decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction);
+    const auto result = decoder_.decode(stream.remoteHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
@@ -84,7 +84,7 @@ HeaderDecodeStatus Http2Connection::decodeInitialHeaderBlock(Http2StreamState& s
 HeaderDecodeStatus Http2Connection::decodeRefusedHeaderBlock(Http2StreamState& stream, HpackDecoder::DecodeTransaction& hpackTransaction) {
     Http2StreamHeaderDecodeTransaction transaction{stream, true};
     Http2HeaderDecodeContext context{stream, &transaction};
-    const auto result = decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction);
+    const auto result = decoder_.decode(stream.remoteHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction);
     return http2ClassifyHeaderDecodeResult(result);
 }
 
@@ -93,7 +93,7 @@ HeaderDecodeStatus Http2Connection::decodeDiscardedHeaderBlock(Http2StreamState&
     // full because HPACK's dynamic table is connection-scoped. Keep the decompressed
     // field-list budget, but deliberately avoid mutating request/response state.
     Http2HeaderDecodeContext context{stream};
-    const auto result = decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2AccumulateHeaderListBytes(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction);
+    const auto result = decoder_.decode(stream.remoteHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2AccumulateHeaderListBytes(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction);
     return http2ClassifyHeaderDecodeResult(result);
 }
 
@@ -183,7 +183,7 @@ HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream,
     // leave the decoded stream half-committed without its message end.
     reserveEventSlots(1);
     Http2HeaderDecodeContext context{stream, &streamTransaction};
-    const auto result = role_ == Http2Role::kServer ? decoder_.decode(stream.requestHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedRequestTrailer(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction) : decoder_.decode(stream.requestHeaderBlock(), &context, http2OnDecodedResponseTrailer, hpackTransaction);
+    const auto result = role_ == Http2Role::kServer ? decoder_.decode(stream.remoteHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedRequestTrailer(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction) : decoder_.decode(stream.remoteHeaderBlock(), &context, http2OnDecodedResponseTrailer, hpackTransaction);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
@@ -241,7 +241,10 @@ void Http2Connection::emitRequestHeaders(Http2StreamState& stream) {
     // every non-terminal request would hide later allocation-failure retries.
     const bool terminalEvent = http2RemotePeerHalfClosed(stream) && !(role_ == Http2Role::kServer && stream.tunnel().pending() != nullptr);
     reserveEventSlots(terminalEvent ? 2 : 1);
-    events_.push_back(Http2Event::messageHead(stream.id()));
+    const auto requestContentSignal = stream.requestContentCanceled()
+        ? std::optional<HttpClientRequestContentSignal>(HttpClientRequestContentSignal::kExchangeComplete)
+        : std::nullopt;
+    events_.push_back(Http2Event::messageHead(stream.id(), requestContentSignal));
     if (role_ == Http2Role::kServer && stream.tunnel().pending() != nullptr) {
         // CONNECT has no request content, but that fact alone says nothing about the
         // peer send half: it can remain open for a tunnel or already carry END_STREAM.

@@ -57,6 +57,16 @@ RUVIA_TEST(unified_model_required_and_optional_fields_are_structural) {
     RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{1});
     RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("requiredValue"));
     RUVIA_CHECK(!ruvia::fromJson<RequiredOptionalModel>("{}").has_value());
+
+    RUVIA_CHECK(!ruvia::FormBody<RequiredOptionalModel>::parse("", std::pmr::get_default_resource()).has_value());
+    auto partialForm = ruvia::FormBody<RequiredOptionalModel>::parsePartial("", std::pmr::get_default_resource());
+    RUVIA_CHECK(partialForm.has_value());
+    if (partialForm) {
+        Validator formValidator;
+        ruvia::detail::ModelValidationAccess::validateStructure(*partialForm, {}, formValidator);
+        RUVIA_CHECK_EQ(formValidator.issues().size(), std::size_t{1});
+        RUVIA_CHECK_EQ(formValidator.issues()[0].field(), std::string_view("requiredValue"));
+    }
 }
 
 RUVIA_TEST(validator_required_flags_absent_values) {

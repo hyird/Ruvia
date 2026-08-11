@@ -1,18 +1,10 @@
-// Drogon-style outbound HTTP client usage from a Ruvia Controller.
+// Outbound HTTP client usage from a Ruvia Controller.
 
 #include <chrono>
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
-#include "ruvia/web/HttpClient.h"
-
-const auto backendClient = [] {
-    ruvia::HttpClientConfig config;
-    config.protocol = ruvia::HttpClientProtocol::kNegotiate;
-    config.connectionsPerWorker = 4;
-    config.cookiesEnabled = true;
-    return ruvia::HttpClient::newHttpClient("https://api.example.com", std::move(config));
-}();
+#include "ruvia/web/HttpClientHandle.h"
 
 class GatewayController final : public ruvia::Controller<GatewayController> {
 public:
@@ -25,23 +17,23 @@ public:
 private:
     ruvia::Task<ruvia::HttpResponse> forward(ruvia::Context& c) {
         const auto incomingBody = co_await c.req().text();
-        auto request = backendClient->newRequest();
+        auto client = c.httpClient("backend");
+        auto request = client.newRequest();
         request.setMethod(ruvia::HttpKnownMethod::kPost)
-            .setPath("/v1/orders")
-            .setContentTypeString(c.req().header("content-type").value_or("application/octet-stream"))
+            .setTarget("/v1/orders")
+            .setContentType(c.req().header("content-type").value_or("application/octet-stream"))
             .setBody(incomingBody);
         if (const auto authorization = c.req().header("authorization")) {
             request.addHeader("authorization", *authorization);
         }
 
         try {
-            auto operation = backendClient->sendRequest(std::move(request), {
+            auto operation = client.sendRequest(std::move(request), {
                 .timeout = std::chrono::seconds(5),
-                .stopToken = c.stopToken(),
             });
             auto response = co_await std::move(operation);
-            c.status(response.statusCode());
-            if (const auto contentType = response.getHeader("content-type")) {
+            c.status(response.status());
+            if (const auto contentType = response.header("content-type")) {
                 c.header("content-type", *contentType);
             }
             co_return c.body(response.body());
@@ -55,7 +47,14 @@ private:
 };
 
 int main() {
+    ruvia::HttpClientConfig backend;
+    backend.host = "api.example.com";
+    backend.scheme = ruvia::HttpScheme::kHttps;
+    backend.protocol = ruvia::HttpClientProtocol::kNegotiate;
+    backend.connectionsPerWorker = 4;
+    backend.cookiesEnabled = true;
     ruvia::app()
         .setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8080)})
+        .useHttpClient("backend", std::move(backend))
         .run();
 }

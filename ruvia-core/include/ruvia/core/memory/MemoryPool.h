@@ -29,12 +29,17 @@ public:
     WorkerMemory& operator=(const WorkerMemory&) = delete;
 
     template <typename T = std::byte>
-    [[nodiscard]] std::pmr::polymorphic_allocator<T> allocator() noexcept {
+    [[nodiscard]] std::pmr::polymorphic_allocator<T> allocator() & noexcept {
         return std::pmr::polymorphic_allocator<T>(&resource_);
     }
 
-    [[nodiscard]] std::pmr::memory_resource* resource() noexcept;
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
+    template <typename T = std::byte>
+    [[nodiscard]] std::pmr::polymorphic_allocator<T> allocator() && = delete;
+
+    [[nodiscard]] std::pmr::memory_resource* resource() & noexcept;
+    [[nodiscard]] std::pmr::memory_resource* resource() const& noexcept;
+    [[nodiscard]] std::pmr::memory_resource* resource() && = delete;
+    [[nodiscard]] std::pmr::memory_resource* resource() const&& = delete;
     [[nodiscard]] std::size_t requestInitialBufferBytes() const noexcept;
 
 private:

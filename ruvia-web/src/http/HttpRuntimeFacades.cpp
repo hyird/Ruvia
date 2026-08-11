@@ -252,7 +252,7 @@ ScopedOperation<void> WebSocket::writeOwned(WebSocketOpcode opcode, std::pmr::st
 ScopedOperation<void> SseWriter::write(const SseMessage& message) {
     auto& streamWriter = writer();
     std::pmr::string frame(detail::processResource());
-    detail::formatSseMessage(frame, message);
+    formatSseMessage(frame, message);
     return streamWriter.writeOwned(std::move(frame));
 }
 

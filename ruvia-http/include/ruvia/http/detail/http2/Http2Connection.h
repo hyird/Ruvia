@@ -59,6 +59,7 @@
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 #include "ruvia/http/HttpInterimResponse.h"
+#include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
@@ -257,6 +258,9 @@ enum class Http2DataSubmitStatus : std::uint8_t {
     kAccepted,
     kQueued,
     kBackpressured,
+    // Expect: 100-continue still gates this request body. The caller retains
+    // the complete input and retries after a Continue signal or explicit release.
+    kExpectationPending,
     // The stream disappeared or was reset; the caller drops the input.
     kClosed,
     // The stream exists but its local message is not in the body-open phase.
@@ -265,6 +269,12 @@ enum class Http2DataSubmitStatus : std::uint8_t {
     kContentLengthExceeded,
     // END_STREAM was requested before the declared content length would be met.
     kContentLengthIncomplete
+};
+
+enum class Http2RequestContentReleaseStatus : std::uint8_t {
+    kReleased,
+    kNotPending,
+    kClosed,
 };
 
 enum class Http2FinishSubmitStatus : std::uint8_t {
@@ -530,20 +540,20 @@ public:
     // schemes use the complete RFC 3986 authority grammar and may carry an empty
     // path. Asterisk-form OPTIONS itself has no authority component, but a direct
     // HTTP/2 sender may still carry request authority in :authority.
-    [[nodiscard]] Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view method, std::string_view scheme, std::optional<std::string_view> authority, std::string_view path, std::span<const HttpHeaderView> headers, Http2RequestContent content);
+    [[nodiscard]] Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view method, std::string_view scheme, std::optional<std::string_view> authority, std::string_view path, std::span<const HttpHeaderView> headers, Http2RequestContent content, HttpClientRequestExpectation expectation = HttpClientRequestExpectation::kNone);
     // The submitted head is queued for later HPACK encoding, so every view must
     // outlive the call; a temporary owning string would be destroyed while the
     // borrowed head is still pending. Owning temporaries are rejected at
     // compile time, one deleted overload per view parameter.
     template <detail::HttpTemporaryOwningCharString Method>
-    Http2RequestHeadSubmitResult submitRegularRequestHead(Method&&, std::string_view, std::optional<std::string_view>, std::string_view, std::span<const HttpHeaderView>, Http2RequestContent) = delete;
+    Http2RequestHeadSubmitResult submitRegularRequestHead(Method&&, std::string_view, std::optional<std::string_view>, std::string_view, std::span<const HttpHeaderView>, Http2RequestContent, HttpClientRequestExpectation = HttpClientRequestExpectation::kNone) = delete;
     template <detail::HttpTemporaryOwningCharString Scheme>
-    Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view, Scheme&&, std::optional<std::string_view>, std::string_view, std::span<const HttpHeaderView>, Http2RequestContent) = delete;
+    Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view, Scheme&&, std::optional<std::string_view>, std::string_view, std::span<const HttpHeaderView>, Http2RequestContent, HttpClientRequestExpectation = HttpClientRequestExpectation::kNone) = delete;
     template <typename Authority>
         requires detail::HttpTemporaryOwningCharString<Authority>
-    Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view, std::string_view, std::optional<Authority>&&, std::string_view, std::span<const HttpHeaderView>, Http2RequestContent) = delete;
+    Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view, std::string_view, std::optional<Authority>&&, std::string_view, std::span<const HttpHeaderView>, Http2RequestContent, HttpClientRequestExpectation = HttpClientRequestExpectation::kNone) = delete;
     template <detail::HttpTemporaryOwningCharString Path>
-    Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view, std::string_view, std::optional<std::string_view>, Path&&, std::span<const HttpHeaderView>, Http2RequestContent) = delete;
+    Http2RequestHeadSubmitResult submitRegularRequestHead(std::string_view, std::string_view, std::optional<std::string_view>, Path&&, std::span<const HttpHeaderView>, Http2RequestContent, HttpClientRequestExpectation = HttpClientRequestExpectation::kNone) = delete;
     // Standard CONNECT uses only :method and an authority-form :authority. Its
     // initial HEADERS never ends the stream; DATA is gated until a final 2xx response.
     [[nodiscard]] Http2RequestHeadSubmitResult submitConnectRequestHead(std::string_view authority, std::span<const HttpHeaderView> headers = {});
@@ -570,6 +580,9 @@ public:
     // connection/stream credit. WINDOW_UPDATE is emitted only at the shared
     // half-window threshold. Safe when the stream is gone.
     void releaseReceivedData(std::uint32_t streamId);
+    // Runtime timeout/manual release for an Expect-gated request body. A later
+    // 100 response remains observable but emits no duplicate Continue signal.
+    [[nodiscard]] Http2RequestContentReleaseStatus releaseRequestContent(std::uint32_t streamId) noexcept;
     // True while submitData left a window-blocked remainder queued for this stream
     // (the owner waits for the drain report before pulling its next body chunk).
     [[nodiscard]] bool hasQueuedData(std::uint32_t streamId) const noexcept;

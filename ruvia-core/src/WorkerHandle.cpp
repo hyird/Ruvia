@@ -27,6 +27,9 @@ WorkerId WorkerHandle::id() const noexcept {
 }
 
 PostResult WorkerHandle::postTask(MoveOnlyFunction<void()> task) const {
+    if (!task) {
+        throw std::invalid_argument("worker post requires a callable task");
+    }
     return dispatcher_ ? dispatcher_->post(std::move(task)) : PostResult::reject(PostStatus::kWorkerStopping, std::move(task));
 }
 
@@ -40,6 +43,11 @@ void detail::WorkerHandleAccess::defer(const WorkerHandle& worker, MoveOnlyFunct
         throw std::runtime_error("worker stopped before internal continuation was scheduled");
     }
     dispatcher->defer(std::move(task));
+}
+
+bool detail::WorkerHandleAccess::deferIfAttached(const WorkerHandle& worker, MoveOnlyFunction<void()> task) {
+    const auto& dispatcher = worker.dispatcher_;
+    return dispatcher && dispatcher->deferIfAttached(std::move(task));
 }
 
 void detail::WorkerHandleAccess::deferOrTerminate(const WorkerHandle& worker, MoveOnlyFunction<void()> task) noexcept {

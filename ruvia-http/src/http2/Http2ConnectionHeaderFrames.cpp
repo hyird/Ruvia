@@ -281,7 +281,7 @@ bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::s
         }
     }
     const auto continuationCheckpoint = headerContinuation_.checkpoint();
-    const auto headerBlockCheckpoint = stream->requestHeaderBlock().size();
+    const auto headerBlockCheckpoint = stream->remoteHeaderBlock().size();
     const auto outputCheckpoint = output_.checkpoint();
     try {
         if (!http2AppendHeaderBlock(*stream, payload)) {
@@ -331,7 +331,7 @@ bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::s
         // compressed block prefix as well as the continuation latch so the fragment
         // is not decoded twice.
         output_.rollbackTo(outputCheckpoint);
-        stream->requestHeaderBlock().resize(headerBlockCheckpoint);
+        stream->remoteHeaderBlock().resize(headerBlockCheckpoint);
         headerContinuation_.restore(continuationCheckpoint);
         throw;
     }

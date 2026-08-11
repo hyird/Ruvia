@@ -8,10 +8,12 @@
 #include <optional>
 #include <variant>
 
-namespace ruvia::detail {
+namespace ruvia {
 
+namespace detail {
 class Http1ServerRequestParseState;
 class Http1ServerRequestParser;
+}  // namespace detail
 
 // Whether the runtime consumed the complete request message before attempting
 // to reuse its transport. This is a protocol lifecycle fact, not a product
@@ -93,8 +95,8 @@ public:
     }
 
 private:
-    friend class Http1ServerRequestParseState;
-    friend class Http1ServerRequestParser;
+    friend class detail::Http1ServerRequestParseState;
+    friend class detail::Http1ServerRequestParser;
 
     using Framing = std::variant<Http1RequestWithoutBody, Http1KnownLengthRequestBody, Http1ChunkedRequestBody>;
 
@@ -115,4 +117,4 @@ private:
     HttpRequestExpectations expectations_;
 };
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

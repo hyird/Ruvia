@@ -30,7 +30,7 @@ using ruvia::Http1ClosePolicy;
 using ruvia::detail::http1PlanResponseStream;
 using ruvia::Http1ClosePolicy;
 using ruvia::detail::Http1ServerRequestParser;
-using ruvia::detail::HttpUnsupportedExpectationPolicy;
+using ruvia::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::requestBodyByteLimit;
 using ruvia::detail::RequestBodyMode;
 using ruvia::detail::ResponseHeadBuffer;

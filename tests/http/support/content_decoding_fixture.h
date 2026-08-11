@@ -37,7 +37,7 @@ using ruvia::detail::decodeHttpContent;
 using ruvia::detail::decodeHttpRequestContent;
 using ruvia::detail::encodeHttpContent;
 using ruvia::detail::Http1ChunkedBodyDecoder;
-using ruvia::detail::Http1RequestBodyPlan;
+using ruvia::Http1RequestBodyPlan;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::HttpContentCoding;
 using ruvia::detail::httpContentCodingFromFieldValue;
@@ -52,9 +52,9 @@ using ruvia::detail::HttpEncodedContent;
 using ruvia::detail::HttpRequestContentDecodeProtocolFailure;
 using ruvia::detail::HttpRequestContentDecodeResult;
 using ruvia::detail::HttpRequestContentDecoderFailure;
-using ruvia::detail::HttpTransferCoding;
-using ruvia::detail::HttpTransferCodings;
-using ruvia::detail::HttpUnsupportedExpectationPolicy;
+using ruvia::HttpTransferCoding;
+using ruvia::HttpTransferCodings;
+using ruvia::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::TransferCodingDecodeNeedInput;
 using ruvia::detail::TransferCodingDecodeOutput;
 using ruvia::detail::TransferCodingDecodeProtocolFailure;
@@ -247,9 +247,9 @@ concept HasRequestTransferCodings = requires(const T& value) {
 
 template <typename T>
 concept HasValueSemanticRequestExpectations = requires(const T& value) {
-    { value.expectations() } -> std::same_as<ruvia::detail::HttpRequestExpectations>;
+    { value.expectations() } -> std::same_as<ruvia::HttpRequestExpectations>;
 } && requires(const T&& value) {
-    { std::move(value).expectations() } -> std::same_as<ruvia::detail::HttpRequestExpectations>;
+    { std::move(value).expectations() } -> std::same_as<ruvia::HttpRequestExpectations>;
 };
 
 template <typename T>
@@ -266,24 +266,24 @@ template <typename T>
 concept ExposesRvalueEncodeFailure = requires(const T&& result) { std::move(result).failure(); };
 
 static_assert(!std::default_initializable<Http1RequestBodyPlan>);
-static_assert(!std::constructible_from<Http1RequestBodyPlan, ruvia::detail::HttpRequestExpectations>);
-static_assert(!std::default_initializable<ruvia::detail::Http1RequestWithoutBody>);
-static_assert(!std::default_initializable<ruvia::detail::Http1KnownLengthRequestBody>);
-static_assert(!std::default_initializable<ruvia::detail::Http1ChunkedRequestBody>);
-static_assert(!std::constructible_from<ruvia::detail::Http1KnownLengthRequestBody, std::size_t>);
-static_assert(!std::constructible_from<ruvia::detail::Http1ChunkedRequestBody, HttpTransferCodings>);
+static_assert(!std::constructible_from<Http1RequestBodyPlan, ruvia::HttpRequestExpectations>);
+static_assert(!std::default_initializable<ruvia::Http1RequestWithoutBody>);
+static_assert(!std::default_initializable<ruvia::Http1KnownLengthRequestBody>);
+static_assert(!std::default_initializable<ruvia::Http1ChunkedRequestBody>);
+static_assert(!std::constructible_from<ruvia::Http1KnownLengthRequestBody, std::size_t>);
+static_assert(!std::constructible_from<ruvia::Http1ChunkedRequestBody, HttpTransferCodings>);
 static_assert(!HasPublicRequestBodyPlanFactories<Http1RequestBodyPlan>);
 static_assert(!HasRequestBodyMode<Http1RequestBodyPlan>);
 static_assert(!HasRequestContentLength<Http1RequestBodyPlan>);
 static_assert(!HasRequestTransferCodings<Http1RequestBodyPlan>);
-static_assert(HasRequestContentLength<ruvia::detail::Http1KnownLengthRequestBody>);
-static_assert(!HasRequestContentLength<ruvia::detail::Http1ChunkedRequestBody>);
-static_assert(HasRequestTransferCodings<ruvia::detail::Http1ChunkedRequestBody>);
+static_assert(HasRequestContentLength<ruvia::Http1KnownLengthRequestBody>);
+static_assert(!HasRequestContentLength<ruvia::Http1ChunkedRequestBody>);
+static_assert(HasRequestTransferCodings<ruvia::Http1ChunkedRequestBody>);
 static_assert(HasValueSemanticRequestExpectations<Http1RequestBodyPlan>);
-static_assert(!HasRequestTransferCodings<ruvia::detail::Http1KnownLengthRequestBody>);
-static_assert(std::same_as<decltype(std::declval<const Http1RequestBodyPlan&>().withoutBody()), const ruvia::detail::Http1RequestWithoutBody*>);
-static_assert(std::same_as<decltype(std::declval<const Http1RequestBodyPlan&>().knownLength()), const ruvia::detail::Http1KnownLengthRequestBody*>);
-static_assert(std::same_as<decltype(std::declval<const Http1RequestBodyPlan&>().chunked()), const ruvia::detail::Http1ChunkedRequestBody*>);
+static_assert(!HasRequestTransferCodings<ruvia::Http1KnownLengthRequestBody>);
+static_assert(std::same_as<decltype(std::declval<const Http1RequestBodyPlan&>().withoutBody()), const ruvia::Http1RequestWithoutBody*>);
+static_assert(std::same_as<decltype(std::declval<const Http1RequestBodyPlan&>().knownLength()), const ruvia::Http1KnownLengthRequestBody*>);
+static_assert(std::same_as<decltype(std::declval<const Http1RequestBodyPlan&>().chunked()), const ruvia::Http1ChunkedRequestBody*>);
 static_assert(!std::default_initializable<HttpContentDecodeResult>);
 static_assert(!std::copy_constructible<HttpContentDecodeResult>);
 static_assert(std::move_constructible<HttpContentDecodeResult>);

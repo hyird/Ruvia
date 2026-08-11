@@ -99,6 +99,22 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer, std::si
     }
     HttpRequestAccess::setPath(state.request, targetView.path);
     HttpRequestAccess::setQueryString(state.request, targetView.query);
+    HttpRequestAccess::setScheme(state.request, targetView.scheme);
+    HttpRequestAccess::setAuthority(state.request, targetView.authority);
+    switch (targetView.form) {
+        case detail::HttpRequestTargetForm::kOrigin:
+            HttpRequestAccess::setTargetForm(state.request, ::ruvia::HttpRequestTargetForm::kOrigin);
+            break;
+        case detail::HttpRequestTargetForm::kAbsolute:
+            HttpRequestAccess::setTargetForm(state.request, ::ruvia::HttpRequestTargetForm::kAbsolute);
+            break;
+        case detail::HttpRequestTargetForm::kAuthority:
+            HttpRequestAccess::setTargetForm(state.request, ::ruvia::HttpRequestTargetForm::kAuthority);
+            break;
+        case detail::HttpRequestTargetForm::kAsterisk:
+            HttpRequestAccess::setTargetForm(state.request, ::ruvia::HttpRequestTargetForm::kAsterisk);
+            break;
+    }
 
     if (protocolVersion == HttpProtocolVersion::kHttp11 && block.hostHeaderIndex < 0) {
         return fail(HttpParseError::kMissingHost);

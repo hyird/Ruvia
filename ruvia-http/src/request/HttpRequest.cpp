@@ -39,8 +39,15 @@ std::optional<std::string_view> HttpRequest::header(std::string_view name) const
     return std::nullopt;
 }
 
-std::optional<std::string_view> HttpRequest::query(std::string_view name) const noexcept {
-    return detail::findUrlEncodedValue(queryString_, name, detail::UrlDecodeMode::kForm);
+std::optional<std::string_view> HttpRequest::lastRawQueryValue(std::string_view rawName) const noexcept {
+    std::optional<std::string_view> result;
+    (void)detail::visitUrlEncodedPairs(queryString_, [&](std::string_view name, std::string_view value) noexcept {
+        if (name == rawName) {
+            result = value;
+        }
+        return true;
+    });
+    return result;
 }
 
 std::optional<std::string_view> HttpRequest::cookie(std::string_view name) const noexcept {

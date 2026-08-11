@@ -23,27 +23,37 @@ detail::MariaDbPool::ConnectionSlot::~ConnectionSlot() {
 detail::MariaDbPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept = default;
 detail::MariaDbPool::ConnectionSlot& detail::MariaDbPool::ConnectionSlot::operator=(ConnectionSlot&&) noexcept = default;
 
-detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, DbConfigStorage config, std::pmr::memory_resource* resource)
+detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, DbConfigStorage config, std::pmr::memory_resource* resource, const WorkerHandle* worker)
     : ioContext_(ioContext),
       config_(std::move(config)),
       resource_(detail::pmrResourceOrDefault(resource)),
       slots_(resource_),
-      scheduler_(1, resource_) {
+      scheduler_(1, resource_),
+      worker_(worker == nullptr ? WorkerHandle{} : *worker) {
     detail::validateDbConfig(config_);
     if (config_.driver != DbDriver::kMariaDb) {
         throw std::invalid_argument("MariaDB pool requires the MariaDB driver");
     }
     slots_.reserve(1);
     slots_.emplace_back(ioContext_, resource_);
+    if (worker_.valid()) {
+        slots_.back().cancellationState = makeDbOperationCancellationState(worker_, *this, 0);
+    }
 }
 
 detail::MariaDbPool::~MariaDbPool() {
+    for (auto& slot : slots_) {
+        if (slot.cancellationState != nullptr) {
+            slot.cancellationState->detach(this);
+        }
+    }
     closeNow();
 }
 
 Task<void> detail::MariaDbPool::connect() {
+    const OperationTimeout operationTimeout(std::nullopt);
     for (auto& slot : slots_) {
-        co_await connectUnlocked(slot);
+        co_await connectUnlocked(slot, operationTimeout);
     }
 }
 
@@ -55,9 +65,8 @@ void detail::MariaDbPool::closeNow() noexcept {
 }
 
 void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
-    if (config_.acquireTimeout.has_value()) {
-        scheduler_.scanDeadlines(now);
-    }
+    // A per-operation timeout may constrain acquire even when DbConfig does not.
+    scheduler_.scanDeadlines(now);
 
     for (auto& slot : slots_) {
         const auto kind = slot.deadline.expire(now);
@@ -79,12 +88,12 @@ void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point no
     }
 }
 
-bool detail::MariaDbPool::hasAnyTimeout() const noexcept {
-    return detail::dbConfigHasAnyTimeout(config_);
+bool detail::MariaDbPool::needsDeadlineScan() const noexcept {
+    return true;
 }
 
-Task<std::size_t> detail::MariaDbPool::acquireSlot() {
-    return detail::acquireDbSlot(*this);
+Task<std::size_t> detail::MariaDbPool::acquireSlot(const OperationTimeout& timeout, StopToken stopToken) {
+    return detail::acquireDbSlot(*this, timeout, std::move(stopToken));
 }
 
 void detail::MariaDbPool::releaseSlot(std::size_t slot) noexcept {
@@ -102,12 +111,10 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
                 handle.resume();
             }
         } else if (slot.waitSocket != nullptr) {
-            // Keep the wrapper and native driver connection alive until every
-            // queued wait completion has run. The resumed coroutine observes
-            // closeRequested before calling a MariaDB *_cont function.
-            if (!slot.waitSocket->release()) {
-                std::terminate();
-            }
+            // Keep the wrapper and driver connection alive until every queued
+            // wait completion has run. Cancelling the ASIO-owned duplicate
+            // wakes the coroutine without touching MariaDB's original socket.
+            slot.waitSocket->cancel();
         }
         return;
     }
@@ -122,11 +129,9 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
         }
     }
     clearSlotDeadline(slot);
-    // Detach the fd from ASIO before mysql_close() closes it.
+    // Close ASIO's duplicate before MariaDB closes its original socket.
     if (slot.waitSocket != nullptr) {
-        if (!slot.waitSocket->release()) {
-            std::terminate();
-        }
+        slot.waitSocket->reset();
         slot.waitSocket.reset();
     }
     if (slot.connection != nullptr) {
@@ -135,6 +140,24 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
     }
     slot.connected = false;
     slot.closeRequested = false;
+}
+
+void detail::MariaDbPool::cancelOperation(std::size_t slotIndex, std::uint64_t generation) noexcept {
+    if (slotIndex >= slots_.size()) {
+        std::terminate();
+    }
+    auto& slot = slots_[slotIndex];
+    if (slot.operationGeneration != generation) {
+        return;
+    }
+    slot.abortReason = DbSlotAbortReason::kCancelled;
+    closeSlot(slot);
+}
+
+void detail::MariaDbPool::throwIfCancelled(const ConnectionSlot& slot) const {
+    if (slot.abortReason == DbSlotAbortReason::kCancelled) {
+        throw DbError(DbError::Code::kCancelled, "database operation cancelled");
+    }
 }
 
 void detail::MariaDbPool::setSlotDeadline(ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind) noexcept {

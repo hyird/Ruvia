@@ -112,24 +112,22 @@ static_assert(!std::default_initializable<ruvia::Http1ClientRequestContentPlan>)
 static_assert(!std::default_initializable<ruvia::Http1ClientRequestWithoutContent>);
 static_assert(!std::default_initializable<ruvia::Http1ClientImmediateRequestContent>);
 static_assert(!std::default_initializable<ruvia::Http1ClientContinueGatedRequestContent>);
-static_assert(!std::default_initializable<Http1ClientRequestWirePolicy>);
-constexpr auto kWithoutExpectation = Http1ClientRequestWirePolicy::withoutExpectation();
-constexpr auto kExpectContinue = Http1ClientRequestWirePolicy::expectContinue();
-static_assert(kWithoutExpectation.noExpectation() != nullptr);
-static_assert(kWithoutExpectation.continueExpectation() == nullptr);
-static_assert(kExpectContinue.noExpectation() == nullptr);
-static_assert(kExpectContinue.continueExpectation() != nullptr);
+static_assert(std::default_initializable<Http1ClientRequestWirePolicy>);
+constexpr auto kWithoutExpectation = Http1ClientRequestWirePolicy();
+constexpr auto kExpectContinue = Http1ClientRequestWirePolicy(Http1ClosePolicy::kAllowReuse, ruvia::HttpClientRequestExpectation::kContinue);
+static_assert(kWithoutExpectation.expectation() == ruvia::HttpClientRequestExpectation::kNone);
+static_assert(kExpectContinue.expectation() == ruvia::HttpClientRequestExpectation::kContinue);
 
 template <std::size_t N = 2048>
 struct PreparedFixture final {
     std::array<char, N> buffer{};
     ruvia::Http1ClientRequestPrepareResult result;
 
-    PreparedFixture(const HttpOriginView& origin, const HttpClientRequestView& request, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy::withoutExpectation())
+    PreparedFixture(const HttpOriginView& origin, const HttpClientRequestView& request, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy())
         : result(Http1ClientRequestWriter().prepare(origin, request, buffer, policy)) {}
 };
 
-[[nodiscard]] Http1ClientRequestPrepareError prepareError(const HttpClientRequestView& request, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy::withoutExpectation()) {
+[[nodiscard]] Http1ClientRequestPrepareError prepareError(const HttpClientRequestView& request, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy()) {
     std::array<char, 512> buffer;
     const auto result = Http1ClientRequestWriter().prepare(HttpOriginView::https("example.test"), request, buffer, policy);
     const auto* failure = result.failure();
@@ -151,7 +149,7 @@ RUVIA_TEST(http1_client_request_writer_emits_one_canonical_scatter_gather_plan) 
     request.headers = headers;
     request.content = HttpClientRequestContentView::bytes("payload");
 
-    PreparedFixture fixture(HttpOriginView::https("example.test"), request, Http1ClientRequestWirePolicy::expectContinue());
+    PreparedFixture fixture(HttpOriginView::https("example.test"), request, Http1ClientRequestWirePolicy(Http1ClosePolicy::kAllowReuse, ruvia::HttpClientRequestExpectation::kContinue));
     const auto* prepared = fixture.result.prepared();
     RUVIA_CHECK(prepared != nullptr);
     if (prepared == nullptr) {
@@ -422,7 +420,7 @@ RUVIA_TEST(http1_client_request_writer_enforces_expect_content_semantics) {
 
     HttpClientRequestView absent;
     absent.method = "POST";
-    PreparedFixture absentFixture(HttpOriginView::https("example.test"), absent, Http1ClientRequestWirePolicy::expectContinue());
+    PreparedFixture absentFixture(HttpOriginView::https("example.test"), absent, Http1ClientRequestWirePolicy(Http1ClosePolicy::kAllowReuse, ruvia::HttpClientRequestExpectation::kContinue));
     RUVIA_CHECK(absentFixture.result.failure() != nullptr);
     if (absentFixture.result.failure() != nullptr) {
         RUVIA_CHECK(absentFixture.result.failure()->error() == Http1ClientRequestPrepareError::kExpectationWithoutContent);
@@ -430,7 +428,7 @@ RUVIA_TEST(http1_client_request_writer_enforces_expect_content_semantics) {
 
     HttpClientRequestView empty = absent;
     empty.content = HttpClientRequestContentView::bytes("");
-    PreparedFixture emptyFixture(HttpOriginView::https("example.test"), empty, Http1ClientRequestWirePolicy::expectContinue());
+    PreparedFixture emptyFixture(HttpOriginView::https("example.test"), empty, Http1ClientRequestWirePolicy(Http1ClosePolicy::kAllowReuse, ruvia::HttpClientRequestExpectation::kContinue));
     RUVIA_CHECK(emptyFixture.result.failure() != nullptr);
     if (emptyFixture.result.failure() != nullptr) {
         RUVIA_CHECK(emptyFixture.result.failure()->error() == Http1ClientRequestPrepareError::kExpectationWithoutContent);
@@ -439,7 +437,7 @@ RUVIA_TEST(http1_client_request_writer_enforces_expect_content_semantics) {
     HttpClientRequestView nonempty;
     nonempty.method = "POST";
     nonempty.content = HttpClientRequestContentView::bytes("x");
-    PreparedFixture fixture(HttpOriginView::https("example.test"), nonempty, Http1ClientRequestWirePolicy::expectContinue());
+    PreparedFixture fixture(HttpOriginView::https("example.test"), nonempty, Http1ClientRequestWirePolicy(Http1ClosePolicy::kAllowReuse, ruvia::HttpClientRequestExpectation::kContinue));
     RUVIA_CHECK(fixture.result.prepared() != nullptr);
     if (fixture.result.prepared() != nullptr) {
         RUVIA_CHECK(fixture.result.prepared()->contentPlan().continueGated() != nullptr);
@@ -449,8 +447,8 @@ RUVIA_TEST(http1_client_request_writer_enforces_expect_content_semantics) {
 
 RUVIA_TEST(http1_client_request_writer_rejects_invalid_close_policy) {
     HttpClientRequestView request;
-    const auto invalidWithoutExpectation = Http1ClientRequestWirePolicy::withoutExpectation(static_cast<Http1ClosePolicy>(0xFF));
-    const auto invalidExpectContinue = Http1ClientRequestWirePolicy::expectContinue(static_cast<Http1ClosePolicy>(0xFF));
+    const auto invalidWithoutExpectation = Http1ClientRequestWirePolicy(static_cast<Http1ClosePolicy>(0xFF));
+    const auto invalidExpectContinue = Http1ClientRequestWirePolicy(static_cast<Http1ClosePolicy>(0xFF), ruvia::HttpClientRequestExpectation::kContinue);
     RUVIA_CHECK(prepareError(request, invalidWithoutExpectation) == Http1ClientRequestPrepareError::kInvalidClosePolicy);
     RUVIA_CHECK(prepareError(request, invalidExpectContinue) == Http1ClientRequestPrepareError::kInvalidClosePolicy);
 
@@ -598,7 +596,7 @@ RUVIA_TEST(http1_client_request_context_binds_the_actual_close_signal) {
     }
 
     HttpClientRequestView generatedRequest;
-    PreparedFixture generatedClose(HttpOriginView::https("example.test"), generatedRequest, Http1ClientRequestWirePolicy::withoutExpectation(Http1ClosePolicy::kCloseAfterResponse));
+    PreparedFixture generatedClose(HttpOriginView::https("example.test"), generatedRequest, Http1ClientRequestWirePolicy(Http1ClosePolicy::kCloseAfterResponse));
     RUVIA_CHECK(generatedClose.result.prepared() != nullptr);
     if (generatedClose.result.prepared() != nullptr) {
         RUVIA_CHECK(generatedClose.result.prepared()->head().find("Connection: close\r\n") != std::string_view::npos);

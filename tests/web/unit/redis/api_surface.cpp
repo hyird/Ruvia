@@ -212,6 +212,18 @@ concept HasRedisTransactionVariadicCommand = requires(T& transaction, std::strin
 template <typename T>
 concept HasRedisTransactionVariadicWatch = requires(T& transaction, std::string_view key) { transaction.watch(key, key); };
 
+template <typename T>
+concept HasLegacyRedisSetCommands = requires(const T& handle) {
+    handle.setEx("key", std::chrono::seconds(1), "value");
+} || requires(const T& handle) {
+    handle.setNx("key", "value");
+} || requires(const T& handle) {
+    handle.getSet("key", "value");
+};
+
+template <typename T>
+concept HasLegacyRedisBatchGetSet = requires(T& batch) { batch.getSet("key", "value"); };
+
 static_assert(HasRedisHandleSpanArgs<ruvia::RedisHandle>);
 static_assert(!HasRedisHandleInitializerListArgs<ruvia::RedisHandle>);
 static_assert(HasRedisHandleVariadicArgs<ruvia::RedisHandle>);
@@ -226,6 +238,9 @@ static_assert(!HasRedisTransactionInitializerListCommand<ruvia::RedisTransaction
 static_assert(HasRedisTransactionVariadicCommand<ruvia::RedisTransaction>);
 static_assert(HasRedisTransactionVariadicWatch<ruvia::RedisTransaction>);
 static_assert(!HasRedisTransactionDiscard<ruvia::RedisTransaction>);
+static_assert(!HasLegacyRedisSetCommands<ruvia::RedisHandle>);
+static_assert(!HasLegacyRedisBatchGetSet<ruvia::RedisPipeline>);
+static_assert(!HasLegacyRedisBatchGetSet<ruvia::RedisTransaction>);
 static_assert(!HasLvalueRedisExec<ruvia::RedisPipeline>);
 static_assert(HasRvalueRedisExec<ruvia::RedisPipeline>);
 static_assert(HasRvalueRedisExecOptions<ruvia::RedisPipeline>);
@@ -239,6 +254,8 @@ static_assert(!std::assignable_from<ruvia::RedisTransaction&, ruvia::RedisTransa
 static_assert(!HasLegacyRedisSetOptionBooleans<ruvia::RedisSetOptions>);
 static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().condition), std::optional<ruvia::RedisSetCondition>>);
 static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().expiration), std::optional<ruvia::RedisSetExpiration>>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::RedisSetResult&>().applied()), bool>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::RedisSetResult&>().previous()), const std::optional<std::pmr::string>&>);
 static_assert(!std::default_initializable<ruvia::RedisSetExpiration>);
 static_assert(std::same_as<decltype(ruvia::RedisScanOptions{}.cursor), std::optional<ruvia::RedisScanCursor>>);
 static_assert(!std::default_initializable<ruvia::RedisScanCursor>);
@@ -296,7 +313,7 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_
     bool helloRejected = false;
     bool askingRejected = false;
     try {
-        (void)redis.blpop(keys, std::chrono::seconds(1));
+        (void)redis.blpop(keys, ruvia::RedisBlockWait::forDuration(std::chrono::seconds(1)));
     } catch (...) {
         finitePopAccepted = false;
     }
@@ -340,7 +357,7 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_
         infiniteStreamRejected = true;
     }
     try {
-        (void)redis.blpop(keys, std::chrono::seconds::zero());
+        (void)redis.blpop(keys, ruvia::RedisBlockWait::indefinitely());
     } catch (const std::invalid_argument&) {
         infinitePopRejected = true;
     }
@@ -477,30 +494,6 @@ RUVIA_TEST(redis_set_expiration_cannot_represent_conflicting_modes) {
     bool negativeRejected = false;
     try {
         (void)ruvia::RedisSetExpiration::expiresAfter(std::chrono::milliseconds(-1));
-    } catch (const std::invalid_argument&) {
-        negativeRejected = true;
-    }
-    RUVIA_CHECK(negativeRejected);
-}
-
-RUVIA_TEST(redis_setex_rejects_non_positive_ttl_before_io) {
-    asio::io_context ioContext;
-    const std::array definitions{redisDefinition("default")};
-    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
-    ruvia::detail::ScopedOperationScope operationScope;
-    auto redis = registry.get(std::pmr::get_default_resource(), operationScope);
-
-    bool zeroRejected = false;
-    try {
-        (void)redis.setEx("key", std::chrono::seconds(0), "value");
-    } catch (const std::invalid_argument&) {
-        zeroRejected = true;
-    }
-    RUVIA_CHECK(zeroRejected);
-
-    bool negativeRejected = false;
-    try {
-        (void)redis.setEx("key", std::chrono::seconds(-1), "value");
     } catch (const std::invalid_argument&) {
         negativeRejected = true;
     }

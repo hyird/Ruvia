@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <system_error>
 
-namespace ruvia::detail {
+namespace ruvia {
 namespace {
 
 void appendSseData(std::pmr::string& frame, std::string_view data) {
@@ -71,4 +71,4 @@ void formatSseMessage(std::pmr::string& frame, const SseMessage& message) {
     frame.push_back('\n');
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

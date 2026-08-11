@@ -11,18 +11,97 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 
+#include <asio/ip/tcp.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/read.hpp>
+#include <asio/use_future.hpp>
+#include <asio/write.hpp>
+
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
+#include "ruvia/web/detail/db/DbPoolOperations.h"
 #include "ruvia/web/detail/db/DbPreparedStatement.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbOperationState.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
+#include "ruvia/web/detail/db/DbSlotSocket.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"
 
 namespace {
+
+template <typename T>
+concept HasMariaDbFactory = requires { T::mariaDb(); };
+
+template <typename T>
+concept HasPostgreSqlFactory = requires { T::postgreSql(); };
+
+[[nodiscard]] ruvia::DbConfig testDbConfig() {
+#ifdef RUVIA_ENABLE_MARIADB
+    return ruvia::DbConfig::mariaDb();
+#else
+    return ruvia::DbConfig::postgreSql();
+#endif
+}
+
+#if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
+struct ClosingResolveSlot;
+
+class ClosingResolver final {
+public:
+    explicit ClosingResolver(ClosingResolveSlot& slot) noexcept
+        : slot_(&slot) {}
+
+    template <typename Handler>
+    void async_resolve(std::string_view, std::string_view, Handler handler);
+
+    void cancel() noexcept {}
+
+private:
+    ClosingResolveSlot* slot_;
+};
+
+struct ClosingResolveSlot final {
+    enum class DeadlineKind : std::uint8_t { kResolve };
+
+    ClosingResolveSlot()
+        : resolver(*this) {}
+
+    bool waitActive{false};
+    bool closeRequested{false};
+    bool observedActiveResolve{false};
+    ClosingResolver resolver;
+    ruvia::detail::OperationDeadline<DeadlineKind> deadline;
+};
+
+template <typename Handler>
+void ClosingResolver::async_resolve(std::string_view, std::string_view, Handler handler) {
+    slot_->observedActiveResolve = slot_->waitActive;
+    slot_->closeRequested = true;
+    handler(
+        asio::error::operation_aborted,
+        asio::ip::tcp::resolver::results_type{});
+}
+
+struct ClosingResolvePool final {
+    struct Config final {
+        std::string host{"resolver.test"};
+        std::uint16_t port{3306};
+    } config_;
+
+    std::pmr::memory_resource* resource_{std::pmr::get_default_resource()};
+
+    void throwIfCancelled(const ClosingResolveSlot&) const {}
+
+    void clearSlotDeadline(ClosingResolveSlot& slot) noexcept {
+        slot.deadline.reset();
+    }
+};
+#endif
 
 [[nodiscard]] ruvia::detail::DbDefinition dbDefinition(std::string_view alias, const ruvia::DbConfig& config, std::pmr::memory_resource* resource = std::pmr::get_default_resource()) {
     return {
@@ -206,6 +285,10 @@ concept HasDbTransactionInitializerListParams = requires(T& transaction, std::in
 static_assert(HasDbHandleDefaultParams<ruvia::DbHandle>);
 static_assert(HasDbHandleSpanParams<ruvia::DbHandle>);
 static_assert(!HasDbHandleInitializerListParams<ruvia::DbHandle>);
+static_assert(std::same_as<
+              decltype(std::declval<const ruvia::DbHandle&>().withOptions(
+                  ruvia::DbOperationOptions{})),
+              ruvia::DbHandle>);
 static_assert(HasDbTransactionDefaultParams<ruvia::DbTransaction>);
 static_assert(HasDbTransactionSpanParams<ruvia::DbTransaction>);
 static_assert(!HasDbTransactionInitializerListParams<ruvia::DbTransaction>);
@@ -247,6 +330,164 @@ static_assert(HasVariadicOwningLvalueParams<ruvia::DbTransaction>);
 
 RUVIA_TEST(db_api_surface_uses_span_params_without_initializer_list_overloads) {
     RUVIA_CHECK(true);
+}
+
+RUVIA_TEST(db_operation_options_validate_and_compose_restrictions) {
+    RUVIA_CHECK(throwsOn([] {
+        ruvia::detail::validateDbOperationOptions(
+            ruvia::DbOperationOptions{.timeout = std::chrono::milliseconds(0)});
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        ruvia::detail::validateDbOperationOptions(
+            ruvia::DbOperationOptions{.timeout = std::chrono::milliseconds(-1)});
+    }));
+
+    ruvia::detail::StopSource ambient;
+    ruvia::detail::StopSource explicitOperation;
+    auto merged = ruvia::detail::mergeDbOperationOptions(
+        ruvia::DbOperationOptions{
+            .timeout = std::chrono::milliseconds(100),
+            .stopToken = ambient.token()},
+        ruvia::DbOperationOptions{
+            .timeout = std::chrono::milliseconds(250),
+            .stopToken = explicitOperation.token()});
+    RUVIA_CHECK(merged.timeout == std::chrono::milliseconds(100));
+    RUVIA_CHECK(!merged.stopToken.stopRequested());
+    explicitOperation.requestStop();
+    RUVIA_CHECK(merged.stopToken.stopRequested());
+
+    ruvia::detail::StopSource secondAmbient;
+    ruvia::detail::StopSource secondExplicit;
+    auto shorterOverride = ruvia::detail::mergeDbOperationOptions(
+        ruvia::DbOperationOptions{
+            .timeout = std::chrono::milliseconds(500),
+            .stopToken = secondAmbient.token()},
+        ruvia::DbOperationOptions{
+            .timeout = std::chrono::milliseconds(50),
+            .stopToken = secondExplicit.token()});
+    RUVIA_CHECK(shorterOverride.timeout == std::chrono::milliseconds(50));
+    secondAmbient.requestStop();
+    RUVIA_CHECK(shorterOverride.stopToken.stopRequested());
+}
+
+RUVIA_TEST(db_error_distinguishes_timeout_cancellation_and_closing) {
+    const ruvia::DbError timeout(ruvia::DbError::Code::kTimeout, "timeout");
+    const ruvia::DbError cancelled(ruvia::DbError::Code::kCancelled, "cancelled");
+    const ruvia::DbError closing(ruvia::DbError::Code::kClosing, "closing");
+    RUVIA_CHECK(timeout.code() == ruvia::DbError::Code::kTimeout);
+    RUVIA_CHECK(cancelled.code() == ruvia::DbError::Code::kCancelled);
+    RUVIA_CHECK(closing.code() == ruvia::DbError::Code::kClosing);
+}
+
+#if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
+RUVIA_TEST(db_resolve_shutdown_preserves_slot_until_it_reports_closing) {
+    asio::io_context ioContext;
+    ClosingResolvePool pool;
+    ClosingResolveSlot slot;
+    auto future = asio::co_spawn(
+        ioContext,
+        ruvia::detail::taskAsAwaitable(ruvia::detail::resolveDbHost(
+            pool,
+            slot,
+            ruvia::detail::OperationTimeout(std::nullopt),
+            "test database")),
+        asio::use_future);
+    ioContext.run();
+
+    bool reportedClosing = false;
+    try {
+        (void)future.get();
+    } catch (const ruvia::DbError& error) {
+        reportedClosing = error.code() == ruvia::DbError::Code::kClosing;
+    }
+    RUVIA_CHECK(slot.observedActiveResolve);
+    RUVIA_CHECK(!slot.waitActive);
+    RUVIA_CHECK(reportedClosing);
+}
+#endif
+
+RUVIA_TEST(db_slot_socket_reset_cancels_wait_and_preserves_driver_socket) {
+    asio::io_context ioContext;
+    asio::ip::tcp::acceptor acceptor(
+        ioContext,
+        asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0));
+    asio::ip::tcp::socket driverSocket(ioContext);
+    driverSocket.connect(acceptor.local_endpoint());
+    asio::ip::tcp::socket peerSocket(ioContext);
+    acceptor.accept(peerSocket);
+
+    const auto source = static_cast<ruvia::detail::DbSlotSocket::NativeSocket>(
+        driverSocket.native_handle());
+    ruvia::detail::DbSlotSocket waitSocket(ioContext);
+    RUVIA_CHECK(waitSocket.ensureAssigned(source));
+#if defined(_WIN32)
+    RUVIA_CHECK(static_cast<ruvia::detail::DbSlotSocket::NativeSocket>(
+                    waitSocket.socket.native_handle()) != source);
+#else
+    RUVIA_CHECK(waitSocket.descriptor.native_handle() != source);
+#endif
+
+    int completions = 0;
+    std::error_code waitError;
+#if defined(_WIN32)
+    waitSocket.socket.async_wait(
+        asio::ip::tcp::socket::wait_read,
+        [&](std::error_code error) {
+            ++completions;
+            waitError = error;
+        });
+#else
+    waitSocket.descriptor.async_wait(
+        asio::posix::stream_descriptor::wait_read,
+        [&](std::error_code error) {
+            ++completions;
+            waitError = error;
+        });
+#endif
+    waitSocket.reset();
+    ioContext.run();
+    RUVIA_CHECK_EQ(completions, 1);
+    RUVIA_CHECK(waitError == asio::error::operation_aborted);
+
+    constexpr std::array<char, 2> payload{'o', 'k'};
+    std::array<char, payload.size()> received{};
+    asio::write(driverSocket, asio::buffer(payload));
+    asio::read(peerSocket, asio::buffer(received));
+    RUVIA_CHECK(received == payload);
+}
+
+RUVIA_TEST(db_slot_socket_survives_driver_socket_closing_first) {
+    asio::io_context ioContext;
+    asio::ip::tcp::acceptor acceptor(
+        ioContext,
+        asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0));
+    asio::ip::tcp::socket driverSocket(ioContext);
+    driverSocket.connect(acceptor.local_endpoint());
+    asio::ip::tcp::socket peerSocket(ioContext);
+    acceptor.accept(peerSocket);
+
+    const auto source = static_cast<ruvia::detail::DbSlotSocket::NativeSocket>(
+        driverSocket.native_handle());
+    {
+        ruvia::detail::DbSlotSocket waitSocket(ioContext);
+        RUVIA_CHECK(waitSocket.ensureAssigned(source));
+#if defined(_WIN32)
+        RUVIA_CHECK(static_cast<ruvia::detail::DbSlotSocket::NativeSocket>(
+                        waitSocket.socket.native_handle()) != source);
+#else
+        RUVIA_CHECK(waitSocket.descriptor.native_handle() != source);
+#endif
+        std::error_code closeError;
+        driverSocket.close(closeError);
+        RUVIA_CHECK(!closeError);
+        waitSocket.reset();
+    }
+
+    std::array<char, 1> byte{};
+    std::error_code readError;
+    (void)peerSocket.read_some(asio::buffer(byte), readError);
+    RUVIA_CHECK(readError == asio::error::eof ||
+                readError == asio::error::connection_reset);
 }
 
 RUVIA_TEST(db_api_surface_accepts_variadic_params_without_absorbing_sequences) {
@@ -404,16 +645,20 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
     RUVIA_CHECK(aliasResolved);
 }
 
-RUVIA_TEST(db_config_rejects_invalid_driver_enum) {
-    ruvia::DbConfig config;
-    config.driver = static_cast<ruvia::DbDriver>(0xFF);
-    bool rejected = false;
-    try {
-        ruvia::detail::validateDbConfig(config);
-    } catch (const std::invalid_argument&) {
-        rejected = true;
-    }
-    RUVIA_CHECK(rejected);
+RUVIA_TEST(db_config_driver_is_factory_selected_and_read_only) {
+    static_assert(!std::default_initializable<ruvia::DbConfig>);
+    static_assert(std::same_as<decltype(std::declval<const ruvia::DbConfig&>().driver()), ruvia::DbDriver>);
+#ifdef RUVIA_ENABLE_MARIADB
+    static_assert(HasMariaDbFactory<ruvia::DbConfig>);
+#else
+    static_assert(!HasMariaDbFactory<ruvia::DbConfig>);
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    static_assert(HasPostgreSqlFactory<ruvia::DbConfig>);
+#else
+    static_assert(!HasPostgreSqlFactory<ruvia::DbConfig>);
+#endif
+    RUVIA_CHECK(true);
 }
 
 RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
@@ -421,20 +666,11 @@ RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
     std::pmr::unsynchronized_pool_resource targetResource;
     asio::io_context ioContext;
     std::optional<ruvia::detail::DbDefinition> definition;
-    ruvia::DbConfig config{
-        .driver = ruvia::DbDriver::kMariaDb,
-        .host = std::string(80, 'h'),
-        .port = 3306,
-        .username = std::string(80, 'u'),
-        .password = std::string(80, 'p'),
-        .database = std::string(80, 'd'),
-    };
-#ifdef RUVIA_ENABLE_POSTGRESQL
-#ifndef RUVIA_ENABLE_MARIADB
-    config.driver = ruvia::DbDriver::kPostgreSql;
-    config.port = 5432;
-#endif
-#endif
+    auto config = testDbConfig();
+    config.host = std::string(80, 'h');
+    config.username = std::string(80, 'u');
+    config.password = std::string(80, 'p');
+    config.database = std::string(80, 'd');
     definition.emplace(dbDefinition("default", config, &sourceResource));
 
     std::optional<ruvia::detail::DbRegistry> registry;
@@ -483,16 +719,16 @@ RUVIA_TEST(db_migrator_validates_before_opening_connection) {
     }};
     bool rejected = false;
     try {
-        (void)ruvia::DbMigrator::migrate(ruvia::DbConfig{}, std::span<const ruvia::DbMigration>(migrations));
+        (void)ruvia::DbMigrator::migrate(testDbConfig(), std::span<const ruvia::DbMigration>(migrations));
     } catch (const std::invalid_argument& error) {
         rejected = std::string_view(error.what()) == "database migration ids must be unique, including case";
     }
     RUVIA_CHECK(rejected);
 }
 
+#ifdef RUVIA_ENABLE_POSTGRESQL
 RUVIA_TEST(db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_connecting) {
-    ruvia::DbConfig config;
-    config.driver = ruvia::DbDriver::kPostgreSql;
+    auto config = ruvia::DbConfig::postgreSql();
     ruvia::DbMigrationOptions options;
     options.lockTimeout = std::chrono::seconds::max();
 
@@ -504,19 +740,17 @@ RUVIA_TEST(db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_co
     }
     RUVIA_CHECK(rejected);
 }
+#endif
 
 RUVIA_TEST(db_migrator_copies_public_configuration) {
     std::pmr::unsynchronized_pool_resource targetResource;
     std::optional<ruvia::DbMigrator> migrator;
     {
-        ruvia::DbConfig config{
-            .driver = ruvia::DbDriver::kMariaDb,
-            .host = std::string(80, 'h'),
-            .port = 3306,
-            .username = std::string(80, 'u'),
-            .password = std::string(80, 'p'),
-            .database = std::string(80, 'd'),
-        };
+        auto config = testDbConfig();
+        config.host = std::string(80, 'h');
+        config.username = std::string(80, 'u');
+        config.password = std::string(80, 'p');
+        config.database = std::string(80, 'd');
         ruvia::DbMigrationOptions options{
             .table = std::string(80, 't'),
             .lockTimeout = std::chrono::seconds(30),

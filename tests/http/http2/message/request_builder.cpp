@@ -11,6 +11,7 @@ namespace {
 
 using ruvia::HttpKnownMethod;
 using ruvia::HttpProtocolVersion;
+using ruvia::HttpRequestTargetForm;
 using ruvia::detail::Http2RequestBuilder;
 using ruvia::detail::Http2RequestBuildResult;
 using ruvia::detail::Http2StreamState;
@@ -69,6 +70,7 @@ RUVIA_TEST(h2_request_builder_uses_connection_protocol_version) {
 
     RUVIA_CHECK(buildRequest(stream, request));
     RUVIA_CHECK(request.protocolVersion() == HttpProtocolVersion::kHttp2);
+    RUVIA_CHECK(request.targetForm() == HttpRequestTargetForm::kHttp2);
 }
 
 RUVIA_TEST(h2_request_builder_accepts_body_from_external_runtime_owner) {
@@ -193,7 +195,7 @@ RUVIA_TEST(h2_request_builder_failure_owns_protocol_status_and_diagnostic) {
     tooManyHeaders.assignRequestAuthority("example.com");
     tooManyHeaders.markAuthority();
     for (std::size_t i = 0; i < ruvia::kMaxHttpHeaderFields; ++i) {
-        RUVIA_CHECK(tooManyHeaders.appendRequestHeader("x-test", "value", RequestHeaderKind::kOther));
+        RUVIA_CHECK(tooManyHeaders.appendRemoteHeader("x-test", "value", RequestHeaderKind::kOther));
     }
     checkBuildFailure(ruvia_ctx, Http2RequestBuilder::build(tooManyHeaders, request, std::pmr::new_delete_resource(), {}), ruvia::http_status::kRequestHeaderFieldsTooLarge, "too many HTTP/2 request headers");
 }

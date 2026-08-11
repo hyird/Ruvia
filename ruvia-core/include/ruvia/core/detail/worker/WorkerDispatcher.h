@@ -30,6 +30,7 @@ public:
     [[nodiscard]] PostResult post(MoveOnlyFunction<void()> task);
     [[nodiscard]] PostStatus postFactory(MoveOnlyFunction<MoveOnlyFunction<void()>()> factory);
     void defer(MoveOnlyFunction<void()> task);
+    [[nodiscard]] bool deferIfAttached(MoveOnlyFunction<void()> task);
     void deferOrTerminate(MoveOnlyFunction<void()> task) noexcept;
     void registerShutdownListener(const std::shared_ptr<WorkerShutdownListener>& listener);
     void scheduleTimer(WorkerTimerRegistration& registration, std::chrono::steady_clock::time_point deadline, MoveOnlyFunction<void(WorkerTimerOutcome)> completion);

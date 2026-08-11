@@ -16,6 +16,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpParseError.h"
+#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
 #include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
@@ -30,6 +31,7 @@
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"
+#include "ruvia/web/detail/ratelimit/RateLimiter.h"
 
 namespace ruvia {
 
@@ -62,6 +64,7 @@ struct TestApp::Impl final {
     HttpErrorHandler errorHandler{nullptr};
     HttpNotFoundHandler notFoundHandler{nullptr};
     std::optional<detail::WorkerStateRegistry> workerStates;
+    std::optional<detail::RateLimiter> rateLimiter;
     bool finalized{false};
 
     ~Impl() {
@@ -107,6 +110,13 @@ struct TestApp::Impl final {
             routes.setGlobalMiddlewares(globalMiddlewares);
         }
         routes.finalize();
+        if (routes.routeTable().hasRouteRateLimit()) {
+            rateLimiter.emplace(
+                std::nullopt,
+                detail::RouteRateLimitPresence::kPresent,
+                1024,
+                memory.resource());
+        }
         workerStates.emplace(memory.resource(), workerStateDefinitions);
         workerStates->initialize();
     }
@@ -247,16 +257,39 @@ TestResponse TestApp::request(const TestRequest& request) {
     }
     detail::HttpRequestAccess::setBody(parsed, request.body_);
 
-    detail::ContextServices services = detail::ContextServices{}.withEnv(impl_->env).withWorkerStates(*impl_->workerStates);
-
     const auto& routes = detail::RouterImpl::from(impl_->router).routeTable();
     const auto resolution = routes.resolve(parsed);
+    const auto* resolved = resolution.resolved();
+    if (!parseError.has_value() && resolved != nullptr && resolved->route().deadlineMs() != 0) {
+        throw std::logic_error("TestApp cannot dispatch a route with Deadline; use a loopback HttpServer");
+    }
+
+    detail::ContextServices services(
+        nullptr,
+        nullptr,
+        impl_->rateLimiter ? &*impl_->rateLimiter : nullptr);
+    services = services.withEnv(impl_->env).withWorkerStates(*impl_->workerStates);
+
+    std::optional<HttpProtocolError> bodyLimitError;
+    if (!parseError.has_value() && resolved != nullptr) {
+        const auto routeLimit = resolved->route().maxRequestBodyBytes();
+        if (routeLimit != 0 && request.body_.size() > routeLimit) {
+            bodyLimitError = detail::HttpRequestBodyFailure::tooLarge().protocolError();
+        }
+    }
 
     asio::io_context context(1);
     auto dispatch = [&]() -> asio::awaitable<HttpResponse> {
         if (parseError.has_value()) {
             const auto error = httpParseProtocolError(*parseError);
             co_return co_await detail::taskAsAwaitable(routes.handleError(parsed, requestMemory, HttpErrorInfo(error.status(), {}, error.what()), services));
+        }
+        if (bodyLimitError.has_value()) {
+            co_return co_await detail::taskAsAwaitable(routes.handleError(
+                parsed,
+                requestMemory,
+                HttpErrorInfo(bodyLimitError->status(), {}, bodyLimitError->what()),
+                services));
         }
         auto result = co_await detail::taskAsAwaitable(routes.dispatchBufferedResponse(parsed, resolution, requestMemory, detail::DocumentRootBinding::none(), services));
         co_return std::move(result).takeResponse();

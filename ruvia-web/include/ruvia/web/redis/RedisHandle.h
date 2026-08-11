@@ -36,14 +36,10 @@ public:
     ScopedOperation<std::optional<std::pmr::string>> get(std::string_view key) const;
     ScopedOperation<std::pmr::vector<std::optional<std::pmr::string>>> mget(std::span<const std::string_view> keys) const;
     ScopedOperation<std::pmr::vector<std::optional<std::pmr::string>>> mget(std::initializer_list<std::string_view> keys) const = delete;
-    ScopedOperation<void> set(std::string_view key, std::string_view value) const;
-    ScopedOperation<std::optional<std::pmr::string>> set(std::string_view key, std::string_view value, RedisSetOptions options) const;
+    ScopedOperation<RedisSetResult> set(std::string_view key, std::string_view value, RedisSetOptions options = {}) const;
     ScopedOperation<void> mset(std::span<const std::pair<std::string_view, std::string_view>> items) const;
     ScopedOperation<void> mset(std::initializer_list<std::pair<std::string_view, std::string_view>> items) const = delete;
-    ScopedOperation<void> setEx(std::string_view key, std::chrono::seconds ttl, std::string_view value) const;
-    ScopedOperation<bool> setNx(std::string_view key, std::string_view value) const;
     ScopedOperation<std::optional<std::pmr::string>> getDel(std::string_view key) const;
-    ScopedOperation<std::optional<std::pmr::string>> getSet(std::string_view key, std::string_view value) const;
     ScopedOperation<std::int64_t> append(std::string_view key, std::string_view value) const;
     ScopedOperation<std::int64_t> strlen(std::string_view key) const;
     ScopedOperation<std::int64_t> incrBy(std::string_view key, std::int64_t value) const;
@@ -114,8 +110,8 @@ public:
     ScopedOperation<std::pmr::string> scriptLoad(std::string_view script) const;
     ScopedOperation<std::pmr::vector<bool>> scriptExists(std::span<const std::string_view> sha1s) const;
     ScopedOperation<std::pmr::vector<bool>> scriptExists(std::initializer_list<std::string_view> sha1s) const = delete;
-    ScopedOperation<std::optional<RedisKeyValue>> blpop(std::span<const std::string_view> keys, std::chrono::seconds timeout, RedisOperationOptions options = {}) const;
-    ScopedOperation<std::optional<RedisKeyValue>> brpop(std::span<const std::string_view> keys, std::chrono::seconds timeout, RedisOperationOptions options = {}) const;
+    ScopedOperation<std::optional<RedisKeyValue>> blpop(std::span<const std::string_view> keys, RedisBlockWait wait, RedisOperationOptions options = {}) const;
+    ScopedOperation<std::optional<RedisKeyValue>> brpop(std::span<const std::string_view> keys, RedisBlockWait wait, RedisOperationOptions options = {}) const;
     ScopedOperation<std::optional<RedisXReadGroupResult>> xreadGroup(std::string_view group, std::string_view consumer, std::span<const RedisStreamReadView> streams, RedisXReadGroupOptions options = {}) const;
 
     // Multi-argument commands as ordinary arguments: mget(a, b, c) instead of a

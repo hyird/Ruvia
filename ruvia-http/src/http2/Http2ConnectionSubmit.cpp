@@ -102,7 +102,7 @@ void Http2Connection::appendResponseHeaderFrames(Http2StreamState& stream, std::
         // staged block that no longer has a matching stream state.
         output_.rollbackTo(outputCheckpoint);
         encoderTableSizeUpdatePending_ = previousEncoderTableSizeUpdatePending;
-        stream.responseHeaderBlock().clear();
+        stream.localHeaderBlock().clear();
         throw;
     }
 }
@@ -139,7 +139,7 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(std::u
         return Http2BufferedResponseHeadSubmitResult::makeInvalidMessageFailure();
     }
     const auto endStream = writePlan.sendBody() ? Http2EndStream::kKeepOpen : Http2EndStream::kEndStream;
-    appendResponseHeaderFrames(*stream, std::string_view(stream->responseHeaderBlock()), endStream);
+    appendResponseHeaderFrames(*stream, std::string_view(stream->localHeaderBlock()), endStream);
     if (headPlan->bodyPlan().bodySuppressed()) {
         stream->beginLocalContentForbidden();
     } else {
@@ -153,7 +153,7 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(std::u
     if (stream->tunnel().pending() != nullptr) {
         (void)stream->rejectConnect();
     }
-    http2ReleaseResponseHeaderBlock(*stream);
+    http2ReleaseLocalHeaderBlock(*stream);
     return Http2BufferedResponseHeadSubmitResult::makeSubmitted(std::move(writePlan));
 }
 
@@ -187,7 +187,7 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         return Http2StreamingResponseHeadSubmitResult::makeInvalidMessageFailure();
     }
     const auto endStream = commitPlan.headDisposition() == ResponseStreamHeadDisposition::kMessageEnded ? Http2EndStream::kEndStream : Http2EndStream::kKeepOpen;
-    appendResponseHeaderFrames(*stream, std::string_view(stream->responseHeaderBlock()), endStream);
+    appendResponseHeaderFrames(*stream, std::string_view(stream->localHeaderBlock()), endStream);
     if (headPlan->bodyPlan().bodySuppressed()) {
         stream->beginLocalContentForbidden();
     } else if (const auto contentLength = headPlan->streamingContentLength()) {
@@ -207,7 +207,7 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
     if (stream->tunnel().pending() != nullptr) {
         (void)stream->rejectConnect();
     }
-    http2ReleaseResponseHeaderBlock(*stream);
+    http2ReleaseLocalHeaderBlock(*stream);
     return Http2StreamingResponseHeadSubmitResult::makeSubmitted(commitPlan);
 }
 
@@ -222,8 +222,8 @@ Http2SubmitStatus Http2Connection::submitInterimResponseHead(std::uint32_t strea
     if (appendHttp2InterimResponseHeaders(*stream, response) != Http2InterimResponseHeaderEncodeStatus::kOk) {
         return Http2SubmitStatus::kInvalidMessage;
     }
-    appendResponseHeaderFrames(*stream, std::string_view(stream->responseHeaderBlock()), Http2EndStream::kKeepOpen);
-    http2ReleaseResponseHeaderBlock(*stream);
+    appendResponseHeaderFrames(*stream, std::string_view(stream->localHeaderBlock()), Http2EndStream::kKeepOpen);
+    http2ReleaseLocalHeaderBlock(*stream);
     return Http2SubmitStatus::kAccepted;
 }
 
@@ -235,6 +235,14 @@ Http2DataSubmitStatus Http2Connection::submitData(std::uint32_t streamId, std::s
     const auto& localSend = stream->localSend();
     if (localSend.requestContentOpen() == nullptr && localSend.responseContentOpen() == nullptr && localSend.tunnelOpen() == nullptr) {
         return Http2DataSubmitStatus::kInvalidState;
+    }
+    if (localSend.requestContentOpen() != nullptr) {
+        if (stream->requestContinuePending()) {
+            return Http2DataSubmitStatus::kExpectationPending;
+        }
+        if (stream->requestContentCanceled()) {
+            return Http2DataSubmitStatus::kInvalidState;
+        }
     }
     // One queued submission per stream is the hard backpressure boundary. The
     // current input remains caller-owned and can be retried after the prior one drains.
@@ -299,6 +307,14 @@ Http2DataSubmitStatus Http2Connection::submitData(std::uint32_t streamId, std::s
     return Http2DataSubmitStatus::kAccepted;
 }
 
+Http2RequestContentReleaseStatus Http2Connection::releaseRequestContent(std::uint32_t streamId) noexcept {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr || stream->isAborted()) {
+        return Http2RequestContentReleaseStatus::kClosed;
+    }
+    return stream->releaseRequestContinue() ? Http2RequestContentReleaseStatus::kReleased : Http2RequestContentReleaseStatus::kNotPending;
+}
+
 Http2SubmitStatus Http2Connection::submitConnectResponseHead(std::uint32_t streamId, const HttpResponse& response) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
@@ -327,11 +343,11 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(std::uint32_t strea
     if (!appendHttp2ResponseHeaders(*stream, response, *headPlan, *http2Control)) {
         return Http2SubmitStatus::kInvalidMessage;
     }
-    appendResponseHeaderFrames(*stream, std::string_view(stream->responseHeaderBlock()), Http2EndStream::kKeepOpen);
+    appendResponseHeaderFrames(*stream, std::string_view(stream->localHeaderBlock()), Http2EndStream::kKeepOpen);
     (void)stream->acceptConnect();
     stream->beginLocalContentUnbounded();
     (void)stream->openLocalConnectTunnel();
-    http2ReleaseResponseHeaderBlock(*stream);
+    http2ReleaseLocalHeaderBlock(*stream);
     if (terminalRemoteHalf) {
         events_.push_back(Http2Event::tunnelEnd(streamId));
     }
@@ -350,12 +366,12 @@ Http2WebSocketHandshakeSubmitResult Http2Connection::submitWebSocketHandshake(st
     if (terminalRemoteHalf) {
         reserveEventSlots(1);
     }
-    http2EncodeWebSocketHandshakeHeaders(stream->responseHeaderBlock(), negotiation);
-    appendResponseHeaderFrames(*stream, std::string_view(stream->responseHeaderBlock()), Http2EndStream::kKeepOpen);
+    http2EncodeWebSocketHandshakeHeaders(stream->localHeaderBlock(), negotiation);
+    appendResponseHeaderFrames(*stream, std::string_view(stream->localHeaderBlock()), Http2EndStream::kKeepOpen);
     (void)stream->acceptConnect();
     stream->beginLocalContentUnbounded();
     (void)stream->openLocalConnectTunnel();
-    http2ReleaseResponseHeaderBlock(*stream);
+    http2ReleaseLocalHeaderBlock(*stream);
     if (terminalRemoteHalf) {
         events_.push_back(Http2Event::tunnelEnd(streamId));
     }

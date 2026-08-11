@@ -84,6 +84,15 @@ RUVIA_TEST(model_wrapper_scalar_fields_reject_mistyped_values_but_allow_missing_
 
     std::pmr::monotonic_buffer_resource resource;
     RUVIA_CHECK(ruvia::JsonBody<WrappedScalars>::parse("{}", &resource).has_value());
+
+    RUVIA_CHECK(!ruvia::FormBody<WrappedScalars>::parse("count=not-a-number", &resource).has_value());
+    const auto partialForm = ruvia::FormBody<WrappedScalars>::parsePartial("count=not-a-number", &resource);
+    RUVIA_CHECK(partialForm.has_value());
+    if (partialForm) {
+        RUVIA_CHECK(
+            ruvia::detail::ModelValidationAccess::fieldState<"count">(*partialForm) ==
+            ruvia::detail::ModelFieldState::kInvalidType);
+    }
 }
 
 RUVIA_TEST(model_wrapper_scalar_fields_round_trip_through_json) {

@@ -18,12 +18,16 @@
 #include <utility>
 
 template <typename T>
-concept HasAnyRvalueWorkerWaitAccessor = requires(T&& result) { std::move(result).value(); } || requires(T&& result) { std::move(result).closed(); } || requires(T&& result) { std::move(result).workerStopping(); } || requires(T&& result) { std::move(result).timedOut(); };
+concept HasAnyRvalueWorkerWaitAccessor = requires(T&& result) { std::move(result).value(); } || requires(T&& result) { std::move(result).closed(); } || requires(T&& result) { std::move(result).workerStopping(); } || requires(T&& result) { std::move(result).timedOut(); } || requires(T&& result) { std::move(result).cancelled(); };
+
+template <typename T>
+concept HasRvalueWorkerBorrow = requires(T&& receiver) { std::move(receiver).worker(); };
 
 static_assert(!std::is_default_constructible_v<ruvia::OneShotReceiver<int>>);
 static_assert(std::is_move_constructible_v<ruvia::OneShotReceiver<int>>);
 static_assert(!std::is_move_assignable_v<ruvia::OneShotReceiver<int>>);
 static_assert(!HasAnyRvalueWorkerWaitAccessor<ruvia::WorkerWaitResult<int>>);
+static_assert(!HasRvalueWorkerBorrow<ruvia::OneShotReceiver<int>>);
 
 namespace {
 
@@ -116,6 +120,34 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
         }
         const auto late = co_await receiver.wait();
         if (late.value() == nullptr || *late.value() != 9) {
+            co_return;
+        }
+    }
+
+    {
+        ruvia::detail::StopSource source;
+        auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
+        ruvia::detail::WorkerHandleAccess::defer(worker, [&source] { source.requestStop(); });
+        const auto cancelled = co_await receiver.wait(source.token());
+        if (cancelled.cancelled() == nullptr || !completion.complete(11).accepted()) {
+            co_return;
+        }
+        const auto late = co_await receiver.wait();
+        if (late.value() == nullptr || *late.value() != 11) {
+            co_return;
+        }
+    }
+
+    {
+        ruvia::detail::StopSource source;
+        source.requestStop();
+        auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
+        const auto cancelled = co_await receiver.waitFor(std::chrono::seconds(1), source.token());
+        if (cancelled.cancelled() == nullptr || !completion.complete(12).accepted()) {
+            co_return;
+        }
+        const auto late = co_await receiver.wait();
+        if (late.value() == nullptr || *late.value() != 12) {
             co_return;
         }
     }

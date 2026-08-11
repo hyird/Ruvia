@@ -16,9 +16,9 @@ namespace ruvia::detail {
 class DataAccessState::Impl final {
 public:
     Impl(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const DbDefinition> databaseDefinitions, std::span<const RedisDefinition> redisDefinitions, ConnectionScanner& scanner)
-        : databases(ioContext, resource, databaseDefinitions),
+        : databases(ioContext, resource, databaseDefinitions, &worker),
           redis(ioContext, resource, redisDefinitions, &worker) {
-        if (databases.hasAnyTimeout()) {
+        if (databases.needsDeadlineScan()) {
             scanner.registerWorkerMaintenance(databaseDeadlineCheck, &databases, [](void* target) noexcept { static_cast<DbRegistry*>(target)->scanDeadlines(); });
         }
         if (redis.needsDeadlineScan()) {
@@ -57,7 +57,7 @@ void DataAccessState::closeNow() noexcept {
 }
 
 bool DataAccessState::hasMaintenance() const noexcept {
-    return impl_->databases.hasAnyTimeout() || impl_->redis.needsDeadlineScan();
+    return impl_->databases.needsDeadlineScan() || impl_->redis.needsDeadlineScan();
 }
 
 DbRegistry& DataAccessState::databases() noexcept {

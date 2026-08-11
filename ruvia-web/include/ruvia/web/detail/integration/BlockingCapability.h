@@ -67,13 +67,15 @@ public:
     template <typename Fn>
     [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(Fn fn) const {
         const auto& self = static_cast<const Derived&>(*this);
-        return ruvia::runBlocking(self.blockingPool(), self.blockingWorker(), std::move(fn));
+        return ruvia::runBlocking(
+            self.blockingPool(), self.blockingWorker(), self.blockingStopToken(), std::move(fn));
     }
 
     template <typename Rep, typename Period, typename Fn>
     [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const {
         const auto& self = static_cast<const Derived&>(*this);
-        return ruvia::runBlocking(self.blockingPool(), self.blockingWorker(), timeout, std::move(fn));
+        return ruvia::runBlocking(
+            self.blockingPool(), self.blockingWorker(), timeout, self.blockingStopToken(), std::move(fn));
     }
 
 protected:

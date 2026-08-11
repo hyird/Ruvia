@@ -89,7 +89,7 @@ bool decodeResponseHeaders(const HttpResponse& response, Collector& out, Respons
     }
 
     HpackDecoder decoder(std::pmr::get_default_resource());
-    const auto result = decoder.decode(stream.responseHeaderBlock(), &out, &collect);
+    const auto result = decoder.decode(stream.localHeaderBlock(), &out, &collect);
     return result.decoded() != nullptr;
 }
 
@@ -100,7 +100,7 @@ bool decodeInterimResponseHeaders(const HttpInterimResponseHead& response, Colle
     }
 
     HpackDecoder decoder(std::pmr::get_default_resource());
-    const auto result = decoder.decode(stream.responseHeaderBlock(), &out, &collect);
+    const auto result = decoder.decode(stream.localHeaderBlock(), &out, &collect);
     return result.decoded() != nullptr;
 }
 
@@ -241,11 +241,11 @@ RUVIA_TEST(http2_interim_response_headers_are_bodyless_exact_and_normalized) {
 RUVIA_TEST(http2_interim_response_header_rejection_is_transactional) {
     Http2StreamState stream(1, std::pmr::get_default_resource());
     const auto rejects = [&](std::span<const ruvia::HttpHeaderView> fields) {
-        stream.responseHeaderBlock().assign("sentinel");
+        stream.localHeaderBlock().assign("sentinel");
         const HttpInterimResponseHead response(ruvia::http_status::kEarlyHints, fields);
         const auto status = appendHttp2InterimResponseHeaders(stream, response);
-        const bool unchanged = stream.responseHeaderBlock() == "sentinel";
-        stream.responseHeaderBlock().clear();
+        const bool unchanged = stream.localHeaderBlock() == "sentinel";
+        stream.localHeaderBlock().clear();
         return status == ruvia::detail::Http2InterimResponseHeaderEncodeStatus::kInvalidHeader && unchanged;
     };
 
@@ -407,7 +407,7 @@ RUVIA_TEST(http2_response_headers_reject_only_preserved_invalid_content_length) 
     RUVIA_CHECK(streamingPlan.plan() == nullptr);
     RUVIA_CHECK(streamingPlan.failure() != nullptr);
     RUVIA_CHECK(streamingPlan.failure()->error() == ruvia::detail::Http2ResponseHeadPlanError::kInvalidContentLength);
-    RUVIA_CHECK(stream.responseHeaderBlock().empty());
+    RUVIA_CHECK(stream.localHeaderBlock().empty());
 
     // A buffered writer owns and canonicalizes the field, so an invalid caller
     // value is filtered before it can make the message malformed.
@@ -421,7 +421,7 @@ RUVIA_TEST(http2_response_headers_reject_only_preserved_invalid_content_length) 
     const auto notModifiedPlan = ruvia::detail::http2BufferedResponseHeadPlan(ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, notModified), notModified);
     RUVIA_CHECK(notModifiedPlan.plan() == nullptr);
     RUVIA_CHECK(notModifiedPlan.failure() != nullptr);
-    RUVIA_CHECK(stream.responseHeaderBlock().empty());
+    RUVIA_CHECK(stream.localHeaderBlock().empty());
 }
 
 RUVIA_TEST(http2_response_headers_set_cookie_uses_never_indexed_literal) {
@@ -434,7 +434,7 @@ RUVIA_TEST(http2_response_headers_set_cookie_uses_never_indexed_literal) {
 
     Http2StreamState stream(1, std::pmr::get_default_resource());
     RUVIA_CHECK(appendBufferedResponseHeaders(stream, response));
-    const auto& block = stream.responseHeaderBlock();
+    const auto& block = stream.localHeaderBlock();
 
     // Byte 0 is the indexed :status 200 (0x88); Set-Cookie is the next field and
     // its representation prefix must be the never-indexed literal nibble (0x10).
@@ -458,7 +458,7 @@ RUVIA_TEST(http2_response_headers_non_sensitive_uses_without_indexing) {
 
     Http2StreamState stream(1, std::pmr::get_default_resource());
     RUVIA_CHECK(appendBufferedResponseHeaders(stream, response));
-    const auto& block = stream.responseHeaderBlock();
+    const auto& block = stream.localHeaderBlock();
 
     RUVIA_CHECK(block.size() >= 2);
     RUVIA_CHECK(static_cast<unsigned char>(block[0]) == 0x88);

@@ -1,0 +1,67 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <memory_resource>
+#include <optional>
+#include <string>
+#include <string_view>
+
+#include "ruvia/http/HttpStatus.h"
+
+namespace ruvia {
+
+enum class HpackDecodeError : std::uint8_t {
+    kNeedMore,
+    kIntegerOverflow,
+    kInvalidIndex,
+    kInvalidString,
+    kInvalidHuffman,
+    kDynamicTableSize,
+    kCallbackRejected,
+};
+
+class HpackDecodeResult final {
+public:
+    [[nodiscard]] constexpr bool decoded() const noexcept { return !error_.has_value(); }
+    [[nodiscard]] constexpr std::optional<HpackDecodeError> error() const noexcept { return error_; }
+
+private:
+    friend class HpackDecoder;
+    explicit constexpr HpackDecodeResult(std::optional<HpackDecodeError> error) noexcept : error_(error) {}
+    std::optional<HpackDecodeError> error_;
+};
+
+// Stateful RFC 7541 decoder. One decode() call is one dynamic-table
+// transaction; protocol failures roll back table changes while callback
+// rejection still consumes the complete block to keep peer state synchronized.
+class HpackDecoder final {
+public:
+    using HeaderCallback = bool (*)(void*, std::string_view, std::string_view);
+
+    explicit HpackDecoder(std::pmr::memory_resource* resource = nullptr);
+    ~HpackDecoder();
+    HpackDecoder(const HpackDecoder&) = delete;
+    HpackDecoder& operator=(const HpackDecoder&) = delete;
+    HpackDecoder(HpackDecoder&&) noexcept;
+    HpackDecoder& operator=(HpackDecoder&&) noexcept;
+
+    void setMaxDynamicTableSize(std::size_t bytes);
+    [[nodiscard]] HpackDecodeResult decode(std::string_view block, void* target, HeaderCallback callback);
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+class HpackEncoder final {
+public:
+    static void encodeIndexed(std::pmr::string& output, std::uint32_t index);
+    static void encodeDynamicTableSizeUpdate(std::pmr::string& output, std::uint32_t maximum);
+    static void encodeHeader(std::pmr::string& output, std::string_view name, std::string_view value);
+    static void encodeHeaderWithNameIndex(std::pmr::string& output, std::uint32_t nameIndex, std::string_view value, bool neverIndexed = false);
+    static void encodeStatus(std::pmr::string& output, HttpStatusCode status);
+};
+
+}  // namespace ruvia

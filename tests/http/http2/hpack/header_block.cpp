@@ -32,32 +32,32 @@ Http2StreamState makeStream() {
 RUVIA_TEST(header_block_start_append_reset) {
     auto stream = makeStream();
     RUVIA_CHECK(http2StartHeaderBlock(stream, "abc"));
-    RUVIA_CHECK_EQ(std::string_view(stream.requestHeaderBlock()), std::string_view("abc"));
+    RUVIA_CHECK_EQ(std::string_view(stream.remoteHeaderBlock()), std::string_view("abc"));
     // A CONTINUATION fragment accumulates onto the block.
     RUVIA_CHECK(http2AppendHeaderBlock(stream, "def"));
-    RUVIA_CHECK_EQ(std::string_view(stream.requestHeaderBlock()), std::string_view("abcdef"));
+    RUVIA_CHECK_EQ(std::string_view(stream.remoteHeaderBlock()), std::string_view("abcdef"));
     // Starting a new block resets first.
     RUVIA_CHECK(http2StartHeaderBlock(stream, "xyz"));
-    RUVIA_CHECK_EQ(std::string_view(stream.requestHeaderBlock()), std::string_view("xyz"));
+    RUVIA_CHECK_EQ(std::string_view(stream.remoteHeaderBlock()), std::string_view("xyz"));
     // Reset clears it.
     http2ResetHeaderBlock(stream);
-    RUVIA_CHECK(stream.requestHeaderBlock().empty());
+    RUVIA_CHECK(stream.remoteHeaderBlock().empty());
 }
 
 RUVIA_TEST(header_block_size_limit_guards_continuation_flood) {
     auto stream = makeStream();
     const std::string atLimit(kMaxHttp2EncodedHeaderBlockBytes, 'a');
     RUVIA_CHECK(http2StartHeaderBlock(stream, atLimit));
-    RUVIA_CHECK_EQ(stream.requestHeaderBlock().size(), kMaxHttp2EncodedHeaderBlockBytes);
+    RUVIA_CHECK_EQ(stream.remoteHeaderBlock().size(), kMaxHttp2EncodedHeaderBlockBytes);
     // One more byte would exceed the cap: rejected, block left untouched.
     RUVIA_CHECK(!http2AppendHeaderBlock(stream, "x"));
-    RUVIA_CHECK_EQ(stream.requestHeaderBlock().size(), kMaxHttp2EncodedHeaderBlockBytes);
+    RUVIA_CHECK_EQ(stream.remoteHeaderBlock().size(), kMaxHttp2EncodedHeaderBlockBytes);
 
     // A single oversized fragment is rejected outright.
     auto fresh = makeStream();
     const std::string tooBig(kMaxHttp2EncodedHeaderBlockBytes + 1, 'b');
     RUVIA_CHECK(!http2StartHeaderBlock(fresh, tooBig));
-    RUVIA_CHECK(fresh.requestHeaderBlock().empty());
+    RUVIA_CHECK(fresh.remoteHeaderBlock().empty());
 }
 
 RUVIA_TEST(header_continuation_frame_budget_bounds_empty_flood) {

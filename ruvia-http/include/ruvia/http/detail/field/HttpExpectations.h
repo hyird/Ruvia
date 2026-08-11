@@ -128,6 +128,10 @@ inline constexpr std::string_view kHttpContinueExpectationToken = "100-continue"
     return valid;
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
 // Whether the framing/lifecycle owner has established that request content will
 // follow the initial head. Keep this typed: HTTP/1 derives it from its body plan,
 // while HTTP/2 combines its receive-half and remaining-content states so an open
@@ -225,8 +229,8 @@ private:
 class HttpRequestExpectations final {
 public:
     void parseField(std::string_view value) noexcept {
-        httpVisitCommaSeparatedQuoted(value, [this](std::string_view member) noexcept {
-            if (httpAsciiEqualsIgnoreCase(member, kHttpContinueExpectationToken)) {
+        detail::httpVisitCommaSeparatedQuoted(value, [this](std::string_view member) noexcept {
+            if (detail::httpAsciiEqualsIgnoreCase(member, detail::kHttpContinueExpectationToken)) {
                 flags_ |= kContinue;
             } else {
                 flags_ |= kUnsupported;
@@ -272,4 +276,4 @@ static_assert(sizeof(HttpRequestExpectations) <= 1);
 static_assert(std::is_trivially_copyable_v<HttpServerExpectationPlan>);
 static_assert(sizeof(HttpServerExpectationPlan) <= 2);
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

@@ -19,8 +19,8 @@ using ruvia::detail::http2OnDecodedRequestTrailer;
 using ruvia::detail::Http2StreamHeaderBlocks;
 using ruvia::detail::Http2StreamRequestState;
 using ruvia::detail::Http2StreamState;
-using ruvia::detail::HttpRequestExpectations;
-using ruvia::detail::HttpUnsupportedExpectationPolicy;
+using ruvia::HttpRequestExpectations;
+using ruvia::HttpUnsupportedExpectationPolicy;
 
 std::pmr::memory_resource* res() noexcept {
     return std::pmr::new_delete_resource();
@@ -41,7 +41,7 @@ template <typename T>
 concept ExposesRvalueHttp2StreamHeaderBlocksStorage = requires(T&& blocks) { std::move(blocks).request(); } || requires(const T&& blocks) { std::move(blocks).request(); } || requires(T&& blocks) { std::move(blocks).response(); } || requires(const T&& blocks) { std::move(blocks).response(); };
 
 template <typename T>
-concept ExposesRvalueHttp2StreamStateStorage = requires(T&& stream) { std::move(stream).receiveWindowCredit(); } || requires(T&& stream) { std::move(stream).requestHeaderBlock(); } || requires(const T&& stream) { std::move(stream).requestHeaderBlock(); } || requires(T&& stream) { std::move(stream).responseHeaderBlock(); } || requires(const T&& stream) { std::move(stream).responseHeaderBlock(); } || requires(T&& stream) { std::move(stream).remoteContent(); } || requires(T&& stream) { std::move(stream).localContent(); } || requires(T&& stream) { std::move(stream).localSend(); } || requires(T&& stream) { std::move(stream).remoteReceive(); } || requires(T&& stream) { std::move(stream).requestMethod(); } || requires(T&& stream) { std::move(stream).requestAuthority(); } || requires(T&& stream) { std::move(stream).requestPath(); } || requires(T&& stream) { std::move(stream).requestProtocol(); } || requires(T&& stream) { std::move(stream).requestCookie(); } || requires(T&& stream) { std::move(stream).requestHeaderAt(std::size_t{}); } || requires(T&& stream) { std::move(stream).requestScheme(); } || requires(T&& stream) { std::move(stream).tunnel(); } || requires(T&& stream) { std::move(stream).responseStatus(); };
+concept ExposesRvalueHttp2StreamStateStorage = requires(T&& stream) { std::move(stream).receiveWindowCredit(); } || requires(T&& stream) { std::move(stream).remoteHeaderBlock(); } || requires(const T&& stream) { std::move(stream).remoteHeaderBlock(); } || requires(T&& stream) { std::move(stream).localHeaderBlock(); } || requires(const T&& stream) { std::move(stream).localHeaderBlock(); } || requires(T&& stream) { std::move(stream).remoteContent(); } || requires(T&& stream) { std::move(stream).localContent(); } || requires(T&& stream) { std::move(stream).localSend(); } || requires(T&& stream) { std::move(stream).remoteReceive(); } || requires(T&& stream) { std::move(stream).requestMethod(); } || requires(T&& stream) { std::move(stream).requestAuthority(); } || requires(T&& stream) { std::move(stream).requestPath(); } || requires(T&& stream) { std::move(stream).requestProtocol(); } || requires(T&& stream) { std::move(stream).requestCookie(); } || requires(T&& stream) { std::move(stream).remoteHeaderAt(std::size_t{}); } || requires(T&& stream) { std::move(stream).requestScheme(); } || requires(T&& stream) { std::move(stream).tunnel(); } || requires(T&& stream) { std::move(stream).responseStatus(); };
 
 static_assert(!ExposesRvalueHttp2StreamRequestStateStorage<Http2StreamRequestState>);
 static_assert(!ExposesRvalueHttp2StreamHeaderBlocksStorage<Http2StreamHeaderBlocks>);
@@ -346,7 +346,7 @@ RUVIA_TEST(h2_headers_repeated_etag_list_fields_accepted) {
     Http2HeaderDecodeContext ctx{stream};
     RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "if-none-match", R"("old")"));
     RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "if-none-match", R"("new")"));
-    RUVIA_CHECK_EQ(stream.requestHeaderCount(), std::size_t{2});
+    RUVIA_CHECK_EQ(stream.remoteHeaderCount(), std::size_t{2});
 }
 
 RUVIA_TEST(h2_headers_duplicate_auth_and_cors_singletons_rejected) {

@@ -197,7 +197,7 @@ struct Http2HeaderDecodeContext final {
             return false;
         }
     }
-    return stream.appendRequestHeader(name, value, kind);
+    return stream.appendRemoteHeader(name, value, kind);
 }
 
 [[nodiscard]] inline bool http2OnDecodedRequestTrailer(Http2HeaderDecodeContext& context, std::string_view name, std::string_view value) {

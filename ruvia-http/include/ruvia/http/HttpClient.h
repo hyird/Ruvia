@@ -38,6 +38,21 @@ enum class HttpScheme : std::uint8_t {
     kHttps,
 };
 
+// Transport-independent sender policy for RFC 9110's only standardized
+// request expectation. HTTP/1 and HTTP/2 writers both own generation of the
+// Expect field so callers cannot create a wire/state-machine mismatch.
+enum class HttpClientRequestExpectation : std::uint8_t {
+    kNone,
+    kContinue,
+};
+
+// A response-side signal for an external request-body writer. The same signal
+// is emitted by HTTP/1 response plans and HTTP/2 response events.
+enum class HttpClientRequestContentSignal : std::uint8_t {
+    kContinue,
+    kExchangeComplete,
+};
+
 class HttpOriginView final {
 public:
     // `host` is a borrowed RFC 3986 uri-host; its storage must outlive this

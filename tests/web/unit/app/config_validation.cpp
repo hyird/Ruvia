@@ -116,22 +116,27 @@ RUVIA_TEST(app_document_root_rejects_invalid_static_options_at_configuration) {
 
 RUVIA_TEST(data_access_config_clones_public_strings_into_internal_pmr_storage) {
     std::pmr::unsynchronized_pool_resource targetResource;
+#if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
     std::optional<ruvia::detail::DbConfigStorage> database;
+#endif
     std::optional<ruvia::detail::RedisConfigStorage> redis;
     {
-        ruvia::DbConfig source{
-            .driver = ruvia::DbDriver::kMariaDb,
-            .host = std::string(80, 'h'),
-            .port = 3306,
-            .username = std::string(80, 'u'),
-            .password = std::string(80, 'p'),
-            .database = std::string(80, 'd'),
-        };
+#ifdef RUVIA_ENABLE_MARIADB
+        auto source = ruvia::DbConfig::mariaDb();
+#elif defined(RUVIA_ENABLE_POSTGRESQL)
+        auto source = ruvia::DbConfig::postgreSql();
+#endif
+#if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
+        source.host = std::string(80, 'h');
+        source.username = std::string(80, 'u');
+        source.password = std::string(80, 'p');
+        source.database = std::string(80, 'd');
         database.emplace(ruvia::detail::cloneDbConfig(source, &targetResource));
         RUVIA_CHECK(database->host.get_allocator().resource() == &targetResource);
         RUVIA_CHECK(database->username.get_allocator().resource() == &targetResource);
         RUVIA_CHECK(database->password.get_allocator().resource() == &targetResource);
         RUVIA_CHECK(database->database.get_allocator().resource() == &targetResource);
+#endif
 
         ruvia::RedisConfig sourceRedis{
             .host = std::string(80, 'r'),
@@ -145,6 +150,8 @@ RUVIA_TEST(data_access_config_clones_public_strings_into_internal_pmr_storage) {
         RUVIA_CHECK(redis->password.get_allocator().resource() == &targetResource);
     }
 
+#if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
     RUVIA_CHECK_EQ(std::string(database->host), std::string(80, 'h'));
+#endif
     RUVIA_CHECK_EQ(std::string(redis->host), std::string(80, 'r'));
 }

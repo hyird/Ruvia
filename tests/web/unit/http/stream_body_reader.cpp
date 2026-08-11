@@ -91,14 +91,14 @@ struct SegmentedBodyStream final {
     }
 };
 
-ruvia::detail::Http1RequestBodyPlan parseBodyPlan(std::string_view wire) {
+ruvia::Http1RequestBodyPlan parseBodyPlan(std::string_view wire) {
     return ruvia::detail::Http1ServerRequestParser().parseMessage(wire).bodyPlan;
 }
 
 struct KnownLengthObservation final {
     std::string body;
     std::string pipeline;
-    ruvia::detail::Http1RequestBodyConsumption consumption{ruvia::detail::Http1RequestBodyConsumption::kIncomplete};
+    ruvia::Http1RequestBodyConsumption consumption{ruvia::Http1RequestBodyConsumption::kIncomplete};
     std::optional<ruvia::HttpStatusCode> errorStatus;
 };
 
@@ -203,7 +203,7 @@ std::string chunkedParts(std::string_view first, std::string_view second) {
 struct TransferBodyObservation final {
     std::string body;
     std::string pipeline;
-    ruvia::detail::Http1RequestBodyConsumption consumption{ruvia::detail::Http1RequestBodyConsumption::kIncomplete};
+    ruvia::Http1RequestBodyConsumption consumption{ruvia::Http1RequestBodyConsumption::kIncomplete};
     std::optional<ruvia::HttpStatusCode> errorStatus;
 };
 
@@ -256,7 +256,7 @@ RUVIA_TEST(http1_without_body_plan_preserves_the_entire_pipeline) {
     ruvia::detail::ConnectionScanner::Entry scannerEntry;
     std::pmr::monotonic_buffer_resource resource;
     ruvia::detail::StreamBodyReader<UnusedBodyStream> reader(stream, std::pmr::polymorphic_allocator<char>(&resource), "GET /next HTTP/1.1\r\nHost: x\r\n\r\n", plan, ruvia::ProtocolByteLimit::limited(1024), scannerEntry);
-    RUVIA_CHECK(reader.consumption() == ruvia::detail::Http1RequestBodyConsumption::kComplete);
+    RUVIA_CHECK(reader.consumption() == ruvia::Http1RequestBodyConsumption::kComplete);
 
     std::pmr::string taken(&resource);
     reader.takePipeline(taken);
@@ -274,7 +274,7 @@ RUVIA_TEST(http1_transfer_coding_uses_one_decoder_for_streaming_and_buffered_rea
         RUVIA_CHECK(!observation.errorStatus.has_value());
         RUVIA_CHECK_EQ(observation.body, std::string(plain));
         RUVIA_CHECK_EQ(observation.pipeline, std::string(pipeline));
-        RUVIA_CHECK(observation.consumption == ruvia::detail::Http1RequestBodyConsumption::kComplete);
+        RUVIA_CHECK(observation.consumption == ruvia::Http1RequestBodyConsumption::kComplete);
     }
 }
 
@@ -291,7 +291,7 @@ RUVIA_TEST(http1_transfer_coding_preserves_gzip_members_across_chunks) {
         RUVIA_CHECK(!observation.errorStatus.has_value());
         RUVIA_CHECK_EQ(observation.body, std::string("first-second"));
         RUVIA_CHECK_EQ(observation.pipeline, std::string(pipeline));
-        RUVIA_CHECK(observation.consumption == ruvia::detail::Http1RequestBodyConsumption::kComplete);
+        RUVIA_CHECK(observation.consumption == ruvia::Http1RequestBodyConsumption::kComplete);
     }
 }
 
@@ -300,7 +300,7 @@ RUVIA_TEST(http1_transfer_coding_failure_maps_once_for_both_read_surfaces) {
     for (const bool streaming : {false, true}) {
         const auto observation = readTransferBody(initial, streaming);
         RUVIA_CHECK_EQ(observation.errorStatus, ruvia::http_status::kBadRequest);
-        RUVIA_CHECK(observation.consumption == ruvia::detail::Http1RequestBodyConsumption::kIncomplete);
+        RUVIA_CHECK(observation.consumption == ruvia::Http1RequestBodyConsumption::kIncomplete);
     }
 }
 
@@ -314,7 +314,7 @@ RUVIA_TEST(http1_streaming_content_length_body_split_across_socket_reads) {
     RUVIA_CHECK(!observation.errorStatus.has_value());
     RUVIA_CHECK_EQ(observation.body, body);
     RUVIA_CHECK(observation.pipeline.empty());
-    RUVIA_CHECK(observation.consumption == ruvia::detail::Http1RequestBodyConsumption::kComplete);
+    RUVIA_CHECK(observation.consumption == ruvia::Http1RequestBodyConsumption::kComplete);
 }
 
 RUVIA_TEST(http1_streaming_content_length_keeps_pipelined_request_out_of_body) {
@@ -327,7 +327,7 @@ RUVIA_TEST(http1_streaming_content_length_keeps_pipelined_request_out_of_body) {
     RUVIA_CHECK(!observation.errorStatus.has_value());
     RUVIA_CHECK_EQ(observation.body, body);
     RUVIA_CHECK_EQ(observation.pipeline, std::string(pipeline));
-    RUVIA_CHECK(observation.consumption == ruvia::detail::Http1RequestBodyConsumption::kComplete);
+    RUVIA_CHECK(observation.consumption == ruvia::Http1RequestBodyConsumption::kComplete);
 }
 
 RUVIA_TEST(http1_transfer_coding_eof_commits_only_the_complete_decode_pipeline) {
@@ -337,6 +337,6 @@ RUVIA_TEST(http1_transfer_coding_eof_commits_only_the_complete_decode_pipeline) 
     for (const bool streaming : {false, true}) {
         const auto observation = readTransferBody(initial, streaming);
         RUVIA_CHECK_EQ(observation.errorStatus, ruvia::http_status::kBadRequest);
-        RUVIA_CHECK(observation.consumption == ruvia::detail::Http1RequestBodyConsumption::kIncomplete);
+        RUVIA_CHECK(observation.consumption == ruvia::Http1RequestBodyConsumption::kIncomplete);
     }
 }

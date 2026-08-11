@@ -76,7 +76,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
 
     // Do not publish a newly minted id until its blob has been persisted, and do
     // not destroy a recognized session until its replacement exists. An RNG,
-    // Redis SETEX, or Redis DEL failure leaves the client's previous cookie
+    // Redis SET, or Redis DEL failure leaves the client's previous cookie
     // untouched instead of returning a Set-Cookie for a missing session.
     const auto commitPlan = detail::sessionCommitPlan(existingId, oldIdToDelete, mintNewId);
     for (std::size_t i = 0; i < commitPlan.count; ++i) {
@@ -85,7 +85,9 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
                 std::pmr::string key(c.resource());
                 key.append("sess:");
                 key.append(existingId.data(), existingId.size());
-                co_await c.redis(redisAlias_.view()).setEx(key, std::chrono::seconds(86400), data);
+                ruvia::RedisSetOptions options;
+                options.expiration = ruvia::RedisSetExpiration::expiresAfter(std::chrono::hours(24));
+                (void)(co_await c.redis(redisAlias_.view()).set(key, data, std::move(options)));
                 break;
             }
             case detail::SessionCommitStep::kDeleteOld: {

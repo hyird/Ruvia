@@ -54,6 +54,9 @@ WorkerDispatcher::WorkerDispatcher(asio::io_context& ioContext, std::size_t capa
 WorkerDispatcher::~WorkerDispatcher() = default;
 
 PostResult WorkerDispatcher::post(MoveOnlyFunction<void()> task) {
+    if (!task) {
+        throw std::invalid_argument("worker post requires a callable task");
+    }
     std::lock_guard lock(impl_->mutex);
     if (!impl_->contextAttached || !impl_->accepting) {
         return PostResult::reject(PostStatus::kWorkerStopping, std::move(task));
@@ -72,6 +75,9 @@ PostResult WorkerDispatcher::post(MoveOnlyFunction<void()> task) {
 }
 
 PostStatus WorkerDispatcher::postFactory(MoveOnlyFunction<MoveOnlyFunction<void()>()> factory) {
+    if (!factory) {
+        throw std::invalid_argument("worker post factory requires a callable");
+    }
     std::lock_guard lock(impl_->mutex);
     if (!impl_->contextAttached || !impl_->accepting) {
         return PostStatus::kWorkerStopping;
@@ -83,18 +89,37 @@ PostStatus WorkerDispatcher::postFactory(MoveOnlyFunction<MoveOnlyFunction<void(
         asio::post(impl_->ioContext, [self = shared_from_this()] { self->drain(); });
         impl_->drainScheduled = true;
     }
-    impl_->slots[impl_->tail].emplace(factory());
+    auto task = factory();
+    if (!task) {
+        throw std::invalid_argument("worker post factory produced an empty task");
+    }
+    impl_->slots[impl_->tail].emplace(std::move(task));
     impl_->tail = (impl_->tail + 1) % impl_->slots.size();
     ++impl_->size;
     return PostStatus::kAccepted;
 }
 
 void WorkerDispatcher::defer(MoveOnlyFunction<void()> task) {
+    if (!task) {
+        throw std::invalid_argument("worker defer requires a callable task");
+    }
     std::lock_guard lock(impl_->mutex);
     if (!impl_->contextAttached) {
         throw std::runtime_error("worker execution context is detached");
     }
     asio::post(impl_->ioContext, [self = shared_from_this(), task = std::move(task)]() mutable { task(); });
+}
+
+bool WorkerDispatcher::deferIfAttached(MoveOnlyFunction<void()> task) {
+    if (!task) {
+        throw std::invalid_argument("worker defer requires a callable task");
+    }
+    std::lock_guard lock(impl_->mutex);
+    if (!impl_->contextAttached) {
+        return false;
+    }
+    asio::post(impl_->ioContext, [self = shared_from_this(), task = std::move(task)]() mutable { task(); });
+    return true;
 }
 
 void WorkerDispatcher::deferOrTerminate(MoveOnlyFunction<void()> task) noexcept {
@@ -214,13 +239,12 @@ void WorkerDispatcher::detachContext() noexcept {
     impl_->freeTimerSlot = kNoTimerSlot;
     impl_->staleTimerCount = 0;
     impl_->timerArmed = false;
-    impl_->timersStopping = true;
+    impl_->timersStopping.store(true, std::memory_order_release);
     detachedTimer.reset();
 }
 
 bool WorkerDispatcher::attached() const noexcept {
-    std::lock_guard lock(impl_->mutex);
-    return impl_->contextAttached;
+    return impl_->contextAttached.load(std::memory_order_acquire);
 }
 
 WorkerDispatcher::ShutdownListeners WorkerDispatcher::beginStopping(bool abandonDrain) noexcept {
@@ -277,13 +301,11 @@ bool WorkerDispatcher::isCurrent() const noexcept {
 }
 
 bool WorkerDispatcher::accepting() const noexcept {
-    std::lock_guard lock(impl_->mutex);
-    return impl_->accepting;
+    return impl_->accepting.load(std::memory_order_acquire);
 }
 
 WorkerId WorkerDispatcher::id() const noexcept {
-    std::lock_guard lock(impl_->mutex);
-    return impl_->contextAttached ? impl_->workerId : 0;
+    return impl_->contextAttached.load(std::memory_order_acquire) ? impl_->workerId : 0;
 }
 
 void WorkerDispatcher::drain() {
