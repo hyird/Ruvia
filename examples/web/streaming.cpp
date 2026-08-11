@@ -59,7 +59,7 @@ private:
         auto& stream = c.streamText();
         co_await stream.write("part 1\n");
         co_await stream.writeln("part 2");
-        if (co_await stream.sleep(std::chrono::milliseconds(20)) == ruvia::TimerSleepResult::kWorkerStopping) {
+        if (co_await stream.sleep(std::chrono::milliseconds(20)) == ruvia::TimerSleepResult::kStopRequested) {
             co_return;
         }
         if (!stream.aborted()) {
@@ -70,7 +70,7 @@ private:
     ruvia::Task<void> events(ruvia::Context& c) {
         auto events = c.streamSse();
         co_await events.write({.data = "connected", .event = "open", .id = "1"});
-        if (co_await events.sleep(std::chrono::milliseconds(20)) == ruvia::TimerSleepResult::kWorkerStopping) {
+        if (co_await events.sleep(std::chrono::milliseconds(20)) == ruvia::TimerSleepResult::kStopRequested) {
             co_return;
         }
         if (!events.aborted()) {

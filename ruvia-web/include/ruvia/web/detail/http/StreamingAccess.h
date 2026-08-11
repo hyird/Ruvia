@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/core/StopToken.h"
+
 #include "ruvia/web/Streaming.h"
 
 #include <memory_resource>
@@ -34,8 +36,10 @@ struct StreamingAccess final {
         return SseWriter(writer);
     }
 
-    static void bindContext(ResponseStreamWriter& writer, Context& context, ResponseStreamWriter::StreamingHeadThunk streamingHead) {
-        writer.bindContext(context, streamingHead);
+    // The token is supplied by the caller rather than read from `context`:
+    // Context is incomplete here, and this header is deliberately narrow.
+    static void bindContext(ResponseStreamWriter& writer, Context& context, StopToken stopToken, ResponseStreamWriter::StreamingHeadThunk streamingHead) {
+        writer.bindContext(context, stopToken, streamingHead);
     }
 
     static void releaseContext(ResponseStreamWriter& writer) noexcept {

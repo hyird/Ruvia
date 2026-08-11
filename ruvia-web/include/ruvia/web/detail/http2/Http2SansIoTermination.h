@@ -151,7 +151,7 @@ public:
             throw std::system_error(termination_.error());
         }
         if (timerOutcome_ == WorkerTimerOutcome::kCancelled) {
-            return TimerSleepResult::kWorkerStopping;
+            return TimerSleepResult::kStopRequested;
         }
         return TimerSleepResult::kElapsed;
     }

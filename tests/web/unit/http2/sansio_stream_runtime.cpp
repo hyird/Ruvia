@@ -185,7 +185,7 @@ RUVIA_TEST(http2_worker_shutdown_reports_typed_sleep_result) {
     io.run();
 
     RUVIA_CHECK(observed.has_value());
-    RUVIA_CHECK_EQ(*observed, ruvia::TimerSleepResult::kWorkerStopping);
+    RUVIA_CHECK_EQ(*observed, ruvia::TimerSleepResult::kStopRequested);
 }
 
 RUVIA_TEST(http2_session_termination_cancels_stream_sleep_with_exact_error) {

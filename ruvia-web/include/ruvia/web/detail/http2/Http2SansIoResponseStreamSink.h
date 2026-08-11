@@ -147,7 +147,7 @@ public:
         }
     }
 
-    Task<TimerSleepResult> sleep(std::chrono::milliseconds duration) {
+    Task<TimerSleepResult> sleep(std::chrono::milliseconds duration, const StopToken& stopToken) {
         co_return co_await Http2SansIoSleepAwaiter(*worker_, streamSignal_.termination(), duration);
     }
 

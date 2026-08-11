@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/StopToken.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/Sse.h"
@@ -100,7 +101,7 @@ private:
 
     using Write = Task<void> (*)(void*, std::string_view);
     using End = Task<void> (*)(void*, std::span<const HttpHeaderView>);
-    using Sleep = Task<TimerSleepResult> (*)(void*, std::chrono::milliseconds);
+    using Sleep = Task<TimerSleepResult> (*)(void*, std::chrono::milliseconds, const StopToken&);
     using StreamingHeadThunk = HttpResponse (*)(Context&);
     using BindContext = void (*)(void*, Context*, StreamingHeadThunk);
     using ReleaseContext = void (*)(void*) noexcept;
@@ -117,7 +118,11 @@ private:
           committed_(committed),
           aborted_(aborted) {}
 
-    void bindContext(Context& context, StreamingHeadThunk streamingHead) {
+    // The request's stop token travels with the binding so sleep() can observe
+    // it. A framework-provided wait that ignores it would be a hole in every
+    // deadline built on that token -- which is exactly what this used to be.
+    void bindContext(Context& context, StopToken stopToken, StreamingHeadThunk streamingHead) {
+        stopToken_ = stopToken;
         bindContext_(target_, &context, streamingHead);
     }
 
@@ -144,6 +149,7 @@ private:
     ReleaseContext releaseContext_;
     Committed committed_;
     Aborted aborted_;
+    StopToken stopToken_;
     bool outputActive_{false};
     detail::ScopedOperationScope operationScope_;
 

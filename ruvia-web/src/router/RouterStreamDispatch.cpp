@@ -52,7 +52,7 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(const 
     const bool webSocketRoute = route.endpoint().webSocket() != nullptr;
     ResponseStreamContextBinding streamContextBinding(responseStreamOutput != nullptr ? &responseStreamOutput->writer() : nullptr);
     if (responseStreamOutput != nullptr) {
-        detail::StreamingAccess::bindContext(responseStreamOutput->writer(), context, &streamingHeadThunk);
+        detail::StreamingAccess::bindContext(responseStreamOutput->writer(), context, context.stopToken(), &streamingHeadThunk);
     }
 
     std::exception_ptr exception;

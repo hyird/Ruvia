@@ -35,8 +35,8 @@ Task<void> responseStreamEndThunk(void* target, std::span<const HttpHeaderView> 
 }
 
 template <typename Sink>
-Task<TimerSleepResult> responseStreamSleepThunk(void* target, std::chrono::milliseconds duration) {
-    co_return co_await static_cast<Sink*>(target)->sleep(duration);
+Task<TimerSleepResult> responseStreamSleepThunk(void* target, std::chrono::milliseconds duration, const StopToken& stopToken) {
+    co_return co_await static_cast<Sink*>(target)->sleep(duration, stopToken);
 }
 
 template <typename Sink>

@@ -1,4 +1,5 @@
 #include <ruvia/core/TaskScope.h>
+#include <ruvia/core/StopToken.h>
 #include <ruvia/core/Timer.h>
 #include <ruvia/core/detail/io/AsioAwait.h>
 #include <ruvia/core/detail/worker/WorkerDispatcher.h>
@@ -9,6 +10,7 @@
 #include <asio/io_context.hpp>
 
 #include <chrono>
+#include <cstdio>
 #include <future>
 #include <limits>
 #include <memory>
@@ -315,9 +317,73 @@ ruvia::Task<void> exerciseSlotReuse(ruvia::WorkerHandle worker, bool& success) {
 
 }  // namespace
 
+// A framework-provided wait that ignores the caller's stop token is a hole in
+// every deadline built on that token. These pin that sleepFor's stoppable
+// overload closes it, and that stopping it does not depend on the timer having
+// been long enough to notice.
+ruvia::Task<void> exerciseStoppableSleep(const ruvia::WorkerHandle& worker, bool& success) {
+    success = false;
+
+
+    // Not stopped: the sleep runs to completion and reports elapsed.
+    ruvia::detail::StopSource idle;
+    if (co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1), idle.token()) != ruvia::TimerSleepResult::kElapsed) {
+        co_return;
+    }
+
+    // Already stopped before the call: must not suspend for the full duration.
+    ruvia::detail::StopSource stopped;
+    stopped.requestStop();
+    const auto before = std::chrono::steady_clock::now();
+    if (co_await ruvia::sleepFor(worker, std::chrono::seconds(30), stopped.token()) != ruvia::TimerSleepResult::kStopRequested) {
+        co_return;
+    }
+    if (std::chrono::steady_clock::now() - before > std::chrono::seconds(5)) {
+        co_return;
+    }
+
+    // Stopped while suspended: the deferred cancel has to cut a sleep that is
+    // already parked on the timer queue, which is the case the whole overload
+    // exists for.
+    ruvia::detail::StopSource inflight;
+    ruvia::detail::WorkerHandleAccess::defer(worker, [&inflight] { inflight.requestStop(); });
+    const auto parked = std::chrono::steady_clock::now();
+    if (co_await ruvia::sleepFor(worker, std::chrono::seconds(30), inflight.token()) != ruvia::TimerSleepResult::kStopRequested) {
+        co_return;
+    }
+    if (std::chrono::steady_clock::now() - parked > std::chrono::seconds(5)) {
+        co_return;
+    }
+
+    // A stop that arrives long after the sleep already finished must be a
+    // no-op, not a use-after-free of the awaiter's timer registration.
+    ruvia::detail::StopSource late;
+    if (co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1), late.token()) != ruvia::TimerSleepResult::kElapsed) {
+        co_return;
+    }
+    late.requestStop();
+    static_cast<void>(co_await ruvia::sleepFor(worker, std::chrono::milliseconds(5)));
+
+    success = true;
+}
+
+bool stoppableSleepWorks() {
+    // Its own io_context and dispatcher: other cases in this file exercise
+    // worker shutdown, which stops timers, and a parked sleep sharing that
+    // dispatcher would be cancelled by them rather than by its own token.
+    asio::io_context ioContext;
+    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    bool success = false;
+    asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exerciseStoppableSleep(worker, success)), asio::detached);
+    ioContext.run();
+    dispatcher->close();
+    return success;
+}
+
 int main() {
     if (!discriminatedWaitStateWorks() || !saturatingTimerDeadlineWorks() || !saturatingTimerDurationCastWorks() || !timerImmediateShutdownWorks() || !stoppedDispatcherCanOutliveContext() || !timerRegistrationResetAfterStopDoesNotQueueCancellation() ||
-        !offWorkerCancellationAfterContextStopDoesNotExpireLater()) {
+        !offWorkerCancellationAfterContextStopDoesNotExpireLater() || !stoppableSleepWorks()) {
         return 1;
     }
     asio::io_context ioContext;
