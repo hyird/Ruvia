@@ -281,6 +281,24 @@ public:
     template <typename T>
     [[nodiscard]] HttpResponse json(const T& value) const;
 
+    // A JSON response whose shape is decided at run time. The callback receives
+    // a writer scoped to this call and appends into the request arena; the
+    // brackets close and the response is built when it returns.
+    //
+    //   co_return c.jsonObject([&](ruvia::JsonObjectWriter& out) {
+    //       out.add("id", user.id);
+    //       auto roles = out.beginArray("roles");
+    //       for (const auto& role : user.roles) roles.add(role);
+    //   });
+    //
+    // Prefer c.json(model) whenever the shape IS known at compile time -- the
+    // model path sizes its output in advance. Reach for this when it is not.
+    template <typename BuildFn>
+    [[nodiscard]] HttpResponse jsonObject(BuildFn&& build) const;
+
+    template <typename BuildFn>
+    [[nodiscard]] HttpResponse jsonArray(BuildFn&& build) const;
+
     [[nodiscard]] HttpResponse html(std::string_view body) const;
     [[nodiscard]] HttpResponse html(std::pmr::string&& body) const;
     [[nodiscard]] HttpResponse html(std::string& body) const = delete;

@@ -88,6 +88,7 @@ public:
     RUVIA_GET("/boom", boom);
     RUVIA_GET("/whoami", whoami, TestingFacadeAuth);
     RUVIA_GET("/whoami-unbound", whoamiUnbound);
+    RUVIA_GET("/report", report);
     RUVIA_ROUTES_END
 
 private:
@@ -136,6 +137,20 @@ private:
         reply.push_back('/');
         reply.append(std::to_string(user.level));
         co_return c.body(std::move(reply));
+    }
+
+    // A body whose shape is decided at run time, built through the streaming
+    // writer rather than by concatenating JSON.
+    ruvia::Task<ruvia::HttpResponse> report(ruvia::Context& c) {
+        const std::string_view tags[] = {"a\"quoted", "b"};
+        co_return c.jsonObject([&](ruvia::JsonObjectWriter& out) {
+            out.add("path", c.req().path());
+            out.add("count", std::size(tags));
+            auto list = out.beginArray("tags");
+            for (const auto& tag : tags) {
+                list.add(tag);
+            }
+        });
     }
 
     // No auth middleware on this route, so nothing is bound and the optional
@@ -411,4 +426,14 @@ RUVIA_TEST(testing_facade_request_state_is_absent_without_its_middleware) {
     const auto response = app.request(ruvia::TestRequest::get("/t/whoami-unbound").header("X-User", "ada"));
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(response.body(), std::string_view("unbound"));
+}
+
+RUVIA_TEST(testing_facade_builds_a_runtime_shaped_json_body) {
+    ruvia::TestApp app;
+    const auto response = app.request(ruvia::TestRequest::get("/t/report"));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(response.body(), std::string_view(R"({"path":"/t/report","count":2,"tags":["a\"quoted","b"]})"));
+    const auto contentType = response.header("Content-Type");
+    RUVIA_CHECK(contentType.has_value());
+    RUVIA_CHECK_EQ(*contentType, std::string_view("application/json"));
 }

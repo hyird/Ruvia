@@ -412,6 +412,7 @@ ruvia_add_unit_suite(ruvia_web_unit_tests ruvia::web
     web/unit/json/lex.cpp
     web/unit/json/object_fields.cpp
     web/unit/json/size_hint.cpp
+    web/unit/json/streaming_writer.cpp
 
     # web/unit/model
     web/unit/model/content_type_match.cpp
