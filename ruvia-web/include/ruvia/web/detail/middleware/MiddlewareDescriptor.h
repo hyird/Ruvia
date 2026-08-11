@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string_view>
+
 // Internal startup-time middleware descriptor.
 
 #include "ruvia/core/Task.h"
@@ -49,11 +51,25 @@ public:
     // Two registrations of the same middleware type differ when they carry
     // different arguments, so identity spans the argument pointer as well.
     [[nodiscard]] friend bool operator==(const ControllerMiddlewareDescriptor& left, const ControllerMiddlewareDescriptor& right) noexcept {
-        return left.invoke_ == right.invoke_ && left.create_ == right.create_ && left.destroy_ == right.destroy_ && left.args_ == right.args_;
+        return left.invoke_ == right.invoke_ && left.create_ == right.create_ && left.destroy_ == right.destroy_ && left.args_ == right.args_ && left.prefix_ == right.prefix_;
     }
 
     [[nodiscard]] const void* validatedModelTypeKey() const noexcept {
         return validatedModelTypeKey_;
+    }
+
+    // Empty means app-wide. Otherwise the middleware runs only on routes whose
+    // path is under this prefix, decided once when the route table is built --
+    // there is no per-request pattern matching. The text is registration-owned
+    // and outlives the table.
+    [[nodiscard]] std::string_view prefix() const noexcept {
+        return prefix_;
+    }
+
+    [[nodiscard]] ControllerMiddlewareDescriptor scopedTo(std::string_view prefix) const noexcept {
+        auto scoped = *this;
+        scoped.prefix_ = prefix;
+        return scoped;
     }
 
     [[nodiscard]] bool usesRouteRateLimit() const noexcept {
@@ -78,6 +94,7 @@ private:
     Destroy destroy_{nullptr};
     const void* args_{nullptr};
     const void* validatedModelTypeKey_{nullptr};
+    std::string_view prefix_{};
     bool usesRouteRateLimit_{false};
 };
 

@@ -205,7 +205,7 @@ template <typename Stored>
 [[nodiscard]] auto selectPrefixHandler(const std::pmr::vector<Stored>& stored, std::string_view path) noexcept {
     for (const auto& candidate : stored) {
         const std::string_view prefix(candidate.prefix);
-        if (prefix == "/" || path == prefix || (path.size() > prefix.size() && path.starts_with(prefix) && path[prefix.size()] == '/')) {
+        if (detail::pathIsUnderPrefix(path, prefix)) {
             return candidate.handler;
         }
     }

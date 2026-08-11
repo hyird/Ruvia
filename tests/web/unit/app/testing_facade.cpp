@@ -75,6 +75,21 @@ public:
     }
 };
 
+// Stamps a header so a response shows whether this middleware ran at all.
+class TestingFacadeScoped final : public ruvia::Middleware<TestingFacadeScoped> {
+public:
+    explicit TestingFacadeScoped(std::string_view tag) noexcept
+        : tag_(tag) {}
+
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+        co_await next();
+        c.header("X-Test-Scope", tag_);
+    }
+
+private:
+    std::string_view tag_;
+};
+
 class TestingFacadeController final : public ruvia::Controller<TestingFacadeController> {
 public:
     RUVIA_CONTROLLER_GROUP("/t")
@@ -436,4 +451,54 @@ RUVIA_TEST(testing_facade_builds_a_runtime_shaped_json_body) {
     const auto contentType = response.header("Content-Type");
     RUVIA_CHECK(contentType.has_value());
     RUVIA_CHECK_EQ(*contentType, std::string_view("application/json"));
+}
+
+RUVIA_TEST(testing_facade_path_scoped_middleware_runs_only_under_its_prefix) {
+    ruvia::TestApp app;
+    app.useAt<TestingFacadeScoped>("/t/users", "users");
+
+    // Under the scope, on both the exact prefix path shape and a deeper one.
+    const auto scoped = app.request(ruvia::TestRequest::get("/t/users/42"));
+    RUVIA_CHECK_EQ(scoped.status(), ruvia::http_status::kOk);
+    const auto scopedHeader = scoped.header("X-Test-Scope");
+    RUVIA_CHECK(scopedHeader.has_value());
+    RUVIA_CHECK_EQ(*scopedHeader, std::string_view("users"));
+
+    // A sibling route outside the scope never receives the frame.
+    const auto outside = app.request(ruvia::TestRequest::get("/t/hello"));
+    RUVIA_CHECK_EQ(outside.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK(!outside.header("X-Test-Scope").has_value());
+}
+
+RUVIA_TEST(testing_facade_path_scope_matches_whole_segments_only) {
+    ruvia::TestApp app;
+    // "/t/user" must not scope "/t/users/:id" -- that is a different segment,
+    // not a deeper path.
+    app.useAt<TestingFacadeScoped>("/t/user", "prefix-only");
+
+    const auto response = app.request(ruvia::TestRequest::get("/t/users/42"));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK(!response.header("X-Test-Scope").has_value());
+}
+
+RUVIA_TEST(testing_facade_path_scope_normalizes_a_trailing_slash) {
+    ruvia::TestApp app;
+    app.useAt<TestingFacadeScoped>("/t/users/", "trailing");
+
+    const auto response = app.request(ruvia::TestRequest::get("/t/users/42"));
+    const auto header = response.header("X-Test-Scope");
+    RUVIA_CHECK(header.has_value());
+    RUVIA_CHECK_EQ(*header, std::string_view("trailing"));
+}
+
+RUVIA_TEST(testing_facade_app_wide_middleware_still_runs_everywhere) {
+    ruvia::TestApp app;
+    app.use<TestingFacadeScoped>("global");
+
+    // Bound to names: TestResponse owns its headers, so header() is rightly
+    // rvalue-deleted and a view into a temporary is not obtainable.
+    const auto hello = app.request(ruvia::TestRequest::get("/t/hello"));
+    RUVIA_CHECK(hello.header("X-Test-Scope").has_value());
+    const auto user = app.request(ruvia::TestRequest::get("/t/users/42"));
+    RUVIA_CHECK(user.header("X-Test-Scope").has_value());
 }

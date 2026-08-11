@@ -35,6 +35,25 @@ public:
         return self().useMiddleware(makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...));
     }
 
+    // The same registration, scoped to a path prefix: the middleware runs only
+    // on routes under it. Prefixes use the same whole-segment rule and trailing
+    // slash normalization as onError(prefix, ...) -- "/api" scopes "/api" and
+    // "/api/x", never "/apix".
+    //
+    // Scoping is resolved when the route table is built, so a scoped middleware
+    // costs a matched route exactly what an app-wide one does and costs a route
+    // outside the scope nothing at all. There is no per-request path matching.
+    //
+    // Deliberately a separate name rather than a use<T>(prefix, args...)
+    // overload: the argument pack can itself begin with a string, and a
+    // registration silently changing meaning based on its first argument's type
+    // is not a mistake worth allowing.
+    template <typename MiddlewareT, typename... Args>
+    Derived& useAt(std::string_view prefix, Args&&... args) {
+        const auto normalized = normalizeFallbackPrefix(prefix);
+        return self().useMiddleware(makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...).scopedTo(retainRegistrationText(normalized)));
+    }
+
     // Worker-local user state: every worker builds its own T from the registered
     // factory at startup, and Context::workerState<T>() /
     // WebWorkerContext::workerState<T>() return that worker's instance. Workers

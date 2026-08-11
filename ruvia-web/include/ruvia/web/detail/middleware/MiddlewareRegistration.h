@@ -81,6 +81,17 @@ template <typename MiddlewareT>
 // stay readable for the process lifetime rather than the caller's scope.
 // Registering without arguments is the zero-argument case of this, so there is
 // one descriptor shape and one construction path.
+// Copies text onto the process registration resource so a descriptor can hold a
+// view of it. The caller's argument may be a temporary; the descriptor outlives
+// every route table built from it.
+[[nodiscard]] inline std::string_view retainRegistrationText(std::string_view text) {
+    if (text.empty()) {
+        return {};
+    }
+    const auto* stored = constructPmrObject<std::pmr::string>(registrationResource(), text, registrationResource());
+    return std::string_view(*stored);
+}
+
 template <typename MiddlewareT, typename... Args>
 [[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args) {
     static_assert(std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>, "middleware must derive from ruvia::Middleware<MiddlewareT>");
