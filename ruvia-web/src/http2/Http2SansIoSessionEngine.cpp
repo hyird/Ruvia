@@ -253,8 +253,11 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         const auto& resolution = selectedRoute->resolution();
         const auto* resolved = resolution.resolved();
 
+        // Resolved per request: one HTTP/2 connection multiplexes many, each
+        // carrying its own forwarding headers.
+        const auto clientAddress = baseServices.resolveConnInfo(request).client().address();
         const auto appRateLimit =
-            decideRequestRateLimit(baseServices.rateLimiter(), remoteAddress_);
+            decideRequestRateLimit(baseServices.rateLimiter(), clientAddress);
         if (const auto* rejection = appRateLimit.rejection()) {
             response = co_await routes_->handleError(
                 request, requestMemory, rateLimitRejectionError(), baseServices);
@@ -417,7 +420,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 recordHttpAccess(
                     options.accessLog,
                     request,
-                    remoteAddress_,
+                    baseServices.resolveConnInfo(request).client().address(),
                     *committedStatus,
                     requestStart);
                 co_return;
@@ -487,7 +490,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         recordHttpAccess(
             options.accessLog,
             request,
-            remoteAddress_,
+            baseServices.resolveConnInfo(request).client().address(),
             *committedStatus,
             requestStart);
     }

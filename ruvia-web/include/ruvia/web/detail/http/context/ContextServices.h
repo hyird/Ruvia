@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/ConnInfo.h"
+#include "ruvia/web/detail/server/TrustedProxies.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/detail/http/context/ContextCapabilities.h"
 #include "ruvia/http/HttpLimits.h"
@@ -13,6 +14,8 @@
 #include <utility>
 
 namespace ruvia {
+
+class HttpRequest;
 class BlockingPool;
 class Env;
 }  // namespace ruvia
@@ -118,6 +121,22 @@ public:
     [[nodiscard]] constexpr const ConnInfo& connInfo() const noexcept {
         return connInfo_;
     }
+
+    [[nodiscard]] ContextServices withTrustedProxies(const TrustedProxySet* value) const noexcept {
+        auto services = *this;
+        services.trustedProxies_ = value;
+        return services;
+    }
+
+    [[nodiscard]] const TrustedProxySet* trustedProxies() const noexcept {
+        return trustedProxies_;
+    }
+
+    // The connection metadata one request sees. Identical to connInfo() unless
+    // the peer is a configured trusted proxy, in which case its forwarding
+    // headers name the client. Resolved per request rather than per connection:
+    // one HTTP/2 connection carries many requests, each with its own headers.
+    [[nodiscard]] ConnInfo resolveConnInfo(const HttpRequest& request) const noexcept;
 
     [[nodiscard]] ContextServices withStreamingRequestBody(BodyReader& value) const noexcept {
         auto services = *this;
@@ -242,6 +261,7 @@ private:
     ContextRequestBodySource requestBodySource_;
     ContextResponseOutput responseOutput_;
     ConnInfo connInfo_;
+    const TrustedProxySet* trustedProxies_{nullptr};
 };
 
 }  // namespace ruvia::detail
