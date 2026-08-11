@@ -170,7 +170,7 @@ Task<detail::BufferedResponseDispatchResult> detail::RouteTable::dispatchRequest
                 // Otherwise the method is known here but this path has nothing:
                 // an ordinary 404, which the fallback below produces.
             } else if (request.knownMethod() == HttpKnownMethod::kOptions && request.path() == "*") {
-                co_return detail::BufferedResponseDispatchResult::makeApplication(makeAllowNoContentResponse(memory, allowedMethodsForServer()));
+                co_return detail::BufferedResponseDispatchResult::makeApplication(makeAllowNoContentResponse(memory, allowedMethodsForServer(), extensionMethodsForServer()));
             } else if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
                 extensionMethods = extensionMethodsFor(request.path(), extensionMethodBuffer);
                 if (request.knownMethod() == HttpKnownMethod::kOptions) {

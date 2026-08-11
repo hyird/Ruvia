@@ -73,15 +73,28 @@ void detail::RouteTable::buildPerfectHash() {
     throw std::logic_error("failed to build the static route index");
 }
 
-void detail::RouteTable::buildAllowedMethodMask() noexcept {
+void detail::RouteTable::buildAllowedMethodMask() {
     allowedMethodMask_ = 0;
     staticMethodMask_ = 0;
+    serverExtensionMethodTokens_.clear();
+    serverExtensionMethodTokens_.reserve(extensionRouteIndices_.size());
     for (const auto& route : routes_) {
         if (isRoutableMethod(route.method())) {
             const auto methodBit = 1U << methodIndex(route.method());
             allowedMethodMask_ |= methodBit;
             if (!route.dynamic()) {
                 staticMethodMask_ |= methodBit;
+            }
+        } else if (!route.methodToken().empty()) {
+            bool duplicate = false;
+            for (const auto token : serverExtensionMethodTokens_) {
+                if (token == route.methodToken()) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                serverExtensionMethodTokens_.push_back(route.methodToken());
             }
         }
     }

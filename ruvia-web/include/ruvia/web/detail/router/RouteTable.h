@@ -194,6 +194,9 @@ public:
     // Tokens of the extension routes registered on `path`, for the Allow header
     // of a 405. Written into caller storage so no allocation outlives the call.
     [[nodiscard]] std::span<const std::string_view> extensionMethodsFor(std::string_view path, std::span<std::string_view> buffer) const noexcept;
+    // Unique extension method tokens registered anywhere on the server, for the
+    // server-wide Allow header of OPTIONS *.
+    [[nodiscard]] std::span<const std::string_view> extensionMethodsForServer() const noexcept;
     [[nodiscard]] bool hasExtensionRoutesFor(std::string_view path) const noexcept;
 
     // Whether ANY route in the table uses this exact token. RFC 9110 15.5.6
@@ -260,7 +263,7 @@ private:
 
     void buildPerfectHash();
     void buildDynamicRoutes();
-    void buildAllowedMethodMask() noexcept;
+    void buildAllowedMethodMask();
 
 
     [[nodiscard]] static std::size_t methodIndex(HttpKnownMethod method) noexcept;
@@ -329,6 +332,7 @@ private:
     // Indices into routes_ rather than pointers: routes_ is populated in two
     // passes and this is built after both.
     std::pmr::vector<std::size_t> extensionRouteIndices_;
+    std::pmr::vector<std::string_view> serverExtensionMethodTokens_;
     std::size_t unmatchedMiddlewareOffset_{0};
     std::size_t unmatchedMiddlewareCount_{0};
     std::pmr::vector<PerfectSlot> exactSlots_;

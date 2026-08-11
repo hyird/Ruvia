@@ -89,6 +89,10 @@ std::span<const std::string_view> detail::RouteTable::extensionMethodsFor(std::s
     return buffer.first(count);
 }
 
+std::span<const std::string_view> detail::RouteTable::extensionMethodsForServer() const noexcept {
+    return serverExtensionMethodTokens_;
+}
+
 detail::RouteResolution detail::RouteTable::resolve(HttpKnownMethod method, std::string_view path) const noexcept {
     // RFC 9110 7.1 / 9.3.7: the asterisk-form target ("OPTIONS *") applies to the
     // server as a whole, not any resource, so it must not bind to a route -- a
