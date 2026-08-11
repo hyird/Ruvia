@@ -321,7 +321,7 @@ private:
             auto lockResult = co_await handle.query("SELECT GET_LOCK(?, ?)", std::span<const DbValue>(lockParams));
             // GET_LOCK answers 0 on timeout and NULL on error rather than
             // failing the statement, so the wait has to be read out of the row.
-            if (lockResult.rows().size() != 1 || lockResult.rows()[0].empty() || lockResult.rows()[0][0].text() != "1") {
+            if (lockResult.size() != 1 || lockResult[0].empty() || lockResult[0][0].as<bool>() != true) {
                 throw std::runtime_error("database migration lock could not be acquired");
             }
             co_return;
@@ -351,7 +351,7 @@ private:
 
         std::array<DbValue, 1> tableParams{DbValue{std::string_view(options.table)}};
         auto checksumColumn = co_await handle.query(buildChecksumColumnProbeSql(driver, resource), std::span<const DbValue>(tableParams));
-        if (checksumColumn.rows().empty()) {
+        if (checksumColumn.empty()) {
             (void)co_await handle.execute(buildAddChecksumColumnSql(options.table, driver, resource));
         }
 
@@ -362,12 +362,13 @@ private:
             const auto checksum = detail::migrationChecksum(migration.sql(), resource);
             std::array<DbValue, 1> findParams{DbValue{migration.id()}};
             auto existing = co_await handle.query(findSql, std::span<const DbValue>(findParams));
-            if (!existing.rows().empty()) {
-                const auto& recorded = existing.rows()[0][0];
-                if (recorded.isNull() || recorded.text().empty()) {
+            if (!existing.empty()) {
+                const auto& recorded = existing[0][0];
+                const auto value = recorded.value();
+                if (!value || value->empty()) {
                     std::array<DbValue, 2> adoptParams{DbValue{std::string_view(checksum)}, DbValue{migration.id()}};
                     (void)co_await handle.execute(adoptSql, std::span<const DbValue>(adoptParams));
-                } else if (recorded.text() != std::string_view(checksum)) {
+                } else if (*value != std::string_view(checksum)) {
                     throw migrationDrift(migration.id(), resource);
                 }
                 appendMigrationId(report.skipped_, migration.id());

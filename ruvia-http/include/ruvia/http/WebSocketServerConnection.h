@@ -12,6 +12,7 @@
 
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/WebSocketProtocol.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia {
 
@@ -27,6 +28,12 @@ enum class WebSocketFrameSubmitStatus : std::uint8_t { kAccepted, kNotOpen, kInv
 enum class WebSocketCloseSubmitStatus : std::uint8_t { kAccepted, kAlreadyClosing, kClosed, kInvalidCode, kInvalidReason, kReasonTooLarge };
 enum class WebSocketAbortDisposition : std::uint8_t { kAbortTransport, kNoTransportAction };
 enum class WebSocketOutputConsumeStatus : std::uint8_t { kPending, kDrained, kOutOfRange };
+enum class WebSocketFeedStatus : std::uint8_t { kAccepted, kInactive };
+
+struct WebSocketServerOptions final {
+    ProtocolByteLimit messageLimit{ProtocolByteLimit::unlimited()};
+    WebSocketCompression compression{WebSocketCompression::kDisabled};
+};
 
 class WebSocketOutputPlan final {
 public:
@@ -114,6 +121,7 @@ public:
 private:
     friend class WebSocketServerConnection;
     using Value = std::variant<WebSocketMessageEvent, WebSocketPingEvent, WebSocketPongEvent, WebSocketCloseEvent, WebSocketProtocolErrorEvent, WebSocketTransportEndEvent>;
+    static_assert(static_cast<std::size_t>(WebSocketEventKind::kTransportEnd) + 1 == std::variant_size_v<Value>);
     template <typename Event>
     explicit WebSocketEvent(Event event) noexcept : value_(std::move(event)) {}
     [[nodiscard]] static WebSocketEvent message(WebSocketOpcode opcode, std::string_view payload) noexcept { return WebSocketEvent(WebSocketMessageEvent(opcode, payload)); }
@@ -127,19 +135,21 @@ private:
 
 // Stable server-side sans-I/O WebSocket driver. It accepts RFC 6455 client
 // frames (which must be masked) and emits server frames (which are never
-// masked). `input` remains caller-owned and must outlive the connection; event
-// views remain valid until the next poll().
+// masked). Event views remain valid until the next feed() or nextEvent().
 class WebSocketServerConnection final {
 public:
-    explicit WebSocketServerConnection(std::pmr::string& input, ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(), WebSocketCompression compression = WebSocketCompression::kDisabled);
+    explicit WebSocketServerConnection(std::pmr::memory_resource* resource = nullptr, WebSocketServerOptions options = {});
     ~WebSocketServerConnection();
     WebSocketServerConnection(const WebSocketServerConnection&) = delete;
     WebSocketServerConnection& operator=(const WebSocketServerConnection&) = delete;
     WebSocketServerConnection(WebSocketServerConnection&&) noexcept;
     WebSocketServerConnection& operator=(WebSocketServerConnection&&) noexcept;
 
-    [[nodiscard]] std::optional<WebSocketEvent> poll() &;
-    std::optional<WebSocketEvent> poll() && = delete;
+    [[nodiscard]] WebSocketFeedStatus feed(std::string_view input);
+    template <detail::HttpTemporaryOwningCharString Input>
+    WebSocketFeedStatus feed(Input&&) = delete;
+    [[nodiscard]] std::optional<WebSocketEvent> nextEvent() &;
+    std::optional<WebSocketEvent> nextEvent() && = delete;
     [[nodiscard]] WebSocketOutputPlan outputPlan() const& noexcept;
     WebSocketOutputPlan outputPlan() const&& = delete;
     [[nodiscard]] WebSocketOutputConsumeStatus consumeOutput(std::size_t bytes) noexcept;

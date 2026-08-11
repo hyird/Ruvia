@@ -14,12 +14,16 @@
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/client/HttpOriginView.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia::detail {
 
 struct Http1ClientRequestPrepareResultAccess final {
-    [[nodiscard]] static constexpr Http1ClientRequestContext context(std::string_view method, std::span<const HttpHeaderView> headers, HttpConnectionOptions connectionOptions, Http1ClosePolicy closePolicy) noexcept {
-        return Http1ClientRequestContext(method, headers, connectionOptions, closePolicy);
+    [[nodiscard]] static Http1ClientExchangeState exchangeState(HttpKnownMethod method,
+        HttpConnectionOptions connectionOptions, Http1ClosePolicy closePolicy,
+        Http1ClientInitialContentState contentState, std::pmr::string offeredUpgradeProtocols) noexcept {
+        return Http1ClientExchangeState(method, connectionOptions, closePolicy, contentState,
+            std::move(offeredUpgradeProtocols));
     }
 
     [[nodiscard]] static constexpr Http1ClientRequestPrepareResult bufferTooSmall(std::size_t requiredHeadBytes) noexcept {
@@ -30,16 +34,21 @@ struct Http1ClientRequestPrepareResultAccess final {
         return Http1ClientRequestPrepareResult(Http1ClientRequestPrepareFailure(error));
     }
 
-    [[nodiscard]] static constexpr Http1ClientRequestPrepareResult preparedWithoutContent(std::string_view head, Http1ClientRequestContext responseContext) noexcept {
-        return Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest(head, Http1ClientRequestContentPlan(Http1ClientRequestWithoutContent()), responseContext));
+    [[nodiscard]] static Http1ClientRequestPrepareResult preparedWithoutContent(std::string_view head, Http1ClientExchangeState exchangeState) noexcept {
+        return Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest(head,
+            Http1ClientRequestContentPlan(Http1ClientRequestWithoutContent()), std::move(exchangeState)));
     }
 
-    [[nodiscard]] static constexpr Http1ClientRequestPrepareResult preparedImmediateContent(std::string_view head, std::string_view contentBytes, Http1ClientRequestContext responseContext) noexcept {
-        return Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest(head, Http1ClientRequestContentPlan(Http1ClientImmediateRequestContent(contentBytes)), responseContext));
+    [[nodiscard]] static Http1ClientRequestPrepareResult preparedImmediateContent(std::string_view head,
+        std::string_view contentBytes, Http1ClientExchangeState exchangeState) noexcept {
+        return Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest(head,
+            Http1ClientRequestContentPlan(Http1ClientImmediateRequestContent(contentBytes)), std::move(exchangeState)));
     }
 
-    [[nodiscard]] static constexpr Http1ClientRequestPrepareResult preparedContinueGatedContent(std::string_view head, std::string_view contentBytes, Http1ClientRequestContext responseContext) noexcept {
-        return Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest(head, Http1ClientRequestContentPlan(Http1ClientContinueGatedRequestContent(contentBytes)), responseContext));
+    [[nodiscard]] static Http1ClientRequestPrepareResult preparedContinueGatedContent(std::string_view head,
+        std::string_view contentBytes, Http1ClientExchangeState exchangeState) noexcept {
+        return Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest(head,
+            Http1ClientRequestContentPlan(Http1ClientContinueGatedRequestContent(contentBytes)), std::move(exchangeState)));
     }
 };
 
@@ -99,7 +108,26 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     return false;
 }
 
-[[nodiscard]] Http1ClientRequestPrepareResult prepareRequest(const HttpOriginView& origin, std::string_view method, std::string_view target, bool connect, std::span<const HttpHeaderView> headers, HttpClientRequestContentView content, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) noexcept {
+[[nodiscard]] std::pmr::string ownOfferedUpgradeProtocols(std::span<const HttpHeaderView> headers,
+    std::pmr::memory_resource* resource) {
+    std::pmr::string result(resource);
+    for (const auto& header : headers) {
+        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
+            continue;
+        }
+        if (!result.empty()) {
+            result.push_back(',');
+        }
+        result.append(header.value());
+    }
+    return result;
+}
+
+[[nodiscard]] Http1ClientRequestPrepareResult prepareRequest(const HttpOriginView& origin,
+    std::string_view method, std::string_view target, bool connect,
+    std::span<const HttpHeaderView> headers, HttpClientRequestContentView content,
+    std::span<char> headBuffer, Http1ClientRequestWirePolicy policy,
+    std::pmr::memory_resource* resource) {
     RequestHeaderFacts headerFacts;
     Http1ClientRequestPrepareError error = Http1ClientRequestPrepareError::kInvalidHeader;
     const auto* contentBytes = content.borrowedBytes();
@@ -138,6 +166,13 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
         return detail::Http1ClientRequestPrepareResultAccess::bufferTooSmall(headBytes);
     }
 
+    // Upgrade is the only response-planning fact that cannot be reduced to a
+    // fixed-size value. Own it before mutating the caller's output buffer so an
+    // allocation failure leaves request preparation transactional.
+    auto offeredUpgradeProtocols = headerFacts.upgradeProtocols.hasProtocol()
+        ? ownOfferedUpgradeProtocols(headers, resource)
+        : std::pmr::string(resource);
+
     char* cursor = headBuffer.data();
     appendView(cursor, method);
     *cursor++ = ' ';
@@ -166,15 +201,24 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     }
     appendView(cursor, kCrlf);
 
-    const auto responseContext = detail::Http1ClientRequestPrepareResultAccess::context(method, headers, headerFacts.connectionOptions, effectiveClosePolicy);
+    const auto contentState = expectContinue
+        ? detail::Http1ClientInitialContentState::kAwaitingContinue
+        : (explicitContent && !contentBytes->value().empty()
+                  ? detail::Http1ClientInitialContentState::kPending
+                  : detail::Http1ClientInitialContentState::kComplete);
+    auto exchangeState = detail::Http1ClientRequestPrepareResultAccess::exchangeState(
+        connect ? HttpKnownMethod::kConnect : classifyHttpMethod(method), headerFacts.connectionOptions,
+        effectiveClosePolicy, contentState, std::move(offeredUpgradeProtocols));
     const auto head = std::string_view(headBuffer.data(), headBytes);
     if (!explicitContent) {
-        return detail::Http1ClientRequestPrepareResultAccess::preparedWithoutContent(head, responseContext);
+        return detail::Http1ClientRequestPrepareResultAccess::preparedWithoutContent(head, std::move(exchangeState));
     }
     if (expectContinue) {
-        return detail::Http1ClientRequestPrepareResultAccess::preparedContinueGatedContent(head, contentBytes->value(), responseContext);
+        return detail::Http1ClientRequestPrepareResultAccess::preparedContinueGatedContent(head,
+            contentBytes->value(), std::move(exchangeState));
     }
-    return detail::Http1ClientRequestPrepareResultAccess::preparedImmediateContent(head, contentBytes->value(), responseContext);
+    return detail::Http1ClientRequestPrepareResultAccess::preparedImmediateContent(head,
+        contentBytes->value(), std::move(exchangeState));
 }
 
 }  // namespace
@@ -225,7 +269,12 @@ std::string_view http1ClientRequestPrepareErrorMessage(Http1ClientRequestPrepare
     return "invalid HTTP/1 client request";
 }
 
-Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOriginView& origin, const HttpClientRequestView& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const noexcept {
+Http1ClientRequestWriter::Http1ClientRequestWriter(std::pmr::memory_resource* resource) noexcept
+    : resource_(detail::httpPmrResourceOrDefault(resource)) {}
+
+Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOriginView& origin,
+    const HttpClientRequestView& request, std::span<char> headBuffer,
+    Http1ClientRequestWirePolicy policy) const {
     if (!isValidHttp1ClosePolicy(policy.closePolicy())) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidClosePolicy);
     }
@@ -238,17 +287,22 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOrig
     if (!detail::isValidOriginOrAsteriskFormTarget(classifyHttpMethod(request.method), request.target)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidTarget);
     }
-    return prepareRequest(origin, request.method, request.target, false, static_cast<std::span<const HttpHeaderView>>(request.headers), request.content, headBuffer, policy);
+    return prepareRequest(origin, request.method, request.target, false,
+        static_cast<std::span<const HttpHeaderView>>(request.headers), request.content, headBuffer, policy,
+        resource_);
 }
 
-Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const noexcept {
+Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(const HttpOriginView& tunnelOrigin,
+    std::span<const HttpHeaderView> headers, std::span<char> headBuffer,
+    Http1ClientRequestWirePolicy policy) const {
     if (!isValidHttp1ClosePolicy(policy.closePolicy())) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidClosePolicy);
     }
     if (tunnelOrigin.port() == 0) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidConnectOrigin);
     }
-    return prepareRequest(tunnelOrigin, "CONNECT", {}, true, headers, HttpClientRequestContentView::none(), headBuffer, policy);
+    return prepareRequest(tunnelOrigin, "CONNECT", {}, true, headers, HttpClientRequestContentView::none(),
+        headBuffer, policy, resource_);
 }
 
 }  // namespace ruvia

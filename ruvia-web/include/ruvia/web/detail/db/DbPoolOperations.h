@@ -194,12 +194,18 @@ Task<std::size_t> acquireDbSlot(Pool& pool, const OperationTimeout& timeout, Sto
         co_return acquired->index();
     }
     if (result.timedOut() != nullptr) {
-        throw DbError(DbError::Code::kTimeout, "database connection pool acquire timed out");
+        throw DbError(
+            DbError::Code::kTimeout,
+            pool.config_.driver,
+            "database connection pool acquire timed out");
     }
     if (result.cancelled() != nullptr) {
-        throw DbError(DbError::Code::kCancelled, "database operation cancelled");
+        throw DbError(
+            DbError::Code::kCancelled,
+            pool.config_.driver,
+            "database operation cancelled");
     }
-    throw DbError(DbError::Code::kClosing, "database client is closing");
+    throw DbError(DbError::Code::kClosing, pool.config_.driver, "database client is closing");
 }
 
 template <typename Pool>
@@ -218,7 +224,7 @@ void releaseDbSlot(Pool& pool, std::size_t slot) noexcept {
 // `Pool` supplies slots_, executeControl(), closeSlot() and releaseSlot(); it
 // declares this a friend so the shared rule stays out of the drivers.
 template <typename Pool>
-Task<void> finishDbTransaction(Pool& pool, std::size_t slot, std::string_view command, std::pmr::memory_resource* resource, const DbOperationOptions& options) {
+Task<void> finishDbTransaction(Pool& pool, std::size_t slot, std::string_view command, std::pmr::memory_resource* resource, const OperationOptions& options) {
     if (slot >= pool.slots_.size()) {
         throw std::logic_error("database transaction slot is invalid");
     }
@@ -241,7 +247,7 @@ Task<void> finishDbTransaction(Pool& pool, std::size_t slot, std::string_view co
 // connection and gives the slot back, because a transaction whose statement
 // failed mid-protocol cannot continue on it.
 template <typename Pool>
-Task<DbRows> queryOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const DbOperationOptions& options) {
+Task<DbRows> queryOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const OperationOptions& options) {
     if (slot >= pool.slots_.size()) {
         throw std::logic_error("database transaction slot is invalid");
     }
@@ -258,7 +264,7 @@ Task<DbRows> queryOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::st
 }
 
 template <typename Pool>
-Task<DbExecResult> executeOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const DbOperationOptions& options) {
+Task<DbExecResult> executeOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const OperationOptions& options) {
     if (slot >= pool.slots_.size()) {
         throw std::logic_error("database transaction slot is invalid");
     }
@@ -279,7 +285,7 @@ Task<DbExecResult> executeOnDbTransactionSlot(Pool& pool, std::size_t slot, std:
 // and close the connection if the statement throws -- a slot whose statement
 // failed mid-protocol cannot be reused. The guard releases the slot either way.
 template <typename Pool>
-Task<DbRows> executeDbQuery(Pool& pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, DbOperationOptions options) {
+Task<DbRows> executeDbQuery(Pool& pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, OperationOptions options) {
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
@@ -297,7 +303,7 @@ Task<DbRows> executeDbQuery(Pool& pool, std::pmr::string sql, std::pmr::vector<D
 }
 
 template <typename Pool>
-Task<DbExecResult> executeDbCommand(Pool& pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, DbOperationOptions options) {
+Task<DbExecResult> executeDbCommand(Pool& pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, OperationOptions options) {
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
@@ -320,7 +326,7 @@ Task<DbExecResult> executeDbCommand(Pool& pool, std::pmr::string sql, std::pmr::
     std::array<char, 6> output{};
     const auto parsed = std::to_chars(output.data(), output.data() + output.size() - 1, port);
     if (parsed.ec != std::errc{}) {
-        throw std::runtime_error(std::string("failed to format ").append(backend).append(" port"));
+        throw std::logic_error(std::string("failed to format ").append(backend).append(" port"));
     }
     *parsed.ptr = '\0';
     return output;
@@ -337,7 +343,12 @@ Task<DbExecResult> executeDbCommand(Pool& pool, std::pmr::string sql, std::pmr::
 // a friend so the shared rule stays out of the drivers.
 template <typename Pool, typename Slot>
 Task<DbResolvedAddresses> resolveDbHost(Pool& pool, Slot& slot, const OperationTimeout& deadline, std::string_view backend) {
-    const auto timedOut = [backend] { return DbError(DbError::Code::kTimeout, std::string(backend).append(" host resolve timed out")); };
+    const auto timedOut = [&pool, backend] {
+        return DbError(
+            DbError::Code::kTimeout,
+            pool.config_.driver,
+            std::string(backend).append(" host resolve timed out"));
+    };
 
     pool.throwIfCancelled(slot);
     const auto remaining = deadline.remaining();
@@ -376,15 +387,22 @@ Task<DbResolvedAddresses> resolveDbHost(Pool& pool, Slot& slot, const OperationT
             (afterResolve.has_value() && afterResolve->count() <= 0);
         pool.throwIfCancelled(slot);
         if (slot.closeRequested) {
-            throw DbError(DbError::Code::kClosing, "database client is closing");
+            throw DbError(DbError::Code::kClosing, pool.config_.driver, "database client is closing");
         }
         if (deadlineExpired) {
             throw timedOut();
         }
         if (resolveError) {
-            throw std::system_error(resolveError, std::string("resolving ").append(backend).append(" host failed"));
+            throw DbError(
+                DbError::Code::kResolveFailed,
+                pool.config_.driver,
+                std::system_error(
+                    resolveError,
+                    std::string("resolving ").append(backend).append(" host failed"))
+                    .what(),
+                resolveError.value());
         }
-        co_return collectDbResolvedAddresses(results, pool.resource_);
+        co_return collectDbResolvedAddresses(results, pool.config_.driver, pool.resource_);
     } catch (...) {
         pool.clearSlotDeadline(slot);
         throw;

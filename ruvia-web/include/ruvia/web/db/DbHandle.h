@@ -20,7 +20,7 @@ public:
     DbHandle(const DbHandle& other) noexcept;
     DbHandle& operator=(const DbHandle&) = delete;
 
-    [[nodiscard]] DbHandle withOptions(DbOperationOptions options) const;
+    [[nodiscard]] DbHandle withOptions(OperationOptions options) const;
 
     ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {}) const;
     ScopedOperation<DbRows> query(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
@@ -40,38 +40,23 @@ public:
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
     [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, Params&&... params) const {
-        const DbValue values[]{DbValue(std::forward<Params>(params))...};
+        const DbValue values[]{detail::makeImmediateDbParameter(std::forward<Params>(params))...};
         return query(sql, std::span<const DbValue>(values));
     }
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
     [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, Params&&... params) const {
-        const DbValue values[]{DbValue(std::forward<Params>(params))...};
+        const DbValue values[]{detail::makeImmediateDbParameter(std::forward<Params>(params))...};
         return execute(sql, std::span<const DbValue>(values));
     }
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
     [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(std::string_view sql, Params&&... params) const {
-        const DbValue values[]{DbValue(std::forward<Params>(params))...};
+        const DbValue values[]{detail::makeImmediateDbParameter(std::forward<Params>(params))...};
         return queryStream(sql, std::span<const DbValue>(values));
     }
-
-    // An owning-string temporary would bind DbValue to text that dies with the
-    // argument. Rejected here rather than through DbValue's deleted constructors
-    // alone, so the error names the offending call.
-    template <typename... Params>
-        requires detail::DbTemporaryOwningParameterPack<Params...>
-    ScopedOperation<DbRows> query(std::string_view, Params&&...) const = delete;
-
-    template <typename... Params>
-        requires detail::DbTemporaryOwningParameterPack<Params...>
-    ScopedOperation<DbExecResult> execute(std::string_view, Params&&...) const = delete;
-
-    template <typename... Params>
-        requires detail::DbTemporaryOwningParameterPack<Params...>
-    ScopedOperation<DbStreamResult> queryStream(std::string_view, Params&&...) const = delete;
 
     ScopedOperation<DbTransaction> beginTransaction() const;
 
@@ -79,14 +64,12 @@ private:
     friend class detail::DbRegistry;
 
     DbHandle(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;
-    static Task<DbRows> queryPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, DbOperationOptions options);
-    static Task<DbExecResult> executePrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, DbOperationOptions options);
-    static Task<DbStreamResult> queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope, DbOperationOptions options);
-    static Task<DbTransaction> beginTransactionPrepared(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope, DbOperationOptions options);
+    static Task<DbStreamResult> queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope, OperationOptions options);
+    static Task<DbTransaction> beginTransactionPrepared(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope, OperationOptions options);
 
     detail::DbPoolRef client_;
     std::pmr::memory_resource* resource_;
-    DbOperationOptions options_;
+    OperationOptions options_;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 };
 

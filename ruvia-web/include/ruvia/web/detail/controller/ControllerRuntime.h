@@ -137,7 +137,8 @@ template <ValidationTarget Target>
 template <ValidationTarget Target, typename BodyT>
 [[nodiscard]] BodyT parseValidatedFields(Context& c, const RequestNameValueList& fields) {
     static_assert(FormBody<BodyT>::value, "field validator body type must use RUVIA_MODEL");
-    auto parsed = FormBody<BodyT>::parseFieldsPartial(fields, c.resource());
+    auto parsed = detail::ModelParseAccess::parseFormFieldsPartial<BodyT>(
+        fields, c.resource());
     if (!parsed) {
         throwInvalidValidationTarget<Target>();
     }
@@ -151,7 +152,8 @@ template <ValidationTarget Target, typename BodyT>
             detail::throwInvalidJsonContentType();
         }
         const auto requestBody = co_await c.req().text();
-        auto parsed = JsonBody<BodyT>::parsePartial(requestBody, c.resource());
+        auto parsed = detail::ModelParseAccess::parseJsonBorrowedPartial<BodyT>(
+            requestBody, c.resource());
         if (!parsed) detail::throwInvalidJsonBody();
         co_return std::move(*parsed);
     } else if constexpr (Target == ValidationTarget::kForm) {
@@ -159,7 +161,8 @@ template <ValidationTarget Target, typename BodyT>
             detail::throwInvalidFormContentType();
         }
         const auto requestBody = co_await c.req().text();
-        auto parsed = FormBody<BodyT>::parsePartial(requestBody, c.resource());
+        auto parsed = detail::ModelParseAccess::parseFormBorrowedPartial<BodyT>(
+            requestBody, c.resource());
         if (!parsed) detail::throwInvalidFormBody();
         co_return std::move(*parsed);
     } else if constexpr (Target == ValidationTarget::kQuery) {

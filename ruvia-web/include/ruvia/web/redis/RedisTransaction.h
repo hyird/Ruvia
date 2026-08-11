@@ -13,12 +13,52 @@
 
 namespace ruvia {
 
-class RedisTransaction final : private detail::ScopedCapabilityNode, public detail::RedisCommandBatchMixin<RedisTransaction> {
+class RedisTransaction final : private detail::ScopedCapabilityNode, private detail::RedisCommandBatchMixin<RedisTransaction> {
+    using BatchCommands = detail::RedisCommandBatchMixin<RedisTransaction>;
+
 public:
     RedisTransaction(const RedisTransaction&) = delete;
     RedisTransaction& operator=(const RedisTransaction&) = delete;
     RedisTransaction(RedisTransaction&&) noexcept = default;
     RedisTransaction& operator=(RedisTransaction&&) = delete;
+
+    using BatchCommands::append;
+    using BatchCommands::decr;
+    using BatchCommands::decrBy;
+    using BatchCommands::del;
+    using BatchCommands::exists;
+    using BatchCommands::get;
+    using BatchCommands::getDel;
+    using BatchCommands::hdel;
+    using BatchCommands::hexists;
+    using BatchCommands::hget;
+    using BatchCommands::hgetAll;
+    using BatchCommands::hlen;
+    using BatchCommands::hset;
+    using BatchCommands::incr;
+    using BatchCommands::incrBy;
+    using BatchCommands::llen;
+    using BatchCommands::lpop;
+    using BatchCommands::lpush;
+    using BatchCommands::lrange;
+    using BatchCommands::rename;
+    using BatchCommands::renameNx;
+    using BatchCommands::rpop;
+    using BatchCommands::rpush;
+    using BatchCommands::sadd;
+    using BatchCommands::scard;
+    using BatchCommands::set;
+    using BatchCommands::smembers;
+    using BatchCommands::srem;
+    using BatchCommands::strlen;
+    using BatchCommands::touch;
+    using BatchCommands::type;
+    using BatchCommands::unlink;
+    using BatchCommands::zadd;
+    using BatchCommands::zcard;
+    using BatchCommands::zrange;
+    using BatchCommands::zrem;
+    using BatchCommands::zscore;
 
     RedisTransaction& command(std::span<const std::string_view> args);
     RedisTransaction& command(std::initializer_list<std::string_view> args) = delete;
@@ -49,7 +89,6 @@ public:
     // A transaction is a single-use command batch. Its commands are transferred
     // into the returned coroutine frame before this builder may be destroyed.
     ScopedOperation<std::pmr::vector<RedisValue>> exec() &&;
-    ScopedOperation<std::pmr::vector<RedisValue>> exec(RedisOperationOptions options) &&;
 
 private:
     friend class RedisHandle;
@@ -58,7 +97,7 @@ private:
     explicit RedisTransaction(RedisPipeline pipeline) noexcept;
     void requireActive() const { pipeline_.requireActive(); }
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept { return pipeline_.resource(); }
-    [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(detail::RedisPool& pool, RedisOperationOptions options, std::pmr::memory_resource* resource, std::pmr::vector<RedisPipeline::Command> watches, std::pmr::vector<RedisPipeline::Command> commands);
+    [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(detail::RedisPool& pool, OperationOptions options, std::pmr::memory_resource* resource, std::pmr::vector<RedisPipeline::Command> watches, std::pmr::vector<RedisPipeline::Command> commands);
 
     RedisPipeline pipeline_;
     std::pmr::vector<RedisPipeline::Command> watches_;

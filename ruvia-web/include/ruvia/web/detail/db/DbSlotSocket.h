@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <system_error>
 
 namespace ruvia::detail {
 
@@ -33,12 +34,12 @@ struct DbSlotSocket final {
 #endif
     NativeSocket native{kInvalidSocket};
 
-    [[nodiscard]] bool ensureAssigned(NativeSocket fd) noexcept;
+    [[nodiscard]] std::error_code ensureAssigned(NativeSocket fd) noexcept;
     // Puts the driver-owned descriptor into non-blocking mode. A driver whose
     // asynchronous API suspends on EAGAIN cannot suspend at all while its
     // socket blocks, so it runs the whole operation inside the call that was
     // supposed to start it.
-    [[nodiscard]] bool makeNonBlocking() noexcept;
+    [[nodiscard]] std::error_code makeNonBlocking() noexcept;
     void cancel() noexcept;
     // Closes only the ASIO-owned duplicate. The driver's original socket stays
     // valid until mysql_close()/PQfinish() disposes it.

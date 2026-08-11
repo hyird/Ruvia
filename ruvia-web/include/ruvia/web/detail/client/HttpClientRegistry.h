@@ -20,18 +20,13 @@
 #include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/integration/WorkerCancellationPost.h"
 
 namespace ruvia::detail {
-
-struct HttpClientHeaderAccess final {
-    [[nodiscard]] static HttpClientHeader make(std::string_view name, std::string_view value, std::pmr::memory_resource* resource) {
-        return HttpClientHeader(name, value, resource);
-    }
-};
 
 struct HttpClientRequestAccess final {
     [[nodiscard]] static HttpClientRequestView view(const HttpClientRequest& request, std::pmr::vector<HttpHeaderView>& headers);
@@ -47,13 +42,13 @@ public:
     HttpClientPool(const HttpClientPool&) = delete;
     HttpClientPool& operator=(const HttpClientPool&) = delete;
 
-    [[nodiscard]] Task<HttpClientResponse> execute(HttpClientRequest request, HttpClientOperationOptions options, std::pmr::memory_resource* responseResource);
+    [[nodiscard]] Task<HttpClientResponse> execute(HttpClientRequest request, OperationOptions options, std::pmr::memory_resource* responseResource);
     void closeNow() noexcept;
     [[nodiscard]] Task<void> join();
     [[nodiscard]] HttpClientStats stats() const noexcept;
     [[nodiscard]] std::string_view host() const noexcept { return config_.host; }
     [[nodiscard]] std::uint16_t port() const noexcept;
-    [[nodiscard]] bool secure() const noexcept { return config_.scheme == HttpScheme::kHttps; }
+    [[nodiscard]] HttpScheme scheme() const noexcept { return config_.scheme; }
 
 private:
     friend class WorkerCancellationMailbox<HttpClientPool>;
@@ -69,12 +64,17 @@ private:
         WorkerSignal signal;
         HttpClientResponse response;
         std::optional<HttpClientError::Code> error;
+        std::exception_ptr failure;
         std::uint64_t requestId{0};
         std::uint64_t cancellationId{0};
         std::uint32_t streamId{0};
         std::size_t responseHeaderCount{0};
         bool complete{false};
         bool retryable{false};
+
+        [[nodiscard]] bool failed() const noexcept {
+            return error.has_value() || failure != nullptr;
+        }
     };
 
     struct Http2Runtime final {
@@ -86,7 +86,6 @@ private:
         PoolLeaseScheduler connectScheduler;
         PoolLeaseScheduler http1Scheduler;
         std::pmr::vector<Http2PendingStream*> pending;
-        std::error_code terminalError;
         std::uint64_t generation{0};
         std::uint64_t nextRequestId{0};
         std::uint64_t stateCancellationId{0};
@@ -200,7 +199,11 @@ private:
         bool adding) const noexcept;
     void configureTls();
     void drainHttp2Events(Connection& connection);
-    void failHttp2Session(Connection& connection, std::uint64_t generation, std::error_code error) noexcept;
+    void failHttp2Session(
+        Connection& connection,
+        std::uint64_t generation,
+        std::error_code transportError,
+        std::exception_ptr failure = {}) noexcept;
     void finishHttp2SessionTask(Connection& connection, std::uint64_t generation) noexcept;
     void submitHttp2Reset(Connection& connection, std::uint32_t streamId) noexcept;
     void cancelHttp2Stream(Connection& connection, std::uint64_t requestId, AbortReason reason) noexcept;

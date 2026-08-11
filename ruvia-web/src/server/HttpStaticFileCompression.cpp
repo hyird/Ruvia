@@ -142,7 +142,7 @@ Task<HttpStaticFileCompressionResult> tryCompressStaticFileResponse(HttpResponse
     }
 
     try {
-        auto result = co_await runBlocking(*pool, worker, [job = StaticFileCompressionJob{file->toPath(), file->size(), file->offset(), file->length(), file->identity(), selection.coding()}]() mutable { return readAndCompress(std::move(job)); });
+        auto result = co_await tryRunBlocking(*pool, worker, [job = StaticFileCompressionJob{file->toPath(), file->size(), file->offset(), file->length(), file->identity(), selection.coding()}]() mutable { return readAndCompress(std::move(job)); });
         if (result.failed()) {
             co_return HttpStaticFileCompressionResult(HttpStaticFileCompressionStatus::kFailed);
         }
@@ -168,7 +168,7 @@ Task<HttpStaticFileCompressionResult> tryCompressStaticFileResponse(HttpResponse
         }
         co_return HttpStaticFileCompressionResult(HttpStaticFileCompressionStatus::kCompressed);
     } catch (...) {
-        // runBlocking normally carries pool rejection and callable failures in
+        // tryRunBlocking normally carries pool rejection and callable failures in
         // its result. Its one-shot setup/result transport can still throw (for
         // example on process-resource exhaustion); do not let that tear down
         // the request/session when the identity file is still available.

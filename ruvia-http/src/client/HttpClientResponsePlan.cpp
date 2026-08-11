@@ -14,29 +14,32 @@ namespace ruvia::detail {
 
 namespace {
 
-[[nodiscard]] bool requestOffersProtocol(const Http1ClientRequestContext& request, const HttpUpgradeProtocol& selected) noexcept {
+[[nodiscard]] bool requestOffersProtocol(const Http1ClientExchangeState& exchangeState,
+    const HttpUpgradeProtocol& selected) noexcept {
+    const auto offeredProtocols = Http1ClientExchangeStateAccess::offeredUpgradeProtocols(exchangeState);
+    if (offeredProtocols.empty()) {
+        return false;
+    }
     bool offered = false;
     HttpUpgradeProtocols protocols;
-    for (const auto& header : request.headers()) {
-        if (!httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
-            continue;
-        }
-        if (protocols.parseField(header.value(), HttpFieldListRole::kSender, [&selected, &offered](const HttpUpgradeProtocol& candidate) noexcept {
+    if (protocols.parseField(offeredProtocols, HttpFieldListRole::kSender,
+            [&selected, &offered](const HttpUpgradeProtocol& candidate) noexcept {
                 offered = offered || httpUpgradeProtocolEquals(candidate, selected);
                 return true;
             }) != HttpFieldListParseStatus::kOk) {
-            return false;
-        }
+        return false;
     }
     return protocols.hasProtocol() && offered;
 }
 
-[[nodiscard]] bool requestAllowsProtocolSwitch(const Http1ClientRequestContext& request, const Http1ClientParsedResponseHead& response, Http1ClientRequestContentPhase requestContentPhase) noexcept {
+[[nodiscard]] bool requestAllowsProtocolSwitch(const Http1ClientExchangeState& exchangeState,
+    const Http1ClientParsedResponseHead& response,
+    Http1ClientRequestContentPhase requestContentPhase) noexcept {
     const bool requestContentAllowsSwitch = requestContentPhase == Http1ClientRequestContentPhase::kContentComplete || requestContentPhase == Http1ClientRequestContentPhase::kContinueReceivedContentComplete;
-    if (request.closePolicy() == Http1ClosePolicy::kCloseAfterResponse || !requestContentAllowsSwitch) {
+    if (Http1ClientExchangeStateAccess::closePolicy(exchangeState) == Http1ClosePolicy::kCloseAfterResponse || !requestContentAllowsSwitch) {
         return false;
     }
-    if (!request.connectionOptions().upgrade() || response.connectionOptions.close() || !response.connectionOptions.upgrade() || !response.upgradeProtocols.hasProtocol()) {
+    if (!Http1ClientExchangeStateAccess::connectionOptions(exchangeState).upgrade() || response.connectionOptions.close() || !response.connectionOptions.upgrade() || !response.upgradeProtocols.hasProtocol()) {
         return false;
     }
 
@@ -46,7 +49,10 @@ namespace {
         if (!httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
             continue;
         }
-        if (selectedProtocols.parseField(header.value(), HttpFieldListRole::kRecipient, [&request](const HttpUpgradeProtocol& selected) noexcept { return requestOffersProtocol(request, selected); }) != HttpFieldListParseStatus::kOk) {
+        if (selectedProtocols.parseField(header.value(), HttpFieldListRole::kRecipient,
+                [&exchangeState](const HttpUpgradeProtocol& selected) noexcept {
+                    return requestOffersProtocol(exchangeState, selected);
+                }) != HttpFieldListParseStatus::kOk) {
             return false;
         }
     }
@@ -84,8 +90,9 @@ namespace {
     return Http1ClosePolicy::kCloseAfterResponse;
 }
 
-[[nodiscard]] Http1ClosePolicy finalResponsePersistence(const Http1ClientRequestContext& request, const Http1ClientParsedResponseHead& response) noexcept {
-    if (request.closePolicy() == Http1ClosePolicy::kCloseAfterResponse) {
+[[nodiscard]] Http1ClosePolicy finalResponsePersistence(const Http1ClientExchangeState& exchangeState,
+    const Http1ClientParsedResponseHead& response) noexcept {
+    if (Http1ClientExchangeStateAccess::closePolicy(exchangeState) == Http1ClosePolicy::kCloseAfterResponse) {
         return Http1ClosePolicy::kCloseAfterResponse;
     }
     return responsePersistence(response);
@@ -137,11 +144,14 @@ struct Http1ClientResponsePlanAccess final {
     }
 };
 
-Http1ClientResponsePlanningResult planHttp1ClientResponse(const Http1ClientRequestContext& request, const Http1ClientParsedResponseHead& response, Http1ClientRequestContentPhase requestContentPhase) noexcept {
-    const auto contentSemantics = httpResponseContentSemantics(request.method(), response.statusCode);
+Http1ClientResponsePlanningResult planHttp1ClientResponse(const Http1ClientExchangeState& exchangeState,
+    const Http1ClientParsedResponseHead& response,
+    Http1ClientRequestContentPhase requestContentPhase) noexcept {
+    const auto contentSemantics = httpResponseContentSemantics(
+        Http1ClientExchangeStateAccess::method(exchangeState), response.statusCode);
 
     if (contentSemantics == HttpResponseContentSemantics::kProtocolSwitch) {
-        if (response.protocolVersion != HttpProtocolVersion::kHttp11 || response.contentLengthFieldPresent || response.sawTransferEncoding || !requestAllowsProtocolSwitch(request, response, requestContentPhase)) {
+        if (response.protocolVersion != HttpProtocolVersion::kHttp11 || response.contentLengthFieldPresent || response.sawTransferEncoding || !requestAllowsProtocolSwitch(exchangeState, response, requestContentPhase)) {
             return Http1ClientResponseParseError::kInvalidProtocolSwitch;
         }
         return Http1ClientResponsePlanAccess::protocolUpgrade(std::nullopt);
@@ -160,7 +170,7 @@ Http1ClientResponsePlanningResult planHttp1ClientResponse(const Http1ClientReque
         return Http1ClientResponseParseError::kInvalidContentLength;
     }
 
-    const auto persistence = finalResponsePersistence(request, response);
+    const auto persistence = finalResponsePersistence(exchangeState, response);
     const auto persistentContentSignal = requestContentSignal(requestContentPhase, response.statusCode, persistence == Http1ClosePolicy::kCloseAfterResponse);
     if (contentSemantics == HttpResponseContentSemantics::kWithoutContent) {
         return Http1ClientResponsePlanAccess::withoutContent(persistence, persistentContentSignal);

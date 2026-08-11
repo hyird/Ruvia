@@ -133,7 +133,7 @@ void PostgreSqlPool::cancelOperation(std::size_t slotIndex, std::uint64_t genera
 
 void PostgreSqlPool::throwIfCancelled(const ConnectionSlot& slot) const {
     if (slot.abortReason == DbSlotAbortReason::kCancelled) {
-        throw DbError(DbError::Code::kCancelled, "database operation cancelled");
+        throw DbError(DbError::Code::kCancelled, DbDriver::kPostgreSql, "database operation cancelled");
     }
 }
 

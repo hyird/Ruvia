@@ -1,5 +1,7 @@
 #include "ruvia/web/detail/db/DbMysqlRuntime.h"
 
+#include "ruvia/web/db/DbTypes.h"
+
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -11,7 +13,10 @@ class MysqlLibraryEnv final {
 public:
     MysqlLibraryEnv() {
         if (mysql_library_init(0, nullptr, nullptr) != 0) {
-            throw std::runtime_error("failed to initialize the MariaDB client library");
+            throw DbError(
+                DbError::Code::kConnectFailed,
+                DbDriver::kMariaDb,
+                "failed to initialize the MariaDB client library");
         }
     }
 
@@ -24,7 +29,10 @@ class MysqlThreadEnv final {
 public:
     MysqlThreadEnv() {
         if (mysql_thread_init() != 0) {
-            throw std::runtime_error("failed to initialize the MariaDB client thread");
+            throw DbError(
+                DbError::Code::kConnectFailed,
+                DbDriver::kMariaDb,
+                "failed to initialize the MariaDB client thread");
         }
     }
 
@@ -57,6 +65,24 @@ bool setMysqlTimeout(st_mysql& connection, mysql_option option, std::optional<st
     }
     const auto seconds = timeoutSeconds(*timeout);
     return mysql_optionsv(&connection, option, &seconds) == 0;
+}
+
+MysqlWaitDeadline selectMysqlWaitDeadline(
+    std::optional<std::chrono::milliseconds> operationTimeout,
+    std::optional<std::chrono::milliseconds> driverTimeout) noexcept {
+    if (operationTimeout && driverTimeout) {
+        if (*operationTimeout <= *driverTimeout) {
+            return {*operationTimeout, MysqlWaitDeadlineSource::kOperation};
+        }
+        return {*driverTimeout, MysqlWaitDeadlineSource::kDriver};
+    }
+    if (operationTimeout) {
+        return {*operationTimeout, MysqlWaitDeadlineSource::kOperation};
+    }
+    if (driverTimeout) {
+        return {*driverTimeout, MysqlWaitDeadlineSource::kDriver};
+    }
+    return {};
 }
 
 }  // namespace ruvia::detail

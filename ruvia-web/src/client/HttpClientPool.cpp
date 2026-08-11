@@ -168,7 +168,6 @@ void HttpClientPool::close(Connection& connection) noexcept {
         connection.http2Runtime->running = false;
         connection.http2Runtime->draining = false;
         connection.http2Runtime->failed = false;
-        connection.http2Runtime->terminalError.clear();
     }
     connection.readBuffer.clear();
     connection.writeBuffer.clear();
@@ -583,7 +582,6 @@ Task<void> HttpClientPool::ensureConnected(
     runtime.running = false;
     runtime.draining = false;
     runtime.failed = false;
-    runtime.terminalError.clear();
     const auto timeout = operationTimeout.constrainedBy(config_.connectTimeout);
     std::array<char, 8> portBytes{};
     const auto [portEnd, ec] = std::to_chars(portBytes.data(), portBytes.data() + portBytes.size(), httpClientPort(config_));
@@ -641,7 +639,7 @@ Task<void> HttpClientPool::ensureConnected(
     if (connection.protocol == WireProtocol::kHttp2) co_await initializeHttp2(connection, timeout);
 }
 
-Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, HttpClientOperationOptions options, std::pmr::memory_resource* responseResource) {
+Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, OperationOptions options, std::pmr::memory_resource* responseResource) {
     responseResource = httpPmrResourceOrDefault(responseResource);
     const OperationTimeout timeout(options.timeout.has_value() ? options.timeout : config_.requestTimeout);
     const auto acquireTimeout = timeout.constrainedBy(config_.acquireTimeout);

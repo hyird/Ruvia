@@ -52,7 +52,7 @@ int main() {
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     CancellationOwner owner;
     auto mailbox = std::make_shared<CancellationMailbox>(owner, worker);
-    ruvia::detail::StopSource source;
+    ruvia::StopSource source;
     ruvia::StopRegistration registration;
 
     const auto allocationsBeforeRegistration = allocationCount.load(std::memory_order_relaxed);
@@ -73,7 +73,7 @@ int main() {
     queuedDispatch();
     assert(owner.lastOperationId == 42);
 
-    ruvia::detail::StopSource onWorkerSource;
+    ruvia::StopSource onWorkerSource;
     ruvia::StopRegistration onWorkerRegistration;
     onWorkerSource.token().registerCallback(
         onWorkerRegistration,

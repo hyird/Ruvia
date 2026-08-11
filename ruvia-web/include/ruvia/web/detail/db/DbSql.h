@@ -13,7 +13,10 @@ struct st_mysql_res;
 
 namespace ruvia::detail {
 
-[[nodiscard]] std::runtime_error mysqlError(const st_mysql& connection, std::string_view operation);
+[[nodiscard]] DbError mysqlError(
+    const st_mysql& connection,
+    std::string_view operation,
+    DbError::Code code);
 
 // MariaDB's C API carries SQL and escaped-value lengths in unsigned long.
 // Reject a wider C++ view before any narrowing conversion reaches the driver.

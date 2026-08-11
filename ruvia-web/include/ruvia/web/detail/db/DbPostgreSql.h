@@ -14,7 +14,11 @@ struct pg_result;
 
 namespace ruvia::detail {
 
-[[nodiscard]] std::runtime_error postgreSqlError(const pg_conn& connection, std::string_view operation, const pg_result* result = nullptr);
+[[nodiscard]] DbError postgreSqlError(
+    const pg_conn& connection,
+    std::string_view operation,
+    DbError::Code code,
+    const pg_result* result = nullptr);
 
 struct PostgreSqlParams final {
     explicit PostgreSqlParams(std::pmr::memory_resource* resource);

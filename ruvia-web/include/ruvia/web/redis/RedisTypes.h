@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -13,7 +12,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/StopToken.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/BorrowedText.h"
 
@@ -60,15 +58,6 @@ struct RedisConfig {
     bool keepAlive{false};
 };
 
-struct RedisOperationOptions final {
-    // End-to-end timeout beginning when the lazy operation starts. It includes
-    // pool acquisition, connection establishment, write, and reply parsing and
-    // is constrained by the corresponding pool-level timeouts. When present,
-    // it must be greater than zero.
-    std::optional<std::chrono::milliseconds> timeout;
-    StopToken stopToken;
-};
-
 class RedisBlockWait final {
 public:
     [[nodiscard]] static RedisBlockWait forDuration(std::chrono::milliseconds duration) {
@@ -106,7 +95,6 @@ struct RedisXReadGroupOptions final {
     std::optional<std::uint64_t> count;
     std::optional<RedisBlockWait> block;
     bool noAck{false};
-    RedisOperationOptions operation;
 };
 
 enum class RedisSetCondition : std::uint8_t {
@@ -451,24 +439,16 @@ class RedisRegistry;
 
 }  // namespace detail
 
-class RedisError : public std::exception {
+class RedisError final : public std::runtime_error {
 public:
-    enum class Code { kNotConfigured, kPoolExhausted, kConnectFailed, kAuthFailed, kProtocolError, kCommandError, kIoError, kTimeout, kCancelled, kTransactionAborted };
+    enum class Code { kNotConfigured, kConnectFailed, kAuthFailed, kProtocolError, kCommandError, kIoError, kTimeout, kCancelled, kClosing, kTransactionAborted };
 
     RedisError(Code code, std::string_view message);
-    RedisError(const RedisError& other);
-    RedisError& operator=(const RedisError& other);
-    RedisError(RedisError&&) noexcept = default;
-    RedisError& operator=(RedisError&&) noexcept = default;
 
-    [[nodiscard]] const char* what() const noexcept override;
     [[nodiscard]] Code code() const noexcept;
-    [[nodiscard]] std::string_view message() const& noexcept;
-    [[nodiscard]] std::string_view message() const&& = delete;
 
 private:
     Code code_;
-    std::pmr::string message_;
 };
 
 class RedisValue final {
@@ -484,6 +464,8 @@ public:
     [[nodiscard]] bool null() const noexcept;
     [[nodiscard]] std::string_view string() const&;
     [[nodiscard]] std::string_view string() const&& = delete;
+    [[nodiscard]] std::string_view error() const&;
+    [[nodiscard]] std::string_view error() const&& = delete;
     [[nodiscard]] std::int64_t integer() const;
     [[nodiscard]] std::span<const RedisValue> array() const&;
     [[nodiscard]] std::span<const RedisValue> array() const&& = delete;

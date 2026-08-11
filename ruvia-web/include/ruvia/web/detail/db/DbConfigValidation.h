@@ -40,22 +40,6 @@ inline void validateDbConfig(const Config& config) {
     }
 }
 
-inline void validateDbOperationOptions(const DbOperationOptions& options) {
-    ensurePositiveOptionalDuration(options.timeout, "database operation timeout must be greater than zero");
-}
-
-[[nodiscard]] inline DbOperationOptions mergeDbOperationOptions(
-    const DbOperationOptions& base,
-    DbOperationOptions overrides) {
-    DbOperationOptions merged = base;
-    if (overrides.timeout.has_value() &&
-        (!merged.timeout.has_value() || *overrides.timeout < *merged.timeout)) {
-        merged.timeout = overrides.timeout;
-    }
-    merged.stopToken = combineStopTokens(base.stopToken, std::move(overrides.stopToken));
-    return merged;
-}
-
 }  // namespace ruvia::detail
 
 #endif  // RUVIA_ENABLE_DATABASE

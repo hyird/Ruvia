@@ -22,6 +22,12 @@ struct SurfaceJsonResponse final {
         RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 };
 
+struct RequiredFieldSurface final {
+    RUVIA_MODEL(RequiredFieldSurface,
+        RUVIA_FIELD(id, ruvia::UInt32),
+        RUVIA_OPTIONAL_FIELD(label, ruvia::String));
+};
+
 template <typename T>
 concept HasModelInputAccessor = requires(const T& model) { model.body(); };
 
@@ -39,6 +45,38 @@ concept HasModelPublicBodyParseHooks = requires { T::ruviaParseJsonBody(std::str
 
 template <typename T>
 concept HasModelPublicJsonDepthHook = requires { T::ruviaParseJsonBodyDepth(std::string_view{}, static_cast<std::pmr::memory_resource*>(nullptr), std::size_t{}); };
+
+template <typename T>
+concept HasJsonBodyInternalParseModes = requires {
+    ruvia::JsonBody<T>::parseOwned(
+        std::string_view{}, static_cast<std::pmr::memory_resource*>(nullptr));
+} || requires {
+    ruvia::JsonBody<T>::parseDepth(
+        std::string_view{}, static_cast<std::pmr::memory_resource*>(nullptr),
+        std::size_t{});
+} || requires {
+    ruvia::JsonBody<T>::parseDepthPartial(
+        std::string_view{}, static_cast<std::pmr::memory_resource*>(nullptr),
+        std::size_t{});
+};
+
+template <typename T>
+concept HasJsonBodyParse = requires {
+    ruvia::JsonBody<T>::parse(
+        std::string_view{}, static_cast<std::pmr::memory_resource*>(nullptr));
+} || requires {
+    ruvia::JsonBody<T>::parsePartial(
+        std::string_view{}, static_cast<std::pmr::memory_resource*>(nullptr));
+};
+
+template <typename T>
+concept HasFormBodyParse = requires {
+    ruvia::FormBody<T>::parse(
+        std::string_view{}, static_cast<std::pmr::memory_resource*>(nullptr));
+} || requires {
+    ruvia::FormBody<T>::parsePartial(
+        std::string_view{}, static_cast<std::pmr::memory_resource*>(nullptr));
+};
 
 template <typename T>
 concept HasModelPublicFormFieldsHook = requires { T::ruviaParseFormFields(std::declval<const ruvia::RequestNameValueList&>(), static_cast<std::pmr::memory_resource*>(nullptr)); };
@@ -63,6 +101,9 @@ concept ExposesAnyRvalueModelBoxedArrayBorrow = requires { std::declval<const T&
 
 template <typename T>
 concept ExposesAnyRvalueGeneratedMessageMember = requires { std::declval<const T&&>().message(); } || requires { std::declval<T&&>().messageEnsure(); } || requires { std::declval<T&&>().message(std::string_view{}); };
+
+template <typename T>
+concept HasRequiredFieldReset = requires(T& model) { model.idReset(); };
 
 template <typename Text>
 concept CanConstructRequiredRule = requires(Text&& text) {
@@ -97,6 +138,9 @@ static_assert(!HasModelTypedDynamicGet<ClonePayload>);
 static_assert(!HasModelCompileTimeGetAlias<ClonePayload>);
 static_assert(!HasModelPublicBodyParseHooks<ClonePayload>);
 static_assert(!HasModelPublicJsonDepthHook<ClonePayload>);
+static_assert(!HasJsonBodyInternalParseModes<ClonePayload>);
+static_assert(!HasJsonBodyParse<ClonePayload>);
+static_assert(!HasFormBodyParse<ClonePayload>);
 static_assert(!HasModelPublicFormFieldsHook<ClonePayload>);
 static_assert(!HasModelNonConstMessageGetter<ClonePayload>);
 static_assert(!HasModelPublicJsonWriterHooks<ClonePayload>);
@@ -106,6 +150,9 @@ static_assert(!ExposesRvalueFixedStringView<ruvia::FixedString<6>>);
 static_assert(!ExposesAnyRvalueModelBoxedArrayBorrow<ruvia::BoxedArray<ruvia::Int32>>);
 static_assert(!ExposesAnyRvalueGeneratedMessageMember<ClonePayload>);
 static_assert(!ExposesAnyRvalueGeneratedMessageMember<SurfaceJsonResponse>);
+static_assert(std::same_as<decltype(std::declval<const RequiredFieldSurface&>().id()), const ruvia::UInt32&>);
+static_assert(std::same_as<decltype(std::declval<const RequiredFieldSurface&>().label()), const std::optional<ruvia::String>&>);
+static_assert(!HasRequiredFieldReset<RequiredFieldSurface>);
 static_assert(CanConstructRequiredRule<std::string_view>);
 static_assert(CanConstructRequiredRule<std::string&>);
 static_assert(CanConstructRequiredRule<const std::string&>);
@@ -124,6 +171,12 @@ static_assert(ruvia::JsonBody<ClonePayload>::value);
 static_assert(ruvia::detail::isResponseModel<ClonePayload>);
 static_assert(ruvia::JsonBody<SurfaceJsonResponse>::value);
 static_assert(ruvia::FormBody<SurfaceJsonResponse>::value);
+static_assert(std::same_as<
+              decltype(ruvia::fromJson<ClonePayload>(std::string{})),
+              std::optional<ClonePayload>>);
+static_assert(std::same_as<
+              decltype(ruvia::fromForm<ClonePayload>(std::string{})),
+              std::optional<ClonePayload>>);
 static_assert(ruvia::detail::isResponseModel<SurfaceJsonResponse>);
 static_assert(!ruvia::JsonBody<ModelBodyDuckProbe>::value);
 static_assert(!ruvia::FormBody<ModelBodyDuckProbe>::value);

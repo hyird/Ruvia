@@ -14,7 +14,7 @@
 namespace ruvia {
 namespace {
 
-Task<DbRows> queryTransactionPool(detail::DbPoolRef pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const DbOperationOptions& options) {
+Task<DbRows> queryTransactionPool(detail::DbPoolRef pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const OperationOptions& options) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
         return (*client)->queryOnTransactionSlot(slot, std::move(sql), std::move(params), resource, options);
@@ -28,7 +28,7 @@ Task<DbRows> queryTransactionPool(detail::DbPoolRef pool, std::size_t slot, std:
     detail::throwUnavailableDbBackend();
 }
 
-Task<DbExecResult> executeTransactionPool(detail::DbPoolRef pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const DbOperationOptions& options) {
+Task<DbExecResult> executeTransactionPool(detail::DbPoolRef pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const OperationOptions& options) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
         return (*client)->executeOnTransactionSlot(slot, std::move(sql), std::move(params), resource, options);
@@ -42,7 +42,7 @@ Task<DbExecResult> executeTransactionPool(detail::DbPoolRef pool, std::size_t sl
     detail::throwUnavailableDbBackend();
 }
 
-Task<void> commitPoolTransaction(detail::DbPoolRef pool, std::size_t slot, std::pmr::memory_resource* resource, const DbOperationOptions& options) {
+Task<void> commitPoolTransaction(detail::DbPoolRef pool, std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
         return (*client)->commitTransaction(slot, resource, options);
@@ -56,7 +56,7 @@ Task<void> commitPoolTransaction(detail::DbPoolRef pool, std::size_t slot, std::
     detail::throwUnavailableDbBackend();
 }
 
-Task<void> rollbackPoolTransaction(detail::DbPoolRef pool, std::size_t slot, std::pmr::memory_resource* resource, const DbOperationOptions& options) {
+Task<void> rollbackPoolTransaction(detail::DbPoolRef pool, std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
         return (*client)->rollbackTransaction(slot, resource, options);
@@ -86,13 +86,13 @@ void abortPoolTransaction(detail::DbPoolRef pool, std::size_t slot) noexcept {
 
 }  // namespace
 
-DbTransaction::Lease::Lease(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, DbOperationOptions options) noexcept
+DbTransaction::Lease::Lease(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, OperationOptions options) noexcept
     : client(client),
       slot(slot),
       resource(detail::pmrResourceOrDefault(resource)),
       options(std::move(options)) {}
 
-DbTransaction::DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, DbOperationOptions options) noexcept
+DbTransaction::DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, OperationOptions options) noexcept
     : state_(Lease{client, slot, resource, std::move(options)}) {}
 
 DbTransaction::DbTransaction(DbTransaction&& other) noexcept

@@ -106,7 +106,7 @@ struct BlockingPool::Impl final {
             try {
                 task();
             } catch (...) {
-                // runBlocking()'s wrapper catches the callable's exceptions and
+                // The blocking wrapper catches the callable's exceptions and
                 // hands them back to the waiter, so reaching this is a raw
                 // submit() whose task threw with nobody to receive it.
                 detail::reportUnhandledFailure("blocking pool task", std::current_exception());

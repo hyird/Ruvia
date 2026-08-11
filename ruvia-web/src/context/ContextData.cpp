@@ -10,18 +10,24 @@ namespace ruvia {
 #ifdef RUVIA_ENABLE_DATABASE
 DbHandle Context::db() const {
     if (db_ == nullptr) {
-        throw std::logic_error("database is not configured");
+        throw DbError(
+            DbError::Code::kNotConfigured,
+            std::nullopt,
+            "database is not configured");
     }
     return db_->get(resource(), operationScope_).withOptions(
-        DbOperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 
 DbHandle Context::db(std::string_view alias) const {
     if (db_ == nullptr) {
-        throw std::logic_error("database is not configured");
+        throw DbError(
+            DbError::Code::kNotConfigured,
+            std::nullopt,
+            "database is not configured");
     }
     return db_->get(alias, resource(), operationScope_).withOptions(
-        DbOperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 #endif
 
@@ -31,7 +37,7 @@ RedisHandle Context::redis() const {
         throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
     return redis_->get(resource(), operationScope_).withOptions(
-        RedisOperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 
 RedisHandle Context::redis(std::string_view alias) const {
@@ -39,7 +45,7 @@ RedisHandle Context::redis(std::string_view alias) const {
         throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
     return redis_->get(alias, resource(), operationScope_).withOptions(
-        RedisOperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 #endif
 

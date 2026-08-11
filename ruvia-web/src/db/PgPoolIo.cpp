@@ -41,11 +41,11 @@ Task<void> PostgreSqlPool::connectUnlocked(ConnectionSlot& slot, const Operation
         const std::array<const char*, 8> values{resolvedHosts.hosts.c_str(), resolvedHosts.addresses.c_str(), port.data(), config_.username.c_str(), config_.password.c_str(), config_.database.c_str(), "UTF8", nullptr};
         slot.connection = PQconnectStartParams(keywords.data(), values.data(), 0);
         if (slot.connection == nullptr) {
-            throw std::runtime_error("PQconnectStartParams failed");
+            throw DbError(DbError::Code::kConnectFailed, DbDriver::kPostgreSql, "PQconnectStartParams failed");
         }
         slot.waitSocket = makePmrObject<DbSlotSocket>(resource_, ioContext_);
         if (PQstatus(slot.connection) == CONNECTION_BAD) {
-            throw postgreSqlError(*slot.connection, "PQconnectStartParams");
+            throw postgreSqlError(*slot.connection, "PQconnectStartParams", DbError::Code::kConnectFailed);
         }
 
         auto status = PQconnectPoll(slot.connection);
@@ -58,10 +58,10 @@ Task<void> PostgreSqlPool::connectUnlocked(ConnectionSlot& slot, const Operation
             status = PQconnectPoll(slot.connection);
         }
         if (status != PGRES_POLLING_OK || PQstatus(slot.connection) != CONNECTION_OK) {
-            throw postgreSqlError(*slot.connection, "PQconnectPoll");
+            throw postgreSqlError(*slot.connection, "PQconnectPoll", DbError::Code::kConnectFailed);
         }
         if (PQsetnonblocking(slot.connection, 1) != 0) {
-            throw postgreSqlError(*slot.connection, "PQsetnonblocking");
+            throw postgreSqlError(*slot.connection, "PQsetnonblocking", DbError::Code::kConnectFailed);
         }
         slot.connected = true;
     } catch (...) {
@@ -75,11 +75,23 @@ Task<void> PostgreSqlPool::waitForPostgreSql(ConnectionSlot& slot, bool read, co
     throwIfCancelled(slot);
     const auto remaining = deadline.remaining();
     if (remaining.has_value() && remaining->count() <= 0) {
-        throw DbError(DbError::Code::kTimeout, "PostgreSQL operation timed out");
+        throw DbError(DbError::Code::kTimeout, DbDriver::kPostgreSql, "PostgreSQL operation timed out");
     }
     const auto native = PQsocket(slot.connection);
-    if (native < 0 || slot.waitSocket == nullptr || !slot.waitSocket->ensureAssigned(static_cast<DbSlotSocket::NativeSocket>(native))) {
-        throw std::runtime_error("PostgreSQL connection socket is unavailable");
+    if (native < 0 || slot.waitSocket == nullptr) {
+        throw DbError(
+            DbError::Code::kIoError,
+            DbDriver::kPostgreSql,
+            "PostgreSQL connection socket is unavailable");
+    }
+    if (const auto error = slot.waitSocket->ensureAssigned(
+            static_cast<DbSlotSocket::NativeSocket>(native));
+        error) {
+        throw DbError(
+            DbError::Code::kIoError,
+            DbDriver::kPostgreSql,
+            "binding PostgreSQL connection socket: " + error.message(),
+            error.value());
     }
 
     setSlotDeadline(slot, remaining);
@@ -124,10 +136,14 @@ Task<void> PostgreSqlPool::waitForPostgreSql(ConnectionSlot& slot, bool read, co
                 std::rethrow_exception(initiationFailure);
             }
             if (slot.deadline.expired()) {
-                throw DbError(DbError::Code::kTimeout, "PostgreSQL operation timed out");
+                throw DbError(DbError::Code::kTimeout, DbDriver::kPostgreSql, "PostgreSQL operation timed out");
             }
             if (error) {
-                throw std::system_error(error, "PostgreSQL socket wait failed");
+                throw DbError(
+                    DbError::Code::kIoError,
+                    DbDriver::kPostgreSql,
+                    std::system_error(error, "PostgreSQL socket wait failed").what(),
+                    error.value());
             }
         }
     };
@@ -160,13 +176,32 @@ Task<void> PostgreSqlPool::waitForPostgreSql(ConnectionSlot& slot, bool read, co
     // PQ* may replace or close the native socket during the next poll. Ensure
     // ASIO no longer owns a duplicate before returning to libpq.
     slot.waitSocket->reset();
+    const bool operationExpired = deadline.expired() || slot.deadline.expired();
     clearSlotDeadline(slot);
     throwIfCancelled(slot);
     if (slot.closeRequested) {
-        throw DbError(DbError::Code::kClosing, "database client is closing");
+        throw DbError(DbError::Code::kClosing, DbDriver::kPostgreSql, "database client is closing");
+    }
+    if (operationExpired) {
+        throw DbError(
+            DbError::Code::kTimeout,
+            DbDriver::kPostgreSql,
+            "PostgreSQL operation timed out");
     }
     if (waitFailure != nullptr) {
-        std::rethrow_exception(waitFailure);
+        try {
+            std::rethrow_exception(waitFailure);
+        } catch (const DbError&) {
+            throw;
+        } catch (const std::system_error& error) {
+            throw DbError(
+                DbError::Code::kIoError,
+                DbDriver::kPostgreSql,
+                error.what(),
+                error.code().value());
+        } catch (const std::runtime_error& error) {
+            throw DbError(DbError::Code::kIoError, DbDriver::kPostgreSql, error.what());
+        }
     }
 }
 
@@ -177,7 +212,7 @@ Task<void> PostgreSqlPool::flushOutput(ConnectionSlot& slot, const OperationTime
             co_return;
         }
         if (status < 0) {
-            throw postgreSqlError(*slot.connection, "PQflush");
+            throw postgreSqlError(*slot.connection, "PQflush", DbError::Code::kIoError);
         }
         co_await waitForPostgreSql(slot, false, deadline);
     }
@@ -187,7 +222,7 @@ Task<void> PostgreSqlPool::waitUntilResultReady(ConnectionSlot& slot, const Oper
     while (PQisBusy(slot.connection) != 0) {
         co_await waitForPostgreSql(slot, true, deadline);
         if (PQconsumeInput(slot.connection) == 0) {
-            throw postgreSqlError(*slot.connection, "PQconsumeInput");
+            throw postgreSqlError(*slot.connection, "PQconsumeInput", DbError::Code::kIoError);
         }
     }
 }
@@ -206,10 +241,10 @@ Task<void> PostgreSqlPool::sendQuery(ConnectionSlot& slot, const std::pmr::strin
     const auto* values = encoded.values.empty() ? nullptr : encoded.values.data();
     const auto* lengths = encoded.lengths.empty() ? nullptr : encoded.lengths.data();
     if (PQsendQueryParams(slot.connection, sql.c_str(), static_cast<int>(params.size()), nullptr, values, lengths, nullptr, 0) == 0) {
-        throw postgreSqlError(*slot.connection, "PQsendQueryParams");
+        throw postgreSqlError(*slot.connection, "PQsendQueryParams", DbError::Code::kStatementFailed);
     }
     if (singleRow && PQsetSingleRowMode(slot.connection) == 0) {
-        throw postgreSqlError(*slot.connection, "PQsetSingleRowMode");
+        throw postgreSqlError(*slot.connection, "PQsetSingleRowMode", DbError::Code::kStatementFailed);
     }
     co_await flushOutput(slot, deadline);
 }

@@ -65,7 +65,7 @@ inline Http1ClientResponseParseResult parseWire(std::string_view method, std::st
     if (prepared == nullptr) {
         throw std::runtime_error("test request could not be prepared");
     }
-    auto parser = Http1ClientResponseParser(*prepared, resource);
+    auto parser = Http1ClientResponseParser(prepared->exchangeState(), resource);
     return parser.parse(wire);
 }
 

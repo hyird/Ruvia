@@ -274,6 +274,7 @@ ruvia_add_unit_suite(ruvia_http_unit_tests ruvia::http
     http/http2/connection/data.cpp
     http/http2/connection/flow.cpp
     http/http2/connection/headers.cpp
+    http/http2/connection/public.cpp
     http/http2/connection/session.cpp
     http/http2/connection/streams.cpp
     http/http2/connection/submit.cpp
@@ -294,6 +295,7 @@ ruvia_add_unit_suite(ruvia_http_unit_tests ruvia::http
     http/http2/hpack/header_block.cpp
     http/http2/hpack/header_list.cpp
     http/http2/hpack/hpack.cpp
+    http/http2/hpack/public.cpp
     http/http2/hpack/static_table.cpp
 
     # http/http2/message
@@ -580,6 +582,18 @@ if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_worker_timer core/worker_timer.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_worker_dispatch_failure core/worker_dispatch_failure.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_worker_async_await core/asio_await.cpp LIB ruvia::core)
+
+    ruvia_validate_test_sources(ruvia_worker_wait_wake_violation ruvia::core
+        core/worker_wait_wake_violation.cpp)
+    add_executable(ruvia_worker_wait_wake_violation
+        core/worker_wait_wake_violation.cpp)
+    target_link_libraries(ruvia_worker_wait_wake_violation PRIVATE ruvia::core)
+    foreach(_probe IN ITEMS channel one_shot)
+        add_test(NAME ruvia_worker_wait_wake_${_probe}_violation
+            COMMAND ruvia_worker_wait_wake_violation ${_probe})
+        set_tests_properties(ruvia_worker_wait_wake_${_probe}_violation
+            PROPERTIES WILL_FAIL TRUE)
+    endforeach()
 
     ruvia_validate_test_sources(ruvia_worker_signal_violation ruvia::core
         core/worker_signal_violation.cpp)

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <exception>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -19,75 +22,51 @@ public:
 
 namespace ruvia {
 
-class WorkerWaitClosed final {
-private:
-    friend struct detail::WorkerWaitResultAccess;
-    constexpr WorkerWaitClosed() noexcept = default;
+enum class WorkerWaitStatus : std::uint8_t {
+    kValue,
+    kClosed,
+    kWorkerStopping,
+    kTimedOut,
+    kCancelled,
 };
 
-class WorkerWaitStopping final {
-private:
-    friend struct detail::WorkerWaitResultAccess;
-    constexpr WorkerWaitStopping() noexcept = default;
-};
-
-class WorkerWaitTimedOut final {
-private:
-    friend struct detail::WorkerWaitResultAccess;
-    constexpr WorkerWaitTimedOut() noexcept = default;
-};
-
-class WorkerWaitCancelled final {
-private:
-    friend struct detail::WorkerWaitResultAccess;
-    constexpr WorkerWaitCancelled() noexcept = default;
-};
-
-// Worker-bound waits have five mutually exclusive outcomes. Only the value
-// alternative owns a payload; close, worker shutdown, and timeout cannot carry
-// a stale or fabricated value, nor can caller cancellation.
+// Worker-bound waits have five mutually exclusive outcomes. A status is always
+// available for exhaustive handling; only kValue owns a payload.
 template <typename T>
 class WorkerWaitResult final {
 public:
-    [[nodiscard]] const T* value() const& noexcept {
+    [[nodiscard]] WorkerWaitStatus status() const noexcept {
+        return std::holds_alternative<detail::WorkerWaitValue<T>>(result_)
+            ? WorkerWaitStatus::kValue
+            : std::get<WorkerWaitStatus>(result_);
+    }
+
+    [[nodiscard]] bool hasValue() const noexcept {
+        return std::holds_alternative<detail::WorkerWaitValue<T>>(result_);
+    }
+
+    [[nodiscard]] const T& value() const& {
         const auto* result = std::get_if<detail::WorkerWaitValue<T>>(&result_);
-        return result == nullptr ? nullptr : &result->value_;
+        if (result == nullptr) {
+            throw std::logic_error("worker wait result has no value");
+        }
+        return result->value_;
     }
-    [[nodiscard]] const T* value() const&& = delete;
+    const T& value() const&& = delete;
 
-    [[nodiscard]] T* value() & noexcept {
-        auto* result = std::get_if<detail::WorkerWaitValue<T>>(&result_);
-        return result == nullptr ? nullptr : &result->value_;
-    }
-    [[nodiscard]] T* value() && = delete;
-
-    [[nodiscard]] const WorkerWaitClosed* closed() const& noexcept {
-        return std::get_if<WorkerWaitClosed>(&result_);
-    }
-    [[nodiscard]] const WorkerWaitClosed* closed() const&& = delete;
-
-    [[nodiscard]] const WorkerWaitStopping* workerStopping() const& noexcept {
-        return std::get_if<WorkerWaitStopping>(&result_);
-    }
-    [[nodiscard]] const WorkerWaitStopping* workerStopping() const&& = delete;
-
-    [[nodiscard]] const WorkerWaitTimedOut* timedOut() const& noexcept {
-        return std::get_if<WorkerWaitTimedOut>(&result_);
-    }
-    [[nodiscard]] const WorkerWaitTimedOut* timedOut() const&& = delete;
-
-    [[nodiscard]] const WorkerWaitCancelled* cancelled() const& noexcept {
-        return std::get_if<WorkerWaitCancelled>(&result_);
-    }
-    [[nodiscard]] const WorkerWaitCancelled* cancelled() const&& = delete;
-
-    // Consumes the value alternative, matching the takeRejected() pattern of
-    // the channel/one-shot results. Only the value outcome carries a payload;
-    // any other outcome makes this a programming error.
-    [[nodiscard]] T takeValue() && noexcept(std::is_nothrow_move_constructible_v<T>) {
+    [[nodiscard]] T& value() & {
         auto* result = std::get_if<detail::WorkerWaitValue<T>>(&result_);
         if (result == nullptr) {
-            std::terminate();
+            throw std::logic_error("worker wait result has no value");
+        }
+        return result->value_;
+    }
+    T& value() && = delete;
+
+    [[nodiscard]] T takeValue() && {
+        auto* result = std::get_if<detail::WorkerWaitValue<T>>(&result_);
+        if (result == nullptr) {
+            throw std::logic_error("worker wait result has no value");
         }
         return std::move(result->value_);
     }
@@ -95,11 +74,17 @@ public:
 private:
     friend struct detail::WorkerWaitResultAccess;
 
-    using Result = std::variant<detail::WorkerWaitValue<T>, WorkerWaitClosed, WorkerWaitStopping, WorkerWaitTimedOut, WorkerWaitCancelled>;
+    using Result = std::variant<detail::WorkerWaitValue<T>, WorkerWaitStatus>;
 
-    template <typename Alternative>
-    explicit WorkerWaitResult(Alternative alternative) noexcept(std::is_nothrow_constructible_v<Result, Alternative&&>)
-        : result_(std::move(alternative)) {}
+    explicit WorkerWaitResult(detail::WorkerWaitValue<T> value) noexcept(std::is_nothrow_move_constructible_v<T>)
+        : result_(std::move(value)) {}
+
+    explicit WorkerWaitResult(WorkerWaitStatus status) noexcept
+        : result_(status) {
+        if (status == WorkerWaitStatus::kValue) {
+            std::terminate();
+        }
+    }
 
     Result result_;
 };
@@ -115,23 +100,8 @@ struct WorkerWaitResultAccess final {
     }
 
     template <typename T>
-    [[nodiscard]] static WorkerWaitResult<T> closed() noexcept {
-        return WorkerWaitResult<T>(WorkerWaitClosed());
-    }
-
-    template <typename T>
-    [[nodiscard]] static WorkerWaitResult<T> workerStopping() noexcept {
-        return WorkerWaitResult<T>(WorkerWaitStopping());
-    }
-
-    template <typename T>
-    [[nodiscard]] static WorkerWaitResult<T> timedOut() noexcept {
-        return WorkerWaitResult<T>(WorkerWaitTimedOut());
-    }
-
-    template <typename T>
-    [[nodiscard]] static WorkerWaitResult<T> cancelled() noexcept {
-        return WorkerWaitResult<T>(WorkerWaitCancelled());
+    [[nodiscard]] static WorkerWaitResult<T> outcome(WorkerWaitStatus status) noexcept {
+        return WorkerWaitResult<T>(status);
     }
 };
 

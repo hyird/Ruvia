@@ -156,7 +156,7 @@ void detail::MariaDbPool::cancelOperation(std::size_t slotIndex, std::uint64_t g
 
 void detail::MariaDbPool::throwIfCancelled(const ConnectionSlot& slot) const {
     if (slot.abortReason == DbSlotAbortReason::kCancelled) {
-        throw DbError(DbError::Code::kCancelled, "database operation cancelled");
+        throw DbError(DbError::Code::kCancelled, DbDriver::kMariaDb, "database operation cancelled");
     }
 }
 

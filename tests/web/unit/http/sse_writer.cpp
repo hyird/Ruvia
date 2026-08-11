@@ -8,7 +8,7 @@ RUVIA_TEST(sse_writer_formats_event_id_retry_and_multiline_data) {
     auto sse = ruvia::detail::StreamingAccess::makeSseWriter(writer);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writeOneSse(sse, ruvia::SseMessage{.data = "line1\nline2", .event = "update", .id = "7", .retry = 3000})), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writeOneSse(sse, ruvia::SseMessage{.data = "line1\nline2", .event = "update", .id = "7", .retry = std::chrono::milliseconds{3000}})), asio::use_future);
     ctx.run();
     future.get();
 
@@ -34,7 +34,7 @@ RUVIA_TEST(sse_writer_distinguishes_absent_and_empty_data) {
     };
 
     // A retry-only block bumps the reconnection time and dispatches nothing.
-    RUVIA_CHECK_EQ(render(ruvia::SseMessage{.retry = 3000}), std::string("retry: 3000\n\n"));
+    RUVIA_CHECK_EQ(render(ruvia::SseMessage{.retry = std::chrono::milliseconds{3000}}), std::string("retry: 3000\n\n"));
     // An event-only block likewise emits no data field (empty data never dispatches).
     RUVIA_CHECK_EQ(render(ruvia::SseMessage{.event = "ping"}), std::string("event: ping\n\n"));
     // A bare block is a no-op keepalive: just the terminating blank line.
@@ -47,7 +47,7 @@ RUVIA_TEST(sse_writer_distinguishes_absent_and_empty_data) {
     // Non-empty data is unaffected: data lines are still emitted.
     RUVIA_CHECK_EQ(render(ruvia::SseMessage{.data = "hi"}), std::string("data: hi\n\n"));
     // No absent-data frame carries a "data:" line.
-    RUVIA_CHECK(render(ruvia::SseMessage{.retry = 1}).find("data:") == std::string::npos);
+    RUVIA_CHECK(render(ruvia::SseMessage{.retry = std::chrono::milliseconds{1}}).find("data:") == std::string::npos);
 }
 
 RUVIA_TEST(sse_writer_splits_data_on_cr_crlf_and_lf_never_emitting_raw_cr) {

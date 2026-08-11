@@ -70,12 +70,12 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& option
 
 void applySecurityHeaders(Context& context, const SecurityHeadersOptions& options) {
     const auto connection = getConnInfo(context);
-    applySecurityHeadersTo(context, options, connection.secure());
+    applySecurityHeadersTo(context, options, connection.scheme() == HttpScheme::kHttps);
 }
 
 Task<void> SecurityHeadersMiddleware::handle(Context& context, Next& next) {
     const auto connection = getConnInfo(context);
-    const bool secureTransport = connection.secure();
+    const bool secureTransport = connection.scheme() == HttpScheme::kHttps;
     applySecurityHeadersTo(context, options_, secureTransport);
     co_await next();
     applySecurityHeadersTo(detail::ContextAccess::responseStorage(context), options_, secureTransport);

@@ -4,6 +4,7 @@
 #include <array>
 #include <concepts>
 #include <cstddef>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -26,8 +27,18 @@ using ruvia::HttpClientRequestView;
 using ruvia::HttpClientRequestContentView;
 using ruvia::HttpOriginView;
 
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http1ClientRequestContext&>().connectionOptions()), ruvia::detail::HttpConnectionOptions>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http1ClientRequestContext&&>().connectionOptions()), ruvia::detail::HttpConnectionOptions>);
+class RejectingMemoryResource final : public std::pmr::memory_resource {
+private:
+    void* do_allocate(std::size_t, std::size_t) override { throw std::bad_alloc(); }
+    void do_deallocate(void*, std::size_t, std::size_t) override {}
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
+
+static_assert(std::same_as<decltype(std::declval<const ruvia::PreparedHttp1ClientRequest&>().exchangeState()), ruvia::Http1ClientExchangeState>);
+static_assert(std::constructible_from<ruvia::Http1ClientResponseParser, ruvia::Http1ClientExchangeState&&>);
+static_assert(!std::constructible_from<ruvia::Http1ClientResponseParser, const ruvia::PreparedHttp1ClientRequest&>);
 
 template <typename T>
 concept HasAnyRvalueHttpClientRequestContentViewAccessor = requires(T&& content) { std::move(content).withoutContent(); } || requires(T&& content) { std::move(content).borrowedBytes(); };
@@ -75,10 +86,10 @@ static_assert(!std::is_constructible_v<HttpClientRequestView::HeaderInit, std::a
 static_assert(!std::is_assignable_v<HttpClientRequestView::HeaderInit&, std::array<ruvia::HttpHeaderView, 1>&&>);
 static_assert(AcceptsHttp1ConnectHeaders<std::vector<ruvia::HttpHeaderView>&>);
 static_assert(AcceptsHttp1ConnectHeaders<std::array<ruvia::HttpHeaderView, 1>&>);
-static_assert(!AcceptsHttp1ConnectHeaders<std::vector<ruvia::HttpHeaderView>>);
-static_assert(!AcceptsHttp1ConnectHeaders<const std::vector<ruvia::HttpHeaderView>>);
-static_assert(!AcceptsHttp1ConnectHeaders<std::array<ruvia::HttpHeaderView, 1>>);
-static_assert(!AcceptsHttp1ConnectHeaders<const std::array<ruvia::HttpHeaderView, 1>>);
+static_assert(AcceptsHttp1ConnectHeaders<std::vector<ruvia::HttpHeaderView>>);
+static_assert(AcceptsHttp1ConnectHeaders<const std::vector<ruvia::HttpHeaderView>>);
+static_assert(AcceptsHttp1ConnectHeaders<std::array<ruvia::HttpHeaderView, 1>>);
+static_assert(AcceptsHttp1ConnectHeaders<const std::array<ruvia::HttpHeaderView, 1>>);
 
 template <typename T>
 concept HasRequestContentMode = requires(const T& content) { content.mode(); };
@@ -551,6 +562,27 @@ RUVIA_TEST(http1_client_request_writer_returns_exact_buffer_requirement_without_
     }
 }
 
+RUVIA_TEST(http1_client_upgrade_state_allocation_failure_leaves_head_buffer_untouched) {
+    RejectingMemoryResource rejecting;
+    const std::array headers{
+        ruvia::HttpHeaderView{"Connection", "Upgrade"},
+        ruvia::HttpHeaderView{"Upgrade", "a-valid-protocol-token-that-exceeds-small-string-storage"},
+    };
+    HttpClientRequestView request{.headers = headers};
+    std::array<char, 512> output;
+    output.fill('u');
+
+    bool allocationFailed = false;
+    try {
+        (void)Http1ClientRequestWriter(&rejecting).prepare(
+            HttpOriginView::https("example.test"), request, output);
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(std::ranges::all_of(output, [](char value) { return value == 'u'; }));
+}
+
 RUVIA_TEST(http1_client_request_writer_enforces_header_count_and_size_transactionally) {
     std::array<ruvia::HttpHeaderView, ruvia::kMaxHttpHeaderFields> headers;
     headers.fill(ruvia::HttpHeaderView("X-Test", "x"));
@@ -583,7 +615,7 @@ RUVIA_TEST(http1_client_request_context_binds_the_actual_close_signal) {
     const auto* explicitPrepared = explicitClose.result.prepared();
     RUVIA_CHECK(explicitPrepared != nullptr);
     if (explicitPrepared != nullptr) {
-        auto parser = ruvia::Http1ClientResponseParser(*explicitPrepared);
+        auto parser = ruvia::Http1ClientResponseParser(explicitPrepared->exchangeState());
         const auto response = parser.parse("HTTP/1.1 204 No Content\r\n\r\n");
         RUVIA_CHECK(response.parsed() != nullptr);
         if (response.parsed() != nullptr) {

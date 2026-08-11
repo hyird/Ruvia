@@ -52,7 +52,7 @@ Task<RedisZScanResult> executeRedisZScan(detail::RedisCommandExecutor executor, 
     co_return detail::parseRedisZScanResult(value, resource);
 }
 
-void constrainOperationTimeout(RedisOperationOptions& options, std::optional<std::chrono::milliseconds> timeout) noexcept {
+void constrainOperationTimeout(OperationOptions& options, std::optional<std::chrono::milliseconds> timeout) noexcept {
     if (timeout.has_value() && (!options.timeout.has_value() || *timeout < *options.timeout)) {
         options.timeout = timeout;
     }
@@ -66,18 +66,18 @@ void constrainOperationTimeout(RedisOperationOptions& options, std::optional<std
     return timeout + grace;
 }
 
-void requireCancelableInfiniteBlock(const RedisOperationOptions& options) {
+void requireCancelableInfiniteBlock(const OperationOptions& options) {
     if (!options.stopToken.stoppable() && !options.timeout.has_value()) {
         throw std::invalid_argument("infinite redis block requires a StopToken or finite operation timeout");
     }
 }
 
-Task<std::optional<RedisKeyValue>> executeRedisBlockingPop(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, RedisOperationOptions options, std::pmr::memory_resource* resource) {
+Task<std::optional<RedisKeyValue>> executeRedisBlockingPop(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, OperationOptions options, std::pmr::memory_resource* resource) {
     auto reply = co_await detail::executeOwnedRedisCommand(pool, std::move(args), std::move(options), resource);
     co_return detail::parseRedisBlockingPopReply(reply, resource);
 }
 
-Task<std::optional<RedisXReadGroupResult>> executeRedisXReadGroup(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, RedisOperationOptions options, std::pmr::memory_resource* resource) {
+Task<std::optional<RedisXReadGroupResult>> executeRedisXReadGroup(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, OperationOptions options, std::pmr::memory_resource* resource) {
     auto reply = co_await detail::executeOwnedRedisCommand(pool, std::move(args), std::move(options), resource);
     co_return detail::parseRedisXReadGroupReply(reply, resource);
 }
@@ -134,10 +134,9 @@ ScopedOperation<std::pmr::vector<bool>> RedisHandle::scriptExists(std::span<cons
     return scoped(detail::redisBoolArrayCommand(executor(), std::move(args), resource_));
 }
 
-ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::blpop(std::span<const std::string_view> keys, RedisBlockWait wait, RedisOperationOptions options) const {
+ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::blpop(std::span<const std::string_view> keys, RedisBlockWait wait) const {
     requireActive();
-    options = detail::mergeRedisOperationOptions(operationOptions_, std::move(options));
-    detail::validateRedisOperationOptions(options);
+    auto options = operationOptions_;
     if (const auto duration = wait.duration(); duration.has_value()) {
         constrainOperationTimeout(options, redisBlockClientTimeout(*duration));
     } else {
@@ -146,10 +145,9 @@ ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::blpop(std::span<const
     return scoped(executeRedisBlockingPop(*blockingPool_, detail::redisBlockingPopArgs("BLPOP", keys, wait, resource_), std::move(options), resource_));
 }
 
-ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::brpop(std::span<const std::string_view> keys, RedisBlockWait wait, RedisOperationOptions options) const {
+ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::brpop(std::span<const std::string_view> keys, RedisBlockWait wait) const {
     requireActive();
-    options = detail::mergeRedisOperationOptions(operationOptions_, std::move(options));
-    detail::validateRedisOperationOptions(options);
+    auto options = operationOptions_;
     if (const auto duration = wait.duration(); duration.has_value()) {
         constrainOperationTimeout(options, redisBlockClientTimeout(*duration));
     } else {
@@ -160,19 +158,18 @@ ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::brpop(std::span<const
 
 ScopedOperation<std::optional<RedisXReadGroupResult>> RedisHandle::xreadGroup(std::string_view group, std::string_view consumer, std::span<const RedisStreamReadView> streams, RedisXReadGroupOptions options) const {
     requireActive();
-    options.operation = detail::mergeRedisOperationOptions(operationOptions_, std::move(options.operation));
-    detail::validateRedisOperationOptions(options.operation);
+    auto operation = operationOptions_;
     auto args = detail::redisXReadGroupArgs(group, consumer, streams, options, resource_);
     auto* selectedPool = pool_;
     if (options.block.has_value()) {
         selectedPool = blockingPool_;
         if (const auto duration = options.block->duration(); duration.has_value()) {
-            constrainOperationTimeout(options.operation, redisBlockClientTimeout(*duration));
+            constrainOperationTimeout(operation, redisBlockClientTimeout(*duration));
         } else {
-            requireCancelableInfiniteBlock(options.operation);
+            requireCancelableInfiniteBlock(operation);
         }
     }
-    return scoped(executeRedisXReadGroup(*selectedPool, std::move(args), std::move(options.operation), resource_));
+    return scoped(executeRedisXReadGroup(*selectedPool, std::move(args), std::move(operation), resource_));
 }
 
 RedisPipeline RedisHandle::pipeline() const {

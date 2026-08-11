@@ -46,7 +46,7 @@ concept AcceptsRvalueValidatedModel = requires(Bindings& bindings) { bindings.bi
 static_assert(!AcceptsRvalueValidatedModel<ruvia::detail::RequestBindings>);
 
 RUVIA_TEST(unified_model_required_and_optional_fields_are_structural) {
-    auto parsed = ruvia::JsonBody<RequiredOptionalModel>::parsePartial("{}", std::pmr::get_default_resource());
+    auto parsed = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<RequiredOptionalModel>("{}", std::pmr::get_default_resource());
     RUVIA_CHECK(parsed.has_value());
     if (!parsed) {
         return;
@@ -58,8 +58,8 @@ RUVIA_TEST(unified_model_required_and_optional_fields_are_structural) {
     RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("requiredValue"));
     RUVIA_CHECK(!ruvia::fromJson<RequiredOptionalModel>("{}").has_value());
 
-    RUVIA_CHECK(!ruvia::FormBody<RequiredOptionalModel>::parse("", std::pmr::get_default_resource()).has_value());
-    auto partialForm = ruvia::FormBody<RequiredOptionalModel>::parsePartial("", std::pmr::get_default_resource());
+    RUVIA_CHECK(!ruvia::fromForm<RequiredOptionalModel>("", std::pmr::get_default_resource()).has_value());
+    auto partialForm = ruvia::detail::ModelParseAccess::parseFormBorrowedPartial<RequiredOptionalModel>("", std::pmr::get_default_resource());
     RUVIA_CHECK(partialForm.has_value());
     if (partialForm) {
         Validator formValidator;

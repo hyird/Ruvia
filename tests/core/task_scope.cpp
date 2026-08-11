@@ -136,7 +136,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
 int main() {
     ruvia::StopToken retainedToken;
     {
-        ruvia::detail::StopSource source;
+        ruvia::StopSource source;
         retainedToken = source.token();
         source.requestStop();
     }

@@ -1234,7 +1234,7 @@ RUVIA_TEST(http2_connection_consumed_data_batches_window_updates_at_half_window)
         RUVIA_CHECK(conn.feed(std::string_view(data.data(), data.size())) == Http2FeedResult::kAccepted);
         RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageBodyChunk);
         RUVIA_CHECK(!conn.nextEvent().has_value());
-        conn.releaseReceivedData(1);
+        conn.releaseAllReceivedData(1);
         if (consumed < threshold) {
             RUVIA_CHECK(conn.pendingOutput().empty());
         }
@@ -1278,7 +1278,7 @@ RUVIA_TEST(http2_connection_receive_window_update_is_transactional_on_allocation
         RUVIA_CHECK(conn.feed(std::string_view(data.data(), data.size())) == Http2FeedResult::kAccepted);
         RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageBodyChunk);
         if (received < threshold) {
-            conn.releaseReceivedData(1);
+            conn.releaseAllReceivedData(1);
             RUVIA_CHECK(conn.pendingOutput().empty());
         }
     }
@@ -1286,7 +1286,7 @@ RUVIA_TEST(http2_connection_receive_window_update_is_transactional_on_allocation
     resource.rejectAllocations();
     bool allocationFailed = false;
     try {
-        conn.releaseReceivedData(1);
+        conn.releaseAllReceivedData(1);
     } catch (const std::bad_alloc&) {
         allocationFailed = true;
     }
@@ -1295,7 +1295,7 @@ RUVIA_TEST(http2_connection_receive_window_update_is_transactional_on_allocation
     RUVIA_CHECK(conn.pendingOutput().empty());
 
     resource.rejectAllocations(false);
-    conn.releaseReceivedData(1);
+    conn.releaseAllReceivedData(1);
     RUVIA_CHECK_EQ(conn.pendingOutput().size(), std::size_t{2 * ruvia::detail::kHttp2WindowUpdateFrameBytes});
 }
 #endif  // !_MSC_VER

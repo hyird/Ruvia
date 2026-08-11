@@ -449,11 +449,16 @@ RUVIA_TEST(redis_wrong_reply_type_throws_RedisError_not_logic_error) {
     // that escapes `catch (const RedisError&)` and can std::terminate a coroutine.
     auto* res = std::pmr::get_default_resource();
     const auto str = RedisTypesAccess::stringValue("foo", res);
+    const auto err = RedisTypesAccess::errorValue("ERR command failed", res);
     const auto num = RedisTypesAccess::integerValue(5, res);
 
     RUVIA_CHECK(throwsRedisError([&] { (void)redisValueInteger(str); }));  // INCR answered with a string
     RUVIA_CHECK(throwsRedisError([&] { (void)redisValueArray(num); }));    // MGET answered with an integer
     RUVIA_CHECK(throwsRedisError([&] { (void)redisValueString(num); }));   // GET answered with an integer
+    RUVIA_CHECK(throwsRedisError([&] { (void)redisValueString(err); }));   // GET answered with an error
+    RUVIA_CHECK(throwsOn([&] { (void)err.string(); }));
+    RUVIA_CHECK(throwsOn([&] { (void)str.error(); }));
+    RUVIA_CHECK_EQ(err.error(), std::string_view("ERR command failed"));
 
     // End-to-end: a SCAN reply whose second element is an integer, not the value array.
     std::pmr::vector<RedisValue> root(res);
@@ -465,6 +470,12 @@ RUVIA_TEST(redis_wrong_reply_type_throws_RedisError_not_logic_error) {
     // Correct types must still pass (no false rejections).
     RUVIA_CHECK(!throwsRedisError([&] { (void)redisValueInteger(num); }));
     RUVIA_CHECK(!throwsRedisError([&] { (void)redisValueString(str); }));
+}
+
+RUVIA_TEST(redis_error_uses_runtime_error_message_and_stable_code) {
+    const ruvia::RedisError error(ruvia::RedisError::Code::kTimeout, "redis timed out");
+    RUVIA_CHECK(error.code() == ruvia::RedisError::Code::kTimeout);
+    RUVIA_CHECK_EQ(std::string_view(error.what()), std::string_view("redis timed out"));
 }
 
 RUVIA_TEST(hiredis_reply_to_value_rejects_nonempty_null_string_storage) {

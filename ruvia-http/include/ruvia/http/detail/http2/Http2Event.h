@@ -49,6 +49,10 @@ public:
     }
     [[nodiscard]] const HttpClientResponseHead& head() const&& = delete;
 
+    [[nodiscard]] HttpClientResponseHead takeHead() && noexcept {
+        return std::move(head_);
+    }
+
     [[nodiscard]] constexpr std::optional<HttpClientRequestContentSignal> requestContentSignal() const noexcept {
         return requestContentSignal_;
     }
@@ -95,13 +99,19 @@ public:
         return bytes_;
     }
 
+    [[nodiscard]] constexpr std::uint32_t flowControlBytes() const noexcept {
+        return flowControlBytes_;
+    }
+
 private:
     friend class Http2Event;
-    constexpr Http2MessageBodyChunkEvent(std::uint32_t streamId, std::string_view bytes) noexcept
+    constexpr Http2MessageBodyChunkEvent(std::uint32_t streamId, std::string_view bytes, std::uint32_t flowControlBytes) noexcept
         : streamId_(streamId),
-          bytes_(bytes) {}
+          bytes_(bytes),
+          flowControlBytes_(flowControlBytes) {}
     std::uint32_t streamId_{0};
     std::string_view bytes_{};
+    std::uint32_t flowControlBytes_{0};
 };
 
 class Http2MessageEndEvent final {
@@ -128,13 +138,19 @@ public:
         return bytes_;
     }
 
+    [[nodiscard]] constexpr std::uint32_t flowControlBytes() const noexcept {
+        return flowControlBytes_;
+    }
+
 private:
     friend class Http2Event;
-    constexpr Http2TunnelDataEvent(std::uint32_t streamId, std::string_view bytes) noexcept
+    constexpr Http2TunnelDataEvent(std::uint32_t streamId, std::string_view bytes, std::uint32_t flowControlBytes) noexcept
         : streamId_(streamId),
-          bytes_(bytes) {}
+          bytes_(bytes),
+          flowControlBytes_(flowControlBytes) {}
     std::uint32_t streamId_{0};
     std::string_view bytes_{};
+    std::uint32_t flowControlBytes_{0};
 };
 
 class Http2TunnelEndEvent final {
@@ -228,6 +244,9 @@ public:
         return static_cast<Http2EventKind>(value_.index());
     }
 
+    [[nodiscard]] Http2InformationalHeadEvent* informationalHead() & noexcept {
+        return std::get_if<Http2InformationalHeadEvent>(&value_);
+    }
     [[nodiscard]] const Http2InformationalHeadEvent* informationalHead() const& noexcept {
         return std::get_if<Http2InformationalHeadEvent>(&value_);
     }
@@ -292,16 +311,16 @@ private:
         return Http2Event(Http2MessageHeadEvent(streamId, requestContentSignal));
     }
 
-    [[nodiscard]] static Http2Event messageBodyChunk(std::uint32_t streamId, std::string_view bytes) noexcept {
-        return Http2Event(Http2MessageBodyChunkEvent(streamId, bytes));
+    [[nodiscard]] static Http2Event messageBodyChunk(std::uint32_t streamId, std::string_view bytes, std::uint32_t flowControlBytes) noexcept {
+        return Http2Event(Http2MessageBodyChunkEvent(streamId, bytes, flowControlBytes));
     }
 
     [[nodiscard]] static Http2Event messageEnd(std::uint32_t streamId) noexcept {
         return Http2Event(Http2MessageEndEvent(streamId));
     }
 
-    [[nodiscard]] static Http2Event tunnelData(std::uint32_t streamId, std::string_view bytes) noexcept {
-        return Http2Event(Http2TunnelDataEvent(streamId, bytes));
+    [[nodiscard]] static Http2Event tunnelData(std::uint32_t streamId, std::string_view bytes, std::uint32_t flowControlBytes) noexcept {
+        return Http2Event(Http2TunnelDataEvent(streamId, bytes, flowControlBytes));
     }
 
     [[nodiscard]] static Http2Event tunnelEnd(std::uint32_t streamId) noexcept {

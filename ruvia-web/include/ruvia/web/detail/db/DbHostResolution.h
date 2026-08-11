@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/web/db/DbTypes.h"
+
 #include <asio/ip/tcp.hpp>
 
 #include <cstddef>
@@ -13,7 +15,10 @@ namespace ruvia::detail {
 
 using DbResolvedAddresses = std::pmr::vector<std::pmr::string>;
 
-[[nodiscard]] DbResolvedAddresses collectDbResolvedAddresses(const asio::ip::tcp::resolver::results_type& results, std::pmr::memory_resource* resource);
+[[nodiscard]] DbResolvedAddresses collectDbResolvedAddresses(
+    const asio::ip::tcp::resolver::results_type& results,
+    DbDriver driver,
+    std::pmr::memory_resource* resource);
 
 // Connector/C accepts comma-separated hosts and performs failover only while
 // opening the transport. IPv6 literals in a multi-host list must be bracketed

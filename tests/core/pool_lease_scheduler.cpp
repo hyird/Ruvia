@@ -117,7 +117,7 @@ ruvia::Task<void> exerciseSaturatedAcquireTimeout(ruvia::detail::PoolLeaseSchedu
 }
 
 ruvia::Task<void> exerciseAcquireCancellation(ruvia::detail::PoolLeaseScheduler& scheduler, asio::io_context& ioContext, const ruvia::WorkerHandle& worker, bool& success) {
-    ruvia::detail::StopSource source;
+    ruvia::StopSource source;
     asio::post(ioContext, [&source] { source.requestStop(); });
     const auto result = co_await scheduler.acquire(std::nullopt, source.token(), worker);
     success = result.cancelled() != nullptr;
@@ -132,7 +132,7 @@ bool exerciseCompletedAcquireIgnoresStalePostedCancellation(asio::io_context& io
     bool closed = false;
     {
         ruvia::detail::PoolLeaseScheduler scheduler(0);
-        ruvia::detail::StopSource source;
+        ruvia::StopSource source;
         auto probe = observeAcquireClosedAfterStaleCancellation(scheduler, source.token(), worker, closed);
 
         probe.start();
