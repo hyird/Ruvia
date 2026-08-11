@@ -60,8 +60,14 @@ public:
     App& setSendTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setMaxConnectionsPerWorker(std::optional<std::size_t> maxConnections);
     App& setKeepaliveRequests(std::optional<std::size_t> maxRequests);
-    App& setMaxBufferedBodyBytes(std::size_t bytes);
-    App& setMaxStreamBodyBytes(std::optional<std::size_t> bytes);
+    // The deployment's request-body ceiling. A route may declare a smaller one
+    // with ruvia::BodyLimit<N>; where both exist the STRICTER wins, and a route
+    // can never raise this. That is the single rule for every policy with both
+    // an app-wide and a route-level form -- narrower scope may only tighten.
+    App& setBodyLimit(std::size_t bytes);
+    // The same ceiling for explicit stream routes, where std::nullopt means
+    // unbounded. A route's ruvia::BodyLimit<N> bounds even that.
+    App& setStreamBodyLimit(std::optional<std::size_t> bytes);
     App& setMaxWebSocketMessageBytes(std::size_t bytes);
     App& setCompression(std::optional<CompressionConfig> config);
     App& setCors(std::optional<CorsConfig> config);
@@ -102,7 +108,16 @@ public:
         return setTrustedProxies(std::span<const std::string_view>(cidrs.begin(), cidrs.size()));
     }
 
-    App& setDefaultRateLimitPerWorker(std::optional<RateLimitRule> rule);
+    // The rate limit every request passes. A route may add its own with
+    // ruvia::RateLimit<max, windowMs>; both then apply, so the stricter is what
+    // a caller actually meets -- the same "narrower scope may only tighten"
+    // rule setBodyLimit() follows.
+    //
+    // Worker-local: each worker counts independently, so a deployment with N
+    // workers admits up to N times this rule. Size it accordingly.
+    App& setRateLimit(std::optional<RateLimitRule> rule);
+    // Startup capacity of that worker-local table, not a policy. Workers with
+    // neither an app-wide nor a route-specific rule allocate no table at all.
     App& setRateLimitSlotsPerWorker(std::size_t slotsPerWorker);
     App& onAccess(AccessLogCallback callback);
     // Observes connections lost to an exception that escaped their session --

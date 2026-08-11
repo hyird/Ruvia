@@ -140,14 +140,14 @@ App& App::setKeepaliveRequests(std::optional<std::size_t> maxRequests) {
     });
 }
 
-App& App::setMaxBufferedBodyBytes(std::size_t bytes) {
+App& App::setBodyLimit(std::size_t bytes) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change buffered body limit while app is running", [bytes](detail::AppState& state) {
         detail::ensurePositiveSize(bytes, "buffered body limit must be greater than 0");
         state.options.maxBufferedBodyBytes = bytes;
     });
 }
 
-App& App::setMaxStreamBodyBytes(std::optional<std::size_t> bytes) {
+App& App::setStreamBodyLimit(std::optional<std::size_t> bytes) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change stream body limit while app is running", [bytes](detail::AppState& state) {
         detail::ensurePositiveOptionalSize(bytes, "configured stream body limit must be greater than zero");
         state.options.maxStreamBodyBytes = bytes;
@@ -177,7 +177,7 @@ App& App::onStop(AppHook hook) {
     return detail::mutateStoppedApp(*this, *state_, "cannot register onStop hook while app is running", [&hook](detail::AppState& state) { state.onStopHooks.push_back(std::move(hook)); });
 }
 
-App& App::setDefaultRateLimitPerWorker(std::optional<RateLimitRule> rule) {
+App& App::setRateLimit(std::optional<RateLimitRule> rule) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change the default rate limit per worker while app is running", [rule](detail::AppState& state) mutable { state.options.defaultRateLimitPerWorker = std::move(rule); });
 }
 

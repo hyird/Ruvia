@@ -17,7 +17,7 @@ public:
     RUVIA_GET("/health", health);
     // Configuration travels in the type, so a route-level middleware needs no
     // constructor arguments and no hand-written wrapper class.
-    RUVIA_GET("/ready", ready, ruvia::RouteRateLimit<10, 1000>);
+    RUVIA_GET("/ready", ready, ruvia::RateLimit<10, 1000>);
     RUVIA_ROUTES_END
 
 private:

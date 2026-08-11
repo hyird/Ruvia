@@ -28,7 +28,7 @@ struct RouteRateLimitOptions final {
 
 // A per-route rate limit, configured through the type:
 //
-//     RUVIA_GET("/ready", ready, ruvia::RouteRateLimit<10, 1000>);
+//     RUVIA_GET("/ready", ready, ruvia::RateLimit<10, 1000>);
 //
 // Route and controller middleware lists name types, so a middleware registered
 // there is default constructed and cannot take constructor arguments. Carrying
@@ -39,9 +39,12 @@ struct RouteRateLimitOptions final {
 // pastes its arguments back together.
 //
 // The limit is scoped to the route it is registered on and keyed on the client
-// address, so two routes carrying the same numbers count independently.
+// address, so two routes carrying the same numbers count independently. It does
+// not replace App::setRateLimit() -- both apply, so the stricter is what a
+// caller meets, the same "narrower scope may only tighten" rule BodyLimit
+// follows. Worker-local, like the app-wide rule.
 template <std::size_t MaxRequests, std::int64_t WindowMs>
-class RouteRateLimit final : public Middleware<RouteRateLimit<MaxRequests, WindowMs>> {
+class RateLimit final : public Middleware<RateLimit<MaxRequests, WindowMs>> {
 public:
     static_assert(MaxRequests > 0, "route rate limit max requests must be greater than 0");
     static_assert(WindowMs > 0, "route rate limit window must be greater than 0ms");

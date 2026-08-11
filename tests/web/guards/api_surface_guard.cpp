@@ -1182,17 +1182,17 @@ concept HasRedisZScanResultCanonicalReadAccessors = requires(const T& result) {
 
 template <typename T>
 concept HasAppDefaultRateLimitPerWorkerRuleSetter = requires(T& app) {
-    { app.setDefaultRateLimitPerWorker(ruvia::RateLimitRule::fixedWindow(std::size_t{1}, std::chrono::seconds(1))) } -> std::same_as<ruvia::App&>;
+    { app.setRateLimit(ruvia::RateLimitRule::fixedWindow(std::size_t{1}, std::chrono::seconds(1))) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
 concept HasAppDefaultRateLimitPerWorkerTupleSetter = requires(T& app) {
-    { app.setDefaultRateLimitPerWorker(std::size_t{1}, std::chrono::milliseconds{1000}) } -> std::same_as<ruvia::App&>;
+    { app.setRateLimit(std::size_t{1}, std::chrono::milliseconds{1000}) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
 concept HasAppDefaultRateLimitPerWorkerDisable = requires(T& app) {
-    { app.setDefaultRateLimitPerWorker(std::nullopt) } -> std::same_as<ruvia::App&>;
+    { app.setRateLimit(std::nullopt) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
