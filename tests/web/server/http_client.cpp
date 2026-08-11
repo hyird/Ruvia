@@ -52,6 +52,11 @@ using namespace std::chrono_literals;
 
 struct SelfSignedPem { std::string cert; std::string key; };
 
+void reportStage(const char* stage) noexcept {
+    std::fprintf(stderr, "[http-client-stage] %s\n", stage);
+    std::fflush(stderr);
+}
+
 class ToggleFailingResource final : public std::pmr::memory_resource {
 public:
     void failAllocations(bool fail) noexcept {
@@ -471,6 +476,8 @@ void writeFile(const std::filesystem::path& path, std::string_view content) {
 }
 
 int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientProtocol protocol) {
+    const bool isHttp2 = protocol == ruvia::HttpClientProtocol::kHttp2Only;
+    reportStage(isHttp2 ? "run-client.h2.begin" : "run-client.h1.begin");
     asio::io_context io;
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
@@ -491,6 +498,7 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
         auto client = registry.get(&operationResource, scope);
         if (client.host() != "127.0.0.1" || client.port() != port || client.scheme() != scheme) co_return 3;
         int result = 0;
+        reportStage(isHttp2 ? "run-client.h2.basic" : "run-client.h1.basic");
         for (int i = 0; i < 2; ++i) {
             auto request = client.newRequest(ruvia::HttpKnownMethod::kPost, "/echo");
             request.setBody("payload");
@@ -502,6 +510,7 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
             }
         }
         if (result == 0) {
+            reportStage(isHttp2 ? "run-client.h2.header" : "run-client.h1.header");
             auto mixedCaseRequest = client.newRequest(ruvia::HttpKnownMethod::kGet, "/header");
             mixedCaseRequest.appendHeader("X-Mixed-Case", "preserved");
             if (protocol == ruvia::HttpClientProtocol::kHttp2Only) {
@@ -511,6 +520,7 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
             if (mixedCaseResponse.body() != "preserved") result = 5;
         }
         if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
+            reportStage("run-client.h2.multiplex");
             std::array<int, 16> results{};
             ruvia::TaskScope batch(worker, memory.resource());
             const auto started = std::chrono::steady_clock::now();
@@ -522,6 +532,7 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
             if (!std::ranges::all_of(results, [](int value) { return value == 1; }) || elapsed >= 400ms) result = 3;
         }
         if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
+            reportStage("run-client.h2.timeout-cancel");
             bool slowTimedOut = false;
             bool slowCancelled = false;
             bool fastCompleted = false;
@@ -533,6 +544,7 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
             if (!slowTimedOut || !slowCancelled || !fastCompleted) result = 4;
         }
         if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
+            reportStage("run-client.h2.decode-error");
             bool preservedDecoderError = false;
             try {
                 auto request = client.newRequest(
@@ -554,6 +566,7 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
             if (!preservedDecoderError) result = 6;
         }
         if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
+            reportStage("run-client.h2.allocation-failure");
             auto request = client.newRequest(ruvia::HttpKnownMethod::kPost, "/echo");
             request.setBody(std::string(4096, 'x'));
             operationResource.failAllocations(true);
@@ -567,16 +580,23 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
             operationResource.failAllocations(false);
             if (!preservedAllocationFailure) result = 7;
         }
+        reportStage(isHttp2 ? "run-client.h2.scope-close" : "run-client.h1.scope-close");
         scope.close();
+        reportStage(isHttp2 ? "run-client.h2.registry-close" : "run-client.h1.registry-close");
         registry.closeNow();
+        reportStage(isHttp2 ? "run-client.h2.registry-join" : "run-client.h1.registry-join");
         co_await registry.join();
+        reportStage(isHttp2 ? "run-client.h2.registry-joined" : "run-client.h1.registry-joined");
         co_return result;
     };
     auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
+    reportStage(isHttp2 ? "run-client.h2.io-run" : "run-client.h1.io-run");
     io.run();
+    reportStage(isHttp2 ? "run-client.h2.io-stopped" : "run-client.h1.io-stopped");
     const auto result = future.get();
     registry.closeNow();
     dispatcher->detachContext();
+    reportStage(isHttp2 ? "run-client.h2.done" : "run-client.h1.done");
     return result;
 }
 
@@ -886,6 +906,7 @@ int runHttp2GoawayRetry() {
 }  // namespace
 
 int main() {
+    reportStage("main.begin");
     ruvia::detail::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
     auto echo = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
@@ -941,9 +962,12 @@ int main() {
     routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/invalid-content-encoding", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(invalidContentEncoding), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
     routerImpl.finalize();
 
+    reportStage("main.plain-start");
     ruvia::detail::HttpServer plain(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable());
     plain.start();
+    reportStage("main.http1-client");
     const auto httpResult = runClient(plain.localEndpoint().port(), ruvia::HttpScheme::kHttp, ruvia::HttpClientProtocol::kHttp1Only);
+    reportStage("main.http1-cookies");
     const auto cookieResult = runCookies(plain.localEndpoint().port());
     auto gatewayClientConfig = ruvia::HttpClientConfig::http("127.0.0.1");
     gatewayClientConfig.setPort(plain.localEndpoint().port());
@@ -965,10 +989,12 @@ int main() {
     ruvia::detail::HttpServer gateway(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), gatewayRouterImpl.routeTable(),
         std::span<const ruvia::detail::DbDefinition>{}, std::span<const ruvia::detail::RedisDefinition>{},
         std::span<const ruvia::detail::WorkerStateDefinition>{}, std::span<const ruvia::detail::HttpClientDefinition>(&gatewayClient, 1));
+    reportStage("main.gateway-start");
     gateway.start();
     asio::io_context gatewayClientIo;
     asio::ip::tcp::socket gatewaySocket(gatewayClientIo);
     std::error_code gatewayEc;
+    reportStage("main.gateway-exchange");
     gatewaySocket.connect(gateway.localEndpoint(), gatewayEc);
     asio::write(gatewaySocket, asio::buffer(std::string_view("GET /call HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")), gatewayEc);
     std::string gatewayResponse;
@@ -977,16 +1003,20 @@ int main() {
         const auto bytes = gatewaySocket.read_some(asio::buffer(gatewayBuffer), gatewayEc);
         gatewayResponse.append(gatewayBuffer.data(), bytes);
     }
+    reportStage("main.gateway-response");
     gateway.stop();
     gateway.join();
+    reportStage("main.plain-stop");
     plain.stop();
     plain.join();
+    reportStage("main.http1-done");
     if (httpResult != 0 || cookieResult != 0 || !gatewayResponse.ends_with("context-client")) {
         std::fprintf(stderr, "HTTP/1 client exchange failed (h1=%d, cookie=%d)\n",
             httpResult, cookieResult);
         return 2;
     }
 
+    reportStage("main.pem-generate");
     const auto pem = makeSelfSignedPem("IP:127.0.0.1");
     const auto mismatchPem = makeSelfSignedPem("DNS:localhost");
     const auto directory = std::filesystem::temp_directory_path() / "ruvia_http_client_tls";
@@ -1001,19 +1031,28 @@ int main() {
     writeFile(keyPath, pem.key);
     writeFile(mismatchCertPath, mismatchPem.cert);
     writeFile(mismatchKeyPath, mismatchPem.key);
+    reportStage("main.tls-truncation-h1");
     const auto tlsTruncationResult = runTlsTruncationCheck(certPath, keyPath);
+    reportStage("main.tls-truncation-h1-done");
+    reportStage("main.tls-truncation-h2");
     const auto h2TlsTruncationResult = runHttp2TlsTruncationCheck(certPath, keyPath);
+    reportStage("main.tls-truncation-h2-done");
     ruvia::detail::HttpServerOptions options;
     ruvia::detail::HttpServerOptions::Tls tls;
     tls.identity.certificateChainFile = std::pmr::string(certPath.string(), std::pmr::get_default_resource());
     tls.identity.privateKeyFile = std::pmr::string(keyPath.string(), std::pmr::get_default_resource());
     options.transport = std::move(tls);
     ruvia::detail::HttpServer secure(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, std::move(options));
+    reportStage("main.secure-start");
     secure.start();
+    reportStage("main.http2-client");
     const auto h2Result = runClient(secure.localEndpoint().port(), ruvia::HttpScheme::kHttps, ruvia::HttpClientProtocol::kHttp2Only);
+    reportStage("main.host-cookie");
     const auto hostPrefixCookieResult = runHostPrefixedCookies(secure.localEndpoint().port());
+    reportStage("main.verified-tls");
     const auto verifiedResult = runVerifiedTlsClient(
         secure.localEndpoint().port(), "127.0.0.1", certPath);
+    reportStage("main.secure-stop");
     secure.stop();
     secure.join();
     ruvia::detail::HttpServerOptions mismatchOptions;
@@ -1024,11 +1063,14 @@ int main() {
     ruvia::detail::HttpServer mismatchSecure(
         asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
         routerImpl.routeTable(), {}, std::move(mismatchOptions));
+    reportStage("main.hostname-mismatch-start");
     mismatchSecure.start();
+    reportStage("main.hostname-mismatch");
     const auto hostnameFailureResult = runVerifiedTlsClient(
         mismatchSecure.localEndpoint().port(), "127.0.0.1", mismatchCertPath, nullptr, nullptr, false);
     mismatchSecure.stop();
     mismatchSecure.join();
+    reportStage("main.hostname-mismatch-done");
     if (tlsTruncationResult != 0 || h2TlsTruncationResult != 0 || h2Result != 0 ||
         hostPrefixCookieResult != 0 ||
         verifiedResult != 0 || hostnameFailureResult != 0) {
@@ -1051,11 +1093,15 @@ int main() {
     ruvia::detail::HttpServer mtlsServer(
         asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
         routerImpl.routeTable(), {}, std::move(mtlsOptions));
+    reportStage("main.mtls-start");
     mtlsServer.start();
+    reportStage("main.mtls-missing-cert");
     const auto missingClientCertificate = runVerifiedTlsClient(
         mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, nullptr, nullptr, false, true);
+    reportStage("main.mtls-client-cert");
     const auto mtlsResult = runVerifiedTlsClient(
         mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, &certPath, &keyPath);
+    reportStage("main.mtls-stop");
     mtlsServer.stop();
     mtlsServer.join();
     std::filesystem::remove_all(directory, ignored);
@@ -1064,17 +1110,24 @@ int main() {
             missingClientCertificate, mtlsResult);
         return 4;
     }
+    reportStage("main.timeout-reconnect");
     if (runTimeoutReconnect() != 0) {
         std::fputs("HTTP client timeout did not discard and reconnect its socket\n", stderr);
         return 5;
     }
+    reportStage("main.timeout-reconnect-done");
+    reportStage("main.bounded-buffer");
     if (runBoundedBuffer() != 0) {
         std::fputs("HTTP client request buffer did not enforce its configured bound\n", stderr);
         return 6;
     }
+    reportStage("main.bounded-buffer-done");
+    reportStage("main.goaway-retry");
     if (const auto goawayResult = runHttp2GoawayRetry(); goawayResult != 0) {
         std::fprintf(stderr, "HTTP/2 GOAWAY retry/trailer exchange failed (%d)\n", goawayResult);
         return 7;
     }
+    reportStage("main.goaway-retry-done");
+    reportStage("main.done");
     return 0;
 }
