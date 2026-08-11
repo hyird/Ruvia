@@ -334,7 +334,7 @@ inline ruvia::Task<void> scEnd(void* target, std::span<const ruvia::HttpHeaderVi
     sink->endedFlag = true;
     co_return;
 }
-inline ruvia::Task<ruvia::TimerSleepResult> scSleep(void*, std::chrono::milliseconds) {
+inline ruvia::Task<ruvia::TimerSleepResult> scSleep(void*, std::chrono::milliseconds, const ruvia::StopToken&) {
     co_return ruvia::TimerSleepResult::kElapsed;
 }
 inline void scBind(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}

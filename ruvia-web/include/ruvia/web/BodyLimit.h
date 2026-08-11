@@ -13,14 +13,16 @@ namespace ruvia {
 //
 //     RUVIA_POST("/avatar", upload, ruvia::BodyLimit<256 * 1024>);
 //
-// The app-wide setMaxBufferedBodyBytes() has to be sized for the largest body
-// any route accepts, which leaves every other route accepting that much too.
-// This tightens it per route, so an endpoint expecting a small JSON document
-// stops reading at a small JSON document.
+// App::setBodyLimit() has to be sized for the largest body any route accepts,
+// which leaves every other route accepting that much too. This is the same
+// policy at a narrower scope: an endpoint expecting a small JSON document stops
+// reading at a small JSON document.
 //
-// It can only tighten, never raise: a route must not be able to lift the
-// deployment-wide bound. On a stream route it also gives an otherwise unlimited
-// body a bound.
+// One rule governs every policy that has both an app-wide and a route-level
+// form: the narrower scope may only TIGHTEN. A route cannot lift the
+// deployment-wide bound, and where a controller-wide and a route-specific
+// declaration both exist the stricter wins rather than the nearer. On a stream
+// route this also gives an otherwise unbounded body a bound.
 //
 // This is a declaration the server reads BEFORE the body is accepted, not code
 // that runs in the chain -- by the time a middleware's handle() runs, the bytes

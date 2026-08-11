@@ -466,7 +466,7 @@ Task<void> HttpServer::staticRootRefreshLoop() {
         if (!httpServerWorkerRunning(workerState_)) {
             co_return;
         }
-        if (co_await sleepFor(workerHandle_, interval) == TimerSleepResult::kWorkerStopping) {
+        if (co_await sleepFor(workerHandle_, interval) == TimerSleepResult::kStopRequested) {
             co_return;
         }
         if (!httpServerWorkerRunning(workerState_)) {

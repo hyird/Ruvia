@@ -373,6 +373,7 @@ ruvia_add_unit_suite(ruvia_web_unit_tests ruvia::web
     # web/unit/http
     web/unit/http/conn_info.cpp
     web/unit/http/trusted_proxy.cpp
+    web/unit/http/request_deadline.cpp
     web/unit/http/context_capabilities.cpp
     web/unit/http/context_cookie.cpp
     web/unit/http/context_parse_body.cpp
@@ -649,6 +650,10 @@ if(RUVIA_BUILD_WEB)
         web/server/max_connections.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_notfound_keepalive
         web/server/notfound_keepalive.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_deadline_body_limit_wire
+        web/server/deadline_body_limit_wire.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_deadline_error_handler_wire
+        web/server/deadline_error_handler_wire.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_http_client
         web/server/http_client.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_http_client_limits
@@ -659,6 +664,8 @@ if(RUVIA_BUILD_WEB)
         web/server/head_document_root.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_static_root_refresh
         web/server/static_root_refresh.cpp LIB ruvia::web TIMEOUT 60)
+    ruvia_add_test(ruvia_server_buffered_body_limit
+        web/server/buffered_body_limit.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_stream_body_limit
         web/server/stream_body_limit.cpp LIB ruvia::web TIMEOUT 60)
     ruvia_add_test(ruvia_server_head_stream_route

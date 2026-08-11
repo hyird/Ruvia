@@ -1,8 +1,13 @@
 #include "ruvia/web/Context.h"
 
 #include "ruvia/web/Dotenv.h"
+#include "ruvia/web/detail/server/RequestDeadline.h"
 
 namespace ruvia {
+
+bool Context::deadlineExceeded() const noexcept {
+    return requestDeadline_ != nullptr && requestDeadline_->exceeded();
+}
 
 const Env& Context::env() const noexcept {
     static const Env empty;

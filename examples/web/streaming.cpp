@@ -59,7 +59,7 @@ private:
         auto& stream = c.streamText();
         co_await stream.write("part 1\n");
         co_await stream.writeln("part 2");
-        if (co_await stream.sleep(std::chrono::milliseconds(20)) == ruvia::TimerSleepResult::kWorkerStopping) {
+        if (co_await stream.sleep(std::chrono::milliseconds(20)) == ruvia::TimerSleepResult::kStopRequested) {
             co_return;
         }
         if (!stream.aborted()) {
@@ -70,7 +70,7 @@ private:
     ruvia::Task<void> events(ruvia::Context& c) {
         auto events = c.streamSse();
         co_await events.write({.data = "connected", .event = "open", .id = "1"});
-        if (co_await events.sleep(std::chrono::milliseconds(20)) == ruvia::TimerSleepResult::kWorkerStopping) {
+        if (co_await events.sleep(std::chrono::milliseconds(20)) == ruvia::TimerSleepResult::kStopRequested) {
             co_return;
         }
         if (!events.aborted()) {
@@ -88,5 +88,5 @@ private:
 };
 
 int main() {
-    ruvia::app().setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8082)}).setWorkersPerListener(2).setSignalShutdown(true).setMaxBufferedBodyBytes(16 * 1024 * 1024).setMaxStreamBodyBytes(std::nullopt).run();
+    ruvia::app().setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8082)}).setWorkersPerListener(2).setSignalShutdown(true).setBodyLimit(16 * 1024 * 1024).setStreamBodyLimit(std::nullopt).run();
 }

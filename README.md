@@ -100,7 +100,25 @@ Public startup configuration uses ordinary C++ values (`std::string`,
 `std::vector`, paths, durations, and spans); callers never choose a PMR
 resource. Ruvia copies retained configuration into process-owned storage before
 workers start.
-Default rate limiting is worker-local via `setDefaultRateLimitPerWorker()`; `setRateLimitSlotsPerWorker()` selects its power-of-two startup capacity (`kDefaultRateLimitSlotsPerWorker` by default), and workers with neither a default nor route-specific rule allocate no table.
+Policies that exist both app-wide and per route use one name and one rule: the
+narrower scope may only **tighten**. `setBodyLimit()` and `setRateLimit()` are
+the deployment's ceilings; `ruvia::BodyLimit<N>` and
+`ruvia::RateLimit<max, windowMs>` declare a route's own, named in the same
+middleware list as any other route middleware. A route can never raise an
+app-wide bound, and where a controller-wide and a route-specific declaration
+both exist the stricter wins rather than the nearer.
+
+```cpp
+RUVIA_POST("/upload", upload, AuthMiddleware, ruvia::BodyLimit<64 * 1024>, ruvia::RateLimit<10, 1000>);
+```
+
+Entries in that list are types, so one that takes no configuration is named
+bare and one that takes some is named with it -- there is no second syntax for
+"configured" middleware. Rate limiting is worker-local: each worker counts
+independently, so N workers admit up to N times the rule.
+`setRateLimitSlotsPerWorker()` selects its power-of-two startup capacity
+(`kDefaultRateLimitSlotsPerWorker` by default), and workers with neither an
+app-wide nor a route-specific rule allocate no table.
 
 Connection metadata is deliberately separate from the HTTP request model:
 

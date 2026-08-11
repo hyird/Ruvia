@@ -147,7 +147,7 @@ inline ruvia::Task<void> endStream(void* target, std::span<const ruvia::HttpHead
     co_return;
 }
 
-inline ruvia::Task<ruvia::TimerSleepResult> sleepStream(void*, std::chrono::milliseconds) {
+inline ruvia::Task<ruvia::TimerSleepResult> sleepStream(void*, std::chrono::milliseconds, const ruvia::StopToken&) {
     co_return ruvia::TimerSleepResult::kElapsed;
 }
 

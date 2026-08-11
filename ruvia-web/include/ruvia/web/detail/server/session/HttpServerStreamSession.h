@@ -10,6 +10,7 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
+#include "ruvia/web/detail/server/RequestDeadline.h"
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
 #include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
 #include "ruvia/web/detail/server/session/HttpServerIdleWorkSet.h"
@@ -127,6 +128,11 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
         // requestCompletion, which borrows it, and empty for the common case of a
         // client that does not pipeline.
         std::pmr::string pipelineStash(requestMemory.resource());
+        // Declared here, before requestCompletion and everything that borrows
+        // the services below, so the deadline's stop source outlives every
+        // dispatch that observes its token.
+        std::optional<RequestDeadline> requestDeadline;
+        ContextServices requestServices = baseRouteServices;
         std::optional<Http1SessionRequestCompletion> requestCompletion;
         // Rejections that close the connection funnel through one co_await
         // site after the read loop: every co_await expression in a coroutine
@@ -186,6 +192,24 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     // request before its handler runs.
                     responseCodingPolicy = HttpResponseCodingPolicy::noAcceptableCoding();
                 }
+                // Reset per request: a keep-alive connection serves many, and
+                // each gets its own deadline or none. Resolve before any
+                // server-layer rejection below: a custom onError/onNotFound
+                // handler is a handler too and must see the request stop token.
+                requestDeadline.reset();
+                requestServices = baseRouteServices;
+                routeResolution = routes.resolve(parsed.request);
+                // Keyed on the client, not the hop: behind a trusted proxy every
+                // request would otherwise share the proxy's single key.
+                clientAddress = baseRouteServices.resolveConnInfo(parsed.request).client().address();
+                const auto* resolved = routeResolution.resolved();
+                const auto handlerDeadline = effectiveHandlerDeadline(options_.deadline ? options_.deadline->handler : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
+                if (handlerDeadline > std::chrono::milliseconds::zero()) {
+                    requestDeadline.emplace(stopToken_);
+                    requestDeadline->arm(workerHandle_, handlerDeadline);
+                    requestServices = baseRouteServices.withStopToken(requestDeadline->token()).withRequestDeadline(&*requestDeadline);
+                }
+
                 const auto expectationPlan = parsed.bodyPlan.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
                 if (const auto* rejection = expectationPlan.rejection()) {
                     // Expect extensions are valid HTTP syntax. The protocol parser
@@ -209,7 +233,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                                 ruvia::http_status::kNotAcceptable,
                                 "not_acceptable",
                                 "no acceptable response content coding"),
-                            baseRouteServices);
+                            requestServices);
                         // The redirect branch commits directly because its
                         // connection is intentionally closing; make the
                         // generated policy error terminal rather than letting
@@ -221,16 +245,13 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     scannerEntry.touch();
                     break;
                 }
-                routeResolution = routes.resolve(parsed.request);
-                // Keyed on the client, not the hop: behind a trusted proxy every
-                // request would otherwise share the proxy's single key.
-                clientAddress = baseRouteServices.resolveConnInfo(parsed.request).client().address();
+
                 const auto appRateLimit = decideRequestRateLimit(&rateLimiter_, clientAddress);
                 if (const auto* rejection = appRateLimit.rejection()) {
                     closingRejection = Http1ClosingRejection::rateLimit(rateLimitRejectionError(), *rejection);
                     break;
                 }
-                const auto* resolved = routeResolution.resolved();
+
                 if (resolved == nullptr) {
                     if (const auto bodyFailure = contentLengthLimitFailure(parsed.bodyPlan, ProtocolByteLimit::limited(options_.maxBufferedBodyBytes))) {
                         closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(requestMemory.resource(), bodyFailure->protocolError()));
@@ -241,8 +262,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                         routeResolution,
                         requestMemory,
                         options_.documentRoot.binding(),
-                        baseRouteServices,
-                        baseRouteServices.deferredStaticFileCompression() ? StaticFileSelectionMode::kAllowDeferredCompression : StaticFileSelectionMode::kStrict);
+                        requestServices,
+                        requestServices.deferredStaticFileCompression() ? StaticFileSelectionMode::kAllowDeferredCompression : StaticFileSelectionMode::kStrict);
                     response = std::move(bufferedResult).takeResponse();
                     // An unresolved request never consumes its body, regardless
                     // of whether the shared Web dispatch selected a document-root
@@ -266,7 +287,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                         .responseCodingAvailability = options_.compression.has_value() ? HttpResponseCodingAvailability::kIdentityAndCompression : HttpResponseCodingAvailability::kIdentityOnly,
                         .routes = routes,
                         .requestMemory = requestMemory,
-                        .baseRouteServices = baseRouteServices,
+                        .baseRouteServices = requestServices,
                         .options = options_,
                         .response = response,
                         .requestSequence = requestSequence,
@@ -323,17 +344,17 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     std::exception_ptr bodySetupException;
                     HttpLazyBufferedBodyRouteState<Stream> bodyState;
                     try {
-                        prepareHttpLazyBufferedBodyRoute(bodyState, routeDispatch(), bodyAndPipeline);
+                        prepareHttpLazyBufferedBodyRoute(bodyState, routeDispatch(), maxRequestBodyBytes, bodyAndPipeline);
                     } catch (...) {
                         bodySetupException = std::current_exception();
                     }
 
                     if (bodySetupException != nullptr) {
-                        requestCompletion.emplace(co_await completeFailedHttpBodyRoute(scannerEntry, bodySetupException, parsed, routes, requestMemory, baseRouteServices, response));
+                        requestCompletion.emplace(co_await completeFailedHttpBodyRoute(scannerEntry, bodySetupException, parsed, routes, requestMemory, requestServices, response));
                         break;
                     }
 
-                    auto bufferedResult = co_await routes.dispatchBufferedResponse(parsed.request, routeResolution, requestMemory, options_.documentRoot.binding(), bodyState.withLoader(baseRouteServices));
+                    auto bufferedResult = co_await routes.dispatchBufferedResponse(parsed.request, routeResolution, requestMemory, options_.documentRoot.binding(), bodyState.withLoader(requestServices));
                     response = std::move(bufferedResult).takeResponse();
 
                     requestCompletion.emplace(completeSuccessfulHttpBodyRoute(scannerEntry, response, parsed.connectionPlan, requestSequence, bodyState.consumption(), pipelineStash, [&bodyState](std::pmr::string& stash) { bodyState.takePipeline(stash); }));
@@ -380,7 +401,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
         // keeps one set of call temporaries in the frame instead of one per
         // rejection branch.
         if (const auto* closingError = closingRejection.error()) {
-            response = co_await routes.handleError(parsed.request, requestMemory, *closingError, baseRouteServices);
+            response = co_await routes.handleError(parsed.request, requestMemory, *closingError, requestServices);
             if (const auto* rateLimit = closingRejection.rateLimit()) {
                 applyRateLimitRejectionHeaders(response, *rateLimit);
             }
@@ -410,7 +431,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                         options_.blockingPool,
                         workerHandle_);
                     if (!compressionResult.compressed() && httpResponseNeedsNotAcceptable(responseCodingPolicy, parsed.request, response) && responseBody(response).file().has_value()) {
-                        response = co_await routes.handleError(parsed.request, requestMemory, httpStaticFileCompressionError(compressionResult), baseRouteServices);
+                        response = co_await routes.handleError(parsed.request, requestMemory, httpStaticFileCompressionError(compressionResult), requestServices);
                     }
                 }
                 connectionPlan = requireHttp1FinalResponseCommit(response, connectionPlan);
@@ -424,7 +445,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     parsed.request,
                     requestMemory,
                     *error,
-                    baseRouteServices);
+                    requestServices);
                 preparation = prepareBufferedHttpResponse(parsed.request, responseCodingPolicy, response, options_);
                 if (httpBufferedResponsePreparationError(responseCodingPolicy, parsed.request, response, preparation.compressionResult()).has_value()) {
                     // The negotiated coding could not be installed even on

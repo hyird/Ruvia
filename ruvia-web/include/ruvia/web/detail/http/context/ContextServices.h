@@ -16,6 +16,9 @@
 namespace ruvia {
 
 class HttpRequest;
+namespace detail {
+class RequestDeadline;
+}
 class BlockingPool;
 class Env;
 }  // namespace ruvia
@@ -120,6 +123,16 @@ public:
 
     [[nodiscard]] constexpr const ConnInfo& connInfo() const noexcept {
         return connInfo_;
+    }
+
+    [[nodiscard]] ContextServices withRequestDeadline(const RequestDeadline* value) const noexcept {
+        auto services = *this;
+        services.requestDeadline_ = value;
+        return services;
+    }
+
+    [[nodiscard]] const RequestDeadline* requestDeadline() const noexcept {
+        return requestDeadline_;
     }
 
     [[nodiscard]] ContextServices withTrustedProxies(const TrustedProxySet* value) const noexcept {
@@ -262,6 +275,7 @@ private:
     ContextResponseOutput responseOutput_;
     ConnInfo connInfo_;
     const TrustedProxySet* trustedProxies_{nullptr};
+    const RequestDeadline* requestDeadline_{nullptr};
 };
 
 }  // namespace ruvia::detail
