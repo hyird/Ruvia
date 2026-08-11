@@ -22,7 +22,7 @@ HttpClientRequestView HttpClientRequestAccess::view(const HttpClientRequest& req
 }
 
 HttpClientRegistry::HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions)
-    : ioContext_(ioContext), worker_(worker), resource_(httpPmrResourceOrDefault(resource)), pools_(resource_), aliasIndex_(resource_) {
+    : resource_(httpPmrResourceOrDefault(resource)), pools_(resource_), aliasIndex_(resource_) {
     pools_.reserve(definitions.size());
     for (const auto& definition : definitions) {
         if (definition.alias.empty()) throw std::invalid_argument("http client alias must not be empty");

@@ -250,8 +250,6 @@ private:
         std::pmr::string alias;
         std::unique_ptr<HttpClientPool, PmrObjectDeleter<HttpClientPool>> pool;
     };
-    asio::io_context& ioContext_;
-    const WorkerHandle& worker_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> pools_;
     std::pmr::vector<std::size_t> aliasIndex_;

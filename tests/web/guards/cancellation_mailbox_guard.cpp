@@ -1,5 +1,4 @@
 #include <atomic>
-#include <cassert>
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
@@ -27,6 +26,12 @@ struct CancellationOwner final {
 using CancellationMailbox = ruvia::detail::WorkerCancellationMailbox<CancellationOwner>;
 
 static_assert(ruvia::detail::workerCancellationPostIsInline<CancellationMailbox>);
+
+void check(bool condition) {
+    if (!condition) {
+        std::abort();
+    }
+}
 
 }  // namespace
 
@@ -60,18 +65,18 @@ int main() {
     source.token().registerCallback(
         registration,
         ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 41));
-    assert(mailbox.use_count() == ownersBeforeRegistration);
+    check(mailbox.use_count() == ownersBeforeRegistration);
     ruvia::MoveOnlyFunction<void()> queuedDispatch(
         ruvia::detail::WorkerCancellationDispatch<CancellationMailbox>(mailbox, 42));
-    assert(allocationCount.load(std::memory_order_relaxed) == allocationsBeforeRegistration);
+    check(allocationCount.load(std::memory_order_relaxed) == allocationsBeforeRegistration);
     registration.reset();
 
     ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 41)();
     ioContext.run();
-    assert(owner.lastOperationId == 41);
+    check(owner.lastOperationId == 41);
 
     queuedDispatch();
-    assert(owner.lastOperationId == 42);
+    check(owner.lastOperationId == 42);
 
     ruvia::StopSource onWorkerSource;
     ruvia::StopRegistration onWorkerRegistration;
@@ -86,11 +91,11 @@ int main() {
     });
     ioContext.restart();
     dispatcher->runContext();
-    assert(observedInline);
+    check(observedInline);
 
     mailbox->detach(owner);
     ruvia::detail::WorkerCancellationDispatch<CancellationMailbox>(mailbox, 43)();
-    assert(owner.lastOperationId == 44);
+    check(owner.lastOperationId == 44);
     dispatcher->detachContext();
     return 0;
 }

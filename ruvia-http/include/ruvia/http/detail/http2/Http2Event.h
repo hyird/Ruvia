@@ -14,6 +14,7 @@
 namespace ruvia::detail {
 
 class Http2Connection;
+class Http2Event;
 
 // The latest GOAWAY received from the peer. Last-Stream-ID is a connection-level
 // processing boundary, not the identifier of an event stream.
