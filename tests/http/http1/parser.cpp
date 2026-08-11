@@ -18,11 +18,12 @@ namespace {
 using ruvia::HttpKnownMethod;
 using ruvia::HttpParseError;
 using ruvia::HttpProtocolVersion;
+using ruvia::HttpRequestTargetForm;
 using ruvia::detail::Http1ServerRequestParseFailureSource;
 using ruvia::Http1ClosePolicy;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::Http1ServerRequestParseState;
-using ruvia::detail::HttpUnsupportedExpectationPolicy;
+using ruvia::HttpUnsupportedExpectationPolicy;
 
 template <typename T>
 concept HasAnyRvalueHttp1RequestParseAccessor = requires(T&& result) { std::move(result).needMore(); } || requires(T&& result) { std::move(result).parsed(); } || requires(T&& result) { std::move(result).failure(); };
@@ -33,7 +34,7 @@ concept HasAnyRvalueHttp1ParsedRequestBorrow = requires(T&& parsed) { std::move(
 static_assert(!HasAnyRvalueHttp1RequestParseAccessor<ruvia::Http1RequestParseResult>);
 static_assert(!HasAnyRvalueHttp1ParsedRequestBorrow<ruvia::Http1ParsedRequest>);
 
-const ruvia::detail::Http1KnownLengthRequestBody& requireKnownLength(const ruvia::detail::Http1RequestBodyPlan& plan) {
+const ruvia::Http1KnownLengthRequestBody& requireKnownLength(const ruvia::Http1RequestBodyPlan& plan) {
     const auto* knownLength = plan.knownLength();
     if (knownLength == nullptr) {
         throw std::runtime_error("test expected known-length request framing");
@@ -41,7 +42,7 @@ const ruvia::detail::Http1KnownLengthRequestBody& requireKnownLength(const ruvia
     return *knownLength;
 }
 
-const ruvia::detail::Http1ChunkedRequestBody& requireChunked(const ruvia::detail::Http1RequestBodyPlan& plan) {
+const ruvia::Http1ChunkedRequestBody& requireChunked(const ruvia::Http1RequestBodyPlan& plan) {
     const auto* chunked = plan.chunked();
     if (chunked == nullptr) {
         throw std::runtime_error("test expected chunked request framing");
@@ -192,6 +193,9 @@ RUVIA_TEST(http1_parse_valid_request) {
     RUVIA_CHECK(result.request.knownMethod() == HttpKnownMethod::kGet);
     RUVIA_CHECK_EQ(result.request.path(), std::string_view("/path"));
     RUVIA_CHECK_EQ(result.request.queryString(), std::string_view("q=1"));
+    RUVIA_CHECK(result.request.scheme().empty());
+    RUVIA_CHECK(result.request.authority().empty());
+    RUVIA_CHECK(result.request.targetForm() == HttpRequestTargetForm::kOrigin);
     RUVIA_CHECK_EQ(result.request.header("host"), std::string_view("example.com"));
     RUVIA_CHECK(result.request.protocolVersion() == HttpProtocolVersion::kHttp11);
 }
@@ -467,7 +471,7 @@ RUVIA_TEST(http1_parse_transfer_coding_before_final_chunked) {
     RUVIA_CHECK(result.messageReady());
     const auto& chunked = requireChunked(result.bodyPlan);
     RUVIA_CHECK_EQ(chunked.transferCodings().count, std::size_t{1});
-    RUVIA_CHECK(chunked.transferCodings().values[0] == ruvia::detail::HttpTransferCoding::kGzip);
+    RUVIA_CHECK(chunked.transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
 }
 
 RUVIA_TEST(http1_parse_unsupported_version_rejected) {
@@ -536,6 +540,9 @@ RUVIA_TEST(http1_parse_absolute_uri_uses_target_authority) {
     const auto result = parser.parseMessage("GET http://a.example/ HTTP/1.1\r\nHost: b.example\r\n\r\n");
     RUVIA_CHECK(result.messageReady());
     RUVIA_CHECK_EQ(result.request.target(), std::string_view("http://a.example/"));
+    RUVIA_CHECK_EQ(result.request.scheme(), std::string_view("http"));
+    RUVIA_CHECK_EQ(result.request.authority(), std::string_view("a.example"));
+    RUVIA_CHECK(result.request.targetForm() == HttpRequestTargetForm::kAbsolute);
     RUVIA_CHECK_EQ(result.request.path(), std::string_view("/"));
     RUVIA_CHECK_EQ(result.request.header("Host").value_or(std::string_view{}), std::string_view("a.example"));
     for (const auto& header : result.request.headers()) {
@@ -698,6 +705,9 @@ RUVIA_TEST(http1_parse_connect_requires_authority_form) {
         RUVIA_CHECK_EQ(result.request.method(), std::string_view("CONNECT"));
         RUVIA_CHECK(result.request.knownMethod() == HttpKnownMethod::kConnect);
         RUVIA_CHECK_EQ(result.request.target(), std::string_view("example.com:443"));
+        RUVIA_CHECK(result.request.scheme().empty());
+        RUVIA_CHECK_EQ(result.request.authority(), std::string_view("example.com:443"));
+        RUVIA_CHECK(result.request.targetForm() == HttpRequestTargetForm::kAuthority);
         RUVIA_CHECK_EQ(result.request.path(), std::string_view("example.com:443"));
     }
     {

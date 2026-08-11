@@ -20,6 +20,7 @@ using ruvia::HttpHeaderView;
 using ruvia::HttpKnownMethod;
 using ruvia::HttpProtocolVersion;
 using ruvia::HttpRequest;
+using ruvia::HttpRequestTargetForm;
 using ruvia::detail::HttpContentCoding;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::requestBodyBytes;
@@ -47,9 +48,27 @@ RUVIA_TEST(request_access_reset_initializes_defaults) {
     HttpRequestAccess::reset(request);
     RUVIA_CHECK(request.method().empty());
     RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kUnknown);
+    RUVIA_CHECK(request.target().empty());
+    RUVIA_CHECK(request.scheme().empty());
+    RUVIA_CHECK(request.authority().empty());
+    RUVIA_CHECK(request.targetForm() == HttpRequestTargetForm::kOrigin);
     RUVIA_CHECK(request.protocolVersion() == HttpProtocolVersion::kHttp11);
     RUVIA_CHECK(request.headers().empty());
     RUVIA_CHECK(requestBodyBytes(request).empty());
+}
+
+RUVIA_TEST(request_access_preserves_target_components_and_form) {
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setTarget(request, "https://example.test/search?q=1");
+    HttpRequestAccess::setScheme(request, "https");
+    HttpRequestAccess::setAuthority(request, "example.test");
+    HttpRequestAccess::setTargetForm(request, HttpRequestTargetForm::kAbsolute);
+
+    RUVIA_CHECK_EQ(request.target(), std::string_view("https://example.test/search?q=1"));
+    RUVIA_CHECK_EQ(request.scheme(), std::string_view("https"));
+    RUVIA_CHECK_EQ(request.authority(), std::string_view("example.test"));
+    RUVIA_CHECK(request.targetForm() == HttpRequestTargetForm::kAbsolute);
 }
 
 RUVIA_TEST(request_access_protocol_version_is_typed_control_data) {
@@ -165,14 +184,16 @@ RUVIA_TEST(request_content_coding_combines_field_lines_with_list_semantics) {
     }
 }
 
-RUVIA_TEST(request_access_query_lookup_uses_last_match) {
+RUVIA_TEST(request_access_raw_query_lookup_preserves_encoding_and_uses_last_match) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::setQueryString(request, "a=first&b=2&a=second");
+    HttpRequestAccess::setQueryString(request, "a=first&b=2&a=second+value&encoded%20key=raw%2Fvalue");
 
-    const auto value = request.query("a");
+    const auto value = request.lastRawQueryValue("a");
     RUVIA_CHECK(value.has_value());
-    RUVIA_CHECK_EQ(*value, std::string_view("second"));
+    RUVIA_CHECK_EQ(*value, std::string_view("second+value"));
+    RUVIA_CHECK(!request.lastRawQueryValue("encoded key").has_value());
+    RUVIA_CHECK_EQ(*request.lastRawQueryValue("encoded%20key"), std::string_view("raw%2Fvalue"));
 }
 
 RUVIA_TEST(request_access_cookie_lookup_uses_last_match) {

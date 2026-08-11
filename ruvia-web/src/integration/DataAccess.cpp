@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -29,24 +30,28 @@ StopToken DataAccessContext::stopToken() const noexcept {
 #ifdef RUVIA_ENABLE_DATABASE
 DbHandle DataAccessContext::db() const {
     state_->requireConnectedOnWorker();
-    return state_->access().databases().get(resource(), operationScope_);
+    return state_->access().databases().get(resource(), operationScope_).withOptions(
+        DbOperationOptions{.timeout = std::nullopt, .stopToken = stopToken()});
 }
 
 DbHandle DataAccessContext::db(std::string_view alias) const {
     state_->requireConnectedOnWorker();
-    return state_->access().databases().get(alias, resource(), operationScope_);
+    return state_->access().databases().get(alias, resource(), operationScope_).withOptions(
+        DbOperationOptions{.timeout = std::nullopt, .stopToken = stopToken()});
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
 RedisHandle DataAccessContext::redis() const {
     state_->requireConnectedOnWorker();
-    return state_->access().redis().get(resource(), operationScope_);
+    return state_->access().redis().get(resource(), operationScope_).withOptions(
+        RedisOperationOptions{.timeout = std::nullopt, .stopToken = stopToken()});
 }
 
 RedisHandle DataAccessContext::redis(std::string_view alias) const {
     state_->requireConnectedOnWorker();
-    return state_->access().redis().get(alias, resource(), operationScope_);
+    return state_->access().redis().get(alias, resource(), operationScope_).withOptions(
+        RedisOperationOptions{.timeout = std::nullopt, .stopToken = stopToken()});
 }
 #endif
 

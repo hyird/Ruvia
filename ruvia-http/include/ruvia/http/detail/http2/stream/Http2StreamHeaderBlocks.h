@@ -12,33 +12,33 @@ public:
     explicit Http2StreamHeaderBlocks(std::pmr::memory_resource* resource = nullptr)
         : Http2StreamHeaderBlocks(HttpResolvedPmrResourceTag{}, httpPmrResourceOrDefault(resource)) {}
 
-    [[nodiscard]] std::pmr::string& request() & noexcept {
-        return request_;
+    [[nodiscard]] std::pmr::string& remote() & noexcept {
+        return remote_;
     }
-    [[nodiscard]] std::pmr::string& request() && = delete;
+    [[nodiscard]] std::pmr::string& remote() && = delete;
 
-    [[nodiscard]] const std::pmr::string& request() const& noexcept {
-        return request_;
+    [[nodiscard]] const std::pmr::string& remote() const& noexcept {
+        return remote_;
     }
-    [[nodiscard]] const std::pmr::string& request() const&& = delete;
+    [[nodiscard]] const std::pmr::string& remote() const&& = delete;
 
-    [[nodiscard]] std::pmr::string& response() & noexcept {
-        return response_;
+    [[nodiscard]] std::pmr::string& local() & noexcept {
+        return local_;
     }
-    [[nodiscard]] std::pmr::string& response() && = delete;
+    [[nodiscard]] std::pmr::string& local() && = delete;
 
-    [[nodiscard]] const std::pmr::string& response() const& noexcept {
-        return response_;
+    [[nodiscard]] const std::pmr::string& local() const& noexcept {
+        return local_;
     }
-    [[nodiscard]] const std::pmr::string& response() const&& = delete;
+    [[nodiscard]] const std::pmr::string& local() const&& = delete;
 
 private:
     Http2StreamHeaderBlocks(HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource)
-        : request_(resource),
-          response_(resource) {}
+        : remote_(resource),
+          local_(resource) {}
 
-    std::pmr::string request_;
-    std::pmr::string response_;
+    std::pmr::string remote_;
+    std::pmr::string local_;
 };
 
 }  // namespace ruvia::detail

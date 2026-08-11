@@ -27,7 +27,7 @@
 #include "ruvia/web/ContextRequest.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
-#include "ruvia/web/HttpClient.h"
+#include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/MultipartReader.h"
 #include "ruvia/web/RequestFields.h"
@@ -54,7 +54,7 @@ namespace ruvia {
 class Context;
 class Env;
 class StaticRoot;
-class HttpClient;
+class HttpClientHandle;
 
 #ifdef RUVIA_ENABLE_DATABASE
 class DbHandle;
@@ -128,13 +128,13 @@ public:
 
     // Stopped when this request should stop doing work: its handler deadline
     // elapsed (see ruvia::Deadline), or the owning worker began stopping.
-    // Waits that TAKE this token -- db(), redis(), httpClient()'s sendRequest,
-    // runBlocking() -- observe it, which is how a deadline reaches a handler
-    // that never mentions one.
+    // db(), redis(), httpClient().sendRequest(), and runBlocking() bind this
+    // token automatically, which is how a deadline reaches a handler that
+    // never mentions one. An explicit operation token is combined with it.
     //
     // Cooperative by necessity: a suspended coroutine cannot be abandoned in
     // C++, so this stops the WAITS rather than the handler. Every wait Ruvia
-    // hands a handler takes this token, streaming sleep() included; a wait the
+    // hands a handler observes this token, streaming sleep() included; a wait the
     // application built out of raw Asio without one is not stopped, and if it is
     // still suspended while the worker can run, the connection scanner's current
     // inactivity phase eventually drops the socket instead of answering on it.
@@ -234,8 +234,8 @@ public:
     [[nodiscard]] RedisHandle redis() const;
     [[nodiscard]] RedisHandle redis(std::string_view alias) const;
 #endif
-    [[nodiscard]] HttpClient httpClient() const;
-    [[nodiscard]] HttpClient httpClient(std::string_view alias) const;
+    [[nodiscard]] HttpClientHandle httpClient() const;
+    [[nodiscard]] HttpClientHandle httpClient(std::string_view alias) const;
     [[nodiscard]] WebSocket& webSocket() const;
 
     [[nodiscard]] ResponseStreamWriter& stream();
@@ -393,6 +393,9 @@ private:
     [[nodiscard]] BlockingPool& blockingPool() const;
     [[nodiscard]] const WorkerHandle& blockingWorker() const noexcept {
         return worker_;
+    }
+    [[nodiscard]] StopToken blockingStopToken() const noexcept {
+        return stopToken_;
     }
 
     RequestMemory& memory_;

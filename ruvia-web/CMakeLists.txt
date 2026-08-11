@@ -25,7 +25,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Testing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/WebWorker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/CookieSignature.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClient.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientHandle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientHttp1.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientHttp2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPool.cpp

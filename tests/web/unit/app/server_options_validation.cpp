@@ -59,12 +59,12 @@ bool throwsInvalid(Fn&& fn) {
 }  // namespace
 
 RUVIA_TEST(validate_server_options_accepts_defaults) {
-    static_assert(std::same_as<decltype(HttpServerOptions{}.keepaliveTimeout), std::optional<std::chrono::milliseconds>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.clientHeaderTimeout), std::optional<std::chrono::milliseconds>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.clientBodyTimeout), std::optional<std::chrono::milliseconds>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.sendTimeout), std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.idleTimeout), std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.requestHeaderTimeout), std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.requestBodyTimeout), std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.writeTimeout), std::optional<std::chrono::milliseconds>>);
     static_assert(std::same_as<decltype(HttpServerOptions{}.maxConnections), std::optional<std::size_t>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.keepaliveRequests), std::optional<std::size_t>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.maxRequestsPerConnection), std::optional<std::size_t>>);
     static_assert(std::same_as<decltype(HttpServerOptions{}.maxStreamBodyBytes), std::optional<std::size_t>>);
     static_assert(std::same_as<decltype(HttpServerOptions{}.defaultRateLimitPerWorker), std::optional<ruvia::RateLimitRule>>);
     static_assert(std::same_as<decltype(HttpServerOptions{}.rateLimitSlotsPerWorker), std::size_t>);
@@ -99,47 +99,47 @@ RUVIA_TEST(validate_server_options_owns_document_root_runtime_policy) {
 RUVIA_TEST(validate_server_options_rejects_configured_nonpositive_timeout) {
     // Every connection timeout feeds the same positive optional fold. Each one bounds
     // how long a slow client can hold a connection (a slowloris defense), so a
-    // nonpositive value in ANY of them must be rejected -- checking only keepaliveTimeout
+    // nonpositive value in ANY of them must be rejected -- checking only idleTimeout
     // would miss a field dropped from the fold call.
     using std::chrono::milliseconds;
     {
         HttpServerOptions options;
-        options.keepaliveTimeout = milliseconds(0);
+        options.idleTimeout = milliseconds(0);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.clientHeaderTimeout = milliseconds(0);
+        options.requestHeaderTimeout = milliseconds(0);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.clientBodyTimeout = milliseconds(0);
+        options.requestBodyTimeout = milliseconds(0);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.sendTimeout = milliseconds(0);
+        options.writeTimeout = milliseconds(0);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.keepaliveTimeout = milliseconds(-1);
+        options.idleTimeout = milliseconds(-1);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.clientHeaderTimeout = milliseconds(-1);
+        options.requestHeaderTimeout = milliseconds(-1);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.clientBodyTimeout = milliseconds(-1);
+        options.requestBodyTimeout = milliseconds(-1);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.sendTimeout = milliseconds(-1);
+        options.writeTimeout = milliseconds(-1);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
 }
@@ -172,7 +172,7 @@ RUVIA_TEST(validate_server_options_rejects_nonpositive_limits) {
     }
     {
         HttpServerOptions options;
-        options.keepaliveRequests = 0;
+        options.maxRequestsPerConnection = 0;
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {

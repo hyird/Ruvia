@@ -141,21 +141,21 @@ struct HttpServerOptions final {
     };
 
     // nginx-aligned inactivity timeouts. Absence disables a phase timeout;
-    // keepaliveRequests caps requests per reused connection.
-    std::optional<std::chrono::milliseconds> keepaliveTimeout{std::chrono::seconds(75)};
+    // maxRequestsPerConnection caps requests per reused connection.
+    std::optional<std::chrono::milliseconds> idleTimeout{std::chrono::seconds(75)};
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
     // Capacity of the explicit cross-thread queue for this Web worker.
     std::size_t workerMailboxCapacity{1024};
     MemoryPoolConfig memoryConfig{};
-    std::optional<std::chrono::milliseconds> clientHeaderTimeout{std::chrono::seconds(60)};
-    std::optional<std::chrono::milliseconds> clientBodyTimeout{std::chrono::seconds(60)};
-    std::optional<std::chrono::milliseconds> sendTimeout{std::chrono::seconds(60)};
+    std::optional<std::chrono::milliseconds> requestHeaderTimeout{std::chrono::seconds(60)};
+    std::optional<std::chrono::milliseconds> requestBodyTimeout{std::chrono::seconds(60)};
+    std::optional<std::chrono::milliseconds> writeTimeout{std::chrono::seconds(60)};
     // Per worker. Defaults to a bounded cap so an unconfigured server cannot be
     // driven to FD/memory exhaustion by a connection flood; set std::nullopt to
     // opt back into unlimited. Excess accepted sockets are closed before TLS or
     // HTTP protocol detection, so admission never fabricates a response.
     std::optional<std::size_t> maxConnections{1024};
-    std::optional<std::size_t> keepaliveRequests{1000};
+    std::optional<std::size_t> maxRequestsPerConnection{1000};
     // Buffered routes materialize body data; the same cap applies again after
     // Content-Encoding is decoded. This limit must be greater than 0.
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};

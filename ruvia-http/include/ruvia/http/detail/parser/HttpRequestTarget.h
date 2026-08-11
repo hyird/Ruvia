@@ -19,6 +19,7 @@ enum class HttpRequestTargetForm : std::uint8_t {
 };
 
 struct RequestTargetView {
+    std::string_view scheme;
     std::string_view path;
     std::string_view query;
     std::string_view authority;

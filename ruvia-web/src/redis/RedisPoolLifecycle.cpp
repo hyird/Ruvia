@@ -37,6 +37,9 @@ RedisPool::RedisPool(asio::io_context& ioContext, RedisConfigStorage config, std
     for (std::size_t i = 0; i < poolSize; ++i) {
         connections_.emplace_back(ioContext_, resource_);
     }
+    if (worker_ != nullptr) {
+        cancellationMailbox_ = std::make_shared<RedisOperationCancellationMailbox>(*this, *worker_);
+    }
 }
 
 RedisPool::~RedisPool() {
@@ -53,6 +56,9 @@ Task<void> RedisPool::connect() {
 }
 
 void RedisPool::closeNow() noexcept {
+    if (cancellationMailbox_ != nullptr) {
+        cancellationMailbox_->detach(*this);
+    }
     if (!scheduler_.close()) {
         return;
     }

@@ -23,6 +23,11 @@ public:
         requires(!std::same_as<std::remove_cvref_t<Fn>, MoveOnlyFunction>) && std::is_invocable_r_v<Result, std::decay_t<Fn>&, Args...>
     MoveOnlyFunction(Fn&& fn) {
         using Stored = std::decay_t<Fn>;
+        if constexpr (std::is_pointer_v<Stored> || std::is_member_pointer_v<Stored>) {
+            if (fn == nullptr) {
+                return;
+            }
+        }
         if constexpr (fitsInline<Stored>) {
             object_ = storage_;
             ::new (object_) Stored(std::forward<Fn>(fn));

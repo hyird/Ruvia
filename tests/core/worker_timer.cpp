@@ -9,6 +9,8 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
+#include <atomic>
+#include <barrier>
 #include <chrono>
 #include <cstdio>
 #include <future>
@@ -221,6 +223,49 @@ bool timerRegistrationResetAfterStopDoesNotQueueCancellation() {
     return queuedHandlers == 0 && cancelled == 1 && expired == 0;
 }
 
+bool offWorkerCancellationCanRaceWithTimerShutdown() {
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        asio::io_context ioContext;
+        const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
+        const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+        ruvia::detail::WorkerTimerRegistration registration;
+        ruvia::detail::WorkerTimerCancellation cancellation;
+        std::barrier start(2);
+        std::atomic_int completions{0};
+
+        asio::post(ioContext, [&] {
+            ruvia::detail::WorkerHandleAccess::scheduleTimer(
+                worker,
+                registration,
+                std::chrono::steady_clock::now() + std::chrono::hours(1),
+                [&](ruvia::detail::WorkerTimerOutcome outcome) {
+                    if (outcome == ruvia::detail::WorkerTimerOutcome::kCancelled) {
+                        completions.fetch_add(1, std::memory_order_relaxed);
+                    }
+                });
+            cancellation = registration.cancellation();
+            start.arrive_and_wait();
+            dispatcher->stopTimers();
+            ioContext.stop();
+        });
+
+        std::thread workerThread([&] { ioContext.run(); });
+        std::thread cancellingThread([&] {
+            start.arrive_and_wait();
+            for (int call = 0; call < 64; ++call) {
+                cancellation.cancel();
+            }
+        });
+        cancellingThread.join();
+        workerThread.join();
+        dispatcher->detachContext();
+        if (completions.load(std::memory_order_relaxed) != 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool offWorkerCancellationAfterContextStopDoesNotExpireLater() {
     asio::io_context ioContext;
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
@@ -362,6 +407,22 @@ ruvia::Task<void> exerciseStoppableSleep(const ruvia::WorkerHandle& worker, bool
         co_return;
     }
 
+    // The stop callback can run on an arbitrary thread. It may only post the
+    // timer generation back to this worker; the dispatcher borrow stays valid
+    // through callback teardown without copying shared ownership into the
+    // awaiter.
+    ruvia::detail::StopSource crossThread;
+    std::thread stopper([&crossThread] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        crossThread.requestStop();
+    });
+    const auto crossThreadResult =
+        co_await ruvia::sleepFor(worker, std::chrono::seconds(30), crossThread.token());
+    stopper.join();
+    if (crossThreadResult != ruvia::TimerSleepResult::kStopRequested) {
+        co_return;
+    }
+
     // A stop that arrives long after the sleep already finished must be a
     // no-op, not a use-after-free of the awaiter's timer registration.
     ruvia::detail::StopSource late;
@@ -389,7 +450,7 @@ bool stoppableSleepWorks() {
 }
 
 int main() {
-    if (!discriminatedWaitStateWorks() || !saturatingTimerDeadlineWorks() || !saturatingTimerDurationCastWorks() || !timerImmediateShutdownWorks() || !stoppedDispatcherCanOutliveContext() || !timerRegistrationResetAfterStopDoesNotQueueCancellation() ||
+    if (!discriminatedWaitStateWorks() || !saturatingTimerDeadlineWorks() || !saturatingTimerDurationCastWorks() || !timerImmediateShutdownWorks() || !stoppedDispatcherCanOutliveContext() || !timerRegistrationResetAfterStopDoesNotQueueCancellation() || !offWorkerCancellationCanRaceWithTimerShutdown() ||
         !offWorkerCancellationAfterContextStopDoesNotExpireLater() || !stoppableSleepWorks()) {
         return 1;
     }

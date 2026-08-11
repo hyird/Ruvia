@@ -18,7 +18,7 @@ public:
     explicit Http1RequestSequence(std::optional<std::size_t> maxRequests)
         : requestsUntilClose_(maxRequests) {
         if (maxRequests.has_value() && *maxRequests == 0) {
-            throw std::invalid_argument("configured keepalive request limit must be greater than zero");
+            throw std::invalid_argument("configured requests-per-connection limit must be greater than zero");
         }
     }
 

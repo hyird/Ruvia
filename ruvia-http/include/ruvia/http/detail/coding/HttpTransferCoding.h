@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace ruvia::detail {
+namespace ruvia {
 
 enum class HttpTransferCoding : std::uint8_t { kGzip, kDeflate };
 
@@ -27,4 +27,4 @@ struct HttpTransferCodings {
 static_assert(std::is_trivially_copyable_v<HttpTransferCodings>);
 static_assert(sizeof(HttpTransferCodings) <= sizeof(std::size_t) * 2);
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

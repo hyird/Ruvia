@@ -54,7 +54,7 @@ inline Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) 
                 // refreshes its own scanner entry, but this handshake entry stays
                 // pinned at kReadingInitial with a frozen last-active time. Left
                 // registered across the session, the scanner would close an active
-                // connection's socket one clientHeaderTimeout after the handshake
+                // connection's socket one requestHeaderTimeout after the handshake
                 // regardless of session activity -- severing long-lived TLS
                 // sessions (WebSocket, keep-alive, slow uploads, streaming).
                 ConnectionScanner::Entry handshakeEntry;

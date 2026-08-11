@@ -14,7 +14,7 @@
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/ScopedOperation.h"
-#include "ruvia/web/HttpClient.h"
+#include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/integration/BlockingCapability.h"
 #include "ruvia/web/detail/integration/WorkerStateCapability.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
@@ -58,8 +58,8 @@ public:
     [[nodiscard]] RedisHandle redis() const;
     [[nodiscard]] RedisHandle redis(std::string_view alias) const;
 #endif
-    [[nodiscard]] HttpClient httpClient() const;
-    [[nodiscard]] HttpClient httpClient(std::string_view alias) const;
+    [[nodiscard]] HttpClientHandle httpClient() const;
+    [[nodiscard]] HttpClientHandle httpClient(std::string_view alias) const;
 
 private:
     friend class detail::WebWorkerDispatch;
@@ -72,6 +72,9 @@ private:
     [[nodiscard]] BlockingPool& blockingPool() const;
     [[nodiscard]] const WorkerHandle& blockingWorker() const noexcept {
         return worker_;
+    }
+    [[nodiscard]] StopToken blockingStopToken() const noexcept {
+        return stopToken_;
     }
 
     WorkerHandle worker_;

@@ -2,12 +2,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <utility>
 #include <variant>
 
 #include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamCloseSource.h"
+#include "ruvia/http/HttpClient.h"
 
 namespace ruvia::detail {
 
@@ -34,7 +36,34 @@ private:
     Http2ErrorCode error_{Http2ErrorCode::kNoError};
 };
 
-enum class Http2EventKind : std::uint8_t { kMessageHead, kMessageBodyChunk, kMessageEnd, kTunnelData, kTunnelEnd, kStreamClosed, kRequestUnprocessed, kGoaway };
+enum class Http2EventKind : std::uint8_t { kInformationalHead, kMessageHead, kMessageBodyChunk, kMessageEnd, kTunnelData, kTunnelEnd, kStreamClosed, kRequestUnprocessed, kGoaway };
+
+class Http2InformationalHeadEvent final {
+public:
+    [[nodiscard]] constexpr std::uint32_t streamId() const noexcept {
+        return streamId_;
+    }
+
+    [[nodiscard]] const HttpClientResponseHead& head() const& noexcept {
+        return head_;
+    }
+    [[nodiscard]] const HttpClientResponseHead& head() const&& = delete;
+
+    [[nodiscard]] constexpr std::optional<HttpClientRequestContentSignal> requestContentSignal() const noexcept {
+        return requestContentSignal_;
+    }
+
+private:
+    friend class Http2Event;
+    Http2InformationalHeadEvent(std::uint32_t streamId, HttpClientResponseHead head, std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept
+        : streamId_(streamId),
+          head_(std::move(head)),
+          requestContentSignal_(requestContentSignal) {}
+
+    std::uint32_t streamId_{0};
+    HttpClientResponseHead head_;
+    std::optional<HttpClientRequestContentSignal> requestContentSignal_;
+};
 
 class Http2MessageHeadEvent final {
 public:
@@ -42,11 +71,17 @@ public:
         return streamId_;
     }
 
+    [[nodiscard]] constexpr std::optional<HttpClientRequestContentSignal> requestContentSignal() const noexcept {
+        return requestContentSignal_;
+    }
+
 private:
     friend class Http2Event;
-    explicit constexpr Http2MessageHeadEvent(std::uint32_t streamId) noexcept
-        : streamId_(streamId) {}
+    explicit constexpr Http2MessageHeadEvent(std::uint32_t streamId, std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept
+        : streamId_(streamId),
+          requestContentSignal_(requestContentSignal) {}
     std::uint32_t streamId_{0};
+    std::optional<HttpClientRequestContentSignal> requestContentSignal_;
 };
 
 class Http2MessageBodyChunkEvent final {
@@ -184,9 +219,19 @@ private:
 // every materialized Http2Event has exactly one valid payload.
 class Http2Event final {
 public:
+    Http2Event(const Http2Event&) = delete;
+    Http2Event& operator=(const Http2Event&) = delete;
+    Http2Event(Http2Event&&) noexcept = default;
+    Http2Event& operator=(Http2Event&&) = delete;
+
     [[nodiscard]] Http2EventKind kind() const noexcept {
         return static_cast<Http2EventKind>(value_.index());
     }
+
+    [[nodiscard]] const Http2InformationalHeadEvent* informationalHead() const& noexcept {
+        return std::get_if<Http2InformationalHeadEvent>(&value_);
+    }
+    [[nodiscard]] const Http2InformationalHeadEvent* informationalHead() const&& = delete;
 
     [[nodiscard]] const Http2MessageHeadEvent* messageHead() const& noexcept {
         return std::get_if<Http2MessageHeadEvent>(&value_);
@@ -231,7 +276,7 @@ public:
 private:
     friend class Http2Connection;
 
-    using Value = std::variant<Http2MessageHeadEvent, Http2MessageBodyChunkEvent, Http2MessageEndEvent, Http2TunnelDataEvent, Http2TunnelEndEvent, Http2StreamClosedEvent, Http2RequestUnprocessedEvent, Http2GoawayEvent>;
+    using Value = std::variant<Http2InformationalHeadEvent, Http2MessageHeadEvent, Http2MessageBodyChunkEvent, Http2MessageEndEvent, Http2TunnelDataEvent, Http2TunnelEndEvent, Http2StreamClosedEvent, Http2RequestUnprocessedEvent, Http2GoawayEvent>;
 
     static_assert(static_cast<std::size_t>(Http2EventKind::kGoaway) + 1 == std::variant_size_v<Value>);
 
@@ -239,8 +284,12 @@ private:
     explicit Http2Event(Event event) noexcept
         : value_(std::move(event)) {}
 
-    [[nodiscard]] static Http2Event messageHead(std::uint32_t streamId) noexcept {
-        return Http2Event(Http2MessageHeadEvent(streamId));
+    [[nodiscard]] static Http2Event informationalHead(std::uint32_t streamId, HttpClientResponseHead head, std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept {
+        return Http2Event(Http2InformationalHeadEvent(streamId, std::move(head), requestContentSignal));
+    }
+
+    [[nodiscard]] static Http2Event messageHead(std::uint32_t streamId, std::optional<HttpClientRequestContentSignal> requestContentSignal = std::nullopt) noexcept {
+        return Http2Event(Http2MessageHeadEvent(streamId, requestContentSignal));
     }
 
     [[nodiscard]] static Http2Event messageBodyChunk(std::uint32_t streamId, std::string_view bytes) noexcept {

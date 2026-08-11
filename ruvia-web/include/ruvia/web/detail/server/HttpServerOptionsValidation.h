@@ -37,7 +37,7 @@ inline void validateDocumentRootRuntimeOptions(const HttpServerOptions& options)
 }
 
 inline void validateHttpServerOptions(const HttpServerOptions& options) {
-    ensurePositiveOptionalDurations("configured server timeouts must be greater than zero", options.keepaliveTimeout, options.clientHeaderTimeout, options.clientBodyTimeout, options.sendTimeout);
+    ensurePositiveOptionalDurations("configured server timeouts must be greater than zero", options.idleTimeout, options.requestHeaderTimeout, options.requestBodyTimeout, options.writeTimeout);
     ensurePositiveDuration(options.scanInterval, "connection scan interval must be greater than 0");
     ensurePositiveSize(options.workerMailboxCapacity, "worker mailbox capacity must be greater than 0");
     if (!std::has_single_bit(options.rateLimitSlotsPerWorker)) {
@@ -48,7 +48,7 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
     ensurePositiveOptionalSize(options.maxStreamBodyBytes, "configured stream body limit must be greater than zero");
     ensurePositiveSize(options.maxWebSocketMessageBytes, "websocket message limit must be greater than 0");
     ensurePositiveOptionalSize(options.maxConnections, "configured connection limit must be greater than zero");
-    ensurePositiveOptionalSize(options.keepaliveRequests, "configured keepalive request limit must be greater than zero");
+    ensurePositiveOptionalSize(options.maxRequestsPerConnection, "configured requests-per-connection limit must be greater than zero");
     validateDocumentRootRuntimeOptions(options);
     if (const auto* tls = options.tls()) {
         validateHttpServerTlsIdentity(tls->identity);

@@ -73,15 +73,15 @@ void scanPool(detail::DbPoolRef pool, std::chrono::steady_clock::time_point now)
 #endif
 }
 
-[[nodiscard]] bool poolHasTimeout(detail::DbPoolRef pool) noexcept {
+[[nodiscard]] bool poolNeedsDeadlineScan(detail::DbPoolRef pool) noexcept {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
-        return (*client)->hasAnyTimeout();
+        return (*client)->needsDeadlineScan();
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
     if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
-        return (*client)->hasAnyTimeout();
+        return (*client)->needsDeadlineScan();
     }
 #endif
     return false;
@@ -89,7 +89,7 @@ void scanPool(detail::DbPoolRef pool, std::chrono::steady_clock::time_point now)
 
 }  // namespace
 
-detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const detail::DbDefinition> databases)
+detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const detail::DbDefinition> databases, const WorkerHandle* worker)
     : resource_(detail::pmrResourceOrDefault(resource)),
       clients_(resource_),
       aliasIndex_(resource_) {
@@ -108,14 +108,14 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_res
         switch (definition.config.driver) {
             case DbDriver::kMariaDb:
 #ifdef RUVIA_ENABLE_MARIADB
-                owner = detail::makePmrObject<MariaDbPool>(resource_, ioContext, std::move(config), resource_);
+                owner = detail::makePmrObject<MariaDbPool>(resource_, ioContext, std::move(config), resource_, worker);
                 break;
 #else
                 throw std::invalid_argument("MariaDB support is not enabled");
 #endif
             case DbDriver::kPostgreSql:
 #ifdef RUVIA_ENABLE_POSTGRESQL
-                owner = detail::makePmrObject<PostgreSqlPool>(resource_, ioContext, std::move(config), resource_);
+                owner = detail::makePmrObject<PostgreSqlPool>(resource_, ioContext, std::move(config), resource_, worker);
                 break;
 #else
                 throw std::invalid_argument("PostgreSQL support is not enabled");
@@ -160,8 +160,8 @@ void detail::DbRegistry::scanDeadlines() noexcept {
     }
 }
 
-bool detail::DbRegistry::hasAnyTimeout() const noexcept {
-    return std::ranges::any_of(clients_, [](const Entry& entry) { return poolHasTimeout(poolRef(entry.client)); });
+bool detail::DbRegistry::needsDeadlineScan() const noexcept {
+    return std::ranges::any_of(clients_, [](const Entry& entry) { return poolNeedsDeadlineScan(poolRef(entry.client)); });
 }
 
 DbHandle detail::DbRegistry::get(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {

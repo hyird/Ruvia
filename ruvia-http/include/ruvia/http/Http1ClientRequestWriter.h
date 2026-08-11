@@ -18,57 +18,28 @@ namespace ruvia {
 
 class Http1ClientResponseParser;
 
-class Http1ClientNoRequestExpectation final {
-private:
-    friend class Http1ClientRequestWirePolicy;
-    constexpr Http1ClientNoRequestExpectation() noexcept = default;
-};
-
-class Http1ClientContinueExpectation final {
-private:
-    friend class Http1ClientRequestWirePolicy;
-    constexpr Http1ClientContinueExpectation() noexcept = default;
-};
-
 // One immutable wire policy for request preparation. Expect is writer-owned so
 // the emitted field and the resulting content gate cannot disagree. How long an
 // I/O runtime waits before releasing a continue-gated body remains runtime
 // policy, not an HTTP message-model setting.
 class Http1ClientRequestWirePolicy final {
-private:
-    using Expectation = std::variant<Http1ClientNoRequestExpectation, Http1ClientContinueExpectation>;
-
-    template <typename ExpectationAlternative>
-    constexpr Http1ClientRequestWirePolicy(Http1ClosePolicy closePolicy, ExpectationAlternative expectation) noexcept
+public:
+    constexpr explicit Http1ClientRequestWirePolicy(Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse,
+        HttpClientRequestExpectation expectation = HttpClientRequestExpectation::kNone) noexcept
         : closePolicy_(closePolicy),
           expectation_(expectation) {}
-
-public:
-    [[nodiscard]] static constexpr Http1ClientRequestWirePolicy withoutExpectation(Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse) noexcept {
-        return Http1ClientRequestWirePolicy(closePolicy, Http1ClientNoRequestExpectation());
-    }
-
-    [[nodiscard]] static constexpr Http1ClientRequestWirePolicy expectContinue(Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse) noexcept {
-        return Http1ClientRequestWirePolicy(closePolicy, Http1ClientContinueExpectation());
-    }
 
     [[nodiscard]] constexpr Http1ClosePolicy closePolicy() const noexcept {
         return closePolicy_;
     }
 
-    [[nodiscard]] constexpr const Http1ClientNoRequestExpectation* noExpectation() const& noexcept {
-        return std::get_if<Http1ClientNoRequestExpectation>(&expectation_);
+    [[nodiscard]] constexpr HttpClientRequestExpectation expectation() const noexcept {
+        return expectation_;
     }
-    const Http1ClientNoRequestExpectation* noExpectation() const&& = delete;
-
-    [[nodiscard]] constexpr const Http1ClientContinueExpectation* continueExpectation() const& noexcept {
-        return std::get_if<Http1ClientContinueExpectation>(&expectation_);
-    }
-    const Http1ClientContinueExpectation* continueExpectation() const&& = delete;
 
 private:
     Http1ClosePolicy closePolicy_;
-    Expectation expectation_;
+    HttpClientRequestExpectation expectation_;
 };
 
 namespace detail {
@@ -320,16 +291,16 @@ private:
 // authority-form target cannot be confused with an origin-form path.
 class Http1ClientRequestWriter final {
 public:
-    [[nodiscard]] Http1ClientRequestPrepareResult prepare(const HttpOriginView& origin, const HttpClientRequestView& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy::withoutExpectation()) const noexcept;
+    [[nodiscard]] Http1ClientRequestPrepareResult prepare(const HttpOriginView& origin, const HttpClientRequestView& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy()) const noexcept;
 
-    [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy::withoutExpectation()) const noexcept;
+    [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy()) const noexcept;
 
     // The prepared response context retains the header table through the final
     // response or protocol-switch decision. A temporary owning contiguous
     // range would be destroyed as prepareConnect() returns; borrowed ranges
     // such as std::span remain valid inputs.
     template <detail::HttpTemporaryOwningHeaderRange Headers>
-    Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView&, Headers&&, std::span<char>, Http1ClientRequestWirePolicy = Http1ClientRequestWirePolicy::withoutExpectation()) const = delete;
+    Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView&, Headers&&, std::span<char>, Http1ClientRequestWirePolicy = Http1ClientRequestWirePolicy()) const = delete;
 };
 
 }  // namespace ruvia

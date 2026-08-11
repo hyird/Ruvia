@@ -8,7 +8,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
+#include "ruvia/http/Http1RequestBodyPlan.h"
 #include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/http/HttpParseError.h"
 #include "ruvia/http/HttpRequest.h"
@@ -56,10 +56,10 @@ public:
     }
     [[nodiscard]] const HttpRequest& request() const&& = delete;
 
-    [[nodiscard]] const detail::Http1RequestBodyPlan& bodyPlan() const& noexcept {
+    [[nodiscard]] const Http1RequestBodyPlan& bodyPlan() const& noexcept {
         return bodyPlan_;
     }
-    [[nodiscard]] const detail::Http1RequestBodyPlan& bodyPlan() const&& = delete;
+    [[nodiscard]] const Http1RequestBodyPlan& bodyPlan() const&& = delete;
 
     // Exact wire bytes after the header section and before the next message.
     // For Content-Length this is the payload. For chunked framing it retains
@@ -78,14 +78,14 @@ private:
 
     // See Http1RequestParseResultAccess::parsed: HttpRequest moves are memcpys,
     // so the only one on this path is the member initialization below.
-    Http1ParsedRequest(HttpRequest&& request, detail::Http1RequestBodyPlan bodyPlan, std::string_view wireBody, std::size_t consumedBytes) noexcept
+    Http1ParsedRequest(HttpRequest&& request, Http1RequestBodyPlan bodyPlan, std::string_view wireBody, std::size_t consumedBytes) noexcept
         : request_(std::move(request)),
           bodyPlan_(bodyPlan),
           wireBody_(wireBody),
           consumedBytes_(consumedBytes) {}
 
     HttpRequest request_;
-    detail::Http1RequestBodyPlan bodyPlan_;
+    Http1RequestBodyPlan bodyPlan_;
     std::string_view wireBody_;
     std::size_t consumedBytes_{0};
 };

@@ -37,9 +37,15 @@ private:
     constexpr WorkerWaitTimedOut() noexcept = default;
 };
 
-// Worker-bound waits have four mutually exclusive outcomes. Only the value
+class WorkerWaitCancelled final {
+private:
+    friend struct detail::WorkerWaitResultAccess;
+    constexpr WorkerWaitCancelled() noexcept = default;
+};
+
+// Worker-bound waits have five mutually exclusive outcomes. Only the value
 // alternative owns a payload; close, worker shutdown, and timeout cannot carry
-// a stale or fabricated value.
+// a stale or fabricated value, nor can caller cancellation.
 template <typename T>
 class WorkerWaitResult final {
 public:
@@ -70,6 +76,11 @@ public:
     }
     [[nodiscard]] const WorkerWaitTimedOut* timedOut() const&& = delete;
 
+    [[nodiscard]] const WorkerWaitCancelled* cancelled() const& noexcept {
+        return std::get_if<WorkerWaitCancelled>(&result_);
+    }
+    [[nodiscard]] const WorkerWaitCancelled* cancelled() const&& = delete;
+
     // Consumes the value alternative, matching the takeRejected() pattern of
     // the channel/one-shot results. Only the value outcome carries a payload;
     // any other outcome makes this a programming error.
@@ -84,7 +95,7 @@ public:
 private:
     friend struct detail::WorkerWaitResultAccess;
 
-    using Result = std::variant<detail::WorkerWaitValue<T>, WorkerWaitClosed, WorkerWaitStopping, WorkerWaitTimedOut>;
+    using Result = std::variant<detail::WorkerWaitValue<T>, WorkerWaitClosed, WorkerWaitStopping, WorkerWaitTimedOut, WorkerWaitCancelled>;
 
     template <typename Alternative>
     explicit WorkerWaitResult(Alternative alternative) noexcept(std::is_nothrow_constructible_v<Result, Alternative&&>)
@@ -116,6 +127,11 @@ struct WorkerWaitResultAccess final {
     template <typename T>
     [[nodiscard]] static WorkerWaitResult<T> timedOut() noexcept {
         return WorkerWaitResult<T>(WorkerWaitTimedOut());
+    }
+
+    template <typename T>
+    [[nodiscard]] static WorkerWaitResult<T> cancelled() noexcept {
+        return WorkerWaitResult<T>(WorkerWaitCancelled());
     }
 };
 

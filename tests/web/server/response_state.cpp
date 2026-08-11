@@ -149,7 +149,7 @@ RUVIA_TEST(http1_request_sequence_unifies_buffered_and_committed_completion) {
 RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
     using ruvia::detail::finalizeBodyRouteResponse;
     using ruvia::Http1ClosePolicy;
-    using ruvia::detail::Http1RequestBodyConsumption;
+    using ruvia::Http1RequestBodyConsumption;
     using ruvia::detail::Http1ServerRequestParser;
 
     Http1ServerRequestParser parser;

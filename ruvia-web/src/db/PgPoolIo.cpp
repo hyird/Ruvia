@@ -22,11 +22,12 @@ Task<DbResolvedAddresses> PostgreSqlPool::resolveHost(ConnectionSlot& slot, cons
     return resolveDbHost(*this, slot, deadline, "PostgreSQL");
 }
 
-Task<void> PostgreSqlPool::connectUnlocked(ConnectionSlot& slot) {
+Task<void> PostgreSqlPool::connectUnlocked(ConnectionSlot& slot, const OperationTimeout& operationTimeout) {
     if (slot.connected) {
         co_return;
     }
-    OperationTimeout deadline(config_.connectTimeout);
+    throwIfCancelled(slot);
+    const OperationTimeout deadline = operationTimeout.constrainedBy(config_.connectTimeout);
     try {
         auto addresses = co_await resolveHost(slot, deadline);
         auto resolvedHosts = makePostgreSqlResolvedHostList(config_.host, addresses, resource_);
@@ -64,15 +65,17 @@ Task<void> PostgreSqlPool::connectUnlocked(ConnectionSlot& slot) {
         }
         slot.connected = true;
     } catch (...) {
+        const auto failure = std::current_exception();
         closeSlot(slot);
-        throw;
+        std::rethrow_exception(failure);
     }
 }
 
 Task<void> PostgreSqlPool::waitForPostgreSql(ConnectionSlot& slot, bool read, const OperationTimeout& deadline) {
+    throwIfCancelled(slot);
     const auto remaining = deadline.remaining();
     if (remaining.has_value() && remaining->count() <= 0) {
-        throw std::runtime_error("PostgreSQL operation timed out");
+        throw DbError(DbError::Code::kTimeout, "PostgreSQL operation timed out");
     }
     const auto native = PQsocket(slot.connection);
     if (native < 0 || slot.waitSocket == nullptr || !slot.waitSocket->ensureAssigned(static_cast<DbSlotSocket::NativeSocket>(native))) {
@@ -104,6 +107,9 @@ Task<void> PostgreSqlPool::waitForPostgreSql(ConnectionSlot& slot, bool read, co
             try {
                 waitable.async_wait(waitType, [this](std::error_code waitError) noexcept {
                     error = waitError;
+                    // Asio has released the wait operation before this user
+                    // handler runs, so resuming cannot destroy an outstanding
+                    // operation that still borrows the awaiter.
                     continuation.resume();
                 });
                 return true;
@@ -117,11 +123,8 @@ Task<void> PostgreSqlPool::waitForPostgreSql(ConnectionSlot& slot, bool read, co
             if (initiationFailure != nullptr) {
                 std::rethrow_exception(initiationFailure);
             }
-            if (slot.closeRequested) {
-                throw std::runtime_error("database client is closing");
-            }
             if (slot.deadline.expired()) {
-                throw std::runtime_error("PostgreSQL operation timed out");
+                throw DbError(DbError::Code::kTimeout, "PostgreSQL operation timed out");
             }
             if (error) {
                 throw std::system_error(error, "PostgreSQL socket wait failed");
@@ -143,14 +146,28 @@ Task<void> PostgreSqlPool::waitForPostgreSql(ConnectionSlot& slot, bool read, co
         }
 
         ConnectionSlot& slot;
-    } activeWait(slot);
-    try {
-        co_await SocketWaitAwaiter{slot, *slot.waitSocket, read, {}, {}, {}};
-    } catch (...) {
-        clearSlotDeadline(slot);
-        throw;
+    };
+
+    std::exception_ptr waitFailure;
+    {
+        ActiveWait activeWait(slot);
+        try {
+            co_await SocketWaitAwaiter{slot, *slot.waitSocket, read, {}, {}, {}};
+        } catch (...) {
+            waitFailure = std::current_exception();
+        }
     }
+    // PQ* may replace or close the native socket during the next poll. Ensure
+    // ASIO no longer owns a duplicate before returning to libpq.
+    slot.waitSocket->reset();
     clearSlotDeadline(slot);
+    throwIfCancelled(slot);
+    if (slot.closeRequested) {
+        throw DbError(DbError::Code::kClosing, "database client is closing");
+    }
+    if (waitFailure != nullptr) {
+        std::rethrow_exception(waitFailure);
+    }
 }
 
 Task<void> PostgreSqlPool::flushOutput(ConnectionSlot& slot, const OperationTimeout& deadline) {

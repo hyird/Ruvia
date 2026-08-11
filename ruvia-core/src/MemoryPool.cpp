@@ -129,11 +129,11 @@ WorkerMemory::WorkerMemory(const MemoryPoolConfig& config)
     : config_(config),
       resource_(detail::processResource()) {}
 
-std::pmr::memory_resource* WorkerMemory::resource() noexcept {
+std::pmr::memory_resource* WorkerMemory::resource() & noexcept {
     return &resource_;
 }
 
-std::pmr::memory_resource* WorkerMemory::resource() const noexcept {
+std::pmr::memory_resource* WorkerMemory::resource() const& noexcept {
     return const_cast<std::pmr::unsynchronized_pool_resource*>(&resource_);
 }
 

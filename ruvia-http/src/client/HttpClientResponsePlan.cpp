@@ -53,12 +53,12 @@ namespace {
     return selectedProtocols.hasProtocol();
 }
 
-[[nodiscard]] std::optional<Http1ClientRequestContentSignal> requestContentSignal(Http1ClientRequestContentPhase phase, HttpStatusCode statusCode, bool responseWillClose) noexcept {
+[[nodiscard]] std::optional<HttpClientRequestContentSignal> requestContentSignal(Http1ClientRequestContentPhase phase, HttpStatusCode statusCode, bool responseWillClose) noexcept {
     if (responseWillClose && (phase == Http1ClientRequestContentPhase::kAwaitingContinue || phase == Http1ClientRequestContentPhase::kContentPending || phase == Http1ClientRequestContentPhase::kContinueReceived)) {
-        return Http1ClientRequestContentSignal::kExchangeComplete;
+        return HttpClientRequestContentSignal::kExchangeComplete;
     }
     if (statusCode == http_status::kContinue) {
-        return phase == Http1ClientRequestContentPhase::kAwaitingContinue ? std::optional<Http1ClientRequestContentSignal>(Http1ClientRequestContentSignal::kContinue) : std::nullopt;
+        return phase == Http1ClientRequestContentPhase::kAwaitingContinue ? std::optional<HttpClientRequestContentSignal>(HttpClientRequestContentSignal::kContinue) : std::nullopt;
     }
     if (statusCode.isFinal()) {
         // A final response cancels content only while Expect still gates it.
@@ -68,7 +68,7 @@ namespace {
         // response that explicit signal, including after Continue released the
         // body writer.
         if (phase == Http1ClientRequestContentPhase::kAwaitingContinue || (responseWillClose && (phase == Http1ClientRequestContentPhase::kContentPending || phase == Http1ClientRequestContentPhase::kContinueReceived))) {
-            return Http1ClientRequestContentSignal::kExchangeComplete;
+            return HttpClientRequestContentSignal::kExchangeComplete;
         }
     }
     return std::nullopt;
@@ -94,7 +94,7 @@ namespace {
 }  // namespace
 
 struct Http1ClientResponsePlanAccess final {
-    using RequestContentSignal = std::optional<Http1ClientRequestContentSignal>;
+    using RequestContentSignal = std::optional<HttpClientRequestContentSignal>;
 
     [[nodiscard]] static Http1ClientResponsePlan informational(Http1ClosePolicy persistence, RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientInformationalResponse(persistence)), requestContentSignal);

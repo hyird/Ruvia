@@ -15,6 +15,7 @@ using NativePathView = std::basic_string_view<NativePathChar>;
     const auto& native = path.native();
     return NativePathView(native);
 }
+NativePathView nativePathView(const std::filesystem::path&&) = delete;
 
 inline void assignNativePath(NativePathString& output, const std::filesystem::path& path) {
     const auto native = nativePathView(path);

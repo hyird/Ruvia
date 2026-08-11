@@ -16,6 +16,7 @@
 
 #include <ruvia/http/HttpCache.h>
 #include <ruvia/http/Cookies.h>
+#include <ruvia/http/Hpack.h>
 #include <ruvia/http/ProtocolByteLimit.h>
 #include <ruvia/http/HttpHeader.h>
 #include <ruvia/http/HttpClient.h>
@@ -23,16 +24,22 @@
 #include <ruvia/http/Http1ClientRequestWriter.h>
 #include <ruvia/http/Http1ClientResponseParser.h>
 #include <ruvia/http/Http1InterimResponseWriter.h>
+#include <ruvia/http/Http1RequestBodyPlan.h>
 #include <ruvia/http/Http1RequestParser.h>
+#include <ruvia/http/Http2Connection.h>
+#include <ruvia/http/Http2Framing.h>
 #include <ruvia/http/HttpInterimResponse.h>
 #include <ruvia/http/HttpKnownMethod.h>
 #include <ruvia/http/HttpProtocolError.h>
 #include <ruvia/http/HttpProtocolVersion.h>
 #include <ruvia/http/HttpRequest.h>
 #include <ruvia/http/HttpResponse.h>
+#include <ruvia/http/HttpExpectations.h>
+#include <ruvia/http/HttpTransferCoding.h>
 #include <ruvia/http/MultipartParser.h>
 #include <ruvia/http/Sse.h>
 #include <ruvia/http/UrlEncoding.h>
+#include <ruvia/http/WebSocketServerConnection.h>
 #include <ruvia/http/detail/util/AsciiCase.h>
 #include <ruvia/http/detail/util/BorrowedView.h>
 #include <ruvia/http/detail/cookie/CookieValidation.h>
@@ -111,6 +118,88 @@
 
 
 int main() {
+    std::pmr::monotonic_buffer_resource publicProtocolResource;
+    std::pmr::string hpackBlock(&publicProtocolResource);
+    ruvia::HpackEncoder::encodeHeader(hpackBlock, "x-public", "yes");
+    std::pair<std::string, std::string> decodedHeader;
+    ruvia::HpackDecoder hpackDecoder(&publicProtocolResource);
+    const auto hpackResult = hpackDecoder.decode(hpackBlock, &decodedHeader, [](void* target, std::string_view name, std::string_view value) {
+        auto& decoded = *static_cast<std::pair<std::string, std::string>*>(target);
+        decoded.first.assign(name);
+        decoded.second.assign(value);
+        return true;
+    });
+    if (!hpackResult.decoded() || decodedHeader.first != "x-public" || decodedHeader.second != "yes") {
+        return 60;
+    }
+
+    std::array<char, ruvia::kHttp2FrameHeaderBytes> publicFrameHeader{};
+    if (!ruvia::encodeHttp2FrameHeader(publicFrameHeader, 7, ruvia::Http2FrameType::kData, 1, 3)) {
+        return 60;
+    }
+    const auto parsedPublicFrame = ruvia::parseHttp2FrameHeader(publicFrameHeader);
+    if (!parsedPublicFrame || parsedPublicFrame->length != 7 || parsedPublicFrame->type != static_cast<std::uint8_t>(ruvia::Http2FrameType::kData) || parsedPublicFrame->flags != 1 || parsedPublicFrame->streamId != 3) {
+        return 60;
+    }
+
+    ruvia::Http2Connection publicHttp2(&publicProtocolResource, ruvia::Http2Role::kClient);
+    publicHttp2.beginConnection();
+    if (!publicHttp2.pendingOutput().starts_with(ruvia::kHttp2ClientPreface)) {
+        return 60;
+    }
+    (void)publicHttp2.consumeOutput(publicHttp2.pendingOutput().size());
+    const auto publicRequest = publicHttp2.submitRegularRequestHead("GET", "https", "example.test", "/", {}, ruvia::Http2RequestContent::none());
+    if (!publicRequest.streamId() || publicRequest.error()) {
+        return 60;
+    }
+    (void)publicHttp2.consumeOutput(publicHttp2.pendingOutput().size());
+
+    std::pmr::string publicPeerBytes(&publicProtocolResource);
+    std::array<char, ruvia::kHttp2FrameHeaderBytes> settingsHeader{};
+    (void)ruvia::encodeHttp2FrameHeader(settingsHeader, 0, ruvia::Http2FrameType::kSettings, 0, 0);
+    publicPeerBytes.append(settingsHeader.data(), settingsHeader.size());
+    std::pmr::string finalHead(&publicProtocolResource);
+    ruvia::HpackEncoder::encodeStatus(finalHead, ruvia::http_status::kNoContent);
+    std::array<char, ruvia::kHttp2FrameHeaderBytes> responseHeader{};
+    (void)ruvia::encodeHttp2FrameHeader(responseHeader, static_cast<std::uint32_t>(finalHead.size()), ruvia::Http2FrameType::kHeaders, 0x5, *publicRequest.streamId());
+    publicPeerBytes.append(responseHeader.data(), responseHeader.size());
+    publicPeerBytes.append(finalHead.data(), finalHead.size());
+    if (publicHttp2.feed(publicPeerBytes) != ruvia::Http2FeedResult::kAccepted) {
+        return 60;
+    }
+    const auto publicResponseHead = publicHttp2.nextEvent();
+    const auto publicResponseEnd = publicHttp2.nextEvent();
+    if (!publicResponseHead || publicResponseHead->kind() != ruvia::Http2EventKind::kMessageHead || publicResponseHead->response() == nullptr || publicResponseHead->response()->status() != ruvia::http_status::kNoContent || publicResponseHead->serverExpectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject).has_value() || !publicResponseEnd || publicResponseEnd->kind() != ruvia::Http2EventKind::kMessageEnd) {
+        return 60;
+    }
+
+    ruvia::Http2Connection publicResetClient(&publicProtocolResource, ruvia::Http2Role::kClient);
+    publicResetClient.beginConnection();
+    (void)publicResetClient.consumeOutput(publicResetClient.pendingOutput().size());
+    for (std::size_t index = 0; index < 256; ++index) {
+        const auto submitted = publicResetClient.submitRegularRequestHead("GET", "https", "example.test", "/cancelled", {}, ruvia::Http2RequestContent::none());
+        if (!submitted.streamId() || submitted.error()) {
+            return 61;
+        }
+        (void)publicResetClient.consumeOutput(publicResetClient.pendingOutput().size());
+        if (publicResetClient.submitReset(*submitted.streamId(), ruvia::Http2ErrorCode::kCancel) != ruvia::Http2SubmitStatus::kAccepted) {
+            return 61;
+        }
+        (void)publicResetClient.consumeOutput(publicResetClient.pendingOutput().size());
+    }
+
+    std::pmr::string webSocketInput(&publicProtocolResource);
+    ruvia::WebSocketServerConnection publicWebSocket(webSocketInput);
+    if (publicWebSocket.submitFrame(ruvia::WebSocketOpcode::kText, "public") != ruvia::WebSocketFrameSubmitStatus::kAccepted || publicWebSocket.outputPlan().bytes().empty()) {
+        return 60;
+    }
+
+    std::pmr::string sseFrame(&publicProtocolResource);
+    ruvia::formatSseMessage(sseFrame, ruvia::SseMessage{.data = "public"});
+    if (sseFrame != "data: public\n\n") {
+        return 60;
+    }
+
     ruvia::CacheControlFieldParser cacheControlParser;
     cacheControlParser.update("public, max-age=invalid");
     cacheControlParser.update("no-transform, max-age=60");
@@ -208,7 +297,7 @@ int main() {
         return 17;
     }
     std::array<char, 512> expectHeadBuffer;
-    const auto expectPrepared = ruvia::Http1ClientRequestWriter().prepare(outboundOrigin, outboundRequest, expectHeadBuffer, ruvia::Http1ClientRequestWirePolicy::expectContinue());
+    const auto expectPrepared = ruvia::Http1ClientRequestWriter().prepare(outboundOrigin, outboundRequest, expectHeadBuffer, ruvia::Http1ClientRequestWirePolicy(ruvia::Http1ClosePolicy::kAllowReuse, ruvia::HttpClientRequestExpectation::kContinue));
     const auto* expectWire = expectPrepared.prepared();
     if (expectWire == nullptr || expectWire->contentPlan().continueGated() == nullptr || expectWire->head().find("Expect: 100-continue\r\n") == std::string_view::npos) {
         return 25;
@@ -216,7 +305,7 @@ int main() {
     ruvia::Http1ClientResponseParser expectParser(*expectWire);
     const auto continueResult = expectParser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     const auto* continueHead = continueResult.parsed();
-    if (continueHead == nullptr || continueHead->plan().informational() == nullptr || continueHead->plan().informational()->persistence() != ruvia::Http1ClosePolicy::kAllowReuse || continueHead->head().protocolVersion() != ruvia::HttpProtocolVersion::kHttp11 || continueHead->plan().requestContentSignal() != ruvia::Http1ClientRequestContentSignal::kContinue) {
+    if (continueHead == nullptr || continueHead->plan().informational() == nullptr || continueHead->plan().informational()->persistence() != ruvia::Http1ClosePolicy::kAllowReuse || continueHead->head().protocolVersion() != ruvia::HttpProtocolVersion::kHttp11 || continueHead->plan().requestContentSignal() != ruvia::HttpClientRequestContentSignal::kContinue) {
         return 25;
     }
     if (expectParser.completeRequestContent() != ruvia::Http1ClientRequestContentCompletionStatus::kCompleted) {
@@ -315,7 +404,7 @@ int main() {
         "Transfer-Encoding: gzip, chunked\r\n\r\n"
         "1\r\nx\r\n0\r\n\r\n");
     const auto* transferCodedBody = transferCoded.bodyPlan.chunked();
-    if (!transferCoded.messageReady() || transferCodedBody == nullptr || transferCodedBody->transferCodings().count != 1 || transferCodedBody->transferCodings().values[0] != ruvia::detail::HttpTransferCoding::kGzip) {
+    if (!transferCoded.messageReady() || transferCodedBody == nullptr || transferCodedBody->transferCodings().count != 1 || transferCodedBody->transferCodings().values[0] != ruvia::HttpTransferCoding::kGzip) {
         return 14;
     }
 
@@ -339,7 +428,7 @@ int main() {
     const auto chunkedResult = chunkedParser.parse("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n");
     const auto* chunkedHead = chunkedResult.parsed();
     const auto* chunked = chunkedHead == nullptr ? nullptr : chunkedHead->plan().chunked();
-    if (chunked == nullptr || chunked->transferCodings().count != 1 || chunked->transferCodings().values[0] != ruvia::detail::HttpTransferCoding::kGzip || chunked->persistence() != ruvia::Http1ClosePolicy::kAllowReuse) {
+    if (chunked == nullptr || chunked->transferCodings().count != 1 || chunked->transferCodings().values[0] != ruvia::HttpTransferCoding::kGzip || chunked->persistence() != ruvia::Http1ClosePolicy::kAllowReuse) {
         return 15;
     }
     ruvia::Http1ClientResponseParser clientParser(*getWire);

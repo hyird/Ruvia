@@ -5,6 +5,7 @@
 
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -57,31 +58,37 @@ StopToken WebWorkerContext::stopToken() const noexcept {
 
 #ifdef RUVIA_ENABLE_DATABASE
 DbHandle WebWorkerContext::db() const {
-    return databases_->get(resource_, operationScope_);
+    return databases_->get(resource_, operationScope_).withOptions(
+        DbOperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 
 DbHandle WebWorkerContext::db(std::string_view alias) const {
-    return databases_->get(alias, resource_, operationScope_);
+    return databases_->get(alias, resource_, operationScope_).withOptions(
+        DbOperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 #endif
 
-HttpClient WebWorkerContext::httpClient() const {
+HttpClientHandle WebWorkerContext::httpClient() const {
     if (httpClients_ == nullptr) throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
-    return httpClients_->get(resource_, operationScope_);
+    return httpClients_->get(resource_, operationScope_).withOptions(
+        HttpClientOperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 
-HttpClient WebWorkerContext::httpClient(std::string_view alias) const {
+HttpClientHandle WebWorkerContext::httpClient(std::string_view alias) const {
     if (httpClients_ == nullptr) throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
-    return httpClients_->get(alias, resource_, operationScope_);
+    return httpClients_->get(alias, resource_, operationScope_).withOptions(
+        HttpClientOperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 
 #ifdef RUVIA_ENABLE_REDIS
 RedisHandle WebWorkerContext::redis() const {
-    return redis_->get(resource_, operationScope_);
+    return redis_->get(resource_, operationScope_).withOptions(
+        RedisOperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 
 RedisHandle WebWorkerContext::redis(std::string_view alias) const {
-    return redis_->get(alias, resource_, operationScope_);
+    return redis_->get(alias, resource_, operationScope_).withOptions(
+        RedisOperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 #endif
 

@@ -11,6 +11,7 @@
 
 #include "db_integration_fixture.h"
 
+#include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/db/DbMigration.h"
@@ -24,9 +25,11 @@
 #include <chrono>
 #include <cstdio>
 #include <exception>
+#include <memory>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -69,10 +72,36 @@ void exerciseMigrations(const ruvia::DbConfig& config) {
     dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }), "an edited migration body was accepted");
 }
 
-ruvia::Task<void> exercise(asio::io_context& ioContext, unsigned& ticks) {
+void exerciseRejectedCredentials(const ruvia::DbConfig& config) {
+    auto rejected = config;
+    rejected.password.append("__ruvia_deliberately_invalid_password__");
+
+    bool threw = false;
+    std::string message;
+    try {
+        (void)ruvia::DbMigrator::migrate(
+            rejected,
+            std::span<const ruvia::DbMigration>());
+    } catch (const std::exception& error) {
+        threw = true;
+        message = error.what();
+    }
+    dbRequire(threw, "MariaDB accepted deliberately invalid credentials");
+    dbRequire(
+        message.find("mysql_real_connect") != std::string::npos,
+        "MariaDB credential cleanup replaced the mysql_real_connect error");
+    dbRequire(
+        message.find("[errno=") != std::string::npos,
+        "MariaDB credential failure omitted the driver errno");
+}
+
+ruvia::Task<void> exercise(
+    asio::io_context& ioContext,
+    const ruvia::WorkerHandle& worker,
+    unsigned& ticks) {
     auto* resource = std::pmr::get_default_resource();
     const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(testConfig(), resource)}};
-    ruvia::detail::DbRegistry registry(ioContext, resource, definitions);
+    ruvia::detail::DbRegistry registry(ioContext, resource, definitions, &worker);
     co_await registry.connect();
     ruvia::detail::ScopedOperationScope operationScope;
     auto db = registry.get(resource, operationScope);
@@ -80,6 +109,67 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, unsigned& ticks) {
     // The loop must keep running while the server takes its time.
     (void)co_await db.query("SELECT SLEEP(1)");
     dbRequire(ticks > 0, "the event loop was blocked for the duration of the query");
+
+    {
+        auto stop = std::make_shared<ruvia::detail::StopSource>();
+        asio::steady_timer cancel(ioContext, std::chrono::milliseconds(50));
+        cancel.async_wait([stop](std::error_code error) {
+            if (!error) {
+                stop->requestStop();
+            }
+        });
+        bool cancelled = false;
+        try {
+            (void)co_await db.withOptions({.stopToken = stop->token()}).query("SELECT SLEEP(5)");
+        } catch (const ruvia::DbError& error) {
+            cancelled = error.code() == ruvia::DbError::Code::kCancelled;
+        }
+        dbRequire(cancelled, "active MariaDB query did not report kCancelled");
+        auto recovered = co_await db.query("SELECT 1");
+        dbRequire(recovered.rows()[0][0].text() == "1", "MariaDB did not reconnect after query cancellation");
+    }
+
+    {
+        auto stop = std::make_shared<ruvia::detail::StopSource>();
+        auto transaction = co_await db.withOptions({.stopToken = stop->token()}).beginTransaction();
+        asio::steady_timer cancel(ioContext, std::chrono::milliseconds(50));
+        cancel.async_wait([stop](std::error_code error) {
+            if (!error) {
+                stop->requestStop();
+            }
+        });
+        bool cancelled = false;
+        try {
+            (void)co_await transaction.query("SELECT SLEEP(5)");
+        } catch (const ruvia::DbError& error) {
+            cancelled = error.code() == ruvia::DbError::Code::kCancelled;
+        }
+        dbRequire(cancelled && !transaction.active(), "active MariaDB transaction did not fail with kCancelled");
+        auto recovered = co_await db.query("SELECT 1");
+        dbRequire(recovered.rows()[0][0].text() == "1", "MariaDB did not reconnect after transaction cancellation");
+    }
+
+    {
+        auto stop = std::make_shared<ruvia::detail::StopSource>();
+        asio::steady_timer cancel(ioContext, std::chrono::milliseconds(50));
+        cancel.async_wait([stop](std::error_code error) {
+            if (!error) {
+                stop->requestStop();
+            }
+        });
+        bool cancelled = false;
+        try {
+            auto stream = co_await db.withOptions({.stopToken = stop->token()})
+                              .queryStream("SELECT seq, SLEEP(0.01) FROM seq_1_to_1000");
+            while (co_await stream.read()) {
+            }
+        } catch (const ruvia::DbError& error) {
+            cancelled = error.code() == ruvia::DbError::Code::kCancelled;
+        }
+        dbRequire(cancelled, "active MariaDB stream did not report kCancelled");
+        auto recovered = co_await db.query("SELECT 1");
+        dbRequire(recovered.rows()[0][0].text() == "1", "MariaDB did not reconnect after stream cancellation");
+    }
 
     (void)co_await db.execute("DROP TABLE IF EXISTS ruvia_mariadb_integration_items");
     (void)co_await db.execute("CREATE TABLE ruvia_mariadb_integration_items (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, name VARCHAR(64) NOT NULL, n BIGINT NOT NULL)");
@@ -168,13 +258,17 @@ int main() {
     }
 
     try {
-        exerciseMigrations(testConfig());
+        const auto config = testConfig();
+        exerciseMigrations(config);
+        exerciseRejectedCredentials(config);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "MariaDB integration failed: %s\n", error.what());
         return 1;
     }
 
     asio::io_context ioContext(1);
+    auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 64});
+    const auto worker = attachment.loop().handle();
     unsigned ticks = 0;
     asio::steady_timer heartbeat(ioContext);
     // Re-armed from its own completion, which is what makes a silent stretch
@@ -201,12 +295,13 @@ int main() {
     heartbeat.async_wait(Heartbeat{heartbeat, ticks, stopped});
 
     std::exception_ptr failure;
-    ruvia::detail::asyncStartTask(exercise(ioContext, ticks), asio::bind_executor(ioContext.get_executor(), [&failure, &stopped, &heartbeat](ruvia::detail::TaskCompletionResult<void> result) {
+    ruvia::detail::asyncStartTask(exercise(ioContext, worker, ticks), asio::bind_executor(ioContext.get_executor(), [&failure, &stopped, &heartbeat, &attachment](ruvia::detail::TaskCompletionResult<void> result) {
         if (const auto* error = result.failure()) {
             failure = error->exception();
         }
         stopped = true;
         heartbeat.cancel();
+        attachment.stop();
     }));
     ioContext.run();
 

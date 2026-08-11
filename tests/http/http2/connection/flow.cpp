@@ -311,7 +311,7 @@ RUVIA_TEST(http2_connection_header_error_output_allocation_failure_retains_block
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
     if (stream != nullptr) {
-        RUVIA_CHECK(!stream->requestHeaderBlock().empty());
+        RUVIA_CHECK(!stream->remoteHeaderBlock().empty());
     }
 
     resource.rejectAllocations(false);
@@ -351,7 +351,7 @@ RUVIA_TEST(http2_connection_header_event_publication_allocation_failure_retries_
     if (stream != nullptr) {
         RUVIA_CHECK(!stream->hasMethod());
         RUVIA_CHECK(!stream->hasPath());
-        RUVIA_CHECK(!stream->requestHeaderBlock().empty());
+        RUVIA_CHECK(!stream->remoteHeaderBlock().empty());
     }
 
     resource.rejectAllocations(false);
@@ -523,7 +523,7 @@ RUVIA_TEST(http2_connection_final_continuation_retry_rolls_back_appended_fragmen
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
     if (stream != nullptr) {
-        stream->requestHeaderBlock().reserve(first.size() + final.size());
+        stream->remoteHeaderBlock().reserve(first.size() + final.size());
     }
 
     resource.rejectAllocations();
@@ -538,7 +538,7 @@ RUVIA_TEST(http2_connection_final_continuation_retry_rolls_back_appended_fragmen
     stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
     if (stream != nullptr) {
-        RUVIA_CHECK_EQ(stream->requestHeaderBlock().size(), first.size());
+        RUVIA_CHECK_EQ(stream->remoteHeaderBlock().size(), first.size());
     }
 
     resource.rejectAllocations(false);
@@ -587,7 +587,7 @@ RUVIA_TEST(http2_connection_client_response_event_publication_allocation_failure
     RUVIA_CHECK(stream != nullptr);
     if (stream != nullptr) {
         RUVIA_CHECK(stream->responseStatus() == nullptr);
-        RUVIA_CHECK(!stream->requestHeaderBlock().empty());
+        RUVIA_CHECK(!stream->remoteHeaderBlock().empty());
     }
 
     resource.rejectAllocations(false);
@@ -1516,9 +1516,9 @@ RUVIA_TEST(http2_connection_goaway_rejects_unprocessed_requests_in_core) {
     RUVIA_CHECK(event.kind() == Http2EventKind::kGoaway);
     RUVIA_CHECK_EQ(event.goaway()->lastStreamId(), firstStreamId);
     RUVIA_CHECK(event.goaway()->error() == Http2ErrorCode::kNoError);
-    event = client.nextEvent().value();
-    RUVIA_CHECK(event.kind() == Http2EventKind::kRequestUnprocessed);
-    RUVIA_CHECK_EQ(event.requestUnprocessed()->streamId(), secondStreamId);
+    auto unprocessedEvent = client.nextEvent().value();
+    RUVIA_CHECK(unprocessedEvent.kind() == Http2EventKind::kRequestUnprocessed);
+    RUVIA_CHECK_EQ(unprocessedEvent.requestUnprocessed()->streamId(), secondStreamId);
     RUVIA_CHECK(!client.nextEvent().has_value());
 
     auto* firstStream = client.stream(firstStreamId);
@@ -1569,13 +1569,13 @@ RUVIA_TEST(http2_connection_goaway_last_stream_id_is_monotonic) {
 
     const auto narrowed = goawayFrame(&resource, 3, Http2ErrorCode::kInternalError);
     RUVIA_CHECK(client.feed(std::string_view(narrowed.data(), narrowed.size())) == ruvia::detail::Http2FeedResult::kAccepted);
-    event = client.nextEvent().value();
-    RUVIA_CHECK(event.kind() == Http2EventKind::kGoaway);
-    RUVIA_CHECK_EQ(event.goaway()->lastStreamId(), std::uint32_t{3});
-    RUVIA_CHECK(event.goaway()->error() == Http2ErrorCode::kInternalError);
-    event = client.nextEvent().value();
-    RUVIA_CHECK(event.kind() == Http2EventKind::kRequestUnprocessed);
-    RUVIA_CHECK_EQ(event.requestUnprocessed()->streamId(), std::uint32_t{5});
+    auto narrowedEvent = client.nextEvent().value();
+    RUVIA_CHECK(narrowedEvent.kind() == Http2EventKind::kGoaway);
+    RUVIA_CHECK_EQ(narrowedEvent.goaway()->lastStreamId(), std::uint32_t{3});
+    RUVIA_CHECK(narrowedEvent.goaway()->error() == Http2ErrorCode::kInternalError);
+    auto unprocessedEvent = client.nextEvent().value();
+    RUVIA_CHECK(unprocessedEvent.kind() == Http2EventKind::kRequestUnprocessed);
+    RUVIA_CHECK_EQ(unprocessedEvent.requestUnprocessed()->streamId(), std::uint32_t{5});
     RUVIA_CHECK(!client.nextEvent().has_value());
     RUVIA_CHECK(client.stream(5) == nullptr);
     const auto narrowedInfo = client.peerGoaway();
@@ -1644,15 +1644,15 @@ RUVIA_TEST(http2_connection_peer_goaway_drains_without_truncating_server_request
     RUVIA_CHECK(server.draining());
     RUVIA_CHECK(server.peerGoaway().has_value());
 
-    event = server.nextEvent().value();
-    RUVIA_CHECK(event.kind() == Http2EventKind::kGoaway);
-    RUVIA_CHECK_EQ(event.goaway()->lastStreamId(), std::uint32_t{0});
-    event = server.nextEvent().value();
-    RUVIA_CHECK(event.kind() == Http2EventKind::kMessageBodyChunk);
-    RUVIA_CHECK(event.messageBodyChunk()->bytes() == "body");
-    event = server.nextEvent().value();
-    RUVIA_CHECK(event.kind() == Http2EventKind::kMessageEnd);
-    RUVIA_CHECK_EQ(event.messageEnd()->streamId(), std::uint32_t{1});
+    auto goawayEvent = server.nextEvent().value();
+    RUVIA_CHECK(goawayEvent.kind() == Http2EventKind::kGoaway);
+    RUVIA_CHECK_EQ(goawayEvent.goaway()->lastStreamId(), std::uint32_t{0});
+    auto bodyEvent = server.nextEvent().value();
+    RUVIA_CHECK(bodyEvent.kind() == Http2EventKind::kMessageBodyChunk);
+    RUVIA_CHECK(bodyEvent.messageBodyChunk()->bytes() == "body");
+    auto endEvent = server.nextEvent().value();
+    RUVIA_CHECK(endEvent.kind() == Http2EventKind::kMessageEnd);
+    RUVIA_CHECK_EQ(endEvent.messageEnd()->streamId(), std::uint32_t{1});
     RUVIA_CHECK(!server.nextEvent().has_value());
 
     // Reciprocal GOAWAY uses the highest accepted client stream (1), not the peer's

@@ -4,10 +4,34 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace ruvia::detail {
 
 class WorkerDispatcher;
+
+class WorkerTimerCancellation final {
+public:
+    WorkerTimerCancellation() noexcept = default;
+
+    void cancel() const noexcept;
+    [[nodiscard]] bool valid() const noexcept {
+        return dispatcher_ != nullptr && generation_ != 0;
+    }
+
+private:
+    // Borrows the dispatcher kept alive by the awaiter's stable WorkerHandle.
+    // StopRegistration teardown synchronizes any callback before that borrow
+    // ends; requestTimerCancellation() owns any continuation it posts.
+    WorkerTimerCancellation(WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept
+        : dispatcher_(&dispatcher), slot_(slot), generation_(generation) {}
+
+    WorkerDispatcher* dispatcher_{nullptr};
+    std::size_t slot_{0};
+    std::uint64_t generation_{0};
+
+    friend class WorkerTimerRegistration;
+};
 
 enum class WorkerTimerOutcome : std::uint8_t {
     kExpired,
@@ -64,6 +88,8 @@ public:
     WorkerTimerRegistration& operator=(WorkerTimerRegistration&&) = delete;
 
     void cancel() noexcept;
+    [[nodiscard]] WorkerTimerCancellation cancellation() const&;
+    WorkerTimerCancellation cancellation() const&& = delete;
     // Whether this registration still owns a cancellation token. Expiry consumes
     // the queue entry but deliberately does not write back through this borrowed
     // registration; its stable owner releases or reuses the token afterwards.

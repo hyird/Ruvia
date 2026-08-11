@@ -2,6 +2,7 @@
 
 #include <utility>
 #include "ruvia/web/detail/db/DbRegistry.h"
+#include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbPreparedStatement.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbUtils.h"
@@ -13,57 +14,57 @@ namespace ruvia {
 
 namespace {
 
-Task<DbRows> queryPool(detail::DbPoolRef pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbRows> queryPool(detail::DbPoolRef pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, DbOperationOptions options) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
-        return (*client)->query(std::move(sql), std::move(params), resource);
+        return (*client)->query(std::move(sql), std::move(params), resource, std::move(options));
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
     if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
-        return (*client)->query(std::move(sql), std::move(params), resource);
+        return (*client)->query(std::move(sql), std::move(params), resource, std::move(options));
     }
 #endif
     detail::throwUnavailableDbBackend();
 }
 
-Task<DbExecResult> executePool(detail::DbPoolRef pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbExecResult> executePool(detail::DbPoolRef pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, DbOperationOptions options) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
-        return (*client)->execute(std::move(sql), std::move(params), resource);
+        return (*client)->execute(std::move(sql), std::move(params), resource, std::move(options));
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
     if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
-        return (*client)->execute(std::move(sql), std::move(params), resource);
+        return (*client)->execute(std::move(sql), std::move(params), resource, std::move(options));
     }
 #endif
     detail::throwUnavailableDbBackend();
 }
 
-Task<DbStreamResult> streamPool(detail::DbPoolRef pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+Task<DbStreamResult> streamPool(detail::DbPoolRef pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, DbOperationOptions options) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
-        return (*client)->stream(std::move(sql), std::move(params), resource);
+        return (*client)->stream(std::move(sql), std::move(params), resource, std::move(options));
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
     if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
-        return (*client)->stream(std::move(sql), std::move(params), resource);
+        return (*client)->stream(std::move(sql), std::move(params), resource, std::move(options));
     }
 #endif
     detail::throwUnavailableDbBackend();
 }
 
-Task<DbTransaction> beginPoolTransaction(detail::DbPoolRef pool, std::pmr::memory_resource* resource) {
+Task<DbTransaction> beginPoolTransaction(detail::DbPoolRef pool, std::pmr::memory_resource* resource, DbOperationOptions options) {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
-        return (*client)->beginTransaction(resource);
+        return (*client)->beginTransaction(resource, std::move(options));
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
     if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
-        return (*client)->beginTransaction(resource);
+        return (*client)->beginTransaction(resource, std::move(options));
     }
 #endif
     detail::throwUnavailableDbBackend();
@@ -79,53 +80,63 @@ DbHandle::DbHandle(detail::DbPoolRef client, std::pmr::memory_resource* resource
 DbHandle::DbHandle(const DbHandle& other) noexcept
     : detail::ScopedCapabilityNode(other),
       client_(other.client_),
-      resource_(other.resource_) {}
+      resource_(other.resource_),
+      options_(other.options_) {}
+
+DbHandle DbHandle::withOptions(DbOperationOptions options) const {
+    detail::validateDbOperationOptions(options);
+    requireActive();
+    DbHandle copy(*this);
+    copy.options_ = detail::mergeDbOperationOptions(options_, std::move(options));
+    return copy;
+}
 
 void DbHandle::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
     auto& handle = static_cast<DbHandle&>(capability);
     handle.client_ = detail::DbPoolRef{};
     handle.resource_ = nullptr;
+    handle.options_ = {};
 }
 
 ScopedOperation<DbRows> DbHandle::query(std::string_view sql, std::span<const DbValue> params) const {
     requireActive();
     auto statement = prepareDbStatement(sql, params, resource_);
-    return detail::makeScopedOperation(operationScope(), queryPrepared(client_, std::move(statement.sql), std::move(statement.params), resource_));
+    return detail::makeScopedOperation(operationScope(), queryPrepared(client_, std::move(statement.sql), std::move(statement.params), resource_, options_));
 }
 
 ScopedOperation<DbExecResult> DbHandle::execute(std::string_view sql, std::span<const DbValue> params) const {
     requireActive();
     auto statement = prepareDbStatement(sql, params, resource_);
-    return detail::makeScopedOperation(operationScope(), executePrepared(client_, std::move(statement.sql), std::move(statement.params), resource_));
+    return detail::makeScopedOperation(operationScope(), executePrepared(client_, std::move(statement.sql), std::move(statement.params), resource_, options_));
 }
 
-Task<DbRows> DbHandle::queryPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
-    co_return co_await queryPool(client, std::move(sql), std::move(params), resource);
+Task<DbRows> DbHandle::queryPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, DbOperationOptions options) {
+    co_return co_await queryPool(client, std::move(sql), std::move(params), resource, std::move(options));
 }
 
-Task<DbExecResult> DbHandle::executePrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
-    co_return co_await executePool(client, std::move(sql), std::move(params), resource);
+Task<DbExecResult> DbHandle::executePrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, DbOperationOptions options) {
+    co_return co_await executePool(client, std::move(sql), std::move(params), resource, std::move(options));
 }
 
 ScopedOperation<DbStreamResult> DbHandle::queryStream(std::string_view sql, std::span<const DbValue> params) const {
     requireActive();
     auto statement = prepareDbStatement(sql, params, resource_);
-    return detail::makeScopedOperation(operationScope(), queryStreamPrepared(client_, std::move(statement.sql), std::move(statement.params), resource_, operationScope()));
+    return detail::makeScopedOperation(operationScope(), queryStreamPrepared(client_, std::move(statement.sql), std::move(statement.params), resource_, operationScope(), options_));
 }
 
-Task<DbStreamResult> DbHandle::queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) {
-    auto result = co_await streamPool(client, std::move(sql), std::move(params), resource);
+Task<DbStreamResult> DbHandle::queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope, DbOperationOptions options) {
+    auto result = co_await streamPool(client, std::move(sql), std::move(params), resource, std::move(options));
     result.bindOperationScope(operationScope);
     co_return result;
 }
 
 ScopedOperation<DbTransaction> DbHandle::beginTransaction() const {
     requireActive();
-    return detail::makeScopedOperation(operationScope(), beginTransactionPrepared(client_, resource_, operationScope()));
+    return detail::makeScopedOperation(operationScope(), beginTransactionPrepared(client_, resource_, operationScope(), options_));
 }
 
-Task<DbTransaction> DbHandle::beginTransactionPrepared(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) {
-    auto transaction = co_await beginPoolTransaction(client, resource);
+Task<DbTransaction> DbHandle::beginTransactionPrepared(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope, DbOperationOptions options) {
+    auto transaction = co_await beginPoolTransaction(client, resource, std::move(options));
     transaction.bindOperationScope(operationScope);
     co_return transaction;
 }

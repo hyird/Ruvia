@@ -7,7 +7,6 @@
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 #include "ruvia/core/memory/PmrResource.h"
 
-#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -36,7 +35,8 @@ class PoolLeaseScheduler final {
 public:
     PoolLeaseScheduler(std::size_t poolSize, std::pmr::memory_resource* resource = nullptr)
         : freeSlots_(pmrResourceOrDefault(resource)),
-          busy_(pmrResourceOrDefault(resource)) {
+          busy_(pmrResourceOrDefault(resource)),
+          waiterState_(std::allocate_shared<WaiterState>(std::pmr::polymorphic_allocator<WaiterState>(processResource()))) {
         freeSlots_.reserve(poolSize);
         busy_.resize(poolSize, 0);
         for (std::size_t i = 0; i < poolSize; ++i) {
@@ -65,12 +65,19 @@ public:
     Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds>, StopToken, WorkerHandle&&) = delete;
 
 private:
-    struct AcquireCancellationState final {
-        AcquireCancellationState(PoolWaiterQueue& queueValue, std::uint64_t waiterIdValue) noexcept
-            : queue(&queueValue), waiterId(waiterIdValue) {}
+    struct WaiterState final : std::enable_shared_from_this<WaiterState> {
+        PoolWaiterQueue queue;
 
-        std::atomic<PoolWaiterQueue*> queue;
-        std::uint64_t waiterId;
+        void requestCancellation(const WorkerHandle& worker, std::uint64_t waiterId) {
+            if (worker.isCurrent()) {
+                (void)queue.cancel(waiterId);
+                return;
+            }
+            auto retained = shared_from_this();
+            (void)WorkerHandleAccess::deferIfAttached(worker, [retained = std::move(retained), waiterId] {
+                (void)retained->queue.cancel(waiterId);
+            });
+        }
     };
 
     class AcquireReservation final {
@@ -123,7 +130,8 @@ private:
             waiterId = ++scheduler.nextWaiterId_;
         }
         PoolWaiter waiter(deadline, waiterId);
-        scheduler.waiters_.enqueue(waiter);
+        auto* const waiterState = scheduler.waiterState_.get();
+        waiterState->queue.enqueue(waiter);
         struct WaiterGuard final {
             PoolWaiterQueue& queue;
             PoolWaiter& waiter;
@@ -131,42 +139,30 @@ private:
             ~WaiterGuard() {
                 queue.remove(waiter);
             }
-        } guard{scheduler.waiters_, waiter};
+        } guard{waiterState->queue, waiter};
 
         WorkerTimerRegistration deadlineTimer;
         if (timeout.has_value() && worker != nullptr) {
-            WorkerHandleAccess::scheduleTimer(*worker, deadlineTimer, deadline, [queue = &scheduler.waiters_, waiterId](WorkerTimerOutcome outcome) noexcept {
+            WorkerHandleAccess::scheduleTimer(*worker, deadlineTimer, deadline, [waiterState, waiterId](WorkerTimerOutcome outcome) noexcept {
                 if (outcome == WorkerTimerOutcome::kExpired) {
-                    (void)queue->expire(waiterId);
+                    (void)waiterState->queue.expire(waiterId);
                 }
             });
         }
 
-        std::shared_ptr<AcquireCancellationState> cancellationState;
-        if (stopToken.stoppable()) {
-            cancellationState = std::make_shared<AcquireCancellationState>(scheduler.waiters_, waiterId);
-        }
-        auto stopRegistration = stopToken.registerCallback([worker, cancellationState] {
-            if (cancellationState == nullptr) {
-                return;
-            }
-            WorkerHandleAccess::deferOrTerminate(*worker, [cancellationState] {
-                auto* queue = cancellationState->queue.load(std::memory_order_acquire);
-                if (queue != nullptr) {
-                    (void)queue->cancel(cancellationState->waiterId);
-                }
-            });
+        auto stopRegistration = stopToken.registerCallback([worker, waiterState, waiterId] {
+            // Registration setup only borrows the pool-level state. An actual
+            // off-worker cancellation retains it for the queued continuation;
+            // waiter ids make late continuations no-ops after completion.
+            waiterState->requestCancellation(*worker, waiterId);
         });
         if (stopToken.stoppable()) {
             if (stopToken.stopRequested()) {
-                (void)scheduler.waiters_.cancel(waiterId);
+                (void)waiterState->queue.cancel(waiterId);
             }
         }
 
         auto result = co_await waiter;
-        if (cancellationState != nullptr) {
-            cancellationState->queue.store(nullptr, std::memory_order_release);
-        }
         deadlineTimer.cancel();
         stopRegistration.reset();
         co_return result;
@@ -180,7 +176,7 @@ public:
         if (busy_[slot] == 0) {
             return PoolLeaseReleaseStatus::kAlreadyReleased;
         }
-        if (!closing_ && waiters_.resumeNext(slot)) {
+        if (!closing_ && waiterState_->queue.resumeNext(slot)) {
             return PoolLeaseReleaseStatus::kTransferredToWaiter;
         }
         busy_[slot] = 0;
@@ -193,12 +189,12 @@ public:
             return false;
         }
         closing_ = true;
-        waiters_.closeAll();
+        waiterState_->queue.closeAll();
         return true;
     }
 
     void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
-        waiters_.expireDeadlines(now);
+        waiterState_->queue.expireDeadlines(now);
     }
 
     [[nodiscard]] bool closing() const noexcept {
@@ -208,7 +204,9 @@ public:
 private:
     std::pmr::vector<std::size_t> freeSlots_;
     std::pmr::vector<std::uint8_t> busy_;
-    PoolWaiterQueue waiters_;
+    // Allocated once with the process PMR pool. Contended acquires borrow it;
+    // only an actual off-worker cancellation retains ownership while queued.
+    std::shared_ptr<WaiterState> waiterState_;
     std::size_t reservedAcquires_{0};
     std::uint64_t nextWaiterId_{0};
     bool closing_{false};

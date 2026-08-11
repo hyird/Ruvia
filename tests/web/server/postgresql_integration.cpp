@@ -1,16 +1,19 @@
 #include "db_integration_fixture.h"
 
+#include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 
 #include <asio/bind_executor.hpp>
 #include <asio/io_context.hpp>
+#include <asio/steady_timer.hpp>
 
 #include <array>
 #include <chrono>
 #include <cstdio>
 #include <exception>
+#include <memory>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
@@ -39,11 +42,14 @@ using ruvia::testing::dbThrowsOn;
 template <typename Factory>
 void runTask(Factory&& factory) {
     asio::io_context ioContext(1);
+    auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 64});
+    const auto worker = attachment.loop().handle();
     std::exception_ptr exception;
-    ruvia::detail::asyncStartTask(factory(ioContext), asio::bind_executor(ioContext.get_executor(), [&exception](ruvia::detail::TaskCompletionResult<void> result) {
+    ruvia::detail::asyncStartTask(factory(ioContext, worker), asio::bind_executor(ioContext.get_executor(), [&exception, &attachment](ruvia::detail::TaskCompletionResult<void> result) {
         if (const auto* failure = result.failure()) {
             exception = failure->exception();
         }
+        attachment.stop();
     }));
     ioContext.run();
     if (exception != nullptr) {
@@ -51,10 +57,14 @@ void runTask(Factory&& factory) {
     }
 }
 
-ruvia::Task<void> withDatabase(asio::io_context& ioContext, ruvia::DbConfig config, bool cleanupOnly) {
+ruvia::Task<void> withDatabase(
+    asio::io_context& ioContext,
+    const ruvia::WorkerHandle& worker,
+    ruvia::DbConfig config,
+    bool cleanupOnly) {
     auto* resource = std::pmr::get_default_resource();
     const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(config, resource)}};
-    ruvia::detail::DbRegistry registry(ioContext, resource, definitions);
+    ruvia::detail::DbRegistry registry(ioContext, resource, definitions, &worker);
     co_await registry.connect();
     ruvia::detail::ScopedOperationScope operationScope;
     auto db = registry.get(resource, operationScope);
@@ -73,6 +83,67 @@ ruvia::Task<void> withDatabase(asio::io_context& ioContext, ruvia::DbConfig conf
     dbRequire(typed.rows()[0][1].text() == "-42", "integer binding failed");
     dbRequire(typed.rows()[0][2].text() == "t", "boolean binding failed");
     dbRequire(typed.rows()[0][3].text() == "t", "NULL binding failed");
+
+    {
+        auto stop = std::make_shared<ruvia::detail::StopSource>();
+        asio::steady_timer cancel(ioContext, std::chrono::milliseconds(50));
+        cancel.async_wait([stop](std::error_code error) {
+            if (!error) {
+                stop->requestStop();
+            }
+        });
+        bool cancelled = false;
+        try {
+            (void)co_await db.withOptions({.stopToken = stop->token()}).query("SELECT pg_sleep(5)");
+        } catch (const ruvia::DbError& error) {
+            cancelled = error.code() == ruvia::DbError::Code::kCancelled;
+        }
+        dbRequire(cancelled, "active PostgreSQL query did not report kCancelled");
+        auto recovered = co_await db.query("SELECT 1");
+        dbRequire(recovered.rows()[0][0].text() == "1", "PostgreSQL did not reconnect after query cancellation");
+    }
+
+    {
+        auto stop = std::make_shared<ruvia::detail::StopSource>();
+        auto transaction = co_await db.withOptions({.stopToken = stop->token()}).beginTransaction();
+        asio::steady_timer cancel(ioContext, std::chrono::milliseconds(50));
+        cancel.async_wait([stop](std::error_code error) {
+            if (!error) {
+                stop->requestStop();
+            }
+        });
+        bool cancelled = false;
+        try {
+            (void)co_await transaction.query("SELECT pg_sleep(5)");
+        } catch (const ruvia::DbError& error) {
+            cancelled = error.code() == ruvia::DbError::Code::kCancelled;
+        }
+        dbRequire(cancelled && !transaction.active(), "active PostgreSQL transaction did not fail with kCancelled");
+        auto recovered = co_await db.query("SELECT 1");
+        dbRequire(recovered.rows()[0][0].text() == "1", "PostgreSQL did not reconnect after transaction cancellation");
+    }
+
+    {
+        auto stop = std::make_shared<ruvia::detail::StopSource>();
+        auto stream = co_await db.withOptions({.stopToken = stop->token()})
+                          .queryStream("SELECT i, pg_sleep(0.01) FROM generate_series(1, 1000) AS i");
+        asio::steady_timer cancel(ioContext, std::chrono::milliseconds(50));
+        cancel.async_wait([stop](std::error_code error) {
+            if (!error) {
+                stop->requestStop();
+            }
+        });
+        bool cancelled = false;
+        try {
+            while (co_await stream.read()) {
+            }
+        } catch (const ruvia::DbError& error) {
+            cancelled = error.code() == ruvia::DbError::Code::kCancelled;
+        }
+        dbRequire(cancelled && !stream.active(), "active PostgreSQL stream did not fail with kCancelled");
+        auto recovered = co_await db.query("SELECT 1");
+        dbRequire(recovered.rows()[0][0].text() == "1", "PostgreSQL did not reconnect after stream cancellation");
+    }
 
     // The same bindings passed as ordinary arguments must reach the server in
     // the same order and with the same types as the prepared span above.
@@ -140,7 +211,7 @@ int main() {
 
     try {
         const auto config = testConfig();
-        runTask([&](asio::io_context& ioContext) { return withDatabase(ioContext, config, true); });
+        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker) { return withDatabase(ioContext, worker, config, true); });
 
         const std::array migrations{ruvia::DbMigration{"001_create_items",
             "CREATE TABLE ruvia_pg_integration_items ("
@@ -179,8 +250,8 @@ int main() {
         dbRequire(concurrent.applied().size() == 1,
             "an unwrapped migration was not applied outside a transaction block");
 
-        runTask([&](asio::io_context& ioContext) { return withDatabase(ioContext, config, false); });
-        runTask([&](asio::io_context& ioContext) { return withDatabase(ioContext, config, true); });
+        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker) { return withDatabase(ioContext, worker, config, false); });
+        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker) { return withDatabase(ioContext, worker, config, true); });
         std::puts("PostgreSQL integration passed");
         return 0;
     } catch (const std::exception& error) {

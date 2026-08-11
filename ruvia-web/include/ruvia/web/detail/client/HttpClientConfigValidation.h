@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
@@ -20,6 +21,18 @@ inline void validateHttpClientUserAgent(std::string_view userAgent) {
 
 inline void validateHttpClientOperationOptions(const HttpClientOperationOptions& options) {
     ensurePositiveOptionalDuration(options.timeout, "http client operation timeout must be greater than zero");
+}
+
+[[nodiscard]] inline HttpClientOperationOptions mergeHttpClientOperationOptions(
+    const HttpClientOperationOptions& base,
+    HttpClientOperationOptions overrides) {
+    HttpClientOperationOptions merged = base;
+    if (overrides.timeout.has_value() &&
+        (!merged.timeout.has_value() || *overrides.timeout < *merged.timeout)) {
+        merged.timeout = overrides.timeout;
+    }
+    merged.stopToken = combineStopTokens(base.stopToken, std::move(overrides.stopToken));
+    return merged;
 }
 
 template <typename Config>

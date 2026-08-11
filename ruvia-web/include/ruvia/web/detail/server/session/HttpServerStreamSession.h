@@ -52,7 +52,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
     // each with its own forwarding headers. Falls back to the peer until the
     // first request line is parsed.
     auto clientAddress = remoteAddress;
-    Http1RequestSequence requestSequence(options_.keepaliveRequests);
+    Http1RequestSequence requestSequence(options_.maxRequestsPerConnection);
     std::size_t usedBytes = 0;
     ConnectionWorkSet* workSet = nullptr;
     WorkSetReturn workSetReturn(workSetPool_, workSet);
@@ -61,10 +61,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
     std::array<char, kIdleResidentReadBytes> idleReadBuffer;
     std::size_t idleReadBytes = 0;
     // nginx-aligned wait semantics. The first request on a connection, and any
-    // partially-received request header, are bounded by clientHeaderTimeout
+    // partially-received request header, are bounded by requestHeaderTimeout
     // (kReadingInitial). The idle wait for the *next* request on a reused
     // keep-alive connection -- no bytes of it received yet -- is bounded by
-    // keepaliveTimeout (kIdle), matching nginx keepalive_timeout. Flips true
+    // idleTimeout (kIdle), matching nginx keepalive_timeout. Flips true
     // once a request has been served so later idle waits use the keepalive
     // deadline instead of the header deadline.
     bool servedKeepaliveRequest = false;
@@ -87,8 +87,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
         if constexpr (kPlainTcp) {
             if (plainTcpShouldWaitForNextRequest(usedBytes)) {
                 releaseIdleWorkSet(workSetPool_, workSet);
-                // Idle wait for the next keep-alive request uses keepaliveTimeout;
-                // the connection's first request uses clientHeaderTimeout.
+                // Idle wait for the next keep-alive request uses idleTimeout;
+                // the connection's first request uses requestHeaderTimeout.
                 scannerEntry.setPhase(servedKeepaliveRequest ? ConnectionScanner::Phase::kIdle : ConnectionScanner::Phase::kReadingInitial);
                 auto idleCompletion = co_await asyncAsio<std::size_t>([&socket, &idleReadBuffer](auto handler) mutable { socket.async_read_some(asio::buffer(idleReadBuffer.data(), idleReadBuffer.size()), std::move(handler)); });
                 const auto idleEc = idleCompletion.errorCode();
@@ -170,11 +170,11 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
             parser.parseHead(bufferView, parsed, headerSearchOffset);
             HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
             if (const auto* requestHead = parsed.headReady()) {
-                // Reset phase so clientHeaderTimeout stops counting against dispatch
+                // Reset phase so requestHeaderTimeout stops counting against dispatch
                 // time. Body readers will set kReadingPayload on their own; the
                 // streaming/websocket paths set their own phases below; the
                 // buffered write path sets kWriting before responding. Until
-                // one of those transitions, keepaliveTimeout governs as the
+                // one of those transitions, idleTimeout governs as the
                 // deadman switch for hung handlers.
                 scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
                 // Negotiate against every coding first. A document root or a
@@ -376,8 +376,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
             headerSearchOffset = usedBytes > 3 ? usedBytes - 3 : 0;
 
             // With no request bytes yet on a reused connection this read is the
-            // keepalive idle wait (keepaliveTimeout); once any header bytes are
-            // buffered, or on the first request, clientHeaderTimeout governs.
+            // keepalive idle wait (idleTimeout); once any header bytes are
+            // buffered, or on the first request, requestHeaderTimeout governs.
             scannerEntry.setPhase((usedBytes == 0 && servedKeepaliveRequest) ? ConnectionScanner::Phase::kIdle : ConnectionScanner::Phase::kReadingInitial);
             growReadBuffer(readBuffer, usedBytes);
             if (usedBytes == readBuffer.size()) {

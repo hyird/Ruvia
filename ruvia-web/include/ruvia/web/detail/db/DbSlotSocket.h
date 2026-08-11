@@ -12,11 +12,13 @@
 
 namespace ruvia::detail {
 
-// Persistent ASIO wrapper around a database driver's native connection socket.
+// Transient ASIO wrapper around a database driver's native connection socket.
 //
-// MariaDB and libpq retain ownership while ASIO waits for readiness. On Windows
-// the IOCP backend permanently associates a handle with the completion port,
-// so the wrapper is assigned once per native socket and reused across waits.
+// MariaDB and libpq retain ownership of their native socket. ASIO waits on a
+// duplicate owned solely by this wrapper, so cleanup never depends on
+// basic_socket::release(), whose Windows IOCP cleanup can fail after cancellation
+// or after the driver has already closed its handle, and can never create two
+// owners of the driver's handle.
 struct DbSlotSocket final {
     explicit DbSlotSocket(asio::io_context& ioContext);
 
@@ -38,10 +40,9 @@ struct DbSlotSocket final {
     // supposed to start it.
     [[nodiscard]] bool makeNonBlocking() noexcept;
     void cancel() noexcept;
-    // Detaches Asio without closing the driver-owned native descriptor.
-    // Failure cannot be ignored: destroying an attached wrapper would close a
-    // handle that MariaDB/libpq still owns.
-    [[nodiscard]] bool release() noexcept;
+    // Closes only the ASIO-owned duplicate. The driver's original socket stays
+    // valid until mysql_close()/PQfinish() disposes it.
+    void reset() noexcept;
 };
 
 }  // namespace ruvia::detail

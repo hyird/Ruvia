@@ -1,17 +1,17 @@
 // Regression: the TLS handshake's initial-read deadline must not outlive the
 // handshake. handleSession registered a ConnectionScanner entry for the TLS
-// handshake (phase kReadingInitial, governed by clientHeaderTimeout). If that
+// handshake (phase kReadingInitial, governed by requestHeaderTimeout). If that
 // entry stays registered across the session -- the bug fixed alongside this
-// test -- the scanner force-closes the connection one clientHeaderTimeout after
+// test -- the scanner force-closes the connection one requestHeaderTimeout after
 // the handshake regardless of what the session is doing, because the entry is
 // frozen at kReadingInitial and never refreshed while the session runs under
 // its own entry.
 //
 // The isolating scenario is a slow-but-valid body upload: while the body
 // streams in, the session's own entry sits in kReadingPayload governed by the
-// long clientBodyTimeout, so only a leaked handshake entry (short
-// clientHeaderTimeout) can close the connection. The upload deliberately spans
-// several clientHeaderTimeouts; with the handshake deadline released it must
+// long requestBodyTimeout, so only a leaked handshake entry (short
+// requestHeaderTimeout) can close the connection. The upload deliberately spans
+// several requestHeaderTimeouts; with the handshake deadline released it must
 // complete and be echoed back.
 
 #include <chrono>
@@ -46,10 +46,10 @@ namespace {
 using namespace std::chrono_literals;
 
 // A short handshake/header deadline against a long body deadline: the upload
-// below outlives clientHeaderTimeout many times over while staying far under
-// clientBodyTimeout, so a close can only come from a leaked handshake entry.
-constexpr auto kClientHeaderTimeout = 300ms;
-constexpr auto kClientBodyTimeout = 30s;
+// below outlives requestHeaderTimeout many times over while staying far under
+// requestBodyTimeout, so a close can only come from a leaked handshake entry.
+constexpr auto kRequestHeaderTimeout = 300ms;
+constexpr auto kRequestBodyTimeout = 30s;
 constexpr int kBodyChunks = 6;
 constexpr auto kChunkGap = 150ms;  // 6 * 150ms = 900ms upload, 3x the header timeout
 
@@ -155,7 +155,7 @@ int main() {
 
     ruvia::detail::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
-    // Consuming the body drives the kReadingPayload phase (clientBodyTimeout),
+    // Consuming the body drives the kReadingPayload phase (requestBodyTimeout),
     // then echoes it so the client can confirm the whole upload was received.
     auto handler = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
         const auto body = co_await context.req().text();
@@ -169,8 +169,8 @@ int main() {
     tls.identity.certificateChainFile = std::pmr::string(certPath.string(), std::pmr::get_default_resource());
     tls.identity.privateKeyFile = std::pmr::string(keyPath.string(), std::pmr::get_default_resource());
     options.transport = std::move(tls);
-    options.clientHeaderTimeout = kClientHeaderTimeout;
-    options.clientBodyTimeout = kClientBodyTimeout;
+    options.requestHeaderTimeout = kRequestHeaderTimeout;
+    options.requestBodyTimeout = kRequestBodyTimeout;
     options.scanInterval = 50ms;  // fire a leaked handshake deadline promptly
 
     ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, std::move(options));
@@ -198,7 +198,7 @@ int main() {
             const std::string head = "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: " + std::to_string(kBodyChunks) + "\r\n\r\n";
             asio::write(stream, asio::buffer(head), ec);
 
-            // Trickle the body across several clientHeaderTimeouts. A leaked
+            // Trickle the body across several requestHeaderTimeouts. A leaked
             // handshake deadline closes the socket partway through, so a write
             // (or the response read) fails.
             bool uploadOk = !ec;

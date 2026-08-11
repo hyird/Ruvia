@@ -106,9 +106,7 @@ RedisOperationOptions mergeRedisOperationOptions(const RedisOperationOptions& ba
     if (overrides.timeout.has_value() && (!merged.timeout.has_value() || *overrides.timeout < *merged.timeout)) {
         merged.timeout = overrides.timeout;
     }
-    if (overrides.stopToken.stoppable()) {
-        merged.stopToken = std::move(overrides.stopToken);
-    }
+    merged.stopToken = combineStopTokens(base.stopToken, std::move(overrides.stopToken));
     return merged;
 }
 

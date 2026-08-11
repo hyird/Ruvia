@@ -488,7 +488,7 @@ RUVIA_TEST(sansio_driver_h2_keepalive_requests_drains_connection) {
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
             const auto workerHandle = testWorker(io);
-            fixture.options.keepaliveRequests = 1;
+            fixture.options.maxRequestsPerConnection = 1;
             co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(sock, impl.routeTable(), worker, fixture.context(ruvia::detail::ContextServices{}.withPlainTransport("127.0.0.1").withWorker(workerHandle))));
         },
         asio::detached);

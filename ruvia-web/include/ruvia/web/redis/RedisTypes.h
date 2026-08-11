@@ -156,10 +156,29 @@ struct RedisSetOptions final {
 };
 
 namespace detail {
-
 struct RedisTypesAccess;
+}
 
-}  // namespace detail
+class RedisSetResult final {
+public:
+    [[nodiscard]] constexpr bool applied() const noexcept {
+        return applied_;
+    }
+
+    [[nodiscard]] const std::optional<std::pmr::string>& previous() const& noexcept {
+        return previous_;
+    }
+    const std::optional<std::pmr::string>& previous() const&& = delete;
+
+private:
+    friend struct detail::RedisTypesAccess;
+
+    RedisSetResult(bool applied, std::optional<std::pmr::string> previous) noexcept
+        : applied_(applied), previous_(std::move(previous)) {}
+
+    bool applied_{false};
+    std::optional<std::pmr::string> previous_;
+};
 
 class RedisScanCursor final {
 public:

@@ -115,15 +115,10 @@ ScopedOperation<std::pmr::vector<std::optional<std::pmr::string>>> RedisHandle::
     return scoped(detail::redisOptionalStringArrayCommand(executor(), detail::redisCommandWithKeys("MGET", keys, resource_), resource_));
 }
 
-ScopedOperation<void> RedisHandle::set(std::string_view key, std::string_view value) const {
-    requireActive();
-    return scoped(detail::redisOkCommand(executor(), detail::ownRedisArgs({"SET", key, value}, resource_), resource_));
-}
-
-ScopedOperation<std::optional<std::pmr::string>> RedisHandle::set(std::string_view key, std::string_view value, RedisSetOptions options) const {
+ScopedOperation<RedisSetResult> RedisHandle::set(std::string_view key, std::string_view value, RedisSetOptions options) const {
     requireActive();
     auto args = detail::redisSetArgs(key, value, options, resource_);
-    return scoped(detail::executeRedisSetWithOptions(executor(), std::move(args), options.returnPrevious, resource_));
+    return scoped(detail::executeRedisSet(executor(), std::move(args), std::move(options), resource_));
 }
 
 ScopedOperation<void> RedisHandle::mset(std::span<const std::pair<std::string_view, std::string_view>> items) const {
@@ -131,26 +126,9 @@ ScopedOperation<void> RedisHandle::mset(std::span<const std::pair<std::string_vi
     return scoped(detail::redisOkCommand(executor(), detail::redisMsetArgs(items, resource_), resource_));
 }
 
-ScopedOperation<void> RedisHandle::setEx(std::string_view key, std::chrono::seconds ttl, std::string_view value) const {
-    requireActive();
-    requirePositiveRedisTtl(ttl, "redis setEx TTL must be greater than zero");
-    auto ttlValue = detail::redisSecondsString(ttl, resource_);
-    return scoped(detail::redisOkCommand(executor(), detail::ownRedisArgs({"SETEX", key, std::string_view(ttlValue), value}, resource_), resource_));
-}
-
-ScopedOperation<bool> RedisHandle::setNx(std::string_view key, std::string_view value) const {
-    requireActive();
-    return scoped(detail::executeRedisSetNx(executor(), detail::ownRedisArgs({"SET", key, value, "NX"}, resource_), resource_));
-}
-
 ScopedOperation<std::optional<std::pmr::string>> RedisHandle::getDel(std::string_view key) const {
     requireActive();
     return scoped(detail::redisStringCommand(executor(), detail::ownRedisArgs({"GETDEL", key}, resource_), resource_));
-}
-
-ScopedOperation<std::optional<std::pmr::string>> RedisHandle::getSet(std::string_view key, std::string_view value) const {
-    requireActive();
-    return scoped(detail::redisStringCommand(executor(), detail::ownRedisArgs({"GETSET", key, value}, resource_), resource_));
 }
 
 ScopedOperation<std::int64_t> RedisHandle::append(std::string_view key, std::string_view value) const {

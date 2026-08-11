@@ -91,10 +91,10 @@ App& App::setWorkerMailboxCapacity(std::size_t capacity) {
     });
 }
 
-App& App::setKeepaliveTimeout(std::optional<std::chrono::milliseconds> timeout) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change keepalive timeout while app is running", [timeout](detail::AppState& state) {
-        detail::ensurePositiveOptionalDuration(timeout, "configured keepalive timeout must be greater than zero");
-        state.options.keepaliveTimeout = timeout;
+App& App::setIdleTimeout(std::optional<std::chrono::milliseconds> timeout) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change idle timeout while app is running", [timeout](detail::AppState& state) {
+        detail::ensurePositiveOptionalDuration(timeout, "configured idle timeout must be greater than zero");
+        state.options.idleTimeout = timeout;
     });
 }
 
@@ -105,24 +105,24 @@ App& App::setConnectionScanInterval(std::chrono::milliseconds interval) {
     });
 }
 
-App& App::setClientHeaderTimeout(std::optional<std::chrono::milliseconds> timeout) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change client header timeout while app is running", [timeout](detail::AppState& state) {
-        detail::ensurePositiveOptionalDuration(timeout, "configured client header timeout must be greater than zero");
-        state.options.clientHeaderTimeout = timeout;
+App& App::setRequestHeaderTimeout(std::optional<std::chrono::milliseconds> timeout) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change request header timeout while app is running", [timeout](detail::AppState& state) {
+        detail::ensurePositiveOptionalDuration(timeout, "configured request header timeout must be greater than zero");
+        state.options.requestHeaderTimeout = timeout;
     });
 }
 
-App& App::setClientBodyTimeout(std::optional<std::chrono::milliseconds> timeout) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change client body timeout while app is running", [timeout](detail::AppState& state) {
-        detail::ensurePositiveOptionalDuration(timeout, "configured client body timeout must be greater than zero");
-        state.options.clientBodyTimeout = timeout;
+App& App::setRequestBodyTimeout(std::optional<std::chrono::milliseconds> timeout) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change request body timeout while app is running", [timeout](detail::AppState& state) {
+        detail::ensurePositiveOptionalDuration(timeout, "configured request body timeout must be greater than zero");
+        state.options.requestBodyTimeout = timeout;
     });
 }
 
-App& App::setSendTimeout(std::optional<std::chrono::milliseconds> timeout) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change send timeout while app is running", [timeout](detail::AppState& state) {
-        detail::ensurePositiveOptionalDuration(timeout, "configured send timeout must be greater than zero");
-        state.options.sendTimeout = timeout;
+App& App::setWriteTimeout(std::optional<std::chrono::milliseconds> timeout) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change write timeout while app is running", [timeout](detail::AppState& state) {
+        detail::ensurePositiveOptionalDuration(timeout, "configured write timeout must be greater than zero");
+        state.options.writeTimeout = timeout;
     });
 }
 
@@ -133,10 +133,10 @@ App& App::setMaxConnectionsPerWorker(std::optional<std::size_t> maxConnections) 
     });
 }
 
-App& App::setKeepaliveRequests(std::optional<std::size_t> maxRequests) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change keepalive request limit while app is running", [maxRequests](detail::AppState& state) {
-        detail::ensurePositiveOptionalSize(maxRequests, "configured keepalive request limit must be greater than zero");
-        state.options.keepaliveRequests = maxRequests;
+App& App::setMaxRequestsPerConnection(std::optional<std::size_t> maxRequests) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change requests-per-connection limit while app is running", [maxRequests](detail::AppState& state) {
+        detail::ensurePositiveOptionalSize(maxRequests, "configured requests-per-connection limit must be greater than zero");
+        state.options.maxRequestsPerConnection = maxRequests;
     });
 }
 

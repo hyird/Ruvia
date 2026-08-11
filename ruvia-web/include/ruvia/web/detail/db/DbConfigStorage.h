@@ -15,7 +15,7 @@ namespace ruvia::detail {
 // its owning PMR domain here.
 struct DbConfigStorage final {
     DbConfigStorage(const DbConfig& source, std::pmr::memory_resource* resource)
-        : driver(source.driver),
+        : driver(source.driver()),
           host(source.host, resource),
           port(source.port),
           username(source.username, resource),

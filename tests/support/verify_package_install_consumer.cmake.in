@@ -321,6 +321,67 @@ ${_expectations}
     endif()
 endforeach()
 
+if(_component_available_http)
+    set(_http_protocol_consumer "${_consumer_root}/http_public_sansio")
+    file(MAKE_DIRECTORY "${_http_protocol_consumer}")
+    file(WRITE "${_http_protocol_consumer}/main.cpp" [=[
+#include <array>
+#include <memory_resource>
+#include <string>
+
+#include <ruvia/http/Hpack.h>
+#include <ruvia/http/Http1RequestBodyPlan.h>
+#include <ruvia/http/Http2Connection.h>
+#include <ruvia/http/Http2Framing.h>
+#include <ruvia/http/HttpExpectations.h>
+#include <ruvia/http/HttpTransferCoding.h>
+#include <ruvia/http/Sse.h>
+#include <ruvia/http/WebSocketServerConnection.h>
+
+int main() {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string block(&resource);
+    ruvia::HpackEncoder::encodeHeader(block, "x-installed", "yes");
+    ruvia::HpackDecoder decoder(&resource);
+    std::pair<std::string, std::string> decoded;
+    const auto result = decoder.decode(block, &decoded, [](void* target, std::string_view name, std::string_view value) {
+        auto& field = *static_cast<std::pair<std::string, std::string>*>(target);
+        field.first.assign(name);
+        field.second.assign(value);
+        return true;
+    });
+    if (!result.decoded() || decoded.first != "x-installed" || decoded.second != "yes") return 1;
+
+    std::array<char, ruvia::kHttp2FrameHeaderBytes> frame{};
+    if (!ruvia::encodeHttp2FrameHeader(frame, 0, ruvia::Http2FrameType::kSettings, 0, 0)) return 2;
+    const auto parsed = ruvia::parseHttp2FrameHeader(frame);
+    if (!parsed || parsed->type != static_cast<unsigned char>(ruvia::Http2FrameType::kSettings)) return 3;
+
+    ruvia::Http2Connection http2(&resource, ruvia::Http2Role::kClient);
+    http2.beginConnection();
+    if (!http2.pendingOutput().starts_with(ruvia::kHttp2ClientPreface)) return 4;
+
+    std::pmr::string websocketInput(&resource);
+    ruvia::WebSocketServerConnection websocket(websocketInput);
+    if (websocket.submitFrame(ruvia::WebSocketOpcode::kText, "installed") != ruvia::WebSocketFrameSubmitStatus::kAccepted || websocket.outputPlan().bytes().empty()) return 5;
+
+    std::pmr::string event(&resource);
+    ruvia::formatSseMessage(event, ruvia::SseMessage{.data = "installed"});
+    return event == "data: installed\n\n" ? 0 : 6;
+}
+]=])
+    file(WRITE "${_http_protocol_consumer}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(ruvia_http_public_sansio_consumer LANGUAGES CXX)
+find_package(ruvia CONFIG REQUIRED COMPONENTS http)
+add_executable(http_public_sansio main.cpp)
+target_compile_features(http_public_sansio PRIVATE cxx_std_20)
+target_link_libraries(http_public_sansio PRIVATE ruvia::http)
+]=])
+    ruvia_run_consumer("http_public_sansio" PASS "")
+    ruvia_build_and_run_consumer("http_public_sansio" "http_public_sansio")
+endif()
+
 if(_component_available_web)
     set(_controller_consumer "${_consumer_root}/controller_link")
     file(MAKE_DIRECTORY "${_controller_consumer}")

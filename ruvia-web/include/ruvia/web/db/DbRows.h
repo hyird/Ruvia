@@ -95,16 +95,17 @@ private:
     friend class detail::PostgreSqlPool;
 
     struct Lease final {
-        Lease(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource) noexcept;
+        Lease(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, DbOperationOptions options) noexcept;
 
         detail::DbPoolRef client;
         std::size_t slot;
         void* result;
         std::pmr::memory_resource* resource;
+        DbOperationOptions options;
     };
 
     DbStreamResult() noexcept = default;
-    DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource) noexcept;
+    DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, DbOperationOptions options) noexcept;
     void reset() noexcept;
     void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;

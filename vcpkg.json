@@ -1,6 +1,6 @@
 {
   "name": "ruvia",
-  "version-string": "0.1.6",
+  "version-string": "0.2.0",
   "default-features": [
     "runtime",
     "protocol",

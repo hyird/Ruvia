@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <utility>
 
 #include <ruvia/core/MoveOnlyFunction.h>
@@ -47,7 +48,10 @@ public:
     Task* rejected() && = delete;
     const Task* rejected() const&& = delete;
 
-    [[nodiscard]] Task takeRejected() && noexcept {
+    [[nodiscard]] Task takeRejected() && {
+        if (status_ == PostStatus::kAccepted || !rejected_) {
+            throw std::logic_error("accepted post outcome has no rejected task");
+        }
         return std::move(rejected_);
     }
 
@@ -55,7 +59,13 @@ public:
         return PostOutcome(PostStatus::kAccepted);
     }
 
-    [[nodiscard]] static PostOutcome reject(PostStatus status, Task task) noexcept {
+    [[nodiscard]] static PostOutcome reject(PostStatus status, Task task) {
+        if (status == PostStatus::kAccepted) {
+            throw std::invalid_argument("rejected post outcome requires a rejection status");
+        }
+        if (!task) {
+            throw std::invalid_argument("rejected post outcome requires a callable task");
+        }
         return PostOutcome(status, std::move(task));
     }
 
@@ -119,6 +129,7 @@ namespace detail {
 struct WorkerHandleAccess {
     [[nodiscard]] static WorkerHandle make(const std::shared_ptr<WorkerDispatcher>& dispatcher) noexcept;
     static void defer(const WorkerHandle& worker, MoveOnlyFunction<void()> task);
+    [[nodiscard]] static bool deferIfAttached(const WorkerHandle& worker, MoveOnlyFunction<void()> task);
     static void deferOrTerminate(const WorkerHandle& worker, MoveOnlyFunction<void()> task) noexcept;
     static void registerShutdownListener(const WorkerHandle& worker, const std::shared_ptr<WorkerShutdownListener>& listener);
     static void scheduleTimer(const WorkerHandle& worker, WorkerTimerRegistration& registration, std::chrono::steady_clock::time_point deadline, MoveOnlyFunction<void(WorkerTimerOutcome)> completion);

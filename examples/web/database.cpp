@@ -24,8 +24,14 @@ void assignIfPresent(std::string& target, std::optional<std::string_view> value)
 }
 
 ruvia::DbConfig dbConfigFromEnv(const ruvia::Env& env) {
+#if defined(RUVIA_ENABLE_MARIADB) && defined(RUVIA_ENABLE_POSTGRESQL)
     const auto driver = env.get("RUVIA_DB_DRIVER");
     auto config = driver && *driver == "postgresql" ? ruvia::DbConfig::postgreSql() : ruvia::DbConfig::mariaDb();
+#elif defined(RUVIA_ENABLE_MARIADB)
+    auto config = ruvia::DbConfig::mariaDb();
+#else
+    auto config = ruvia::DbConfig::postgreSql();
+#endif
     assignIfPresent(config.host, env.get("RUVIA_DB_HOST"));
     assignIfPresent(config.username, env.get("RUVIA_DB_USER"));
     assignIfPresent(config.password, env.get("RUVIA_DB_PASSWORD"));
@@ -172,13 +178,13 @@ int main() {
         };
 
         if (app.env().get<bool>("RUVIA_DB_MIGRATE").value_or(false)) {
-            if (config.driver == ruvia::DbDriver::kPostgreSql) {
+            if (config.driver() == ruvia::DbDriver::kPostgreSql) {
                 (void)ruvia::DbMigrator::migrate(config, postgreSqlMigrations);
             } else {
                 (void)ruvia::DbMigrator::migrate(config, mariaDbMigrations);
             }
         }
-        DatabaseController::setDriver(config.driver);
+        DatabaseController::setDriver(config.driver());
         app.useDb(config);
     }
 
