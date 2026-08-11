@@ -155,6 +155,17 @@ HttpClientPool::Lease::~Lease() {
 }
 
 void HttpClientPool::close(Connection& connection) noexcept {
+    auto& runtime = *connection.http2Runtime;
+    if (runtime.running) {
+        // A multiplexed connection owns background reader/writer tasks. Route
+        // every terminal close through their shared failure transition so both
+        // drivers and all pending streams are woken before join().
+        failHttp2Session(
+            connection,
+            runtime.generation,
+            std::make_error_code(std::errc::operation_canceled));
+        return;
+    }
     connection.deadlineTimer->cancel();
     connection.deadline.reset();
     connection.resolver.cancel();
@@ -163,11 +174,11 @@ void HttpClientPool::close(Connection& connection) noexcept {
     connection.stream.lowest_layer().close(ignored);
     connection.connected = false;
     connection.protocol = WireProtocol::kUnknown;
-    if (connection.http2Runtime->sessionTasks == 0) {
+    if (runtime.sessionTasks == 0) {
         connection.http2.reset();
-        connection.http2Runtime->running = false;
-        connection.http2Runtime->draining = false;
-        connection.http2Runtime->failed = false;
+        runtime.running = false;
+        runtime.draining = false;
+        runtime.failed = false;
     }
     connection.readBuffer.clear();
     connection.writeBuffer.clear();
@@ -663,9 +674,14 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, Oper
     bool discardConnection = true;
     try {
         co_await ensureConnected(connection, timeout, acquireTimeout, options.stopToken);
+        if (connection.protocol == WireProtocol::kHttp2) {
+            // This lease now shares a multiplexed session with background
+            // drivers and possibly other requests. A request-local failure must
+            // not discard that shared connection.
+            discardConnection = false;
+        }
         HttpClientResponse response(responseResource);
         if (connection.protocol == WireProtocol::kHttp2) {
-            discardConnection = false;
             response = co_await executeHttp2(connection, request, timeout, options.stopToken, responseResource);
         } else {
             // A negotiated HTTP/1 connection can have several operations that
