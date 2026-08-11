@@ -13,9 +13,9 @@
 #include "ruvia/web/Model.h"
 
 struct JsonWriterPoint final {
-    RUVIA_FIELD(x, ruvia::Int64);
-    RUVIA_FIELD(y, ruvia::Int64);
-    RUVIA_MODEL(JsonWriterPoint, x, y);
+    RUVIA_MODEL(JsonWriterPoint,
+        RUVIA_FIELD(x, ruvia::Int64),
+        RUVIA_FIELD(y, ruvia::Int64));
 };
 
 namespace {

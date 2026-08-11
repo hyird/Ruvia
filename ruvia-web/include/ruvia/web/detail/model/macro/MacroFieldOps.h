@@ -3,10 +3,11 @@
 #include "ruvia/web/detail/model/ModelSchema.h"
 #include "ruvia/web/detail/model/macro/MacroCore.h"
 
-// A field declaration lives directly inside a normal struct. The generated
-// accessors deliberately preserve the existing Hono-style model call surface.
+// Field macros produce descriptors consumed once by RUVIA_MODEL. The model
+// macro expands each descriptor into both the member/accessor declaration and
+// the schema entry, so a field cannot be omitted from parsing or serialization.
 
-#define RUVIA_MODEL_DECLARE_FIELD(required, wire, field, type, ...)                                                                                                                                                                                                                                                                                               \
+#define RUVIA_MODEL_DECLARE_FIELD_IMPL(required, wire, field, type, ...)                                                                                                                                                                                                                                                                                          \
 private:                                                                                                                                                                                                                                                                                                                                                          \
     using RuviaFieldType_##field = RUVIA_MODEL_UNPAREN type;                                                                                                                                                                                                                                                                                                      \
     using RuviaFieldOptions_##field = decltype(::ruvia::detail::model::ModelOptions{__VA_ARGS__});                                                                                                                                                                                                                                                                \
@@ -34,13 +35,19 @@ public:                                                                         
     template <typename RuviaFieldValueT>                                                                                                                                                                                                                                                                                                                          \
     auto& field(RuviaFieldValueT&&) && = delete;
 
-#define RUVIA_FIELD(field, type, ...) RUVIA_MODEL_DECLARE_FIELD(true, #field, field, (type), __VA_ARGS__)
+#define RUVIA_FIELD(field, type, ...) (true, #field, field, (type) __VA_OPT__(,) __VA_ARGS__)
 
-#define RUVIA_FIELD_NAME(wire_name, field, type, ...) RUVIA_MODEL_DECLARE_FIELD(true, wire_name, field, (type), __VA_ARGS__)
+#define RUVIA_FIELD_NAME(wire_name, field, type, ...) (true, wire_name, field, (type) __VA_OPT__(,) __VA_ARGS__)
 
-#define RUVIA_OPTIONAL_FIELD(field, type, ...) RUVIA_MODEL_DECLARE_FIELD(false, #field, field, (type), __VA_ARGS__)
+#define RUVIA_OPTIONAL_FIELD(field, type, ...) (false, #field, field, (type) __VA_OPT__(,) __VA_ARGS__)
 
-#define RUVIA_OPTIONAL_FIELD_NAME(wire_name, field, type, ...) RUVIA_MODEL_DECLARE_FIELD(false, wire_name, field, (type), __VA_ARGS__)
+#define RUVIA_OPTIONAL_FIELD_NAME(wire_name, field, type, ...) (false, wire_name, field, (type) __VA_OPT__(,) __VA_ARGS__)
 
-#define RUVIA_MODEL_SCHEMA_FIELD(T, field)                                                                                                               \
+#define RUVIA_MODEL_DECLARE_FIELD(T, descriptor) RUVIA_MODEL_DECLARE_FIELD_EXPAND descriptor
+#define RUVIA_MODEL_DECLARE_FIELD_EXPAND(...) RUVIA_MODEL_DECLARE_FIELD_IMPL(__VA_ARGS__)
+
+#define RUVIA_MODEL_SCHEMA_FIELD(T, descriptor) RUVIA_MODEL_SCHEMA_FIELD_EXPAND(T, descriptor)
+#define RUVIA_MODEL_SCHEMA_FIELD_EXPAND(T, descriptor) RUVIA_MODEL_SCHEMA_FIELD_EXPAND_ARGS(T, RUVIA_MODEL_UNPAREN descriptor)
+#define RUVIA_MODEL_SCHEMA_FIELD_EXPAND_ARGS(T, ...) RUVIA_MODEL_SCHEMA_FIELD_UNPACK(T, __VA_ARGS__)
+#define RUVIA_MODEL_SCHEMA_FIELD_UNPACK(T, required, wire, field, type, ...) \
     ::ruvia::detail::model::ModelFieldDescriptor<&T::ruviaField_##field##_, T::ruviaFieldWireHash_##field, ::ruvia::FixedString{#field}>{},

@@ -137,7 +137,7 @@ template <ValidationTarget Target>
 template <ValidationTarget Target, typename BodyT>
 [[nodiscard]] BodyT parseValidatedFields(Context& c, const RequestNameValueList& fields) {
     static_assert(FormBody<BodyT>::value, "field validator body type must use RUVIA_MODEL");
-    auto parsed = FormBody<BodyT>::parseFields(fields, c.resource());
+    auto parsed = FormBody<BodyT>::parseFieldsPartial(fields, c.resource());
     if (!parsed) {
         throwInvalidValidationTarget<Target>();
     }
@@ -147,9 +147,21 @@ template <ValidationTarget Target, typename BodyT>
 template <ValidationTarget Target, typename BodyT>
 [[nodiscard]] Task<BodyT> parseValidatedBody(Context& c) {
     if constexpr (Target == ValidationTarget::kJson) {
-        co_return co_await c.req().template json<BodyT>();
+        if (!detail::contentTypeMatches(c.req().header("Content-Type").value_or(std::string_view{}), "application/json")) {
+            detail::throwInvalidJsonContentType();
+        }
+        const auto requestBody = co_await c.req().text();
+        auto parsed = JsonBody<BodyT>::parsePartial(requestBody, c.resource());
+        if (!parsed) detail::throwInvalidJsonBody();
+        co_return std::move(*parsed);
     } else if constexpr (Target == ValidationTarget::kForm) {
-        co_return co_await c.req().template form<BodyT>();
+        if (!detail::contentTypeMatches(c.req().header("Content-Type").value_or(std::string_view{}), "application/x-www-form-urlencoded")) {
+            detail::throwInvalidFormContentType();
+        }
+        const auto requestBody = co_await c.req().text();
+        auto parsed = FormBody<BodyT>::parsePartial(requestBody, c.resource());
+        if (!parsed) detail::throwInvalidFormBody();
+        co_return std::move(*parsed);
     } else if constexpr (Target == ValidationTarget::kQuery) {
         co_return parseValidatedFields<Target, BodyT>(c, c.req().queryFields());
     } else if constexpr (Target == ValidationTarget::kParam) {

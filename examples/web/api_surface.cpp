@@ -85,8 +85,8 @@ std::string_view jsonKindName(ruvia::JsonValue::Kind kind) noexcept {
 }
 
 struct SurfaceJsonResponse final {
-    RUVIA_OPTIONAL_FIELD(message, ruvia::String);
-    RUVIA_MODEL(SurfaceJsonResponse, message);
+    RUVIA_MODEL(SurfaceJsonResponse,
+        RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 };
 
 }  // namespace

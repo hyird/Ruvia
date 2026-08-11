@@ -2,19 +2,12 @@
 
 #include "ruvia/web/detail/model/macro/MacroFieldOps.h"
 
-// Unified JSON model body for a normal C++ struct. A model owns one PMR
-// resource, parses JSON/form inputs, preserves per-field validation state, and
-// serializes through the same schema.
-//
-// Contract: every RUVIA_FIELD / RUVIA_OPTIONAL_FIELD declared inside the struct
-// MUST be re-listed in the RUVIA_MODEL(T, ...) field list. A field declared but
-// not listed is absent from the schema -- it is not parsed, validated, or
-// serialized, and no diagnostic fires (C++ has no reflection to compare the
-// declaration set against the list). When adding a field, add it to both
-// places; the compile-time static_assert below only verifies that every listed
-// field is a real member, never the reverse.
+// Unified JSON model body for a normal C++ struct. RUVIA_MODEL owns the single
+// field descriptor list used to declare accessors and build the runtime schema.
 
 #define RUVIA_MODEL(T, ...)                                                                                                                      \
+    RUVIA_MODEL_FIELD_COUNT_GUARD(__VA_ARGS__)                                                                                                   \
+    RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_DECLARE_FIELD, T, __VA_ARGS__)                                                                              \
 public:                                                                                                                                          \
     using RuviaModelSchema = void;                                                                                                               \
     explicit T(::std::pmr::memory_resource* resource = nullptr) noexcept                                                                         \
@@ -44,15 +37,33 @@ private:                                                                        
     }                                                                                                                                             \
     static ::std::optional<T> ruviaParseJsonBody(                                                                                                \
         ::std::string_view body, ::std::pmr::memory_resource* resource) {                                                                         \
-        return ruviaParseJsonBodyDepth(                                                                                                           \
+        auto ruviaModel = ruviaParseJsonBodyPartial(                                                                                              \
+            body, resource);                                                                                                                      \
+        if (!ruviaModel || !::ruvia::detail::ModelValidationAccess::structureValid(*ruviaModel)) return ::std::nullopt;                           \
+        return ruviaModel;                                                                                                                        \
+    }                                                                                                                                             \
+    static ::std::optional<T> ruviaParseJsonBodyPartial(                                                                                         \
+        ::std::string_view body, ::std::pmr::memory_resource* resource) {                                                                         \
+        return ruviaParseJsonBodyDepthPartial(                                                                                                    \
             body, resource, 0, ::ruvia::detail::ModelStringStorage::kBorrowed);                                                                   \
     }                                                                                                                                             \
     static ::std::optional<T> ruviaParseJsonBodyOwned(                                                                                           \
         ::std::string_view body, ::std::pmr::memory_resource* resource) {                                                                         \
-        return ruviaParseJsonBodyDepth(                                                                                                           \
+        auto ruviaModel = ruviaParseJsonBodyDepthPartial(                                                                                         \
             body, resource, 0, ::ruvia::detail::ModelStringStorage::kOwned);                                                                      \
+        if (!ruviaModel || !::ruvia::detail::ModelValidationAccess::structureValid(*ruviaModel)) return ::std::nullopt;                           \
+        return ruviaModel;                                                                                                                        \
     }                                                                                                                                             \
     static ::std::optional<T> ruviaParseJsonBodyDepth(                                                                                           \
+        ::std::string_view body,                                                                                                                  \
+        ::std::pmr::memory_resource* resource,                                                                                                   \
+        ::std::size_t depth,                                                                                                                      \
+        ::ruvia::detail::ModelStringStorage ruviaStringStorage) {                                                                                 \
+        auto ruviaModel = ruviaParseJsonBodyDepthPartial(body, resource, depth, ruviaStringStorage);                                              \
+        if (!ruviaModel || !::ruvia::detail::ModelValidationAccess::structureValid(*ruviaModel)) return ::std::nullopt;                           \
+        return ruviaModel;                                                                                                                        \
+    }                                                                                                                                             \
+    static ::std::optional<T> ruviaParseJsonBodyDepthPartial(                                                                                    \
         ::std::string_view body,                                                                                                                  \
         ::std::pmr::memory_resource* resource,                                                                                                   \
         ::std::size_t depth,                                                                                                                      \
@@ -76,12 +87,25 @@ private:                                                                        
     }                                                                                                                                             \
     static ::std::optional<T> ruviaParseFormBody(                                                                                                \
         ::std::string_view body, ::std::pmr::memory_resource* resource) {                                                                         \
+        auto ruviaModel = ruviaParseFormBodyPartial(body, resource);                                                                              \
+        if (!ruviaModel || !::ruvia::detail::ModelValidationAccess::structureValid(*ruviaModel)) return ::std::nullopt;                           \
+        return ruviaModel;                                                                                                                        \
+    }                                                                                                                                             \
+    static ::std::optional<T> ruviaParseFormBodyPartial(                                                                                         \
+        ::std::string_view body, ::std::pmr::memory_resource* resource) {                                                                         \
         auto form = ::ruvia::FormObject::parse(body, resource);                                                                                   \
         if (!form) return ::std::nullopt;                                                                                                         \
         return ruviaMaterializeFormInput(                                                                                                         \
             ::ruvia::detail::makeFormModelInput(form->view(), resource));                                                                         \
     }                                                                                                                                             \
     static ::std::optional<T> ruviaParseFormFields(                                                                                              \
+        const ::ruvia::RequestNameValueList& fields,                                                                                              \
+        ::std::pmr::memory_resource* resource) {                                                                                                 \
+        auto ruviaModel = ruviaParseFormFieldsPartial(fields, resource);                                                                          \
+        if (!ruviaModel || !::ruvia::detail::ModelValidationAccess::structureValid(*ruviaModel)) return ::std::nullopt;                           \
+        return ruviaModel;                                                                                                                        \
+    }                                                                                                                                             \
+    static ::std::optional<T> ruviaParseFormFieldsPartial(                                                                                       \
         const ::ruvia::RequestNameValueList& fields,                                                                                              \
         ::std::pmr::memory_resource* resource) {                                                                                                 \
         return ruviaMaterializeFormInput(                                                                                                         \
@@ -241,22 +265,6 @@ private:                                                                        
                 }                                                                                                                                 \
             });                                                                                                                                   \
         return size;                                                                                                                              \
-    }                                                                                                                                             \
-    template <typename RuviaValidatorT>                                                                                                           \
-    void ruviaValidateRequired(::std::string_view prefix, RuviaValidatorT& validator) const {                                                    \
-        ::ruvia::detail::model::visitModelFields(                                                                                                \
-            *this,                                                                                                                                \
-            ruviaSchema(),                                                                                                                        \
-            [&prefix, &validator](const auto&, const auto& ruviaSlot) {                                                                           \
-                if constexpr (::std::remove_cvref_t<decltype(ruviaSlot)>::required) {                                                            \
-                    if (ruviaSlot.state() == ::ruvia::detail::ModelFieldState::kMissing) {                                                       \
-                        ::std::pmr::string ruviaPath(validator.resource());                                                                        \
-                        ::ruvia::detail::model::appendPath(                                                                                       \
-                            ruviaPath, prefix, ruviaSlot.wireName());                                                                              \
-                        validator.add(ruviaPath, "required", "is required");                                                                     \
-                    }                                                                                                                             \
-                }                                                                                                                                 \
-            });                                                                                                                                   \
     }                                                                                                                                             \
     ::std::pmr::memory_resource* ruviaResource_;                                                                                                 \
     static_assert(::ruvia::JsonBody<T>::value, "RUVIA_MODEL registered " #T)

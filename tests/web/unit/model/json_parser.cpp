@@ -4,6 +4,8 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/web/Validation.h"
+
 RUVIA_TEST(model_json_parser_dispatches_decoded_keys) {
     std::pmr::monotonic_buffer_resource resource;
     const auto parsed = ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"mess\u0061ge":"ready"})", &resource);
@@ -20,7 +22,8 @@ RUVIA_TEST(model_json_parser_dispatches_decoded_keys) {
 
 RUVIA_TEST(model_json_parser_keeps_field_errors_separate_from_document_errors) {
     std::pmr::monotonic_buffer_resource resource;
-    const auto parsed = ruvia::JsonBody<NestedModelItem>::parse(R"({"id":"wrong","label":"still parsed"})", &resource);
+    RUVIA_CHECK(!ruvia::JsonBody<NestedModelItem>::parse(R"({"id":"wrong","label":"still parsed"})", &resource).has_value());
+    const auto parsed = ruvia::JsonBody<NestedModelItem>::parsePartial(R"({"id":"wrong","label":"still parsed"})", &resource);
     RUVIA_CHECK(parsed.has_value());
     if (!parsed) {
         return;
@@ -41,7 +44,8 @@ RUVIA_TEST(model_json_parser_fully_validates_unknown_and_duplicate_values) {
     RUVIA_CHECK(!ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":"first","message":{"broken":}})", &resource).has_value());
     RUVIA_CHECK(!ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":"first","message":"\ud83d"})", &resource).has_value());
 
-    const auto duplicate = ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":"first","message":"second"})", &resource);
+    RUVIA_CHECK(!ruvia::JsonBody<AccessorSurfaceRequest>::parse(R"({"message":"first","message":"second"})", &resource).has_value());
+    const auto duplicate = ruvia::JsonBody<AccessorSurfaceRequest>::parsePartial(R"({"message":"first","message":"second"})", &resource);
     RUVIA_CHECK(duplicate.has_value());
     if (!duplicate) {
         return;
@@ -52,6 +56,22 @@ RUVIA_TEST(model_json_parser_fully_validates_unknown_and_duplicate_values) {
     }
     RUVIA_CHECK_EQ(duplicate->message()->view(), std::string_view("first"));
     RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(*duplicate) == ruvia::detail::ModelFieldState::kDuplicate);
+}
+
+RUVIA_TEST(model_json_parser_rejects_nested_structure_recursively) {
+    std::pmr::monotonic_buffer_resource resource;
+    constexpr auto body = R"({"primary":{},"items":[{"label":"missing id"}]})";
+    RUVIA_CHECK(!ruvia::JsonBody<NestedModelEnvelope>::parse(body, &resource).has_value());
+
+    const auto partial = ruvia::JsonBody<NestedModelEnvelope>::parsePartial(body, &resource);
+    RUVIA_CHECK(partial.has_value());
+    if (!partial) return;
+
+    ruvia::Validator validator(&resource);
+    ruvia::detail::ModelValidationAccess::validateStructure(*partial, {}, validator);
+    RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("primary.id"));
+    RUVIA_CHECK_EQ(validator.issues()[1].field(), std::string_view("items[0].id"));
 }
 
 RUVIA_TEST(model_json_parser_enforces_depth_while_skipping_unknown_values) {

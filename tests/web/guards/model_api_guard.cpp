@@ -13,13 +13,13 @@
 namespace {
 
 struct ClonePayload final {
-    RUVIA_OPTIONAL_FIELD(message, ruvia::String);
-    RUVIA_MODEL(ClonePayload, message);
+    RUVIA_MODEL(ClonePayload,
+        RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 };
 
 struct SurfaceJsonResponse final {
-    RUVIA_OPTIONAL_FIELD(message, ruvia::String);
-    RUVIA_MODEL(SurfaceJsonResponse, message);
+    RUVIA_MODEL(SurfaceJsonResponse,
+        RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 };
 
 template <typename T>

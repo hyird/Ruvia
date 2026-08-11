@@ -17,9 +17,9 @@ namespace {
 using ruvia::Validator;
 
 struct RequiredOptionalModel final {
-    RUVIA_FIELD(requiredValue, ruvia::String);
-    RUVIA_OPTIONAL_FIELD(optionalValue, ruvia::String);
-    RUVIA_MODEL(RequiredOptionalModel, requiredValue, optionalValue);
+    RUVIA_MODEL(RequiredOptionalModel,
+        RUVIA_FIELD(requiredValue, ruvia::String),
+        RUVIA_OPTIONAL_FIELD(optionalValue, ruvia::String));
 };
 
 }  // namespace
@@ -46,16 +46,17 @@ concept AcceptsRvalueValidatedModel = requires(Bindings& bindings) { bindings.bi
 static_assert(!AcceptsRvalueValidatedModel<ruvia::detail::RequestBindings>);
 
 RUVIA_TEST(unified_model_required_and_optional_fields_are_structural) {
-    auto parsed = ruvia::fromJson<RequiredOptionalModel>("{}");
+    auto parsed = ruvia::JsonBody<RequiredOptionalModel>::parsePartial("{}", std::pmr::get_default_resource());
     RUVIA_CHECK(parsed.has_value());
     if (!parsed) {
         return;
     }
 
     Validator validator;
-    ruvia::detail::ModelValidationAccess::validateRequired(*parsed, {}, validator);
+    ruvia::detail::ModelValidationAccess::validateStructure(*parsed, {}, validator);
     RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{1});
     RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("requiredValue"));
+    RUVIA_CHECK(!ruvia::fromJson<RequiredOptionalModel>("{}").has_value());
 }
 
 RUVIA_TEST(validator_required_flags_absent_values) {
