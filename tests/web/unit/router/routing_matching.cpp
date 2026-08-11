@@ -1,4 +1,5 @@
 #include "routing_fixture.h"
+#include "ruvia/web/BodyLimit.h"
 
 // Routing: registering routes and matching a request to one.
 
@@ -35,6 +36,47 @@ RUVIA_TEST(finalized_route_table_records_route_rate_limit_usage) {
         impl.registerRoute(HttpKnownMethod::kGet, path("/limited"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span(&rateLimit, std::size_t{1}));
         impl.finalize();
         RUVIA_CHECK(impl.routeTable().hasRouteRateLimit());
+    }
+}
+
+RUVIA_TEST(finalized_route_table_carries_the_declared_body_limit) {
+    using SmallBody = ruvia::BodyLimit<16>;
+    using SmallerBody = ruvia::BodyLimit<8>;
+
+    {
+        // Undeclared stays 0, meaning "use the server's limit".
+        ruvia::detail::Router router;
+        auto& impl = ruvia::detail::RouterImpl::from(router);
+        addRoute(impl, "/plain");
+        impl.finalize();
+        const auto resolution = impl.routeTable().resolve(HttpKnownMethod::kGet, "/plain");
+        RUVIA_CHECK(resolution.resolved() != nullptr);
+        RUVIA_CHECK_EQ(resolution.resolved()->route().maxRequestBodyBytes(), std::size_t{0});
+    }
+
+    {
+        ruvia::detail::Router router;
+        auto& impl = ruvia::detail::RouterImpl::from(router);
+        const auto limit = ruvia::detail::makeMiddlewareDescriptor<SmallBody>();
+        impl.registerRoute(HttpKnownMethod::kGet, path("/limited"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span(&limit, std::size_t{1}));
+        impl.finalize();
+        const auto resolution = impl.routeTable().resolve(HttpKnownMethod::kGet, "/limited");
+        RUVIA_CHECK(resolution.resolved() != nullptr);
+        RUVIA_CHECK_EQ(resolution.resolved()->route().maxRequestBodyBytes(), std::size_t{16});
+    }
+
+    {
+        // A controller-wide and a route-specific declaration: the stricter wins,
+        // regardless of which position it sits in.
+        ruvia::detail::Router router;
+        auto& impl = ruvia::detail::RouterImpl::from(router);
+        const auto controllerLimit = ruvia::detail::makeMiddlewareDescriptor<SmallBody>();
+        const auto routeLimit = ruvia::detail::makeMiddlewareDescriptor<SmallerBody>();
+        impl.registerRoute(HttpKnownMethod::kGet, path("/both"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span(&controllerLimit, std::size_t{1}), std::span(&routeLimit, std::size_t{1}));
+        impl.finalize();
+        const auto resolution = impl.routeTable().resolve(HttpKnownMethod::kGet, "/both");
+        RUVIA_CHECK(resolution.resolved() != nullptr);
+        RUVIA_CHECK_EQ(resolution.resolved()->route().maxRequestBodyBytes(), std::size_t{8});
     }
 }
 

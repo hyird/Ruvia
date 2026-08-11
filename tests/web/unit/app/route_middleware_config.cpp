@@ -11,6 +11,7 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Controller.h"
+#include "ruvia/web/BodyLimit.h"
 #include "ruvia/web/RateLimit.h"
 #include "ruvia/web/Testing.h"
 
@@ -43,11 +44,23 @@ public:
     RUVIA_GET("/one", one, ConfiguredByType<2>);
     RUVIA_GET("/two", two, ConfiguredByTwoValues<10, 1000>);
     RUVIA_GET("/limited", limited, ruvia::RouteRateLimit<10, 1000>);
+    RUVIA_POST("/small", small, ruvia::BodyLimit<16>);
+    RUVIA_POST("/default", defaultBody);
     RUVIA_ROUTES_END
 private:
     ruvia::Task<ruvia::HttpResponse> one(ruvia::Context& c) { co_return c.text("one"); }
     ruvia::Task<ruvia::HttpResponse> two(ruvia::Context& c) { co_return c.text("two"); }
     ruvia::Task<ruvia::HttpResponse> limited(ruvia::Context& c) { co_return c.text("limited"); }
+
+    ruvia::Task<ruvia::HttpResponse> small(ruvia::Context& c) {
+        const auto body = co_await c.req().text();
+        co_return c.body(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> defaultBody(ruvia::Context& c) {
+        const auto body = co_await c.req().text();
+        co_return c.body(body);
+    }
 };
 }  // namespace
 
@@ -73,4 +86,20 @@ RUVIA_TEST(route_rate_limit_is_configured_without_a_generated_type) {
     const auto limited = app.request(ruvia::TestRequest::get("/route-config/limited"));
     RUVIA_CHECK_EQ(limited.status(), ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(limited.body(), std::string_view("limited"));
+}
+
+RUVIA_TEST(route_body_limit_is_declared_through_the_type) {
+    ruvia::TestApp app;
+
+    // Within the route's ceiling.
+    const auto small = app.request(ruvia::TestRequest::post("/route-config/small").body("0123456789"));
+    RUVIA_CHECK_EQ(small.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(small.body(), std::string_view("0123456789"));
+
+    // A sibling route without the declaration keeps the app-wide ceiling, so
+    // the same body that the limited route would reject is fine here.
+    const auto oversizeForRoute = std::string(64, 'x');
+    const auto unlimited = app.request(ruvia::TestRequest::post("/route-config/default").body(oversizeForRoute));
+    RUVIA_CHECK_EQ(unlimited.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(unlimited.body().size(), std::size_t{64});
 }

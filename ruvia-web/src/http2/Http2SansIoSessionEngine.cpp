@@ -654,10 +654,12 @@ void Http2SansIoSessionEngine::drainEvents() {
             return;
         }
         auto& requestBody = selectedRoute->body();
+        const auto* resolvedRoute = selectedRoute->resolution().resolved();
         const auto totalLimit = requestBodyByteLimit(
             requestBody.mode(),
             options.maxStreamBodyBytes,
-            options.maxBufferedBodyBytes);
+            options.maxBufferedBodyBytes,
+            resolvedRoute != nullptr ? resolvedRoute->route().maxRequestBodyBytes() : 0);
         const auto stored = requestBody.store(
             bodyChunk->bytes(), totalLimit, options.maxBufferedBodyBytes);
         if (stored.stored() == nullptr) {

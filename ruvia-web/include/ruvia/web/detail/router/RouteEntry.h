@@ -24,6 +24,8 @@ public:
         std::string_view path;
         RouteEndpoint endpoint;
         bool dynamic{false};
+        // 0 = no route-declared ceiling; the server default applies.
+        std::size_t maxRequestBodyBytes{0};
         std::size_t middlewareOffset{0};
         std::size_t middlewareCount{0};
     };
@@ -54,6 +56,13 @@ public:
 
     [[nodiscard]] bool dynamic() const noexcept {
         return dynamic_;
+    }
+
+    // A ceiling declared by one of this route's middlewares, or 0 for none.
+    // Read before the body is accepted, so it bounds what is buffered rather
+    // than what a handler later sees.
+    [[nodiscard]] std::size_t maxRequestBodyBytes() const noexcept {
+        return maxRequestBodyBytes_;
     }
 
     [[nodiscard]] std::span<const std::string_view> paramNames() const noexcept {
@@ -87,6 +96,7 @@ private:
     std::pmr::string path_;
     RouteEndpoint endpoint_;
     bool dynamic_{false};
+    std::size_t maxRequestBodyBytes_{0};
     std::span<const std::string_view> paramNames_{};
     std::size_t middlewareOffset_{0};
     std::size_t middlewareCount_{0};

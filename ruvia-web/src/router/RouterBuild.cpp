@@ -56,6 +56,7 @@ detail::RouteEntry::RouteEntry(detail::ResolvedPmrResourceTag, std::pmr::memory_
       path_(init.path, resource),
       endpoint_(std::move(init.endpoint)),
       dynamic_(init.dynamic),
+      maxRequestBodyBytes_(init.maxRequestBodyBytes),
       middlewareOffset_(init.middlewareOffset),
       middlewareCount_(init.middlewareCount) {}
 
@@ -108,7 +109,7 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
 
     for (const auto& pending : pendingRoutes_) {
         const auto pendingMiddlewares = pending.middlewares();
-        RouteEntry route(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{.method = pending.method(), .methodToken = pending.methodToken(), .path = pending.path(), .endpoint = pending.endpoint().clone(table.resource_), .dynamic = pending.dynamic(), .middlewareOffset = 0, .middlewareCount = 0});
+        RouteEntry route(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{.method = pending.method(), .methodToken = pending.methodToken(), .path = pending.path(), .endpoint = pending.endpoint().clone(table.resource_), .dynamic = pending.dynamic(), .maxRequestBodyBytes = pending.maxRequestBodyBytes(), .middlewareOffset = 0, .middlewareCount = 0});
         // App-wide middleware runs before controller/route middleware on every
         // matched route: each route's contiguous frame range starts with the
         // shared global instances.
@@ -176,7 +177,7 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
         if (conflictsWithExistingHead) {
             continue;
         }
-        RouteEntry shadow(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{.method = HttpKnownMethod::kHead, .path = source.path(), .endpoint = source.endpoint().clone(table.resource_), .dynamic = source.dynamic(), .middlewareOffset = source.middlewareOffset(), .middlewareCount = source.middlewareCount()});
+        RouteEntry shadow(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{.method = HttpKnownMethod::kHead, .path = source.path(), .endpoint = source.endpoint().clone(table.resource_), .dynamic = source.dynamic(), .maxRequestBodyBytes = source.maxRequestBodyBytes(), .middlewareOffset = source.middlewareOffset(), .middlewareCount = source.middlewareCount()});
         table.routes_.push_back(std::move(shadow));
     }
 

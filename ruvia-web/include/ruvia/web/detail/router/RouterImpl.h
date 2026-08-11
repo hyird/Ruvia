@@ -92,6 +92,7 @@ private:
             std::pmr::string path;
             RouteEndpoint endpoint;
             bool dynamic{false};
+            std::size_t maxRequestBodyBytes{0};
             std::pmr::vector<RouteMiddleware> middlewares;
         };
 
@@ -125,6 +126,10 @@ private:
             return middlewares_;
         }
 
+        [[nodiscard]] std::size_t maxRequestBodyBytes() const noexcept {
+            return maxRequestBodyBytes_;
+        }
+
         void setDynamic(bool dynamic) noexcept {
             dynamic_ = dynamic;
         }
@@ -135,6 +140,7 @@ private:
         std::pmr::string path_;
         RouteEndpoint endpoint_;
         bool dynamic_{false};
+        std::size_t maxRequestBodyBytes_{0};
         std::pmr::vector<RouteMiddleware> middlewares_;
     };
 
