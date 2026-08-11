@@ -17,6 +17,7 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Controller.h"
+#include "ruvia/web/SecurityHeaders.h"
 #include "ruvia/web/Testing.h"
 
 struct TestingFacadeEcho final {
@@ -72,6 +73,33 @@ public:
         const TestingFacadeUser user{.name = c.req().header("X-User").value_or("anonymous"), .level = 2};
         const auto binding = c.bindRequestState(user);
         co_await next();
+    }
+};
+
+// Stamps a header so a response shows whether this middleware ran at all.
+class TestingFacadeScoped final : public ruvia::Middleware<TestingFacadeScoped> {
+public:
+    explicit TestingFacadeScoped(std::string_view tag) noexcept
+        : tag_(tag) {}
+
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+        co_await next();
+        c.header("X-Test-Scope", tag_);
+    }
+
+private:
+    std::string_view tag_;
+};
+
+// Declares itself meaningful on a request that matched no route, the way
+// SecurityHeadersMiddleware does.
+class TestingFacadeAlways final : public ruvia::Middleware<TestingFacadeAlways> {
+public:
+    static constexpr bool ruviaRunsOnUnmatchedRequests = true;
+
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+        co_await next();
+        c.header("X-Test-Always", "on");
     }
 };
 
@@ -436,4 +464,129 @@ RUVIA_TEST(testing_facade_builds_a_runtime_shaped_json_body) {
     const auto contentType = response.header("Content-Type");
     RUVIA_CHECK(contentType.has_value());
     RUVIA_CHECK_EQ(*contentType, std::string_view("application/json"));
+}
+
+RUVIA_TEST(testing_facade_path_scoped_middleware_runs_only_under_its_prefix) {
+    ruvia::TestApp app;
+    app.useAt<TestingFacadeScoped>("/t/users", "users");
+
+    // Under the scope, on both the exact prefix path shape and a deeper one.
+    const auto scoped = app.request(ruvia::TestRequest::get("/t/users/42"));
+    RUVIA_CHECK_EQ(scoped.status(), ruvia::http_status::kOk);
+    const auto scopedHeader = scoped.header("X-Test-Scope");
+    RUVIA_CHECK(scopedHeader.has_value());
+    RUVIA_CHECK_EQ(*scopedHeader, std::string_view("users"));
+
+    // A sibling route outside the scope never receives the frame.
+    const auto outside = app.request(ruvia::TestRequest::get("/t/hello"));
+    RUVIA_CHECK_EQ(outside.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK(!outside.header("X-Test-Scope").has_value());
+}
+
+RUVIA_TEST(testing_facade_path_scope_matches_whole_segments_only) {
+    ruvia::TestApp app;
+    // "/t/user" must not scope "/t/users/:id" -- that is a different segment,
+    // not a deeper path.
+    app.useAt<TestingFacadeScoped>("/t/user", "prefix-only");
+
+    const auto response = app.request(ruvia::TestRequest::get("/t/users/42"));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK(!response.header("X-Test-Scope").has_value());
+}
+
+RUVIA_TEST(testing_facade_path_scope_normalizes_a_trailing_slash) {
+    ruvia::TestApp app;
+    app.useAt<TestingFacadeScoped>("/t/users/", "trailing");
+
+    const auto response = app.request(ruvia::TestRequest::get("/t/users/42"));
+    const auto header = response.header("X-Test-Scope");
+    RUVIA_CHECK(header.has_value());
+    RUVIA_CHECK_EQ(*header, std::string_view("trailing"));
+}
+
+RUVIA_TEST(testing_facade_app_wide_middleware_still_runs_everywhere) {
+    ruvia::TestApp app;
+    app.use<TestingFacadeScoped>("global");
+
+    // Bound to names: TestResponse owns its headers, so header() is rightly
+    // rvalue-deleted and a view into a temporary is not obtainable.
+    const auto hello = app.request(ruvia::TestRequest::get("/t/hello"));
+    RUVIA_CHECK(hello.header("X-Test-Scope").has_value());
+    const auto user = app.request(ruvia::TestRequest::get("/t/users/42"));
+    RUVIA_CHECK(user.header("X-Test-Scope").has_value());
+}
+
+RUVIA_TEST(testing_facade_unmatched_middleware_wraps_the_404_terminal) {
+    ruvia::TestApp app;
+    app.use<TestingFacadeAlways>();
+    app.use<TestingFacadeStamp>();
+
+    // A matched route runs both, as before.
+    const auto matched = app.request(ruvia::TestRequest::get("/t/hello"));
+    RUVIA_CHECK_EQ(matched.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK(matched.header("X-Test-Always").has_value());
+    RUVIA_CHECK(matched.header("X-Test-Stamp").has_value());
+
+    // An unmatched one runs only what declared itself for unmatched requests.
+    const auto missing = app.request(ruvia::TestRequest::get("/nope"));
+    RUVIA_CHECK_EQ(missing.status(), ruvia::http_status::kNotFound);
+    const auto always = missing.header("X-Test-Always");
+    RUVIA_CHECK(always.has_value());
+    RUVIA_CHECK_EQ(*always, std::string_view("on"));
+    RUVIA_CHECK(!missing.header("X-Test-Stamp").has_value());
+}
+
+RUVIA_TEST(testing_facade_unmatched_middleware_also_wraps_405_and_501) {
+    ruvia::TestApp app;
+    app.use<TestingFacadeAlways>();
+
+    // Known method, wrong verb for an existing path.
+    const auto wrongMethod = app.request(ruvia::TestRequest::post("/t/hello"));
+    RUVIA_CHECK_EQ(wrongMethod.status(), ruvia::http_status::kMethodNotAllowed);
+    RUVIA_CHECK(wrongMethod.header("X-Test-Always").has_value());
+    // The Allow header the fallback sets must survive the chain.
+    RUVIA_CHECK(wrongMethod.header("Allow").has_value());
+
+    const auto unknownMethod = app.request(ruvia::TestRequest::method("PROPFIND", "/t/hello"));
+    RUVIA_CHECK_EQ(unknownMethod.status(), ruvia::http_status::kNotImplemented);
+    RUVIA_CHECK(unknownMethod.header("X-Test-Always").has_value());
+}
+
+RUVIA_TEST(testing_facade_unmatched_middleware_runs_with_a_custom_not_found_handler) {
+    ruvia::TestApp app;
+    app.use<TestingFacadeAlways>();
+    app.onNotFound(&facadeNotFound);
+
+    const auto missing = app.request(ruvia::TestRequest::get("/nope"));
+    RUVIA_CHECK_EQ(missing.status(), ruvia::http_status::kNotFound);
+    // The application's own fallback body still wins; the chain only wraps it.
+    RUVIA_CHECK_EQ(missing.body(), std::string_view("custom-miss"));
+    RUVIA_CHECK(missing.header("X-Test-Always").has_value());
+}
+
+RUVIA_TEST(testing_facade_without_unmatched_middleware_the_404_path_is_unchanged) {
+    ruvia::TestApp app;
+    app.use<TestingFacadeStamp>();
+
+    const auto missing = app.request(ruvia::TestRequest::get("/nope"));
+    RUVIA_CHECK_EQ(missing.status(), ruvia::http_status::kNotFound);
+    RUVIA_CHECK(!missing.header("X-Test-Stamp").has_value());
+}
+
+RUVIA_TEST(testing_facade_security_headers_reach_unmatched_requests) {
+    // The concrete gap this exists to close: a 404 is an attacker-reachable URL
+    // and needs the same content policy a matched route gets.
+    ruvia::TestApp app;
+    app.use<ruvia::SecurityHeadersMiddleware>();
+
+    const auto matched = app.request(ruvia::TestRequest::get("/t/hello"));
+    RUVIA_CHECK(matched.header("Content-Security-Policy").has_value());
+
+    const auto missing = app.request(ruvia::TestRequest::get("/nope"));
+    RUVIA_CHECK_EQ(missing.status(), ruvia::http_status::kNotFound);
+    const auto policy = missing.header("Content-Security-Policy");
+    RUVIA_CHECK(policy.has_value());
+    RUVIA_CHECK_EQ(*policy, std::string_view("default-src 'self'"));
+    RUVIA_CHECK(missing.header("X-Content-Type-Options").has_value());
+    RUVIA_CHECK(missing.header("X-Frame-Options").has_value());
 }

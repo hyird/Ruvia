@@ -384,7 +384,6 @@ std::optional<std::string_view> Context::requestNegotiate(ContextRequest::Negoti
     const bool prefixMatching = field == ContextRequest::Negotiable::kLanguage;
 
     std::optional<std::string_view> best;
-    int bestSpecificity = -1;
     int bestQuality = 0;
     bool sawField = false;
 
@@ -414,7 +413,6 @@ std::optional<std::string_view> Context::requestNegotiate(ContextRequest::Negoti
         // reads as the server's own preference.
         if (quality > bestQuality) {
             bestQuality = quality;
-            bestSpecificity = specificity;
             best = offered;
         }
     }

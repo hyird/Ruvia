@@ -58,6 +58,9 @@ struct NextState final {
     Context* context{nullptr};
     StreamMiddlewareChainState* streamChain{nullptr};
     const CallableRef<void, Context&>* streamHandler{nullptr};
+    // Set only for the unmatched-request chain, whose terminal is the
+    // 404/405/501 response rather than a route endpoint.
+    const void* unmatchedTerminal{nullptr};
     Control* control{nullptr};
     std::size_t index{0};
     Invocation invocation{Invocation::kReady};

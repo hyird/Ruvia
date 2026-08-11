@@ -124,6 +124,13 @@ void applySecurityHeaders(Context& context, const SecurityHeadersOptions& option
 // SecurityHeadersOptions members already enforce against owning temporaries.
 class SecurityHeadersMiddleware final : public Middleware<SecurityHeadersMiddleware> {
 public:
+    // A 404 is a response to an attacker-reachable URL like any other, so it
+    // needs the same CSP, frame and referrer policy a matched route gets.
+    // Without this the headers were silently absent from every 404, 405 and 501
+    // -- which is also why CORS had to be applied in the response layer instead
+    // of as middleware.
+    static constexpr bool ruviaRunsOnUnmatchedRequests = true;
+
     SecurityHeadersMiddleware() noexcept = default;
 
     explicit SecurityHeadersMiddleware(SecurityHeadersOptions options) noexcept

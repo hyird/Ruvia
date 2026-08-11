@@ -1,3 +1,4 @@
+#include "ruvia/web/detail/router/PrefixFallback.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/router/PathSegments.h"
 
@@ -109,11 +110,33 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
         // App-wide middleware runs before controller/route middleware on every
         // matched route: each route's contiguous frame range starts with the
         // shared global instances.
-        route.setMiddlewareRange(table.middlewareFrames_.size(), globalMiddlewareFrames_.size() + pendingMiddlewares.size());
-        table.middlewareFrames_.insert(table.middlewareFrames_.end(), globalMiddlewareFrames_.begin(), globalMiddlewareFrames_.end());
+        //
+        // A path-scoped registration (useAt) is filtered out HERE, when the
+        // table is built, rather than tested per request: a route outside the
+        // scope simply never receives the frame, so scoping costs the request
+        // path nothing. globalMiddlewareFrames_ and globalMiddlewareDescriptors_
+        // are parallel, so the descriptor at i carries frame i's scope.
+        const auto middlewareOffset = table.middlewareFrames_.size();
+        for (std::size_t i = 0; i < globalMiddlewareFrames_.size(); ++i) {
+            if (!pathIsUnderPrefix(pending.path(), globalMiddlewareDescriptors_[i].prefix())) {
+                continue;
+            }
+            table.middlewareFrames_.push_back(globalMiddlewareFrames_[i]);
+        }
         table.middlewareFrames_.insert(table.middlewareFrames_.end(), pendingMiddlewares.begin(), pendingMiddlewares.end());
+        route.setMiddlewareRange(middlewareOffset, table.middlewareFrames_.size() - middlewareOffset);
         table.routes_.push_back(std::move(route));
     }
+
+    // The unmatched-request block, appended once after every route's range so
+    // it stays contiguous and no route can accidentally include it.
+    table.unmatchedMiddlewareOffset_ = table.middlewareFrames_.size();
+    for (std::size_t i = 0; i < globalMiddlewareFrames_.size(); ++i) {
+        if (globalMiddlewareDescriptors_[i].runsOnUnmatchedRequests()) {
+            table.middlewareFrames_.push_back(globalMiddlewareFrames_[i]);
+        }
+    }
+    table.unmatchedMiddlewareCount_ = table.middlewareFrames_.size() - table.unmatchedMiddlewareOffset_;
 
     const auto originalRouteCount = table.routes_.size();
     const auto conflictsWithHeadRoute = [](const RouteEntry& source, const RouteEntry& headRoute) noexcept {

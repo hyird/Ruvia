@@ -42,7 +42,10 @@ struct TrustedProxyBlock final {
 // The startup-owned trusted set. Empty means "trust nothing", the default.
 class TrustedProxySet final {
 public:
-    explicit TrustedProxySet(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+    TrustedProxySet()
+        : blocks_(std::pmr::get_default_resource()) {}
+
+    explicit TrustedProxySet(std::pmr::memory_resource* resource)
         : blocks_(resource) {}
 
     void add(TrustedProxyBlock block) {

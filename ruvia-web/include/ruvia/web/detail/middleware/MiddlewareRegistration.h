@@ -75,12 +75,37 @@ template <typename MiddlewareT>
     }
 }
 
+// Whether this middleware is meaningful on a request that matched no route.
+// A property of the middleware, not of where it is registered: security headers
+// and request ids belong on a 404 response just as much as on a 200, while a
+// validator or an authorization check has nothing to act on. Declared as
+//     static constexpr bool ruviaRunsOnUnmatchedRequests = true;
+template <typename MiddlewareT>
+[[nodiscard]] constexpr bool middlewareRunsOnUnmatchedRequests() noexcept {
+    if constexpr (requires { MiddlewareT::ruviaRunsOnUnmatchedRequests; }) {
+        return MiddlewareT::ruviaRunsOnUnmatchedRequests;
+    } else {
+        return false;
+    }
+}
+
 // Registers one middleware type together with the arguments every instance of
 // it is constructed from. Arguments are decayed and copied once, at
 // registration; a middleware is built per router materialization, so they must
 // stay readable for the process lifetime rather than the caller's scope.
 // Registering without arguments is the zero-argument case of this, so there is
 // one descriptor shape and one construction path.
+// Copies text onto the process registration resource so a descriptor can hold a
+// view of it. The caller's argument may be a temporary; the descriptor outlives
+// every route table built from it.
+[[nodiscard]] inline std::string_view retainRegistrationText(std::string_view text) {
+    if (text.empty()) {
+        return {};
+    }
+    const auto* stored = constructPmrObject<std::pmr::string>(registrationResource(), text, registrationResource());
+    return std::string_view(*stored);
+}
+
 template <typename MiddlewareT, typename... Args>
 [[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args) {
     static_assert(std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>, "middleware must derive from ruvia::Middleware<MiddlewareT>");
@@ -89,7 +114,7 @@ template <typename MiddlewareT, typename... Args>
 
     using ArgsT = std::tuple<std::decay_t<Args>...>;
     const auto* stored = constructPmrObject<ArgsT>(registrationResource(), std::forward<Args>(args)...);
-    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddleware<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>());
+    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddleware<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>(), middlewareRunsOnUnmatchedRequests<MiddlewareT>());
 }
 
 }  // namespace ruvia::detail
