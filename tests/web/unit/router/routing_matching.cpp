@@ -2,7 +2,7 @@
 
 // Routing: registering routes and matching a request to one.
 
-RUVIA_ROUTE_RATE_LIMIT(TestRouteRateLimit, 1, 1000);
+using TestRouteRateLimit = ruvia::RouteRateLimit<1, 1000>;
 
 RUVIA_TEST(route_rejects_duplicate_validated_model_types_at_registration) {
     ruvia::detail::Router router;
