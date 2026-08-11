@@ -41,7 +41,7 @@ detail::RouteResolution detail::RouteTable::resolveExtensionMethod(std::string_v
     // extensionMethodsFor().
     auto methodMask = allowedMethods(path, HttpKnownMethod::kUnknown);
     const bool extensionRoutes = hasExtensionRoutesFor(path);
-    if (methodMask != 0) {
+    if (methodMask != 0 || extensionRoutes) {
         methodMask |= 1U << methodIndex(HttpKnownMethod::kOptions);
     }
     return RouteResolution::methodNotAllowed(methodMask, extensionRoutes);
@@ -116,7 +116,7 @@ detail::RouteResolution detail::RouteTable::resolve(HttpKnownMethod method, std:
     // an unsupported known method is 405 and OPTIONS must answer with Allow --
     // the mask alone cannot tell that apart from no resource at all.
     const bool extensionRoutes = hasExtensionRoutesFor(path);
-    if (methodMask != 0) {
+    if (methodMask != 0 || extensionRoutes) {
         methodMask |= 1U << methodIndex(HttpKnownMethod::kOptions);
     }
     return RouteResolution::methodNotAllowed(methodMask, extensionRoutes);

@@ -671,7 +671,8 @@ RUVIA_TEST(testing_facade_allow_header_names_extension_methods) {
     RUVIA_CHECK_EQ(davOnly.status(), ruvia::http_status::kMethodNotAllowed);
     const auto davAllow = davOnly.header("Allow");
     RUVIA_CHECK(davAllow.has_value());
-    RUVIA_CHECK_EQ(davAllow.value_or(std::string_view{}), std::string_view("PROPFIND"));
+    RUVIA_CHECK(davAllow.has_value() && davAllow->find("OPTIONS") != std::string_view::npos);
+    RUVIA_CHECK(davAllow.has_value() && davAllow->find("PROPFIND") != std::string_view::npos);
 }
 
 RUVIA_TEST(testing_facade_options_reports_extension_methods_too) {
@@ -680,5 +681,15 @@ RUVIA_TEST(testing_facade_options_reports_extension_methods_too) {
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kNoContent);
     const auto allow = response.header("Allow");
     RUVIA_CHECK(allow.has_value());
+    RUVIA_CHECK(allow.has_value() && allow->find("PROPFIND") != std::string_view::npos);
+}
+
+RUVIA_TEST(testing_facade_options_reports_extension_only_resource_methods_too) {
+    ruvia::TestApp app;
+    const auto response = app.request(ruvia::TestRequest::options("/t/dav-only"));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kNoContent);
+    const auto allow = response.header("Allow");
+    RUVIA_CHECK(allow.has_value());
+    RUVIA_CHECK(allow.has_value() && allow->find("OPTIONS") != std::string_view::npos);
     RUVIA_CHECK(allow.has_value() && allow->find("PROPFIND") != std::string_view::npos);
 }
