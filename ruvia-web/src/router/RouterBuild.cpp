@@ -128,6 +128,16 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
         table.routes_.push_back(std::move(route));
     }
 
+    // The unmatched-request block, appended once after every route's range so
+    // it stays contiguous and no route can accidentally include it.
+    table.unmatchedMiddlewareOffset_ = table.middlewareFrames_.size();
+    for (std::size_t i = 0; i < globalMiddlewareFrames_.size(); ++i) {
+        if (globalMiddlewareDescriptors_[i].runsOnUnmatchedRequests()) {
+            table.middlewareFrames_.push_back(globalMiddlewareFrames_[i]);
+        }
+    }
+    table.unmatchedMiddlewareCount_ = table.middlewareFrames_.size() - table.unmatchedMiddlewareOffset_;
+
     const auto originalRouteCount = table.routes_.size();
     const auto conflictsWithHeadRoute = [](const RouteEntry& source, const RouteEntry& headRoute) noexcept {
         if (source.dynamic() && headRoute.dynamic()) {

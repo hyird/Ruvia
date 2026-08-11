@@ -17,6 +17,7 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Controller.h"
+#include "ruvia/web/SecurityHeaders.h"
 #include "ruvia/web/Testing.h"
 
 struct TestingFacadeEcho final {
@@ -88,6 +89,18 @@ public:
 
 private:
     std::string_view tag_;
+};
+
+// Declares itself meaningful on a request that matched no route, the way
+// SecurityHeadersMiddleware does.
+class TestingFacadeAlways final : public ruvia::Middleware<TestingFacadeAlways> {
+public:
+    static constexpr bool ruviaRunsOnUnmatchedRequests = true;
+
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+        co_await next();
+        c.header("X-Test-Always", "on");
+    }
 };
 
 class TestingFacadeController final : public ruvia::Controller<TestingFacadeController> {
@@ -501,4 +514,79 @@ RUVIA_TEST(testing_facade_app_wide_middleware_still_runs_everywhere) {
     RUVIA_CHECK(hello.header("X-Test-Scope").has_value());
     const auto user = app.request(ruvia::TestRequest::get("/t/users/42"));
     RUVIA_CHECK(user.header("X-Test-Scope").has_value());
+}
+
+RUVIA_TEST(testing_facade_unmatched_middleware_wraps_the_404_terminal) {
+    ruvia::TestApp app;
+    app.use<TestingFacadeAlways>();
+    app.use<TestingFacadeStamp>();
+
+    // A matched route runs both, as before.
+    const auto matched = app.request(ruvia::TestRequest::get("/t/hello"));
+    RUVIA_CHECK_EQ(matched.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK(matched.header("X-Test-Always").has_value());
+    RUVIA_CHECK(matched.header("X-Test-Stamp").has_value());
+
+    // An unmatched one runs only what declared itself for unmatched requests.
+    const auto missing = app.request(ruvia::TestRequest::get("/nope"));
+    RUVIA_CHECK_EQ(missing.status(), ruvia::http_status::kNotFound);
+    const auto always = missing.header("X-Test-Always");
+    RUVIA_CHECK(always.has_value());
+    RUVIA_CHECK_EQ(*always, std::string_view("on"));
+    RUVIA_CHECK(!missing.header("X-Test-Stamp").has_value());
+}
+
+RUVIA_TEST(testing_facade_unmatched_middleware_also_wraps_405_and_501) {
+    ruvia::TestApp app;
+    app.use<TestingFacadeAlways>();
+
+    // Known method, wrong verb for an existing path.
+    const auto wrongMethod = app.request(ruvia::TestRequest::post("/t/hello"));
+    RUVIA_CHECK_EQ(wrongMethod.status(), ruvia::http_status::kMethodNotAllowed);
+    RUVIA_CHECK(wrongMethod.header("X-Test-Always").has_value());
+    // The Allow header the fallback sets must survive the chain.
+    RUVIA_CHECK(wrongMethod.header("Allow").has_value());
+
+    const auto unknownMethod = app.request(ruvia::TestRequest::method("PROPFIND", "/t/hello"));
+    RUVIA_CHECK_EQ(unknownMethod.status(), ruvia::http_status::kNotImplemented);
+    RUVIA_CHECK(unknownMethod.header("X-Test-Always").has_value());
+}
+
+RUVIA_TEST(testing_facade_unmatched_middleware_runs_with_a_custom_not_found_handler) {
+    ruvia::TestApp app;
+    app.use<TestingFacadeAlways>();
+    app.onNotFound(&facadeNotFound);
+
+    const auto missing = app.request(ruvia::TestRequest::get("/nope"));
+    RUVIA_CHECK_EQ(missing.status(), ruvia::http_status::kNotFound);
+    // The application's own fallback body still wins; the chain only wraps it.
+    RUVIA_CHECK_EQ(missing.body(), std::string_view("custom-miss"));
+    RUVIA_CHECK(missing.header("X-Test-Always").has_value());
+}
+
+RUVIA_TEST(testing_facade_without_unmatched_middleware_the_404_path_is_unchanged) {
+    ruvia::TestApp app;
+    app.use<TestingFacadeStamp>();
+
+    const auto missing = app.request(ruvia::TestRequest::get("/nope"));
+    RUVIA_CHECK_EQ(missing.status(), ruvia::http_status::kNotFound);
+    RUVIA_CHECK(!missing.header("X-Test-Stamp").has_value());
+}
+
+RUVIA_TEST(testing_facade_security_headers_reach_unmatched_requests) {
+    // The concrete gap this exists to close: a 404 is an attacker-reachable URL
+    // and needs the same content policy a matched route gets.
+    ruvia::TestApp app;
+    app.use<ruvia::SecurityHeadersMiddleware>();
+
+    const auto matched = app.request(ruvia::TestRequest::get("/t/hello"));
+    RUVIA_CHECK(matched.header("Content-Security-Policy").has_value());
+
+    const auto missing = app.request(ruvia::TestRequest::get("/nope"));
+    RUVIA_CHECK_EQ(missing.status(), ruvia::http_status::kNotFound);
+    const auto policy = missing.header("Content-Security-Policy");
+    RUVIA_CHECK(policy.has_value());
+    RUVIA_CHECK_EQ(*policy, std::string_view("default-src 'self'"));
+    RUVIA_CHECK(missing.header("X-Content-Type-Options").has_value());
+    RUVIA_CHECK(missing.header("X-Frame-Options").has_value());
 }

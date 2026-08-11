@@ -121,6 +121,64 @@ Task<void> detail::RouteTable::invokeMiddlewareContinuation(NextState state) {
     }
 }
 
+// The unmatched-request chain. It mirrors the route chain exactly except for
+// its terminal: there is no route endpoint, so the 404/405/501 response comes
+// from the caller-supplied thunk instead.
+Task<HttpResponse> detail::RouteTable::runUnmatchedChain(Context& context, const UnmatchedTerminal& terminal) const {
+    if (unmatchedMiddlewareCount_ == 0) {
+        return terminal(context);
+    }
+    return [](const RouteTable* table, Context* context, const UnmatchedTerminal* terminal) -> Task<HttpResponse> {
+        co_await table->invokeUnmatchedMiddlewareAt(0, *context, *terminal);
+        if (detail::ContextAccess::hasResponse(*context)) {
+            co_return detail::ContextAccess::takeResponse(*context);
+        }
+        if (auto exception = context->exception()) {
+            co_return co_await table->handleException(*context, exception);
+        }
+        throw std::logic_error("context is not finalized; middleware must set a response or await next()");
+    }(this, &context, &terminal);
+}
+
+Task<void> detail::RouteTable::invokeUnmatchedMiddlewareAt(std::size_t index, Context& context, const UnmatchedTerminal& terminal) const {
+    if (index >= unmatchedMiddlewareCount_) {
+        auto response = co_await terminal(context);
+        detail::ContextAccess::setResponse(context, std::move(response));
+        co_return;
+    }
+
+    const auto& middleware = middlewareFrames_[unmatchedMiddlewareOffset_ + index];
+    auto& control = *makeNextControl(context);
+    auto controlScope = makeNextControlScope(control);
+    auto& next = NextAccess::makeIn(context.resource(), detail::NextState{.table = this, .context = &context, .unmatchedTerminal = &terminal, .control = &control, .index = index + 1}, &RouteTable::invokeUnmatchedMiddlewareContinuation);
+    auto task = middleware(context, next);
+    co_await std::move(task);
+    co_return;
+}
+
+Task<void> detail::RouteTable::invokeUnmatchedMiddlewareContinuation(NextState state) {
+    auto* context = state.context;
+    if (state.invocation != detail::NextState::Invocation::kReady) {
+        storeRepeatedNextError(*context);
+        co_return;
+    }
+    if (detail::ContextAccess::hasResponse(*context)) {
+        storeNextAfterResponseError(*context);
+        co_return;
+    }
+    const auto* table = state.table;
+    const auto* terminal = static_cast<const RouteTable::UnmatchedTerminal*>(state.unmatchedTerminal);
+    std::exception_ptr exception;
+    try {
+        co_await table->invokeUnmatchedMiddlewareAt(state.index, *context, *terminal);
+    } catch (...) {
+        exception = std::current_exception();
+    }
+    if (exception != nullptr) {
+        co_await table->storeMiddlewareExceptionResponse(*context, exception);
+    }
+}
+
 Task<void> detail::RouteTable::invokeStreamMiddlewareAt(const RouteEntry& route, std::size_t index, Context& context, StreamMiddlewareChainState& chain, const RouteStreamHandler& handler) const {
     if (index >= route.middlewareCount()) {
         chain.markHandlerInvoked();

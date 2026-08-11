@@ -72,6 +72,12 @@ public:
         return scoped;
     }
 
+    // See middlewareRunsOnUnmatchedRequests(): true means this middleware also
+    // wraps the 404/405/501 terminal, not just matched routes.
+    [[nodiscard]] bool runsOnUnmatchedRequests() const noexcept {
+        return runsOnUnmatchedRequests_;
+    }
+
     [[nodiscard]] bool usesRouteRateLimit() const noexcept {
         return usesRouteRateLimit_;
     }
@@ -81,13 +87,14 @@ private:
     friend ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args);
 
     constexpr ControllerMiddlewareDescriptor() noexcept = default;
-    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy, const void* args, const void* validatedModelTypeKey, bool usesRouteRateLimit) noexcept
+    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy, const void* args, const void* validatedModelTypeKey, bool usesRouteRateLimit, bool runsOnUnmatchedRequests = false) noexcept
         : invoke_(invoke),
           create_(create),
           destroy_(destroy),
           args_(args),
           validatedModelTypeKey_(validatedModelTypeKey),
-          usesRouteRateLimit_(usesRouteRateLimit) {}
+          usesRouteRateLimit_(usesRouteRateLimit),
+          runsOnUnmatchedRequests_(runsOnUnmatchedRequests) {}
 
     Invoke invoke_{nullptr};
     Create create_{nullptr};
@@ -96,6 +103,7 @@ private:
     const void* validatedModelTypeKey_{nullptr};
     std::string_view prefix_{};
     bool usesRouteRateLimit_{false};
+    bool runsOnUnmatchedRequests_{false};
 };
 
 }  // namespace detail

@@ -112,12 +112,20 @@ void applyExceptionResponseMetadata(HttpResponse& response, std::exception_ptr e
 
 Task<HttpResponse> detail::RouteTable::handleError(const HttpRequest& request, RequestMemory& memory, HttpErrorInfo error, ContextServices services) const {
     const auto errorHandler = errorHandlerFor(request.path());
-    if (errorHandler == nullptr) {
+    // Nothing to wrap and no handler: the original allocation-free path.
+    if (errorHandler == nullptr && unmatchedMiddlewareCount_ == 0) {
         co_return makeDefaultErrorResponse(memory.resource(), error);
     }
 
     auto context = detail::ContextAccess::make(memory, request, withRouteHandlers(services, *this, errorHandler, notFoundHandlerFor(request.path())));
-    co_return co_await handleError(context, error);
+    auto terminal = [this, error, errorHandler](Context& terminalContext) -> Task<HttpResponse> {
+        if (errorHandler == nullptr) {
+            co_return makeDefaultErrorResponse(terminalContext.resource(), error);
+        }
+        co_return co_await handleError(terminalContext, error);
+    };
+    const auto terminalRef = makeCallableRef<HttpResponse, Context&>(terminal);
+    co_return co_await runUnmatchedChain(context, terminalRef);
 }
 
 Task<HttpResponse> detail::RouteTable::handleException(const HttpRequest& request, RequestMemory& memory, std::exception_ptr exception, ContextServices services) const {
@@ -138,19 +146,28 @@ Task<HttpResponse> detail::RouteTable::handleError(Context& context, HttpErrorIn
 
 Task<HttpResponse> detail::RouteTable::handleNotFound(const HttpRequest& request, RequestMemory& memory, ContextServices services) const {
     const auto notFoundHandler = notFoundHandlerFor(request.path());
-    if (notFoundHandler == nullptr) {
+    if (notFoundHandler == nullptr && unmatchedMiddlewareCount_ == 0) {
         co_return makeDefaultErrorResponse(memory.resource(), HttpErrorInfo(ruvia::http_status::kNotFound, {}, "route not found"));
     }
 
     auto context = detail::ContextAccess::make(memory, request, withRouteHandlers(services, *this, errorHandlerFor(request.path()), notFoundHandler));
 
-    std::exception_ptr exception;
-    try {
-        co_return co_await notFoundHandler(context);
-    } catch (...) {
-        exception = std::current_exception();
-    }
-    co_return co_await handleException(context, exception);
+    // The handler's own failure keeps going through handleException, exactly as
+    // before; wrapping it in the chain must not change which layer answers it.
+    auto terminal = [this, notFoundHandler](Context& terminalContext) -> Task<HttpResponse> {
+        if (notFoundHandler == nullptr) {
+            co_return makeDefaultErrorResponse(terminalContext.resource(), HttpErrorInfo(ruvia::http_status::kNotFound, {}, "route not found"));
+        }
+        std::exception_ptr exception;
+        try {
+            co_return co_await notFoundHandler(terminalContext);
+        } catch (...) {
+            exception = std::current_exception();
+        }
+        co_return co_await handleException(terminalContext, exception);
+    };
+    const auto terminalRef = makeCallableRef<HttpResponse, Context&>(terminal);
+    co_return co_await runUnmatchedChain(context, terminalRef);
 }
 
 Task<HttpResponse> detail::RouteTable::handleException(Context& context, std::exception_ptr exception) const {

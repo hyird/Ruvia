@@ -50,6 +50,11 @@ public:
     // is not a mistake worth allowing.
     template <typename MiddlewareT, typename... Args>
     Derived& useAt(std::string_view prefix, Args&&... args) {
+        // The unmatched-request chain is one contiguous block shared by every
+        // 404/405/501, so it cannot carry per-prefix membership. Rejecting the
+        // combination is better than silently dropping either half of it.
+        static_assert(!middlewareRunsOnUnmatchedRequests<MiddlewareT>(),
+            "a middleware declaring ruviaRunsOnUnmatchedRequests cannot be path-scoped with useAt(); register it app-wide with use<T>()");
         const auto normalized = normalizeFallbackPrefix(prefix);
         return self().useMiddleware(makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...).scopedTo(retainRegistrationText(normalized)));
     }

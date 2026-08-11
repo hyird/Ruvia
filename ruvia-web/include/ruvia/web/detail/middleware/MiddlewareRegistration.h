@@ -75,6 +75,20 @@ template <typename MiddlewareT>
     }
 }
 
+// Whether this middleware is meaningful on a request that matched no route.
+// A property of the middleware, not of where it is registered: security headers
+// and request ids belong on a 404 response just as much as on a 200, while a
+// validator or an authorization check has nothing to act on. Declared as
+//     static constexpr bool ruviaRunsOnUnmatchedRequests = true;
+template <typename MiddlewareT>
+[[nodiscard]] constexpr bool middlewareRunsOnUnmatchedRequests() noexcept {
+    if constexpr (requires { MiddlewareT::ruviaRunsOnUnmatchedRequests; }) {
+        return MiddlewareT::ruviaRunsOnUnmatchedRequests;
+    } else {
+        return false;
+    }
+}
+
 // Registers one middleware type together with the arguments every instance of
 // it is constructed from. Arguments are decayed and copied once, at
 // registration; a middleware is built per router materialization, so they must
@@ -100,7 +114,7 @@ template <typename MiddlewareT, typename... Args>
 
     using ArgsT = std::tuple<std::decay_t<Args>...>;
     const auto* stored = constructPmrObject<ArgsT>(registrationResource(), std::forward<Args>(args)...);
-    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddleware<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>());
+    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddleware<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>(), middlewareRunsOnUnmatchedRequests<MiddlewareT>());
 }
 
 }  // namespace ruvia::detail
