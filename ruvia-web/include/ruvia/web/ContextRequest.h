@@ -6,6 +6,8 @@
 // are provided by ruvia::web; only model-dependent templates remain inline.
 
 #include <cstddef>
+#include <cstdint>
+#include <initializer_list>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -521,8 +523,43 @@ public:
     // with a 400 status. A selected body with the wrong media type throws
     // HttpError with 415; application/programming exceptions are never
     // represented by these request-validation signals.
+    // Which Accept-* field a negotiation reads. The weight grammar is shared,
+    // but how a member matches an offered value is not: Accept carries media
+    // ranges with wildcards and parameters, Accept-Language does RFC 4647 basic
+    // filtering ("en" matches "en-US"), and the other two match tokens exactly
+    // or by "*".
+    enum class Negotiable : std::uint8_t {
+        kMediaType,
+        kLanguage,
+        kEncoding,
+        kCharset,
+    };
+
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
+
+    // Whether the client would accept this one representation. The cheap probe,
+    // and the right call when there is only one thing to offer.
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
+
+    // Picks the representation to send when several could be. Returns the
+    // element of `supported` the client prefers most, or nullopt when it
+    // accepts none of them -- which is a 406, and the reason this cannot just
+    // return the first entry as a fallback.
+    //
+    // The client's weights decide; `supported` order breaks its ties, so it
+    // reads as the server's own preference, best first. An absent field means
+    // no preference and selects supported.front(). The returned view is one of
+    // the caller's own entries, borrowed, not a copy out of the request.
+    //
+    // accepts() answers "would this do?" for one type; this answers "which of
+    // mine is best?" -- looping accepts() in server order cannot, because it
+    // returns the server's first acceptable option rather than the client's
+    // most preferred one.
+    [[nodiscard]] std::optional<std::string_view> negotiate(Negotiable field, std::span<const std::string_view> supported) const noexcept;
+
+    [[nodiscard]] std::optional<std::string_view> negotiate(Negotiable field, std::initializer_list<std::string_view> supported) const noexcept {
+        return negotiate(field, std::span<const std::string_view>(supported.begin(), supported.size()));
+    }
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const;
     [[nodiscard]] std::span<const std::string_view> queries(std::string_view name) const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;

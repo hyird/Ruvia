@@ -66,6 +66,10 @@ bool ContextRequest::accepts(std::string_view mediaType) const noexcept {
     return context_->requestAccepts(mediaType);
 }
 
+std::optional<std::string_view> ContextRequest::negotiate(Negotiable field, std::span<const std::string_view> supported) const noexcept {
+    return context_->requestNegotiate(field, supported);
+}
+
 std::optional<std::string_view> ContextRequest::query(std::string_view name) const {
     return context_->requestQuery(name);
 }
