@@ -57,15 +57,18 @@ void reportStage(const char* stage) noexcept {
     std::fflush(stderr);
 }
 
-class ToggleFailingResource final : public std::pmr::memory_resource {
+class OneShotFailingResource final : public std::pmr::memory_resource {
 public:
-    void failAllocations(bool fail) noexcept {
-        fail_ = fail;
+    void failNextAllocationAtLeast(std::size_t bytes) noexcept {
+        minimumFailureBytes_ = bytes;
     }
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (fail_) throw std::bad_alloc();
+        if (minimumFailureBytes_ != 0 && bytes >= minimumFailureBytes_) {
+            minimumFailureBytes_ = 0;
+            throw std::bad_alloc();
+        }
         return std::pmr::new_delete_resource()->allocate(bytes, alignment);
     }
 
@@ -79,7 +82,7 @@ private:
         return this == &other;
     }
 
-    bool fail_{false};
+    std::size_t minimumFailureBytes_{0};
 };
 
 std::string gzipContent(std::string_view body) {
@@ -492,110 +495,140 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
     ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
     ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
-    ToggleFailingResource operationResource;
+    OneShotFailingResource operationResource;
     auto exercise = [&]() -> ruvia::Task<int> {
         ruvia::detail::ScopedOperationScope scope;
         auto client = registry.get(&operationResource, scope);
-        if (client.host() != "127.0.0.1" || client.port() != port || client.scheme() != scheme) co_return 3;
-        int result = 0;
-        reportStage(isHttp2 ? "run-client.h2.basic" : "run-client.h1.basic");
-        for (int i = 0; i < 2; ++i) {
-            auto request = client.newRequest(ruvia::HttpKnownMethod::kPost, "/echo");
-            request.setBody("payload");
-            auto operation = client.sendRequest(std::move(request));
-            auto response = co_await std::move(operation);
-            if (response.status() != ruvia::http_status::kOk || response.body() != "payload" || response.protocolVersion() != (protocol == ruvia::HttpClientProtocol::kHttp2Only ? ruvia::HttpProtocolVersion::kHttp2 : ruvia::HttpProtocolVersion::kHttp11)) {
-                result = 1;
-                break;
-            }
-        }
-        if (result == 0) {
-            reportStage(isHttp2 ? "run-client.h2.header" : "run-client.h1.header");
-            auto mixedCaseRequest = client.newRequest(ruvia::HttpKnownMethod::kGet, "/header");
-            mixedCaseRequest.appendHeader("X-Mixed-Case", "preserved");
-            if (protocol == ruvia::HttpClientProtocol::kHttp2Only) {
-                mixedCaseRequest.appendHeader("TE", "Trailers");
-            }
-            auto mixedCaseResponse = co_await client.sendRequest(std::move(mixedCaseRequest));
-            if (mixedCaseResponse.body() != "preserved") result = 5;
-        }
-        if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
-            reportStage("run-client.h2.multiplex");
-            std::array<int, 16> results{};
-            ruvia::TaskScope batch(worker, memory.resource());
-            const auto started = std::chrono::steady_clock::now();
-            for (std::size_t i = 0; i < results.size(); ++i) {
-                batch.spawn(sendMultiplexed(client, results, i));
-            }
-            co_await batch.join();
-            const auto elapsed = std::chrono::steady_clock::now() - started;
-            if (!std::ranges::all_of(results, [](int value) { return value == 1; }) || elapsed >= 400ms) result = 3;
-        }
-        if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
-            reportStage("run-client.h2.timeout-cancel");
-            bool slowTimedOut = false;
-            bool slowCancelled = false;
-            bool fastCompleted = false;
-            ruvia::TaskScope mixed(worker, memory.resource());
-            mixed.spawn(sendSlowWithTimeout(client, slowTimedOut));
-            mixed.spawn(sendSlowWithCancellation(client, worker, memory.resource(), slowCancelled));
-            mixed.spawn(sendFastAlongsideCancelled(client, fastCompleted));
-            co_await mixed.join();
-            if (!slowTimedOut || !slowCancelled || !fastCompleted) result = 4;
-        }
-        if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
-            reportStage("run-client.h2.decode-error");
-            bool preservedDecoderError = false;
-            try {
-                auto request = client.newRequest(
-                    ruvia::HttpKnownMethod::kGet, "/invalid-content-encoding");
-                (void)co_await client.sendRequest(std::move(request));
-            } catch (const ruvia::HttpClientError& error) {
-                preservedDecoderError =
-                    error.code() == ruvia::HttpClientError::Code::kProtocolError &&
-                    std::string_view(error.what()) ==
-                        "invalid HTTP response Content-Encoding";
-                if (!preservedDecoderError) {
-                    std::fprintf(
-                        stderr,
-                        "unexpected HTTP/2 decoder error (%u): %s\n",
-                        static_cast<unsigned int>(error.code()),
-                        error.what());
+        auto runRequests = [&]() -> ruvia::Task<int> {
+            if (client.host() != "127.0.0.1" || client.port() != port || client.scheme() != scheme) co_return 3;
+            int result = 0;
+            reportStage(isHttp2 ? "run-client.h2.basic" : "run-client.h1.basic");
+            for (int i = 0; i < 2; ++i) {
+                auto request = client.newRequest(ruvia::HttpKnownMethod::kPost, "/echo");
+                request.setBody("payload");
+                auto operation = client.sendRequest(std::move(request));
+                auto response = co_await std::move(operation);
+                if (response.status() != ruvia::http_status::kOk || response.body() != "payload" || response.protocolVersion() != (protocol == ruvia::HttpClientProtocol::kHttp2Only ? ruvia::HttpProtocolVersion::kHttp2 : ruvia::HttpProtocolVersion::kHttp11)) {
+                    result = 1;
+                    break;
                 }
             }
-            if (!preservedDecoderError) result = 6;
-        }
-        if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
-            reportStage("run-client.h2.allocation-failure");
-            auto request = client.newRequest(ruvia::HttpKnownMethod::kPost, "/echo");
-            request.setBody(std::string(4096, 'x'));
-            operationResource.failAllocations(true);
-            bool preservedAllocationFailure = false;
-            try {
-                (void)co_await client.sendRequest(std::move(request));
-            } catch (const std::bad_alloc&) {
-                preservedAllocationFailure = true;
-            } catch (...) {
+            if (result == 0) {
+                reportStage(isHttp2 ? "run-client.h2.header" : "run-client.h1.header");
+                auto mixedCaseRequest = client.newRequest(ruvia::HttpKnownMethod::kGet, "/header");
+                mixedCaseRequest.appendHeader("X-Mixed-Case", "preserved");
+                if (protocol == ruvia::HttpClientProtocol::kHttp2Only) {
+                    mixedCaseRequest.appendHeader("TE", "Trailers");
+                }
+                auto mixedCaseResponse = co_await client.sendRequest(std::move(mixedCaseRequest));
+                if (mixedCaseResponse.body() != "preserved") result = 5;
             }
-            operationResource.failAllocations(false);
-            if (!preservedAllocationFailure) result = 7;
+            if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
+                reportStage("run-client.h2.multiplex");
+                std::array<int, 16> results{};
+                ruvia::TaskScope batch(worker, memory.resource());
+                const auto started = std::chrono::steady_clock::now();
+                for (std::size_t i = 0; i < results.size(); ++i) {
+                    batch.spawn(sendMultiplexed(client, results, i));
+                }
+                co_await batch.join();
+                const auto elapsed = std::chrono::steady_clock::now() - started;
+                if (!std::ranges::all_of(results, [](int value) { return value == 1; }) || elapsed >= 400ms) result = 3;
+            }
+            if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
+                reportStage("run-client.h2.timeout-cancel");
+                bool slowTimedOut = false;
+                bool slowCancelled = false;
+                bool fastCompleted = false;
+                ruvia::TaskScope mixed(worker, memory.resource());
+                mixed.spawn(sendSlowWithTimeout(client, slowTimedOut));
+                mixed.spawn(sendSlowWithCancellation(client, worker, memory.resource(), slowCancelled));
+                mixed.spawn(sendFastAlongsideCancelled(client, fastCompleted));
+                co_await mixed.join();
+                if (!slowTimedOut || !slowCancelled || !fastCompleted) result = 4;
+            }
+            if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
+                reportStage("run-client.h2.decode-error");
+                bool preservedDecoderError = false;
+                try {
+                    auto request = client.newRequest(
+                        ruvia::HttpKnownMethod::kGet, "/invalid-content-encoding");
+                    (void)co_await client.sendRequest(std::move(request));
+                } catch (const ruvia::HttpClientError& error) {
+                    preservedDecoderError =
+                        error.code() == ruvia::HttpClientError::Code::kProtocolError &&
+                        std::string_view(error.what()) ==
+                            "invalid HTTP response Content-Encoding";
+                    if (!preservedDecoderError) {
+                        std::fprintf(
+                            stderr,
+                            "unexpected HTTP/2 decoder error (%u): %s\n",
+                            static_cast<unsigned int>(error.code()),
+                            error.what());
+                    }
+                }
+                if (!preservedDecoderError) result = 6;
+            }
+            if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
+                reportStage("run-client.h2.allocation-failure");
+                auto request = client.newRequest(ruvia::HttpKnownMethod::kPost, "/echo");
+                request.setBody(std::string(4096, 'x'));
+                // MSVC's Debug STL allocates small iterator proxies while constructing
+                // empty PMR containers. Fail the first real response-storage request
+                // instead, so every standard library exercises the recoverable path.
+                operationResource.failNextAllocationAtLeast(sizeof(ruvia::HttpClientResponseHeader));
+                bool preservedAllocationFailure = false;
+                try {
+                    (void)co_await client.sendRequest(std::move(request));
+                } catch (const std::bad_alloc&) {
+                    preservedAllocationFailure = true;
+                }
+                if (!preservedAllocationFailure) result = 7;
+                if (result == 0) {
+                    auto recoveryRequest = client.newRequest(ruvia::HttpKnownMethod::kPost, "/echo");
+                    recoveryRequest.setBody("after-allocation-failure");
+                    auto recoveryResponse = co_await client.sendRequest(std::move(recoveryRequest));
+                    if (recoveryResponse.body() != "after-allocation-failure") result = 8;
+                }
+            }
+            co_return result;
+        };
+
+        int result = 0;
+        std::exception_ptr failure;
+        try {
+            result = co_await runRequests();
+        } catch (...) {
+            failure = std::current_exception();
         }
         reportStage(isHttp2 ? "run-client.h2.scope-close" : "run-client.h1.scope-close");
         scope.close();
         reportStage(isHttp2 ? "run-client.h2.registry-close" : "run-client.h1.registry-close");
         registry.closeNow();
         reportStage(isHttp2 ? "run-client.h2.registry-join" : "run-client.h1.registry-join");
-        co_await registry.join();
+        try {
+            co_await registry.join();
+        } catch (...) {
+            if (failure == nullptr) failure = std::current_exception();
+        }
         reportStage(isHttp2 ? "run-client.h2.registry-joined" : "run-client.h1.registry-joined");
+        if (failure != nullptr) std::rethrow_exception(failure);
         co_return result;
     };
     auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
     reportStage(isHttp2 ? "run-client.h2.io-run" : "run-client.h1.io-run");
     io.run();
     reportStage(isHttp2 ? "run-client.h2.io-stopped" : "run-client.h1.io-stopped");
-    const auto result = future.get();
+    int result = 0;
+    std::exception_ptr failure;
+    try {
+        result = future.get();
+    } catch (...) {
+        failure = std::current_exception();
+    }
     registry.closeNow();
     dispatcher->detachContext();
+    if (failure != nullptr) std::rethrow_exception(failure);
     reportStage(isHttp2 ? "run-client.h2.done" : "run-client.h1.done");
     return result;
 }
