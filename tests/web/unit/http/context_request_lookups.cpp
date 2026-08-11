@@ -419,3 +419,119 @@ RUVIA_TEST(context_request_bulk_accessors_share_the_named_lookup_cache) {
     RUVIA_CHECK_EQ(cookies.size(), std::size_t(2));
     RUVIA_CHECK_EQ(context.req().cookieFields().data(), cookies.data());
 }
+
+// Content negotiation: accepts() answers "would this one do?", negotiate()
+// answers "which of mine does the client want most?". Looping accepts() cannot
+// substitute -- it yields the server's first acceptable option, not the
+// client's preferred one.
+
+namespace {
+
+void setAcceptHeader(HttpRequest& request, std::string_view name, std::string_view value) {
+    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{name, value});
+}
+
+}  // namespace
+
+RUVIA_TEST(context_request_negotiate_picks_the_client_preferred_media_type) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    setAcceptHeader(request, "Accept", "text/html;q=0.3, application/json;q=0.9");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    // Server order lists html first, but the client prefers json.
+    const std::string_view supported[] = {"text/html", "application/json"};
+    const auto chosen = context.req().negotiate(ruvia::ContextRequest::Negotiable::kMediaType, supported);
+    RUVIA_CHECK(chosen.has_value());
+    RUVIA_CHECK_EQ(*chosen, std::string_view("application/json"));
+
+    // accepts() would have said yes to the first one tried, which is the bug
+    // this API exists to remove.
+    RUVIA_CHECK(context.req().accepts("text/html"));
+}
+
+RUVIA_TEST(context_request_negotiate_reports_no_acceptable_representation) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    setAcceptHeader(request, "Accept", "image/png");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    const std::string_view supported[] = {"text/html", "application/json"};
+    // nullopt is the 406 signal, which is why this cannot fall back to front().
+    RUVIA_CHECK(!context.req().negotiate(ruvia::ContextRequest::Negotiable::kMediaType, supported).has_value());
+}
+
+RUVIA_TEST(context_request_negotiate_without_the_field_takes_server_preference) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    const std::string_view supported[] = {"application/json", "text/html"};
+    const auto chosen = context.req().negotiate(ruvia::ContextRequest::Negotiable::kMediaType, supported);
+    RUVIA_CHECK(chosen.has_value());
+    RUVIA_CHECK_EQ(*chosen, std::string_view("application/json"));
+}
+
+RUVIA_TEST(context_request_negotiate_language_uses_basic_prefix_filtering) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    setAcceptHeader(request, "Accept-Language", "fr;q=0.4, en;q=0.8");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    // RFC 4647 basic filtering: the range "en" matches the tag "en-US".
+    const std::string_view supported[] = {"fr-CA", "en-US"};
+    const auto chosen = context.req().negotiate(ruvia::ContextRequest::Negotiable::kLanguage, supported);
+    RUVIA_CHECK(chosen.has_value());
+    RUVIA_CHECK_EQ(*chosen, std::string_view("en-US"));
+}
+
+RUVIA_TEST(context_request_negotiate_honours_explicit_zero_quality_exclusion) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    // "*" accepts everything except the explicitly excluded, more specific tag.
+    setAcceptHeader(request, "Accept-Encoding", "*, gzip;q=0");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    const std::string_view supported[] = {"gzip", "br"};
+    const auto chosen = context.req().negotiate(ruvia::ContextRequest::Negotiable::kEncoding, supported);
+    RUVIA_CHECK(chosen.has_value());
+    RUVIA_CHECK_EQ(*chosen, std::string_view("br"));
+}
+
+RUVIA_TEST(context_request_negotiate_folds_repeated_field_lines) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    // RFC 9110 5.3: equivalent to one comma-joined value.
+    setAcceptHeader(request, "Accept-Language", "de;q=0.2");
+    setAcceptHeader(request, "Accept-Language", "ja;q=0.9");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    const std::string_view supported[] = {"de", "ja"};
+    const auto chosen = context.req().negotiate(ruvia::ContextRequest::Negotiable::kLanguage, supported);
+    RUVIA_CHECK(chosen.has_value());
+    RUVIA_CHECK_EQ(*chosen, std::string_view("ja"));
+}
