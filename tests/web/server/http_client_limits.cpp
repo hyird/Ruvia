@@ -230,10 +230,8 @@ int runClient(ruvia::HttpClientConfig config, CountingResource& operationResourc
 }
 
 ruvia::HttpClientConfig plainConfig(std::uint16_t port) {
-    ruvia::HttpClientConfig config;
-    config.host = "127.0.0.1";
-    config.port = port;
-    config.scheme = ruvia::HttpScheme::kHttp;
+    auto config = ruvia::HttpClientConfig::http("127.0.0.1");
+    config.setPort(port);
     config.protocol = ruvia::HttpClientProtocol::kHttp1Only;
     return config;
 }
@@ -278,8 +276,8 @@ int testOperationArena() {
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource* resource) -> ruvia::Task<int> {
             const auto before = resource->allocations();
-            auto request = client.newRequest();
-            request.addHeader("x-arena", std::string(4096, 'h'));
+            auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
+            request.appendHeader("x-arena", std::string(4096, 'h'));
             if (resource->allocations() == before) co_return 1;
             auto response = co_await client.sendRequest(std::move(request));
             if (response.body().size() != 4096) co_return 2;
@@ -299,7 +297,7 @@ int testResponseLimit() {
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
             try {
-                auto request = client.newRequest();
+                auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
                 (void)co_await client.sendRequest(std::move(request));
             } catch (const ruvia::HttpClientError& error) {
                 co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 0 : 2;
@@ -324,7 +322,7 @@ int testClosingInformationalResponse() {
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
             try {
-                auto request = client.newRequest();
+                auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
                 (void)co_await client.sendRequest(std::move(request));
             } catch (const ruvia::HttpClientError& error) {
                 co_return error.code() == ruvia::HttpClientError::Code::kProtocolError ? 0 : 2;
@@ -358,8 +356,8 @@ int testTransferCodedResponse() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto request = client.newRequest();
-            request.addHeader("Connection", "TE").addHeader("TE", "gzip");
+            auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
+            request.appendHeader("Connection", "TE").appendHeader("TE", "gzip");
             auto response = co_await client.sendRequest(std::move(request));
             co_return response.body() == "decoded transfer body" ? 0 : 1;
         });
@@ -377,7 +375,7 @@ int testContentEncodedResponse() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto request = client.newRequest();
+            auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto response = co_await client.sendRequest(std::move(request));
             co_return response.body() == "decoded content body" ? 0 : 1;
         });
@@ -398,7 +396,7 @@ int testContentEncodedResponseLimitAppliesAfterDecode() {
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
             try {
-                auto request = client.newRequest();
+                auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
                 (void)co_await client.sendRequest(std::move(request));
             } catch (const ruvia::HttpClientError& error) {
                 co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 0 : 2;
@@ -421,8 +419,8 @@ int testWriteTimeout() {
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
             try {
-                auto request = client.newRequest();
-                request.setMethod(ruvia::HttpKnownMethod::kPost).setBody(std::string(16 * 1024 * 1024, 'w'));
+                auto request = client.newRequest(ruvia::HttpKnownMethod::kPost, "/");
+                request.setBody(std::string(16 * 1024 * 1024, 'w'));
                 (void)co_await client.sendRequest(std::move(request));
             } catch (const ruvia::HttpClientError& error) {
                 co_return error.code() == ruvia::HttpClientError::Code::kTimeout ? 0 : 2;
@@ -433,7 +431,7 @@ int testWriteTimeout() {
 
 ruvia::Task<void> completeSlowRequest(const ruvia::HttpClientHandle& client, int& result) {
     try {
-        auto request = client.newRequest();
+        auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
         auto response = co_await client.sendRequest(std::move(request));
         result = response.body() == "ok" ? 1 : -1;
     } catch (const std::exception& error) {
@@ -444,7 +442,7 @@ ruvia::Task<void> completeSlowRequest(const ruvia::HttpClientHandle& client, int
 
 ruvia::Task<void> timeOutQueuedRequest(const ruvia::HttpClientHandle& client, int& result) {
     try {
-        auto request = client.newRequest();
+        auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
         (void)co_await client.sendRequest(std::move(request));
         result = -1;
     } catch (const ruvia::HttpClientError& error) {
@@ -480,7 +478,7 @@ int testNegotiatedHttp1AcquireTimeout() {
         });
 }
 
-ruvia::Task<void> requestStopSoon(const ruvia::WorkerHandle& worker, ruvia::detail::StopSource& source) {
+ruvia::Task<void> requestStopSoon(const ruvia::WorkerHandle& worker, ruvia::StopSource& source) {
     (void)co_await ruvia::sleepFor(worker, 20ms);
     source.requestStop();
 }
@@ -495,13 +493,13 @@ int testStopTokenCancellation() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle& worker, CountingResource* resource) -> ruvia::Task<int> {
-            ruvia::detail::StopSource source;
+            ruvia::StopSource source;
             ruvia::TaskScope cancellation(worker, resource);
             cancellation.spawn(requestStopSoon(worker, source));
             int result = 1;
             try {
-                auto request = client.newRequest();
-                (void)co_await client.sendRequest(std::move(request), {.stopToken = source.token()});
+                auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
+                (void)co_await client.withOptions({.stopToken = source.token()}).sendRequest(std::move(request));
             } catch (const ruvia::HttpClientError& error) {
                 result = error.code() == ruvia::HttpClientError::Code::kCancelled ? 0 : 2;
             }
@@ -514,21 +512,22 @@ int testConnectStopTokenCancellation() {
     OneShotServer server([](asio::ip::tcp::socket&) {
         std::this_thread::sleep_for(200ms);
     });
-    auto config = plainConfig(server.port());
-    config.scheme = ruvia::HttpScheme::kHttps;
+    auto config = ruvia::HttpClientConfig::https("127.0.0.1");
+    config.setPort(server.port());
+    config.protocol = ruvia::HttpClientProtocol::kHttp1Only;
     config.verifyCertificate = false;
     config.connectTimeout = 2s;
     config.requestTimeout = 2s;
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle& worker, CountingResource* resource) -> ruvia::Task<int> {
-            ruvia::detail::StopSource source;
+            ruvia::StopSource source;
             ruvia::TaskScope cancellation(worker, resource);
             cancellation.spawn(requestStopSoon(worker, source));
             int result = 1;
             try {
-                auto request = client.newRequest();
-                (void)co_await client.sendRequest(std::move(request), {.stopToken = source.token()});
+                auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
+                (void)co_await client.withOptions({.stopToken = source.token()}).sendRequest(std::move(request));
             } catch (const ruvia::HttpClientError& error) {
                 result = error.code() == ruvia::HttpClientError::Code::kCancelled ? 0 : 2;
             }
@@ -538,9 +537,7 @@ int testConnectStopTokenCancellation() {
 }
 
 int testCookieCapacity() {
-    ruvia::HttpClientConfig config;
-    config.host = "127.0.0.1";
-    config.scheme = ruvia::HttpScheme::kHttp;
+    auto config = ruvia::HttpClientConfig::http("127.0.0.1");
     config.protocol = ruvia::HttpClientProtocol::kHttp1Only;
     config.maxCookiesPerWorker = 1;
     config.maxCookieBytesPerWorker = 8;
@@ -557,7 +554,7 @@ int testCookieCapacity() {
 
 int testRequestCookieAppendFailureDoesNotRetainPartialHeader() {
     return runRequestOnly([](const ruvia::HttpClientHandle& client, FailSelectedLargeAllocationResource& requestResource) {
-        auto request = client.newRequest();
+        auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
         request.addCookie("a", "1");
 
         const std::string largeName(700, 'n');
@@ -593,7 +590,7 @@ int testRequestCookieAppendFailureDoesNotRetainPartialHeader() {
 
 int testSetContentTypeFailurePreservesPreviousHeader() {
     return runRequestOnly([](const ruvia::HttpClientHandle& client, FailSelectedLargeAllocationResource& requestResource) {
-        auto request = client.newRequest();
+        auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
         request.setContentType("text/plain");
 
         const std::string longContentType = "text/plain; x=" + std::string(700, 'x');
@@ -650,18 +647,11 @@ int testOperationOptionsRejectNonpositiveTimeout() {
     const auto scopedResult = runClient(config, operationResource,
         [rejectsInvalidArgument](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
             if (!rejectsInvalidArgument([&client] {
-                    (void)client.withOptions(ruvia::HttpClientOperationOptions{.timeout = 0ms});
+                    (void)client.withOptions(ruvia::OperationOptions{.timeout = 0ms});
                 })) co_return 1;
             if (!rejectsInvalidArgument([&client] {
-                    auto request = client.newRequest();
-                    (void)client.sendRequest(std::move(request), 0ms);
+                    (void)client.withOptions(ruvia::OperationOptions{.timeout = -1ms});
                 })) co_return 2;
-            if (!rejectsInvalidArgument([&client] {
-                    auto request = client.newRequest();
-                    (void)client.sendRequest(
-                        std::move(request),
-                        ruvia::HttpClientOperationOptions{.timeout = -1ms});
-                })) co_return 3;
             co_return 0;
         });
     if (scopedResult != 0) return scopedResult;
@@ -689,10 +679,10 @@ int testAutomaticCookieCapacity() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto first = client.newRequest();
+            auto first = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto firstResponse = co_await client.sendRequest(std::move(first));
             if (firstResponse.body() != "seeded") co_return 1;
-            auto second = client.newRequest();
+            auto second = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto secondResponse = co_await client.sendRequest(std::move(second));
             co_return secondResponse.body() == "bounded" ? 0 : 2;
         });
@@ -734,7 +724,7 @@ int testAutomaticCookieInsertionFailureDoesNotRetainPartialCookie() {
         auto poolClient = registry.get(&poolResource, scope);
         auto operationClient = registry.get(&operationResource, scope);
 
-        auto first = poolClient.newRequest();
+        auto first = poolClient.newRequest(ruvia::HttpKnownMethod::kGet, "/");
         poolResource.failAllocationSizeRange(512, 2048);
         bool storageAllocationFailed = false;
         try {
@@ -746,7 +736,7 @@ int testAutomaticCookieInsertionFailureDoesNotRetainPartialCookie() {
         }
         poolResource.disableFailures();
 
-        auto second = poolClient.newRequest();
+        auto second = poolClient.newRequest(ruvia::HttpKnownMethod::kGet, "/");
         auto secondResponse = co_await operationClient.sendRequest(std::move(second));
         scope.close();
         registry.closeNow();
@@ -780,16 +770,17 @@ int testCookieHostOnlyIdentity() {
             domain != std::string::npos && hostOnly < domain;
         writeResponse(socket, distinct ? "distinct" : "collapsed");
     });
-    auto config = plainConfig(server.port());
-    config.host = "localhost";
+    auto config = ruvia::HttpClientConfig::http("localhost");
+    config.setPort(server.port());
+    config.protocol = ruvia::HttpClientProtocol::kHttp1Only;
     config.cookiesEnabled = true;
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto first = client.newRequest();
+            auto first = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto firstResponse = co_await client.sendRequest(std::move(first));
             if (firstResponse.body() != "seeded") co_return 1;
-            auto second = client.newRequest();
+            auto second = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto secondResponse = co_await client.sendRequest(std::move(second));
             co_return secondResponse.body() == "distinct" ? 0 : 2;
         });
@@ -818,11 +809,10 @@ int testCookiePathOrdering() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto first = client.newRequest();
+            auto first = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto firstResponse = co_await client.sendRequest(std::move(first));
             if (firstResponse.body() != "seeded") co_return 1;
-            auto second = client.newRequest();
-            second.setTarget("/account/profile");
+            auto second = client.newRequest(ruvia::HttpKnownMethod::kGet, "/account/profile");
             auto secondResponse = co_await client.sendRequest(std::move(second));
             co_return secondResponse.body() == "ordered" ? 0 : 2;
         });
@@ -846,10 +836,10 @@ int testLargeCookieMaxAge() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto first = client.newRequest();
+            auto first = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto firstResponse = co_await client.sendRequest(std::move(first));
             if (firstResponse.body() != "seeded") co_return 1;
-            auto second = client.newRequest();
+            auto second = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto secondResponse = co_await client.sendRequest(std::move(second));
             co_return secondResponse.body() == "retained" ? 0 : 2;
         });
@@ -874,10 +864,10 @@ int testNamelessResponseCookie() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto first = client.newRequest();
+            auto first = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto firstResponse = co_await client.sendRequest(std::move(first));
             if (firstResponse.body() != "seeded") co_return 1;
-            auto second = client.newRequest();
+            auto second = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto secondResponse = co_await client.sendRequest(std::move(second));
             co_return secondResponse.body() == "serialized" ? 0 : 2;
         });
@@ -910,10 +900,10 @@ int testAutomaticCookieJarRejectsPairsThatCannotBeSerialized() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto first = client.newRequest();
+            auto first = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto firstResponse = co_await client.sendRequest(std::move(first));
             if (firstResponse.body() != "seeded") co_return 1;
-            auto second = client.newRequest();
+            auto second = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto secondResponse = co_await client.sendRequest(std::move(second));
             co_return secondResponse.body() == "filtered" ? 0 : 2;
         });
@@ -939,10 +929,10 @@ int testFarFutureCookieExpires() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto first = client.newRequest();
+            auto first = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto firstResponse = co_await client.sendRequest(std::move(first));
             if (firstResponse.body() != "seeded") co_return 1;
-            auto second = client.newRequest();
+            auto second = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto secondResponse = co_await client.sendRequest(std::move(second));
             co_return secondResponse.body() == "retained" ? 0 : 2;
         });
@@ -971,10 +961,10 @@ int testCookieStorageSecurityConstraints() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto first = client.newRequest();
+            auto first = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto firstResponse = co_await client.sendRequest(std::move(first));
             if (firstResponse.body() != "seeded") co_return 1;
-            auto second = client.newRequest();
+            auto second = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto secondResponse = co_await client.sendRequest(std::move(second));
             co_return secondResponse.body() == "rejected" ? 0 : 2;
         });
@@ -1000,10 +990,10 @@ int testIpCookieDomainSuffixRejection() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto first = client.newRequest();
+            auto first = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto firstResponse = co_await client.sendRequest(std::move(first));
             if (firstResponse.body() != "seeded") co_return 1;
-            auto second = client.newRequest();
+            auto second = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto secondResponse = co_await client.sendRequest(std::move(second));
             co_return secondResponse.body() == "restricted" ? 0 : 2;
         });
@@ -1031,7 +1021,7 @@ int testHttp1ResponseTrailers() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto request = client.newRequest();
+            auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/");
             auto response = co_await client.sendRequest(std::move(request));
             if (response.body() != "abc") co_return 1;
             if (response.trailer("server-timing") !=
@@ -1057,10 +1047,9 @@ int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
-            auto request = client.newRequest();
-            request.setMethod(ruvia::HttpKnownMethod::kPost)
-                .addHeader("Connection", "Upgrade")
-                .addHeader("Upgrade", "websocket")
+            auto request = client.newRequest(ruvia::HttpKnownMethod::kPost, "/");
+            request.appendHeader("Connection", "Upgrade")
+                .appendHeader("Upgrade", "websocket")
                 .setBody("payload");
             try {
                 (void)co_await client.sendRequest(std::move(request));

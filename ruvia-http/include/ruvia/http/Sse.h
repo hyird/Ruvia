@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
@@ -21,11 +22,11 @@ struct SseMessage final {
     std::optional<::ruvia::BorrowedText> data;
     ::ruvia::BorrowedText event;
     std::optional<::ruvia::BorrowedText> id;
-    std::optional<std::uint32_t> retry;
+    std::optional<std::chrono::milliseconds> retry;
 };
 
-// Replace `frame` with one complete UTF-8 event-stream block. Invalid event/id
-// line syntax throws std::invalid_argument; allocation follows frame's resource.
-void formatSseMessage(std::pmr::string& frame, const SseMessage& message);
+// Build one complete UTF-8 event-stream block. Invalid event/id line syntax
+// throws std::invalid_argument.
+[[nodiscard]] std::pmr::string formatSseMessage(const SseMessage& message, std::pmr::memory_resource* resource = nullptr);
 
 }  // namespace ruvia

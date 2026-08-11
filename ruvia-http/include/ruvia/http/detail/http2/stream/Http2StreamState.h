@@ -94,6 +94,14 @@ public:
         return std::exchange(windowDebt_, 0);
     }
 
+    [[nodiscard]] bool takeWindowDebt(std::uint32_t bytes) noexcept {
+        if (bytes == 0 || bytes > windowDebt_) {
+            return false;
+        }
+        windowDebt_ -= bytes;
+        return true;
+    }
+
     [[nodiscard]] Http2ReceiveWindowCredit& receiveWindowCredit() & noexcept {
         return receiveWindowCredit_;
     }

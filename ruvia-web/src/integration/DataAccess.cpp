@@ -31,13 +31,13 @@ StopToken DataAccessContext::stopToken() const noexcept {
 DbHandle DataAccessContext::db() const {
     state_->requireConnectedOnWorker();
     return state_->access().databases().get(resource(), operationScope_).withOptions(
-        DbOperationOptions{.timeout = std::nullopt, .stopToken = stopToken()});
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken()});
 }
 
 DbHandle DataAccessContext::db(std::string_view alias) const {
     state_->requireConnectedOnWorker();
     return state_->access().databases().get(alias, resource(), operationScope_).withOptions(
-        DbOperationOptions{.timeout = std::nullopt, .stopToken = stopToken()});
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken()});
 }
 #endif
 
@@ -45,13 +45,13 @@ DbHandle DataAccessContext::db(std::string_view alias) const {
 RedisHandle DataAccessContext::redis() const {
     state_->requireConnectedOnWorker();
     return state_->access().redis().get(resource(), operationScope_).withOptions(
-        RedisOperationOptions{.timeout = std::nullopt, .stopToken = stopToken()});
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken()});
 }
 
 RedisHandle DataAccessContext::redis(std::string_view alias) const {
     state_->requireConnectedOnWorker();
     return state_->access().redis().get(alias, resource(), operationScope_).withOptions(
-        RedisOperationOptions{.timeout = std::nullopt, .stopToken = stopToken()});
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken()});
 }
 #endif
 

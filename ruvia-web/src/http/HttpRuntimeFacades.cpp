@@ -30,7 +30,7 @@ private:
     bool& active_;
 };
 
-ruvia::Task<void> writeOwned(void* target, ruvia::Task<void> (*write)(void*, std::string_view), std::pmr::string chunk, bool& outputActive) {
+ruvia::Task<void> writeTransferredChunk(void* target, ruvia::Task<void> (*write)(void*, std::string_view), std::pmr::string chunk, bool& outputActive) {
     ResponseStreamOutputGuard guard(outputActive);
     co_await write(target, chunk);
 }
@@ -67,11 +67,11 @@ ruvia::Task<void> endOwned(void* target, ruvia::Task<void> (*end)(void*, std::sp
     co_await end(target, trailers.views);
 }
 
-ruvia::Task<void> writeWebSocketOwned(void* target, ruvia::Task<void> (*write)(void*, ruvia::WebSocketOpcode, std::string_view), ruvia::WebSocketOpcode opcode, std::pmr::string payload) {
+ruvia::Task<void> writeWebSocketPayload(void* target, ruvia::Task<void> (*write)(void*, ruvia::WebSocketOpcode, std::string_view), ruvia::WebSocketOpcode opcode, std::pmr::string payload) {
     co_await write(target, opcode, payload);
 }
 
-ruvia::Task<void> closeWebSocketOwned(void* target, ruvia::Task<void> (*close)(void*, std::uint16_t, std::string_view), std::uint16_t code, std::pmr::string reason) {
+ruvia::Task<void> closeWebSocketWithReason(void* target, ruvia::Task<void> (*close)(void*, std::uint16_t, std::string_view), std::uint16_t code, std::pmr::string reason) {
     co_await close(target, code, reason);
 }
 
@@ -155,19 +155,19 @@ ScopedOperation<std::optional<std::string_view>> BodyReader::read() {
 ScopedOperation<void> ResponseStreamWriter::write(std::string_view chunk) {
     requireActive();
     std::pmr::string owned(chunk, detail::processResource());
-    return writeOwned(std::move(owned));
+    return write(std::move(owned));
 }
 
-ScopedOperation<void> ResponseStreamWriter::writeOwned(std::pmr::string chunk) {
+ScopedOperation<void> ResponseStreamWriter::write(std::pmr::string&& chunk) {
     requireActive();
-    return detail::makeScopedOperation(operationScope_, ::writeOwned(target_, write_, std::move(chunk), outputActive_));
+    return detail::makeScopedOperation(operationScope_, writeTransferredChunk(target_, write_, std::move(chunk), outputActive_));
 }
 
 ScopedOperation<void> ResponseStreamWriter::writeln(std::string_view chunk) {
     requireActive();
     std::pmr::string owned(chunk, detail::processResource());
     owned.push_back('\n');
-    return writeOwned(std::move(owned));
+    return write(std::move(owned));
 }
 
 ScopedOperation<TimerSleepResult> ResponseStreamWriter::sleep(std::chrono::milliseconds duration) {
@@ -209,26 +209,26 @@ ScopedOperation<void> WebSocket::ping(std::string_view payload) {
     return write(WebSocketOpcode::kPing, payload);
 }
 
-ScopedOperation<void> WebSocket::textOwned(std::pmr::string payload) {
-    return writeOwned(WebSocketOpcode::kText, std::move(payload));
+ScopedOperation<void> WebSocket::text(std::pmr::string&& payload) {
+    return write(WebSocketOpcode::kText, std::move(payload));
 }
 
-ScopedOperation<void> WebSocket::binaryOwned(std::pmr::string payload) {
-    return writeOwned(WebSocketOpcode::kBinary, std::move(payload));
+ScopedOperation<void> WebSocket::binary(std::pmr::string&& payload) {
+    return write(WebSocketOpcode::kBinary, std::move(payload));
 }
 
-ScopedOperation<void> WebSocket::pongOwned(std::pmr::string payload) {
-    return writeOwned(WebSocketOpcode::kPong, std::move(payload));
+ScopedOperation<void> WebSocket::pong(std::pmr::string&& payload) {
+    return write(WebSocketOpcode::kPong, std::move(payload));
 }
 
-ScopedOperation<void> WebSocket::pingOwned(std::pmr::string payload) {
-    return writeOwned(WebSocketOpcode::kPing, std::move(payload));
+ScopedOperation<void> WebSocket::ping(std::pmr::string&& payload) {
+    return write(WebSocketOpcode::kPing, std::move(payload));
 }
 
 ScopedOperation<void> WebSocket::close(std::uint16_t code, std::string_view reason) {
     requireActive();
     std::pmr::string owned(reason, detail::processResource());
-    return detail::makeScopedOperation(operationScope_, closeWebSocketOwned(target_, close_, code, std::move(owned)));
+    return detail::makeScopedOperation(operationScope_, closeWebSocketWithReason(target_, close_, code, std::move(owned)));
 }
 
 void WebSocket::abort() noexcept {
@@ -241,19 +241,18 @@ void WebSocket::abort() noexcept {
 ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::string_view payload) {
     requireActive();
     std::pmr::string owned(payload, detail::processResource());
-    return writeOwned(opcode, std::move(owned));
+    return write(opcode, std::move(owned));
 }
 
-ScopedOperation<void> WebSocket::writeOwned(WebSocketOpcode opcode, std::pmr::string payload) {
+ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::pmr::string&& payload) {
     requireActive();
-    return detail::makeScopedOperation(operationScope_, writeWebSocketOwned(target_, write_, opcode, std::move(payload)));
+    return detail::makeScopedOperation(operationScope_, writeWebSocketPayload(target_, write_, opcode, std::move(payload)));
 }
 
 ScopedOperation<void> SseWriter::write(const SseMessage& message) {
     auto& streamWriter = writer();
-    std::pmr::string frame(detail::processResource());
-    formatSseMessage(frame, message);
-    return streamWriter.writeOwned(std::move(frame));
+    auto frame = formatSseMessage(message, detail::processResource());
+    return streamWriter.write(std::move(frame));
 }
 
 }  // namespace ruvia

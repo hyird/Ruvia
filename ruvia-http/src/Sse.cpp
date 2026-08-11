@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <system_error>
 
+#include "ruvia/http/detail/util/PmrResource.h"
+
 namespace ruvia {
 namespace {
 
@@ -27,8 +29,8 @@ void appendSseData(std::pmr::string& frame, std::string_view data) {
     }
 }
 
-void appendUnsigned(std::pmr::string& frame, std::uint32_t value) {
-    std::array<char, 10> buffer;
+void appendUnsigned(std::pmr::string& frame, std::uint64_t value) {
+    std::array<char, 20> buffer;
     const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
     if (ec != std::errc{}) {
         throw std::logic_error("failed to format SSE retry value");
@@ -38,15 +40,18 @@ void appendUnsigned(std::pmr::string& frame, std::uint32_t value) {
 
 }  // namespace
 
-void formatSseMessage(std::pmr::string& frame, const SseMessage& message) {
+std::pmr::string formatSseMessage(const SseMessage& message, std::pmr::memory_resource* resource) {
     if (message.event.view().find_first_of("\r\n") != std::string_view::npos || (message.id.has_value() && message.id->view().find_first_of("\r\n") != std::string_view::npos)) {
         throw std::invalid_argument("SSE event and id must not contain CR or LF");
     }
     if (message.id.has_value() && message.id->view().find('\0') != std::string_view::npos) {
         throw std::invalid_argument("SSE id must not contain a NUL character");
     }
+    if (message.retry.has_value() && message.retry->count() < 0) {
+        throw std::invalid_argument("SSE retry delay must not be negative");
+    }
 
-    frame.clear();
+    std::pmr::string frame(detail::httpPmrResourceOrDefault(resource));
     if (!message.event.empty()) {
         frame.append("event: ");
         frame.append(message.event.data(), message.event.size());
@@ -62,13 +67,14 @@ void formatSseMessage(std::pmr::string& frame, const SseMessage& message) {
     }
     if (message.retry.has_value()) {
         frame.append("retry: ");
-        appendUnsigned(frame, *message.retry);
+        appendUnsigned(frame, static_cast<std::uint64_t>(message.retry->count()));
         frame.push_back('\n');
     }
     if (message.data.has_value()) {
         appendSseData(frame, message.data->view());
     }
     frame.push_back('\n');
+    return frame;
 }
 
 }  // namespace ruvia

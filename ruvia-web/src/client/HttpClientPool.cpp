@@ -155,6 +155,17 @@ HttpClientPool::Lease::~Lease() {
 }
 
 void HttpClientPool::close(Connection& connection) noexcept {
+    auto& runtime = *connection.http2Runtime;
+    if (runtime.running) {
+        // A multiplexed connection owns background reader/writer tasks. Route
+        // every terminal close through their shared failure transition so both
+        // drivers and all pending streams are woken before join().
+        failHttp2Session(
+            connection,
+            runtime.generation,
+            std::make_error_code(std::errc::operation_canceled));
+        return;
+    }
     connection.deadlineTimer->cancel();
     connection.deadline.reset();
     connection.resolver.cancel();
@@ -163,12 +174,11 @@ void HttpClientPool::close(Connection& connection) noexcept {
     connection.stream.lowest_layer().close(ignored);
     connection.connected = false;
     connection.protocol = WireProtocol::kUnknown;
-    if (connection.http2Runtime->sessionTasks == 0) {
+    if (runtime.sessionTasks == 0) {
         connection.http2.reset();
-        connection.http2Runtime->running = false;
-        connection.http2Runtime->draining = false;
-        connection.http2Runtime->failed = false;
-        connection.http2Runtime->terminalError.clear();
+        runtime.running = false;
+        runtime.draining = false;
+        runtime.failed = false;
     }
     connection.readBuffer.clear();
     connection.writeBuffer.clear();
@@ -583,7 +593,6 @@ Task<void> HttpClientPool::ensureConnected(
     runtime.running = false;
     runtime.draining = false;
     runtime.failed = false;
-    runtime.terminalError.clear();
     const auto timeout = operationTimeout.constrainedBy(config_.connectTimeout);
     std::array<char, 8> portBytes{};
     const auto [portEnd, ec] = std::to_chars(portBytes.data(), portBytes.data() + portBytes.size(), httpClientPort(config_));
@@ -641,7 +650,7 @@ Task<void> HttpClientPool::ensureConnected(
     if (connection.protocol == WireProtocol::kHttp2) co_await initializeHttp2(connection, timeout);
 }
 
-Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, HttpClientOperationOptions options, std::pmr::memory_resource* responseResource) {
+Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, OperationOptions options, std::pmr::memory_resource* responseResource) {
     responseResource = httpPmrResourceOrDefault(responseResource);
     const OperationTimeout timeout(options.timeout.has_value() ? options.timeout : config_.requestTimeout);
     const auto acquireTimeout = timeout.constrainedBy(config_.acquireTimeout);
@@ -665,9 +674,14 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, Http
     bool discardConnection = true;
     try {
         co_await ensureConnected(connection, timeout, acquireTimeout, options.stopToken);
+        if (connection.protocol == WireProtocol::kHttp2) {
+            // This lease now shares a multiplexed session with background
+            // drivers and possibly other requests. A request-local failure must
+            // not discard that shared connection.
+            discardConnection = false;
+        }
         HttpClientResponse response(responseResource);
         if (connection.protocol == WireProtocol::kHttp2) {
-            discardConnection = false;
             response = co_await executeHttp2(connection, request, timeout, options.stopToken, responseResource);
         } else {
             // A negotiated HTTP/1 connection can have several operations that

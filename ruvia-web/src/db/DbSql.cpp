@@ -86,7 +86,7 @@ void validateMariaDbSqlLength(std::size_t length) {
     }
 }
 
-std::runtime_error mysqlError(const st_mysql& connection, std::string_view operation) {
+DbError mysqlError(const st_mysql& connection, std::string_view operation, DbError::Code errorCode) {
     auto* mutableConnection = const_cast<st_mysql*>(&connection);
     const auto* message = mysql_error(mutableConnection);
     const auto code = mysql_errno(mutableConnection);
@@ -107,7 +107,12 @@ std::runtime_error mysqlError(const st_mysql& connection, std::string_view opera
         error.append(": ");
         error.append(message);
     }
-    return std::runtime_error(error.c_str());
+    return DbError(
+        errorCode,
+        DbDriver::kMariaDb,
+        std::string(error),
+        code == 0 ? std::nullopt : std::optional<std::int64_t>(code),
+        state == nullptr ? std::string{} : std::string(state));
 }
 
 void freeStoredResult(void* result) noexcept {

@@ -29,7 +29,7 @@ RUVIA_TEST(http2_connection_feed_data_emits_body_chunk_and_end) {
     RUVIA_CHECK_EQ(end.messageEnd()->streamId(), static_cast<std::uint32_t>(1));
 
     RUVIA_CHECK(conn.pendingOutput().empty());
-    conn.releaseReceivedData(1);
+    conn.releaseAllReceivedData(1);
     // END_STREAM leaves no live stream scope. The consumed connection credit is
     // retained below the batching threshold without manufacturing output.
     RUVIA_CHECK(conn.pendingOutput().empty());
@@ -118,7 +118,7 @@ RUVIA_TEST(http2_connection_same_feed_data_credit_queues_owner_batch) {
 
     // One owner acknowledgement releases the complete copied event batch and
     // queues its six flow-controlled octets once in each live receive scope.
-    conn.releaseReceivedData(1);
+    conn.releaseAllReceivedData(1);
     RUVIA_CHECK(conn.pendingOutput().empty());
 }
 

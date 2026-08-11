@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -29,6 +30,27 @@ using ruvia::detail::WsMessageEvent;
 using ruvia::detail::WsOutputConsumeStatus;
 using ruvia::detail::WsProtocolErrorEvent;
 using ruvia::detail::WsTransportDisposition;
+
+class ToggleAllocationResource final : public std::pmr::memory_resource {
+public:
+    void reject(bool value = true) noexcept { reject_ = value; }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (reject_) throw std::bad_alloc();
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool reject_{false};
+};
 
 template <typename T>
 concept HasLooseWsEventFields = requires(T& event) {
@@ -293,6 +315,26 @@ RUVIA_TEST(ws_connection_submit_frame_encodes_unmasked_frame) {
     RUVIA_CHECK(out.substr(2) == std::string_view("hello"));
 }
 
+RUVIA_TEST(ws_connection_submit_frame_accepts_its_current_output_as_input) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string input(&resource);
+    WsConnection conn(input);
+    const std::string payload(128, 'x');
+
+    RUVIA_CHECK(conn.submitFrame(WebSocketOpcode::kBinary, payload) ==
+        WsFrameSubmitStatus::kAccepted);
+    const auto borrowed = conn.outputPlan().bytes();
+    const std::string expected(borrowed);
+    RUVIA_CHECK(conn.submitFrame(WebSocketOpcode::kBinary, borrowed) ==
+        WsFrameSubmitStatus::kAccepted);
+
+    const auto output = conn.outputPlan().bytes();
+    const auto secondOffset = expected.size();
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(output[secondOffset]), 0x82U);
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(output[secondOffset + 1]), 126U);
+    RUVIA_CHECK(output.substr(secondOffset + 4) == expected);
+}
+
 // A partial frame (only the first byte) is buffered and yields no event until the rest
 // arrives on a later feed.
 RUVIA_TEST(ws_connection_needs_more_on_partial_frame) {
@@ -456,6 +498,54 @@ RUVIA_TEST(ws_connection_outbound_frame_rejections_are_typed_and_transactional) 
     RUVIA_CHECK(conn.outputPlan().bytes().empty());
     RUVIA_CHECK(conn.livenessMode() == WsLivenessMode::kOpen);
 }
+
+#if !defined(_MSC_VER)
+RUVIA_TEST(ws_connection_outbound_allocation_failure_publishes_no_partial_frame) {
+    ToggleAllocationResource resource;
+    std::pmr::string input(&resource);
+    WsConnection conn(input);
+    const std::string payload(128, 'x');
+
+    resource.reject();
+    bool threw = false;
+    try {
+        (void)conn.submitFrame(WebSocketOpcode::kBinary, payload);
+    } catch (const std::bad_alloc&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
+    RUVIA_CHECK(conn.outputPlan().bytes().empty());
+    RUVIA_CHECK(conn.livenessMode() == WsLivenessMode::kOpen);
+
+    resource.reject(false);
+    RUVIA_CHECK(conn.submitFrame(WebSocketOpcode::kBinary, payload) == WsFrameSubmitStatus::kAccepted);
+    RUVIA_CHECK_EQ(conn.outputPlan().bytes().size(), payload.size() + 4);
+}
+
+RUVIA_TEST(ws_connection_inbound_allocation_failure_is_explicitly_terminal) {
+    ToggleAllocationResource resource;
+    std::pmr::string input(&resource);
+    WsConnection conn(input);
+    const std::string payload(100, 'x');
+    const auto firstFragment = maskedFrame(std::pmr::get_default_resource(), 0x1, payload, false);
+    input.append(firstFragment);
+
+    resource.reject();
+    bool threw = false;
+    try {
+        (void)conn.poll();
+    } catch (const std::bad_alloc&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
+    RUVIA_CHECK(conn.livenessMode() == WsLivenessMode::kInactive);
+    RUVIA_CHECK(conn.outputPlan().bytes().empty());
+
+    resource.reject(false);
+    const auto terminal = conn.poll();
+    RUVIA_CHECK(terminal && terminal->transportEnd() != nullptr);
+}
+#endif
 
 RUVIA_TEST(ws_connection_outbound_close_rejections_are_typed_and_transactional) {
     std::pmr::monotonic_buffer_resource resource;

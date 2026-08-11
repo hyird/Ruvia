@@ -272,9 +272,9 @@ struct HttpClientRequestView {
 
     ::ruvia::BorrowedText method{"GET"};
     ::ruvia::BorrowedText target{"/"};
-    // Borrowed header table; its elements and their strings must remain alive
-    // and unchanged through request preparation and any corresponding HTTP/1
-    // response-head decision that inspects the prepared request context.
+    // Borrowed header table; its elements and strings must remain alive and
+    // unchanged through the synchronous prepare/submit call. HTTP/1 preparation
+    // owns the small set of facts needed by the later response exchange.
     HeaderInit headers{};
     HttpClientRequestContentView content{HttpClientRequestContentView::none()};
 };

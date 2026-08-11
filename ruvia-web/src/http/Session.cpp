@@ -34,7 +34,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     }
 
     const auto connection = getConnInfo(c);
-    const bool secure = connection.secure();
+    const bool secure = connection.scheme() == HttpScheme::kHttps;
     if (const auto* cleared = state.cleared()) {
         if (cleared->oldId.has_value()) {
             std::pmr::string key(c.resource());

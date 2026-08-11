@@ -71,29 +71,28 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
 
 }  // namespace detail
 
-HttpClientRequest::HttpClientRequest(std::pmr::memory_resource* resource)
-    : method_("GET", detail::httpPmrResourceOrDefault(resource)),
-      target_("/", detail::httpPmrResourceOrDefault(resource)),
+HttpClientRequest::HttpClientRequest(
+    std::string_view method,
+    std::string_view target,
+    std::pmr::memory_resource* resource)
+    : method_(method, detail::httpPmrResourceOrDefault(resource)),
+      target_(target, detail::httpPmrResourceOrDefault(resource)),
       headers_(detail::httpPmrResourceOrDefault(resource)),
       body_(detail::httpPmrResourceOrDefault(resource)) {}
 
-HttpClientRequest& HttpClientRequest::setMethod(HttpKnownMethod method) {
-    const auto token = knownHttpMethodToken(method);
-    if (token.empty()) throw std::invalid_argument("unknown HTTP method requires an explicit token");
-    return setMethod(token);
-}
-
-HttpClientRequest& HttpClientRequest::setMethod(std::string_view method) {
-    method_.assign(method);
+HttpClientRequest& HttpClientRequest::setHeader(std::string_view name, std::string_view value) {
+    auto* const resource = headers_.get_allocator().resource();
+    Header replacement(name, value, resource);
+    for (auto& ch : replacement.name) {
+        ch = static_cast<char>(detail::httpAsciiToLower(static_cast<unsigned char>(ch)));
+    }
+    headers_.reserve(headers_.size() + 1);
+    removeHeader(name);
+    headers_.push_back(std::move(replacement));
     return *this;
 }
 
-HttpClientRequest& HttpClientRequest::setTarget(std::string_view target) {
-    target_.assign(target);
-    return *this;
-}
-
-HttpClientRequest& HttpClientRequest::addHeader(std::string_view name, std::string_view value) {
+HttpClientRequest& HttpClientRequest::appendHeader(std::string_view name, std::string_view value) {
     auto& header = headers_.emplace_back(name, value, headers_.get_allocator().resource());
     // HTTP field names are case-insensitive, but HTTP/2 requires their wire form
     // to be lowercase (RFC 9113 Section 8.2). Normalize once at the owning public
@@ -112,12 +111,7 @@ HttpClientRequest& HttpClientRequest::removeHeader(std::string_view name) {
 }
 
 HttpClientRequest& HttpClientRequest::setContentType(std::string_view contentType) {
-    auto* const resource = headers_.get_allocator().resource();
-    Header replacement("content-type", contentType, resource);
-    headers_.reserve(headers_.size() + 1);
-    removeHeader("content-type");
-    headers_.push_back(std::move(replacement));
-    return *this;
+    return setHeader("content-type", contentType);
 }
 
 HttpClientRequest& HttpClientRequest::addCookie(std::string_view name, std::string_view value) {
@@ -173,44 +167,39 @@ void HttpClientHandle::expireCapability(detail::ScopedCapabilityNode& capability
     static_cast<HttpClientHandle&>(capability).pool_ = nullptr;
 }
 
-HttpClientHandle HttpClientHandle::withOptions(HttpClientOperationOptions options) const {
-    detail::validateHttpClientOperationOptions(options);
+HttpClientHandle HttpClientHandle::withOptions(OperationOptions options) const {
+    detail::validateOperationOptions(options);
     requireActive();
     HttpClientHandle copy(*this);
-    copy.options_ = detail::mergeHttpClientOperationOptions(options_, std::move(options));
+    copy.options_ = detail::mergeOperationOptions(options_, std::move(options));
     return copy;
 }
 
-HttpClientRequest HttpClientHandle::newRequest() const {
+HttpClientRequest HttpClientHandle::newRequest(HttpKnownMethod method, std::string_view target) const {
     requireActive();
-    return HttpClientRequest(detail::httpPmrResourceOrDefault(resource_));
+    const auto token = knownHttpMethodToken(method);
+    if (token.empty()) {
+        throw std::invalid_argument("unknown HTTP method requires an explicit token");
+    }
+    return HttpClientRequest(token, target, detail::httpPmrResourceOrDefault(resource_));
 }
 
-ScopedOperation<HttpClientResponse> HttpClientHandle::sendRequest(HttpClientRequest request, HttpClientOperationOptions options) const {
+HttpClientRequest HttpClientHandle::newRequest(std::string_view method, std::string_view target) const {
     requireActive();
-    options = detail::mergeHttpClientOperationOptions(options_, std::move(options));
-    detail::validateHttpClientOperationOptions(options);
+    return HttpClientRequest(method, target, detail::httpPmrResourceOrDefault(resource_));
+}
+
+ScopedOperation<HttpClientResponse> HttpClientHandle::sendRequest(HttpClientRequest request) const {
+    requireActive();
     return detail::makeScopedOperation(
         operationScope(),
-        pool_->execute(std::move(request), std::move(options), detail::httpPmrResourceOrDefault(resource_)));
-}
-
-ScopedOperation<HttpClientResponse> HttpClientHandle::sendRequest(HttpClientRequest request, std::chrono::milliseconds timeout) const {
-    return sendRequest(std::move(request), HttpClientOperationOptions{.timeout = timeout, .stopToken = {}});
+        pool_->execute(std::move(request), options_, detail::httpPmrResourceOrDefault(resource_)));
 }
 
 HttpClientStats HttpClientHandle::stats() const {
     requireActive();
     return pool_->stats();
 }
-
-std::size_t HttpClientHandle::bufferedRequests() const { return stats().bufferedRequests; }
-std::size_t HttpClientHandle::outstandingRequests() const {
-    const auto value = stats();
-    return value.bufferedRequests + value.inFlightRequests;
-}
-std::size_t HttpClientHandle::bytesSent() const { return stats().bytesSent; }
-std::size_t HttpClientHandle::bytesReceived() const { return stats().bytesReceived; }
 
 std::string_view HttpClientHandle::host() const& {
     requireActive();
@@ -222,25 +211,21 @@ std::uint16_t HttpClientHandle::port() const {
     return pool_->port();
 }
 
-bool HttpClientHandle::secure() const {
+HttpScheme HttpClientHandle::scheme() const {
     requireActive();
-    return pool_->secure();
-}
-
-bool HttpClientHandle::onDefaultPort() const {
-    return port() == (secure() ? 443 : 80);
+    return pool_->scheme();
 }
 
 HttpClientHandle Context::httpClient() const {
     if (httpClients_ == nullptr) throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
     return httpClients_->get(resource(), operationScope_).withOptions(
-        HttpClientOperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 
 HttpClientHandle Context::httpClient(std::string_view alias) const {
     if (httpClients_ == nullptr) throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
     return httpClients_->get(alias, resource(), operationScope_).withOptions(
-        HttpClientOperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 
 }  // namespace ruvia

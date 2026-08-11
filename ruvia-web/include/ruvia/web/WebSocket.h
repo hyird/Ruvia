@@ -6,11 +6,14 @@
 #include "ruvia/http/BorrowedText.h"
 
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 namespace ruvia {
 
@@ -73,29 +76,57 @@ public:
 
     [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read();
 
-    /// text()/binary()/pong()/ping() copy the payload into process-owned PMR
-    /// storage before returning. Hot-path producers that already hold a buffer
-    /// in request-owned storage should build it with the request arena and move
-    /// it in through the matching *Owned() entry to skip that copy.
+    /// The string_view overloads copy payloads into process-owned PMR storage
+    /// before returning. Hot-path producers that already hold a buffer in
+    /// request-owned storage can move it into the matching PMR-string overload
+    /// to skip that copy.
     ScopedOperation<void> text(std::string_view payload);
+
+    template <typename Text>
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
+                 std::constructible_from<std::string_view, Text&&>)
+    ScopedOperation<void> text(Text&& payload) {
+        return text(std::string_view(std::forward<Text>(payload)));
+    }
+
+    /// Zero-copy text frame: takes ownership of an already-allocated payload.
+    ScopedOperation<void> text(std::pmr::string&& payload);
 
     ScopedOperation<void> binary(std::string_view payload);
 
+    template <typename Text>
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
+                 std::constructible_from<std::string_view, Text&&>)
+    ScopedOperation<void> binary(Text&& payload) {
+        return binary(std::string_view(std::forward<Text>(payload)));
+    }
+
+    /// Zero-copy binary frame.
+    ScopedOperation<void> binary(std::pmr::string&& payload);
+
     ScopedOperation<void> pong(std::string_view payload);
+
+    template <typename Text>
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
+                 std::constructible_from<std::string_view, Text&&>)
+    ScopedOperation<void> pong(Text&& payload) {
+        return pong(std::string_view(std::forward<Text>(payload)));
+    }
+
+    /// Zero-copy pong frame.
+    ScopedOperation<void> pong(std::pmr::string&& payload);
 
     ScopedOperation<void> ping(std::string_view payload = {});
 
-    /// Zero-copy text frame: takes ownership of an already-allocated payload.
-    ScopedOperation<void> textOwned(std::pmr::string payload);
-
-    /// Zero-copy binary frame.
-    ScopedOperation<void> binaryOwned(std::pmr::string payload);
-
-    /// Zero-copy pong frame.
-    ScopedOperation<void> pongOwned(std::pmr::string payload);
+    template <typename Text>
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
+                 std::constructible_from<std::string_view, Text&&>)
+    ScopedOperation<void> ping(Text&& payload) {
+        return ping(std::string_view(std::forward<Text>(payload)));
+    }
 
     /// Zero-copy ping frame.
-    ScopedOperation<void> pingOwned(std::pmr::string payload);
+    ScopedOperation<void> ping(std::pmr::string&& payload);
 
     ScopedOperation<void> close(std::uint16_t code = 1000, std::string_view reason = {});
     void abort() noexcept;
@@ -122,7 +153,7 @@ private:
     }
 
     ScopedOperation<void> write(WebSocketOpcode opcode, std::string_view payload);
-    ScopedOperation<void> writeOwned(WebSocketOpcode opcode, std::pmr::string payload);
+    ScopedOperation<void> write(WebSocketOpcode opcode, std::pmr::string&& payload);
 
     void* target_;
     Read read_;

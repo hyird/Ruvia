@@ -131,7 +131,7 @@ private:
         if (!bodyQueue_.empty()) {
             return;
         }
-        connection_.releaseReceivedData(streamId_);
+        connection_.releaseAllReceivedData(streamId_);
         wakeWriter();
     }
 
@@ -166,7 +166,7 @@ public:
             }
             if (const auto chunk = bodyQueue_.pop(); !chunk.empty()) {
                 if (bodyQueue_.empty()) {
-                    connection_.releaseReceivedData(streamId_);
+                    connection_.releaseAllReceivedData(streamId_);
                     writeSignal_.notify();
                 }
                 co_return chunk;

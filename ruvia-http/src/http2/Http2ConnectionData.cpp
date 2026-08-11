@@ -192,7 +192,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             if (flowBytes > 0) {
                 if (!data.empty()) {
                     stream->addWindowDebt(static_cast<std::uint32_t>(flowBytes));
-                    events_.push_back(Http2Event::messageBodyChunk(header.streamId, data));
+                    events_.push_back(Http2Event::messageBodyChunk(header.streamId, data, static_cast<std::uint32_t>(flowBytes)));
                 } else {
                     queueConsumedDataCredit(nullptr, static_cast<std::uint32_t>(flowBytes));
                 }
@@ -235,7 +235,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     // participate in framing, END_STREAM, and flow control without creating a
     // no-progress event for every tiny wire frame.
     if (deliverData) {
-        events_.push_back(tunnelData ? Http2Event::tunnelData(header.streamId, data) : Http2Event::messageBodyChunk(header.streamId, data));
+        events_.push_back(tunnelData ? Http2Event::tunnelData(header.streamId, data, static_cast<std::uint32_t>(flowBytes)) : Http2Event::messageBodyChunk(header.streamId, data, static_cast<std::uint32_t>(flowBytes)));
     }
     if (endStream) {
         const bool remoteFinished = tunnelData ? stream->finishRemoteTunnel() : stream->finishRemoteContent();

@@ -38,24 +38,16 @@ public:
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
     [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, Params&&... params) {
-        const DbValue values[]{DbValue(std::forward<Params>(params))...};
+        const DbValue values[]{detail::makeImmediateDbParameter(std::forward<Params>(params))...};
         return query(sql, std::span<const DbValue>(values));
     }
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
     [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, Params&&... params) {
-        const DbValue values[]{DbValue(std::forward<Params>(params))...};
+        const DbValue values[]{detail::makeImmediateDbParameter(std::forward<Params>(params))...};
         return execute(sql, std::span<const DbValue>(values));
     }
-
-    template <typename... Params>
-        requires detail::DbTemporaryOwningParameterPack<Params...>
-    ScopedOperation<DbRows> query(std::string_view, Params&&...) = delete;
-
-    template <typename... Params>
-        requires detail::DbTemporaryOwningParameterPack<Params...>
-    ScopedOperation<DbExecResult> execute(std::string_view, Params&&...) = delete;
 
     ScopedOperation<void> commit();
     ScopedOperation<void> rollback();
@@ -66,15 +58,15 @@ private:
     friend class detail::PostgreSqlPool;
 
     struct Lease final {
-        Lease(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, DbOperationOptions options) noexcept;
+        Lease(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
 
         detail::DbPoolRef client;
         std::size_t slot;
         std::pmr::memory_resource* resource;
-        DbOperationOptions options;
+        OperationOptions options;
     };
 
-    DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, DbOperationOptions options) noexcept;
+    DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
     Task<DbRows> queryPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
     Task<DbExecResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
     Task<void> commitTask();

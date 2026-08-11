@@ -63,6 +63,9 @@ void RedisPool::closeNow() noexcept {
         return;
     }
     for (auto& connection : connections_) {
+        if (connection.abortReason == Connection::AbortReason::kNone) {
+            connection.abortReason = Connection::AbortReason::kClosing;
+        }
         close(connection);
     }
 }

@@ -118,7 +118,7 @@ ruvia::Task<void> runCancelledQuery(
     ruvia::detail::ScopedOperationScope operationScope;
     auto db = registry
                   .get(std::pmr::get_default_resource(), operationScope)
-                  .withOptions(ruvia::DbOperationOptions{.stopToken = std::move(stopToken)});
+                  .withOptions(ruvia::OperationOptions{.stopToken = std::move(stopToken)});
     try {
         (void)co_await db.query("SELECT 1");
     } catch (const ruvia::DbError& error) {
@@ -143,7 +143,7 @@ ruvia::Task<void> runClosingConnect(
 }
 
 [[nodiscard]] bool exerciseStopCancellation() {
-    ruvia::detail::StopSource stopSource;
+    ruvia::StopSource stopSource;
     SilentPeer peer;
     asio::io_context ioContext(1);
     auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 16});

@@ -1,5 +1,8 @@
 #include <ruvia/web/detail/http2/Http2SansIoSessionLifecycle.h>
 
+#include <stdexcept>
+#include <string_view>
+
 namespace {
 
 using ruvia::detail::Http2SansIoSessionLifecycle;
@@ -33,8 +36,26 @@ bool failedWriteThenShutdown() {
     return lifecycle.phase() == Http2SansIoSessionPhase::kWriterDoneAfterWriteFailure && lifecycle.writerDone() && lifecycle.writeFailed();
 }
 
+bool writerFailureSurvivesJoinState() {
+    Http2SansIoSessionLifecycle lifecycle;
+    lifecycle.recordWriterFailure(
+        std::make_exception_ptr(std::runtime_error("h2 writer failed")));
+    lifecycle.beginStopping();
+    lifecycle.markWriterDone();
+    try {
+        lifecycle.rethrowWriterFailure();
+    } catch (const std::runtime_error& error) {
+        return lifecycle.writerDone() &&
+            std::string_view(error.what()) == "h2 writer failed";
+    }
+    return false;
+}
+
 }  // namespace
 
 int main() {
-    return cleanShutdown() && failedWriteThenShutdown() ? 0 : 1;
+    return cleanShutdown() && failedWriteThenShutdown() &&
+            writerFailureSurvivesJoinState()
+        ? 0
+        : 1;
 }

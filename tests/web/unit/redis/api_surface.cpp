@@ -3,6 +3,7 @@
 #include <array>
 #include <chrono>
 #include <concepts>
+#include <future>
 #include <initializer_list>
 #include <memory_resource>
 #include <new>
@@ -11,10 +12,19 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
+#include <asio/co_spawn.hpp>
+#include <asio/post.hpp>
+#include <asio/read.hpp>
+#include <asio/use_future.hpp>
+
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/redis/RedisHandle.h"
+#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisTypesAccess.h"
 
@@ -80,6 +90,66 @@ private:
     bool deallocatedAfterRelease_{false};
 };
 
+class StalledRedisCommandServer final {
+public:
+    StalledRedisCommandServer()
+        : acceptor_(ioContext_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+          port_(acceptor_.local_endpoint().port()),
+          commandReadFuture_(commandRead_.get_future()),
+          thread_([this] { run(); }) {}
+
+    ~StalledRedisCommandServer() {
+        std::error_code ignored;
+        acceptor_.close(ignored);
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    StalledRedisCommandServer(const StalledRedisCommandServer&) = delete;
+    StalledRedisCommandServer& operator=(const StalledRedisCommandServer&) = delete;
+
+    [[nodiscard]] std::uint16_t port() const {
+        return port_;
+    }
+
+    void waitUntilCommandRead() {
+        commandReadFuture_.get();
+    }
+
+private:
+    void run() noexcept {
+        try {
+            asio::ip::tcp::socket socket(ioContext_);
+            acceptor_.accept(socket);
+
+            constexpr std::string_view ping = "*1\r\n$4\r\nPING\r\n";
+            std::array<char, ping.size()> command{};
+            std::error_code error;
+            (void)asio::read(socket, asio::buffer(command), error);
+            if (error) {
+                throw std::system_error(error);
+            }
+            commandRead_.set_value();
+
+            std::array<char, 1> ignoredByte{};
+            (void)socket.read_some(asio::buffer(ignoredByte), error);
+        } catch (...) {
+            try {
+                commandRead_.set_exception(std::current_exception());
+            } catch (...) {
+            }
+        }
+    }
+
+    asio::io_context ioContext_;
+    asio::ip::tcp::acceptor acceptor_;
+    std::uint16_t port_;
+    std::promise<void> commandRead_;
+    std::future<void> commandReadFuture_;
+    std::thread thread_;
+};
+
 template <typename Fn>
 bool throwsInvalidArgument(Fn&& fn) {
     try {
@@ -98,7 +168,10 @@ static_assert(std::is_move_assignable_v<ruvia::RedisValue>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisValue>);
 
 template <typename T>
-concept ExposesAnyRvalueRedisOwnedView = requires(T&& value) { std::move(value).duration(); } || requires(T&& value) { std::move(value).key(); } || requires(T&& value) { std::move(value).value(); } || requires(T&& value) { std::move(value).values(); } || requires(T&& value) { std::move(value).entries(); } || requires(T&& value) { std::move(value).fields(); } || requires(T&& value) { std::move(value).streams(); } || requires(T&& value) { std::move(value).stream(); } || requires(T&& value) { std::move(value).id(); } || requires(T&& value) { std::move(value).message(); } || requires(T&& value) { std::move(value).string(); } || requires(T&& value) { std::move(value).array(); };
+concept ExposesAnyRvalueRedisOwnedView = requires(T&& value) { std::move(value).duration(); } || requires(T&& value) { std::move(value).key(); } || requires(T&& value) { std::move(value).value(); } || requires(T&& value) { std::move(value).values(); } || requires(T&& value) { std::move(value).entries(); } || requires(T&& value) { std::move(value).fields(); } || requires(T&& value) { std::move(value).streams(); } || requires(T&& value) { std::move(value).stream(); } || requires(T&& value) { std::move(value).id(); } || requires(T&& value) { std::move(value).message(); } || requires(T&& value) { std::move(value).string(); } || requires(T&& value) { std::move(value).error(); } || requires(T&& value) { std::move(value).array(); };
+
+template <typename T>
+concept HasRedisErrorMessageAlias = requires(const T& error) { error.message(); };
 
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisSetExpiration>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisKeyValue>);
@@ -111,6 +184,9 @@ static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisStreamReadResult>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisXReadGroupResult>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisError>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisValue>);
+static_assert(std::is_final_v<ruvia::RedisError>);
+static_assert(std::derived_from<ruvia::RedisError, std::runtime_error>);
+static_assert(!HasRedisErrorMessageAlias<ruvia::RedisError>);
 
 template <typename T>
 concept HasRedisHandleSpanArgs = requires(const T& handle, std::span<const std::string_view> keys, std::span<const std::pair<std::string_view, std::string_view>> pairs) {
@@ -139,6 +215,26 @@ concept HasRedisHandleInitializerListArgs = requires(const T& handle, std::initi
 };
 
 template <typename T>
+concept HasRedisPerCallCommandOptions = requires(
+    const T& handle,
+    std::span<const std::string_view> args) {
+    handle.command(args, ruvia::OperationOptions{});
+} || requires(const T& handle) {
+    handle.command(ruvia::OperationOptions{}, "PING");
+};
+
+template <typename T>
+concept HasRedisBlockingPerCallOptions = requires(
+    const T& handle,
+    std::span<const std::string_view> keys) {
+    handle.blpop(keys, ruvia::RedisBlockWait::indefinitely(), ruvia::OperationOptions{});
+    handle.brpop(keys, ruvia::RedisBlockWait::indefinitely(), ruvia::OperationOptions{});
+};
+
+template <typename T>
+concept HasRedisXReadGroupOperationMember = requires(T& options) { options.operation; };
+
+template <typename T>
 concept HasRedisPipelineSpanCommand = requires(T& pipeline, std::span<const std::string_view> args) { pipeline.command(args); };
 
 template <typename T>
@@ -160,7 +256,7 @@ template <typename T>
 concept HasRvalueRedisExec = requires(T& batch) { std::move(batch).exec(); };
 
 template <typename T>
-concept HasRvalueRedisExecOptions = requires(T& batch) { std::move(batch).exec(ruvia::RedisOperationOptions{}); };
+concept HasRvalueRedisExecOptions = requires(T& batch) { std::move(batch).exec(ruvia::OperationOptions{}); };
 
 template <typename T>
 concept HasLegacyRedisSetOptionBooleans = requires(T& options) {
@@ -195,8 +291,7 @@ concept HasRedisHandleVariadicArgs = requires(const T& handle, std::string_view 
 template <typename T>
 concept HasRedisHandleOddPairArgs = requires(const T& handle, std::string_view key) { handle.mset(key, key, key); };
 
-// An owning-string temporary would leave the borrowed argument dangling; unlike
-// DbValue there is no deleted constructor to catch it, so the concept must.
+// Variadic commands synchronously clone owning-string temporaries.
 template <typename T>
 concept HasRedisHandleOwningTemporaryArgs = requires(const T& handle, std::string_view key) { handle.mget(key, std::string("owned")); };
 
@@ -207,7 +302,13 @@ template <typename T>
 concept HasRedisPipelineVariadicCommand = requires(T& pipeline, std::string_view key) { pipeline.command("TYPE", key); };
 
 template <typename T>
+concept HasRedisPipelineOwningTemporaryArgs = requires(T& pipeline) { pipeline.command("GET", std::string("owned")); };
+
+template <typename T>
 concept HasRedisTransactionVariadicCommand = requires(T& transaction, std::string_view key) { transaction.command("TYPE", key); };
+
+template <typename T>
+concept HasRedisTransactionOwningTemporaryArgs = requires(T& transaction) { transaction.command("GET", std::string("owned")); };
 
 template <typename T>
 concept HasRedisTransactionVariadicWatch = requires(T& transaction, std::string_view key) { transaction.watch(key, key); };
@@ -228,14 +329,16 @@ static_assert(HasRedisHandleSpanArgs<ruvia::RedisHandle>);
 static_assert(!HasRedisHandleInitializerListArgs<ruvia::RedisHandle>);
 static_assert(HasRedisHandleVariadicArgs<ruvia::RedisHandle>);
 static_assert(!HasRedisHandleOddPairArgs<ruvia::RedisHandle>);
-static_assert(!HasRedisHandleOwningTemporaryArgs<ruvia::RedisHandle>);
+static_assert(HasRedisHandleOwningTemporaryArgs<ruvia::RedisHandle>);
 static_assert(HasRedisHandleOwningLvalueArgs<ruvia::RedisHandle>);
 static_assert(HasRedisPipelineSpanCommand<ruvia::RedisPipeline>);
 static_assert(!HasRedisPipelineInitializerListCommand<ruvia::RedisPipeline>);
 static_assert(HasRedisPipelineVariadicCommand<ruvia::RedisPipeline>);
+static_assert(HasRedisPipelineOwningTemporaryArgs<ruvia::RedisPipeline>);
 static_assert(HasRedisTransactionSpanCommand<ruvia::RedisTransaction>);
 static_assert(!HasRedisTransactionInitializerListCommand<ruvia::RedisTransaction>);
 static_assert(HasRedisTransactionVariadicCommand<ruvia::RedisTransaction>);
+static_assert(HasRedisTransactionOwningTemporaryArgs<ruvia::RedisTransaction>);
 static_assert(HasRedisTransactionVariadicWatch<ruvia::RedisTransaction>);
 static_assert(!HasRedisTransactionDiscard<ruvia::RedisTransaction>);
 static_assert(!HasLegacyRedisSetCommands<ruvia::RedisHandle>);
@@ -243,10 +346,10 @@ static_assert(!HasLegacyRedisBatchGetSet<ruvia::RedisPipeline>);
 static_assert(!HasLegacyRedisBatchGetSet<ruvia::RedisTransaction>);
 static_assert(!HasLvalueRedisExec<ruvia::RedisPipeline>);
 static_assert(HasRvalueRedisExec<ruvia::RedisPipeline>);
-static_assert(HasRvalueRedisExecOptions<ruvia::RedisPipeline>);
+static_assert(!HasRvalueRedisExecOptions<ruvia::RedisPipeline>);
 static_assert(!HasLvalueRedisExec<ruvia::RedisTransaction>);
 static_assert(HasRvalueRedisExec<ruvia::RedisTransaction>);
-static_assert(HasRvalueRedisExecOptions<ruvia::RedisTransaction>);
+static_assert(!HasRvalueRedisExecOptions<ruvia::RedisTransaction>);
 static_assert(std::move_constructible<ruvia::RedisPipeline>);
 static_assert(!std::assignable_from<ruvia::RedisPipeline&, ruvia::RedisPipeline&&>);
 static_assert(std::move_constructible<ruvia::RedisTransaction>);
@@ -262,8 +365,11 @@ static_assert(!std::default_initializable<ruvia::RedisScanCursor>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::RedisTtl&>().remaining()), std::optional<std::chrono::milliseconds>>);
 static_assert(std::same_as<decltype(ruvia::RedisScanOptions{}.count), std::optional<std::uint64_t>>);
 static_assert(std::is_aggregate_v<ruvia::RedisScanOptions>);
-static_assert(std::is_aggregate_v<ruvia::RedisOperationOptions>);
+static_assert(std::is_aggregate_v<ruvia::OperationOptions>);
 static_assert(std::is_aggregate_v<ruvia::RedisXReadGroupOptions>);
+static_assert(!HasRedisXReadGroupOperationMember<ruvia::RedisXReadGroupOptions>);
+static_assert(!HasRedisPerCallCommandOptions<ruvia::RedisHandle>);
+static_assert(!HasRedisBlockingPerCallOptions<ruvia::RedisHandle>);
 static_assert(std::same_as<decltype(ruvia::RedisConfig{}.blockingPoolSizePerWorker), std::size_t>);
 static_assert(ruvia::RedisConfig{}.connectTimeout.has_value());
 static_assert(ruvia::RedisConfig{}.commandTimeout.has_value());
@@ -323,7 +429,8 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_
         finiteStreamAccepted = false;
     }
     try {
-        (void)redis.command(ruvia::RedisOperationOptions{.timeout = std::chrono::seconds(1)}, "BLPOP", "queue", "1");
+        (void)redis.withOptions({.timeout = std::chrono::seconds(1)})
+            .command("BLPOP", "queue", "1");
     } catch (...) {
         finiteRawAccepted = false;
     }
@@ -536,6 +643,58 @@ RUVIA_TEST(redis_multi_key_commands_reject_empty_key_spans_before_io) {
     RUVIA_CHECK(throwsInvalidArgument([&] { (void)redis.sinter(noKeys); }));
     RUVIA_CHECK(throwsInvalidArgument([&] { (void)redis.sunion(noKeys); }));
     RUVIA_CHECK(throwsInvalidArgument([&] { (void)redis.sdiff(noKeys); }));
+}
+
+RUVIA_TEST(redis_transaction_errors_preserve_server_diagnostics) {
+    const auto reply = ruvia::detail::RedisTypesAccess::errorValue(
+        "EXECABORT Transaction discarded because of previous errors.",
+        std::pmr::get_default_resource());
+    bool preserved = false;
+    try {
+        ruvia::detail::throwIfRedisTransactionReplyError(reply, 3);
+    } catch (const ruvia::RedisError& error) {
+        preserved = error.code() == ruvia::RedisError::Code::kCommandError &&
+                    std::string_view(error.what()).find("reply 3") != std::string_view::npos &&
+                    std::string_view(error.what()).find("EXECABORT") != std::string_view::npos;
+    }
+    RUVIA_CHECK(preserved);
+}
+
+RUVIA_TEST(redis_active_command_reports_pool_closing_instead_of_io_error) {
+    StalledRedisCommandServer server;
+    asio::io_context ioContext;
+    auto config = ruvia::RedisConfig{};
+    config.host = "127.0.0.1";
+    config.port = server.port();
+    config.commandTimeout = std::nullopt;
+    auto* const resource = std::pmr::get_default_resource();
+    ruvia::detail::RedisPool pool(
+        ioContext,
+        ruvia::detail::RedisConfigStorage(config, resource),
+        1,
+        resource);
+
+    auto exercise = [&]() -> ruvia::Task<ruvia::RedisError::Code> {
+        std::pmr::vector<std::pmr::string> args(resource);
+        args.emplace_back("PING");
+        try {
+            (void)co_await pool.executeOwned(std::move(args), resource);
+        } catch (const ruvia::RedisError& error) {
+            co_return error.code();
+        }
+        co_return ruvia::RedisError::Code::kProtocolError;
+    };
+
+    auto result = asio::co_spawn(
+        ioContext,
+        ruvia::detail::taskAsAwaitable(exercise()),
+        asio::use_future);
+    std::jthread runner([&ioContext] { ioContext.run(); });
+    server.waitUntilCommandRead();
+    asio::post(ioContext, [&pool] { pool.closeNow(); });
+
+    RUVIA_CHECK(result.get() == ruvia::RedisError::Code::kClosing);
+    runner.join();
 }
 
 RUVIA_TEST(redis_value_move_assignment_propagates_allocator_failure) {

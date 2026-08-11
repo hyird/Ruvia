@@ -13,7 +13,7 @@
 using namespace std::chrono_literals;
 using ruvia::detail::effectiveHandlerDeadline;
 using ruvia::detail::RequestDeadline;
-using ruvia::detail::StopSource;
+using ruvia::StopSource;
 
 RUVIA_TEST(effective_handler_deadline_takes_the_stricter_scope) {
     // Neither declared.

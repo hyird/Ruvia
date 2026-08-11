@@ -66,11 +66,18 @@ int main() {
     static constexpr std::array migrations{
         ruvia::DbMigration{"001_never_runs", "CREATE TABLE ruvia_never_runs (id INT)"}};
     bool threw = false;
+    bool typed = false;
     std::string message;
     try {
         (void)ruvia::DbMigrator::migrate(
             closedPeerConfig(port),
             std::span<const ruvia::DbMigration>(migrations));
+    } catch (const ruvia::DbError& error) {
+        threw = true;
+        message = error.what();
+        typed = error.code() == ruvia::DbError::Code::kConnectFailed &&
+                error.driver() == ruvia::DbDriver::kMariaDb &&
+                error.nativeCode().has_value();
     } catch (const std::exception& error) {
         threw = true;
         message = error.what();
@@ -87,6 +94,10 @@ int main() {
     }
     if (message.find("mysql_real_connect") == std::string::npos) {
         std::fprintf(stderr, "MariaDB cleanup replaced the handshake error: %s\n", message.c_str());
+        return 1;
+    }
+    if (!typed || message.find("[errno=") == std::string::npos) {
+        std::fprintf(stderr, "MariaDB handshake failure lost typed diagnostics: %s\n", message.c_str());
         return 1;
     }
 

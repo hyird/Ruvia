@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <ruvia/core/Task.h>
+#include <ruvia/core/StopToken.h>
 #include <ruvia/core/WorkerHandle.h>
 #include <ruvia/core/WorkerWaitResult.h>
 #include <ruvia/core/detail/worker/WorkerDispatcher.h>
@@ -96,6 +97,9 @@ namespace detail {
 template <typename T>
 struct ChannelReceiveAwaiter;
 
+template <typename T>
+struct ChannelState;
+
 struct ChannelOpen final {};
 struct ChannelClosed final {};
 struct ChannelWorkerStopping final {};
@@ -123,89 +127,88 @@ struct ChannelState final : WorkerShutdownListener {
     using Lifecycle = std::variant<ChannelOpen, ChannelClosed, ChannelWorkerStopping>;
     Lifecycle lifecycle;
     ChannelReceiveAwaiter<T>* waiter{nullptr};
+    std::uint64_t waiterGeneration{0};
+    std::uint64_t nextWaiterGeneration{0};
 
     void workerStopping() noexcept override;
 };
 
 template <typename T>
-struct ChannelReceiveAwaiter final {
-    ChannelReceiveAwaiter(std::shared_ptr<ChannelState<T>> value, std::optional<std::chrono::steady_clock::duration> timeoutValue = std::nullopt)
-        : state(std::move(value)),
-          timeout(timeoutValue) {}
+struct ChannelReceiveAwaiter final
+    : WorkerSingleWaitAwaiter<
+          T,
+          ChannelState<T>,
+          ChannelReceiveAwaiter<T>> {
+    using Wait = WorkerSingleWaitAwaiter<
+        T,
+        ChannelState<T>,
+        ChannelReceiveAwaiter<T>>;
+
+    ChannelReceiveAwaiter(std::shared_ptr<ChannelState<T>> value, std::optional<std::chrono::steady_clock::duration> timeoutValue, StopToken stopTokenValue)
+        : Wait(
+              std::move(value),
+              timeoutValue,
+              std::move(stopTokenValue)) {}
 
     [[nodiscard]] bool await_ready() {
-        std::lock_guard lock(state->mutex);
-        if (state->size != 0) {
-            (void)completion.complete(WorkerWaitResultAccess::value(std::move(*state->slots[state->head])));
-            state->slots[state->head].reset();
-            state->head = (state->head + 1) % state->slots.size();
-            --state->size;
+        auto& owner = this->state();
+        std::lock_guard lock(owner.mutex);
+        if (owner.size != 0) {
+            (void)this->completeResult(WorkerWaitResultAccess::value(
+                std::move(*owner.slots[owner.head])));
+            owner.slots[owner.head].reset();
+            owner.head = (owner.head + 1) % owner.slots.size();
+            --owner.size;
             return true;
         }
-        if (std::holds_alternative<ChannelWorkerStopping>(state->lifecycle)) {
-            (void)completion.complete(WorkerWaitResultAccess::workerStopping<T>());
+        if (std::holds_alternative<ChannelWorkerStopping>(owner.lifecycle)) {
+            (void)this->completeStatus(WorkerWaitStatus::kWorkerStopping);
             return true;
         }
-        if (std::holds_alternative<ChannelClosed>(state->lifecycle)) {
-            (void)completion.complete(WorkerWaitResultAccess::closed<T>());
+        if (std::holds_alternative<ChannelClosed>(owner.lifecycle)) {
+            (void)this->completeStatus(WorkerWaitStatus::kClosed);
             return true;
         }
-        assert(std::holds_alternative<ChannelOpen>(state->lifecycle));
-        if (timeout && *timeout <= std::chrono::steady_clock::duration::zero()) {
-            (void)completion.complete(WorkerWaitResultAccess::timedOut<T>());
+        assert(std::holds_alternative<ChannelOpen>(owner.lifecycle));
+        if (this->stopToken().stopRequested()) {
+            (void)this->completeStatus(WorkerWaitStatus::kCancelled);
             return true;
         }
-        if (state->waiter != nullptr) {
+        if (this->timeout() &&
+            *this->timeout() <=
+                std::chrono::steady_clock::duration::zero()) {
+            (void)this->completeStatus(WorkerWaitStatus::kTimedOut);
+            return true;
+        }
+        if (owner.waiter != nullptr) {
             throw std::logic_error("channel supports one pending receiver");
         }
-        state->waiter = this;
+        this->publish();
         return false;
     }
 
     bool await_suspend(std::coroutine_handle<> handle) {
-        return suspendWorkerWait(*state, this, completion, timer, timeout, handle);
+        return this->suspend(handle);
     }
 
     [[nodiscard]] WorkerWaitResult<T> await_resume() {
-        return completion.takeValue();
+        return this->takeResult();
     }
-
-    std::shared_ptr<ChannelState<T>> state;
-    std::optional<std::chrono::steady_clock::duration> timeout;
-    WorkerTimerRegistration timer;
-    WorkerWaitAwaitState<T> completion;
 };
 
 template <typename T>
-[[nodiscard]] Task<WorkerWaitResult<T>> receiveChannelState(std::shared_ptr<ChannelState<T>> state, std::optional<std::chrono::steady_clock::duration> timeout) {
+[[nodiscard]] Task<WorkerWaitResult<T>> receiveChannelState(std::shared_ptr<ChannelState<T>> state, std::optional<std::chrono::steady_clock::duration> timeout, StopToken stopToken) {
     if (!state || !state->worker.isCurrent()) {
         throw std::logic_error("channel receive must run on its bound worker");
     }
-    co_return co_await ChannelReceiveAwaiter<T>(std::move(state), timeout);
-}
-
-template <typename T>
-void wakeChannelReceiver(ChannelReceiveAwaiter<T>* waiter) {
-    if (waiter->timer.registered()) {
-        waiter->timer.cancel();
-        return;
-    }
-    WorkerHandleAccess::defer(waiter->state->worker, [waiter] { waiter->completion.continuation().resume(); });
+    co_return co_await ChannelReceiveAwaiter<T>(std::move(state), timeout, std::move(stopToken));
 }
 
 template <typename T>
 void ChannelState<T>::workerStopping() noexcept {
     std::lock_guard lock(mutex);
     lifecycle.template emplace<ChannelWorkerStopping>();
-    ChannelReceiveAwaiter<T>* pending = std::exchange(waiter, nullptr);
-    if (pending != nullptr && pending->completion.complete(WorkerWaitResultAccess::workerStopping<T>())) {
-        // Wake under the mutex (see ChannelSender::send).
-        try {
-            wakeChannelReceiver(pending);
-        } catch (...) {
-            std::terminate();
-        }
-    }
+    completeWorkerSingleWait(*this, WorkerWaitStatus::kWorkerStopping);
 }
 
 }  // namespace detail
@@ -235,14 +238,16 @@ public:
             }
             if (state_->waiter != nullptr) {
                 waiter = state_->waiter;
-                wake = waiter->completion.complete(detail::WorkerWaitResultAccess::value(std::move(value)));
+                wake = waiter->completeResult(
+                    detail::WorkerWaitResultAccess::value(std::move(value)));
                 state_->waiter = nullptr;
+                state_->waiterGeneration = 0;
                 // Wake the receiver while still holding the mutex. Once it is
                 // released, an already-in-flight timer expiry can resume the
                 // receiver on its worker and destroy this awaiter, so reading
-                // waiter->timer afterward would be a use-after-free.
+                // its timer registration afterward would be a use-after-free.
                 if (wake) {
-                    detail::wakeChannelReceiver(waiter);
+                    waiter->wake();
                 }
             } else {
                 if (state_->size == state_->slots.size()) {
@@ -269,11 +274,12 @@ public:
             }
             state_->lifecycle.template emplace<detail::ChannelClosed>();
             waiter = std::exchange(state_->waiter, nullptr);
+            state_->waiterGeneration = 0;
             if (waiter != nullptr) {
-                wake = waiter->completion.complete(detail::WorkerWaitResultAccess::closed<T>());
+                wake = waiter->completeStatus(WorkerWaitStatus::kClosed);
                 // Wake under the mutex (see ChannelSender::send).
                 if (wake) {
-                    detail::wakeChannelReceiver(waiter);
+                    waiter->wake();
                 }
             }
         }
@@ -303,12 +309,21 @@ public:
     }
 
     [[nodiscard]] Task<WorkerWaitResult<T>> receive() const {
-        return detail::receiveChannelState<T>(state_, std::nullopt);
+        return detail::receiveChannelState<T>(state_, std::nullopt, {});
+    }
+
+    [[nodiscard]] Task<WorkerWaitResult<T>> receive(StopToken stopToken) const {
+        return detail::receiveChannelState<T>(state_, std::nullopt, std::move(stopToken));
     }
 
     template <typename Rep, typename Period>
     [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period> duration) const {
-        return detail::receiveChannelState<T>(state_, detail::workerTimerSaturatingDurationCast(duration));
+        return detail::receiveChannelState<T>(state_, detail::workerTimerSaturatingDurationCast(duration), {});
+    }
+
+    template <typename Rep, typename Period>
+    [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period> duration, StopToken stopToken) const {
+        return detail::receiveChannelState<T>(state_, detail::workerTimerSaturatingDurationCast(duration), std::move(stopToken));
     }
 
     // The worker every receive must run on. Makes the receive-side affinity

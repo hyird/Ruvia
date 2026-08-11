@@ -136,13 +136,13 @@ RUVIA_TEST(http_client_response_parser_failure_is_typed_and_allocation_free) {
         return;
     }
 
-    auto failureParser = Http1ClientResponseParser(*prepared, &counting);
+    auto failureParser = Http1ClientResponseParser(prepared->exchangeState(), &counting);
     const auto failure = failureParser.parse("HTTP/2 200 OK\r\n\r\n");
     RUVIA_CHECK(failure.failure() != nullptr);
     RUVIA_CHECK(failure.failure()->error() == Http1ClientResponseParseError::kUnsupportedHttpVersion);
     RUVIA_CHECK_EQ(counting.allocationCount(), std::size_t{0});
 
-    auto successParser = Http1ClientResponseParser(*prepared, &counting);
+    auto successParser = Http1ClientResponseParser(prepared->exchangeState(), &counting);
     const auto success = successParser.parse(
         "HTTP/1.1 200 OK\r\n"
         "X-Requires-Ownership: a-long-enough-value-to-require-storage\r\n"

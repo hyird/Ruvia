@@ -76,6 +76,7 @@ static_assert(AcceptsAllSseTextAssignments<std::string&>);
 static_assert(AcceptsAllSseTextAssignments<std::pmr::string&>);
 static_assert(AcceptsAllSseTextAssignments<std::string_view>);
 static_assert(std::is_aggregate_v<ruvia::SseMessage>);
+static_assert(std::same_as<decltype(ruvia::SseMessage::retry), std::optional<std::chrono::milliseconds>>);
 constexpr ruvia::SseMessage kLiteralSseMessage{.data = "data", .event = "event", .id = "id"};
 static_assert(kLiteralSseMessage.data->view() == "data");
 static_assert(kLiteralSseMessage.event == "event");

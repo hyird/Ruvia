@@ -28,10 +28,8 @@ using ruvia::detail::ContextServices;
 using ruvia::detail::HttpRequestAccess;
 
 // TLS details belong behind the typed transport variant, not flattened back
-// onto ConnInfo as they were before it existed. Note this no longer pairs with
-// secure(): that is now present on purpose and answers a different question --
-// the end-to-end scheme, including TLS a trusted proxy terminated -- while the
-// certificate subject remains reachable only through tls().
+// onto ConnInfo. The end-to-end scheme, including TLS a trusted proxy
+// terminated, remains separate from this hop's typed transport.
 template <typename Info>
 concept HasFlattenedTlsDetail = requires(const Info& info) { info.clientCertificateSubject(); };
 
@@ -57,9 +55,9 @@ static_assert(std::is_same_v<decltype(std::declval<const ConnInfo&>().plain()), 
 static_assert(std::is_same_v<decltype(std::declval<const ConnInfo&>().tls()), const TlsConnectionTransport*>);
 static_assert(std::is_same_v<decltype(std::declval<const ContextServices&>().connInfo()), const ConnInfo&>);
 static_assert(!HasFlattenedTlsDetail<ConnInfo>);
-// scheme()/secure() describe the client's connection, so they must NOT be a
-// synonym for "this hop is TLS".
-static_assert(std::is_same_v<decltype(std::declval<const ConnInfo&>().scheme()), std::string_view>);
+// scheme() describes the client's connection, so it must NOT be a synonym for
+// "this hop is TLS".
+static_assert(std::is_same_v<decltype(std::declval<const ConnInfo&>().scheme()), ruvia::HttpScheme>);
 static_assert(!HasBooleanTransportRefinement<ContextServices>);
 static_assert(!AcceptsRvaluePlainTransport<ContextServices>);
 static_assert(!AcceptsRvalueTlsAddress<ContextServices>);

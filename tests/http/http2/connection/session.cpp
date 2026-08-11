@@ -679,7 +679,7 @@ RUVIA_TEST(http2_connection_options_content_requires_valid_content_type) {
         RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageBodyChunk);
         RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
         RUVIA_CHECK(!conn.nextEvent().has_value());
-        conn.releaseReceivedData(1);
+        conn.releaseAllReceivedData(1);
     }
 
     {

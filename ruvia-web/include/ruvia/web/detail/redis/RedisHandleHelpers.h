@@ -20,15 +20,14 @@ namespace ruvia::detail {
 [[nodiscard]] bool redisValueIntegerBool(const RedisValue& value);
 [[nodiscard]] std::span<const RedisValue> redisValueArray(const RedisValue& value);
 void throwIfRedisError(const RedisValue& value);
-void validateRedisOperationOptions(const RedisOperationOptions& options);
-[[nodiscard]] RedisOperationOptions mergeRedisOperationOptions(const RedisOperationOptions& base, RedisOperationOptions overrides);
+void throwIfRedisTransactionReplyError(const RedisValue& value, std::size_t index);
 [[nodiscard]] bool validateRedisPooledCommand(std::span<const std::string_view> args, bool allowBlocking);
 
 [[nodiscard]] std::pmr::vector<std::pmr::string> ownRedisArgs(std::span<const std::string_view> args, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::vector<std::pmr::string> ownRedisArgs(std::initializer_list<std::string_view> args, std::pmr::memory_resource* resource);
 
 Task<RedisValue> executeOwnedRedisCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
-Task<RedisValue> executeOwnedRedisCommand(RedisPool& pool, std::pmr::vector<std::pmr::string> args, RedisOperationOptions options, std::pmr::memory_resource* resource);
+Task<RedisValue> executeOwnedRedisCommand(RedisPool& pool, std::pmr::vector<std::pmr::string> args, OperationOptions options, std::pmr::memory_resource* resource);
 Task<std::optional<std::pmr::string>> redisStringCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
 Task<std::int64_t> redisIntegerCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
 Task<std::pmr::vector<std::pmr::string>> redisStringArrayCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);

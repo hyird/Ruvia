@@ -140,12 +140,17 @@ case ruvia::ChannelSendStatus::kWorkerStopping: break;
 }
 
 auto event = co_await receiver.receive();
-if (const auto* value = event.value()) {
-    consume(*value);
-} else if (event.closed()) {
+switch (event.status()) {
+case ruvia::WorkerWaitStatus::kValue:
+    consume(std::move(event).takeValue());
+    break;
+case ruvia::WorkerWaitStatus::kClosed:
     // producer 已关闭 Channel
-} else if (event.workerStopping()) {
-    // 绑定 worker 正在停止
+    break;
+case ruvia::WorkerWaitStatus::kWorkerStopping:
+case ruvia::WorkerWaitStatus::kTimedOut:
+case ruvia::WorkerWaitStatus::kCancelled:
+    break;
 }
 ```
 
@@ -159,7 +164,9 @@ if (const auto* value = event.value()) {
 - receiver close/析构幂等并唤醒 pending receive。
 - Channel 不做按 key 合流；实时设备状态由 `RealtimeAggregator` 的 latest map + dirty set 完成。
 
-后续的 `receiveFor()` 必须在 Channel 自有 waiter 内完成 timeout/message 单胜者，不复用通用 Task 超时包装器。
+`receiveFor()` 在 Channel 自有 waiter 内完成 timeout/message 单胜者，
+`receive(token)` 和 `receiveFor(duration, token)` 使用同一状态机处理取消；
+都不复用通用 Task 超时包装器。
 
 ## 6. OneShot
 
@@ -168,9 +175,9 @@ if (const auto* value = event.value()) {
 ```cpp
 auto [completion, receiver] = ruvia::makeOneShot<Ack>(worker);
 auto result = co_await receiver.waitFor(2s);
-if (const auto* ack = result.value()) {
-    consume(*ack);
-} else if (result.timedOut()) {
+if (result.status() == ruvia::WorkerWaitStatus::kValue) {
+    consume(std::move(result).takeValue());
+} else if (result.status() == ruvia::WorkerWaitStatus::kTimedOut) {
     recordTimeout();
 }
 ```
@@ -179,8 +186,8 @@ if (const auto* ack = result.value()) {
 - 重复 completion 不覆盖首个结果，返回 already-completed，并归还未采用的 payload。
 - wait/waitFor 只能在绑定 worker。
 - timeout、completion、close 由控制块状态机保证单胜者。
-- Channel receive 与 OneShot wait 共用封闭的 `WorkerWaitResult<T>`；只有
-  `value()` alternative 暴露 payload，closed/stopping/timeout 无法携带伪值。
+- Channel receive 与 OneShot wait 共用封闭的 `WorkerWaitResult<T>`；通过
+  `status()` 穷举结果，只有 `kValue` 可以经 `value()` 或 `takeValue()` 读取 payload。
 - 超时不取消已经发往设备的命令；迟到回执仍持久化并计指标。
 
 ## 7. TaskScope

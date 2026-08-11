@@ -417,17 +417,18 @@ private:
     std::variant<Http1ClientResponseNeedMore, Http1ParsedClientResponseHead, Http1ClientResponseParseFailure, Http1ClientResponseParseTerminal> state_;
 };
 
-// Per-request HTTP/1 response-head state machine. Construction is bound to one
-// successfully prepared request; informational responses advance the same
+// Per-request HTTP/1 response-head state machine. Construction consumes the
+// owning exchange state from one successfully prepared request; informational
+// responses advance the same
 // exchange until a final response, CONNECT tunnel, or protocol switch completes
 // it. Header validation is transactional and owning response allocation occurs
 // only after protocol validation succeeds.
 class Http1ClientResponseParser final {
 public:
-    explicit Http1ClientResponseParser(const PreparedHttp1ClientRequest& request, std::pmr::memory_resource* resource = nullptr) noexcept
-        : request_(request.responseContext_),
+    explicit Http1ClientResponseParser(Http1ClientExchangeState exchangeState, std::pmr::memory_resource* resource = nullptr) noexcept
+        : exchangeState_(std::move(exchangeState)),
           resource_(resource),
-          requestContentPhase_(initialRequestContentPhase(request.contentPlan_)) {}
+          requestContentPhase_(initialRequestContentPhase(exchangeState_)) {}
 
     Http1ClientResponseParser(const Http1ClientResponseParser&) = delete;
     Http1ClientResponseParser& operator=(const Http1ClientResponseParser&) = delete;
@@ -439,21 +440,16 @@ public:
     [[nodiscard]] Http1ClientResponseParseResult parse(std::string_view buffer);
 
 private:
-    [[nodiscard]] static constexpr bool requestContentStartsComplete(const Http1ClientRequestContentPlan& plan) noexcept {
-        if (plan.withoutContent() != nullptr) {
-            return true;
+    [[nodiscard]] static constexpr detail::Http1ClientRequestContentPhase initialRequestContentPhase(const Http1ClientExchangeState& state) noexcept {
+        switch (detail::Http1ClientExchangeStateAccess::contentState(state)) {
+            case detail::Http1ClientInitialContentState::kComplete:
+                return detail::Http1ClientRequestContentPhase::kContentComplete;
+            case detail::Http1ClientInitialContentState::kPending:
+                return detail::Http1ClientRequestContentPhase::kContentPending;
+            case detail::Http1ClientInitialContentState::kAwaitingContinue:
+                return detail::Http1ClientRequestContentPhase::kAwaitingContinue;
         }
-        if (const auto* immediate = plan.immediate()) {
-            return immediate->bytes().empty();
-        }
-        return false;
-    }
-
-    [[nodiscard]] static constexpr detail::Http1ClientRequestContentPhase initialRequestContentPhase(const Http1ClientRequestContentPlan& plan) noexcept {
-        if (plan.continueGated() != nullptr) {
-            return detail::Http1ClientRequestContentPhase::kAwaitingContinue;
-        }
-        return requestContentStartsComplete(plan) ? detail::Http1ClientRequestContentPhase::kContentComplete : detail::Http1ClientRequestContentPhase::kContentPending;
+        return detail::Http1ClientRequestContentPhase::kContentComplete;
     }
 
     enum class Phase : std::uint8_t {
@@ -462,7 +458,7 @@ private:
         kFailed,
     };
 
-    detail::Http1ClientRequestContext request_;
+    Http1ClientExchangeState exchangeState_;
     std::pmr::memory_resource* resource_;
     Phase phase_{Phase::kAwaitResponse};
     detail::Http1ClientRequestContentPhase requestContentPhase_;

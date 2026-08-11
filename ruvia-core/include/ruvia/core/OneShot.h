@@ -98,9 +98,6 @@ struct OneShotAwaiter;
 template <typename T>
 struct OneShotState;
 
-template <typename T>
-void cancelOneShotWait(const std::shared_ptr<OneShotState<T>>& state, std::uint64_t generation) noexcept;
-
 struct OneShotPending final {};
 struct OneShotConsumed final {};
 struct OneShotReceiverClosed final {};
@@ -141,82 +138,64 @@ struct OneShotState final : WorkerShutdownListener {
 };
 
 template <typename T>
-struct OneShotAwaiter final {
+struct OneShotAwaiter final
+    : WorkerSingleWaitAwaiter<
+          T,
+          OneShotState<T>,
+          OneShotAwaiter<T>> {
+    using Wait = WorkerSingleWaitAwaiter<
+        T,
+        OneShotState<T>,
+        OneShotAwaiter<T>>;
+
     OneShotAwaiter(std::shared_ptr<OneShotState<T>> value, std::optional<std::chrono::steady_clock::duration> timeoutValue, StopToken stopTokenValue)
-        : state(std::move(value)),
-          timeout(timeoutValue),
-          stopToken(std::move(stopTokenValue)),
-          generation(stopToken.stoppable() ? reserveGeneration(*state) : 0),
-          stopRegistration(registerCancellation(stopToken, state, generation)) {}
+        : Wait(
+              std::move(value),
+              timeoutValue,
+              std::move(stopTokenValue)) {}
 
     [[nodiscard]] bool await_ready() {
-        std::lock_guard lock(state->mutex);
-        if (auto* ready = std::get_if<OneShotReady<T>>(&state->lifecycle)) {
-            (void)completion.complete(WorkerWaitResultAccess::value(std::move(*ready).takeValue()));
-            state->lifecycle.template emplace<OneShotConsumed>();
+        auto& owner = this->state();
+        std::lock_guard lock(owner.mutex);
+        if (auto* ready = std::get_if<OneShotReady<T>>(&owner.lifecycle)) {
+            (void)this->completeResult(WorkerWaitResultAccess::value(
+                std::move(*ready).takeValue()));
+            owner.lifecycle.template emplace<OneShotConsumed>();
             return true;
         }
-        if (std::holds_alternative<OneShotWorkerStopping>(state->lifecycle)) {
-            (void)completion.complete(WorkerWaitResultAccess::workerStopping<T>());
+        if (std::holds_alternative<OneShotWorkerStopping>(owner.lifecycle)) {
+            (void)this->completeStatus(WorkerWaitStatus::kWorkerStopping);
             return true;
         }
-        if (std::holds_alternative<OneShotReceiverClosed>(state->lifecycle) || std::holds_alternative<OneShotConsumed>(state->lifecycle)) {
-            (void)completion.complete(WorkerWaitResultAccess::closed<T>());
+        if (std::holds_alternative<OneShotReceiverClosed>(owner.lifecycle) ||
+            std::holds_alternative<OneShotConsumed>(owner.lifecycle)) {
+            (void)this->completeStatus(WorkerWaitStatus::kClosed);
             return true;
         }
-        assert(std::holds_alternative<OneShotPending>(state->lifecycle));
-        if (stopToken.stopRequested()) {
-            (void)completion.complete(WorkerWaitResultAccess::cancelled<T>());
+        assert(std::holds_alternative<OneShotPending>(owner.lifecycle));
+        if (this->stopToken().stopRequested()) {
+            (void)this->completeStatus(WorkerWaitStatus::kCancelled);
             return true;
         }
-        if (timeout && *timeout <= std::chrono::steady_clock::duration::zero()) {
-            (void)completion.complete(WorkerWaitResultAccess::timedOut<T>());
+        if (this->timeout() &&
+            *this->timeout() <=
+                std::chrono::steady_clock::duration::zero()) {
+            (void)this->completeStatus(WorkerWaitStatus::kTimedOut);
             return true;
         }
-        if (state->waiter != nullptr) {
+        if (owner.waiter != nullptr) {
             throw std::logic_error("one-shot supports one pending receiver");
         }
-        state->waiter = this;
-        state->waiterGeneration = generation;
+        this->publish();
         return false;
     }
 
     bool await_suspend(std::coroutine_handle<> handle) {
-        return suspendWorkerWait(*state, this, completion, timer, timeout, handle);
+        return this->suspend(handle);
     }
 
     [[nodiscard]] WorkerWaitResult<T> await_resume() {
-        return completion.takeValue();
-    }
-
-    std::shared_ptr<OneShotState<T>> state;
-    std::optional<std::chrono::steady_clock::duration> timeout;
-    StopToken stopToken;
-    std::uint64_t generation{0};
-    WorkerTimerRegistration timer;
-    WorkerWaitAwaitState<T> completion;
-    // Last so callback unregistration completes before the awaiter's state and
-    // timer registration begin destruction.
-    StopRegistration stopRegistration;
-
-private:
-    [[nodiscard]] static StopRegistration registerCancellation(const StopToken& token, const std::shared_ptr<OneShotState<T>>& state, std::uint64_t generation) {
-        if (!token.stoppable() || token.stopRequested()) {
-            return {};
-        }
-        return token.registerCallback([state, generation] {
-            // A detached worker has already delivered kWorkerStopping to this
-            // state, so a late cancellation has nothing left to wake.
-            (void)WorkerHandleAccess::deferIfAttached(state->worker, [state, generation] { cancelOneShotWait(state, generation); });
-        });
-    }
-
-    [[nodiscard]] static std::uint64_t reserveGeneration(OneShotState<T>& state) noexcept {
-        std::lock_guard lock(state.mutex);
-        if (++state.nextWaiterGeneration == 0) {
-            ++state.nextWaiterGeneration;
-        }
-        return state.nextWaiterGeneration;
+        return this->takeResult();
     }
 };
 
@@ -229,47 +208,12 @@ template <typename T>
 }
 
 template <typename T>
-void wakeOneShotReceiver(OneShotAwaiter<T>* waiter) {
-    if (waiter->timer.registered()) {
-        waiter->timer.cancel();
-        return;
-    }
-    WorkerHandleAccess::defer(waiter->state->worker, [waiter] { waiter->completion.continuation().resume(); });
-}
-
-template <typename T>
-void cancelOneShotWait(const std::shared_ptr<OneShotState<T>>& state, std::uint64_t generation) noexcept {
-    std::lock_guard lock(state->mutex);
-    if (state->waiter == nullptr || state->waiterGeneration != generation) {
-        return;
-    }
-    auto* pending = std::exchange(state->waiter, nullptr);
-    state->waiterGeneration = 0;
-    if (pending->completion.complete(WorkerWaitResultAccess::cancelled<T>())) {
-        try {
-            wakeOneShotReceiver(pending);
-        } catch (...) {
-            std::terminate();
-        }
-    }
-}
-
-template <typename T>
 void OneShotState<T>::workerStopping() noexcept {
     std::lock_guard lock(mutex);
     if (!std::holds_alternative<OneShotReady<T>>(lifecycle)) {
         lifecycle.template emplace<OneShotWorkerStopping>();
     }
-    OneShotAwaiter<T>* pending = std::exchange(waiter, nullptr);
-    waiterGeneration = 0;
-    if (pending != nullptr && pending->completion.complete(WorkerWaitResultAccess::workerStopping<T>())) {
-        // Wake under the mutex (see OneShotCompletion::complete).
-        try {
-            wakeOneShotReceiver(pending);
-        } catch (...) {
-            std::terminate();
-        }
-    }
+    completeWorkerSingleWait(*this, WorkerWaitStatus::kWorkerStopping);
 }
 
 }  // namespace detail
@@ -302,16 +246,17 @@ public:
             }
             waiter = state_->waiter;
             if (waiter != nullptr) {
-                wake = waiter->completion.complete(detail::WorkerWaitResultAccess::value(std::move(value)));
+                wake = waiter->completeResult(
+                    detail::WorkerWaitResultAccess::value(std::move(value)));
                 state_->lifecycle.template emplace<detail::OneShotConsumed>();
                 state_->waiter = nullptr;
                 state_->waiterGeneration = 0;
                 // Wake the receiver while still holding the mutex. Once it is
                 // released, an already-in-flight timer expiry can resume the
                 // receiver on its worker and destroy this awaiter, so reading
-                // waiter->timer afterward would be a use-after-free.
+                // its timer registration afterward would be a use-after-free.
                 if (wake) {
-                    detail::wakeOneShotReceiver(waiter);
+                    waiter->wake();
                 }
             } else {
                 try {
@@ -389,10 +334,10 @@ public:
             waiter = std::exchange(state_->waiter, nullptr);
             state_->waiterGeneration = 0;
             if (waiter != nullptr) {
-                wake = waiter->completion.complete(detail::WorkerWaitResultAccess::closed<T>());
+                wake = waiter->completeStatus(WorkerWaitStatus::kClosed);
                 // Wake under the mutex (see OneShotCompletion::complete).
                 if (wake) {
-                    detail::wakeOneShotReceiver(waiter);
+                    waiter->wake();
                 }
             }
         }

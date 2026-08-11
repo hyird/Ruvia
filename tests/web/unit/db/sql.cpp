@@ -219,9 +219,23 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     static_assert(std::same_as<decltype(std::declval<DbConfig&>().queryTimeout), std::optional<milliseconds>>);
     static_assert(std::same_as<decltype(std::declval<DbConfig&>().acquireTimeout), std::optional<milliseconds>>);
 
-    // A driver factory supplies the backend's valid default port; absent
-    // timeouts are disabled explicitly.
+    // A driver factory supplies a valid port and finite end-to-end defaults.
+    const auto defaults = DbConfig::mariaDb();
+    RUVIA_CHECK(defaults.connectTimeout == std::chrono::seconds(5));
+    RUVIA_CHECK(defaults.queryTimeout == std::chrono::seconds(30));
+    RUVIA_CHECK(defaults.acquireTimeout == std::chrono::seconds(5));
+    RUVIA_CHECK(!defaults.readTimeout.has_value());
+    RUVIA_CHECK(!defaults.writeTimeout.has_value());
     RUVIA_CHECK(!throwsOn([] { validateDbConfig(DbConfig::mariaDb()); }));
+
+    // Explicit absence is the only way to request an unbounded operation.
+    RUVIA_CHECK(!throwsOn([] {
+        auto c = DbConfig::mariaDb();
+        c.connectTimeout = std::nullopt;
+        c.queryTimeout = std::nullopt;
+        c.acquireTimeout = std::nullopt;
+        validateDbConfig(c);
+    }));
 
     // Host and port each have a required-value guard.
     RUVIA_CHECK(throwsOn([] {

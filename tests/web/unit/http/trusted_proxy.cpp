@@ -81,8 +81,7 @@ RUVIA_TEST(conn_info_ignores_forwarding_headers_from_an_untrusted_peer) {
     const auto context = ContextAccess::make(memory, request, ContextServices{}.withPlainTransport("198.51.100.7"));
     const auto info = ruvia::getConnInfo(context);
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("198.51.100.7"));
-    RUVIA_CHECK_EQ(info.scheme(), std::string_view("http"));
-    RUVIA_CHECK(!info.secure());
+    RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
     RUVIA_CHECK(!info.viaTrustedProxy());
 
     // Configured, but this peer is not in it.
@@ -90,7 +89,7 @@ RUVIA_TEST(conn_info_ignores_forwarding_headers_from_an_untrusted_peer) {
     const auto guarded = ContextAccess::make(memory, request, ContextServices{}.withPlainTransport("198.51.100.7").withTrustedProxies(&trusted));
     const auto guardedInfo = ruvia::getConnInfo(guarded);
     RUVIA_CHECK_EQ(guardedInfo.client().address(), std::string_view("198.51.100.7"));
-    RUVIA_CHECK(!guardedInfo.secure());
+    RUVIA_CHECK(guardedInfo.scheme() == ruvia::HttpScheme::kHttp);
 }
 
 RUVIA_TEST(conn_info_resolves_client_from_a_trusted_peer_x_forwarded_headers) {
@@ -111,10 +110,9 @@ RUVIA_TEST(conn_info_resolves_client_from_a_trusted_peer_x_forwarded_headers) {
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
     // remote() still reports the hop, unchanged.
     RUVIA_CHECK_EQ(info.remote().address(), std::string_view("10.0.0.5"));
-    RUVIA_CHECK_EQ(info.scheme(), std::string_view("https"));
-    RUVIA_CHECK(info.secure());
+    RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttps);
     RUVIA_CHECK(info.viaTrustedProxy());
-    // The hop itself is plaintext: secure() must not be a synonym for tls().
+    // The hop itself is plaintext: the end-to-end scheme is not a synonym for tls().
     RUVIA_CHECK(info.tls() == nullptr);
 }
 
@@ -134,7 +132,7 @@ RUVIA_TEST(conn_info_prefers_rfc7239_forwarded_over_the_x_headers) {
 
     // Bracketed IPv6 with a port, unwrapped, and the X- header not consulted.
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("2001:db8::1"));
-    RUVIA_CHECK(info.secure());
+    RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttps);
 }
 
 RUVIA_TEST(conn_info_keeps_transport_values_for_fields_the_proxy_omitted) {
@@ -152,6 +150,6 @@ RUVIA_TEST(conn_info_keeps_transport_values_for_fields_the_proxy_omitted) {
     const auto info = ruvia::getConnInfo(context);
 
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
-    RUVIA_CHECK_EQ(info.scheme(), std::string_view("https"));
+    RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttps);
     RUVIA_CHECK(info.tls() != nullptr);
 }

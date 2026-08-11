@@ -326,6 +326,7 @@ if(_component_available_http)
     file(MAKE_DIRECTORY "${_http_protocol_consumer}")
     file(WRITE "${_http_protocol_consumer}/main.cpp" [=[
 #include <array>
+#include <chrono>
 #include <memory_resource>
 #include <string>
 
@@ -344,10 +345,9 @@ int main() {
     ruvia::HpackEncoder::encodeHeader(block, "x-installed", "yes");
     ruvia::HpackDecoder decoder(&resource);
     std::pair<std::string, std::string> decoded;
-    const auto result = decoder.decode(block, &decoded, [](void* target, std::string_view name, std::string_view value) {
-        auto& field = *static_cast<std::pair<std::string, std::string>*>(target);
-        field.first.assign(name);
-        field.second.assign(value);
+    const auto result = decoder.decode(block, [&](std::string_view name, std::string_view value) {
+        decoded.first.assign(name);
+        decoded.second.assign(value);
         return true;
     });
     if (!result.decoded() || decoded.first != "x-installed" || decoded.second != "yes") return 1;
@@ -357,17 +357,15 @@ int main() {
     const auto parsed = ruvia::parseHttp2FrameHeader(frame);
     if (!parsed || parsed->type != static_cast<unsigned char>(ruvia::Http2FrameType::kSettings)) return 3;
 
-    ruvia::Http2Connection http2(&resource, ruvia::Http2Role::kClient);
-    http2.beginConnection();
+    auto http2 = ruvia::Http2Connection::client(&resource);
     if (!http2.pendingOutput().starts_with(ruvia::kHttp2ClientPreface)) return 4;
 
-    std::pmr::string websocketInput(&resource);
-    ruvia::WebSocketServerConnection websocket(websocketInput);
+    ruvia::WebSocketServerConnection websocket(&resource);
     if (websocket.submitFrame(ruvia::WebSocketOpcode::kText, "installed") != ruvia::WebSocketFrameSubmitStatus::kAccepted || websocket.outputPlan().bytes().empty()) return 5;
 
-    std::pmr::string event(&resource);
-    ruvia::formatSseMessage(event, ruvia::SseMessage{.data = "installed"});
-    return event == "data: installed\n\n" ? 0 : 6;
+    const auto event = ruvia::formatSseMessage(ruvia::SseMessage{
+        .data = "installed", .retry = std::chrono::milliseconds{5}}, &resource);
+    return event == "retry: 5\ndata: installed\n\n" ? 0 : 6;
 }
 ]=])
     file(WRITE "${_http_protocol_consumer}/CMakeLists.txt" [=[

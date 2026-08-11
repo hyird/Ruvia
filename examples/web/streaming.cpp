@@ -74,7 +74,7 @@ private:
             co_return;
         }
         if (!events.aborted()) {
-            co_await events.write({.data = "heartbeat", .event = "tick", .id = "2", .retry = 3000});
+            co_await events.write({.data = "heartbeat", .event = "tick", .id = "2", .retry = std::chrono::milliseconds{3000}});
         }
     }
 

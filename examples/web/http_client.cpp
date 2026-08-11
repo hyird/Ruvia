@@ -18,19 +18,17 @@ private:
     ruvia::Task<ruvia::HttpResponse> forward(ruvia::Context& c) {
         const auto incomingBody = co_await c.req().text();
         auto client = c.httpClient("backend");
-        auto request = client.newRequest();
-        request.setMethod(ruvia::HttpKnownMethod::kPost)
-            .setTarget("/v1/orders")
-            .setContentType(c.req().header("content-type").value_or("application/octet-stream"))
+        auto request = client.newRequest(ruvia::HttpKnownMethod::kPost, "/v1/orders");
+        request.setContentType(c.req().header("content-type").value_or("application/octet-stream"))
             .setBody(incomingBody);
         if (const auto authorization = c.req().header("authorization")) {
-            request.addHeader("authorization", *authorization);
+            request.appendHeader("authorization", *authorization);
         }
 
         try {
-            auto operation = client.sendRequest(std::move(request), {
+            auto operation = client.withOptions({
                 .timeout = std::chrono::seconds(5),
-            });
+            }).sendRequest(std::move(request));
             auto response = co_await std::move(operation);
             c.status(response.status());
             if (const auto contentType = response.header("content-type")) {
@@ -47,9 +45,7 @@ private:
 };
 
 int main() {
-    ruvia::HttpClientConfig backend;
-    backend.host = "api.example.com";
-    backend.scheme = ruvia::HttpScheme::kHttps;
+    auto backend = ruvia::HttpClientConfig::https("api.example.com");
     backend.protocol = ruvia::HttpClientProtocol::kNegotiate;
     backend.connectionsPerWorker = 4;
     backend.cookiesEnabled = true;

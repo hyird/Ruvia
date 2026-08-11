@@ -12,9 +12,9 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/StopToken.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/web/OperationOptions.h"
 #include "ruvia/web/ScopedOperation.h"
 
 namespace ruvia {
@@ -22,7 +22,6 @@ namespace ruvia {
 namespace detail {
 class HttpClientPool;
 class HttpClientRegistry;
-struct HttpClientHeaderAccess;
 struct HttpClientRequestAccess;
 }
 
@@ -35,10 +34,37 @@ enum class HttpClientProtocol : std::uint8_t {
     kHttp2Only,
 };
 
-struct HttpClientConfig {
-    std::string host;
-    HttpScheme scheme{HttpScheme::kHttps};
-    std::uint16_t port{0};
+class HttpClientConfig final {
+public:
+    [[nodiscard]] static HttpClientConfig http(std::string_view host) {
+        return HttpClientConfig(host, HttpScheme::kHttp, 80);
+    }
+
+    [[nodiscard]] static HttpClientConfig https(std::string_view host) {
+        return HttpClientConfig(host, HttpScheme::kHttps, 443);
+    }
+
+    [[nodiscard]] std::string_view host() const& noexcept {
+        return host_;
+    }
+    std::string_view host() const&& = delete;
+
+    [[nodiscard]] HttpScheme scheme() const noexcept {
+        return scheme_;
+    }
+
+    [[nodiscard]] std::uint16_t port() const noexcept {
+        return port_;
+    }
+
+    HttpClientConfig& setPort(std::uint16_t port) {
+        if (port == 0) {
+            throw std::invalid_argument("http client port must be greater than zero");
+        }
+        port_ = port;
+        return *this;
+    }
+
     std::size_t connectionsPerWorker{1};
     std::size_t maxConcurrentHttp2StreamsPerConnection{100};
     std::size_t maxBufferedRequestsPerWorker{1024};
@@ -60,11 +86,14 @@ struct HttpClientConfig {
     std::string privateKeyPassword;
     std::string userAgent{"Ruvia"};
     std::vector<std::pair<std::string, std::string>> cookies;
-};
 
-struct HttpClientOperationOptions {
-    std::optional<std::chrono::milliseconds> timeout;
-    StopToken stopToken;
+private:
+    HttpClientConfig(std::string_view host, HttpScheme scheme, std::uint16_t port)
+        : host_(host), scheme_(scheme), port_(port) {}
+
+    std::string host_;
+    HttpScheme scheme_;
+    std::uint16_t port_;
 };
 
 class HttpClientError final : public std::runtime_error {
@@ -101,10 +130,8 @@ public:
     HttpClientRequest(HttpClientRequest&&) noexcept = default;
     HttpClientRequest& operator=(HttpClientRequest&&) noexcept = default;
 
-    HttpClientRequest& setMethod(HttpKnownMethod method);
-    HttpClientRequest& setMethod(std::string_view method);
-    HttpClientRequest& setTarget(std::string_view target);
-    HttpClientRequest& addHeader(std::string_view name, std::string_view value);
+    HttpClientRequest& setHeader(std::string_view name, std::string_view value);
+    HttpClientRequest& appendHeader(std::string_view name, std::string_view value);
     HttpClientRequest& removeHeader(std::string_view name);
     HttpClientRequest& setContentType(std::string_view contentType);
     HttpClientRequest& addCookie(std::string_view name, std::string_view value);
@@ -130,29 +157,16 @@ private:
         std::pmr::string value;
     };
 
-    explicit HttpClientRequest(std::pmr::memory_resource* resource);
+    HttpClientRequest(
+        std::string_view method,
+        std::string_view target,
+        std::pmr::memory_resource* resource);
 
     std::pmr::string method_;
     std::pmr::string target_;
     std::pmr::vector<Header> headers_;
     std::pmr::string body_;
     bool hasBody_{false};
-};
-
-class HttpClientHeader final {
-public:
-    [[nodiscard]] std::string_view name() const& noexcept { return name_; }
-    [[nodiscard]] std::string_view name() const&& = delete;
-    [[nodiscard]] std::string_view value() const& noexcept { return value_; }
-    [[nodiscard]] std::string_view value() const&& = delete;
-
-private:
-    friend struct detail::HttpClientHeaderAccess;
-    HttpClientHeader(std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
-        : name_(name, resource), value_(value, resource) {}
-
-    std::pmr::string name_;
-    std::pmr::string value_;
 };
 
 class HttpClientResponse final {
@@ -164,10 +178,10 @@ public:
 
     [[nodiscard]] HttpStatusCode status() const noexcept { return status_; }
     [[nodiscard]] HttpProtocolVersion protocolVersion() const noexcept { return protocolVersion_; }
-    [[nodiscard]] std::span<const HttpClientHeader> headers() const& noexcept { return headers_; }
-    [[nodiscard]] std::span<const HttpClientHeader> headers() const&& = delete;
-    [[nodiscard]] std::span<const HttpClientHeader> trailers() const& noexcept { return trailers_; }
-    [[nodiscard]] std::span<const HttpClientHeader> trailers() const&& = delete;
+    [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const& noexcept { return headers_; }
+    [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const&& = delete;
+    [[nodiscard]] std::span<const HttpClientResponseHeader> trailers() const& noexcept { return trailers_; }
+    [[nodiscard]] std::span<const HttpClientResponseHeader> trailers() const&& = delete;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view) const&& = delete;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const& noexcept;
@@ -182,8 +196,8 @@ private:
 
     HttpStatusCode status_{http_status::kOk};
     HttpProtocolVersion protocolVersion_{HttpProtocolVersion::kHttp11};
-    std::pmr::vector<HttpClientHeader> headers_;
-    std::pmr::vector<HttpClientHeader> trailers_;
+    std::pmr::vector<HttpClientResponseHeader> headers_;
+    std::pmr::vector<HttpClientResponseHeader> trailers_;
     std::pmr::string body_;
 };
 
@@ -201,20 +215,15 @@ public:
     HttpClientHandle(const HttpClientHandle& other);
     HttpClientHandle& operator=(const HttpClientHandle&) = delete;
 
-    [[nodiscard]] HttpClientRequest newRequest() const;
-    [[nodiscard]] HttpClientHandle withOptions(HttpClientOperationOptions options) const;
-    [[nodiscard]] ScopedOperation<HttpClientResponse> sendRequest(HttpClientRequest request, HttpClientOperationOptions options = {}) const;
-    [[nodiscard]] ScopedOperation<HttpClientResponse> sendRequest(HttpClientRequest request, std::chrono::milliseconds timeout) const;
+    [[nodiscard]] HttpClientRequest newRequest(HttpKnownMethod method, std::string_view target) const;
+    [[nodiscard]] HttpClientRequest newRequest(std::string_view method, std::string_view target) const;
+    [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const;
+    [[nodiscard]] ScopedOperation<HttpClientResponse> sendRequest(HttpClientRequest request) const;
     [[nodiscard]] HttpClientStats stats() const;
-    [[nodiscard]] std::size_t bufferedRequests() const;
-    [[nodiscard]] std::size_t outstandingRequests() const;
-    [[nodiscard]] std::size_t bytesSent() const;
-    [[nodiscard]] std::size_t bytesReceived() const;
     [[nodiscard]] std::string_view host() const&;
     [[nodiscard]] std::string_view host() const&& = delete;
     [[nodiscard]] std::uint16_t port() const;
-    [[nodiscard]] bool secure() const;
-    [[nodiscard]] bool onDefaultPort() const;
+    [[nodiscard]] HttpScheme scheme() const;
 private:
     friend class detail::HttpClientRegistry;
     HttpClientHandle(detail::HttpClientPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope) noexcept;
@@ -222,7 +231,7 @@ private:
 
     detail::HttpClientPool* pool_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
-    HttpClientOperationOptions options_;
+    OperationOptions options_;
 };
 
 }  // namespace ruvia

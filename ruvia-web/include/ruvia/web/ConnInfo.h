@@ -5,6 +5,8 @@
 #include <type_traits>
 #include <variant>
 
+#include "ruvia/http/HttpClient.h"
+
 namespace ruvia {
 
 class Context;
@@ -87,17 +89,13 @@ public:
         return viaTrustedProxy_;
     }
 
-    // "https" when the request reached the client over TLS -- including TLS the
-    // proxy terminated and reported with X-Forwarded-Proto -- and "http"
+    // kHttps when the request reached the client over TLS -- including TLS the
+    // proxy terminated and reported with X-Forwarded-Proto -- and kHttp
     // otherwise. tls() describes only THIS hop, so a Secure cookie or an HSTS
     // header must be decided from this instead: behind a TLS-terminating proxy
     // the server's own transport is plaintext while the client's is not.
-    [[nodiscard]] constexpr std::string_view scheme() const noexcept {
+    [[nodiscard]] constexpr HttpScheme scheme() const noexcept {
         return scheme_;
-    }
-
-    [[nodiscard]] constexpr bool secure() const noexcept {
-        return scheme_ == "https";
     }
 
     [[nodiscard]] constexpr const PlainConnectionTransport* plain() const& noexcept {
@@ -118,13 +116,13 @@ private:
         : remote_(remoteAddress),
           client_(remoteAddress),
           transport_(transport),
-          scheme_("http") {}
+          scheme_(HttpScheme::kHttp) {}
 
     constexpr ConnInfo(std::string_view remoteAddress, TlsConnectionTransport transport) noexcept
         : remote_(remoteAddress),
           client_(remoteAddress),
           transport_(transport),
-          scheme_("https") {}
+          scheme_(HttpScheme::kHttps) {}
 
     [[nodiscard]] static constexpr ConnInfo plain(std::string_view remoteAddress) noexcept {
         return ConnInfo(remoteAddress, PlainConnectionTransport{});
@@ -142,8 +140,11 @@ private:
             client_ = Address(clientAddress);
             viaTrustedProxy_ = true;
         }
-        if (forwardedScheme == "http" || forwardedScheme == "https") {
-            scheme_ = forwardedScheme;
+        if (forwardedScheme == "http") {
+            scheme_ = HttpScheme::kHttp;
+            viaTrustedProxy_ = true;
+        } else if (forwardedScheme == "https") {
+            scheme_ = HttpScheme::kHttps;
             viaTrustedProxy_ = true;
         }
     }
@@ -158,7 +159,7 @@ private:
     Address remote_;
     Address client_;
     std::variant<PlainConnectionTransport, TlsConnectionTransport> transport_;
-    std::string_view scheme_;
+    HttpScheme scheme_;
     bool viaTrustedProxy_{false};
 };
 

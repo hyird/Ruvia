@@ -33,7 +33,12 @@
     "mariadb": {
       "description": "Build MariaDB-compatible database APIs.",
       "dependencies": [
-        "libmariadb"
+        {
+          "name": "libmariadb",
+          "features": [
+            "openssl"
+          ]
+        }
       ]
     },
     "postgresql": {

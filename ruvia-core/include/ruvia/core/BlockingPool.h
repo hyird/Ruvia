@@ -307,7 +307,7 @@ struct BlockingResultAccess final {
 };
 
 template <typename Fn>
-[[nodiscard]] auto runBlockingUntil(BlockingPool& pool, WorkerHandle worker, std::optional<std::chrono::steady_clock::duration> timeout, StopToken stopToken, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
+[[nodiscard]] auto tryRunBlockingUntil(BlockingPool& pool, WorkerHandle worker, std::optional<std::chrono::steady_clock::duration> timeout, StopToken stopToken, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
     using Result = std::invoke_result_t<Fn&>;
     using Payload = BlockingPayload<Result>;
     static_assert(std::is_void_v<Result> || std::is_move_constructible_v<Result>, "a blocking callable's result travels back to the worker by move");
@@ -345,22 +345,23 @@ template <typename Fn>
     }
 
     auto waited = timeout.has_value() ? co_await receiver.waitFor(*timeout, std::move(stopToken)) : co_await receiver.wait(std::move(stopToken));
-    if (auto* payload = waited.value(); payload != nullptr) {
-        if (payload->status != BlockingStatus::kCompleted) {
-            co_return BlockingResultAccess::rejected<Result>(payload->status);
+    if (waited.hasValue()) {
+        auto& payload = waited.value();
+        if (payload.status != BlockingStatus::kCompleted) {
+            co_return BlockingResultAccess::rejected<Result>(payload.status);
         }
         try {
-            co_return BlockingResultAccess::completed<Result>(std::move(*payload));
+            co_return BlockingResultAccess::completed<Result>(std::move(payload));
         } catch (...) {
             Payload failure;
             failure.error = std::current_exception();
             co_return BlockingResultAccess::completed<Result>(std::move(failure));
         }
     }
-    if (waited.timedOut() != nullptr) {
+    if (waited.status() == WorkerWaitStatus::kTimedOut) {
         co_return BlockingResultAccess::rejected<Result>(BlockingStatus::kTimedOut);
     }
-    if (waited.cancelled() != nullptr) {
+    if (waited.status() == WorkerWaitStatus::kCancelled) {
         co_return BlockingResultAccess::rejected<Result>(BlockingStatus::kCancelled);
     }
     // Closed cannot happen -- this coroutine owns the receiver and is the only
@@ -368,9 +369,21 @@ template <typename Fn>
     co_return BlockingResultAccess::rejected<Result>(BlockingStatus::kWorkerStopping);
 }
 
+template <typename T>
+[[nodiscard]] Task<T> unwrapBlockingResult(Task<BlockingResult<T>> operation) {
+    auto result = co_await std::move(operation);
+    if constexpr (std::is_void_v<T>) {
+        std::move(result).value();
+        co_return;
+    } else {
+        co_return std::move(result).value();
+    }
+}
+
 }  // namespace detail
 
-// Runs `fn` on `pool` and resumes the caller on `worker` with its result.
+// Tries to run `fn` on `pool` and resumes the caller on `worker` with a typed
+// status. The callable's own exception is retained in the result.
 //
 // The returned task must be awaited on `worker` -- that is the thread the
 // coroutine resumes on and the only thread the result is touched from. `fn` is
@@ -382,13 +395,13 @@ template <typename Fn>
 // rethrow the callable's own exception; value() is rvalue-only because it
 // consumes the result.
 template <typename Fn>
-[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
-    return detail::runBlockingUntil(pool, std::move(worker), std::nullopt, {}, std::move(fn));
+[[nodiscard]] auto tryRunBlocking(BlockingPool& pool, WorkerHandle worker, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
+    return detail::tryRunBlockingUntil(pool, std::move(worker), std::nullopt, {}, std::move(fn));
 }
 
 template <typename Fn>
-[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, StopToken stopToken, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
-    return detail::runBlockingUntil(pool, std::move(worker), std::nullopt, std::move(stopToken), std::move(fn));
+[[nodiscard]] auto tryRunBlocking(BlockingPool& pool, WorkerHandle worker, StopToken stopToken, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
+    return detail::tryRunBlockingUntil(pool, std::move(worker), std::nullopt, std::move(stopToken), std::move(fn));
 }
 
 // The same, but the caller stops waiting after `timeout` and gets kTimedOut.
@@ -397,16 +410,43 @@ template <typename Fn>
 // wedged dependency from pinning a request -- its connection, its arena, its
 // leases -- indefinitely.
 template <typename Rep, typename Period, typename Fn>
-[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, std::chrono::duration<Rep, Period> timeout, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
+[[nodiscard]] auto tryRunBlocking(BlockingPool& pool, WorkerHandle worker, std::chrono::duration<Rep, Period> timeout, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
     // duration_cast can overflow for a valid user duration such as hours::max(),
     // turning a long deadline into an immediate timeout. Use the same saturating
     // conversion as worker timers so all bounded waits share one interpretation.
-    return detail::runBlockingUntil(pool, std::move(worker), detail::workerTimerSaturatingDurationCast(timeout), {}, std::move(fn));
+    return detail::tryRunBlockingUntil(pool, std::move(worker), detail::workerTimerSaturatingDurationCast(timeout), {}, std::move(fn));
 }
 
 template <typename Rep, typename Period, typename Fn>
-[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, std::chrono::duration<Rep, Period> timeout, StopToken stopToken, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
-    return detail::runBlockingUntil(pool, std::move(worker), detail::workerTimerSaturatingDurationCast(timeout), std::move(stopToken), std::move(fn));
+[[nodiscard]] auto tryRunBlocking(BlockingPool& pool, WorkerHandle worker, std::chrono::duration<Rep, Period> timeout, StopToken stopToken, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
+    return detail::tryRunBlockingUntil(pool, std::move(worker), detail::workerTimerSaturatingDurationCast(timeout), std::move(stopToken), std::move(fn));
+}
+
+// The throwing form has the same name and semantics in core and web: callable
+// exceptions are rethrown and a rejected operation throws
+// BlockingOperationRejected.
+template <typename Fn>
+[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, Fn fn) -> Task<std::invoke_result_t<Fn&>> {
+    using Result = std::invoke_result_t<Fn&>;
+    return detail::unwrapBlockingResult<Result>(tryRunBlocking(pool, std::move(worker), std::move(fn)));
+}
+
+template <typename Fn>
+[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, StopToken stopToken, Fn fn) -> Task<std::invoke_result_t<Fn&>> {
+    using Result = std::invoke_result_t<Fn&>;
+    return detail::unwrapBlockingResult<Result>(tryRunBlocking(pool, std::move(worker), std::move(stopToken), std::move(fn)));
+}
+
+template <typename Rep, typename Period, typename Fn>
+[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, std::chrono::duration<Rep, Period> timeout, Fn fn) -> Task<std::invoke_result_t<Fn&>> {
+    using Result = std::invoke_result_t<Fn&>;
+    return detail::unwrapBlockingResult<Result>(tryRunBlocking(pool, std::move(worker), timeout, std::move(fn)));
+}
+
+template <typename Rep, typename Period, typename Fn>
+[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, std::chrono::duration<Rep, Period> timeout, StopToken stopToken, Fn fn) -> Task<std::invoke_result_t<Fn&>> {
+    using Result = std::invoke_result_t<Fn&>;
+    return detail::unwrapBlockingResult<Result>(tryRunBlocking(pool, std::move(worker), timeout, std::move(stopToken), std::move(fn)));
 }
 
 }  // namespace ruvia

@@ -56,7 +56,7 @@ namespace {
 
 }  // namespace
 
-Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(std::string_view headSection, const Http1ClientRequestContext& request) noexcept {
+Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(std::string_view headSection, const Http1ClientExchangeState& exchangeState) noexcept {
     const auto firstLineEnd = headSection.find("\r\n");
     const auto firstLine = firstLineEnd == std::string_view::npos ? headSection : headSection.substr(0, firstLineEnd);
     auto statusLineResult = parseStatusLine(firstLine);
@@ -67,7 +67,8 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(std::strin
     Http1ClientResponseHeadParseResult result(std::in_place_type<Http1ClientParsedResponseHead>, *statusLine);
     auto& output = std::get<Http1ClientParsedResponseHead>(result);
 
-    const auto contentSemantics = httpResponseContentSemantics(request.method(), output.statusCode);
+    const auto contentSemantics = httpResponseContentSemantics(
+        Http1ClientExchangeStateAccess::method(exchangeState), output.statusCode);
     HttpInterimResponseHeaderValidator interimHeaders(HttpFieldListRole::kRecipient);
     const bool framingFieldsApply = contentSemantics == HttpResponseContentSemantics::kWithContent;
     const bool resetContentRequiresEmpty = output.statusCode == http_status::kResetContent && contentSemantics != HttpResponseContentSemantics::kConnectTunnel;

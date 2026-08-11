@@ -117,27 +117,30 @@ DbField& DbField::operator=(DbField&& other) {
     return *this;
 }
 
-bool DbField::isNull() const noexcept {
-    return std::holds_alternative<std::monostate>(storage_);
-}
-
-std::string_view DbField::text() const& noexcept {
+std::optional<std::string_view> DbField::value() const& noexcept {
     if (const auto* owned = std::get_if<std::pmr::string>(&storage_)) {
         return *owned;
     }
     if (const auto* borrowed = std::get_if<BorrowedText>(&storage_)) {
         return borrowed->value;
     }
-    return {};
+    return std::nullopt;
 }
 
 DbRow::DbRow(std::pmr::memory_resource* resource)
     : resource_(detail::pmrResourceOrDefault(resource)),
-      storage_(std::in_place_type<OwnedFields>, resource_) {}
+      storage_(std::in_place_type<OwnedFields>, resource_),
+      columnNames_(std::in_place_type<OwnedColumnNames>, resource_) {}
 
-DbRow::DbRow(const DbField* fields, std::size_t size, std::pmr::memory_resource* resource)
+DbRow::DbRow(
+    const DbField* fields,
+    std::size_t size,
+    const std::pmr::string* columnNames,
+    std::size_t columnCount,
+    std::pmr::memory_resource* resource)
     : resource_(detail::pmrResourceOrDefault(resource)),
-      storage_(std::in_place_type<BorrowedFields>, fields, size) {}
+      storage_(std::in_place_type<BorrowedFields>, fields, size),
+      columnNames_(std::in_place_type<BorrowedColumnNames>, columnNames, columnCount) {}
 
 DbRow::DbRow(DbRow&& other) noexcept
     : resource_(other.resource_),
@@ -146,8 +149,17 @@ DbRow::DbRow(DbRow&& other) noexcept
               return Storage(std::in_place_type<OwnedFields>, std::move(*owned));
           }
           return Storage(std::in_place_type<BorrowedFields>, std::get<BorrowedFields>(other.storage_));
+      }()),
+      columnNames_([&other]() noexcept -> ColumnNameStorage {
+          if (auto* owned = std::get_if<OwnedColumnNames>(&other.columnNames_)) {
+              return ColumnNameStorage(std::in_place_type<OwnedColumnNames>, std::move(*owned));
+          }
+          return ColumnNameStorage(
+              std::in_place_type<BorrowedColumnNames>,
+              std::get<BorrowedColumnNames>(other.columnNames_));
       }()) {
     other.storage_.emplace<OwnedFields>(other.resource_);
+    other.columnNames_.emplace<OwnedColumnNames>(other.resource_);
 }
 
 DbRow& DbRow::operator=(DbRow&& other) {
@@ -164,7 +176,19 @@ DbRow& DbRow::operator=(DbRow&& other) {
     } else {
         storage_.emplace<BorrowedFields>(std::get<BorrowedFields>(other.storage_));
     }
+    if (auto* owned = std::get_if<OwnedColumnNames>(&other.columnNames_)) {
+        if (auto* destination = std::get_if<OwnedColumnNames>(&columnNames_)) {
+            *destination = std::move(*owned);
+        } else {
+            OwnedColumnNames replacement(std::move(*owned), resource_);
+            columnNames_.emplace<OwnedColumnNames>(std::move(replacement));
+        }
+    } else {
+        columnNames_.emplace<BorrowedColumnNames>(
+            std::get<BorrowedColumnNames>(other.columnNames_));
+    }
     other.storage_.emplace<OwnedFields>(other.resource_);
+    other.columnNames_.emplace<OwnedColumnNames>(other.resource_);
     return *this;
 }
 
@@ -186,6 +210,16 @@ const DbField& DbRow::operator[](std::size_t index) const& noexcept {
     return std::get<BorrowedFields>(storage_)[index];
 }
 
+const DbField& DbRow::operator[](std::string_view column) const& {
+    const auto names = columnNames();
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        if (names[index] == column) {
+            return (*this)[index];
+        }
+    }
+    throw std::out_of_range("database result has no such column");
+}
+
 const DbField* DbRow::begin() const& noexcept {
     if (const auto* owned = std::get_if<OwnedFields>(&storage_)) {
         return owned->data();
@@ -203,16 +237,29 @@ DbRow::OwnedFields& DbRow::ownedFields() noexcept {
     return std::get<OwnedFields>(storage_);
 }
 
+DbRow::OwnedColumnNames& DbRow::ownedColumnNames() noexcept {
+    return std::get<OwnedColumnNames>(columnNames_);
+}
+
+std::span<const std::pmr::string> DbRow::columnNames() const noexcept {
+    if (const auto* owned = std::get_if<OwnedColumnNames>(&columnNames_)) {
+        return *owned;
+    }
+    return std::get<BorrowedColumnNames>(columnNames_);
+}
+
 DbRows::DbRows(std::pmr::memory_resource* resource)
     : DbRows(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
 
 DbRows::DbRows(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
     : rows_(resource),
-      fields_(resource) {}
+      fields_(resource),
+      columnNames_(resource) {}
 
 DbRows::DbRows(DbRows&& other) noexcept
     : rows_(std::move(other.rows_)),
       fields_(std::move(other.fields_)),
+      columnNames_(std::move(other.columnNames_)),
       rawResult_(std::move(other.rawResult_)) {
     other.rawResult_.template emplace<NoRawResult>();
 }
@@ -223,8 +270,29 @@ DbRows::~DbRows() {
     }
 }
 
-std::span<const DbRow> DbRows::rows() const& noexcept {
-    return rows_;
+bool DbRows::empty() const noexcept {
+    return rows_.empty();
+}
+
+std::size_t DbRows::size() const noexcept {
+    return rows_.size();
+}
+
+const DbRow& DbRows::operator[](std::size_t index) const& noexcept {
+    return rows_[index];
+}
+
+const DbRow* DbRows::begin() const& noexcept {
+    return rows_.data();
+}
+
+const DbRow* DbRows::end() const& noexcept {
+    const auto* first = begin();
+    return rows_.empty() ? first : first + rows_.size();
+}
+
+const DbRow& DbRows::front() const& noexcept {
+    return rows_.front();
 }
 
 DbMigrationReport::DbMigrationReport(std::pmr::memory_resource* resource)

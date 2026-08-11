@@ -22,7 +22,7 @@ void HpackDecoder::setMaxDynamicTableSize(std::size_t bytes) {
     impl_->decoder.setMaxDynamicTableSize(bytes);
 }
 
-HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, HeaderCallback callback) {
+HpackDecodeResult HpackDecoder::decodeWithCallback(std::string_view block, void* target, HeaderCallback callback) {
     const auto result = impl_->decoder.decode(block, target, callback);
     const auto* failure = result.failure();
     return HpackDecodeResult(failure == nullptr ? std::nullopt : std::optional<HpackDecodeError>(static_cast<HpackDecodeError>(failure->error())));

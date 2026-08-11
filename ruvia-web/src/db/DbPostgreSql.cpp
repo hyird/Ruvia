@@ -12,7 +12,7 @@
 
 namespace ruvia::detail {
 
-std::runtime_error postgreSqlError(const pg_conn& connection, std::string_view operation, const pg_result* result) {
+DbError postgreSqlError(const pg_conn& connection, std::string_view operation, DbError::Code errorCode, const pg_result* result) {
     std::pmr::string error(operation, processResource());
     error.append(" failed");
     const char* state = result == nullptr ? nullptr : PQresultErrorField(const_cast<PGresult*>(result), PG_DIAG_SQLSTATE);
@@ -32,7 +32,12 @@ std::runtime_error postgreSqlError(const pg_conn& connection, std::string_view o
             error.pop_back();
         }
     }
-    return std::runtime_error(error.c_str());
+    return DbError(
+        errorCode,
+        DbDriver::kPostgreSql,
+        std::string(error),
+        std::nullopt,
+        state == nullptr ? std::string{} : std::string(state));
 }
 
 PostgreSqlParams::PostgreSqlParams(std::pmr::memory_resource* resource)

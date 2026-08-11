@@ -1,6 +1,9 @@
 #include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameReader.h"
 
+#include <cstdint>
+#include <stdexcept>
+
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketClosePayload.h"
 
 namespace ruvia::detail {
@@ -86,8 +89,27 @@ WsLivenessMode WsConnection::livenessMode() const noexcept {
 }
 
 void WsConnection::appendFrame(WebSocketOpcode opcode, std::string_view payload, bool rsv1) {
+    std::pmr::string ownedPayload(outBuffer_.get_allocator().resource());
+    if (!payload.empty() && !outBuffer_.empty()) {
+        const auto payloadAddress = reinterpret_cast<std::uintptr_t>(payload.data());
+        const auto bufferAddress = reinterpret_cast<std::uintptr_t>(outBuffer_.data());
+        if (payloadAddress >= bufferAddress &&
+            payloadAddress - bufferAddress < outBuffer_.size()) {
+            // outputPlan() exposes a borrowed view. Copy only for this aliasing
+            // case so reserve() below cannot invalidate its own append source.
+            ownedPayload.assign(payload);
+            payload = ownedPayload;
+        }
+    }
     WebSocketFrameHeader header;
     const auto headerSize = encodeWebSocketFrameHeader(header, opcode, payload.size(), rsv1);
+    if (headerSize > outBuffer_.max_size() - outBuffer_.size() ||
+        payload.size() > outBuffer_.max_size() - outBuffer_.size() - headerSize) {
+        throw std::length_error("WebSocket output frame size overflow");
+    }
+    // One reserve is the transaction boundary. Once it succeeds, neither append
+    // can allocate, so an exception can never publish an orphan wire header.
+    outBuffer_.reserve(outBuffer_.size() + headerSize + payload.size());
     outBuffer_.append(header.data(), headerSize);
     outBuffer_.append(payload.data(), payload.size());
 }
@@ -180,6 +202,18 @@ WsCloseSubmitStatus WsConnection::submitClose(std::uint16_t code, std::string_vi
 }
 
 std::optional<WsEvent> WsConnection::poll() & {
+    try {
+        return pollImpl();
+    } catch (...) {
+        // Frame reading unmasks in place and advances the input cursor. If any
+        // later assembler/deflate/output operation fails, retrying that frame is
+        // no longer well-defined; make the terminal transport decision explicit.
+        closePhase_ = ClosePhase::kClosed;
+        throw;
+    }
+}
+
+std::optional<WsEvent> WsConnection::pollImpl() & {
     inboundInflated_.clear();
     if (closePhase_ == ClosePhase::kFinalCloseQueued || closePhase_ == ClosePhase::kTransportEndReady || closePhase_ == ClosePhase::kClosed) {
         return WsEvent::makeTransportEnd();

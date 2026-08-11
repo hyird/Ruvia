@@ -1,17 +1,17 @@
 #pragma once
 
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <ranges>
+#include <memory_resource>
 #include <span>
+#include <string>
 #include <string_view>
-#include <type_traits>
 #include <variant>
 
 #include "ruvia/http/Http1ClosePolicy.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
 
 namespace ruvia {
@@ -45,45 +45,78 @@ private:
 namespace detail {
 
 struct Http1ClientRequestPrepareResultAccess;
+struct Http1ClientExchangeStateAccess;
 
-template <typename Range>
-concept HttpTemporaryOwningHeaderRange = !std::is_lvalue_reference_v<Range&&> && std::ranges::contiguous_range<Range> && !std::ranges::borrowed_range<Range> && std::same_as<std::remove_cv_t<std::ranges::range_value_t<Range>>, HttpHeaderView>;
+enum class Http1ClientInitialContentState : std::uint8_t {
+    kComplete,
+    kPending,
+    kAwaitingContinue,
+};
 
-// Exact sent-request facts needed to interpret the corresponding HTTP/1
-// response. Only a successfully prepared request can create this context, so
-// response framing cannot drift from the method, Upgrade offer, or close signal
-// that actually entered the wire plan.
-class Http1ClientRequestContext final {
+}  // namespace detail
+
+// Owning protocol facts for exactly one HTTP/1 response exchange. Preparing a
+// request creates this state from the facts that actually entered the wire
+// plan; transferring it to the response parser removes every dependency on the
+// caller's method and header storage. Only an offered Upgrade value needs owned
+// dynamic storage, so ordinary requests remain allocation-free.
+class Http1ClientExchangeState final {
 public:
-    [[nodiscard]] constexpr std::string_view method() const noexcept {
-        return method_;
-    }
-
-    [[nodiscard]] constexpr std::span<const HttpHeaderView> headers() const noexcept {
-        return headers_;
-    }
-
-    [[nodiscard]] constexpr Http1ClosePolicy closePolicy() const noexcept {
-        return closePolicy_;
-    }
-
-    [[nodiscard]] constexpr HttpConnectionOptions connectionOptions() const noexcept {
-        return connectionOptions_;
-    }
+    Http1ClientExchangeState(const Http1ClientExchangeState&) = delete;
+    Http1ClientExchangeState& operator=(const Http1ClientExchangeState&) = delete;
+    Http1ClientExchangeState(Http1ClientExchangeState&&) noexcept = default;
+    Http1ClientExchangeState& operator=(Http1ClientExchangeState&&) = delete;
 
 private:
-    friend struct Http1ClientRequestPrepareResultAccess;
+    friend class PreparedHttp1ClientRequest;
+    friend struct detail::Http1ClientRequestPrepareResultAccess;
+    friend struct detail::Http1ClientExchangeStateAccess;
 
-    constexpr Http1ClientRequestContext(std::string_view method, std::span<const HttpHeaderView> headers, HttpConnectionOptions connectionOptions, Http1ClosePolicy closePolicy) noexcept
-        : method_(method),
-          headers_(headers),
+    Http1ClientExchangeState(const Http1ClientExchangeState& other, std::pmr::memory_resource* resource)
+        : offeredUpgradeProtocols_(other.offeredUpgradeProtocols_, resource),
+          method_(other.method_),
+          connectionOptions_(other.connectionOptions_),
+          closePolicy_(other.closePolicy_),
+          contentState_(other.contentState_) {}
+
+    Http1ClientExchangeState(HttpKnownMethod method, detail::HttpConnectionOptions connectionOptions,
+        Http1ClosePolicy closePolicy, detail::Http1ClientInitialContentState contentState,
+        std::pmr::string offeredUpgradeProtocols) noexcept
+        : offeredUpgradeProtocols_(std::move(offeredUpgradeProtocols)),
+          method_(method),
           connectionOptions_(connectionOptions),
-          closePolicy_(closePolicy) {}
+          closePolicy_(closePolicy),
+          contentState_(contentState) {}
 
-    std::string_view method_;
-    std::span<const HttpHeaderView> headers_;
-    HttpConnectionOptions connectionOptions_;
-    Http1ClosePolicy closePolicy_;
+    std::pmr::string offeredUpgradeProtocols_;
+    HttpKnownMethod method_{HttpKnownMethod::kUnknown};
+    detail::HttpConnectionOptions connectionOptions_;
+    Http1ClosePolicy closePolicy_{Http1ClosePolicy::kAllowReuse};
+    detail::Http1ClientInitialContentState contentState_{detail::Http1ClientInitialContentState::kComplete};
+};
+
+namespace detail {
+
+struct Http1ClientExchangeStateAccess final {
+    [[nodiscard]] static constexpr HttpKnownMethod method(const Http1ClientExchangeState& state) noexcept {
+        return state.method_;
+    }
+
+    [[nodiscard]] static constexpr HttpConnectionOptions connectionOptions(const Http1ClientExchangeState& state) noexcept {
+        return state.connectionOptions_;
+    }
+
+    [[nodiscard]] static constexpr Http1ClosePolicy closePolicy(const Http1ClientExchangeState& state) noexcept {
+        return state.closePolicy_;
+    }
+
+    [[nodiscard]] static constexpr Http1ClientInitialContentState contentState(const Http1ClientExchangeState& state) noexcept {
+        return state.contentState_;
+    }
+
+    [[nodiscard]] static std::string_view offeredUpgradeProtocols(const Http1ClientExchangeState& state) noexcept {
+        return state.offeredUpgradeProtocols_;
+    }
 };
 
 }  // namespace detail
@@ -208,9 +241,8 @@ private:
 // caller-provided output buffer and the active immediate/continue-gated
 // alternative points into the request's borrowed content; those sources must
 // remain alive and unchanged until sent.
-// The response context also borrows the request method/header table, which must
-// remain alive and unchanged until the corresponding final response head or
-// protocol-switch decision has been parsed.
+// exchangeState() returns independent response-side protocol facts; head() and
+// contentPlan() remain readable for the request write or an explicit retry.
 class PreparedHttp1ClientRequest final {
 public:
     [[nodiscard]] constexpr std::string_view head() const& noexcept {
@@ -223,18 +255,22 @@ public:
     }
     [[nodiscard]] constexpr const Http1ClientRequestContentPlan& contentPlan() const&& = delete;
 
+    [[nodiscard]] Http1ClientExchangeState exchangeState() const& {
+        return Http1ClientExchangeState(exchangeState_, exchangeState_.offeredUpgradeProtocols_.get_allocator().resource());
+    }
+    Http1ClientExchangeState exchangeState() const&& = delete;
+
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;
-    friend class Http1ClientResponseParser;
 
-    constexpr PreparedHttp1ClientRequest(std::string_view head, Http1ClientRequestContentPlan contentPlan, detail::Http1ClientRequestContext responseContext) noexcept
+    PreparedHttp1ClientRequest(std::string_view head, Http1ClientRequestContentPlan contentPlan, Http1ClientExchangeState exchangeState) noexcept
         : head_(head),
           contentPlan_(contentPlan),
-          responseContext_(responseContext) {}
+          exchangeState_(std::move(exchangeState)) {}
 
     std::string_view head_;
     Http1ClientRequestContentPlan contentPlan_;
-    detail::Http1ClientRequestContext responseContext_;
+    Http1ClientExchangeState exchangeState_;
 };
 
 class Http1ClientRequestPrepareFailure final {
@@ -259,6 +295,10 @@ public:
     }
     const Http1ClientRequestBufferTooSmall* bufferTooSmall() const&& = delete;
 
+    [[nodiscard]] constexpr PreparedHttp1ClientRequest* prepared() & noexcept {
+        return std::get_if<PreparedHttp1ClientRequest>(&state_);
+    }
+
     [[nodiscard]] constexpr const PreparedHttp1ClientRequest* prepared() const& noexcept {
         return std::get_if<PreparedHttp1ClientRequest>(&state_);
     }
@@ -275,8 +315,8 @@ private:
     explicit constexpr Http1ClientRequestPrepareResult(Http1ClientRequestBufferTooSmall state) noexcept
         : state_(state) {}
 
-    explicit constexpr Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest state) noexcept
-        : state_(state) {}
+    explicit Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest state) noexcept
+        : state_(std::move(state)) {}
 
     explicit constexpr Http1ClientRequestPrepareResult(Http1ClientRequestPrepareFailure state) noexcept
         : state_(state) {}
@@ -284,23 +324,23 @@ private:
     std::variant<Http1ClientRequestBufferTooSmall, PreparedHttp1ClientRequest, Http1ClientRequestPrepareFailure> state_;
 };
 
-// Allocation-free HTTP/1.1 direct-origin request writer. It validates the
-// complete request before touching the caller's buffer, generates Host and
-// exact Content-Length, and returns separate head/content views for writev-style
-// I/O or Expect: 100-continue gating. CONNECT uses its dedicated entry so the
-// authority-form target cannot be confused with an origin-form path.
+// HTTP/1.1 direct-origin request writer. Ordinary requests are allocation-free;
+// an Upgrade request owns only its offered protocol value for later 101
+// validation. It validates the complete request before touching the caller's
+// buffer, generates Host and exact Content-Length, and returns separate
+// head/content views for writev-style I/O or Expect: 100-continue gating.
+// CONNECT uses its dedicated entry so authority form cannot be confused with an
+// origin-form target.
 class Http1ClientRequestWriter final {
 public:
-    [[nodiscard]] Http1ClientRequestPrepareResult prepare(const HttpOriginView& origin, const HttpClientRequestView& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy()) const noexcept;
+    explicit Http1ClientRequestWriter(std::pmr::memory_resource* resource = nullptr) noexcept;
 
-    [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy()) const noexcept;
+    [[nodiscard]] Http1ClientRequestPrepareResult prepare(const HttpOriginView& origin, const HttpClientRequestView& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy()) const;
 
-    // The prepared response context retains the header table through the final
-    // response or protocol-switch decision. A temporary owning contiguous
-    // range would be destroyed as prepareConnect() returns; borrowed ranges
-    // such as std::span remain valid inputs.
-    template <detail::HttpTemporaryOwningHeaderRange Headers>
-    Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView&, Headers&&, std::span<char>, Http1ClientRequestWirePolicy = Http1ClientRequestWirePolicy()) const = delete;
+    [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy()) const;
+
+private:
+    std::pmr::memory_resource* resource_;
 };
 
 }  // namespace ruvia

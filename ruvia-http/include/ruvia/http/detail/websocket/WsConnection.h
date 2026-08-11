@@ -135,6 +135,7 @@ private:
     void appendFrame(WebSocketOpcode opcode, std::string_view payload, bool rsv1 = false);
     void fail(std::uint16_t code, std::string_view reason = {});
     void receivePeerClose() noexcept;
+    [[nodiscard]] std::optional<WsEvent> pollImpl() &;
 
     std::pmr::string* input_;
     ProtocolByteLimit messageLimit_;

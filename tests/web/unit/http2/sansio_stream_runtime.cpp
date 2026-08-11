@@ -194,7 +194,7 @@ RUVIA_TEST(http2_stream_sleep_observes_request_stop_token) {
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     Http2SansIoTermination termination;
-    ruvia::detail::StopSource source;
+    ruvia::StopSource source;
     auto token = source.token();
     std::optional<ruvia::TimerSleepResult> observed;
     const auto waitForStop = [&]() -> ruvia::Task<ruvia::TimerSleepResult> {

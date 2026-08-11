@@ -15,8 +15,10 @@
 #include <exception>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -77,15 +79,18 @@ ruvia::Task<void> withDatabase(
     }
 
     const std::array<ruvia::DbValue, 4> params{ruvia::DbValue{"hello"}, ruvia::DbValue{-42}, ruvia::DbValue{true}, ruvia::DbValue{nullptr}};
-    auto typed = co_await db.query("SELECT $1::text, $2::bigint, $3::boolean, $4::text IS NULL", std::span<const ruvia::DbValue>(params));
-    dbRequire(typed.rows().size() == 1 && typed.rows()[0].size() == 4, "typed PostgreSQL query returned the wrong shape");
-    dbRequire(typed.rows()[0][0].text() == "hello", "text binding failed");
-    dbRequire(typed.rows()[0][1].text() == "-42", "integer binding failed");
-    dbRequire(typed.rows()[0][2].text() == "t", "boolean binding failed");
-    dbRequire(typed.rows()[0][3].text() == "t", "NULL binding failed");
+    auto typed = co_await db.query(
+        "SELECT $1::text AS text_value, $2::bigint AS integer_value, "
+        "$3::boolean AS boolean_value, $4::text AS nullable_value",
+        std::span<const ruvia::DbValue>(params));
+    dbRequire(typed.size() == 1 && typed[0].size() == 4, "typed PostgreSQL query returned the wrong shape");
+    dbRequire(typed[0]["text_value"].value() == std::optional<std::string_view>("hello"), "text binding failed");
+    dbRequire(typed[0]["integer_value"].as<std::int64_t>() == -42, "integer binding failed");
+    dbRequire(typed[0]["boolean_value"].as<bool>() == true, "boolean binding failed");
+    dbRequire(!typed[0]["nullable_value"].value().has_value(), "NULL binding failed");
 
     {
-        auto stop = std::make_shared<ruvia::detail::StopSource>();
+        auto stop = std::make_shared<ruvia::StopSource>();
         asio::steady_timer cancel(ioContext, std::chrono::milliseconds(50));
         cancel.async_wait([stop](std::error_code error) {
             if (!error) {
@@ -100,11 +105,11 @@ ruvia::Task<void> withDatabase(
         }
         dbRequire(cancelled, "active PostgreSQL query did not report kCancelled");
         auto recovered = co_await db.query("SELECT 1");
-        dbRequire(recovered.rows()[0][0].text() == "1", "PostgreSQL did not reconnect after query cancellation");
+        dbRequire(recovered[0][0].as<std::int64_t>() == 1, "PostgreSQL did not reconnect after query cancellation");
     }
 
     {
-        auto stop = std::make_shared<ruvia::detail::StopSource>();
+        auto stop = std::make_shared<ruvia::StopSource>();
         auto transaction = co_await db.withOptions({.stopToken = stop->token()}).beginTransaction();
         asio::steady_timer cancel(ioContext, std::chrono::milliseconds(50));
         cancel.async_wait([stop](std::error_code error) {
@@ -120,11 +125,11 @@ ruvia::Task<void> withDatabase(
         }
         dbRequire(cancelled && !transaction.active(), "active PostgreSQL transaction did not fail with kCancelled");
         auto recovered = co_await db.query("SELECT 1");
-        dbRequire(recovered.rows()[0][0].text() == "1", "PostgreSQL did not reconnect after transaction cancellation");
+        dbRequire(recovered[0][0].as<std::int64_t>() == 1, "PostgreSQL did not reconnect after transaction cancellation");
     }
 
     {
-        auto stop = std::make_shared<ruvia::detail::StopSource>();
+        auto stop = std::make_shared<ruvia::StopSource>();
         auto stream = co_await db.withOptions({.stopToken = stop->token()})
                           .queryStream("SELECT i, pg_sleep(0.01) FROM generate_series(1, 1000) AS i");
         asio::steady_timer cancel(ioContext, std::chrono::milliseconds(50));
@@ -142,17 +147,20 @@ ruvia::Task<void> withDatabase(
         }
         dbRequire(cancelled && !stream.active(), "active PostgreSQL stream did not fail with kCancelled");
         auto recovered = co_await db.query("SELECT 1");
-        dbRequire(recovered.rows()[0][0].text() == "1", "PostgreSQL did not reconnect after stream cancellation");
+        dbRequire(recovered[0][0].as<std::int64_t>() == 1, "PostgreSQL did not reconnect after stream cancellation");
     }
 
     // The same bindings passed as ordinary arguments must reach the server in
     // the same order and with the same types as the prepared span above.
-    auto variadic = co_await db.query("SELECT $1::text, $2::bigint, $3::boolean, $4::text IS NULL", "hello", -42, true, nullptr);
-    dbRequire(variadic.rows().size() == 1 && variadic.rows()[0].size() == 4, "variadic PostgreSQL query returned the wrong shape");
-    dbRequire(variadic.rows()[0][0].text() == "hello", "variadic text binding failed");
-    dbRequire(variadic.rows()[0][1].text() == "-42", "variadic integer binding failed");
-    dbRequire(variadic.rows()[0][2].text() == "t", "variadic boolean binding failed");
-    dbRequire(variadic.rows()[0][3].text() == "t", "variadic NULL binding failed");
+    auto variadic = co_await db.query(
+        "SELECT $1::text AS text_value, $2::bigint AS integer_value, "
+        "$3::boolean AS boolean_value, $4::text AS nullable_value",
+        "hello", -42, true, nullptr);
+    dbRequire(variadic.size() == 1 && variadic[0].size() == 4, "variadic PostgreSQL query returned the wrong shape");
+    dbRequire(variadic[0]["text_value"].value() == std::optional<std::string_view>("hello"), "variadic text binding failed");
+    dbRequire(variadic[0]["integer_value"].as<std::int64_t>() == -42, "variadic integer binding failed");
+    dbRequire(variadic[0]["boolean_value"].as<bool>() == true, "variadic boolean binding failed");
+    dbRequire(!variadic[0]["nullable_value"].value().has_value(), "variadic NULL binding failed");
 
     {
         auto transaction = co_await db.beginTransaction();
@@ -160,7 +168,7 @@ ruvia::Task<void> withDatabase(
         co_await transaction.rollback();
     }
     auto count = co_await db.query("SELECT count(*) FROM ruvia_pg_integration_items");
-    dbRequire(count.rows()[0][0].text() == "0", "rollback did not restore state");
+    dbRequire(count[0][0].as<std::uint64_t>() == 0, "rollback did not restore state");
 
     {
         auto transaction = co_await db.beginTransaction();
@@ -168,7 +176,7 @@ ruvia::Task<void> withDatabase(
         co_await transaction.commit();
     }
     auto committedCount = co_await db.query("SELECT count(*) FROM ruvia_pg_integration_items");
-    dbRequire(committedCount.rows()[0][0].text() == "1", "commit did not persist state");
+    dbRequire(committedCount[0][0].as<std::uint64_t>() == 1, "commit did not persist state");
     auto updated = co_await db.execute("UPDATE ruvia_pg_integration_items SET value = $1", std::span<const ruvia::DbValue>(params.data(), 1));
     dbRequire(updated.affectedRows() == 1, "affected-row count is incorrect");
 
@@ -181,12 +189,13 @@ ruvia::Task<void> withDatabase(
     }
     dbRequire(rejectedCommandStream, "queryStream accepted non-row-producing SQL");
     auto afterRejectedStream = co_await db.query("SELECT 1");
-    dbRequire(afterRejectedStream.rows()[0][0].text() == "1", "pool was not reusable after a rejected stream query");
+    dbRequire(afterRejectedStream[0][0].as<std::int64_t>() == 1, "pool was not reusable after a rejected stream query");
 
-    auto stream = co_await db.queryStream("SELECT generate_series(1, 128)");
+    auto stream = co_await db.queryStream("SELECT generate_series(1, 128) AS sequence_value");
     std::size_t streamed = 0;
     while (auto row = co_await stream.read()) {
         dbRequire(row->size() == 1, "streamed row has the wrong shape");
+        dbRequire((*row)["sequence_value"].as<std::int64_t>().has_value(), "streamed row has no named value");
         ++streamed;
     }
     dbRequire(streamed == 128, "single-row mode did not stream every row");
@@ -195,7 +204,7 @@ ruvia::Task<void> withDatabase(
     dbRequire((co_await abandoned.read()).has_value(), "stream produced no first row");
     co_await abandoned.close();
     auto reconnected = co_await db.query("SELECT 1");
-    dbRequire(reconnected.rows()[0][0].text() == "1", "pool did not reconnect after an abandoned stream");
+    dbRequire(reconnected[0][0].as<std::int64_t>() == 1, "pool did not reconnect after an abandoned stream");
     registry.closeNow();
 }
 
