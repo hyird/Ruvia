@@ -52,7 +52,7 @@ RUVIA_TEST(context_request_cookie_fields_include_repeated_cookie_headers) {
     HttpRequestAccess::setResource(request, requestMemory.resource());
     auto context = ContextAccess::make(requestMemory, request);
 
-    const auto& cookies = ruvia::detail::requestCookieFields(context.req());
+    const auto& cookies = context.req().cookieFields();
     RUVIA_CHECK_EQ(cookies.size(), std::size_t{3});
     RUVIA_CHECK_EQ(cookies[0].name(), std::string_view("a"));
     RUVIA_CHECK_EQ(cookies[0].value(), std::string_view("1"));
@@ -87,7 +87,7 @@ RUVIA_TEST(context_request_query_single_lookup_materializes_one_shared_cache) {
     const auto all = context.req().queries("a");
     RUVIA_CHECK_EQ(all.size(), std::size_t{2});
     RUVIA_CHECK_EQ(all.back(), std::string_view("one two"));
-    const auto& fields = ruvia::detail::requestQueryFields(context.req());
+    const auto& fields = context.req().queryFields();
     RUVIA_CHECK_EQ(*fields.get("a"), std::string_view("one two"));
     const auto repeated = context.req().query("a");
     RUVIA_CHECK(repeated.has_value());
@@ -110,7 +110,7 @@ RUVIA_TEST(context_request_query_list_uses_last_duplicate_like_single_lookup) {
     // The query field list (used by controller field binding) preserves every
     // decoded occurrence, while its scalar get() agrees with query("a") by
     // taking the last value.
-    const auto& list = ruvia::detail::requestQueryFields(context.req());
+    const auto& list = context.req().queryFields();
     RUVIA_CHECK_EQ(list.size(), std::size_t{3});
     RUVIA_CHECK_EQ(list[0].name(), std::string_view("a"));
     RUVIA_CHECK_EQ(list[0].value(), std::string_view("1"));
@@ -140,7 +140,7 @@ RUVIA_TEST(context_request_query_fields_preserve_duplicates_for_model_binding) {
     HttpRequestAccess::setResource(request, requestMemory.resource());
     auto context = ContextAccess::make(requestMemory, request);
 
-    const auto& fields = ruvia::detail::requestQueryFields(context.req());
+    const auto& fields = context.req().queryFields();
     RUVIA_CHECK_EQ(fields.size(), std::size_t{3});
     RUVIA_CHECK_EQ(*fields.get("message"), std::string_view("second"));
 
@@ -192,7 +192,7 @@ RUVIA_TEST(context_request_param_single_lookup_materializes_one_shared_cache) {
     RUVIA_CHECK(ContextAccess::routeParamsMaterialized(context));
 
     const auto* const stableData = param->data();
-    const auto& fields = ruvia::detail::requestParamFields(context.req());
+    const auto& fields = context.req().paramFields();
     RUVIA_CHECK_EQ(*fields.get("id"), std::string_view("one two"));
     const auto repeated = context.req().param("id");
     RUVIA_CHECK(repeated.has_value());
@@ -343,4 +343,79 @@ RUVIA_TEST(context_request_preserves_exact_extension_method_token) {
 
     RUVIA_CHECK_EQ(observation.method, std::string("PROPFIND"));
     RUVIA_CHECK(observation.knownMethod == HttpKnownMethod::kUnknown);
+}
+
+// The four bulk accessors are the enumeration path promoted out of detail:: onto
+// ContextRequest. Each must present every field in request order, keep
+// duplicates, and stay callable on the by-value facade req() returns.
+
+RUVIA_TEST(context_request_header_fields_enumerate_every_field_in_order) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Trace", "a"}));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Trace", "b"}));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Other", "c"}));
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    // Called on the prvalue req() returns: the borrowed list belongs to the
+    // Context, so this must not be an rvalue-deleted overload.
+    const auto& headers = context.req().headerFields();
+    // Names are normalized to lower case here, unlike the case-insensitive
+    // header(name) lookup over the request as received.
+    RUVIA_CHECK_EQ(headers.count("x-trace"), std::size_t(2));
+    RUVIA_CHECK_EQ(headers.count("X-Trace"), std::size_t(0));
+    RUVIA_CHECK_EQ(headers[0].name(), std::string_view("x-trace"));
+    RUVIA_CHECK_EQ(headers[0].value(), std::string_view("a"));
+    RUVIA_CHECK_EQ(headers[1].value(), std::string_view("b"));
+    RUVIA_CHECK_EQ(headers[2].name(), std::string_view("x-other"));
+    // Scalar lookup keeps last-occurrence semantics across the same list.
+    RUVIA_CHECK_EQ(*headers.get("x-trace"), std::string_view("b"));
+    // ...while the named lookup still accepts the sent spelling, and both paths
+    // agree on last-occurrence-wins for a repeated name.
+    RUVIA_CHECK_EQ(*context.req().header("X-Trace"), std::string_view("b"));
+}
+
+RUVIA_TEST(context_request_query_fields_enumerate_repeated_names) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setQueryString(request, "tag=x&tag=y&page=2");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    const auto& queries = context.req().queryFields();
+    RUVIA_CHECK_EQ(queries.size(), std::size_t(3));
+    RUVIA_CHECK_EQ(queries.count("tag"), std::size_t(2));
+    RUVIA_CHECK_EQ(queries[0].value(), std::string_view("x"));
+    RUVIA_CHECK_EQ(queries[1].value(), std::string_view("y"));
+    RUVIA_CHECK_EQ(*queries.get("page"), std::string_view("2"));
+}
+
+RUVIA_TEST(context_request_bulk_accessors_share_the_named_lookup_cache) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "a=1; b=2"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    // A named lookup alone must not materialize the list...
+    RUVIA_CHECK(!ContextAccess::requestCookiesMaterialized(context));
+    (void)context.req().cookie("a");
+    RUVIA_CHECK(!ContextAccess::requestCookiesMaterialized(context));
+
+    // ...but the bulk accessor does, and a later named lookup reuses it rather
+    // than building a second copy.
+    const auto& cookies = context.req().cookieFields();
+    RUVIA_CHECK(ContextAccess::requestCookiesMaterialized(context));
+    RUVIA_CHECK_EQ(cookies.size(), std::size_t(2));
+    RUVIA_CHECK_EQ(context.req().cookieFields().data(), cookies.data());
 }

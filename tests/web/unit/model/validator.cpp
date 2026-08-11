@@ -10,7 +10,7 @@
 
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
-#include "ruvia/web/detail/model/rule/ValidatedValues.h"
+#include "ruvia/web/detail/http/context/RequestBindings.h"
 
 namespace {
 
@@ -40,10 +40,10 @@ static_assert(!ExposesAnyRvalueValidationIssueBorrow<ruvia::ValidationIssue>);
 static_assert(!ExposesAnyRvalueValidationErrorBorrow<ruvia::ValidationError>);
 static_assert(!ExposesRvalueValidatorIssues<ruvia::Validator>);
 static_assert(!AcceptsAnyRvalueValidatorMutation<ruvia::Validator>);
-static_assert(sizeof(ruvia::detail::ValidatedModelBindings) == sizeof(void*));
+static_assert(sizeof(ruvia::detail::RequestBindings) == sizeof(void*));
 template <typename Bindings>
 concept AcceptsRvalueValidatedModel = requires(Bindings& bindings) { bindings.bind(int{1}); };
-static_assert(!AcceptsRvalueValidatedModel<ruvia::detail::ValidatedModelBindings>);
+static_assert(!AcceptsRvalueValidatedModel<ruvia::detail::RequestBindings>);
 
 RUVIA_TEST(unified_model_required_and_optional_fields_are_structural) {
     auto parsed = ruvia::fromJson<RequiredOptionalModel>("{}");
@@ -202,33 +202,33 @@ RUVIA_TEST(validator_throw_if_invalid_raises_on_issues) {
 }
 
 RUVIA_TEST(validated_model_bindings_are_nested_scoped_borrows) {
-    ruvia::detail::ValidatedModelBindings values;
+    ruvia::detail::RequestBindings values;
     int number = 42;
     {
-        auto numberBinding = values.bind(number);
-        RUVIA_CHECK_EQ(values.get<int>(), 42);
+        auto numberBinding = values.bindValidated(number);
+        RUVIA_CHECK_EQ(values.getValidated<int>(), 42);
 
         {
             std::string text = "nested";
-            auto textBinding = values.bind(text);
-            RUVIA_CHECK_EQ(values.get<std::string>(), std::string("nested"));
-            RUVIA_CHECK_EQ(values.get<int>(), 42);
+            auto textBinding = values.bindValidated(text);
+            RUVIA_CHECK_EQ(values.getValidated<std::string>(), std::string("nested"));
+            RUVIA_CHECK_EQ(values.getValidated<int>(), 42);
         }
 
         // The inner borrow must unbind on its own and leave the outer one live.
         bool nestedReleased = false;
         try {
-            (void)values.get<std::string>();
+            (void)values.getValidated<std::string>();
         } catch (const std::logic_error&) {
             nestedReleased = true;
         }
         RUVIA_CHECK(nestedReleased);
-        RUVIA_CHECK_EQ(values.get<int>(), 42);
+        RUVIA_CHECK_EQ(values.getValidated<int>(), 42);
     }
 
     bool missingRejected = false;
     try {
-        (void)values.get<int>();
+        (void)values.getValidated<int>();
     } catch (const std::logic_error&) {
         missingRejected = true;
     }
@@ -236,29 +236,84 @@ RUVIA_TEST(validated_model_bindings_are_nested_scoped_borrows) {
 }
 
 RUVIA_TEST(validated_json_binding_exposes_typed_value_and_exact_raw_body) {
-    ruvia::detail::ValidatedModelBindings values;
+    ruvia::detail::RequestBindings values;
     int number = 42;
     constexpr std::string_view raw = R"( {"value":42} )";
-    auto binding = values.bind(number, raw);
-    const auto json = values.getJson<int>();
+    auto binding = values.bindValidated(number, raw);
+    const auto json = values.getValidatedJson<int>();
     RUVIA_CHECK_EQ(json.value(), 42);
     RUVIA_CHECK_EQ(json.raw(), raw);
 }
 
 RUVIA_TEST(validated_model_binding_unwinds_on_exception) {
-    ruvia::detail::ValidatedModelBindings values;
+    ruvia::detail::RequestBindings values;
     try {
         int number = 7;
-        auto binding = values.bind(number);
+        auto binding = values.bindValidated(number);
         throw std::runtime_error("leave validation scope");
     } catch (const std::runtime_error&) {
     }
 
     bool missingRejected = false;
     try {
-        (void)values.get<int>();
+        (void)values.getValidated<int>();
     } catch (const std::logic_error&) {
         missingRejected = true;
     }
     RUVIA_CHECK(missingRejected);
+}
+
+// Request state shares the intrusive stack with validated models but must never
+// answer their lookups: validated<T>() promises "a validator checked this", and
+// hand-bound state impersonating it would silently void that promise.
+
+RUVIA_TEST(request_state_and_validated_model_do_not_answer_each_other) {
+    ruvia::detail::RequestBindings values;
+    int number = 42;
+
+    auto stateBinding = values.bindState(number);
+    RUVIA_CHECK_EQ(values.getState<int>(), 42);
+
+    // Bound as state, so the validated lookup must not find it.
+    bool validatedRejected = false;
+    try {
+        (void)values.getValidated<int>();
+    } catch (const std::logic_error&) {
+        validatedRejected = true;
+    }
+    RUVIA_CHECK(validatedRejected);
+
+    // ...and symmetrically for a validated binding of the same type.
+    int validatedNumber = 7;
+    auto validatedBinding = values.bindValidated(validatedNumber);
+    RUVIA_CHECK_EQ(values.getValidated<int>(), 7);
+    RUVIA_CHECK_EQ(values.getState<int>(), 42);
+}
+
+RUVIA_TEST(request_state_try_lookup_reports_absence_without_throwing) {
+    ruvia::detail::RequestBindings values;
+    RUVIA_CHECK(values.tryGetState<int>() == nullptr);
+
+    int number = 5;
+    {
+        auto binding = values.bindState(number);
+        const auto* found = values.tryGetState<int>();
+        RUVIA_CHECK(found != nullptr);
+        RUVIA_CHECK_EQ(*found, 5);
+        // Bound by address, never copied.
+        RUVIA_CHECK(found == &number);
+    }
+    RUVIA_CHECK(values.tryGetState<int>() == nullptr);
+}
+
+RUVIA_TEST(request_state_nested_binding_shadows_then_restores) {
+    ruvia::detail::RequestBindings values;
+    int outer = 1;
+    auto outerBinding = values.bindState(outer);
+    {
+        int inner = 2;
+        auto innerBinding = values.bindState(inner);
+        RUVIA_CHECK_EQ(values.getState<int>(), 2);
+    }
+    RUVIA_CHECK_EQ(values.getState<int>(), 1);
 }

@@ -22,7 +22,7 @@
 #include "ruvia/web/ScopedOperation.h"
 #include "ruvia/web/RequestFields.h"
 #include "ruvia/web/Streaming.h"
-#include "ruvia/web/detail/model/rule/ValidatedValues.h"
+#include "ruvia/web/detail/http/context/RequestBindings.h"
 
 namespace ruvia {
 
@@ -34,19 +34,15 @@ class ValidatedJson;
 namespace detail {
 struct RequestFormFieldAccess;
 struct RequestFormDataAccess;
-const RequestNameValueList& requestHeaderFields(const ContextRequest& request);
-const RequestNameValueList& requestQueryFields(const ContextRequest& request);
-const RequestNameValueList& requestCookieFields(const ContextRequest& request);
-const RequestNameValueList& requestParamFields(const ContextRequest& request);
 template <typename T>
-[[nodiscard]] ValidatedModelBinding<T> bindValidatedModel(Context& context, const T& model);
+[[nodiscard]] RequestBindingHandle<T> bindValidatedModel(Context& context, const T& model);
 
 template <typename T>
-[[nodiscard]] ValidatedModelBinding<T> bindValidatedJsonModel(Context& context, const T& model, std::string_view rawJson);
+[[nodiscard]] RequestBindingHandle<T> bindValidatedJsonModel(Context& context, const T& model, std::string_view rawJson);
 
 template <typename T>
     requires(!std::is_lvalue_reference_v<T>)
-ValidatedModelBinding<std::remove_cvref_t<T>> bindValidatedModel(Context&, T&&) = delete;
+RequestBindingHandle<std::remove_cvref_t<T>> bindValidatedModel(Context&, T&&) = delete;
 
 [[noreturn]] void throwInvalidJsonContentType();
 [[noreturn]] void throwInvalidJsonBody();
@@ -530,6 +526,32 @@ public:
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const;
     [[nodiscard]] std::span<const std::string_view> queries(std::string_view name) const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
+
+    // Every field of one kind, in the order the request presented it, for the
+    // callers that must enumerate rather than look one name up: signing an
+    // arbitrary header set, forwarding, or diagnostics. The named lookups above
+    // stay the cheap path; these materialize the request's field list once and
+    // cache it for the rest of the request. The list borrows request-owned
+    // storage, so it never outlives this Context.
+    //
+    // "Fields" rather than a no-argument queries(): queries(name) already means
+    // "every value for this one name", and one identifier must not mean both.
+    //
+    // Deliberately not const&&-qualified, unlike the accessors on the owning
+    // types this list is made of. ContextRequest owns nothing -- it is a facade
+    // over a Context pointer -- and req() returns one by value, so the natural
+    // c.req().headerFields() is an rvalue call that must keep working. The
+    // borrowed storage belongs to the Context and outlives the facade, exactly
+    // as it does for header()/queries().
+    //
+    // headerFields() normalizes every field name to lower case, matching the
+    // HTTP/2 wire form, while header(name) is an ASCII case-insensitive lookup
+    // over the request as received. Compare names from this list against lower
+    // case literals; "X-Trace" never matches, "x-trace" does.
+    [[nodiscard]] const RequestNameValueList& headerFields() const;
+    [[nodiscard]] const RequestNameValueList& queryFields() const;
+    [[nodiscard]] const RequestNameValueList& cookieFields() const;
+    [[nodiscard]] const RequestNameValueList& paramFields() const;
     // Verifies the "value.signature" format written by setSignedCookie; returns
     // the value view on a valid signature, nullopt when missing or tampered.
     [[nodiscard]] std::optional<std::string_view> signedCookie(std::string_view name, std::string_view secret) const;
@@ -584,17 +606,13 @@ public:
 
 private:
     friend class Context;
-    friend const RequestNameValueList& detail::requestHeaderFields(const ContextRequest& request);
-    friend const RequestNameValueList& detail::requestQueryFields(const ContextRequest& request);
-    friend const RequestNameValueList& detail::requestCookieFields(const ContextRequest& request);
-    friend const RequestNameValueList& detail::requestParamFields(const ContextRequest& request);
 
     explicit constexpr ContextRequest(const Context& context) noexcept
         : context_(&context) {}
 
     [[nodiscard]] bool contentTypeMatches(std::string_view expected) const noexcept;
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
-    [[nodiscard]] const detail::ValidatedModelBindings& validatedModels() const noexcept;
+    [[nodiscard]] const detail::RequestBindings& requestBindings() const noexcept;
 
     [[nodiscard]] static Task<std::span<const std::byte>> bytesTask(const Context* context);
     [[nodiscard]] static Task<RequestBlob> blobTask(const Context* context);
