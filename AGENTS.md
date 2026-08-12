@@ -260,11 +260,13 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 ## Model 和校验
 
-- `RUVIA_MODEL` 在普通结构体内声明统一 JSON schema，同时支持解析、校验和序列化；不区分请求与响应模型。
-- `RUVIA_FIELD` 是 schema 必填字段，`RUVIA_OPTIONAL_FIELD` 是可选字段；模型支持嵌套模型与数组。
+- `RUVIA_REQUEST_MODEL` 是请求解析和校验 schema；`RUVIA_RESPONSE_MODEL` 只约束响应字段类型并生成 JSON，不参与请求解析或校验。
+- `RUVIA_REQUIRED_FIELD` 是必填字段，`RUVIA_OPTIONAL_FIELD` 是可选字段；自定义 wire name 使用对应的 `*_FIELD_NAME`。字段通过 `get/set/ensure/reset<"field">()` 访问，不生成逐字段成员函数别名。
+- Model 字段描述符必须由 `RUVIA_REQUEST_MODEL` / `RUVIA_RESPONSE_MODEL` 的 `__VA_ARGS__` 直接进入 C++ 模板参数包。禁止在 Model 注册路径恢复 `NARG`、`FOR_EACH`、固定展开表、运行时注册表或固定字段数量上限；编译守卫必须保留一个超过 64 字段的模型。
 - 字段必须使用 Ruvia 模型类型，不使用 raw `std::string`、`std::vector`、`std::string_view` 或基础整数。
-- 校验规则通过 route validation middleware 声明，不写进 `RUVIA_FIELD`。
-- JSON 可嵌套统一模型并支持数组。form 只支持扁平 key-value 基础字段。
+- 校验规则通过 route validation middleware 声明，不写进 `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`。
+- 请求 JSON 只嵌套请求模型，响应 JSON 只嵌套响应模型；两者都支持 `Array`，递归/地址稳定数组使用 `BoxedArray`。form、query、param、header、cookie 只支持扁平 key-value 基础字段。
+- 可选请求字段缺失时保持 `std::nullopt`，显式 JSON `null` 默认是 `invalid_type`，optional 不等于 nullable。可选响应字段未设置时默认省略；只有 `RUVIA_EMIT_NULL` 输出 `null`，`RUVIA_OMIT_EMPTY` 处理已设置的空值。
 - JSON validation middleware 同时绑定 typed model 与原始 JSON view，供下游校验后直接透传 PostgreSQL JSONB；原始 view 不得逃逸请求作用域。
 - validation 不应为 invalid type 或 duplicate 再扫描 body。
 - 同一 `RUVIA_PATTERN` 只能编译一次并复用。

@@ -1,4 +1,4 @@
-// Typed models and validation: unified JSON models, form bodies, nested
+// Typed request/response models and validation: JSON models, form bodies, nested
 // models, arrays, recursive lists, defaults, validation
 // middleware and rules, and jsonIf/formIf probes that fall back only on a
 // media-type mismatch; malformed selected bodies remain 400 responses.
@@ -9,70 +9,50 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
-struct ProfileRequest final {
-    RUVIA_MODEL(ProfileRequest,
-        RUVIA_OPTIONAL_FIELD(displayName, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(email, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32));
-};
+RUVIA_REQUEST_MODEL(ProfileRequest,
+    RUVIA_OPTIONAL_FIELD(displayName, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(email, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32));
 
-struct RoleRequest final {
-    RUVIA_MODEL(RoleRequest,
-        RUVIA_OPTIONAL_FIELD(name, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(level, ruvia::UInt32));
-};
+RUVIA_REQUEST_MODEL(RoleRequest,
+    RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(level, ruvia::UInt32));
 
-struct RegisterRequest final {
-    RUVIA_MODEL(RegisterRequest,
-        RUVIA_OPTIONAL_FIELD_NAME("user_name", username, ruvia::String, RUVIA_DEFAULT("guest")),
-        RUVIA_OPTIONAL_FIELD(password, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(code, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(profile, ProfileRequest),
-        RUVIA_OPTIONAL_FIELD(roles, ruvia::Array<RoleRequest>),
-        RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>),
-        RUVIA_OPTIONAL_FIELD(newsletter, ruvia::Bool));
-};
+RUVIA_REQUEST_MODEL(RegisterRequest,
+    RUVIA_OPTIONAL_FIELD_NAME("user_name", username, ruvia::String, RUVIA_DEFAULT("guest")),
+    RUVIA_OPTIONAL_FIELD(password, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(code, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(profile, ProfileRequest),
+    RUVIA_OPTIONAL_FIELD(roles, ruvia::Array<RoleRequest>),
+    RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>),
+    RUVIA_OPTIONAL_FIELD(newsletter, ruvia::Bool));
 
-struct RegisterResponse final {
-    RUVIA_MODEL(RegisterResponse,
-        RUVIA_OPTIONAL_FIELD(username, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(roleCount, ruvia::UInt32),
-        RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
-};
+RUVIA_RESPONSE_MODEL(RegisterResponse,
+    RUVIA_OPTIONAL_FIELD(username, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(roleCount, ruvia::UInt32),
+    RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
 
-struct ContactForm final {
-    RUVIA_MODEL(ContactForm,
-        RUVIA_OPTIONAL_FIELD(name, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(email, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(message, ruvia::String));
-};
+RUVIA_REQUEST_MODEL(ContactForm,
+    RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(email, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
-struct SearchQuery final {
-    RUVIA_MODEL(SearchQuery,
-        RUVIA_OPTIONAL_FIELD(q, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(page, ruvia::UInt32));
-};
+RUVIA_REQUEST_MODEL(SearchQuery,
+    RUVIA_OPTIONAL_FIELD(q, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(page, ruvia::UInt32));
 
-struct CategoryParams final {
-    RUVIA_MODEL(CategoryParams,
-        RUVIA_OPTIONAL_FIELD(id, ruvia::String));
-};
+RUVIA_REQUEST_MODEL(CategoryParams,
+    RUVIA_OPTIONAL_FIELD(id, ruvia::String));
 
-struct RequestHeaders final {
-    RUVIA_MODEL(RequestHeaders,
-        RUVIA_OPTIONAL_FIELD_NAME("x-request-id", requestId, ruvia::String));
-};
+RUVIA_REQUEST_MODEL(RequestHeaders,
+    RUVIA_OPTIONAL_FIELD_NAME("x-request-id", requestId, ruvia::String));
 
-struct PreferencesCookie final {
-    RUVIA_MODEL(PreferencesCookie,
-        RUVIA_OPTIONAL_FIELD(theme, ruvia::String));
-};
+RUVIA_REQUEST_MODEL(PreferencesCookie,
+    RUVIA_OPTIONAL_FIELD(theme, ruvia::String));
 
-struct Category final {
-    RUVIA_MODEL(Category,
-        RUVIA_OPTIONAL_FIELD(name, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(children, ruvia::BoxedArray<Category>));
-};
+RUVIA_RESPONSE_MODEL(Category,
+    RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(children, ruvia::BoxedArray<Category>));
 
 static bool hasRuviaCodePrefix(const ruvia::String& code) {
     return code.view().starts_with("CY-");
@@ -138,14 +118,14 @@ private:
         const auto& request = c.req().validated<RegisterRequest>();
 
         RegisterResponse response(c);
-        const auto& username = request.username();
-        response.username(username->view());
-        const auto& roles = request.roles();
+        const auto& username = request.get<"username">();
+        response.set<"username">(username->view());
+        const auto& roles = request.get<"roles">();
         if (roles) {
-            response.roleCount(ruvia::UInt32{static_cast<std::uint32_t>(roles->size())});
+            response.set<"roleCount">(ruvia::UInt32{static_cast<std::uint32_t>(roles->size())});
         }
-        response.tagsEnsure().emplace_back(ruvia::String("created", c.resource()));
-        response.tagsEnsure().emplace_back(ruvia::String("validated", c.resource()));
+        response.ensure<"tags">().emplace_back(ruvia::String("created", c.resource()));
+        response.ensure<"tags">().emplace_back(ruvia::String("validated", c.resource()));
         c.status(ruvia::http_status::kCreated);
         co_return c.json(response);
     }
@@ -158,14 +138,14 @@ private:
         if (const auto json = co_await c.req().jsonIf<ContactForm>()) {
             std::pmr::string body(c.allocator<char>());
             body.append("json feedback from ");
-            body.append(json->name().has_value() ? json->name()->view() : "anonymous");
+            body.append(json->get<"name">().has_value() ? json->get<"name">()->view() : "anonymous");
             body.push_back('\n');
             co_return c.text(std::move(body));
         }
         if (const auto form = co_await c.req().formIf<ContactForm>()) {
             std::pmr::string body(c.allocator<char>());
             body.append("form feedback from ");
-            body.append(form->name().has_value() ? form->name()->view() : "anonymous");
+            body.append(form->get<"name">().has_value() ? form->get<"name">()->view() : "anonymous");
             body.push_back('\n');
             co_return c.text(std::move(body));
         }
@@ -176,7 +156,7 @@ private:
         const auto& form = c.req().validated<ContactForm>();
         std::pmr::string body(c.allocator<char>());
         body.append("message from ");
-        const auto& name = form.name();
+        const auto& name = form.get<"name">();
         body.append(name->view());
         body.push_back('\n');
         co_return c.text(std::move(body));
@@ -187,12 +167,12 @@ private:
         const auto requestQuery = c.req().query("q");
         std::pmr::string body(c.allocator<char>());
         body.append("search=");
-        const auto& q = query.q();
+        const auto& q = query.get<"q">();
         body.append(q->view());
         body.append("\nquery-shared=");
         const auto queryValue = q->view();
         body.append(requestQuery.has_value() && requestQuery->data() == queryValue.data() && requestQuery->size() == queryValue.size() ? "true" : "false");
-        if (const auto page = query.page()) {
+        if (const auto page = query.get<"page">()) {
             body.append("\npage=");
             char buffer[16]{};
             const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), page->value);
@@ -206,8 +186,8 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> category(ruvia::Context& c) {
         Category root(c);
-        root.name("root");
-        root.childrenEnsure().emplace().name("leaf");
+        root.set<"name">("root");
+        root.ensure<"children">().emplace().set<"name">("leaf");
         co_return c.json(root);
     }
 
@@ -215,7 +195,7 @@ private:
         const auto& params = c.req().validated<CategoryParams>();
         std::pmr::string body(c.allocator<char>());
         body.append("category=");
-        const auto& id = params.id();
+        const auto& id = params.get<"id">();
         body.append(id->view());
         body.push_back('\n');
         co_return c.text(std::move(body));
@@ -225,7 +205,7 @@ private:
         const auto& headers = c.req().validated<RequestHeaders>();
         std::pmr::string body(c.allocator<char>());
         body.append("request-id=");
-        const auto& requestId = headers.requestId();
+        const auto& requestId = headers.get<"requestId">();
         body.append(requestId->view());
         body.push_back('\n');
         co_return c.text(std::move(body));
@@ -235,7 +215,7 @@ private:
         const auto& cookies = c.req().validated<PreferencesCookie>();
         std::pmr::string body(c.allocator<char>());
         body.append("theme=");
-        const auto& theme = cookies.theme();
+        const auto& theme = cookies.get<"theme">();
         body.append(theme->view());
         body.push_back('\n');
         co_return c.text(std::move(body));

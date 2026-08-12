@@ -84,10 +84,8 @@ std::string_view jsonKindName(ruvia::JsonValue::Kind kind) noexcept {
     return "unknown";
 }
 
-struct SurfaceJsonResponse final {
-    RUVIA_MODEL(SurfaceJsonResponse,
-        RUVIA_OPTIONAL_FIELD(message, ruvia::String));
-};
+RUVIA_RESPONSE_MODEL(SurfaceJsonResponse,
+    RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
 }  // namespace
 
@@ -269,7 +267,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> jsonResponse(ruvia::Context& c) {
         SurfaceJsonResponse response(c);
-        response.message("json response");
+        response.set<"message">("json response");
         co_return c.json(response);
     }
 

@@ -16,11 +16,9 @@ namespace {
 
 using ruvia::Validator;
 
-struct RequiredOptionalModel final {
-    RUVIA_MODEL(RequiredOptionalModel,
-        RUVIA_FIELD(requiredValue, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(optionalValue, ruvia::String));
-};
+RUVIA_REQUEST_MODEL(RequiredOptionalModel,
+    RUVIA_REQUIRED_FIELD(requiredValue, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(optionalValue, ruvia::String));
 
 }  // namespace
 
@@ -45,7 +43,7 @@ template <typename Bindings>
 concept AcceptsRvalueValidatedModel = requires(Bindings& bindings) { bindings.bind(int{1}); };
 static_assert(!AcceptsRvalueValidatedModel<ruvia::detail::RequestBindings>);
 
-RUVIA_TEST(unified_model_required_and_optional_fields_are_structural) {
+RUVIA_TEST(request_model_required_and_optional_fields_are_structural) {
     auto parsed = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<RequiredOptionalModel>("{}", std::pmr::get_default_resource());
     RUVIA_CHECK(parsed.has_value());
     if (!parsed) {

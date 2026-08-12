@@ -39,14 +39,14 @@ template <typename T, typename = void>
 struct JsonBody : std::false_type {};
 
 template <typename T>
-    requires requires { typename T::RuviaModelSchema; }
+    requires requires { typename T::RuviaRequestModelSchema; }
 struct JsonBody<T, void> : std::true_type {};
 
 template <typename T, typename = void>
 struct FormBody : std::false_type {};
 
 template <typename T>
-    requires requires { typename T::RuviaModelSchema; }
+    requires requires { typename T::RuviaRequestModelSchema; }
 struct FormBody<T, void> : std::true_type {};
 
 template <std::size_t N>

@@ -34,12 +34,10 @@ public:
     }
 };
 
-struct UserResponse final {
-    RUVIA_MODEL(UserResponse,
-        RUVIA_OPTIONAL_FIELD(id, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(name, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(active, ruvia::Bool));
-};
+RUVIA_RESPONSE_MODEL(UserResponse,
+    RUVIA_OPTIONAL_FIELD(id, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(active, ruvia::Bool));
 
 ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(ruvia::Context& c, ruvia::HttpErrorInfo error) {
     co_return c.error(error.status(), error.code(), error.message(), error.statusText());
@@ -100,7 +98,9 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> user(ruvia::Context& c) {
         UserResponse response(c);
-        response.id(c.req().param("id").value_or("unknown")).name("example-user").active(ruvia::Bool{true});
+        response.set<"id">(c.req().param("id").value_or("unknown"))
+            .set<"name">("example-user")
+            .set<"active">(ruvia::Bool{true});
         co_return c.json(response);
     }
 

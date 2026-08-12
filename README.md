@@ -759,7 +759,7 @@ Routes and schemas use these macros:
 | HTTP methods | `RUVIA_GET`, `RUVIA_POST`, `RUVIA_PUT`, `RUVIA_PATCH`, `RUVIA_DELETE` |
 | Streaming / SSE | `RUVIA_GET_STREAM`, `RUVIA_GET_SSE` |
 | WebSocket | `RUVIA_GET_WS`, `RUVIA_GET_WS_OPTIONS` |
-| Models | `RUVIA_MODEL`, `RUVIA_FIELD`, `RUVIA_OPTIONAL_FIELD`, `RUVIA_FIELD_NAME` |
+| Models | `RUVIA_REQUEST_MODEL`, `RUVIA_RESPONSE_MODEL`, `RUVIA_REQUIRED_FIELD`, `RUVIA_OPTIONAL_FIELD` |
 | Validation | `RUVIA_VALIDATE_JSON`, `RUVIA_VALIDATE_FORM`, `RUVIA_RULE` |
 
 Route tables, middleware chains, and controller instances are finalized before
@@ -813,19 +813,51 @@ or `getSet()` commands. `blpop()` and `brpop()` take `RedisBlockWait`, using
 `forDuration()` for a finite Redis wait or `indefinitely()` for an explicit
 unbounded wait.
 
-Models are ordinary structs with one schema for JSON parsing, validation, and
-serialization. They support nested models and arrays; `RUVIA_FIELD` is required
-and `RUVIA_OPTIONAL_FIELD` may be absent. Route middleware keeps the Hono-style
-typed `c.req().validated<T>()` API, while `c.req().validatedJson<T>()` also exposes the
+Request and response models have separate roles and a compact declaration:
+
+```cpp
+RUVIA_REQUEST_MODEL(AddressRequest,
+    RUVIA_REQUIRED_FIELD(city, ruvia::String));
+
+RUVIA_REQUEST_MODEL(CreateUserRequest,
+    RUVIA_REQUIRED_FIELD_NAME("user_name", username, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32),
+    RUVIA_REQUIRED_FIELD(address, AddressRequest),
+    RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
+
+RUVIA_RESPONSE_MODEL(UserResponse,
+    RUVIA_REQUIRED_FIELD(id, ruvia::UInt64),
+    RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(avatar, ruvia::String, RUVIA_EMIT_NULL));
+```
+
+`RUVIA_REQUEST_MODEL` supports `fromJson<T>()`, `fromForm<T>()`, route parsing,
+and validation. `RUVIA_RESPONSE_MODEL` supports `toJson()` and `c.json()`; a
+request model may only nest request models, and a response model may only nest
+response models. Both roles support `ruvia::Array<T>` and recursive
+`ruvia::BoxedArray<T>` fields. Form, query, param, header, and cookie binding
+remain flat scalar inputs.
+
+Fields use compile-time accessors: `model.get<"username">()`,
+`model.set<"name">("Ada")`, `model.ensure<"tags">()`, and
+`model.reset<"avatar">()`. Required `get` returns `const T&`; optional `get`
+returns `const std::optional<T>&`. A missing optional request property stays
+empty, while an explicit JSON `null` is an `invalid_type` error. An unset
+optional response property is omitted by default; `RUVIA_EMIT_NULL` writes it as
+`null`, and `RUVIA_OMIT_EMPTY` omits present empty values. The source field name
+(`username`) is used by `get`/`set`; a `*_FIELD_NAME` wire name (`user_name`) is
+used in JSON and validation paths.
+
+Model field descriptors are passed directly to a C++ variadic template. Model
+registration does not use a preprocessor argument counter or `FOR_EACH`, so
+Ruvia defines no fixed field-count limit; only the compiler's normal template
+resource limits apply. The compiled model guard declares more than 64 fields to
+protect this contract. Route middleware keeps the typed
+`c.req().validated<T>()` API, while `c.req().validatedJson<T>()` also exposes the
 validated original bytes through `raw()` for JSONB passthrough. See the compiled
-[`models_validation.cpp`](examples/web/models_validation.cpp) example for the
-complete API. `fromJson<T>()` and `fromForm<T>()` return owning models and reject
-required fields that are missing, mistyped, or duplicated, including those
-inside nested JSON models and arrays. A `RUVIA_FIELD` getter returns `const T&` directly;
-only a `RUVIA_OPTIONAL_FIELD` getter returns `const std::optional<T>&` and has a
-generated reset operation. Route validation keeps partial field-state parsing
-inside the framework so the public parsing contract stays strict and owning.
-`RUVIA_RULE` adds route-level business constraints after this structural check.
+[`models_validation.cpp`](examples/web/models_validation.cpp) example for a
+complete request/response, nested, array, default, and validation example.
+`RUVIA_RULE` adds route-level business constraints after structural validation.
 
 `TestApp` uses the production route graph and enforces route body and rate
 limits. It throws `std::logic_error` before dispatching a route with a

@@ -40,32 +40,32 @@ static_assert(ParsesLvalueOwningString<ruvia::JsonValue>);
 static_assert(ParsesLvalueOwningString<ruvia::JsonObject>);
 static_assert(ParsesLvalueOwningString<ruvia::FormObject>);
 
-struct AccessorSurfaceRequest final {
-    RUVIA_MODEL(AccessorSurfaceRequest,
-        RUVIA_OPTIONAL_FIELD(message, ruvia::String));
-};
+RUVIA_REQUEST_MODEL(AccessorSurfaceRequest,
+    RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
-struct AccessorSurfaceResponse final {
-    RUVIA_MODEL(AccessorSurfaceResponse,
-        RUVIA_OPTIONAL_FIELD(message, ruvia::String));
-};
+RUVIA_RESPONSE_MODEL(AccessorSurfaceResponse,
+    RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
-struct NestedModelItem final {
-    RUVIA_MODEL(NestedModelItem,
-        RUVIA_FIELD(id, ruvia::UInt32),
-        RUVIA_OPTIONAL_FIELD(label, ruvia::String));
-};
+RUVIA_REQUEST_MODEL(NestedModelItem,
+    RUVIA_REQUIRED_FIELD(id, ruvia::UInt32),
+    RUVIA_OPTIONAL_FIELD(label, ruvia::String));
 
-struct NestedModelEnvelope final {
-    RUVIA_MODEL(NestedModelEnvelope,
-        RUVIA_FIELD(primary, NestedModelItem),
-        RUVIA_FIELD(items, ruvia::Array<NestedModelItem>),
-        RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
-};
+RUVIA_REQUEST_MODEL(NestedModelEnvelope,
+    RUVIA_REQUIRED_FIELD(primary, NestedModelItem),
+    RUVIA_REQUIRED_FIELD(items, ruvia::Array<NestedModelItem>),
+    RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
+
+RUVIA_RESPONSE_MODEL(NestedResponseItem,
+    RUVIA_REQUIRED_FIELD(id, ruvia::UInt32),
+    RUVIA_OPTIONAL_FIELD(label, ruvia::String));
+
+RUVIA_RESPONSE_MODEL(NestedResponseEnvelope,
+    RUVIA_REQUIRED_FIELD(primary, NestedResponseItem),
+    RUVIA_REQUIRED_FIELD(items, ruvia::Array<NestedResponseItem>),
+    RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
 
 #define RUVIA_TEST_BOOL_FIELD(field) RUVIA_OPTIONAL_FIELD(field, ruvia::Bool)
-struct MaxFieldCountResponse final {
-    RUVIA_MODEL(MaxFieldCountResponse,
+RUVIA_RESPONSE_MODEL(UnlimitedFieldCountResponse,
         RUVIA_TEST_BOOL_FIELD(f01), RUVIA_TEST_BOOL_FIELD(f02), RUVIA_TEST_BOOL_FIELD(f03), RUVIA_TEST_BOOL_FIELD(f04),
         RUVIA_TEST_BOOL_FIELD(f05), RUVIA_TEST_BOOL_FIELD(f06), RUVIA_TEST_BOOL_FIELD(f07), RUVIA_TEST_BOOL_FIELD(f08),
         RUVIA_TEST_BOOL_FIELD(f09), RUVIA_TEST_BOOL_FIELD(f10), RUVIA_TEST_BOOL_FIELD(f11), RUVIA_TEST_BOOL_FIELD(f12),
@@ -81,17 +81,17 @@ struct MaxFieldCountResponse final {
         RUVIA_TEST_BOOL_FIELD(f49), RUVIA_TEST_BOOL_FIELD(f50), RUVIA_TEST_BOOL_FIELD(f51), RUVIA_TEST_BOOL_FIELD(f52),
         RUVIA_TEST_BOOL_FIELD(f53), RUVIA_TEST_BOOL_FIELD(f54), RUVIA_TEST_BOOL_FIELD(f55), RUVIA_TEST_BOOL_FIELD(f56),
         RUVIA_TEST_BOOL_FIELD(f57), RUVIA_TEST_BOOL_FIELD(f58), RUVIA_TEST_BOOL_FIELD(f59), RUVIA_TEST_BOOL_FIELD(f60),
-        RUVIA_TEST_BOOL_FIELD(f61), RUVIA_TEST_BOOL_FIELD(f62), RUVIA_TEST_BOOL_FIELD(f63), RUVIA_TEST_BOOL_FIELD(f64));
-};
+        RUVIA_TEST_BOOL_FIELD(f61), RUVIA_TEST_BOOL_FIELD(f62), RUVIA_TEST_BOOL_FIELD(f63), RUVIA_TEST_BOOL_FIELD(f64),
+        RUVIA_TEST_BOOL_FIELD(f65));
 #undef RUVIA_TEST_BOOL_FIELD
 
-static_assert(ruvia::detail::isResponseModel<MaxFieldCountResponse>);
+static_assert(ruvia::detail::isResponseModel<UnlimitedFieldCountResponse>);
 
 template <typename T>
-concept ExposesAnyRvalueGeneratedMessageMember = requires { std::declval<const T&&>().message(); } || requires { std::declval<T&&>().messageEnsure(); } || requires { std::declval<T&&>().message(std::string_view{}); };
+concept ExposesAnyRvalueGeneratedMessageMember = requires { std::declval<const T&&>().template get<"message">(); } || requires { std::declval<T&&>().template ensure<"message">(); } || requires { std::declval<T&&>().template set<"message">(std::string_view{}); };
 
-static_assert(std::same_as<std::remove_cvref_t<decltype(std::declval<AccessorSurfaceRequest&>().message())>, std::optional<ruvia::String>>);
-static_assert(std::same_as<std::remove_cvref_t<decltype(std::declval<const AccessorSurfaceRequest&>().message())>, std::optional<ruvia::String>>);
+static_assert(std::same_as<std::remove_cvref_t<decltype(std::declval<AccessorSurfaceRequest&>().template get<"message">())>, std::optional<ruvia::String>>);
+static_assert(std::same_as<std::remove_cvref_t<decltype(std::declval<const AccessorSurfaceRequest&>().template get<"message">())>, std::optional<ruvia::String>>);
 static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceRequest>);
 static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceResponse>);
 

@@ -17,7 +17,7 @@
 #include "ruvia/web/detail/util/DecimalNumber.h"
 #include "ruvia/web/detail/model/Traits.h"
 
-// Internal URL-encoded form parser for RUVIA_MODEL.
+// Internal URL-encoded form parser for RUVIA_REQUEST_MODEL.
 
 namespace ruvia::detail {
 

@@ -41,20 +41,22 @@ private:
 };
 
 template <typename T>
+    requires JsonBody<T>::value
 [[nodiscard]] std::optional<T> fromJson(std::string_view body, std::pmr::memory_resource* resource = nullptr) {
-    static_assert(JsonBody<T>::value, "fromJson<T> requires a RUVIA_MODEL");
     return detail::ModelJsonAccess::parseOwned<T>(
         body, detail::pmrResourceOrDefault(resource));
 }
 
 template <typename T>
-void appendJson(std::pmr::string& output, const T& value) {
+    requires(!detail::isRequestModel<T>)
+inline void appendJson(std::pmr::string& output, const T& value) {
     output.reserve(output.size() + detail::jsonSizeHintValue(value));
     detail::appendJsonValue(output, value);
 }
 
 template <typename T>
-[[nodiscard]] std::pmr::string toJson(const T& value, std::pmr::memory_resource* resource = nullptr) {
+    requires(!detail::isRequestModel<T>)
+[[nodiscard]] inline std::pmr::string toJson(const T& value, std::pmr::memory_resource* resource = nullptr) {
     std::pmr::string output(detail::pmrResourceOrDefault(resource));
     output.reserve(detail::jsonSizeHintValue(value));
     detail::appendJsonValue(output, value);
