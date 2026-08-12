@@ -297,12 +297,12 @@ private:
 #define RUVIA_RULE(field, ...) (field, (#field), (::ruvia::detail::model::Rules{__VA_ARGS__}))
 #define RUVIA_RULE_NAME(wire_name, field, ...) (field, (wire_name), (::ruvia::detail::model::Rules{__VA_ARGS__}))
 
-#define RUVIA_VALIDATE_RULE_FIELD(T, x) RUVIA_VALIDATE_RULE_FIELD_I(RUVIA_MODEL_UNPAREN x)
+#define RUVIA_VALIDATE_RULE_FIELD(T, x) RUVIA_VALIDATE_RULE_FIELD_I(RUVIA_VALIDATION_UNPAREN x)
 #define RUVIA_VALIDATE_RULE_FIELD_I(...) RUVIA_VALIDATE_RULE_FIELD_IMPL(__VA_ARGS__)
 #define RUVIA_VALIDATE_RULE_FIELD_IMPL(field, wire, rules)                                                                  \
     {                                                                                                                       \
         ::std::pmr::string ruviaPath(validator.resource());                                                                 \
         ::ruvia::detail::model::appendPath(ruviaPath, prefix, ::std::string_view{wire});                                    \
-        const auto& ruviaValue = body.field();                                                                              \
+        const auto& ruviaValue = body.template get<#field>();                                                              \
         rules.validate(::ruvia::detail::ModelValidationAccess::fieldState<#field>(body), ruviaValue, ruviaPath, validator); \
     }

@@ -81,7 +81,7 @@ template <typename Visitor>
 }
 
 // Consumes one object directly from input and lets the visitor consume each
-// value from the same cursor. RUVIA_MODEL uses this On-Demand-style traversal
+// value from the same cursor. RUVIA_REQUEST_MODEL uses this On-Demand-style traversal
 // so a known value is parsed into its typed field without first scanning it to
 // discover a raw slice and then parsing that slice again.
 template <typename Visitor>

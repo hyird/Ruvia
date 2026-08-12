@@ -172,14 +172,14 @@ private:                                                                        
 
 #define RUVIA_VALIDATE_BODY(target, body_type, ...)                                                              \
 public:                                                                                                          \
-    static_assert(::ruvia::detail::isRequestModel<body_type>, "RUVIA_VALIDATE_* requires a RUVIA_MODEL");        \
+    static_assert(::ruvia::detail::isRequestModel<body_type>, "RUVIA_VALIDATE_* requires a RUVIA_REQUEST_MODEL"); \
     using RuviaValidationBody = body_type;                                                                       \
     void validate(const body_type& body, ::ruvia::Validator& validator) const {                                  \
         ::ruvia::detail::ModelValidationAccess::validateStructure(body, {}, validator);                         \
         validateNested(body, {}, validator);                                                                     \
     }                                                                                                            \
     void validateNested(const body_type& body, ::std::string_view prefix, ::ruvia::Validator& validator) const { \
-        RUVIA_MODEL_FOR_EACH(RUVIA_VALIDATE_RULE_FIELD, body_type, __VA_ARGS__)                                  \
+        RUVIA_VALIDATION_FOR_EACH(RUVIA_VALIDATE_RULE_FIELD, body_type, __VA_ARGS__)                             \
     }                                                                                                            \
     [[nodiscard]] ::ruvia::Task<void> handle(::ruvia::Context& c, ::ruvia::Next& next) {                         \
         return ::ruvia::detail::invokeModelValidator<target, body_type>(*this, c, next);                         \

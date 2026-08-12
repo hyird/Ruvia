@@ -9,10 +9,10 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
     RUVIA_CHECK(parsed.has_value());
     if (parsed.has_value()) {
         const AccessorSurfaceRequest& model = *parsed;
-        RUVIA_CHECK(model.message().has_value());
-        if (model.message().has_value()) {
-            RUVIA_CHECK_EQ(model.message()->view(), std::string_view("ready"));
-            RUVIA_CHECK(model.message()->resource() == &modelResource);
+        RUVIA_CHECK(model.get<"message">().has_value());
+        if (model.get<"message">().has_value()) {
+            RUVIA_CHECK_EQ(model.get<"message">()->view(), std::string_view("ready"));
+            RUVIA_CHECK(model.get<"message">()->resource() == &modelResource);
         }
         RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(model) == ruvia::detail::ModelFieldState::kParsed);
     }
@@ -21,7 +21,7 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
     const auto invalidField = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<AccessorSurfaceRequest>(R"({"message":42})", std::pmr::get_default_resource());
     RUVIA_CHECK(invalidField.has_value());
     if (invalidField.has_value()) {
-        RUVIA_CHECK(!invalidField->message().has_value());
+        RUVIA_CHECK(!invalidField->get<"message">().has_value());
         RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(*invalidField) == ruvia::detail::ModelFieldState::kInvalidType);
     }
 
@@ -29,10 +29,10 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
     RUVIA_CHECK(!malformed.has_value());
 
     AccessorSurfaceResponse response(&modelResource);
-    RUVIA_CHECK(response.messageEnsure().resource() == &modelResource);
+    RUVIA_CHECK(response.ensure<"message">().resource() == &modelResource);
 }
 
-RUVIA_TEST(unified_model_parses_and_serializes_nested_arrays_and_optional_fields) {
+RUVIA_TEST(request_and_response_models_support_nested_arrays_and_optional_fields) {
     std::pmr::monotonic_buffer_resource resource;
     std::string input = R"({"primary":{"id":1},"items":[{"id":2,"label":"two"}],"tags":["a","b"]})";
     const auto parsed = ruvia::fromJson<NestedModelEnvelope>(input, &resource);
@@ -42,21 +42,26 @@ RUVIA_TEST(unified_model_parses_and_serializes_nested_arrays_and_optional_fields
     }
     input.assign(input.size(), 'x');
 
-    RUVIA_CHECK_EQ(std::uint32_t(parsed->primary().id()), std::uint32_t{1});
-    RUVIA_CHECK_EQ(parsed->items().size(), std::size_t{1});
-    RUVIA_CHECK(parsed->tags().has_value());
-    RUVIA_CHECK(!parsed->primary().label().has_value());
-    RUVIA_CHECK(parsed->items()[0].label().has_value());
-    if (parsed->items()[0].label()) {
-        RUVIA_CHECK_EQ(parsed->items()[0].label()->view(), std::string_view("two"));
+    RUVIA_CHECK_EQ(std::uint32_t(parsed->get<"primary">().get<"id">()), std::uint32_t{1});
+    RUVIA_CHECK_EQ(parsed->get<"items">().size(), std::size_t{1});
+    RUVIA_CHECK(parsed->get<"tags">().has_value());
+    RUVIA_CHECK(!parsed->get<"primary">().get<"label">().has_value());
+    RUVIA_CHECK(parsed->get<"items">()[0].get<"label">().has_value());
+    if (parsed->get<"items">()[0].get<"label">()) {
+        RUVIA_CHECK_EQ(parsed->get<"items">()[0].get<"label">()->view(), std::string_view("two"));
     }
-    if (parsed->tags()) {
-        RUVIA_CHECK_EQ(parsed->tags()->size(), std::size_t{2});
-        RUVIA_CHECK_EQ((*parsed->tags())[0].view(), std::string_view("a"));
-        RUVIA_CHECK_EQ((*parsed->tags())[1].view(), std::string_view("b"));
+    if (parsed->get<"tags">()) {
+        RUVIA_CHECK_EQ(parsed->get<"tags">()->size(), std::size_t{2});
+        RUVIA_CHECK_EQ((*parsed->get<"tags">())[0].view(), std::string_view("a"));
+        RUVIA_CHECK_EQ((*parsed->get<"tags">())[1].view(), std::string_view("b"));
     }
 
-    RUVIA_CHECK_EQ(std::string(ruvia::toJson(*parsed, &resource)), std::string(R"({"primary":{"id":1},"items":[{"id":2,"label":"two"}],"tags":["a","b"]})"));
+    NestedResponseEnvelope response(&resource);
+    response.ensure<"primary">().set<"id">(ruvia::UInt32{1});
+    response.ensure<"items">().emplace_back(&resource).set<"id">(ruvia::UInt32{2}).set<"label">("two");
+    response.ensure<"tags">().emplace_back("a", &resource);
+    response.ensure<"tags">().emplace_back("b", &resource);
+    RUVIA_CHECK_EQ(std::string(ruvia::toJson(response, &resource)), std::string(R"({"primary":{"id":1},"items":[{"id":2,"label":"two"}],"tags":["a","b"]})"));
 }
 
 RUVIA_TEST(form_object_get_uses_last_match) {

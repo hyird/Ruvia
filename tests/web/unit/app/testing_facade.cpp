@@ -20,10 +20,8 @@
 #include "ruvia/web/SecurityHeaders.h"
 #include "ruvia/web/Testing.h"
 
-struct TestingFacadeEcho final {
-    RUVIA_MODEL(TestingFacadeEcho,
-        RUVIA_OPTIONAL_FIELD(value, ruvia::String));
-};
+RUVIA_REQUEST_MODEL(TestingFacadeEcho,
+    RUVIA_OPTIONAL_FIELD(value, ruvia::String));
 
 namespace {
 
@@ -158,7 +156,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
         const auto body = co_await c.req().json<TestingFacadeEcho>();
-        co_return c.body(body.value().has_value() ? body.value()->view() : "missing");
+        co_return c.body(body.get<"value">().has_value() ? body.get<"value">()->view() : "missing");
     }
 
     ruvia::Task<ruvia::HttpResponse> propfind(ruvia::Context& c) {

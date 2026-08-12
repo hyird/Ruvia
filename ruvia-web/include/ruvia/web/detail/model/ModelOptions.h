@@ -5,6 +5,7 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 #include "ruvia/web/detail/model/rule/RuleSupport.h"
 
@@ -13,10 +14,10 @@ namespace ruvia::detail::model {
 template <typename... OptionTs>
 class ModelOptions final {
 public:
-    constexpr explicit ModelOptions(OptionTs... options) noexcept
-        : options_(options...) {
+    constexpr ModelOptions() noexcept
+        : options_(OptionTs{}...) {
         static_assert((isModelOption<OptionTs>() && ...),
-            "RUVIA_FIELD accepts only model options: RUVIA_DEFAULT, RUVIA_OMIT_EMPTY, "
+            "RUVIA_REQUIRED_FIELD/RUVIA_OPTIONAL_FIELD accept only model options: RUVIA_DEFAULT, RUVIA_OMIT_EMPTY, "
             "RUVIA_EMIT_NULL. "
             "Move validation rules to RUVIA_VALIDATE_* with RUVIA_RULE.");
     }
@@ -74,8 +75,5 @@ private:
 
     std::tuple<OptionTs...> options_;
 };
-
-template <typename... OptionTs>
-ModelOptions(OptionTs...) -> ModelOptions<OptionTs...>;
 
 }  // namespace ruvia::detail::model

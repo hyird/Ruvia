@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/web/detail/model/pattern/PatternCompiler.h"
@@ -135,6 +136,15 @@ struct Default final {
 
 template <typename ValueT>
 Default(ValueT) -> Default<ValueT>;
+
+template <auto Provider>
+struct StaticDefault final {
+    using RuviaDefaultRuleMarker = void;
+    using RuviaModelOptionMarker = void;
+
+    using value_type = std::remove_cvref_t<decltype(Provider())>;
+    value_type value{Provider()};
+};
 
 struct OmitEmpty final {
     using RuviaModelOptionMarker = void;

@@ -13,18 +13,20 @@
 #include "ruvia/web/ModelJson.h"
 #include "ruvia/web/Validation.h"
 
-struct WrappedScalars final {
-    RUVIA_MODEL(WrappedScalars,
-        RUVIA_OPTIONAL_FIELD(count, ruvia::UInt32),
-        RUVIA_OPTIONAL_FIELD(ratio, ruvia::Double),
-        RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool),
-        RUVIA_OPTIONAL_FIELD(delta, ruvia::Int64));
-};
+RUVIA_REQUEST_MODEL(WrappedScalars,
+    RUVIA_OPTIONAL_FIELD(count, ruvia::UInt32),
+    RUVIA_OPTIONAL_FIELD(ratio, ruvia::Double),
+    RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool),
+    RUVIA_OPTIONAL_FIELD(delta, ruvia::Int64));
 
-struct WrappedDefaulted final {
-    RUVIA_MODEL(WrappedDefaulted,
-        RUVIA_OPTIONAL_FIELD(retries, ruvia::UInt32, RUVIA_DEFAULT(3)));
-};
+RUVIA_RESPONSE_MODEL(WrappedScalarsResponse,
+    RUVIA_OPTIONAL_FIELD(count, ruvia::UInt32),
+    RUVIA_OPTIONAL_FIELD(ratio, ruvia::Double),
+    RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool),
+    RUVIA_OPTIONAL_FIELD(delta, ruvia::Int64));
+
+RUVIA_REQUEST_MODEL(WrappedDefaulted,
+    RUVIA_OPTIONAL_FIELD(retries, ruvia::UInt32, RUVIA_DEFAULT(3)));
 
 namespace {
 
@@ -60,18 +62,18 @@ RUVIA_TEST(model_wrapper_scalar_fields_parse_json_and_forms) {
         return;
     }
 
-    RUVIA_CHECK_EQ(std::uint32_t(wrapped->count().value()), std::uint32_t{36});
-    RUVIA_CHECK(double(wrapped->ratio().value()) == 9.5);
-    RUVIA_CHECK(bool(wrapped->enabled().value()));
-    RUVIA_CHECK_EQ(std::int64_t(wrapped->delta().value()), std::int64_t{-7});
+    RUVIA_CHECK_EQ(std::uint32_t(wrapped->get<"count">().value()), std::uint32_t{36});
+    RUVIA_CHECK(double(wrapped->get<"ratio">().value()) == 9.5);
+    RUVIA_CHECK(bool(wrapped->get<"enabled">().value()));
+    RUVIA_CHECK_EQ(std::int64_t(wrapped->get<"delta">().value()), std::int64_t{-7});
 
     std::pmr::monotonic_buffer_resource formResource;
     const auto form = ruvia::fromForm<WrappedScalars>("count=41&ratio=2.5&enabled=true&delta=-9", &formResource);
     RUVIA_CHECK(form.has_value());
     if (form) {
-        RUVIA_CHECK_EQ(std::uint32_t(form->count().value()), std::uint32_t{41});
-        RUVIA_CHECK(double(form->ratio().value()) == 2.5);
-        RUVIA_CHECK(bool(form->enabled().value()));
+        RUVIA_CHECK_EQ(std::uint32_t(form->get<"count">().value()), std::uint32_t{41});
+        RUVIA_CHECK(double(form->get<"ratio">().value()) == 2.5);
+        RUVIA_CHECK(bool(form->get<"enabled">().value()));
     }
 }
 
@@ -103,7 +105,12 @@ RUVIA_TEST(model_wrapper_scalar_fields_round_trip_through_json) {
         return;
     }
 
-    const auto json = ruvia::toJson(*parsed, &resource);
+    WrappedScalarsResponse response(&resource);
+    response.set<"count">(*parsed->get<"count">())
+        .set<"ratio">(*parsed->get<"ratio">())
+        .set<"enabled">(*parsed->get<"enabled">())
+        .set<"delta">(*parsed->get<"delta">());
+    const auto json = ruvia::toJson(response, &resource);
     RUVIA_CHECK_EQ(std::string_view(json), std::string_view(R"({"count":1,"ratio":2.5,"enabled":false,"delta":-3})"));
 }
 
@@ -112,6 +119,6 @@ RUVIA_TEST(model_wrapper_scalar_fields_apply_defaults) {
     const auto defaulted = ruvia::fromJson<WrappedDefaulted>("{}", &defaultResource);
     RUVIA_CHECK(defaulted.has_value());
     if (defaulted) {
-        RUVIA_CHECK_EQ(std::uint32_t(defaulted->retries().value()), std::uint32_t{3});
+        RUVIA_CHECK_EQ(std::uint32_t(defaulted->get<"retries">().value()), std::uint32_t{3});
     }
 }

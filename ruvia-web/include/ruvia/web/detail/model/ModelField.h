@@ -24,20 +24,16 @@ namespace ruvia::detail::model {
     return hash;
 }
 
-template <typename ValueT, bool Required, typename OptionsT>
+template <typename ValueT, bool Required, typename OptionsT, FixedString WireName>
 class ModelField final {
 public:
     using value_type = ValueT;
     static constexpr bool required = Required;
 
-    constexpr ModelField(std::string_view wireName, OptionsT options) noexcept
-        : wireName_(wireName),
-          options_(std::move(options)) {
-        static_assert(detail::isRequestModelField<ValueT>, "RUVIA_FIELD type must be a Ruvia value type or nested RUVIA_MODEL");
-    }
+    constexpr ModelField() noexcept = default;
 
     [[nodiscard]] constexpr std::string_view wireName() const noexcept {
-        return wireName_;
+        return WireName.view();
     }
 
     [[nodiscard]] detail::ModelFieldState state() const noexcept {
@@ -110,7 +106,6 @@ public:
     }
 
 private:
-    std::string_view wireName_;
     OptionsT options_;
     detail::ModelFieldState state_{detail::ModelFieldState::kMissing};
     std::optional<ValueT> value_;

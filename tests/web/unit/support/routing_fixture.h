@@ -39,10 +39,8 @@
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/websocket/WebSocketAccess.h"
 
-struct ScopedValidationRequest final {
-    RUVIA_MODEL(ScopedValidationRequest,
-        RUVIA_OPTIONAL_FIELD(value, ruvia::String));
-};
+RUVIA_REQUEST_MODEL(ScopedValidationRequest,
+    RUVIA_OPTIONAL_FIELD(value, ruvia::String));
 
 namespace routing_test {
 
@@ -108,7 +106,7 @@ inline bool scopedValidationHandlerThrows{false};
 inline ruvia::Task<ruvia::HttpResponse> scopedValidationHandler(void*, ruvia::Context& context) {
     const auto& model = context.req().validated<ScopedValidationRequest>();
     const auto json = context.req().validatedJson<ScopedValidationRequest>();
-    scopedValidationHandlerRead = model.value().has_value() && model.value()->view() == "ok";
+    scopedValidationHandlerRead = model.get<"value">().has_value() && model.get<"value">()->view() == "ok";
     scopedValidationRawRead = &json.value() == &model && json.raw() == R"({"value":"ok"})";
     if (scopedValidationHandlerThrows) {
         throw std::runtime_error("validated handler failure");
@@ -737,22 +735,22 @@ inline ruvia::Task<ruvia::HttpResponse> urlForEchoHandler(void*, ruvia::Context&
 
 inline ruvia::Task<ruvia::HttpResponse> jsonModelEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().json<ScopedValidationRequest>();
-    co_return context.body(body.value().has_value() ? body.value()->view() : "missing");
+    co_return context.body(body.get<"value">().has_value() ? body.get<"value">()->view() : "missing");
 }
 
 inline ruvia::Task<ruvia::HttpResponse> formModelEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().form<ScopedValidationRequest>();
-    co_return context.body(body.value().has_value() ? body.value()->view() : "missing");
+    co_return context.body(body.get<"value">().has_value() ? body.get<"value">()->view() : "missing");
 }
 
 inline ruvia::Task<ruvia::HttpResponse> jsonIfEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().jsonIf<ScopedValidationRequest>();
-    co_return context.body(body.has_value() && body->value().has_value() ? body->value()->view() : "no-json");
+    co_return context.body(body.has_value() && body->get<"value">().has_value() ? body->get<"value">()->view() : "no-json");
 }
 
 inline ruvia::Task<ruvia::HttpResponse> formIfEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().formIf<ScopedValidationRequest>();
-    co_return context.body(body.has_value() && body->value().has_value() ? body->value()->view() : "no-form");
+    co_return context.body(body.has_value() && body->get<"value">().has_value() ? body->get<"value">()->view() : "no-form");
 }
 
 inline ruvia::Task<ruvia::HttpResponse> jsonValueIfEchoHandler(void*, ruvia::Context& context) {

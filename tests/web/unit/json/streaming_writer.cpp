@@ -12,11 +12,9 @@
 #include "ruvia/web/Json.h"
 #include "ruvia/web/Model.h"
 
-struct JsonWriterPoint final {
-    RUVIA_MODEL(JsonWriterPoint,
-        RUVIA_FIELD(x, ruvia::Int64),
-        RUVIA_FIELD(y, ruvia::Int64));
-};
+RUVIA_RESPONSE_MODEL(JsonWriterPoint,
+    RUVIA_REQUIRED_FIELD(x, ruvia::Int64),
+    RUVIA_REQUIRED_FIELD(y, ruvia::Int64));
 
 namespace {
 
@@ -130,8 +128,8 @@ RUVIA_TEST(json_writer_renders_non_finite_numbers_as_null) {
 RUVIA_TEST(json_writer_splices_a_compile_time_model) {
     const auto json = writeObject([](ruvia::JsonObjectWriter& out) {
         JsonWriterPoint point;
-        point.x(ruvia::Int64{1});
-        point.y(ruvia::Int64{2});
+        point.set<"x">(ruvia::Int64{1});
+        point.set<"y">(ruvia::Int64{2});
         out.addModel("origin", point);
     });
     RUVIA_CHECK_EQ(json, std::string(R"({"origin":{"x":1,"y":2}})"));

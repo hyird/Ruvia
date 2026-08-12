@@ -85,26 +85,48 @@ using ModelScalarValueT = typename RuviaScalarTraits<std::remove_cvref_t<T>>::va
 template <typename T>
 inline constexpr bool isFormField = isRuviaString<T> || isRuviaScalar<T>;
 
-template <typename T>
-struct RuviaModelFieldTraits : std::bool_constant<isRuviaString<T> || isRuviaScalar<T> || JsonBody<std::remove_cvref_t<T>>::value> {};
-
-template <typename ValueT>
-struct RuviaModelFieldTraits<std::pmr::vector<ValueT>> : RuviaModelFieldTraits<std::remove_cvref_t<ValueT>> {};
-
-template <typename ValueT>
-struct RuviaModelFieldTraits<BoxedArray<ValueT>> : RuviaModelFieldTraits<std::remove_cvref_t<ValueT>> {};
+template <typename T, typename = void>
+struct ResponseModel : std::false_type {};
 
 template <typename T>
-inline constexpr bool isRequestModelField = RuviaModelFieldTraits<std::remove_cvref_t<T>>::value;
+    requires requires { typename T::RuviaResponseModelSchema; }
+struct ResponseModel<T, void> : std::true_type {};
+
+template <typename T>
+struct RuviaRequestModelFieldTraits
+    : std::bool_constant<isRuviaString<T> || isRuviaScalar<T> || JsonBody<std::remove_cvref_t<T>>::value> {};
+
+template <typename ValueT>
+struct RuviaRequestModelFieldTraits<std::pmr::vector<ValueT>>
+    : RuviaRequestModelFieldTraits<std::remove_cvref_t<ValueT>> {};
+
+template <typename ValueT>
+struct RuviaRequestModelFieldTraits<BoxedArray<ValueT>>
+    : RuviaRequestModelFieldTraits<std::remove_cvref_t<ValueT>> {};
+
+template <typename T>
+inline constexpr bool isRequestModelField = RuviaRequestModelFieldTraits<std::remove_cvref_t<T>>::value;
 
 template <typename T>
 inline constexpr bool isRequestModel = JsonBody<std::remove_cvref_t<T>>::value;
 
 template <typename T>
-inline constexpr bool isResponseModel = JsonBody<std::remove_cvref_t<T>>::value;
+inline constexpr bool isResponseModel = ResponseModel<std::remove_cvref_t<T>>::value;
 
 template <typename T>
-inline constexpr bool isResponseModelField = RuviaModelFieldTraits<std::remove_cvref_t<T>>::value;
+struct RuviaResponseModelFieldTraits
+    : std::bool_constant<isRuviaString<T> || isRuviaScalar<T> || isResponseModel<T>> {};
+
+template <typename ValueT>
+struct RuviaResponseModelFieldTraits<std::pmr::vector<ValueT>>
+    : RuviaResponseModelFieldTraits<std::remove_cvref_t<ValueT>> {};
+
+template <typename ValueT>
+struct RuviaResponseModelFieldTraits<BoxedArray<ValueT>>
+    : RuviaResponseModelFieldTraits<std::remove_cvref_t<ValueT>> {};
+
+template <typename T>
+inline constexpr bool isResponseModelField = RuviaResponseModelFieldTraits<std::remove_cvref_t<T>>::value;
 
 template <typename T>
 [[nodiscard]] T makeRequestValue(ResolvedPmrResourceTag, std::pmr::memory_resource* resource) {
@@ -115,7 +137,7 @@ template <typename T>
         return T(std::pmr::polymorphic_allocator<ValueT>(resource));
     } else if constexpr (isRuviaBoxedArray<T>) {
         return ModelValueFactory::makeBoxedArray<T>(resource);
-    } else if constexpr (JsonBody<std::remove_cvref_t<T>>::value) {
+    } else if constexpr (isRequestModel<T> || isResponseModel<T>) {
         return T(resource);
     } else {
         (void)resource;
@@ -125,7 +147,7 @@ template <typename T>
 
 template <typename T>
 [[nodiscard]] T makeRequestValue(std::pmr::memory_resource* resource) {
-    if constexpr (isRuviaString<T> || isRuviaArray<T> || isRuviaBoxedArray<T> || JsonBody<std::remove_cvref_t<T>>::value) {
+    if constexpr (isRuviaString<T> || isRuviaArray<T> || isRuviaBoxedArray<T> || isRequestModel<T> || isResponseModel<T>) {
         return makeRequestValue<T>(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource));
     } else {
         (void)resource;
