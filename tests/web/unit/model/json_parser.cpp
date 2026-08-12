@@ -13,11 +13,11 @@ RUVIA_TEST(model_json_parser_dispatches_decoded_keys) {
     if (!parsed) {
         return;
     }
-    RUVIA_CHECK(parsed->message().has_value());
-    if (!parsed->message()) {
+    RUVIA_CHECK(parsed->get<"message">().has_value());
+    if (!parsed->get<"message">()) {
         return;
     }
-    RUVIA_CHECK_EQ(parsed->message()->view(), std::string_view("ready"));
+    RUVIA_CHECK_EQ(parsed->get<"message">()->view(), std::string_view("ready"));
 }
 
 RUVIA_TEST(model_public_parsers_own_string_fields) {
@@ -31,11 +31,11 @@ RUVIA_TEST(model_public_parsers_own_string_fields) {
 
     RUVIA_CHECK(json.has_value());
     RUVIA_CHECK(form.has_value());
-    if (!json || !form || !json->message() || !form->message()) {
+    if (!json || !form || !json->get<"message">() || !form->get<"message">()) {
         return;
     }
-    RUVIA_CHECK_EQ(json->message()->view(), std::string_view("json-owned"));
-    RUVIA_CHECK_EQ(form->message()->view(), std::string_view("form-owned"));
+    RUVIA_CHECK_EQ(json->get<"message">()->view(), std::string_view("json-owned"));
+    RUVIA_CHECK_EQ(form->get<"message">()->view(), std::string_view("form-owned"));
 }
 
 RUVIA_TEST(model_internal_request_parsers_keep_literal_strings_borrowed) {
@@ -49,11 +49,11 @@ RUVIA_TEST(model_internal_request_parsers_keep_literal_strings_borrowed) {
 
     RUVIA_CHECK(json.has_value());
     RUVIA_CHECK(form.has_value());
-    if (!json || !form || !json->message() || !form->message()) {
+    if (!json || !form || !json->get<"message">() || !form->get<"message">()) {
         return;
     }
-    RUVIA_CHECK(json->message()->data() == jsonInput.data() + 12);
-    RUVIA_CHECK(form->message()->data() == formInput.data() + 8);
+    RUVIA_CHECK(json->get<"message">()->data() == jsonInput.data() + 12);
+    RUVIA_CHECK(form->get<"message">()->data() == formInput.data() + 8);
 }
 
 RUVIA_TEST(model_json_parser_keeps_field_errors_separate_from_document_errors) {
@@ -64,11 +64,11 @@ RUVIA_TEST(model_json_parser_keeps_field_errors_separate_from_document_errors) {
     if (!parsed) {
         return;
     }
-    RUVIA_CHECK(parsed->label().has_value());
-    if (!parsed->label()) {
+    RUVIA_CHECK(parsed->get<"label">().has_value());
+    if (!parsed->get<"label">()) {
         return;
     }
-    RUVIA_CHECK_EQ(parsed->label()->view(), std::string_view("still parsed"));
+    RUVIA_CHECK_EQ(parsed->get<"label">()->view(), std::string_view("still parsed"));
     RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"id">(*parsed) == ruvia::detail::ModelFieldState::kInvalidType);
 }
 
@@ -85,11 +85,11 @@ RUVIA_TEST(model_json_parser_fully_validates_unknown_and_duplicate_values) {
     if (!duplicate) {
         return;
     }
-    RUVIA_CHECK(duplicate->message().has_value());
-    if (!duplicate->message()) {
+    RUVIA_CHECK(duplicate->get<"message">().has_value());
+    if (!duplicate->get<"message">()) {
         return;
     }
-    RUVIA_CHECK_EQ(duplicate->message()->view(), std::string_view("first"));
+    RUVIA_CHECK_EQ(duplicate->get<"message">()->view(), std::string_view("first"));
     RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(*duplicate) == ruvia::detail::ModelFieldState::kDuplicate);
 }
 

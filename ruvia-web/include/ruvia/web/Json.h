@@ -2,7 +2,7 @@
 
 // Streaming JSON output for responses whose shape is only known at run time.
 //
-// Ruvia's model JSON (RUVIA_MODEL + c.json(value)) covers every response whose
+// Ruvia's model JSON (RUVIA_RESPONSE_MODEL + c.json(value)) covers every response whose
 // shape is known when the code is written, and it stays the preferred path: the
 // schema is compile-time, so serialization allocates nothing it cannot size in
 // advance. But some responses genuinely are not statically shaped -- an error
@@ -165,7 +165,7 @@ public:
         output_->append("null");
     }
 
-    // Splices a RUVIA_MODEL value in as a nested object, so a statically shaped
+    // Splices a RUVIA_RESPONSE_MODEL value in as a nested object, so a statically shaped
     // subtree keeps using the compile-time schema path.
     template <typename T>
     void addModel(std::string_view key, const T& model) {

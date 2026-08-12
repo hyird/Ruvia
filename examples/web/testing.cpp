@@ -11,10 +11,8 @@
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/Testing.h"
 
-struct NoteRequest final {
-    RUVIA_MODEL(NoteRequest,
-        RUVIA_OPTIONAL_FIELD(text, ruvia::String));
-};
+RUVIA_REQUEST_MODEL(NoteRequest,
+    RUVIA_OPTIONAL_FIELD(text, ruvia::String));
 
 namespace {
 
@@ -55,7 +53,7 @@ private:
         const auto note = co_await c.req().json<NoteRequest>();
         ++c.workerState<NoteCounter>().stored;
         c.status(ruvia::http_status::kCreated);
-        co_return c.body(note.text().has_value() ? note.text()->view() : "empty");
+        co_return c.body(note.get<"text">().has_value() ? note.get<"text">()->view() : "empty");
     }
 
     ruvia::Task<ruvia::HttpResponse> stats(ruvia::Context& c) {

@@ -7,36 +7,26 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
-struct UserDTO final {
-    RUVIA_MODEL(UserDTO,
-        RUVIA_OPTIONAL_FIELD(name, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32),
-        RUVIA_OPTIONAL_FIELD(email, ruvia::String));
-};
+RUVIA_REQUEST_MODEL(UserDTO,
+    RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32),
+    RUVIA_OPTIONAL_FIELD(email, ruvia::String));
 
-struct UserEcho final {
-    RUVIA_MODEL(UserEcho,
-        RUVIA_OPTIONAL_FIELD(name, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32),
-        RUVIA_OPTIONAL_FIELD(email, ruvia::String));
-};
+RUVIA_RESPONSE_MODEL(UserEcho,
+    RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32),
+    RUVIA_OPTIONAL_FIELD(email, ruvia::String));
 
-struct StatusResponse final {
-    RUVIA_MODEL(StatusResponse,
-        RUVIA_OPTIONAL_FIELD(status, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(framework, ruvia::String));
-};
+RUVIA_RESPONSE_MODEL(StatusResponse,
+    RUVIA_OPTIONAL_FIELD(status, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(framework, ruvia::String));
 
-struct UserByIdResponse final {
-    RUVIA_MODEL(UserByIdResponse,
-        RUVIA_OPTIONAL_FIELD(userId, ruvia::String),
-        RUVIA_OPTIONAL_FIELD(name, ruvia::String));
-};
+RUVIA_RESPONSE_MODEL(UserByIdResponse,
+    RUVIA_OPTIONAL_FIELD(userId, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(name, ruvia::String));
 
-struct MiddlewareResponse final {
-    RUVIA_MODEL(MiddlewareResponse,
-        RUVIA_OPTIONAL_FIELD(middleware_count, ruvia::UInt32));
-};
+RUVIA_RESPONSE_MODEL(MiddlewareResponse,
+    RUVIA_OPTIONAL_FIELD(middleware_count, ruvia::UInt32));
 
 template <int N>
 class Passthrough final : public ruvia::Middleware<Passthrough<N>> {
@@ -67,21 +57,21 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> status(ruvia::Context& c) {
         StatusResponse response(c);
-        response.status("running").framework("ruvia");
+        response.set<"status">("running").set<"framework">("ruvia");
         co_return c.json(response);
     }
 
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
         const auto user = co_await c.req().json<UserDTO>();
         UserEcho response(c);
-        if (const auto& name = user.name()) {
-            response.name(name->view());
+        if (const auto& name = user.get<"name">()) {
+            response.set<"name">(name->view());
         }
-        if (const auto& age = user.age()) {
-            response.age(*age);
+        if (const auto& age = user.get<"age">()) {
+            response.set<"age">(*age);
         }
-        if (const auto& email = user.email()) {
-            response.email(email->view());
+        if (const auto& email = user.get<"email">()) {
+            response.set<"email">(email->view());
         }
         co_return c.json(response);
     }
@@ -92,7 +82,7 @@ private:
         std::pmr::string name(c.allocator<char>());
         name.append("User ");
         name.append(id);
-        response.userId(id).name(name);
+        response.set<"userId">(id).set<"name">(name);
         co_return c.json(response);
     }
 
@@ -110,7 +100,7 @@ private:
 
     static ruvia::HttpResponse middlewareResponse(ruvia::Context& c, std::uint32_t count) {
         MiddlewareResponse response(c);
-        response.middleware_count(ruvia::UInt32{count});
+        response.set<"middleware_count">(ruvia::UInt32{count});
         return c.json(response);
     }
 };

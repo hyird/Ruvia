@@ -9,10 +9,10 @@
 namespace ruvia {
 
 template <typename T>
+    requires FormBody<T>::value
 [[nodiscard]] std::optional<T> fromForm(
     std::string_view body,
     std::pmr::memory_resource* resource = nullptr) {
-    static_assert(FormBody<T>::value, "fromForm<T> requires a RUVIA_MODEL");
     return detail::ModelParseAccess::parseFormOwned<T>(
         body, detail::pmrResourceOrDefault(resource));
 }

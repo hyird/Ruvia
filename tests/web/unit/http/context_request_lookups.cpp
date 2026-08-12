@@ -150,8 +150,8 @@ RUVIA_TEST(context_request_query_fields_preserve_duplicates_for_model_binding) {
     if (!parsed) {
         return;
     }
-    RUVIA_CHECK(parsed->message().has_value());
-    RUVIA_CHECK_EQ(parsed->message()->view(), std::string_view("first"));
+    RUVIA_CHECK(parsed->get<"message">().has_value());
+    RUVIA_CHECK_EQ(parsed->get<"message">()->view(), std::string_view("first"));
     RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(*parsed) == ruvia::detail::ModelFieldState::kDuplicate);
 }
 
