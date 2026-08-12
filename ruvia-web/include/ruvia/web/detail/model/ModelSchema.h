@@ -106,8 +106,9 @@ template <std::size_t Index, typename DescriptorT, typename... RemainingTs, type
             wireName,
             visitResult,
             visitor);
+    } else {
+        return false;
     }
-    return false;
 }
 
 template <typename ModelT, typename... DescriptorTs, typename VisitorT>
