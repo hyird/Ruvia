@@ -2,6 +2,7 @@
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketPayloadValidation.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
+#include "ruvia/http/WebSocketHandshake.h"
 
 #include <array>
 #include <cstring>
@@ -11,8 +12,8 @@
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 
 namespace ruvia::detail {
 namespace {
@@ -100,9 +101,29 @@ namespace {
 
 }  // namespace
 
-HttpWebSocketHandshakeValidationResult validateHttp1WebSocketHandshake(const HttpRequest& request, const Http1RequestBodyPlan& bodyPlan) noexcept {
-    HttpConnectionOptions connectionOptions;
-    HttpUpgradeProtocols upgradeProtocols;
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+HttpProtocolError WebSocketHandshakeFailure::protocolError() const noexcept {
+    switch (kind_) {
+        case Kind::kInvalidRequest:
+            return HttpProtocolError(http_status::kBadRequest, "invalid WebSocket handshake");
+        case Kind::kUnsupportedVersion:
+            return HttpProtocolError(http_status::kBadRequest, "unsupported WebSocket version");
+    }
+    return HttpProtocolError(http_status::kBadRequest, "invalid WebSocket handshake");
+}
+
+void WebSocketHandshakeFailure::applyRequiredResponseHeaders(HttpResponse& response) const {
+    if (kind_ == Kind::kUnsupportedVersion) {
+        detail::setResponseHeaderStableView(response, "Sec-WebSocket-Version", "13");
+    }
+}
+
+WebSocketHandshakeValidationResult validateWebSocketHandshake(const HttpRequest& request, const Http1RequestBodyPlan& bodyPlan) noexcept {
+    detail::HttpConnectionOptions connectionOptions;
+    detail::HttpUpgradeProtocols upgradeProtocols;
     std::string_view key;
     std::string_view version;
     std::size_t keyCount = 0;
@@ -110,23 +131,23 @@ HttpWebSocketHandshakeValidationResult validateHttp1WebSocketHandshake(const Htt
     bool webSocketUpgrade = false;
 
     for (const auto& header : request.headers()) {
-        if (httpAsciiEqualsIgnoreCase(header.name(), "Connection")) {
-            if (connectionOptions.parseField(header.value(), HttpFieldListRole::kRecipient) != HttpFieldListParseStatus::kOk) {
-                return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+        if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Connection")) {
+            if (connectionOptions.parseField(header.value(), detail::HttpFieldListRole::kRecipient) != detail::HttpFieldListParseStatus::kOk) {
+                return WebSocketHandshakeValidationResult::makeInvalidRequest();
             }
-        } else if (httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
-            if (upgradeProtocols.parseField(header.value(), HttpFieldListRole::kRecipient, [&webSocketUpgrade](const HttpUpgradeProtocol& protocol) noexcept {
-                    if (protocol.version.empty() && httpAsciiEqualsIgnoreCase(protocol.name, "websocket")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
+            if (upgradeProtocols.parseField(header.value(), detail::HttpFieldListRole::kRecipient, [&webSocketUpgrade](const detail::HttpUpgradeProtocol& protocol) noexcept {
+                    if (protocol.version.empty() && detail::httpAsciiEqualsIgnoreCase(protocol.name, "websocket")) {
                         webSocketUpgrade = true;
                     }
                     return true;
-                }) != HttpFieldListParseStatus::kOk) {
-                return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+                }) != detail::HttpFieldListParseStatus::kOk) {
+                return WebSocketHandshakeValidationResult::makeInvalidRequest();
             }
-        } else if (httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Key")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Key")) {
             key = header.value();
             ++keyCount;
-        } else if (httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Version")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Version")) {
             version = header.value();
             ++versionCount;
         }
@@ -138,14 +159,18 @@ HttpWebSocketHandshakeValidationResult validateHttp1WebSocketHandshake(const Htt
         // Content-Length: 0 carries no content, while a positive length or
         // chunked coding still has bytes that must be consumed before the
         // connection can change protocols.
-        bodyPlan.requiresConsumption() || !webSocketSubprotocolOffersValid(request) || !webSocketExtensionOffersValid(request) || keyCount != 1 || !decodeWebSocketKey(key).has_value() || versionCount != 1) {
-        return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+        bodyPlan.requiresConsumption() || !detail::webSocketSubprotocolOffersValid(request) || !detail::webSocketExtensionOffersValid(request) || keyCount != 1 || !detail::decodeWebSocketKey(key).has_value() || versionCount != 1) {
+        return WebSocketHandshakeValidationResult::makeInvalidRequest();
     }
-    if (!webSocketHeaderEquals(version, "13")) {
-        return HttpWebSocketHandshakeValidationResult::makeUnsupportedVersion();
+    if (!detail::webSocketHeaderEquals(version, "13")) {
+        return WebSocketHandshakeValidationResult::makeUnsupportedVersion();
     }
-    return HttpWebSocketHandshakeValidationResult::makeAccepted();
+    return WebSocketHandshakeValidationResult::makeAccepted();
 }
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
 
 bool isValidWebSocketCloseCode(std::uint16_t code) noexcept {
     if (code == 1000 || code == 1001 || code == 1002 || code == 1003 || (code >= 1007 && code <= 1014)) {

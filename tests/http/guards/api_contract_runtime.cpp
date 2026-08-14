@@ -22,6 +22,8 @@
 #include <ruvia/http/HttpHeader.h>
 #include <ruvia/http/HttpClient.h>
 #include <ruvia/http/HttpClientRedirect.h>
+#include <ruvia/http/HttpContentCodec.h>
+#include <ruvia/http/HttpContentCoding.h>
 #include <ruvia/http/Http1ClientRequestWriter.h>
 #include <ruvia/http/Http1ClientResponseParser.h>
 #include <ruvia/http/Http1InterimResponseWriter.h>
@@ -35,12 +37,14 @@
 #include <ruvia/http/HttpProtocolVersion.h>
 #include <ruvia/http/HttpRequest.h>
 #include <ruvia/http/HttpResponse.h>
+#include <ruvia/http/HttpSetCookie.h>
 #include <ruvia/http/HttpExpectations.h>
 #include <ruvia/http/HttpTransferCoding.h>
 #include <ruvia/http/MultipartParser.h>
 #include <ruvia/http/Sse.h>
 #include <ruvia/http/UrlEncoding.h>
 #include <ruvia/http/WebSocketServerConnection.h>
+#include <ruvia/http/WebSocketHandshake.h>
 #include <ruvia/http/detail/util/AsciiCase.h>
 #include <ruvia/http/detail/util/BorrowedView.h>
 #include <ruvia/http/detail/cookie/CookieValidation.h>
@@ -92,7 +96,6 @@
 #include <ruvia/http/detail/http2/stream/Http2TunnelState.h>
 #include <ruvia/http/detail/parser/MultipartPartAccess.h>
 #include <ruvia/http/detail/parser/MimeFieldGrammar.h>
-#include <ruvia/http/detail/parser/MultipartBoundary.h>
 #include <ruvia/http/detail/parser/MultipartDelimiter.h>
 #include <ruvia/http/detail/parser/MultipartPartHeaders.h>
 #include <ruvia/http/detail/parser/MultipartStreamPartAccess.h>
@@ -103,9 +106,7 @@
 #include <ruvia/http/detail/server/HttpFinalResponseControlPlan.h>
 #include <ruvia/http/detail/server/HttpResponseHeadBuffer.h>
 #include <ruvia/http/detail/server/HttpResponseWritePlan.h>
-#include <ruvia/http/detail/websocket/handshake/HttpWebSocketServerHandshake.h>
 #include <ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h>
-#include <ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeValidation.h>
 #include <ruvia/http/detail/websocket/message/HttpWebSocketMessageAccess.h>
 #include <ruvia/http/detail/websocket/frame/HttpWebSocketClosePayload.h>
 #include <ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h>
@@ -292,6 +293,16 @@ int main() {
         publicServer.release(std::move(*publicRequestHeadEvent)) != ruvia::Http2ServerRequestReleaseStatus::kInvalidLease) return 62;
     if (!publicRequestHeadEvent->request().method().empty()) return 62;
 
+    bool invalidWebSocketCompressionRejected = false;
+    try {
+        ruvia::WebSocketServerOptions invalidOptions;
+        invalidOptions.compression = static_cast<ruvia::WebSocketCompression>(255);
+        ruvia::WebSocketServerConnection invalidWebSocket(&publicProtocolResource, invalidOptions);
+    } catch (const std::invalid_argument&) {
+        invalidWebSocketCompressionRejected = true;
+    }
+    if (!invalidWebSocketCompressionRejected) return 60;
+
     ruvia::WebSocketServerConnection publicWebSocket(&publicProtocolResource);
     constexpr std::array<unsigned char, 6> websocketPayload{'p', 'u', 'b', 'l', 'i', 'c'};
     constexpr std::array<unsigned char, 4> websocketMask{1, 2, 3, 4};
@@ -345,11 +356,11 @@ int main() {
     if (!decodedUrl.has_value() || std::string_view(*decodedUrl) != "installed decoder" || malformedUrl.has_value()) {
         return 51;
     }
-    auto encodedContent = ruvia::detail::encodeHttpContent(ruvia::detail::HttpContentCoding::kGzip, "installed content encoder", 1024, std::pmr::get_default_resource());
+    auto encodedContent = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, "installed content encoder", 1024, std::pmr::get_default_resource());
     if (encodedContent.encoded() == nullptr || encodedContent.failure() != nullptr || encodedContent.encoded()->bytes().empty()) {
         return 50;
     }
-    const auto identityDecode = ruvia::detail::decodeHttpContent(ruvia::detail::HttpContentCoding::kIdentity, "identity", 8, std::pmr::get_default_resource());
+    const auto identityDecode = ruvia::decodeHttpContent(ruvia::HttpContentCoding::kIdentity, "identity", 8, std::pmr::get_default_resource());
     if (identityDecode.decoded() == nullptr || identityDecode.failure() != nullptr || identityDecode.decoded()->bytes() != "identity") {
         return 49;
     }

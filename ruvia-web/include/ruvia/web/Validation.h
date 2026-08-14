@@ -12,51 +12,11 @@
 #include <vector>
 
 #include "ruvia/web/Error.h"
-#include "ruvia/web/detail/json/JsonEscape.h"
 #include "ruvia/web/Model.h"
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia {
-
-class ValidationIssue final {
-public:
-    [[nodiscard]] std::string_view field() const& noexcept {
-        return field_;
-    }
-    [[nodiscard]] std::string_view field() const&& = delete;
-
-    [[nodiscard]] std::string_view code() const& noexcept {
-        return code_;
-    }
-    [[nodiscard]] std::string_view code() const&& = delete;
-
-    [[nodiscard]] std::string_view message() const& noexcept {
-        return message_;
-    }
-    [[nodiscard]] std::string_view message() const&& = delete;
-
-private:
-    friend class ValidationError;
-    friend class Validator;
-
-    ValidationIssue(std::string_view fieldName, std::string_view codeValue, std::string_view messageValue, std::pmr::memory_resource* resource = nullptr)
-        : ValidationIssue(detail::ResolvedPmrResourceTag{}, fieldName, codeValue, messageValue, detail::pmrResourceOrDefault(resource)) {}
-
-    ValidationIssue(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
-        : field_(resource),
-          code_(resource),
-          message_(resource) {}
-
-    ValidationIssue(detail::ResolvedPmrResourceTag, std::string_view fieldName, std::string_view codeValue, std::string_view messageValue, std::pmr::memory_resource* resource)
-        : field_(fieldName, resource),
-          code_(codeValue, resource),
-          message_(messageValue, resource) {}
-
-    std::pmr::string field_;
-    std::pmr::string code_;
-    std::pmr::string message_;
-};
 
 namespace detail {
 
@@ -80,13 +40,11 @@ public:
           issues_(resource_),
           statusCode_(statusCode),
           code_(code, resource_),
-          message_(message, resource_),
-          detailsJson_(resource_) {
+          message_(message, resource_) {
         issues_.reserve(issues.size());
         for (const auto& issue : issues) {
             issues_.push_back(ValidationIssue(issue.field(), issue.code(), issue.message(), resource_));
         }
-        buildDetailsJson();
     }
 
     explicit ValidationError(IssueList&& issues, HttpStatusCode statusCode = http_status::kBadRequest, std::string_view code = "validation_failed", std::string_view message = "request validation failed", std::pmr::memory_resource* resource = nullptr)
@@ -94,10 +52,7 @@ public:
           issues_(std::move(issues), resource_),
           statusCode_(statusCode),
           code_(code, resource_),
-          message_(message, resource_),
-          detailsJson_(resource_) {
-        buildDetailsJson();
-    }
+          message_(message, resource_) {}
 
     [[nodiscard]] const char* what() const noexcept override {
         return message_.c_str();
@@ -109,50 +64,16 @@ public:
     [[nodiscard]] const IssueList& issues() const&& = delete;
 
     [[nodiscard]] HttpErrorInfo info() const& noexcept {
-        return HttpErrorInfo(statusCode_, code_, message_, {}, detailsJson_);
+        return HttpErrorInfo(statusCode_, code_, message_, {}, issues_);
     }
     [[nodiscard]] HttpErrorInfo info() const&& = delete;
 
 private:
-    void buildDetailsJson() {
-        detailsJson_.clear();
-        std::size_t size = 2;
-        bool sizeFirst = true;
-        for (const auto& issue : issues_) {
-            if (!sizeFirst) {
-                ++size;
-            }
-            sizeFirst = false;
-            size += std::string_view("{\"field\":").size() + detail::jsonStringSizeHint(issue.field());
-            size += std::string_view(",\"code\":").size() + detail::jsonStringSizeHint(issue.code());
-            size += std::string_view(",\"message\":").size() + detail::jsonStringSizeHint(issue.message());
-            size += 1;
-        }
-        detailsJson_.reserve(size);
-        detailsJson_.push_back('[');
-        bool first = true;
-        for (const auto& issue : issues_) {
-            if (!first) {
-                detailsJson_.push_back(',');
-            }
-            first = false;
-            detailsJson_.append("{\"field\":");
-            detail::appendJsonString(detailsJson_, issue.field());
-            detailsJson_.append(",\"code\":");
-            detail::appendJsonString(detailsJson_, issue.code());
-            detailsJson_.append(",\"message\":");
-            detail::appendJsonString(detailsJson_, issue.message());
-            detailsJson_.push_back('}');
-        }
-        detailsJson_.push_back(']');
-    }
-
     std::pmr::memory_resource* resource_;
     IssueList issues_;
     HttpStatusCode statusCode_{http_status::kBadRequest};
     std::pmr::string code_;
     std::pmr::string message_;
-    std::pmr::string detailsJson_;
 };
 
 class Validator final {

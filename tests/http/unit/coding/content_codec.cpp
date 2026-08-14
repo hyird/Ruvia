@@ -57,7 +57,7 @@ private:
 
 RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     const auto checkCoding = [&](std::string_view value, HttpContentCoding expected) {
-        const auto parsed = httpContentCodingFromFieldValue(value);
+        const auto parsed = parseHttpContentCoding(value);
         RUVIA_CHECK(parsed.invalid() == nullptr);
         RUVIA_CHECK(parsed.unsupported() == nullptr);
         RUVIA_CHECK(parsed.coding() != nullptr);
@@ -73,15 +73,30 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     checkCoding("identity", HttpContentCoding::kIdentity);
     checkCoding("", HttpContentCoding::kIdentity);
 
-    const auto unsupported = httpContentCodingFromFieldValue("deflate");
-    const auto stacked = httpContentCodingFromFieldValue("gzip, br");
+    constexpr std::array mappings{
+        std::pair{HttpContentCoding::kIdentity, std::string_view("identity")},
+        std::pair{HttpContentCoding::kGzip, std::string_view("gzip")},
+        std::pair{HttpContentCoding::kBrotli, std::string_view("br")},
+        std::pair{HttpContentCoding::kZstd, std::string_view("zstd")},
+    };
+    for (const auto& [coding, token] : mappings) {
+        RUVIA_CHECK_EQ(ruvia::httpContentCodingToken(coding), token);
+        const auto parsed = parseHttpContentCoding(token);
+        RUVIA_CHECK(parsed.coding() != nullptr);
+        if (parsed.coding() != nullptr) {
+            RUVIA_CHECK(*parsed.coding() == coding);
+        }
+    }
+
+    const auto unsupported = parseHttpContentCoding("deflate");
+    const auto stacked = parseHttpContentCoding("gzip, br");
     RUVIA_CHECK(unsupported.invalid() == nullptr);
     RUVIA_CHECK(stacked.invalid() == nullptr);
     RUVIA_CHECK(unsupported.unsupported() != nullptr);
     RUVIA_CHECK(stacked.unsupported() != nullptr);
 
     for (const std::string_view value : {"gzip;level=9", "bad coding", "gzip/deflate"}) {
-        const auto invalid = httpContentCodingFromFieldValue(value);
+        const auto invalid = parseHttpContentCoding(value);
         RUVIA_CHECK(invalid.coding() == nullptr);
         RUVIA_CHECK(invalid.unsupported() == nullptr);
         RUVIA_CHECK(invalid.invalid() != nullptr);

@@ -2,17 +2,36 @@
 
 #include <cstdint>
 #include <memory_resource>
+#include <stdexcept>
 #include <string_view>
 
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/web/Error.h"
+#include "ruvia/web/Validation.h"
 #include "ruvia/web/detail/http/error/HttpErrorResponse.h"
 
 namespace {
 
 using ruvia::HttpErrorInfo;
 using ruvia::detail::makeDefaultErrorResponse;
+
+[[nodiscard]] ruvia::HttpResponse makeValidationErrorResponse(
+    std::pmr::memory_resource* resource,
+    std::string_view field,
+    std::string_view message) {
+    ruvia::Validator validator(resource);
+    validator.add(field, "required", message);
+    try {
+        validator.throwIfInvalid(
+            ruvia::http_status::kUnprocessableContent,
+            "validation_failed",
+            "failed");
+    } catch (const ruvia::ValidationError& error) {
+        return makeDefaultErrorResponse(resource, error.info());
+    }
+    throw std::logic_error("validator did not throw");
+}
 
 }  // namespace
 
@@ -32,14 +51,21 @@ RUVIA_TEST(default_error_response_escapes_message_in_json_body) {
     RUVIA_CHECK(body.find(R"("message":"invalid \"input\"")") != std::string_view::npos);
 }
 
-RUVIA_TEST(default_error_response_embeds_details_json) {
+RUVIA_TEST(default_error_response_serializes_typed_validation_details) {
     auto* resource = std::pmr::new_delete_resource();
-    HttpErrorInfo error(ruvia::http_status::kUnprocessableContent, "validation_failed", "failed", "Unprocessable Content", R"([{"field":"x","code":"required","message":"m"}])");
-    const auto response = makeDefaultErrorResponse(resource, error);
+    const auto response = makeValidationErrorResponse(resource, "x", "m");
 
     const auto body = ruvia::detail::responseBody(response).bytes();
-    // The already-valid details JSON is embedded verbatim under "details".
     RUVIA_CHECK(body.find(R"("details":[{"field":"x","code":"required","message":"m"}])") != std::string_view::npos);
+}
+
+RUVIA_TEST(default_error_response_escapes_typed_validation_details) {
+    auto* resource = std::pmr::new_delete_resource();
+    const auto response = makeValidationErrorResponse(resource, "f\"x", "a\"b\\c");
+
+    const auto body = ruvia::detail::responseBody(response).bytes();
+    RUVIA_CHECK(body.find(R"("field":"f\"x")") != std::string_view::npos);
+    RUVIA_CHECK(body.find(R"("message":"a\"b\\c")") != std::string_view::npos);
 }
 
 RUVIA_TEST(default_error_response_does_not_set_transport_headers) {

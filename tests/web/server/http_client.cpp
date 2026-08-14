@@ -33,7 +33,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/Timer.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/Context.h"
@@ -86,8 +86,8 @@ private:
 };
 
 std::string gzipContent(std::string_view body) {
-    auto encoded = ruvia::detail::encodeHttpContent(
-        ruvia::detail::HttpContentCoding::kGzip, body,
+    auto encoded = ruvia::encodeHttpContent(
+        ruvia::HttpContentCoding::kGzip, body,
         body.size() + 1024, std::pmr::get_default_resource());
     if (!encoded.encoded()) throw std::runtime_error("failed to encode test gzip body");
     const auto bytes = encoded.encoded()->bytes();

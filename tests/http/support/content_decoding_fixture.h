@@ -23,6 +23,7 @@
 #include <zstd.h>
 
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/detail/request/RequestBodyDecoding.h"
 #include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
@@ -33,22 +34,22 @@
 namespace content_decoding_test {
 
 using ruvia::ProtocolByteLimit;
-using ruvia::detail::decodeHttpContent;
+using ruvia::decodeHttpContent;
 using ruvia::detail::decodeHttpRequestContent;
-using ruvia::detail::encodeHttpContent;
+using ruvia::encodeHttpContent;
 using ruvia::detail::Http1ChunkedBodyDecoder;
 using ruvia::Http1RequestBodyPlan;
 using ruvia::detail::Http1ServerRequestParser;
-using ruvia::detail::HttpContentCoding;
-using ruvia::detail::httpContentCodingFromFieldValue;
-using ruvia::detail::HttpContentDecodeError;
-using ruvia::detail::HttpContentDecodeFailure;
-using ruvia::detail::HttpContentDecodeResult;
-using ruvia::detail::HttpContentEncodeError;
-using ruvia::detail::HttpContentEncodeFailure;
-using ruvia::detail::HttpContentEncodeResult;
-using ruvia::detail::HttpDecodedContent;
-using ruvia::detail::HttpEncodedContent;
+using ruvia::HttpContentCoding;
+using ruvia::parseHttpContentCoding;
+using ruvia::HttpContentDecodeError;
+using ruvia::HttpContentDecodeFailure;
+using ruvia::HttpContentDecodeResult;
+using ruvia::HttpContentEncodeError;
+using ruvia::HttpContentEncodeFailure;
+using ruvia::HttpContentEncodeResult;
+using ruvia::HttpDecodedContent;
+using ruvia::HttpEncodedContent;
 using ruvia::detail::HttpRequestContentDecodeProtocolFailure;
 using ruvia::detail::HttpRequestContentDecodeResult;
 using ruvia::detail::HttpRequestContentDecoderFailure;
@@ -324,7 +325,7 @@ inline std::optional<std::string> zstdRoundTrip(std::string_view plain, std::siz
     }
     compressed.resize(written - truncateBy);
 
-    const auto result = ruvia::detail::decodeHttpContent(HttpContentCoding::kZstd, compressed, ruvia::kDefaultMaxBufferedBodyBytes, std::pmr::get_default_resource());
+    const auto result = ruvia::decodeHttpContent(HttpContentCoding::kZstd, compressed, ruvia::kDefaultMaxBufferedBodyBytes, std::pmr::get_default_resource());
     const auto* decoded = result.decoded();
     if (decoded == nullptr) {
         return std::nullopt;

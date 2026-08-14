@@ -8,14 +8,14 @@
 
 namespace ruvia::detail {
 
-WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit, WebSocketDeflateNegotiation deflate)
+WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit, WebSocketCompression compression)
     : input_(&input),
       messageLimit_(messageLimit),
       outBuffer_(input.get_allocator().resource()),
       assembler_(input.get_allocator().resource()),
       inboundInflated_(input.get_allocator().resource()),
       outboundDeflated_(input.get_allocator().resource()) {
-    if (webSocketDeflateNegotiated(deflate)) {
+    if (webSocketDeflateNegotiated(compression)) {
         deflate_.emplace();
     }
 }

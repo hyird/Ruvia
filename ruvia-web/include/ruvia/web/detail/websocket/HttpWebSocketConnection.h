@@ -37,19 +37,19 @@ namespace ruvia::detail {
 template <typename Transport>
 class WebSocketConnection final {
 public:
-    WebSocketConnection(Transport transport, const WorkerHandle& worker, ConnectionScanner::Entry& scannerEntry, WebSocketLifecycleOptions lifecycleOptions, ProtocolByteLimit messageLimit, std::pmr::memory_resource* resource, std::string_view initialBytes = {}, WebSocketDeflateNegotiation deflate = WebSocketDeflateNegotiation::kDisabled)
+    WebSocketConnection(Transport transport, const WorkerHandle& worker, ConnectionScanner::Entry& scannerEntry, WebSocketLifecycleOptions lifecycleOptions, ProtocolByteLimit messageLimit, std::pmr::memory_resource* resource, std::string_view initialBytes = {}, WebSocketCompression compression = WebSocketCompression::kDisabled)
         : transport_(std::move(transport)),
           scannerEntry_(scannerEntry),
           lifecycleOptions_(lifecycleOptions),
           buffer_(pmrResourceOrDefault(resource)),
-          protocol_(buffer_, messageLimit, deflate),
+          protocol_(buffer_, messageLimit, compression),
           backgroundWriteSignal_(worker),
           readerDoneSignal_(worker) {
         buffer_.append(initialBytes.data(), initialBytes.size());
         scannerEntry_.registerPeriodicCheck(periodicCheck_, this, &WebSocketConnection::heartbeatTickThunk);
     }
 
-    WebSocketConnection(Transport, WorkerHandle&&, ConnectionScanner::Entry&, WebSocketLifecycleOptions, ProtocolByteLimit, std::pmr::memory_resource*, std::string_view = {}, WebSocketDeflateNegotiation = WebSocketDeflateNegotiation::kDisabled) = delete;
+    WebSocketConnection(Transport, WorkerHandle&&, ConnectionScanner::Entry&, WebSocketLifecycleOptions, ProtocolByteLimit, std::pmr::memory_resource*, std::string_view = {}, WebSocketCompression = WebSocketCompression::kDisabled) = delete;
 
     ~WebSocketConnection() = default;
 

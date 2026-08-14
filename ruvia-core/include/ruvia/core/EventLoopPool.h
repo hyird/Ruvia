@@ -61,13 +61,13 @@ public:
     [[nodiscard]] WorkerHandle handle() const noexcept;
 
     template <typename Fn>
-        requires std::invocable<std::decay_t<Fn>&>
+        requires detail::MoveOnlyFunctionTarget<void, Fn>
     [[nodiscard]] PostResult post(Fn&& fn) const {
         return handle().post(std::forward<Fn>(fn));
     }
 
     template <typename Fn>
-        requires std::invocable<std::decay_t<Fn>&>
+        requires detail::MoveOnlyFunctionTarget<void, Fn>
     [[nodiscard]] EventLoopStopRegistration onStop(Fn&& fn) const {
         return registerStopCallback(MoveOnlyFunction<void()>(std::forward<Fn>(fn)));
     }

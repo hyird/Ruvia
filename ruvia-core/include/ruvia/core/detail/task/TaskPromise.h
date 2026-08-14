@@ -36,7 +36,11 @@ class TaskAwaiter;
 template <typename T, typename Handler>
 class TaskCompletionState;
 
+template <typename T>
+concept AsioTaskResult = std::is_void_v<T> || std::is_nothrow_move_constructible_v<T>;
+
 template <typename T, typename CompletionToken>
+    requires AsioTaskResult<T>
 auto asyncStartTask(Task<T>&& task, CompletionToken&& token);
 
 struct TaskFinalAwaiter final {

@@ -25,7 +25,7 @@ static_assert(!std::default_initializable<ruvia::Http1ChunkedRequestBody>);
 static_assert(!std::default_initializable<ruvia::detail::WebSocketServerNegotiation>);
 static_assert(!std::copy_constructible<ruvia::detail::WebSocketServerNegotiation>);
 static_assert(std::move_constructible<ruvia::detail::WebSocketServerNegotiation>);
-static_assert(!std::constructible_from<ruvia::detail::WebSocketDeflateNegotiation, bool>);
+static_assert(!std::constructible_from<ruvia::WebSocketCompression, bool>);
 static_assert(!std::constructible_from<ruvia::detail::WsConnection, std::pmr::string&, std::size_t, bool>);
 static_assert(!std::copy_constructible<ruvia::Http2Connection>);
 static_assert(!std::copy_constructible<ruvia::HpackDecoder>);

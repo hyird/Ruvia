@@ -34,13 +34,13 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
 
     struct Candidate final {
         std::string_view suffix;
-        detail::HttpContentCoding contentCoding;
+        HttpContentCoding contentCoding;
         std::optional<detail::StaticRootEntryView> entry;
     };
     Candidate candidates[] = {
-        {".br", detail::HttpContentCoding::kBrotli, std::nullopt},
-        {".zst", detail::HttpContentCoding::kZstd, std::nullopt},
-        {".gz", detail::HttpContentCoding::kGzip, std::nullopt},
+        {".br", HttpContentCoding::kBrotli, std::nullopt},
+        {".zst", HttpContentCoding::kZstd, std::nullopt},
+        {".gz", HttpContentCoding::kGzip, std::nullopt},
     };
 
     auto available = detail::HttpResponseCodingCandidates::identityOnly();
@@ -63,8 +63,8 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
 
     const auto selectionResult = detail::HttpResponseCodingSelection::select(qualities, available);
     if (const auto* selection = selectionResult.selected()) {
-        if (selection->coding() == detail::HttpContentCoding::kIdentity) {
-            return StaticFileRepresentation(identity, detail::HttpContentCoding::kIdentity);
+        if (selection->coding() == HttpContentCoding::kIdentity) {
+            return StaticFileRepresentation(identity, HttpContentCoding::kIdentity);
         }
         for (const auto& candidate : candidates) {
             if (candidate.contentCoding == selection->coding() && candidate.entry.has_value()) {
@@ -81,8 +81,8 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
     // stay strict and return no representation here.
     const auto preferredResult = detail::HttpResponseCodingSelection::select(qualities);
     const auto* preferred = preferredResult.selected();
-    if (mode == detail::StaticFileSelectionMode::kAllowDeferredCompression && preferred != nullptr && preferred->coding() != detail::HttpContentCoding::kIdentity && !preferred->identityAccepted()) {
-        return StaticFileRepresentation(identity, detail::HttpContentCoding::kIdentity);
+    if (mode == detail::StaticFileSelectionMode::kAllowDeferredCompression && preferred != nullptr && preferred->coding() != HttpContentCoding::kIdentity && !preferred->identityAccepted()) {
+        return StaticFileRepresentation(identity, HttpContentCoding::kIdentity);
     }
     return std::nullopt;
 }

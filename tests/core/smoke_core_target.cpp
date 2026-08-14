@@ -13,6 +13,47 @@
 #include <string_view>
 #include <utility>
 
+struct ReturnsVoid final {
+    void operator()() {}
+};
+
+struct ReturnsInt final {
+    int operator()() {
+        return 1;
+    }
+};
+
+struct ReturnsShort final {
+    short operator()() {
+        return 1;
+    }
+};
+
+template <typename Fn>
+concept WorkerPostable = requires(const ruvia::WorkerHandle& worker, Fn&& fn) {
+    { worker.post(std::forward<Fn>(fn)) } -> std::same_as<ruvia::PostResult>;
+};
+
+template <typename Fn>
+concept EventLoopPostable = requires(const ruvia::EventLoop& loop, Fn&& fn) {
+    { loop.post(std::forward<Fn>(fn)) } -> std::same_as<ruvia::PostResult>;
+};
+
+template <typename Fn>
+concept EventLoopStopCallback = requires(const ruvia::EventLoop& loop, Fn&& fn) {
+    { loop.onStop(std::forward<Fn>(fn)) } -> std::same_as<ruvia::EventLoopStopRegistration>;
+};
+
+static_assert(std::constructible_from<ruvia::MoveOnlyFunction<void()>, ReturnsVoid>);
+static_assert(!std::constructible_from<ruvia::MoveOnlyFunction<void()>, ReturnsInt>);
+static_assert(std::constructible_from<ruvia::MoveOnlyFunction<int()>, ReturnsShort>);
+static_assert(WorkerPostable<ReturnsVoid>);
+static_assert(!WorkerPostable<ReturnsInt>);
+static_assert(EventLoopPostable<ReturnsVoid>);
+static_assert(!EventLoopPostable<ReturnsInt>);
+static_assert(EventLoopStopCallback<ReturnsVoid>);
+static_assert(!EventLoopStopCallback<ReturnsInt>);
+
 template <typename T>
 concept ExposesRvalueMemoryBorrow = requires(T&& memory) { std::move(memory).resource(); } || requires(T&& memory) { std::move(memory).template allocator<>(); };
 

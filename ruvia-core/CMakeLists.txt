@@ -50,6 +50,7 @@ ruvia_install_generated_public_header(
     ruvia/core/version.h)
 
 ruvia_install_public_headers(core
+    include/ruvia/core/AsioTask.h
     include/ruvia/core/Task.h
     include/ruvia/core/BlockingPool.h
     include/ruvia/core/Channel.h

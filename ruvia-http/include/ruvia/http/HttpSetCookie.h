@@ -5,6 +5,8 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/http/detail/util/BorrowedView.h"
+
 namespace ruvia {
 
 // Borrowed, allocation-free Set-Cookie fields for outbound client runtimes.
@@ -23,5 +25,8 @@ struct HttpSetCookieView final {
 };
 
 [[nodiscard]] std::optional<HttpSetCookieView> parseSetCookie(std::string_view value) noexcept;
+
+template <detail::HttpTemporaryOwningCharString Value>
+std::optional<HttpSetCookieView> parseSetCookie(Value&&) = delete;
 
 }  // namespace ruvia

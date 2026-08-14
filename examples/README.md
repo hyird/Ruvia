@@ -13,7 +13,7 @@ These examples are built when `RUVIA_BUILD_EXAMPLES` is enabled and double as co
 | `ruvia_example_websocket` | `web/websocket.cpp` | WebSocket upgrade routes, subprotocol options, lifecycle timeouts, text/binary echo and RFC close handshake. |
 | `ruvia_example_ops` | `web/ops.cpp` | Security headers middleware, route-level per-IP rate limiting, and health/readiness response helpers wired through controller macros. |
 | `ruvia_example_middleware_next` | `web/middleware_next.cpp` | Middleware value `Next` and one-shot `co_await next()` signature coverage. |
-| `ruvia_example_workers_blocking` | `web/workers_blocking.cpp` | Worker-local state (`useWorkerState<T>`/`workerState<T>`), cross-worker task posting (`App::workers`, `WebWorkerHandle::post`), and the `OneShot` pattern for offloading blocking calls to an application-owned thread. |
+| `ruvia_example_workers_blocking` | `web/workers_blocking.cpp` | Worker-local state (`useWorkerState<T>`/`workerState<T>`), cross-worker task posting (`App::workers`, `WebWorkerHandle::post`), and bounded blocking offload through `Context::runBlocking()`/`tryRunBlocking()`. |
 | `ruvia_example_testing` | `web/testing.cpp` | In-memory application testing with `TestApp`/`TestRequest`/`TestResponse`: production routing, middleware, model bodies, fallbacks, urlFor and worker state without a socket. |
 | `ruvia_example_auth_jwt` | `web/auth_jwt.cpp` | JWT signing, verification, bearer-token middleware and protected routes. Built only with `RUVIA_ENABLE_JWT=ON`. |
 | `ruvia_example_database` | `web/database.cpp` | Unified MariaDB/PostgreSQL configuration, query, execute, streaming query, transaction and optional migration. Built with either database feature. |

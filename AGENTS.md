@@ -261,6 +261,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 ## Model 和校验
 
 - `RUVIA_REQUEST_MODEL` 是请求解析和校验 schema；`RUVIA_RESPONSE_MODEL` 只约束响应字段类型并生成 JSON，不参与请求解析或校验。
+- 所有 HTTP JSON 输出必须先建立 `RUVIA_RESPONSE_MODEL`；`c.json()` 与 `toJson()` 只接受响应模型，不暴露动态 object/array writer 或原始 JSON details 注入入口。
 - `RUVIA_REQUIRED_FIELD` 是必填字段，`RUVIA_OPTIONAL_FIELD` 是可选字段；自定义 wire name 使用对应的 `*_FIELD_NAME`。字段通过 `get/set/ensure/reset<"field">()` 访问，不生成逐字段成员函数别名。
 - Model 字段描述符必须由 `RUVIA_REQUEST_MODEL` / `RUVIA_RESPONSE_MODEL` 的 `__VA_ARGS__` 直接进入 C++ 模板参数包。禁止在 Model 注册路径恢复 `NARG`、`FOR_EACH`、固定展开表、运行时注册表或固定字段数量上限；编译守卫必须保留一个超过 64 字段的模型。
 - 字段必须使用 Ruvia 模型类型，不使用 raw `std::string`、`std::vector`、`std::string_view` 或基础整数。

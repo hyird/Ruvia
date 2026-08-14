@@ -18,6 +18,12 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/web/Model.h"
+
+RUVIA_RESPONSE_MODEL(ContextJsonResponse,
+    RUVIA_REQUIRED_FIELD(number, ruvia::Int64),
+    RUVIA_REQUIRED_FIELD(boolean, ruvia::Bool),
+    RUVIA_REQUIRED_FIELD(real, ruvia::Double));
 
 namespace {
 
@@ -332,17 +338,15 @@ RUVIA_TEST(context_param_lookup_handles_unencoded_and_missing) {
     RUVIA_CHECK(ContextAccess::routeParamsMaterialized(context));
 }
 
-RUVIA_TEST(context_json_serializes_scalars_with_json_content_type) {
+RUVIA_TEST(context_json_serializes_response_model_with_json_content_type) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
 
-    const auto number = context.json(42);
-    RUVIA_CHECK_EQ(number.status(), ruvia::http_status::kOk);
-    RUVIA_CHECK_EQ(number.header("Content-Type"), std::string_view("application/json"));
-    RUVIA_CHECK_EQ(responseBody(number).bytes(), std::string_view("42"));
-
-    const auto boolean = context.json(true);
-    RUVIA_CHECK_EQ(responseBody(boolean).bytes(), std::string_view("true"));
-
-    const auto real = context.json(3.5);
-    RUVIA_CHECK_EQ(responseBody(real).bytes(), std::string_view("3.5"));
+    ContextJsonResponse model(context.resource());
+    model.set<"number">(42);
+    model.set<"boolean">(true);
+    model.set<"real">(3.5);
+    const auto response = context.json(model);
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
+    RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view(R"({"number":42,"boolean":true,"real":3.5})"));
 }

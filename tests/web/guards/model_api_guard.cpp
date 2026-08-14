@@ -1,5 +1,6 @@
 // Request/response model roles, compile-time field access, and legacy API guard.
 #include <concepts>
+#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <string_view>
@@ -83,6 +84,9 @@ static_assert(ruvia::detail::isResponseModel<SurfaceJsonResponse>);
 static_assert(!CanFromJson<SurfaceJsonResponse>);
 static_assert(!CanFromForm<SurfaceJsonResponse>);
 static_assert(CanToJson<SurfaceJsonResponse>);
+static_assert(!CanToJson<std::uint32_t>);
+static_assert(!CanToJson<ruvia::String>);
+static_assert(!CanToJson<ruvia::Array<ruvia::String>>);
 
 static_assert(!HasLegacyMessageAccessor<ClonePayload>);
 static_assert(!HasLegacyMessageAccessor<SurfaceJsonResponse>);

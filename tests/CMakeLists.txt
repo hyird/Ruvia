@@ -426,7 +426,6 @@ ruvia_add_unit_suite(ruvia_web_unit_tests ruvia::web
     web/unit/json/lex.cpp
     web/unit/json/object_fields.cpp
     web/unit/json/size_hint.cpp
-    web/unit/json/streaming_writer.cpp
 
     # web/unit/model
     web/unit/model/content_type_match.cpp
@@ -546,6 +545,8 @@ set_tests_properties(ruvia_http2_conformance PROPERTIES
 endif()
 
 if(RUVIA_BUILD_CORE)
+    ruvia_add_test(ruvia_asio_task core/asio_task.cpp LIB ruvia::core)
+
     ruvia_validate_test_sources(ruvia_smoke_core_target ruvia::core
         core/smoke_core_target.cpp)
     add_executable(ruvia_smoke_core_target core/smoke_core_target.cpp)
@@ -647,6 +648,34 @@ if(RUVIA_BUILD_HTTP)
 endif()
 
 if(RUVIA_BUILD_WEB)
+    if(RUVIA_ENABLE_JWT)
+        ruvia_add_test(ruvia_guard_jwt_feature_on
+            web/guards/jwt_feature_on.cpp LIB ruvia::web LABELS "jwt;guards")
+    else()
+        # This object target deliberately uses the disabled JWT API. It is kept
+        # out of the normal build and compiled by CTest: failure is the expected
+        # result, while success means feature-off declarations leaked again.
+        ruvia_validate_test_sources(ruvia_jwt_feature_off_probe ruvia::web
+            web/guards/jwt_feature_off.cpp)
+        add_library(ruvia_jwt_feature_off_probe OBJECT EXCLUDE_FROM_ALL
+            web/guards/jwt_feature_off.cpp)
+        target_link_libraries(ruvia_jwt_feature_off_probe PRIVATE ruvia::web)
+        ruvia_apply_test_warnings(ruvia_jwt_feature_off_probe)
+
+        configure_file(
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/guards/verify_jwt_feature_off.cmake.in
+            ${CMAKE_CURRENT_BINARY_DIR}/verify_jwt_feature_off.cmake
+            @ONLY)
+        add_test(NAME ruvia_guard_jwt_feature_off
+            COMMAND ${CMAKE_COMMAND}
+                -DCONFIG=$<CONFIG>
+                -P ${CMAKE_CURRENT_BINARY_DIR}/verify_jwt_feature_off.cmake)
+        set_tests_properties(ruvia_guard_jwt_feature_off PROPERTIES
+            LABELS "jwt;guards"
+            RUN_SERIAL TRUE
+            TIMEOUT 60)
+    endif()
+
     ruvia_add_test(ruvia_guard_web_api_surface
         web/guards/api_surface_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_web_blocking_api
@@ -665,6 +694,8 @@ if(RUVIA_BUILD_WEB)
         web/guards/context_request_header_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_cookie_api
         web/guards/cookie_api_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_web_error_header
+        web/guards/error_header.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_app_lifecycle
         web/guards/app_lifecycle_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_http2_session_lifecycle

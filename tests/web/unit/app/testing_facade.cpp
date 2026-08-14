@@ -8,6 +8,7 @@
 // application's own test suite would.
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <stdexcept>
 #include <string_view>
@@ -22,6 +23,11 @@
 
 RUVIA_REQUEST_MODEL(TestingFacadeEcho,
     RUVIA_OPTIONAL_FIELD(value, ruvia::String));
+
+RUVIA_RESPONSE_MODEL(TestingFacadeReport,
+    RUVIA_REQUIRED_FIELD(path, ruvia::String),
+    RUVIA_REQUIRED_FIELD(count, ruvia::UInt64),
+    RUVIA_REQUIRED_FIELD(tags, ruvia::Array<ruvia::String>));
 
 namespace {
 
@@ -180,18 +186,19 @@ private:
         co_return c.body(std::move(reply));
     }
 
-    // A body whose shape is decided at run time, built through the streaming
-    // writer rather than by concatenating JSON.
+    // Runtime-sized collections stay inside a statically declared response
+    // schema; JSON output never bypasses the model boundary.
     ruvia::Task<ruvia::HttpResponse> report(ruvia::Context& c) {
         const std::string_view tags[] = {"a\"quoted", "b"};
-        co_return c.jsonObject([&](ruvia::JsonObjectWriter& out) {
-            out.add("path", c.req().path());
-            out.add("count", std::size(tags));
-            auto list = out.beginArray("tags");
-            for (const auto& tag : tags) {
-                list.add(tag);
-            }
-        });
+        TestingFacadeReport report(c.resource());
+        report.set<"path">(c.req().path());
+        report.set<"count">(static_cast<std::uint64_t>(std::size(tags)));
+        auto& reportTags = report.ensure<"tags">();
+        reportTags.reserve(std::size(tags));
+        for (const auto tag : tags) {
+            reportTags.emplace_back(tag, c.resource());
+        }
+        co_return c.json(report);
     }
 
     // No auth middleware on this route, so nothing is bound and the optional
@@ -469,7 +476,7 @@ RUVIA_TEST(testing_facade_request_state_is_absent_without_its_middleware) {
     RUVIA_CHECK_EQ(response.body(), std::string_view("unbound"));
 }
 
-RUVIA_TEST(testing_facade_builds_a_runtime_shaped_json_body) {
+RUVIA_TEST(testing_facade_builds_a_runtime_sized_response_model) {
     ruvia::TestApp app;
     const auto response = app.request(ruvia::TestRequest::get("/t/report"));
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);

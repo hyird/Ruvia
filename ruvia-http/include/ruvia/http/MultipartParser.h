@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -119,6 +120,74 @@ private:
     std::array<char, kMaxSize> bytes_{};
     std::uint8_t size_{0};
 };
+
+class MultipartBoundaryNotApplicable final {
+private:
+    friend class MultipartBoundaryParseResult;
+
+    constexpr MultipartBoundaryNotApplicable() noexcept = default;
+};
+
+class MultipartBoundaryParseFailure final {
+public:
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept {
+        return HttpProtocolError(http_status::kBadRequest, "invalid multipart boundary");
+    }
+
+private:
+    friend class MultipartBoundaryParseResult;
+
+    constexpr MultipartBoundaryParseFailure() noexcept = default;
+};
+
+// Content-Type boundary extraction distinguishes another media type from a
+// malformed multipart/form-data declaration. The successful alternative owns
+// its decoded boundary bytes.
+class MultipartBoundaryParseResult final {
+public:
+    [[nodiscard]] constexpr const MultipartBoundary* boundary() const& noexcept {
+        return std::get_if<MultipartBoundary>(&value_);
+    }
+    const MultipartBoundary* boundary() const&& = delete;
+
+    [[nodiscard]] constexpr const MultipartBoundaryNotApplicable* notApplicable() const& noexcept {
+        return std::get_if<MultipartBoundaryNotApplicable>(&value_);
+    }
+    const MultipartBoundaryNotApplicable* notApplicable() const&& = delete;
+
+    [[nodiscard]] constexpr const MultipartBoundaryParseFailure* failure() const& noexcept {
+        return std::get_if<MultipartBoundaryParseFailure>(&value_);
+    }
+    const MultipartBoundaryParseFailure* failure() const&& = delete;
+
+private:
+    friend MultipartBoundaryParseResult parseMultipartBoundary(std::string_view);
+
+    using Value = std::variant<MultipartBoundary, MultipartBoundaryNotApplicable, MultipartBoundaryParseFailure>;
+
+    explicit MultipartBoundaryParseResult(MultipartBoundary boundary)
+        : value_(std::move(boundary)) {}
+
+    [[nodiscard]] static constexpr MultipartBoundaryParseResult makeNotApplicable() noexcept {
+        return MultipartBoundaryParseResult(MultipartBoundaryNotApplicable());
+    }
+
+    [[nodiscard]] static constexpr MultipartBoundaryParseResult makeFailure() noexcept {
+        return MultipartBoundaryParseResult(MultipartBoundaryParseFailure());
+    }
+
+    explicit constexpr MultipartBoundaryParseResult(MultipartBoundaryNotApplicable notApplicable) noexcept
+        : value_(notApplicable) {}
+
+    explicit constexpr MultipartBoundaryParseResult(MultipartBoundaryParseFailure failure) noexcept
+        : value_(failure) {}
+
+    Value value_;
+};
+
+// Extracts the RFC 2046 boundary parameter from multipart/form-data. MIME
+// quoted-pairs are decoded into the owned MultipartBoundary value.
+[[nodiscard]] MultipartBoundaryParseResult parseMultipartBoundary(std::string_view contentType);
 
 enum class MultipartChunkPhase : std::uint8_t {
     kComplete,
