@@ -6,7 +6,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 
@@ -27,7 +27,7 @@ namespace ruvia {
 // precompressed sidecar the client accepts.
 class StaticFileRepresentation final {
 public:
-    StaticFileRepresentation(detail::StaticRootEntryView entry, detail::HttpContentCoding contentCoding) noexcept
+    StaticFileRepresentation(detail::StaticRootEntryView entry, HttpContentCoding contentCoding) noexcept
         : entry_(entry),
           contentCoding_(contentCoding) {}
 
@@ -35,13 +35,13 @@ public:
         return entry_;
     }
 
-    [[nodiscard]] detail::HttpContentCoding contentCoding() const noexcept {
+    [[nodiscard]] HttpContentCoding contentCoding() const noexcept {
         return contentCoding_;
     }
 
 private:
     detail::StaticRootEntryView entry_;
-    detail::HttpContentCoding contentCoding_;
+    HttpContentCoding contentCoding_;
 };
 
 // Selects the best precompressed sidecar (foo.js.br / .gz / .zst) the client

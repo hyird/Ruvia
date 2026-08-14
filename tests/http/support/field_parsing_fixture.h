@@ -12,10 +12,9 @@
 
 #include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/field/HttpAcceptMediaType.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
-#include "ruvia/http/detail/parser/MultipartBoundary.h"
 #include "ruvia/http/detail/parser/MultipartDelimiter.h"
 #include "ruvia/http/detail/parser/MultipartPartHeaders.h"
 #include "ruvia/http/detail/request/RequestBodyDecoding.h"
@@ -28,7 +27,7 @@ using ruvia::detail::HttpChunkScanComplete;
 using ruvia::detail::HttpChunkScanFailure;
 using ruvia::detail::HttpChunkScanNeedMore;
 using ruvia::detail::HttpChunkScanResult;
-using ruvia::detail::HttpContentCoding;
+using ruvia::HttpContentCoding;
 using ruvia::detail::HttpMultipartPartHeaders;
 
 template <typename T>

@@ -12,6 +12,7 @@
 #include <zlib.h>
 
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/WebSocketProtocol.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 #include "ruvia/http/HttpRequest.h"
@@ -141,18 +142,8 @@ private:
     z_stream inflate_{};
 };
 
-// One negotiated permessage-deflate outcome. The former enabled/echo booleans
-// admitted an impossible "disabled but echo server_max_window_bits" product.
-enum class WebSocketDeflateNegotiation : std::uint8_t {
-    kDisabled,
-    kAccepted,
-    // The client pinned server_max_window_bits=15, i.e. exactly our fixed window.
-    // RFC 7692 §7.1.2.1 requires the response to echo that parameter.
-    kAcceptedWithServerMaxWindowBits,
-};
-
-[[nodiscard]] constexpr bool webSocketDeflateNegotiated(WebSocketDeflateNegotiation negotiation) noexcept {
-    return negotiation == WebSocketDeflateNegotiation::kAccepted || negotiation == WebSocketDeflateNegotiation::kAcceptedWithServerMaxWindowBits;
+[[nodiscard]] constexpr bool webSocketDeflateNegotiated(WebSocketCompression negotiation) noexcept {
+    return negotiation == WebSocketCompression::kPermessageDeflate || negotiation == WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits;
 }
 
 // Decide whether the client offered permessage-deflate in a form we can honor. We
@@ -206,7 +197,7 @@ enum class WebSocketDeflateNegotiation : std::uint8_t {
     return digits != 0 && parsed >= 8 && parsed <= 15 ? std::optional<int>(parsed) : std::nullopt;
 }
 
-[[nodiscard]] inline std::optional<WebSocketDeflateNegotiation> webSocketParseDeflateOffer(std::string_view offer) noexcept {
+[[nodiscard]] inline std::optional<WebSocketCompression> webSocketParseDeflateOffer(std::string_view offer) noexcept {
     const auto firstSemicolon = httpFindUnquotedDelimiter(offer, 0, ';');
     const auto name = httpTrimOws(offer.substr(0, firstSemicolon));
     if (!httpAsciiEqualsIgnoreCase(name, "permessage-deflate")) {
@@ -271,11 +262,11 @@ enum class WebSocketDeflateNegotiation : std::uint8_t {
     if (serverWindowSeen && serverWindow != 15) {
         return std::nullopt;
     }
-    return serverWindowSeen ? WebSocketDeflateNegotiation::kAcceptedWithServerMaxWindowBits : WebSocketDeflateNegotiation::kAccepted;
+    return serverWindowSeen ? WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits : WebSocketCompression::kPermessageDeflate;
 }
 
-[[nodiscard]] inline WebSocketDeflateNegotiation webSocketScanDeflateOffers(std::string_view offers) noexcept {
-    std::optional<WebSocketDeflateNegotiation> accepted;
+[[nodiscard]] inline WebSocketCompression webSocketScanDeflateOffers(std::string_view offers) noexcept {
+    std::optional<WebSocketCompression> accepted;
     httpVisitCommaSeparatedQuotedItems(offers, [&accepted](std::string_view offer) noexcept {
         if (offer.empty()) {
             return true;
@@ -283,35 +274,12 @@ enum class WebSocketDeflateNegotiation : std::uint8_t {
         accepted = webSocketParseDeflateOffer(offer);
         return !accepted.has_value();
     });
-    return accepted.value_or(WebSocketDeflateNegotiation::kDisabled);
+    return accepted.value_or(WebSocketCompression::kDisabled);
 }
 
-// Response Sec-WebSocket-Extensions VALUES for an accepted permessage-deflate offer
-// (no-context-takeover both directions; the MaxWindow variant echoes a client-pinned
-// server_max_window_bits=15 per RFC 7692 §7.1.2.1). Shared by the h1 header line and
-// the h2 HPACK handshake.
-inline constexpr std::string_view kWebSocketDeflateResponseExtensions = "permessage-deflate; server_no_context_takeover; client_no_context_takeover";
-inline constexpr std::string_view kWebSocketDeflateResponseExtensionsMaxWindow =
-    "permessage-deflate; server_no_context_takeover; client_no_context_takeover; "
-    "server_max_window_bits=15";
-
-// The response Sec-WebSocket-Extensions VALUE for a negotiation result (empty when
-// deflate was not accepted). Single-sources the h1 handshake and the h2 tunnel path.
-[[nodiscard]] inline std::string_view webSocketDeflateResponseExtensions(WebSocketDeflateNegotiation negotiation) noexcept {
-    switch (negotiation) {
-        case WebSocketDeflateNegotiation::kDisabled:
-            return {};
-        case WebSocketDeflateNegotiation::kAccepted:
-            return kWebSocketDeflateResponseExtensions;
-        case WebSocketDeflateNegotiation::kAcceptedWithServerMaxWindowBits:
-            return kWebSocketDeflateResponseExtensionsMaxWindow;
-    }
-    return {};
-}
-
-[[nodiscard]] inline WebSocketDeflateNegotiation webSocketNegotiatePermessageDeflate(const HttpRequest& request) noexcept {
+[[nodiscard]] inline WebSocketCompression webSocketNegotiatePermessageDeflate(const HttpRequest& request) noexcept {
     if (!webSocketExtensionOffersValid(request)) {
-        return WebSocketDeflateNegotiation::kDisabled;
+        return WebSocketCompression::kDisabled;
     }
     // RFC 6455 §9.1: extension declarations may be split across multiple
     // Sec-WebSocket-Extensions field lines, which RFC 9110 §5.3 makes equivalent to
@@ -328,7 +296,7 @@ inline constexpr std::string_view kWebSocketDeflateResponseExtensionsMaxWindow =
             return negotiation;
         }
     }
-    return WebSocketDeflateNegotiation::kDisabled;
+    return WebSocketCompression::kDisabled;
 }
 
 }  // namespace ruvia::detail

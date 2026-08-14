@@ -6,7 +6,7 @@
 #include <string_view>
 #include <system_error>
 
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketServerHandshake.h"
+#include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/Task.h"
 
@@ -15,7 +15,7 @@ namespace ruvia::detail {
 // Flush the exact HTTP-owned 101 handshake prepared by the route. Negotiation is
 // not recomputed and no compression bool is returned through a side channel.
 template <typename Stream>
-Task<std::error_code> writeWebSocketHandshake(Stream& stream, const HttpWebSocketServerHandshake& handshake) {
+Task<std::error_code> writeWebSocketHandshake(Stream& stream, const WebSocketServerHandshake& handshake) {
     std::array<asio::const_buffer, 10> buffers;
     std::size_t count = 0;
     handshake.forEachResponsePart([&buffers, &count](std::string_view part) { buffers[count++] = asio::buffer(part); });

@@ -221,7 +221,8 @@ private:
 };
 
 template <typename T, typename CompletionToken>
-auto asyncStartTask(Task<T>&& task, CompletionToken&& token) {
+    requires AsioTaskResult<T>
+inline auto asyncStartTask(Task<T>&& task, CompletionToken&& token) {
     if (task.handle_ == nullptr) {
         throw std::logic_error("cannot adapt an empty ruvia::Task to asio::awaitable");
     }
@@ -245,6 +246,7 @@ auto asyncStartTask(Task<T>&& task, CompletionToken&& token) {
 }
 
 template <typename T>
+    requires AsioTaskResult<T>
 [[nodiscard]] asio::awaitable<T> taskAsAwaitable(Task<T> task) {
     auto result = co_await asyncStartTask(std::move(task), asio::use_awaitable);
     if (const auto* failure = result.failure()) {

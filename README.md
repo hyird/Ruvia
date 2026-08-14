@@ -276,6 +276,41 @@ use bounded `EventLoop::post()` rather than raw `asio::post()`, so shutdown and
 backpressure remain observable. Web workers deliberately expose only
 `WorkerHandle`/`WebWorkerHandle`, not their `io_context` or executor.
 
+A lazy `Task<T>` needs an explicit root owner. Core applications can adapt one
+to Asio and retain its completion with a non-detached completion token:
+
+```cpp
+#include <asio/co_spawn.hpp>
+#include <asio/use_future.hpp>
+#include <ruvia/core/AsioTask.h>
+#include <ruvia/core/EventLoopPool.h>
+
+ruvia::Task<ruvia::WorkerId> currentWorker(ruvia::WorkerHandle worker) {
+    co_return worker.isCurrent() ? worker.id() : 0;
+}
+
+ruvia::EventLoopPool loops({.loopCount = 1});
+auto loop = loops.loop(0);
+auto completed = asio::co_spawn(
+    loop.executor(),
+    ruvia::asAwaitable(currentWorker(loop.handle())),
+    asio::use_future);
+
+loops.start();
+const auto workerId = completed.get();
+loops.stop();
+loops.join();
+```
+
+`asAwaitable()` only transfers the task into the returned awaitable; it neither
+starts nor detaches it. Keep the `co_spawn` completion owner and wait for it
+before stopping resources the task may still use. Exceptions from `Task<T>` are
+reported through that completion token, so `future::get()` rethrows them. This
+boundary accepts `void` or nothrow-move-constructible result types so completion
+delivery itself cannot strand the awaiting coroutine. This setup-time root
+ownership does not replace bounded `EventLoop::post()` for ongoing cross-thread
+submissions.
+
 Existing Asio applications can attach one Ruvia event loop to an externally
 owned context without transferring thread or lifecycle ownership:
 
@@ -591,6 +626,10 @@ then run `ctest --test-dir build -C Release --output-on-failure`.
 | `RUVIA_ENABLE_REDIS` | `OFF` | Enable Redis integration in Web. |
 | `RUVIA_ENABLE_JWT` | `OFF` | Enable JWT integration in Web. |
 
+`<ruvia/web/auth/Jwt.h>` and its declarations are available only when
+`RUVIA_ENABLE_JWT=ON`. Consumers linking `ruvia::web` inherit that feature
+definition from the target and should not define it themselves.
+
 ## Database Drivers
 
 MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction and migration APIs. Each worker owns exactly one database connection. `DbConfig` has no driver-neutral default constructor: select an enabled driver through its factory, which also supplies that backend's default port:
@@ -832,11 +871,13 @@ RUVIA_RESPONSE_MODEL(UserResponse,
 ```
 
 `RUVIA_REQUEST_MODEL` supports `fromJson<T>()`, `fromForm<T>()`, route parsing,
-and validation. `RUVIA_RESPONSE_MODEL` supports `toJson()` and `c.json()`; a
-request model may only nest request models, and a response model may only nest
-response models. Both roles support `ruvia::Array<T>` and recursive
-`ruvia::BoxedArray<T>` fields. Form, query, param, header, and cookie binding
-remain flat scalar inputs.
+and validation. Every JSON response is first represented by a
+`RUVIA_RESPONSE_MODEL`; `toJson()` and `c.json()` accept response models only,
+and there is no dynamic object/array writer API. Runtime-sized collections are
+declared as `ruvia::Array<T>` fields. A request model may only nest request
+models, and a response model may only nest response models. Both roles support
+`ruvia::Array<T>` and recursive `ruvia::BoxedArray<T>` fields. Form, query,
+param, header, and cookie binding remain flat scalar inputs.
 
 Fields use compile-time accessors: `model.get<"username">()`,
 `model.set<"name">("Ada")`, `model.ensure<"tags">()`, and
@@ -871,14 +912,18 @@ timer without silently weakening production policy.
 `ruvia::http` can be used without the runtime or Web framework. It provides
 HTTP message types and helpers, HTTP/1 request and response parsing/writing,
 multipart parsing, range and conditional-request helpers, cookies, content
-negotiation, redirects, and content decoding. The supported protocol-driver
-entry points are `<ruvia/http/Http2Connection.h>` and
+negotiation, redirects, and content coding. Parse `Content-Encoding` with
+`ruvia::parseHttpContentCoding()` from `<ruvia/http/HttpContentCoding.h>`, and
+use the bounded complete-buffer codecs in `<ruvia/http/HttpContentCodec.h>`.
+`ruvia::parseMultipartBoundary()` and the multipart parsers are declared by
+`<ruvia/http/MultipartParser.h>`. The supported protocol-driver entry points
+are `<ruvia/http/Http2Connection.h>` and
 `<ruvia/http/Http2Framing.h>` for HTTP/2, `<ruvia/http/Hpack.h>` for HPACK,
-and `<ruvia/http/WebSocketServerConnection.h>` for the server-side WebSocket
-driver and its typed events. The WebSocket driver accepts masked client frames
-and emits unmasked server frames; it does not claim a client role. SSE messages
-are formatted through `ruvia::formatSseMessage()` from
-`<ruvia/http/Sse.h>`.
+`<ruvia/http/WebSocketHandshake.h>` for the HTTP/1.1 server handshake, and
+`<ruvia/http/WebSocketServerConnection.h>` for the server-side WebSocket driver
+and its typed events. The WebSocket driver accepts masked client frames and
+emits unmasked server frames; it does not claim a client role. SSE messages are
+formatted through `ruvia::formatSseMessage()` from `<ruvia/http/Sse.h>`.
 
 The library is sans-I/O: callers feed bytes, consume typed results/events, and drive
 transport I/O themselves. It contains no App, Context, Router, socket,
@@ -898,7 +943,8 @@ Borrowed outbound-client models say so in their names: `HttpOriginView`,
 `HttpClientRequestView`, `HttpClientRequestContentView`, and
 `HttpClientRequestBytesView`. Their referenced storage must remain alive until
 the external sans-I/O driver finishes using it; response-head values remain
-owned PMR results.
+owned PMR results. `parseSetCookie()` likewise returns views into its input, so
+owning string temporaries are rejected at compile time.
 
 Headers below `ruvia/http/detail/` are internal component contracts used by
 Ruvia's own targets and are not a supported application API.

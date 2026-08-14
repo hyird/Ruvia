@@ -28,12 +28,12 @@
 namespace {
 
 using asio::ip::tcp;
+using ruvia::WebSocketCompression;
 using ruvia::WebSocketOpcode;
 using ruvia::detail::ConnectionScanner;
 using ruvia::detail::SocketWebSocketConnection;
 using ruvia::detail::WebSocketConnection;
 using ruvia::detail::WebSocketDeflate;
-using ruvia::detail::WebSocketDeflateNegotiation;
 using ruvia::detail::WebSocketSocketTransport;
 using ruvia::detail::WsTransportDisposition;
 
@@ -466,7 +466,7 @@ RUVIA_TEST(websocket_socket_bridge_permessage_deflate_round_trip) {
             auto socket = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory memory;
             ConnectionScanner::Entry scannerEntry;
-            SocketWebSocketConnection<tcp::socket> connection(WebSocketSocketTransport<tcp::socket>(socket), workerHandle, scannerEntry, {}, ruvia::ProtocolByteLimit::limited(1024), memory.resource(), {}, WebSocketDeflateNegotiation::kAccepted);
+            SocketWebSocketConnection<tcp::socket> connection(WebSocketSocketTransport<tcp::socket>(socket), workerHandle, scannerEntry, {}, ruvia::ProtocolByteLimit::limited(1024), memory.resource(), {}, WebSocketCompression::kPermessageDeflate);
             const auto message = co_await ruvia::detail::taskAsAwaitable(connection.read());
             serverDecoded = message.has_value() && message->payload() == original;
             if (message) {

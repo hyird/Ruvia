@@ -321,6 +321,64 @@ ${_expectations}
     endif()
 endforeach()
 
+if(_component_available_core)
+    set(_core_task_consumer "${_consumer_root}/core_asio_task")
+    file(MAKE_DIRECTORY "${_core_task_consumer}")
+    file(WRITE "${_core_task_consumer}/main.cpp" [=[
+#include <stdexcept>
+#include <string_view>
+
+#include <asio/co_spawn.hpp>
+#include <asio/io_context.hpp>
+#include <asio/use_future.hpp>
+
+#include <ruvia/core/AsioTask.h>
+
+ruvia::Task<int> makeValue() {
+    co_return 42;
+}
+
+ruvia::Task<void> completeVoid(bool& completed) {
+    completed = true;
+    co_return;
+}
+
+ruvia::Task<void> fail() {
+    throw std::runtime_error("installed task failure");
+    co_return;
+}
+
+int main() {
+    asio::io_context io;
+    bool completed = false;
+    auto value = asio::co_spawn(io, ruvia::asAwaitable(makeValue()), asio::use_future);
+    auto noValue = asio::co_spawn(io, ruvia::asAwaitable(completeVoid(completed)), asio::use_future);
+    auto failure = asio::co_spawn(io, ruvia::asAwaitable(fail()), asio::use_future);
+    io.run();
+
+    if (value.get() != 42) return 1;
+    noValue.get();
+    if (!completed) return 2;
+    try {
+        failure.get();
+    } catch (const std::runtime_error& error) {
+        return std::string_view(error.what()) == "installed task failure" ? 0 : 3;
+    }
+    return 4;
+}
+]=])
+    file(WRITE "${_core_task_consumer}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(ruvia_core_asio_task_consumer LANGUAGES CXX)
+find_package(ruvia CONFIG REQUIRED COMPONENTS core)
+add_executable(core_asio_task main.cpp)
+target_compile_features(core_asio_task PRIVATE cxx_std_20)
+target_link_libraries(core_asio_task PRIVATE ruvia::core)
+]=])
+    ruvia_run_consumer("core_asio_task" PASS "")
+    ruvia_build_and_run_consumer("core_asio_task" "core_asio_task")
+endif()
+
 if(_component_available_http)
     set(_http_protocol_consumer "${_consumer_root}/http_public_sansio")
     file(MAKE_DIRECTORY "${_http_protocol_consumer}")

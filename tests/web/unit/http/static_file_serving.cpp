@@ -43,7 +43,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/response/HttpStaticFileCompression.h"
 
@@ -320,7 +320,7 @@ RUVIA_TEST(static_file_without_sidecar_uses_bounded_blocking_compression) {
     RUVIA_CHECK_EQ(compressed.status(), ruvia::detail::HttpStaticFileCompressionStatus::kCompressed);
     RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
     RUVIA_CHECK(ruvia::detail::responseBody(response).file() == std::nullopt);
-    const auto decoded = ruvia::detail::decodeHttpContent(ruvia::detail::HttpContentCoding::kGzip, ruvia::detail::responseBody(response).bytes(), original.size(), std::pmr::get_default_resource());
+    const auto decoded = ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, ruvia::detail::responseBody(response).bytes(), original.size(), std::pmr::get_default_resource());
     RUVIA_CHECK(decoded.decoded() != nullptr);
     if (const auto* content = decoded.decoded()) {
         RUVIA_CHECK_EQ(content->bytes(), std::string_view(original));
@@ -329,14 +329,14 @@ RUVIA_TEST(static_file_without_sidecar_uses_bounded_blocking_compression) {
     // An incompressible representation is a valid policy miss. The encoder
     // must not turn that expected outcome into the 500 path used for I/O or
     // codec failures.
-    auto directEncoding = ruvia::detail::encodeHttpContent(
-        ruvia::detail::HttpContentCoding::kGzip,
+    auto directEncoding = ruvia::encodeHttpContent(
+        ruvia::HttpContentCoding::kGzip,
         incompressible,
         incompressible.size() - 1,
         std::pmr::get_default_resource());
     RUVIA_CHECK(directEncoding.failure() != nullptr);
     if (const auto* failure = directEncoding.failure()) {
-        RUVIA_CHECK_EQ(failure->error(), ruvia::detail::HttpContentEncodeError::kEncodedSizeExceeded);
+        RUVIA_CHECK_EQ(failure->error(), ruvia::HttpContentEncodeError::kEncodedSizeExceeded);
     }
 
     auto notSmallerResponse = context.staticFile(root, "incompressible.bin", "application/octet-stream");
@@ -467,8 +467,8 @@ RUVIA_TEST(static_file_document_root_can_defer_identity_for_runtime_compression)
     RUVIA_CHECK(compressionResult.compressed());
     RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
     RUVIA_CHECK(!ruvia::detail::responseBody(response).file().has_value());
-    const auto decoded = ruvia::detail::decodeHttpContent(
-        ruvia::detail::HttpContentCoding::kGzip,
+    const auto decoded = ruvia::decodeHttpContent(
+        ruvia::HttpContentCoding::kGzip,
         ruvia::detail::responseBody(response).bytes(),
         original.size(),
         std::pmr::get_default_resource());

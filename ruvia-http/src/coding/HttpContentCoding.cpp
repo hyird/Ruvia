@@ -1,4 +1,5 @@
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCodec.h"
 
 #include <memory_resource>
 #include <string_view>
@@ -13,7 +14,7 @@
 // each coding is spelled with, the list-grammar accumulator across field lines,
 // and which codec a decode or encode of that coding runs on.
 
-namespace ruvia::detail {
+namespace ruvia {
 
 std::string_view httpContentCodingToken(HttpContentCoding coding) noexcept {
     switch (coding) {
@@ -24,10 +25,14 @@ std::string_view httpContentCodingToken(HttpContentCoding coding) noexcept {
         case HttpContentCoding::kGzip:
             return "gzip";
         case HttpContentCoding::kIdentity:
-            return {};
+            return "identity";
     }
     return {};
 }
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
 
 void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
     if (std::get_if<HttpInvalidContentCodingField>(&state_) != nullptr) {
@@ -70,12 +75,12 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
 
 HttpContentCodingFieldResult HttpContentCodingFieldParser::finish() const noexcept {
     if (std::get_if<HttpInvalidContentCodingField>(&state_) != nullptr) {
-        return HttpContentCodingFieldResult(HttpInvalidContentCodingField{});
+        return HttpContentCodingFieldResultAccess::invalid();
     }
     if (std::get_if<HttpUnsupportedContentCoding>(&state_) != nullptr) {
-        return HttpContentCodingFieldResult(HttpUnsupportedContentCoding{});
+        return HttpContentCodingFieldResultAccess::unsupported();
     }
-    return HttpContentCodingFieldResult(std::get<Supported>(state_).coding);
+    return HttpContentCodingFieldResultAccess::coding(std::get<Supported>(state_).coding);
 }
 
 bool isValidHttpContentEncodingFieldValue(std::string_view value, HttpFieldListRole role) noexcept {
@@ -85,29 +90,33 @@ bool isValidHttpContentEncodingFieldValue(std::string_view value, HttpFieldListR
     return result.invalid() == nullptr;
 }
 
-HttpContentCodingFieldResult httpContentCodingFromFieldValue(std::string_view value) noexcept {
-    HttpContentCodingFieldParser parser;
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+HttpContentCodingFieldResult parseHttpContentCoding(std::string_view value) noexcept {
+    detail::HttpContentCodingFieldParser parser;
     parser.update(value);
     return parser.finish();
 }
 
 HttpContentDecodeResult decodeHttpContent(HttpContentCoding coding, std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
-    ContentDecodeAttempt attempt = HttpContentDecodeError::kUnsupportedCoding;
+    detail::ContentDecodeAttempt attempt = HttpContentDecodeError::kUnsupportedCoding;
     switch (coding) {
         case HttpContentCoding::kGzip:
-            attempt = decodeGzipContent(input, maxDecodedBytes, resource);
+            attempt = detail::decodeGzipContent(input, maxDecodedBytes, resource);
             break;
         case HttpContentCoding::kBrotli:
-            attempt = decodeBrotliContent(input, maxDecodedBytes, resource);
+            attempt = detail::decodeBrotliContent(input, maxDecodedBytes, resource);
             break;
         case HttpContentCoding::kZstd:
-            attempt = decodeZstdContent(input, maxDecodedBytes, resource);
+            attempt = detail::decodeZstdContent(input, maxDecodedBytes, resource);
             break;
         case HttpContentCoding::kIdentity: {
             if (input.size() > maxDecodedBytes) {
                 attempt = HttpContentDecodeError::kDecodedSizeExceeded;
             } else {
-                attempt = std::pmr::string(input, httpPmrResourceOrDefault(resource));
+                attempt = std::pmr::string(input, detail::httpPmrResourceOrDefault(resource));
             }
             break;
         }
@@ -119,22 +128,22 @@ HttpContentDecodeResult decodeHttpContent(HttpContentCoding coding, std::string_
 }
 
 HttpContentEncodeResult encodeHttpContent(HttpContentCoding coding, std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
-    ContentEncodeAttempt attempt = HttpContentEncodeError::kEncoderFailure;
+    detail::ContentEncodeAttempt attempt = HttpContentEncodeError::kEncoderFailure;
     switch (coding) {
         case HttpContentCoding::kBrotli:
-            attempt = encodeBrotliContent(input, maxEncodedBytes, resource);
+            attempt = detail::encodeBrotliContent(input, maxEncodedBytes, resource);
             break;
         case HttpContentCoding::kZstd:
-            attempt = encodeZstdContent(input, maxEncodedBytes, resource);
+            attempt = detail::encodeZstdContent(input, maxEncodedBytes, resource);
             break;
         case HttpContentCoding::kGzip:
-            attempt = encodeGzipContent(input, maxEncodedBytes, resource);
+            attempt = detail::encodeGzipContent(input, maxEncodedBytes, resource);
             break;
         case HttpContentCoding::kIdentity: {
             if (input.size() > maxEncodedBytes) {
                 attempt = HttpContentEncodeError::kEncodedSizeExceeded;
             } else {
-                attempt = std::pmr::string(input, httpPmrResourceOrDefault(resource));
+                attempt = std::pmr::string(input, detail::httpPmrResourceOrDefault(resource));
             }
             break;
         }
@@ -145,4 +154,4 @@ HttpContentEncodeResult encodeHttpContent(HttpContentCoding coding, std::string_
     return HttpContentEncodeResult::makeFailure(std::get<HttpContentEncodeError>(attempt));
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

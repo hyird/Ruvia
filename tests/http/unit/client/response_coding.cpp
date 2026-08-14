@@ -4,7 +4,7 @@
 
 RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
     using ruvia::detail::httpClientResponseContentCoding;
-    using ruvia::detail::HttpContentCoding;
+    using ruvia::HttpContentCoding;
 
     struct Case final {
         std::string_view headers;
@@ -54,7 +54,7 @@ RUVIA_TEST(http_client_rejects_invalid_content_encoding_syntax) {
     RUVIA_CHECK(coding.unsupported() == nullptr);
     RUVIA_CHECK(coding.coding() != nullptr);
     if (coding.coding() != nullptr) {
-        RUVIA_CHECK(*coding.coding() == ruvia::detail::HttpContentCoding::kGzip);
+        RUVIA_CHECK(*coding.coding() == ruvia::HttpContentCoding::kGzip);
     }
 }
 
@@ -68,7 +68,7 @@ RUVIA_TEST(http_client_content_decode_reports_unsupported_wire_coding) {
     RUVIA_CHECK(decoded.decoded() == nullptr);
     RUVIA_CHECK(decoded.failure() != nullptr);
     if (decoded.failure() != nullptr) {
-        RUVIA_CHECK(decoded.failure()->error() == ruvia::detail::HttpContentDecodeError::kUnsupportedCoding);
+        RUVIA_CHECK(decoded.failure()->error() == ruvia::HttpContentDecodeError::kUnsupportedCoding);
     }
 }
 
@@ -86,8 +86,8 @@ RUVIA_TEST(http_client_identity_content_decode_accepts_a_null_resource) {
 }
 
 RUVIA_TEST(http_client_content_decode_consumes_concatenated_gzip_members) {
-    auto firstEncoding = ruvia::detail::encodeHttpContent(ruvia::detail::HttpContentCoding::kGzip, "first-", 1024, std::pmr::get_default_resource());
-    auto secondEncoding = ruvia::detail::encodeHttpContent(ruvia::detail::HttpContentCoding::kGzip, "second", 1024, std::pmr::get_default_resource());
+    auto firstEncoding = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, "first-", 1024, std::pmr::get_default_resource());
+    auto secondEncoding = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, "second", 1024, std::pmr::get_default_resource());
     RUVIA_CHECK(firstEncoding.encoded() != nullptr);
     RUVIA_CHECK(secondEncoding.encoded() != nullptr);
     if (firstEncoding.encoded() == nullptr || secondEncoding.encoded() == nullptr) {
@@ -112,7 +112,7 @@ RUVIA_TEST(http_client_content_decode_consumes_concatenated_gzip_members) {
     const auto coding = ruvia::detail::httpClientResponseContentCoding(parsed.head);
     RUVIA_CHECK(coding.coding() != nullptr);
     if (coding.coding() != nullptr) {
-        RUVIA_CHECK(*coding.coding() == ruvia::detail::HttpContentCoding::kGzip);
+        RUVIA_CHECK(*coding.coding() == ruvia::HttpContentCoding::kGzip);
     }
 }
 
@@ -124,5 +124,5 @@ RUVIA_TEST(http_client_content_decode_failure_preserves_encoded_body) {
     const auto decoded = ruvia::detail::decodeHttpClientResponseContentEncoding(parsed.head, encodedContent, 1024, std::pmr::get_default_resource());
     RUVIA_CHECK(decoded.decoded() == nullptr);
     RUVIA_CHECK(decoded.failure() != nullptr);
-    RUVIA_CHECK(decoded.failure()->error() == ruvia::detail::HttpContentDecodeError::kInvalidContent);
+    RUVIA_CHECK(decoded.failure()->error() == ruvia::HttpContentDecodeError::kInvalidContent);
 }

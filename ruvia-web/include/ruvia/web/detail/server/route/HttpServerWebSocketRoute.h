@@ -10,7 +10,8 @@
 #include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
 #include "ruvia/web/detail/http/error/HttpProtocolErrorInfo.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeValidation.h"
+#include "ruvia/http/WebSocketHandshake.h"
+#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"
@@ -28,7 +29,7 @@ namespace ruvia::detail {
 // ownership to the WebSocket session, so no HTTP request completion remains.
 template <typename Stream>
 Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(Http1RouteDispatch<Stream> d, const ResolvedRoute& resolved, std::string_view pendingFrames) {
-    const auto handshakeValidation = validateHttp1WebSocketHandshake(d.parsed.request, d.parsed.bodyPlan);
+    const auto handshakeValidation = validateWebSocketHandshake(d.parsed.request, d.parsed.bodyPlan);
     if (const auto* failure = handshakeValidation.failure()) {
         d.response = co_await d.routes.handleError(d.parsed.request, d.requestMemory, copyHttpProtocolErrorInfo(d.requestMemory.resource(), failure->protocolError()), d.baseRouteServices);
         failure->applyRequiredResponseHeaders(d.response);
@@ -39,11 +40,11 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(Ht
     using Connection = SocketWebSocketConnection<Stream>;
     std::optional<Connection> webSocketConnection;
     auto upgradeAndRun = [&](Context& context) -> Task<void> {
-        const auto handshake = makeHttpWebSocketServerHandshake(d.parsed.request, webSocketEndpoint.subprotocols(), d.memory.resource());
+        const auto handshake = makeWebSocketServerHandshake(d.parsed.request, webSocketEndpoint.subprotocols(), d.memory.resource());
         if (const auto ec = co_await writeWebSocketHandshake(d.stream, handshake); ec) {
             co_return;
         }
-        webSocketConnection.emplace(WebSocketSocketTransport<Stream>{d.stream}, d.baseRouteServices.worker(), d.scannerEntry, webSocketEndpoint.lifecycle(), ProtocolByteLimit::limited(d.options.maxWebSocketMessageBytes), d.memory.resource(), pendingFrames, handshake.negotiation().deflate());
+        webSocketConnection.emplace(WebSocketSocketTransport<Stream>{d.stream}, d.baseRouteServices.worker(), d.scannerEntry, webSocketEndpoint.lifecycle(), ProtocolByteLimit::limited(d.options.maxWebSocketMessageBytes), d.memory.resource(), pendingFrames, handshake.compression());
         co_await invokeWebSocketHandler(*webSocketConnection, d.scannerEntry, webSocketEndpoint.handler(), context);
     };
     const auto terminal = makeCallableRef<void, Context&>(upgradeAndRun);

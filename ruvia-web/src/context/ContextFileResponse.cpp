@@ -13,7 +13,7 @@
 #include "ruvia/web/detail/http/static/StaticFileVariant.h"
 #include "ruvia/web/detail/server/file/HttpNativeFile.h"
 #include "ruvia/web/detail/http/static/StaticPathNormalization.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/UrlEncoding.h"
 
 #include <cstddef>
@@ -96,7 +96,7 @@ struct FileResponseSource final {
     bool enableValidators{false};
     std::string_view precomputedEtag;
     std::string_view precomputedLastModified;
-    detail::HttpContentCoding contentCoding{detail::HttpContentCoding::kIdentity};
+    HttpContentCoding contentCoding{HttpContentCoding::kIdentity};
     bool negotiatesEncoding{false};
 };
 
@@ -143,9 +143,8 @@ template <typename ApplyResponseState>
         }
         // A precompressed variant carries the original Content-Type with the
         // encoding declared here.
-        const auto contentEncoding = detail::httpContentCodingToken(source.contentCoding);
-        if (!contentEncoding.empty()) {
-            detail::setResponseHeaderStableView(response, "Content-Encoding", contentEncoding);
+        if (source.contentCoding != HttpContentCoding::kIdentity) {
+            detail::setResponseHeaderStableView(response, "Content-Encoding", httpContentCodingToken(source.contentCoding));
         }
         if (source.enableRanges) {
             detail::setResponseHeaderStableView(response, "Accept-Ranges", "bytes");
@@ -279,7 +278,7 @@ HttpResponse Context::file(const std::filesystem::path& path, std::string_view c
             .enableValidators = true,
             .precomputedEtag = {},
             .precomputedLastModified = {},
-            .contentCoding = detail::HttpContentCoding::kIdentity,
+            .contentCoding = HttpContentCoding::kIdentity,
             // A server-enabled static-file policy may transform this file in
             // the protocol session after the handler returns. Standalone
             // Context::file keeps its historical byte-for-byte behavior.

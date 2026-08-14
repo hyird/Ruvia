@@ -18,7 +18,7 @@ RUVIA_TEST(multipart_part_headers_quoted_name_with_semicolon) {
 
 RUVIA_TEST(multipart_boundary_quoted_with_mime_special) {
     const std::string_view contentType = R"(multipart/form-data; boundary="a:b")";
-    const auto result = ruvia::detail::httpParseMultipartBoundary(contentType);
+    const auto result = ruvia::parseMultipartBoundary(contentType);
     RUVIA_CHECK(result.boundary() != nullptr);
     RUVIA_CHECK_EQ(result.boundary()->value(), std::string_view("a:b"));
 }

@@ -17,7 +17,7 @@
 #include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
 #include "ruvia/web/detail/server/response/HttpResponseCompression.h"
 #include "ruvia/web/detail/server/response/HttpStreamingResponseCompression.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 
@@ -26,7 +26,7 @@ namespace {
 using ruvia::HttpKnownMethod;
 using ruvia::HttpResponse;
 using ruvia::detail::applyResponseCompression;
-using ruvia::detail::HttpContentCoding;
+using ruvia::HttpContentCoding;
 using ruvia::detail::HttpResponseCodingSelection;
 using ruvia::detail::HttpResponseCodingQualities;
 using ruvia::detail::responseBody;
@@ -239,7 +239,7 @@ RUVIA_TEST(streaming_compression_owns_one_typed_encoder_lifecycle) {
     RUVIA_CHECK(compression.finish() == ruvia::detail::HttpContentEncodeStep::kFinished);
     RUVIA_CHECK(!compression.active());
 
-    const auto decoded = ruvia::detail::decodeHttpContent(ruvia::detail::HttpContentCoding::kGzip, encoded, kCompressibleBody.size(), std::pmr::get_default_resource());
+    const auto decoded = ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, encoded, kCompressibleBody.size(), std::pmr::get_default_resource());
     RUVIA_CHECK(decoded.decoded() != nullptr);
     if (const auto* content = decoded.decoded()) {
         RUVIA_CHECK_EQ(content->bytes(), std::string_view(kCompressibleBody));

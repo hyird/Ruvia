@@ -16,8 +16,8 @@
 namespace {
 
 using ruvia::ProtocolByteLimit;
+using ruvia::WebSocketCompression;
 using ruvia::WebSocketOpcode;
-using ruvia::detail::WebSocketDeflateNegotiation;
 using ruvia::detail::WsAbortDisposition;
 using ruvia::detail::WsCloseEvent;
 using ruvia::detail::WsCloseSubmitStatus;
@@ -355,7 +355,7 @@ RUVIA_TEST(ws_connection_needs_more_on_partial_frame) {
 RUVIA_TEST(ws_connection_inflates_compressed_message) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
-    WsConnection conn(input, ProtocolByteLimit::unlimited(), WebSocketDeflateNegotiation::kAccepted);
+    WsConnection conn(input, ProtocolByteLimit::unlimited(), WebSocketCompression::kPermessageDeflate);
 
     ruvia::detail::WebSocketDeflate encoder;
     std::pmr::string compressed(&resource);
@@ -375,7 +375,7 @@ RUVIA_TEST(ws_connection_inflates_compressed_message) {
 RUVIA_TEST(ws_connection_suppressed_compressed_message_does_not_taint_next_utf8) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
-    WsConnection conn(input, ProtocolByteLimit::unlimited(), WebSocketDeflateNegotiation::kAccepted);
+    WsConnection conn(input, ProtocolByteLimit::unlimited(), WebSocketCompression::kPermessageDeflate);
 
     RUVIA_CHECK(conn.submitClose(1000, "") == WsCloseSubmitStatus::kAccepted);
     const auto plan = conn.outputPlan();
@@ -418,7 +418,7 @@ RUVIA_TEST(ws_connection_suppressed_compressed_message_does_not_taint_next_utf8)
 RUVIA_TEST(ws_connection_suppressed_compressed_message_does_not_charge_next_limit) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
-    WsConnection conn(input, ProtocolByteLimit::limited(1000), WebSocketDeflateNegotiation::kAccepted);
+    WsConnection conn(input, ProtocolByteLimit::limited(1000), WebSocketCompression::kPermessageDeflate);
 
     RUVIA_CHECK(conn.submitClose(1000, "") == WsCloseSubmitStatus::kAccepted);
     const auto plan = conn.outputPlan();
@@ -461,7 +461,7 @@ RUVIA_TEST(ws_connection_suppressed_compressed_message_does_not_charge_next_limi
 RUVIA_TEST(ws_connection_submit_compresses_when_enabled) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
-    WsConnection conn(input, ProtocolByteLimit::unlimited(), WebSocketDeflateNegotiation::kAccepted);
+    WsConnection conn(input, ProtocolByteLimit::unlimited(), WebSocketCompression::kPermessageDeflate);
 
     const std::pmr::string repetitive(200, 'a', &resource);
     RUVIA_CHECK(conn.submitFrame(WebSocketOpcode::kText, std::string_view(repetitive.data(), repetitive.size())) == WsFrameSubmitStatus::kAccepted);

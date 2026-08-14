@@ -16,12 +16,6 @@
 
 namespace ruvia {
 
-enum class WebSocketCompression : std::uint8_t {
-    kDisabled,
-    kPermessageDeflate,
-    kPermessageDeflateWithServerMaxWindowBits,
-};
-
 enum class WebSocketTransportDisposition : std::uint8_t { kKeepOpen, kEndTransport };
 enum class WebSocketLivenessMode : std::uint8_t { kOpen, kAwaitingPeerClose, kInactive };
 enum class WebSocketFrameSubmitStatus : std::uint8_t { kAccepted, kNotOpen, kInvalidOpcode, kMessageTooLarge, kInvalidTextPayload, kControlFrameTooLarge };

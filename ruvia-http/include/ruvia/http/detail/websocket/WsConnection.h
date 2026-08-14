@@ -93,7 +93,7 @@ private:
 
 class WsConnection final {
 public:
-    explicit WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(), WebSocketDeflateNegotiation deflate = WebSocketDeflateNegotiation::kDisabled);
+    explicit WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(), WebSocketCompression compression = WebSocketCompression::kDisabled);
 
     // Parse buffered transport bytes until one protocol event is available or
     // more input is required (nullopt). Every materialized event contains one

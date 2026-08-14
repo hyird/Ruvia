@@ -4,12 +4,12 @@
 #include <string_view>
 
 #include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCoding.h"
 
 namespace {
 
 using ruvia::detail::HttpAcceptedEncodingQuality;
-using ruvia::detail::HttpContentCoding;
+using ruvia::HttpContentCoding;
 using ruvia::detail::HttpResponseCodingCandidates;
 using ruvia::detail::HttpResponseCodingQualities;
 using ruvia::detail::HttpResponseCodingSelection;

@@ -1,6 +1,8 @@
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 
+#include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 
@@ -10,6 +12,7 @@
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
@@ -235,12 +238,23 @@ std::string_view chooseWebSocketSubprotocol(const HttpRequest& request, std::str
     return httpFindHeaderToken(supported, [&offered](std::string_view token) noexcept { return offered.contains(token); });
 }
 
-WebSocketServerNegotiation::WebSocketServerNegotiation(std::string_view subprotocol, WebSocketDeflateNegotiation deflate, std::pmr::memory_resource* resource)
+WebSocketServerNegotiation::WebSocketServerNegotiation(std::string_view subprotocol, WebSocketCompression compression, std::pmr::memory_resource* resource)
     : subprotocol_(subprotocol, httpPmrResourceOrDefault(resource)),
-      deflate_(deflate) {}
+      compression_(compression) {}
 
 WebSocketServerNegotiation makeWebSocketServerNegotiation(const HttpRequest& request, std::string_view supportedSubprotocols, std::pmr::memory_resource* resource) {
     return WebSocketServerNegotiation(chooseWebSocketSubprotocol(request, supportedSubprotocols), webSocketNegotiatePermessageDeflate(request), resource);
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+WebSocketServerHandshake makeWebSocketServerHandshake(const HttpRequest& request, std::string_view supportedSubprotocols, std::pmr::memory_resource* resource) {
+    detail::WebSocketAcceptKey accept;
+    detail::encodeWebSocketAccept(accept, detail::requestKnownHeader(request, detail::RequestKnownHeader::kSecWebSocketKey));
+    std::pmr::string subprotocol(detail::chooseWebSocketSubprotocol(request, supportedSubprotocols), detail::httpPmrResourceOrDefault(resource));
+    return WebSocketServerHandshake(accept, std::move(subprotocol), detail::webSocketNegotiatePermessageDeflate(request));
+}
+
+}  // namespace ruvia

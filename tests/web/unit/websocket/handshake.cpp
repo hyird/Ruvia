@@ -14,9 +14,8 @@
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeValidation.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketServerHandshake.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
 
@@ -25,19 +24,15 @@ namespace {
 using ruvia::HttpRequest;
 using ruvia::detail::chooseWebSocketSubprotocol;
 using ruvia::detail::Http1ServerRequestParser;
-using ruvia::detail::validateHttp1WebSocketHandshake;
+using ruvia::validateWebSocketHandshake;
 using ruvia::detail::webSocketProtocolOffered;
 
 template <typename T>
-concept HasRvalueWebSocketHandshakeNegotiation = requires(T&& handshake) { std::move(handshake).negotiation(); };
+concept HasRvalueWebSocketHandshakeSubprotocol = requires(T&& handshake) { std::move(handshake).subprotocol(); };
 
-template <typename T>
-concept HasRvalueWebSocketServerSubprotocol = requires(T&& negotiation) { std::move(negotiation).subprotocol(); };
-
-static_assert(!HasRvalueWebSocketHandshakeNegotiation<ruvia::detail::HttpWebSocketServerHandshake>);
-static_assert(!HasRvalueWebSocketServerSubprotocol<ruvia::detail::WebSocketServerNegotiation>);
-static_assert(!std::copy_constructible<ruvia::detail::HttpWebSocketServerHandshake>);
-static_assert(std::move_constructible<ruvia::detail::HttpWebSocketServerHandshake>);
+static_assert(!HasRvalueWebSocketHandshakeSubprotocol<ruvia::WebSocketServerHandshake>);
+static_assert(!std::copy_constructible<ruvia::WebSocketServerHandshake>);
+static_assert(std::move_constructible<ruvia::WebSocketServerHandshake>);
 
 class FailingHandshakeWriteStream final {
 public:
@@ -68,7 +63,7 @@ HttpRequest parseRequest(std::string_view rawRequest) {
 [[nodiscard]] auto validateRequest(std::string_view rawRequest) {
     Http1ServerRequestParser parser;
     const auto parsed = parser.parseMessage(rawRequest);
-    return validateHttp1WebSocketHandshake(parsed.request, parsed.bodyPlan);
+    return validateWebSocketHandshake(parsed.request, parsed.bodyPlan);
 }
 
 [[nodiscard]] bool acceptsRequest(std::string_view rawRequest) {
@@ -332,7 +327,7 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
         "Sec-WebSocket-Extensions: permessage-deflate; server_max_window_bits=15\r\n"
         "\r\n");
     std::string supported = "chat";
-    const auto handshake = ruvia::detail::makeHttpWebSocketServerHandshake(request, supported);
+    const auto handshake = ruvia::makeWebSocketServerHandshake(request, supported);
     supported.front() = 'X';
 
     std::string response;
@@ -346,14 +341,13 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
                                          "server_no_context_takeover; client_no_context_takeover; "
                                          "server_max_window_bits=15\r\n"
                                          "\r\n"));
-    RUVIA_CHECK(handshake.negotiation().deflate() == ruvia::detail::WebSocketDeflateNegotiation::kAcceptedWithServerMaxWindowBits);
-    RUVIA_CHECK_EQ(handshake.negotiation().subprotocol(), "chat");
-    RUVIA_CHECK_EQ(handshake.negotiation().extensions(), ruvia::detail::kWebSocketDeflateResponseExtensionsMaxWindow);
+    RUVIA_CHECK(handshake.compression() == ruvia::WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits);
+    RUVIA_CHECK_EQ(handshake.subprotocol(), "chat");
 }
 
 RUVIA_TEST(ws_handshake_writer_preserves_transport_error) {
     const auto request = parseRequest(validHandshake());
-    const auto handshake = ruvia::detail::makeHttpWebSocketServerHandshake(request, {});
+    const auto handshake = ruvia::makeWebSocketServerHandshake(request, {});
     asio::io_context& io = ruvia::test::newTestIoContext();
     FailingHandshakeWriteStream stream(io);
     auto result = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(ruvia::detail::writeWebSocketHandshake(stream, handshake)), asio::use_future);

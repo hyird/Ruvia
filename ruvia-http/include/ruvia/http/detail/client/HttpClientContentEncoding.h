@@ -4,10 +4,17 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/HttpClient.h"
 
 namespace ruvia::detail {
+
+struct HttpContentDecodeResultAccess final {
+    [[nodiscard]] static HttpContentDecodeResult failure(HttpContentDecodeError error) noexcept {
+        return HttpContentDecodeResult::makeFailure(error);
+    }
+};
 
 template <typename Headers>
 [[nodiscard]] inline HttpContentCodingFieldResult httpClientContentCodingOf(const Headers& headers) noexcept {
@@ -25,7 +32,7 @@ template <typename Headers>
     const auto parsedCoding = httpClientResponseContentCoding(head);
     const auto* coding = parsedCoding.coding();
     if (coding == nullptr) {
-        return HttpContentDecodeResult::makeFailure(HttpContentDecodeError::kUnsupportedCoding);
+        return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kUnsupportedCoding);
     }
     return decodeHttpContent(*coding, encodedContent, maxDecodedBytes, resource);
 }

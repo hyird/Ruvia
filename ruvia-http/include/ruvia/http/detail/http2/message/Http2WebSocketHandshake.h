@@ -11,7 +11,8 @@
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeValidation.h"
+#include "ruvia/http/WebSocketHandshake.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketHandshakeValidationAccess.h"
 #include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 #include "ruvia/http/HttpRequest.h"
 
@@ -22,9 +23,9 @@ namespace ruvia::detail {
     return pending != nullptr && pending->form() == Http2ConnectForm::kExtended && stream.protocolIsWebSocket();
 }
 
-[[nodiscard]] inline HttpWebSocketHandshakeValidationResult validateHttp2WebSocketHandshake(const Http2StreamState& stream, const HttpRequest& request) noexcept {
+[[nodiscard]] inline WebSocketHandshakeValidationResult validateHttp2WebSocketHandshake(const Http2StreamState& stream, const HttpRequest& request) noexcept {
     if (!http2IsPendingWebSocketConnect(stream) || !http2RemoteFinalHeadDecoded(stream) || http2RemotePeerHalfClosed(stream) || stream.remoteContent().allowedWithoutLength() == nullptr) {
-        return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+        return WebSocketHandshakeValidationResultAccess::invalidRequest();
     }
 
     std::size_t versionCount = 0;
@@ -36,18 +37,18 @@ namespace ruvia::detail {
         }
     }
     if (versionCount != 1) {
-        return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+        return WebSocketHandshakeValidationResultAccess::invalidRequest();
     }
     if (!webSocketSubprotocolOffersValid(request)) {
-        return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+        return WebSocketHandshakeValidationResultAccess::invalidRequest();
     }
     if (!webSocketExtensionOffersValid(request)) {
-        return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+        return WebSocketHandshakeValidationResultAccess::invalidRequest();
     }
     if (version != "13") {
-        return HttpWebSocketHandshakeValidationResult::makeUnsupportedVersion();
+        return WebSocketHandshakeValidationResultAccess::unsupportedVersion();
     }
-    return HttpWebSocketHandshakeValidationResult::makeAccepted();
+    return WebSocketHandshakeValidationResultAccess::accepted();
 }
 
 inline void http2EncodeWebSocketHandshakeHeaders(std::pmr::string& headerBlock, const WebSocketServerNegotiation& negotiation) {

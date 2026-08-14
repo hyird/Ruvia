@@ -109,7 +109,7 @@ public:
     [[nodiscard]] WorkerId id() const noexcept;
 
     template <typename Fn>
-        requires std::is_invocable_r_v<void, std::decay_t<Fn>&>
+        requires detail::MoveOnlyFunctionTarget<void, Fn>
     [[nodiscard]] PostResult post(Fn&& fn) const {
         return postTask(MoveOnlyFunction<void()>(std::forward<Fn>(fn)));
     }

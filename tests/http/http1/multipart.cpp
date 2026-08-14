@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "ruvia/http/detail/parser/MultipartPartAccess.h"
-#include "ruvia/http/detail/parser/MultipartBoundary.h"
 #include "ruvia/http/detail/parser/MultipartDelimiter.h"
 #include "ruvia/http/detail/parser/MultipartPartHeaders.h"
 #include "ruvia/http/detail/parser/MultipartStreamPartAccess.h"
@@ -163,15 +162,15 @@ static_assert(!HasMultipartLineBytes<ruvia::detail::HttpMultipartDelimiterNeedIn
 static_assert(HasMultipartLineBytes<ruvia::detail::HttpMultipartPartDelimiter>);
 static_assert(HasMultipartLineBytes<ruvia::detail::HttpMultipartCloseDelimiter>);
 
-static_assert(!std::default_initializable<ruvia::detail::HttpMultipartBoundaryParseResult>);
-static_assert(!HasMultipartStatus<ruvia::detail::HttpMultipartBoundaryParseResult>);
-static_assert(!HasAnyRvalueMultipartBoundaryAccessor<ruvia::detail::HttpMultipartBoundaryParseResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpMultipartBoundaryParseResult&>().notApplicable()), const ruvia::detail::HttpMultipartBoundaryNotApplicable*>);
+static_assert(!std::default_initializable<ruvia::MultipartBoundaryParseResult>);
+static_assert(!HasMultipartStatus<ruvia::MultipartBoundaryParseResult>);
+static_assert(!HasAnyRvalueMultipartBoundaryAccessor<ruvia::MultipartBoundaryParseResult>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartBoundaryParseResult&>().notApplicable()), const ruvia::MultipartBoundaryNotApplicable*>);
 static_assert(!HasMultipartError<ruvia::MultipartBoundary>);
 static_assert(!ExposesAnyRvalueMultipartOwnedView<ruvia::MultipartBoundary>);
 static_assert(!ExposesAnyRvalueMultipartOwnedView<ruvia::MultipartPart>);
-static_assert(!HasMultipartError<ruvia::detail::HttpMultipartBoundaryParseFailure>);
-static_assert(HasMultipartProtocolError<ruvia::detail::HttpMultipartBoundaryParseFailure>);
+static_assert(!HasMultipartError<ruvia::MultipartBoundaryParseFailure>);
+static_assert(HasMultipartProtocolError<ruvia::MultipartBoundaryParseFailure>);
 static_assert(!std::default_initializable<ruvia::detail::HttpMultipartPartHeaderParseResult>);
 static_assert(!HasAnyRvalueMultipartPartHeaderAccessor<ruvia::detail::HttpMultipartPartHeaderParseResult>);
 static_assert(!HasMultipartError<ruvia::detail::HttpMultipartPartHeaders>);
@@ -259,27 +258,26 @@ RUVIA_TEST(multipart_boundary_value_enforces_rfc2046_grammar) {
 // Boundary extraction owns MIME parameter quoting and returns the same typed
 // value consumed by buffered and streaming parsers.
 RUVIA_TEST(multipart_boundary_from_content_type) {
-    using ruvia::detail::httpParseMultipartBoundary;
-    const auto plain = httpParseMultipartBoundary("multipart/form-data; boundary=abc123");
+    const auto plain = ruvia::parseMultipartBoundary("multipart/form-data; boundary=abc123");
     RUVIA_CHECK(plain.boundary() != nullptr);
     RUVIA_CHECK(plain.notApplicable() == nullptr);
     RUVIA_CHECK(plain.failure() == nullptr);
     RUVIA_CHECK_EQ(plain.boundary()->value(), std::string_view("abc123"));
 
-    const auto quoted = httpParseMultipartBoundary(R"(multipart/form-data; boundary="a b")");
+    const auto quoted = ruvia::parseMultipartBoundary(R"(multipart/form-data; boundary="a b")");
     RUVIA_CHECK(quoted.boundary() != nullptr);
     RUVIA_CHECK_EQ(quoted.boundary()->value(), std::string_view("a b"));
 
-    const auto quotedSpecial = httpParseMultipartBoundary(R"(multipart/form-data; boundary="a:b")");
+    const auto quotedSpecial = ruvia::parseMultipartBoundary(R"(multipart/form-data; boundary="a:b")");
     RUVIA_CHECK(quotedSpecial.boundary() != nullptr);
     RUVIA_CHECK_EQ(quotedSpecial.boundary()->value(), std::string_view("a:b"));
 
-    const auto quotedPair = httpParseMultipartBoundary(R"(multipart/form-data; boundary="a\?b")");
+    const auto quotedPair = ruvia::parseMultipartBoundary(R"(multipart/form-data; boundary="a\?b")");
     RUVIA_CHECK(quotedPair.boundary() != nullptr);
     RUVIA_CHECK_EQ(quotedPair.boundary()->value(), std::string_view("a?b"));
 
     // A different media type is not applicable to the multipart parser.
-    const auto wrongType = httpParseMultipartBoundary("text/plain; boundary=abc");
+    const auto wrongType = ruvia::parseMultipartBoundary("text/plain; boundary=abc");
     RUVIA_CHECK(wrongType.boundary() == nullptr);
     RUVIA_CHECK(wrongType.notApplicable() != nullptr);
     RUVIA_CHECK(wrongType.failure() == nullptr);
@@ -287,7 +285,7 @@ RUVIA_TEST(multipart_boundary_from_content_type) {
     // Once multipart/form-data is declared, an invalid boundary is an HTTP
     // request failure rather than a Web-layer parsing policy decision.
     for (const std::string_view invalid : {"multipart/form-data", "multipart/form-data; charset=utf-8", "multipart/form-data; boundary=", "multipart/form-data; boundary=a:b", R"(multipart/form-data; boundary="a;b")", "multipart/form-data; boundary=one; boundary=two", "multipart/form-data; boundary=abc; charset=utf-8; CHARSET=latin1", "multipart/form-data; boundary=abc; broken", "multipart/form-data; broken; boundary=abc", "multipart/form-data; boundary =abc", "multipart/form-data; boundary= abc", "multipart/form-data; boundary=abc; charset=unquoted value", R"(multipart/form-data; boundary=abc; charset="unterminated)", "multipart/form-data; boundary=abc; =value"}) {
-        const auto result = httpParseMultipartBoundary(invalid);
+        const auto result = ruvia::parseMultipartBoundary(invalid);
         RUVIA_CHECK(result.boundary() == nullptr);
         RUVIA_CHECK(result.notApplicable() == nullptr);
         RUVIA_CHECK(result.failure() != nullptr);
@@ -298,7 +296,7 @@ RUVIA_TEST(multipart_boundary_from_content_type) {
         }
     }
 
-    const auto extension = httpParseMultipartBoundary(R"(multipart/form-data; charset="utf-8"; boundary=abc)");
+    const auto extension = ruvia::parseMultipartBoundary(R"(multipart/form-data; charset="utf-8"; boundary=abc)");
     RUVIA_CHECK(extension.boundary() != nullptr);
     if (extension.boundary() != nullptr) {
         RUVIA_CHECK_EQ(extension.boundary()->value(), std::string_view("abc"));

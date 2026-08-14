@@ -25,7 +25,7 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
@@ -191,8 +191,8 @@ void writeResponse(asio::ip::tcp::socket& socket, std::string_view body, std::st
 }
 
 std::string gzipContent(std::string_view body) {
-    auto encoded = ruvia::detail::encodeHttpContent(
-        ruvia::detail::HttpContentCoding::kGzip, body,
+    auto encoded = ruvia::encodeHttpContent(
+        ruvia::HttpContentCoding::kGzip, body,
         body.size() + 1024, std::pmr::get_default_resource());
     if (!encoded.encoded()) throw std::runtime_error("failed to encode test gzip body");
     const auto bytes = encoded.encoded()->bytes();

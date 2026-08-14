@@ -29,7 +29,7 @@ namespace ruvia::detail {
     if (message.empty()) {
         message = statusText;
     }
-    return HttpErrorInfo(status, code, message, statusText, error.detailsJson());
+    return HttpErrorInfo(status, code, message, statusText, error.validationIssues());
 }
 
 }  // namespace ruvia::detail

@@ -48,14 +48,7 @@ template <typename T>
 }
 
 template <typename T>
-    requires(!detail::isRequestModel<T>)
-inline void appendJson(std::pmr::string& output, const T& value) {
-    output.reserve(output.size() + detail::jsonSizeHintValue(value));
-    detail::appendJsonValue(output, value);
-}
-
-template <typename T>
-    requires(!detail::isRequestModel<T>)
+    requires detail::isResponseModel<T>
 [[nodiscard]] inline std::pmr::string toJson(const T& value, std::pmr::memory_resource* resource = nullptr) {
     std::pmr::string output(detail::pmrResourceOrDefault(resource));
     output.reserve(detail::jsonSizeHintValue(value));

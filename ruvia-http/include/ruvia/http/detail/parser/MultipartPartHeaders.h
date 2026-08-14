@@ -42,7 +42,7 @@ std::optional<std::string_view> httpHeaderValueInBlock(Headers&&, std::string_vi
 
 [[nodiscard]] inline std::optional<std::string_view> httpDispositionParameter(std::string_view disposition, std::string_view name) noexcept {
     // Content-Disposition parameter names are case-insensitive (RFC 6266 section 4.1 /
-    // RFC 2183), matching how httpParseMultipartBoundary treats the Content-Type
+    // RFC 2183), matching how parseMultipartBoundary treats the Content-Type
     // "boundary" parameter. Match "name"/"filename" the same way so a part using
     // e.g. `Name=` or `FileName=` is not spuriously rejected.
     const auto value = httpFindSemicolonParameterQuotedIgnoreCase(disposition, name);

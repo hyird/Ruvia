@@ -6,7 +6,7 @@
 #include <string_view>
 #include <variant>
 
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCodec.h"
 
 // One compression library binding per coding, behind a uniform signature: decode
 // or encode a whole buffer through the caller's memory resource, bounded by an

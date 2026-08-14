@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/response/HttpResponseFileBody.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
