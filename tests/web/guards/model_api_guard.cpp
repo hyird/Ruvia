@@ -1,11 +1,13 @@
 // Request/response model roles, compile-time field access, and legacy API guard.
 #include <concepts>
+#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/web/Context.h"
 #include "ruvia/web/Model.h"
 
 namespace {
@@ -20,6 +22,18 @@ RUVIA_RESPONSE_MODEL(SurfaceJsonResponse,
 RUVIA_RESPONSE_MODEL(RequiredFieldSurface,
     RUVIA_REQUIRED_FIELD(id, ruvia::UInt32),
     RUVIA_OPTIONAL_FIELD(label, ruvia::String));
+
+struct DirectRequestModel final
+    : ruvia::RequestModel<DirectRequestModel,
+          RUVIA_OPTIONAL_FIELD(message, ruvia::String)> {
+    using RuviaModelBase::RuviaModelBase;
+};
+
+struct DirectResponseModel final
+    : ruvia::ResponseModel<DirectResponseModel,
+          RUVIA_OPTIONAL_FIELD(message, ruvia::String)> {
+    using RuviaModelBase::RuviaModelBase;
+};
 
 template <typename T>
 concept HasLegacyMessageAccessor = requires(const T& model) { model.message(); };
@@ -83,6 +97,14 @@ static_assert(ruvia::detail::isResponseModel<SurfaceJsonResponse>);
 static_assert(!CanFromJson<SurfaceJsonResponse>);
 static_assert(!CanFromForm<SurfaceJsonResponse>);
 static_assert(CanToJson<SurfaceJsonResponse>);
+static_assert(!CanToJson<std::uint32_t>);
+static_assert(!CanToJson<ruvia::String>);
+static_assert(!CanToJson<ruvia::Array<ruvia::String>>);
+
+static_assert(ruvia::detail::isRequestModel<DirectRequestModel>);
+static_assert(!ruvia::detail::isResponseModel<DirectRequestModel>);
+static_assert(!ruvia::detail::isRequestModel<DirectResponseModel>);
+static_assert(ruvia::detail::isResponseModel<DirectResponseModel>);
 
 static_assert(!HasLegacyMessageAccessor<ClonePayload>);
 static_assert(!HasLegacyMessageAccessor<SurfaceJsonResponse>);
@@ -93,6 +115,12 @@ static_assert(!HasRvalueEnsure<SurfaceJsonResponse>);
 static_assert(!HasPublicParseHook<ClonePayload>);
 static_assert(!HasPublicWriterHook<SurfaceJsonResponse>);
 static_assert(!HasPublicFieldStateHook<ClonePayload>);
+
+[[maybe_unused]] ruvia::Task<ruvia::HttpResponse> responseModelSmokeTest(ruvia::Context& context) {
+    SurfaceJsonResponse response;
+    response.set<"message">("ok");
+    co_return context.json(response);
+}
 
 static_assert(std::same_as<
               decltype(std::declval<const RequiredFieldSurface&>().template get<"id">()),

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCoding.h"
 
 #include <exception>
 

@@ -55,6 +55,7 @@ private:
     template <typename, typename>
     friend class detail::TaskCompletionState;
     template <typename U, typename CompletionToken>
+        requires detail::AsioTaskResult<U>
     friend auto detail::asyncStartTask(Task<U>&&, CompletionToken&&);
     friend class TaskScope;
 

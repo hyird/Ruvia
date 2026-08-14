@@ -10,6 +10,7 @@
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/WebSocketHandshake.h"
 
 namespace {
 
@@ -126,6 +127,43 @@ RUVIA_TEST(websocket_server_negotiation_owns_selected_subprotocol) {
     supported.front() = 'X';
 
     RUVIA_CHECK_EQ(negotiation.subprotocol(), std::string_view("chat"));
+}
+
+RUVIA_TEST(websocket_h1_and_h2_share_compression_negotiation_and_serialization) {
+    struct Case final {
+        std::string_view extensionHeader;
+        ruvia::WebSocketCompression expected;
+    };
+    constexpr Case cases[] = {
+        {"", ruvia::WebSocketCompression::kDisabled},
+        {"Sec-WebSocket-Extensions: permessage-deflate\r\n", ruvia::WebSocketCompression::kPermessageDeflate},
+        {"Sec-WebSocket-Extensions: permessage-deflate; server_max_window_bits=15\r\n", ruvia::WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits},
+    };
+
+    for (const auto& testCase : cases) {
+        std::string raw =
+            "GET /ws HTTP/1.1\r\n"
+            "Host: example.test\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n";
+        raw.append(testCase.extensionHeader);
+        raw.append("\r\n");
+        const auto request = parseRequest(raw);
+        const auto h1 = ruvia::makeWebSocketServerHandshake(request, {});
+        const auto h2 = makeWebSocketServerNegotiation(request, {});
+
+        RUVIA_CHECK(h1.compression() == testCase.expected);
+        RUVIA_CHECK(h2.compression() == testCase.expected);
+        const auto extension = ruvia::detail::webSocketCompressionExtension(testCase.expected);
+        RUVIA_CHECK_EQ(h2.extensions(), extension);
+
+        std::string response;
+        h1.forEachResponsePart([&response](std::string_view part) { response.append(part); });
+        const auto header = std::string("Sec-WebSocket-Extensions: ") + std::string(extension) + "\r\n";
+        RUVIA_CHECK_EQ(response.find("Sec-WebSocket-Extensions:"), extension.empty() ? std::string::npos : response.find(header));
+    }
 }
 
 RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
@@ -253,7 +291,7 @@ RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
     RUVIA_CHECK(decodeResult.decoded() != nullptr);
     RUVIA_CHECK(hasHeader(fields, ":status", "200"));
     RUVIA_CHECK(hasHeader(fields, "sec-websocket-protocol", "chat"));
-    RUVIA_CHECK(hasHeader(fields, "sec-websocket-extensions", ruvia::detail::kWebSocketDeflateResponseExtensions));
+    RUVIA_CHECK(hasHeader(fields, "sec-websocket-extensions", ruvia::detail::webSocketCompressionExtension(ruvia::WebSocketCompression::kPermessageDeflate)));
     RUVIA_CHECK(hasHeaderName(fields, "date"));
     RUVIA_CHECK(!hasHeaderName(fields, "server"));
 }

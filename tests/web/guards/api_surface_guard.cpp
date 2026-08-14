@@ -21,7 +21,9 @@
 #include <vector>
 
 #include "ruvia/web/App.h"
+#ifdef RUVIA_ENABLE_JWT
 #include "ruvia/web/auth/Jwt.h"
+#endif
 #include "ruvia/web/db/DbMigration.h"
 #include "ruvia/web/db/DbRows.h"
 #include "ruvia/web/db/DbTransaction.h"
@@ -40,6 +42,7 @@
 #include "ruvia/http/HttpTransferCoding.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/HttpClientHandle.h"
+#include "ruvia/web/Model.h"
 #include "ruvia/web/RateLimit.h"
 #include "ruvia/web/SecurityHeaders.h"
 #include "ruvia/web/Session.h"
@@ -55,6 +58,10 @@
 #include "ruvia/web/detail/server/response/HttpStreamingResponseCompression.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/redis/RedisTypes.h"
+
+#if __has_include("ruvia/web/Json.h")
+#error "ruvia/web/Json.h must not expose dynamic JSON writers; declare a RUVIA_RESPONSE_MODEL"
+#endif
 
 namespace ruvia::detail {
 class RouteRateLimitResult;
@@ -77,6 +84,14 @@ namespace {
 struct CurrentUser final {
     std::uint32_t id{0};
     std::string_view name;
+};
+
+RUVIA_RESPONSE_MODEL(ContextJsonResponseProbe,
+    RUVIA_REQUIRED_FIELD(value, ruvia::UInt32));
+
+struct DynamicJsonBuilderProbe final {
+    template <typename Writer>
+    void operator()(Writer&) const;
 };
 
 struct AppUseProbeMiddleware;
@@ -537,6 +552,21 @@ concept HasContextBuilderMetadataArguments = requires(const T& context) {
     context.text(std::string_view{}, std::uint16_t{});
     context.html(std::string_view{}, std::uint16_t{});
     context.json(std::uint32_t{1}, std::uint16_t{});
+};
+
+template <typename T, typename Value>
+concept AcceptsContextJson = requires(const T& context, const Value& value) {
+    { context.json(value) } -> std::same_as<ruvia::HttpResponse>;
+};
+
+template <typename T>
+concept HasContextJsonObjectBuilder = requires(const T& context) {
+    context.jsonObject(DynamicJsonBuilderProbe{});
+};
+
+template <typename T>
+concept HasContextJsonArrayBuilder = requires(const T& context) {
+    context.jsonArray(DynamicJsonBuilderProbe{});
 };
 
 template <typename T>
@@ -1179,6 +1209,7 @@ concept HasDbMigrationReportCanonicalReadAccessors = requires(const T& report) {
     { report.changed() } -> std::same_as<bool>;
 };
 
+#ifdef RUVIA_ENABLE_JWT
 template <typename T>
 concept HasJwtClaimPublicFields = requires(T& claim) {
     claim.name;
@@ -1209,6 +1240,7 @@ concept HasJwtPayloadCanonicalReadAccessors = requires(const T& payload) {
     { payload.claims() } -> std::same_as<std::span<const ruvia::JwtClaim>>;
     { payload.claim(std::string_view{}) } -> std::same_as<std::optional<std::string_view>>;
 };
+#endif
 
 template <typename T>
 concept HasRedisValuePublicFactories = requires(std::pmr::memory_resource* resource, std::pmr::vector<ruvia::RedisValue> values) {
@@ -1528,7 +1560,7 @@ concept HasHttpErrorInfoPublicFields = requires(T& info) {
     info.statusText;
     info.code;
     info.message;
-    info.detailsJson;
+    info.validationIssues;
 };
 
 template <typename T>
@@ -1537,6 +1569,11 @@ concept HasHttpErrorInfoCanonicalReadAccessors = requires(const T& info) {
     { info.statusText() } -> std::same_as<std::string_view>;
     { info.code() } -> std::same_as<std::string_view>;
     { info.message() } -> std::same_as<std::string_view>;
+    { info.validationIssues() } -> std::same_as<std::span<const ruvia::ValidationIssue>>;
+};
+
+template <typename T>
+concept HasRawHttpErrorDetailsJson = requires(const T& info) {
     { info.detailsJson() } -> std::same_as<std::string_view>;
 };
 
@@ -1932,6 +1969,10 @@ static_assert(!HasResponseAppendHeaderAlias<ruvia::HttpResponse>);
 static_assert(!HasResponseHasHeaderAlias<ruvia::HttpResponse>);
 static_assert(HasResponseHeaderOptionsSetter<ruvia::HttpResponse>);
 static_assert(!HasContextBuilderMetadataArguments<ruvia::Context>);
+static_assert(AcceptsContextJson<ruvia::Context, ContextJsonResponseProbe>);
+static_assert(!AcceptsContextJson<ruvia::Context, std::uint32_t>);
+static_assert(!HasContextJsonObjectBuilder<ruvia::Context>);
+static_assert(!HasContextJsonArrayBuilder<ruvia::Context>);
 static_assert(HasResponseHeaderRemoveSetter<ruvia::HttpResponse>);
 static_assert(!HasResponseHeadersEraseAlias<ruvia::HttpResponse>);
 static_assert(!HasResponseHeadersGetAlias<ruvia::HttpResponse>);
@@ -2179,6 +2220,7 @@ static_assert(!std::is_constructible_v<ruvia::DbMigrationReport, std::pmr::memor
 static_assert(HasDbMigrationReportCanonicalReadAccessors<ruvia::DbMigrationReport>);
 static_assert(std::is_move_constructible_v<ruvia::DbMigrationReport>);
 static_assert(!std::is_move_assignable_v<ruvia::DbMigrationReport>);
+#ifdef RUVIA_ENABLE_JWT
 static_assert(!std::is_default_constructible_v<ruvia::JwtClaim>);
 static_assert(HasJwtClaimStringViewConstructor<ruvia::JwtClaim>);
 static_assert(!HasJwtClaimResourceConstructor<ruvia::JwtClaim>);
@@ -2189,6 +2231,7 @@ static_assert(HasJwtClaimCanonicalReadAccessors<ruvia::JwtClaim>);
 static_assert(!std::is_default_constructible_v<ruvia::JwtPayload>);
 static_assert(!std::is_constructible_v<ruvia::JwtPayload, std::pmr::memory_resource*>);
 static_assert(HasJwtPayloadCanonicalReadAccessors<ruvia::JwtPayload>);
+#endif
 static_assert(!std::is_default_constructible_v<ruvia::RedisValue>);
 static_assert(!std::is_constructible_v<ruvia::RedisValue, std::pmr::memory_resource*>);
 static_assert(!HasRedisValuePublicFactories<ruvia::RedisValue>);
@@ -2252,12 +2295,12 @@ static_assert(HasDocumentRootBindingAccessor<ruvia::detail::HttpServerOptions::D
 static_assert(!HasSplitDocumentRootDispatch<ruvia::detail::RouteTable>);
 static_assert(!HasRawDocumentRootDispatch<ruvia::detail::RouteTable>);
 static_assert(HasTypedBufferedDispatchResult<ruvia::detail::RouteTable>);
-static_assert(!HasRawResponseCompressionCoding<ruvia::detail::HttpContentCoding>);
+static_assert(!HasRawResponseCompressionCoding<ruvia::HttpContentCoding>);
 static_assert(!HasTypedResponseCompressionSelection<ruvia::detail::HttpResponseCodingSelection>);
 static_assert(HasTypedResponseCompressionSelection<ruvia::detail::HttpResponseCodingPolicy>);
 static_assert(!std::default_initializable<ruvia::detail::HttpResponseCompressionResult>);
 static_assert(!std::default_initializable<ruvia::detail::HttpResponseCodingPolicy>);
-static_assert(!HasRawApplyResponseCompressionCoding<ruvia::detail::HttpContentCoding>);
+static_assert(!HasRawApplyResponseCompressionCoding<ruvia::HttpContentCoding>);
   static_assert(HasTypedApplyResponseCompressionSelection<ruvia::detail::HttpResponseCodingSelection>);
   static_assert(HasTypedResponseCompressionPreflight<ruvia::detail::HttpResponseCodingSelection>);
   static_assert(!HasStaticFileCompressionResult<bool>);
@@ -2298,6 +2341,7 @@ static_assert(!AcceptsAnyRvalueValidatorMutation<ruvia::Validator>);
 static_assert(!ExposesRvalueHttpErrorInfo<ruvia::HttpError>);
 static_assert(!HasHttpErrorInfoPublicFields<ruvia::HttpErrorInfo>);
 static_assert(HasHttpErrorInfoCanonicalReadAccessors<ruvia::HttpErrorInfo>);
+static_assert(!HasRawHttpErrorDetailsJson<ruvia::HttpErrorInfo>);
 static_assert(!HasCompleteType<ruvia::detail::RouteRateLimitResult>);
 static_assert(!std::is_default_constructible_v<ruvia::Http1RequestParseResult>);
 static_assert(!std::is_default_constructible_v<ruvia::Http1ParsedRequest>);

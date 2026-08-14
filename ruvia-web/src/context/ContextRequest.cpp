@@ -7,12 +7,11 @@
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpAcceptMediaType.h"
 #include "ruvia/http/detail/field/HttpAcceptToken.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/detail/http/request/RequestFormAccess.h"
 #include "ruvia/web/detail/http/request/RequestFieldsAccess.h"
 #include "ruvia/web/detail/http/request/RequestQueryValues.h"
-#include "ruvia/http/detail/parser/MultipartBoundary.h"
 #include "ruvia/http/detail/request/RequestBodyDecoding.h"
 #include "ruvia/web/detail/http/request/RequestBodyLoader.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
@@ -450,7 +449,7 @@ Task<std::string_view> Context::requestBody() const {
         throw detail::UnsupportedRequestContentCoding(*unsupported);
     }
     const auto coding = *parsedCoding.coding();
-    if (coding == detail::HttpContentCoding::kIdentity) {
+    if (coding == HttpContentCoding::kIdentity) {
         co_return raw;
     }
     auto decodeResult = detail::decodeHttpRequestContent(coding, raw, maxDecodedBodyBytes_, resource());
@@ -528,7 +527,7 @@ MultipartReader Context::requestMultipartReader() const {
 }
 
 MultipartBoundary Context::multipartBoundary() const {
-    const auto boundary = detail::httpParseMultipartBoundary(detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType));
+    const auto boundary = parseMultipartBoundary(detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType));
     if (const auto* parsed = boundary.boundary()) {
         return *parsed;
     }

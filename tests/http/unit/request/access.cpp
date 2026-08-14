@@ -21,7 +21,7 @@ using ruvia::HttpKnownMethod;
 using ruvia::HttpProtocolVersion;
 using ruvia::HttpRequest;
 using ruvia::HttpRequestTargetForm;
-using ruvia::detail::HttpContentCoding;
+using ruvia::HttpContentCoding;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::requestBodyBytes;
 using ruvia::detail::requestContentCoding;

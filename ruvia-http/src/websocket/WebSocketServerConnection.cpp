@@ -2,18 +2,18 @@
 
 #include <exception>
 #include <stdexcept>
-
 #include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
 
 namespace ruvia {
 namespace {
 
-[[nodiscard]] detail::WebSocketDeflateNegotiation toInternal(WebSocketCompression compression) {
+[[nodiscard]] WebSocketCompression validateCompression(WebSocketCompression compression) {
     switch (compression) {
-        case WebSocketCompression::kDisabled: return detail::WebSocketDeflateNegotiation::kDisabled;
-        case WebSocketCompression::kPermessageDeflate: return detail::WebSocketDeflateNegotiation::kAccepted;
-        case WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits: return detail::WebSocketDeflateNegotiation::kAcceptedWithServerMaxWindowBits;
+        case WebSocketCompression::kDisabled:
+        case WebSocketCompression::kPermessageDeflate:
+        case WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits:
+            return compression;
     }
     throw std::invalid_argument("invalid WebSocket compression mode");
 }
@@ -82,7 +82,7 @@ class WebSocketServerConnection::Impl final {
 public:
     Impl(std::pmr::memory_resource* requested, WebSocketServerOptions options)
         : input(detail::httpPmrResourceOrDefault(requested)),
-          connection(input, options.messageLimit, toInternal(options.compression)) {}
+          connection(input, options.messageLimit, validateCompression(options.compression)) {}
     std::pmr::string input;
     detail::WsConnection connection;
 };

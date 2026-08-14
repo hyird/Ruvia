@@ -1,10 +1,30 @@
 #include <chrono>
 #include <limits>
+#include <memory_resource>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include "ruvia/http/HttpCache.h"
 #include "ruvia/http/HttpSetCookie.h"
 #include "test_harness.h"
+
+namespace {
+
+template <typename Input>
+concept CanParseSetCookie = requires(Input&& input) {
+    ruvia::parseSetCookie(std::forward<Input>(input));
+};
+
+static_assert(CanParseSetCookie<std::string&>);
+static_assert(CanParseSetCookie<const std::string&>);
+static_assert(CanParseSetCookie<std::pmr::string&>);
+static_assert(CanParseSetCookie<std::string_view>);
+static_assert(!CanParseSetCookie<std::string>);
+static_assert(!CanParseSetCookie<const std::string>);
+static_assert(!CanParseSetCookie<std::pmr::string>);
+
+}  // namespace
 
 RUVIA_TEST(set_cookie_parser_exposes_client_storage_fields) {
     const auto parsed = ruvia::parseSetCookie("sid=abc; Path=/api; Domain=.example.com; Max-Age=60; Secure; HttpOnly");

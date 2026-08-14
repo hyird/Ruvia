@@ -163,7 +163,7 @@ RUVIA_TEST(validator_one_of_absent_skips_and_range_accepts_doubles) {
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{2});  // unchanged
 }
 
-RUVIA_TEST(validation_error_serializes_issues_to_json) {
+RUVIA_TEST(validation_error_exposes_typed_issues) {
     Validator v;
     std::optional<std::string> absent;
     v.required(absent, "email", "email is required");
@@ -174,23 +174,28 @@ RUVIA_TEST(validation_error_serializes_issues_to_json) {
         v.throwIfInvalid();
         RUVIA_CHECK(false);  // must have thrown
     } catch (const ruvia::ValidationError& error) {
-        RUVIA_CHECK_EQ(error.info().detailsJson(), std::string_view(R"([{"field":"email","code":"required","message":"email is required"},)"
-                                                                    R"({"field":"name","code":"too_small","message":"too short"}])"));
+        const auto issues = error.info().validationIssues();
+        RUVIA_CHECK_EQ(issues.size(), std::size_t{2});
+        RUVIA_CHECK_EQ(issues[0].field(), std::string_view("email"));
+        RUVIA_CHECK_EQ(issues[0].code(), std::string_view("required"));
+        RUVIA_CHECK_EQ(issues[0].message(), std::string_view("email is required"));
+        RUVIA_CHECK_EQ(issues[1].field(), std::string_view("name"));
+        RUVIA_CHECK_EQ(issues[1].code(), std::string_view("too_small"));
+        RUVIA_CHECK_EQ(issues[1].message(), std::string_view("too short"));
     }
 }
 
-RUVIA_TEST(validation_error_json_escapes_special_characters) {
+RUVIA_TEST(validation_error_preserves_special_characters_as_typed_data) {
     Validator v;
-    // A field/message carrying a quote and backslash must be JSON-escaped so the
-    // error body stays well-formed and cannot be broken out of.
     v.add("f\"x", "code", "a\"b\\c");
     try {
         v.throwIfInvalid();
         RUVIA_CHECK(false);
     } catch (const ruvia::ValidationError& error) {
-        const auto json = error.info().detailsJson();
-        RUVIA_CHECK(json.find(R"("field":"f\"x")") != std::string_view::npos);
-        RUVIA_CHECK(json.find(R"("message":"a\"b\\c")") != std::string_view::npos);
+        const auto issues = error.info().validationIssues();
+        RUVIA_CHECK_EQ(issues.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(issues[0].field(), std::string_view("f\"x"));
+        RUVIA_CHECK_EQ(issues[0].message(), std::string_view("a\"b\\c"));
     }
 }
 

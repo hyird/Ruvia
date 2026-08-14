@@ -1,5 +1,7 @@
 #pragma once
 
+#ifdef RUVIA_ENABLE_JWT
+
 #include <chrono>
 #include <memory_resource>
 #include <optional>
@@ -124,3 +126,5 @@ template <detail::HttpTemporaryOwningCharString Authorization>
 std::optional<std::string_view> jwtBearerToken(Authorization&&) = delete;
 
 }  // namespace ruvia
+
+#endif  // RUVIA_ENABLE_JWT

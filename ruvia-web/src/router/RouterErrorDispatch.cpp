@@ -6,7 +6,9 @@
 #include <utility>
 
 #include "ruvia/core/BlockingPool.h"
+#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
@@ -32,13 +34,13 @@ struct OwnedHttpErrorInfo final {
     std::pmr::string statusText;
     std::pmr::string code;
     std::pmr::string message;
-    std::pmr::string detailsJson;
+    std::pmr::vector<ValidationIssue> validationIssues;
 
     explicit OwnedHttpErrorInfo(HttpErrorInfo source, std::pmr::memory_resource* resource)
         : statusText(resource),
           code(resource),
           message(resource),
-          detailsJson(resource) {
+          validationIssues(resource) {
         assign(source);
     }
 
@@ -51,9 +53,14 @@ struct OwnedHttpErrorInfo final {
         statusText.assign(source.statusText().data(), source.statusText().size());
         code.assign(source.code().data(), source.code().size());
         message.assign(source.message().data(), source.message().size());
-        detailsJson.assign(source.detailsJson().data(), source.detailsJson().size());
+        std::pmr::vector<ValidationIssue> copied(validationIssues.get_allocator().resource());
+        copied.reserve(source.validationIssues().size());
+        for (const auto& issue : source.validationIssues()) {
+            copied.push_back(detail::ValidationIssueAccess::copy(issue, copied.get_allocator().resource()));
+        }
+        validationIssues = std::move(copied);
 
-        info = HttpErrorInfo(source.status(), code, message, statusText, detailsJson);
+        info = HttpErrorInfo(source.status(), code, message, statusText, validationIssues);
     }
 };
 
@@ -65,7 +72,7 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
     } catch (const ValidationError& error) {
         errorInfo.assign(error.info());
     } catch (const detail::UnsupportedRequestContentCoding& error) {
-        errorInfo.assign(HttpErrorInfo(detail::HttpUnsupportedContentCoding::status(), "unsupported_content_coding", error.what()));
+        errorInfo.assign(HttpErrorInfo(HttpUnsupportedContentCoding::status(), "unsupported_content_coding", error.what()));
     } catch (const HttpError& error) {
         errorInfo.assign(error.info());
     } catch (const HttpProtocolError& error) {

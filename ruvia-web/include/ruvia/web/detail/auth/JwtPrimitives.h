@@ -1,5 +1,7 @@
 #pragma once
 
+#ifdef RUVIA_ENABLE_JWT
+
 #include "ruvia/web/auth/Jwt.h"
 
 #include <chrono>
@@ -77,3 +79,5 @@ struct JwtPayloadAccess final {
 };
 
 }  // namespace ruvia::detail
+
+#endif  // RUVIA_ENABLE_JWT

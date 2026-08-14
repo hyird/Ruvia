@@ -1,12 +1,15 @@
 #include "test_harness.h"
 
 #include <memory_resource>
+#include <ranges>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/web/Error.h"
+#include "ruvia/web/Validation.h"
 
 namespace {
 
@@ -22,13 +25,29 @@ template <typename String>
 concept AcceptsAnyRvalueHttpErrorInfoText = requires(String&& value) { ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, std::forward<String>(value)); } || requires(String&& value) { ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, std::forward<String>(value)); } || requires(String&& value) { ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, {}, std::forward<String>(value)); } || requires(String&& value) { ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, {}, {}, std::forward<String>(value)); };
 
 template <typename String>
-concept AcceptsLvalueHttpErrorInfoText = requires(String& value) { ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, value, value, value, value); };
+concept AcceptsLvalueHttpErrorInfoText = requires(String& value) { ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, value, value, value); };
+
+template <typename Issues>
+concept AcceptsRvalueHttpErrorInfoIssues = requires(Issues&& issues) {
+    ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, {}, {}, std::forward<Issues>(issues));
+};
+
+template <typename Issues>
+concept AcceptsLvalueHttpErrorInfoIssues = requires(Issues& issues) {
+    ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, {}, {}, issues);
+};
 
 static_assert(!ExposesRvalueHttpErrorInfo<ruvia::HttpError>);
 static_assert(!AcceptsAnyRvalueHttpErrorInfoText<std::string>);
 static_assert(!AcceptsAnyRvalueHttpErrorInfoText<const std::string>);
 static_assert(!AcceptsAnyRvalueHttpErrorInfoText<std::pmr::string>);
 static_assert(AcceptsLvalueHttpErrorInfoText<std::string>);
+static_assert(!AcceptsRvalueHttpErrorInfoIssues<ruvia::ValidationError::IssueList>);
+static_assert(AcceptsLvalueHttpErrorInfoIssues<ruvia::ValidationError::IssueList>);
+static_assert(AcceptsRvalueHttpErrorInfoIssues<std::span<const ruvia::ValidationIssue>>);
+using ValidationIssuesOwningView = std::ranges::owning_view<ruvia::ValidationError::IssueList>;
+static_assert(!AcceptsRvalueHttpErrorInfoIssues<ValidationIssuesOwningView>);
+static_assert(AcceptsLvalueHttpErrorInfoIssues<ValidationIssuesOwningView>);
 
 RUVIA_TEST(default_error_code_mapping) {
     RUVIA_CHECK_EQ(defaultErrorCode(ruvia::http_status::kBadRequest), std::string_view("bad_request"));

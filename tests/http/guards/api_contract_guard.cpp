@@ -20,6 +20,8 @@
 #include <ruvia/http/HttpHeader.h>
 #include <ruvia/http/HttpClient.h>
 #include <ruvia/http/HttpClientRedirect.h>
+#include <ruvia/http/HttpContentCodec.h>
+#include <ruvia/http/HttpContentCoding.h>
 #include <ruvia/http/Http1ClientRequestWriter.h>
 #include <ruvia/http/Http1ClientResponseParser.h>
 #include <ruvia/http/Http1InterimResponseWriter.h>
@@ -33,12 +35,14 @@
 #include <ruvia/http/HttpProtocolVersion.h>
 #include <ruvia/http/HttpRequest.h>
 #include <ruvia/http/HttpResponse.h>
+#include <ruvia/http/HttpSetCookie.h>
 #include <ruvia/http/HttpExpectations.h>
 #include <ruvia/http/HttpTransferCoding.h>
 #include <ruvia/http/MultipartParser.h>
 #include <ruvia/http/Sse.h>
 #include <ruvia/http/UrlEncoding.h>
 #include <ruvia/http/WebSocketServerConnection.h>
+#include <ruvia/http/WebSocketHandshake.h>
 #include <ruvia/http/detail/util/AsciiCase.h>
 #include <ruvia/http/detail/util/BorrowedView.h>
 #include <ruvia/http/detail/cookie/CookieValidation.h>
@@ -82,6 +86,7 @@
 #include <ruvia/http/detail/http2/message/Http2RemoteReceiveState.h>
 #include <ruvia/http/detail/http2/message/Http2RequestBuilder.h>
 #include <ruvia/http/detail/http2/message/Http2ResponseHeadPlan.h>
+#include <ruvia/http/detail/http2/message/Http2WebSocketHandshake.h>
 #include <ruvia/http/detail/http2/stream/Http2StreamHeaderBlocks.h>
 #include <ruvia/http/detail/http2/stream/Http2StreamLifecycle.h>
 #include <ruvia/http/detail/http2/stream/Http2StreamRequestData.h>
@@ -91,7 +96,6 @@
 #include <ruvia/http/detail/http2/stream/Http2TunnelState.h>
 #include <ruvia/http/detail/parser/MultipartPartAccess.h>
 #include <ruvia/http/detail/parser/MimeFieldGrammar.h>
-#include <ruvia/http/detail/parser/MultipartBoundary.h>
 #include <ruvia/http/detail/parser/MultipartDelimiter.h>
 #include <ruvia/http/detail/parser/MultipartPartHeaders.h>
 #include <ruvia/http/detail/parser/MultipartStreamPartAccess.h>
@@ -102,9 +106,7 @@
 #include <ruvia/http/detail/server/HttpFinalResponseControlPlan.h>
 #include <ruvia/http/detail/server/HttpResponseHeadBuffer.h>
 #include <ruvia/http/detail/server/HttpResponseWritePlan.h>
-#include <ruvia/http/detail/websocket/handshake/HttpWebSocketServerHandshake.h>
 #include <ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h>
-#include <ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeValidation.h>
 #include <ruvia/http/detail/websocket/message/HttpWebSocketMessageAccess.h>
 #include <ruvia/http/detail/websocket/frame/HttpWebSocketClosePayload.h>
 #include <ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h>
@@ -393,6 +395,9 @@ template <typename Input>
 concept AcceptsMultipartBorrowedInput = requires(Input&& input) { ruvia::parseMultipartBody(std::forward<Input>(input), ruvia::MultipartBoundary("x")); };
 
 template <typename Input>
+concept AcceptsSetCookieBorrowedInput = requires(Input&& input) { ruvia::parseSetCookie(std::forward<Input>(input)); };
+
+template <typename Input>
 concept AcceptsCopiedMultipartMetadata = requires(Input&& input) {
     ruvia::detail::MultipartPartAccess::make(std::forward<Input>(input), {}, {}, {}, std::pmr::get_default_resource());
     ruvia::detail::MultipartPartAccess::make({}, std::forward<Input>(input), {}, {}, std::pmr::get_default_resource());
@@ -453,6 +458,13 @@ static_assert(AcceptsMultipartBorrowedInput<std::string&>);
 static_assert(AcceptsMultipartBorrowedInput<std::string_view>);
 static_assert(!AcceptsMultipartBorrowedInput<std::string>);
 static_assert(!AcceptsMultipartBorrowedInput<std::pmr::string>);
+static_assert(AcceptsSetCookieBorrowedInput<std::string&>);
+static_assert(AcceptsSetCookieBorrowedInput<const std::string&>);
+static_assert(AcceptsSetCookieBorrowedInput<std::pmr::string&>);
+static_assert(AcceptsSetCookieBorrowedInput<std::string_view>);
+static_assert(!AcceptsSetCookieBorrowedInput<std::string>);
+static_assert(!AcceptsSetCookieBorrowedInput<const std::string>);
+static_assert(!AcceptsSetCookieBorrowedInput<std::pmr::string>);
 static_assert(AcceptsCopiedMultipartMetadata<std::string>);
 static_assert(AcceptsCopiedMultipartMetadata<std::pmr::string>);
 static_assert(AcceptsAnyBufferedMultipartBorrow<std::string&>);
@@ -798,6 +810,11 @@ template <typename T>
 concept ExposesRvalueWebSocketServerSubprotocol = requires(T&& negotiation) { std::move(negotiation).subprotocol(); };
 
 template <typename T>
+concept AcceptsRvalueWebSocketResponsePartVisitor = requires(T&& handshake) {
+    std::move(handshake).forEachResponsePart([](std::string_view) {});
+};
+
+template <typename T>
 concept AcceptsLooseWebSocketHandshakeSubmit = requires(T& connection) { connection.submitWebSocketHandshake(std::uint32_t{}, std::string_view{}, std::string_view{}); };
 
 template <typename T>
@@ -1056,7 +1073,7 @@ concept HasTypedResponseCodingSelector = requires(const ruvia::detail::HttpRespo
 };
 
 template <typename Selection>
-concept HasResponseCodingAcceptability = requires(const Selection& selection, ruvia::detail::HttpContentCoding coding) {
+concept HasResponseCodingAcceptability = requires(const Selection& selection, ruvia::HttpContentCoding coding) {
     { selection.accepts(coding) } -> std::same_as<bool>;
 };
 
@@ -1072,7 +1089,7 @@ concept HasTypedResponseCodingResult = requires(const Result& result) {
 };
 
 template <typename Candidates>
-concept HasTypedResponseCodingCandidates = requires(Candidates& candidates, ruvia::detail::HttpContentCoding coding) {
+concept HasTypedResponseCodingCandidates = requires(Candidates& candidates, ruvia::HttpContentCoding coding) {
     { Candidates::empty() } -> std::same_as<Candidates>;
     { Candidates::identityOnly() } -> std::same_as<Candidates>;
     { Candidates::all() } -> std::same_as<Candidates>;
@@ -1254,7 +1271,7 @@ static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::Http1ParsedClie
 static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::PreparedHttp1ClientRequest>);
 static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::detail::ResponseStreamHead>);
 static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::detail::PreparedHttp1ResponseStream>);
-static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::detail::HttpWebSocketServerHandshake>);
+static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::WebSocketServerHandshake>);
 
 template <typename T>
 concept HasStaleHttp2StreamRemoteContentForwarders = requires(const T& stream) {
@@ -2021,45 +2038,49 @@ static_assert(sizeof(ruvia::detail::Http2ResponseHeadSubmitFailure) <= 1);
 static_assert(!HasResponseHeadPlanAccessor<ruvia::detail::Http2ResponseHeadSubmitFailure>);
 static_assert(!std::constructible_from<ruvia::detail::Http2ResponseHeadSubmitFailure, ruvia::detail::Http2ResponseHeadSubmitError>);
 using WebSocketServerNegotiator = ruvia::detail::WebSocketServerNegotiation (*)(const ruvia::HttpRequest&, std::string_view, std::pmr::memory_resource*);
-using HttpWebSocketServerHandshakeFactory = ruvia::detail::HttpWebSocketServerHandshake (*)(const ruvia::HttpRequest&, std::string_view, std::pmr::memory_resource*);
-using Http1WebSocketHandshakeValidator = ruvia::detail::HttpWebSocketHandshakeValidationResult (*)(const ruvia::HttpRequest&, const ruvia::Http1RequestBodyPlan&) noexcept;
-using Http2WebSocketHandshakeValidator = ruvia::detail::HttpWebSocketHandshakeValidationResult (*)(const ruvia::detail::Http2StreamState&, const ruvia::HttpRequest&) noexcept;
+using WebSocketServerHandshakeFactory = ruvia::WebSocketServerHandshake (*)(const ruvia::HttpRequest&, std::string_view, std::pmr::memory_resource*);
+using WebSocketHandshakeValidator = ruvia::WebSocketHandshakeValidationResult (*)(const ruvia::HttpRequest&, const ruvia::Http1RequestBodyPlan&) noexcept;
+using Http2WebSocketHandshakeValidator = ruvia::WebSocketHandshakeValidationResult (*)(const ruvia::detail::Http2StreamState&, const ruvia::HttpRequest&) noexcept;
 using WebSocketHandshakeFieldValidator = bool (*)(const ruvia::HttpRequest&) noexcept;
 using WebSocketClientOfferHeaderValidator = bool (*)(std::span<const ruvia::HttpHeaderView>) noexcept;
 static_assert(std::same_as<decltype(&ruvia::detail::makeWebSocketServerNegotiation), WebSocketServerNegotiator>);
-static_assert(std::same_as<decltype(&ruvia::detail::makeHttpWebSocketServerHandshake), HttpWebSocketServerHandshakeFactory>);
-static_assert(std::same_as<decltype(&ruvia::detail::validateHttp1WebSocketHandshake), Http1WebSocketHandshakeValidator>);
+static_assert(std::same_as<decltype(&ruvia::makeWebSocketServerHandshake), WebSocketServerHandshakeFactory>);
+static_assert(std::same_as<decltype(&ruvia::validateWebSocketHandshake), WebSocketHandshakeValidator>);
 static_assert(std::same_as<decltype(&ruvia::detail::validateHttp2WebSocketHandshake), Http2WebSocketHandshakeValidator>);
 static_assert(std::same_as<decltype(&ruvia::detail::webSocketSubprotocolOffersValid), WebSocketHandshakeFieldValidator>);
 static_assert(std::same_as<decltype(&ruvia::detail::webSocketExtensionOffersValid), WebSocketHandshakeFieldValidator>);
 static_assert(std::same_as<decltype(&ruvia::detail::webSocketClientOfferHeadersValid), WebSocketClientOfferHeaderValidator>);
-static_assert(!std::default_initializable<ruvia::detail::HttpWebSocketHandshakeAccepted>);
-static_assert(!std::default_initializable<ruvia::detail::HttpWebSocketHandshakeFailure>);
-static_assert(!std::default_initializable<ruvia::detail::HttpWebSocketHandshakeValidationResult>);
-static_assert(!ExposesRvalueWebSocketHandshakeValidationAlternative<ruvia::detail::HttpWebSocketHandshakeValidationResult>);
-static_assert(!HasRawContentDecodeError<ruvia::detail::HttpWebSocketHandshakeFailure>);
-static_assert(AppliesRequiredWebSocketResponseHeaders<ruvia::detail::HttpWebSocketHandshakeFailure>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpWebSocketHandshakeValidationResult&>().accepted()), const ruvia::detail::HttpWebSocketHandshakeAccepted*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpWebSocketHandshakeValidationResult&>().failure()), const ruvia::detail::HttpWebSocketHandshakeFailure*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpWebSocketHandshakeFailure&>().protocolError()), ruvia::HttpProtocolError>);
-static_assert(std::is_enum_v<ruvia::detail::WebSocketDeflateNegotiation>);
-static_assert(!std::constructible_from<ruvia::detail::WebSocketDeflateNegotiation, bool>);
-static_assert(!HasLooseWebSocketDeflateFields<ruvia::detail::WebSocketDeflateNegotiation>);
+static_assert(!std::default_initializable<ruvia::WebSocketHandshakeAccepted>);
+static_assert(!std::default_initializable<ruvia::WebSocketHandshakeFailure>);
+static_assert(!std::default_initializable<ruvia::WebSocketHandshakeValidationResult>);
+static_assert(!ExposesRvalueWebSocketHandshakeValidationAlternative<ruvia::WebSocketHandshakeValidationResult>);
+static_assert(!HasRawContentDecodeError<ruvia::WebSocketHandshakeFailure>);
+static_assert(AppliesRequiredWebSocketResponseHeaders<ruvia::WebSocketHandshakeFailure>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketHandshakeValidationResult&>().accepted()), const ruvia::WebSocketHandshakeAccepted*>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketHandshakeValidationResult&>().failure()), const ruvia::WebSocketHandshakeFailure*>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketHandshakeFailure&>().protocolError()), ruvia::HttpProtocolError>);
+static_assert(std::is_enum_v<ruvia::WebSocketCompression>);
+static_assert(!std::constructible_from<ruvia::WebSocketCompression, bool>);
+static_assert(!HasLooseWebSocketDeflateFields<ruvia::WebSocketCompression>);
 static_assert(!HasFallibleWebSocketDeflateState<ruvia::detail::WebSocketDeflate>);
 static_assert(!std::is_nothrow_default_constructible_v<ruvia::detail::WebSocketDeflate>);
 static_assert(!std::default_initializable<ruvia::detail::WebSocketServerNegotiation>);
 static_assert(!std::copy_constructible<ruvia::detail::WebSocketServerNegotiation>);
 static_assert(std::move_constructible<ruvia::detail::WebSocketServerNegotiation>);
 static_assert(!ExposesRvalueWebSocketServerSubprotocol<ruvia::detail::WebSocketServerNegotiation>);
-static_assert(!std::constructible_from<ruvia::detail::WebSocketServerNegotiation, std::string_view, ruvia::detail::WebSocketDeflateNegotiation>);
+static_assert(!std::constructible_from<ruvia::detail::WebSocketServerNegotiation, std::string_view, ruvia::WebSocketCompression>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketServerNegotiation&>().subprotocol()), std::string_view>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketServerNegotiation&>().deflate()), ruvia::detail::WebSocketDeflateNegotiation>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketServerNegotiation&>().compression()), ruvia::WebSocketCompression>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketServerNegotiation&>().extensions()), std::string_view>);
-static_assert(!std::default_initializable<ruvia::detail::HttpWebSocketServerHandshake>);
-static_assert(!std::copy_constructible<ruvia::detail::HttpWebSocketServerHandshake>);
-static_assert(std::move_constructible<ruvia::detail::HttpWebSocketServerHandshake>);
-static_assert(HasWebSocketNegotiationAccessor<ruvia::detail::HttpWebSocketServerHandshake>);
-static_assert(!HasLooseWebSocketNegotiationFields<ruvia::detail::HttpWebSocketServerHandshake>);
+static_assert(!std::default_initializable<ruvia::WebSocketServerHandshake>);
+static_assert(!std::copy_constructible<ruvia::WebSocketServerHandshake>);
+static_assert(std::move_constructible<ruvia::WebSocketServerHandshake>);
+static_assert(!ExposesRvalueWebSocketServerSubprotocol<ruvia::WebSocketServerHandshake>);
+static_assert(!AcceptsRvalueWebSocketResponsePartVisitor<ruvia::WebSocketServerHandshake>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketServerHandshake&>().subprotocol()), std::string_view>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketServerHandshake&>().compression()), ruvia::WebSocketCompression>);
+static_assert(!HasWebSocketNegotiationAccessor<ruvia::WebSocketServerHandshake>);
+static_assert(!HasLooseWebSocketNegotiationFields<ruvia::WebSocketServerHandshake>);
 static_assert(!std::default_initializable<ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
 static_assert(!std::copy_constructible<ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
 static_assert(std::move_constructible<ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
@@ -2210,14 +2231,15 @@ static_assert(HasMultipartOffset<ruvia::detail::HttpMultipartDelimiterNeedInput>
 static_assert(!HasMultipartLineBytes<ruvia::detail::HttpMultipartDelimiterNeedInput>);
 static_assert(HasMultipartLineBytes<ruvia::detail::HttpMultipartPartDelimiter>);
 static_assert(HasMultipartLineBytes<ruvia::detail::HttpMultipartCloseDelimiter>);
-static_assert(!std::default_initializable<ruvia::detail::HttpMultipartBoundaryParseResult>);
-static_assert(!HasMultipartStatus<ruvia::detail::HttpMultipartBoundaryParseResult>);
-static_assert(!HasAnyRvalueMultipartBoundaryAccessor<ruvia::detail::HttpMultipartBoundaryParseResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpMultipartBoundaryParseResult&>().notApplicable()), const ruvia::detail::HttpMultipartBoundaryNotApplicable*>);
+static_assert(!std::default_initializable<ruvia::MultipartBoundaryParseResult>);
+static_assert(!HasMultipartStatus<ruvia::MultipartBoundaryParseResult>);
+static_assert(!HasAnyRvalueMultipartBoundaryAccessor<ruvia::MultipartBoundaryParseResult>);
+static_assert(std::same_as<decltype(ruvia::parseMultipartBoundary(std::string_view{})), ruvia::MultipartBoundaryParseResult>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartBoundaryParseResult&>().notApplicable()), const ruvia::MultipartBoundaryNotApplicable*>);
 static_assert(!ExposesAnyRvalueMultipartOwnedView<ruvia::MultipartBoundary>);
 static_assert(!ExposesAnyRvalueMultipartOwnedView<ruvia::MultipartPart>);
-static_assert(!HasMultipartParseError<ruvia::detail::HttpMultipartBoundaryParseFailure>);
-static_assert(HasMultipartProtocolError<ruvia::detail::HttpMultipartBoundaryParseFailure>);
+static_assert(!HasMultipartParseError<ruvia::MultipartBoundaryParseFailure>);
+static_assert(HasMultipartProtocolError<ruvia::MultipartBoundaryParseFailure>);
 static_assert(!std::default_initializable<ruvia::detail::HttpMultipartPartHeaderParseResult>);
 static_assert(!HasAnyRvalueMultipartPartHeaderAccessor<ruvia::detail::HttpMultipartPartHeaderParseResult>);
 static_assert(HasMultipartParseError<ruvia::detail::HttpMultipartPartHeaderParseFailure>);
@@ -2280,15 +2302,15 @@ static_assert(!std::default_initializable<ruvia::detail::HttpOwnedResponseBytes>
 static_assert(!std::default_initializable<ruvia::detail::HttpOwnedResponseFile>);
 static_assert(!std::default_initializable<ruvia::detail::HttpBorrowedResponseFile>);
 static_assert(!std::default_initializable<ruvia::detail::ResponseFileBody>);
-static_assert(!std::default_initializable<ruvia::detail::HttpContentCodingFieldResult>);
-static_assert(ruvia::detail::HttpUnsupportedContentCoding::status() == ruvia::http_status::kUnsupportedMediaType);
-static_assert(ruvia::detail::HttpInvalidContentCodingField::status() == ruvia::http_status::kBadRequest);
+static_assert(!std::default_initializable<ruvia::HttpContentCodingFieldResult>);
+static_assert(ruvia::HttpUnsupportedContentCoding::status() == ruvia::http_status::kUnsupportedMediaType);
+static_assert(ruvia::HttpInvalidContentCodingField::status() == ruvia::http_status::kBadRequest);
 static_assert(ruvia::detail::httpSupportedRequestContentCodings() == std::string_view("gzip, br, zstd"));
-static_assert(!ExposesRvalueContentCoding<ruvia::detail::HttpContentCodingFieldResult>);
-static_assert(!ExposesRvalueUnsupportedContentCoding<ruvia::detail::HttpContentCodingFieldResult>);
-static_assert(!ExposesRvalueInvalidContentCoding<ruvia::detail::HttpContentCodingFieldResult>);
-static_assert(std::same_as<decltype(ruvia::detail::httpContentCodingFromFieldValue(std::string_view{})), ruvia::detail::HttpContentCodingFieldResult>);
-static_assert(std::same_as<decltype(ruvia::detail::httpClientResponseContentCoding(std::declval<const ruvia::HttpClientResponseHead&>())), ruvia::detail::HttpContentCodingFieldResult>);
+static_assert(!ExposesRvalueContentCoding<ruvia::HttpContentCodingFieldResult>);
+static_assert(!ExposesRvalueUnsupportedContentCoding<ruvia::HttpContentCodingFieldResult>);
+static_assert(!ExposesRvalueInvalidContentCoding<ruvia::HttpContentCodingFieldResult>);
+static_assert(std::same_as<decltype(ruvia::parseHttpContentCoding(std::string_view{})), ruvia::HttpContentCodingFieldResult>);
+static_assert(std::same_as<decltype(ruvia::detail::httpClientResponseContentCoding(std::declval<const ruvia::HttpClientResponseHead&>())), ruvia::HttpContentCodingFieldResult>);
 static_assert(!HasContentLengthPresent<ruvia::detail::HttpContentLengthState>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpContentLengthState&>().value()), std::optional<std::size_t>>);
 static_assert(!HasStaleTransferEncodingAccessors<ruvia::detail::HttpTransferEncodingState>);
@@ -2300,7 +2322,7 @@ static_assert(HasHttp1RequestPlanTransferCodings<ruvia::detail::HttpFinalChunked
 static_assert(!ExposesRvalueFinalChunked<ruvia::detail::HttpTransferEncodingValue>);
 static_assert(!ExposesRvalueNonChunked<ruvia::detail::HttpTransferEncodingValue>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpTransferEncodingState&>().value()), std::optional<ruvia::detail::HttpTransferEncodingValue>>);
-static_assert(!std::default_initializable<ruvia::detail::HttpContentDecodeResult>);
+static_assert(!std::default_initializable<ruvia::HttpContentDecodeResult>);
 static_assert(!std::default_initializable<ruvia::detail::HttpRequestContentDecodeResult>);
 static_assert(!std::copy_constructible<ruvia::detail::HttpRequestContentDecodeResult>);
 static_assert(std::move_constructible<ruvia::detail::HttpRequestContentDecodeResult>);
@@ -2311,25 +2333,25 @@ static_assert(!HasRawContentDecodeError<ruvia::detail::HttpRequestContentDecodeP
 static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpRequestContentDecodeProtocolFailure&>().protocolError()), ruvia::HttpProtocolError>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpRequestContentDecodeResult&>().protocolFailure()), const ruvia::detail::HttpRequestContentDecodeProtocolFailure*>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpRequestContentDecodeResult&>().decoderFailure()), const ruvia::detail::HttpRequestContentDecoderFailure*>);
-static_assert(std::same_as<decltype(ruvia::detail::decodeHttpRequestContent(ruvia::detail::HttpContentCoding::kGzip, std::string_view{}, std::size_t{}, std::declval<std::pmr::memory_resource*>())), ruvia::detail::HttpRequestContentDecodeResult>);
-static_assert(!std::copy_constructible<ruvia::detail::HttpContentDecodeResult>);
-static_assert(std::move_constructible<ruvia::detail::HttpContentDecodeResult>);
-static_assert(!std::is_move_assignable_v<ruvia::detail::HttpContentDecodeResult>);
-static_assert(!ExposesRvalueDecodedContent<ruvia::detail::HttpContentDecodeResult>);
-static_assert(!ExposesRvalueDecodeFailure<ruvia::detail::HttpContentDecodeResult>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::HttpContentDecodeResult&>().decoded()), ruvia::detail::HttpDecodedContent*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpContentDecodeResult&>().failure()), const ruvia::detail::HttpContentDecodeFailure*>);
-static_assert(std::same_as<decltype(ruvia::detail::decodeHttpContent(ruvia::detail::HttpContentCoding::kGzip, std::string_view{}, std::size_t{}, std::declval<std::pmr::memory_resource*>())), ruvia::detail::HttpContentDecodeResult>);
-static_assert(std::same_as<decltype(ruvia::detail::decodeHttpClientResponseContentEncoding(std::declval<const ruvia::HttpClientResponseHead&>(), std::string_view{}, std::size_t{}, std::declval<std::pmr::memory_resource*>())), ruvia::detail::HttpContentDecodeResult>);
-static_assert(!std::default_initializable<ruvia::detail::HttpContentEncodeResult>);
-static_assert(!std::copy_constructible<ruvia::detail::HttpContentEncodeResult>);
-static_assert(std::move_constructible<ruvia::detail::HttpContentEncodeResult>);
-static_assert(!std::is_move_assignable_v<ruvia::detail::HttpContentEncodeResult>);
-static_assert(!ExposesRvalueEncodedContent<ruvia::detail::HttpContentEncodeResult>);
-static_assert(!ExposesRvalueEncodeFailure<ruvia::detail::HttpContentEncodeResult>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::HttpContentEncodeResult&>().encoded()), ruvia::detail::HttpEncodedContent*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpContentEncodeResult&>().failure()), const ruvia::detail::HttpContentEncodeFailure*>);
-static_assert(std::same_as<decltype(ruvia::detail::encodeHttpContent(ruvia::detail::HttpContentCoding::kGzip, std::string_view{}, std::size_t{}, std::declval<std::pmr::memory_resource*>())), ruvia::detail::HttpContentEncodeResult>);
+static_assert(std::same_as<decltype(ruvia::detail::decodeHttpRequestContent(ruvia::HttpContentCoding::kGzip, std::string_view{}, std::size_t{}, std::declval<std::pmr::memory_resource*>())), ruvia::detail::HttpRequestContentDecodeResult>);
+static_assert(!std::copy_constructible<ruvia::HttpContentDecodeResult>);
+static_assert(std::move_constructible<ruvia::HttpContentDecodeResult>);
+static_assert(!std::is_move_assignable_v<ruvia::HttpContentDecodeResult>);
+static_assert(!ExposesRvalueDecodedContent<ruvia::HttpContentDecodeResult>);
+static_assert(!ExposesRvalueDecodeFailure<ruvia::HttpContentDecodeResult>);
+static_assert(std::same_as<decltype(std::declval<ruvia::HttpContentDecodeResult&>().decoded()), ruvia::HttpDecodedContent*>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::HttpContentDecodeResult&>().failure()), const ruvia::HttpContentDecodeFailure*>);
+static_assert(std::same_as<decltype(ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, std::string_view{}, std::size_t{}, std::declval<std::pmr::memory_resource*>())), ruvia::HttpContentDecodeResult>);
+static_assert(std::same_as<decltype(ruvia::detail::decodeHttpClientResponseContentEncoding(std::declval<const ruvia::HttpClientResponseHead&>(), std::string_view{}, std::size_t{}, std::declval<std::pmr::memory_resource*>())), ruvia::HttpContentDecodeResult>);
+static_assert(!std::default_initializable<ruvia::HttpContentEncodeResult>);
+static_assert(!std::copy_constructible<ruvia::HttpContentEncodeResult>);
+static_assert(std::move_constructible<ruvia::HttpContentEncodeResult>);
+static_assert(!std::is_move_assignable_v<ruvia::HttpContentEncodeResult>);
+static_assert(!ExposesRvalueEncodedContent<ruvia::HttpContentEncodeResult>);
+static_assert(!ExposesRvalueEncodeFailure<ruvia::HttpContentEncodeResult>);
+static_assert(std::same_as<decltype(std::declval<ruvia::HttpContentEncodeResult&>().encoded()), ruvia::HttpEncodedContent*>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::HttpContentEncodeResult&>().failure()), const ruvia::HttpContentEncodeFailure*>);
+static_assert(std::same_as<decltype(ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, std::string_view{}, std::size_t{}, std::declval<std::pmr::memory_resource*>())), ruvia::HttpContentEncodeResult>);
 static_assert(!AcceptsUrlDecodeOutputParameter<std::pmr::string>);
 static_assert(std::same_as<decltype(ruvia::detail::decodeUrlComponent(std::string_view{}, ruvia::detail::UrlDecodeMode::kPercent, std::declval<std::pmr::memory_resource*>())), std::optional<std::pmr::string>>);
 

@@ -9,6 +9,7 @@
 #include <variant>
 
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
 #include "ruvia/http/HttpRequest.h"

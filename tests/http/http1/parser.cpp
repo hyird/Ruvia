@@ -889,7 +889,7 @@ RUVIA_TEST(http1_response_coding_folds_all_accept_encoding_field_lines) {
     const auto responseCoding = parsed.responseCodingSelection();
     RUVIA_CHECK(responseCoding.selected() != nullptr);
     if (const auto* selected = responseCoding.selected()) {
-        RUVIA_CHECK(selected->coding() == ruvia::detail::HttpContentCoding::kBrotli);
+        RUVIA_CHECK(selected->coding() == ruvia::HttpContentCoding::kBrotli);
     }
 }
 

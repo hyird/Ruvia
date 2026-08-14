@@ -55,6 +55,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpRequestTarget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpSerializedOrigin.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpUriGrammar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/MultipartBoundary.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/MultipartInput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/MultipartParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/request/HttpRequest.cpp
@@ -109,6 +110,8 @@ ruvia_install_public_headers(http
     include/ruvia/http/HttpCache.h
     include/ruvia/http/HttpClient.h
     include/ruvia/http/HttpClientRedirect.h
+    include/ruvia/http/HttpContentCodec.h
+    include/ruvia/http/HttpContentCoding.h
     include/ruvia/http/HttpHeader.h
     include/ruvia/http/HttpExpectations.h
     include/ruvia/http/HttpTransferCoding.h
@@ -133,6 +136,7 @@ ruvia_install_public_headers(http
     include/ruvia/http/Sse.h
     include/ruvia/http/UrlEncoding.h
     include/ruvia/http/WebSocketProtocol.h
+    include/ruvia/http/WebSocketHandshake.h
     include/ruvia/http/WebSocketServerConnection.h
 )
 

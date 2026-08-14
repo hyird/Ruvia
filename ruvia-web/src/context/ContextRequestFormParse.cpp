@@ -8,7 +8,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/detail/parser/MultipartBoundary.h"
 #include "ruvia/http/detail/parser/MultipartDelimiter.h"
 #include "ruvia/web/detail/http/request/RequestFormAccess.h"
 #include "ruvia/web/detail/http/request/RequestFieldParsing.h"
@@ -231,7 +230,7 @@ void enforceMultipartFieldCap(std::string_view requestBody, const MultipartBound
         return parseUrlEncodedFormBody(requestBody, resource, options);
     }
 
-    const auto boundary = detail::httpParseMultipartBoundary(contentType);
+    const auto boundary = parseMultipartBoundary(contentType);
     if (const auto* parsed = boundary.boundary()) {
         return parseMultipartFormBody(requestBody, *parsed, resource, options);
     }
