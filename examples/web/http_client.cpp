@@ -1,6 +1,8 @@
 // Outbound HTTP client usage from a Ruvia Controller.
 
+#include <array>
 #include <chrono>
+#include <span>
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
@@ -18,17 +20,25 @@ private:
     ruvia::Task<ruvia::HttpResponse> forward(ruvia::Context& c) {
         const auto incomingBody = co_await c.req().text();
         auto client = c.httpClient("backend");
-        auto request = client.newRequest(ruvia::HttpKnownMethod::kPost, "/v1/orders");
-        request.setContentType(c.req().header("content-type").value_or("application/octet-stream"))
-            .setBody(incomingBody);
-        if (const auto authorization = c.req().header("authorization")) {
-            request.appendHeader("authorization", *authorization);
-        }
 
         try {
-            auto operation = client.withOptions({
+            std::array<ruvia::HttpHeaderView, 2> headers{};
+            std::size_t headerCount = 0;
+            headers[headerCount++] = {
+                "content-type",
+                c.req().header("content-type").value_or("application/octet-stream"),
+            };
+            if (const auto authorization = c.req().header("authorization")) {
+                headers[headerCount++] = {"authorization", *authorization};
+            }
+            auto operation = client.send({
+                .method = "POST",
+                .target = "/v1/orders",
+                .headers = std::span(headers).first(headerCount),
+                .content = ruvia::HttpClientRequestContentView::bytes(incomingBody),
+            }, {
                 .timeout = std::chrono::seconds(5),
-            }).sendRequest(std::move(request));
+            });
             auto response = co_await std::move(operation);
             c.status(response.status());
             if (const auto contentType = response.header("content-type")) {
@@ -45,12 +55,15 @@ private:
 };
 
 int main() {
-    auto backend = ruvia::HttpClientConfig::https("api.example.com");
-    backend.protocol = ruvia::HttpClientProtocol::kNegotiate;
-    backend.connectionsPerWorker = 4;
-    backend.cookiesEnabled = true;
     ruvia::app()
         .setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8080)})
-        .useHttpClient("backend", std::move(backend))
+        .useHttpClient({
+            .alias = "backend",
+            .scheme = ruvia::HttpScheme::kHttps,
+            .host = "api.example.com",
+            .connectionsPerWorker = 4,
+            .protocol = ruvia::HttpClientProtocol::kNegotiate,
+            .cookiesEnabled = true,
+        })
         .run();
 }

@@ -438,9 +438,9 @@ Task<void> HttpClientPool::waitForHttp2SessionStop(
     }
 }
 
-Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, const HttpClientRequest& request, const OperationTimeout& timeout, StopToken stopToken, std::pmr::memory_resource* responseResource) {
+Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, const HttpClientRequestStorage& request, const OperationTimeout& timeout, StopToken stopToken, std::pmr::memory_resource* responseResource) {
     std::pmr::vector<HttpHeaderView> headers(resource_);
-    auto source = HttpClientRequestAccess::view(request, headers);
+    auto source = HttpClientRequestStorageAccess::view(request, headers);
     std::pmr::string cookieHeader(resource_);
     appendAutomaticHeaders(request, headers, cookieHeader);
     source.headers = std::span<const HttpHeaderView>(headers);

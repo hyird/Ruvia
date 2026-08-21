@@ -129,7 +129,7 @@ public:
 
     // Stopped when this request should stop doing work: its handler deadline
     // elapsed (see ruvia::Deadline), or the owning worker began stopping.
-    // db(), redis(), httpClient().sendRequest(), and runBlocking() bind this
+    // db(), redis(), httpClient().send(), and runBlocking() bind this
     // token automatically, which is how a deadline reaches a handler that
     // never mentions one. An explicit operation token is combined with it.
     //

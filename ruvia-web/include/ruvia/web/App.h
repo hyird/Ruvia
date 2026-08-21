@@ -136,7 +136,6 @@ public:
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
     App& useHttpClient(HttpClientConfig config);
-    App& useHttpClient(std::string_view alias, HttpClientConfig config);
 #ifdef RUVIA_ENABLE_DATABASE
     App& useDb(DbConfig config);
     App& useDb(std::string_view alias, DbConfig config);

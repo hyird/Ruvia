@@ -9,7 +9,7 @@
 
 namespace ruvia::detail {
 
-HttpClientRequestView HttpClientRequestAccess::view(const HttpClientRequest& request, std::pmr::vector<HttpHeaderView>& headers) {
+HttpClientRequestView HttpClientRequestStorageAccess::view(const HttpClientRequestStorage& request, std::pmr::vector<HttpHeaderView>& headers) {
     headers.clear();
     headers.reserve(request.headers_.size());
     for (const auto& header : request.headers_) headers.emplace_back(header.name, header.value);

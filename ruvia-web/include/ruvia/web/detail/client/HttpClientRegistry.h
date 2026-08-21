@@ -28,8 +28,8 @@
 
 namespace ruvia::detail {
 
-struct HttpClientRequestAccess final {
-    [[nodiscard]] static HttpClientRequestView view(const HttpClientRequest& request, std::pmr::vector<HttpHeaderView>& headers);
+struct HttpClientRequestStorageAccess final {
+    [[nodiscard]] static HttpClientRequestView view(const HttpClientRequestStorage& request, std::pmr::vector<HttpHeaderView>& headers);
 };
 
 class HttpClientPool;
@@ -42,7 +42,7 @@ public:
     HttpClientPool(const HttpClientPool&) = delete;
     HttpClientPool& operator=(const HttpClientPool&) = delete;
 
-    [[nodiscard]] Task<HttpClientResponse> execute(HttpClientRequest request, OperationOptions options, std::pmr::memory_resource* responseResource);
+    [[nodiscard]] Task<HttpClientResponse> execute(HttpClientRequestStorage request, OperationOptions options, std::pmr::memory_resource* responseResource);
     void closeNow() noexcept;
     [[nodiscard]] Task<void> join();
     [[nodiscard]] HttpClientStats stats() const noexcept;
@@ -180,12 +180,12 @@ private:
     [[nodiscard]] Task<void> initializeHttp2(Connection& connection, const OperationTimeout& timeout);
     [[nodiscard]] Task<void> runHttp2Reader(Connection& connection, std::uint64_t generation);
     [[nodiscard]] Task<void> runHttp2Writer(Connection& connection, std::uint64_t generation);
-    [[nodiscard]] Task<HttpClientResponse> executeHttp1(Connection& connection, const HttpClientRequest& request, const OperationTimeout& timeout, std::pmr::memory_resource* responseResource);
-    [[nodiscard]] Task<HttpClientResponse> executeHttp2(Connection& connection, const HttpClientRequest& request, const OperationTimeout& timeout, StopToken stopToken, std::pmr::memory_resource* responseResource);
+    [[nodiscard]] Task<HttpClientResponse> executeHttp1(Connection& connection, const HttpClientRequestStorage& request, const OperationTimeout& timeout, std::pmr::memory_resource* responseResource);
+    [[nodiscard]] Task<HttpClientResponse> executeHttp2(Connection& connection, const HttpClientRequestStorage& request, const OperationTimeout& timeout, StopToken stopToken, std::pmr::memory_resource* responseResource);
     [[nodiscard]] Task<void> write(Connection& connection, std::string_view bytes, const OperationTimeout& timeout);
     [[nodiscard]] Task<std::size_t> readSome(Connection& connection, std::span<char> bytes, const OperationTimeout& timeout, bool allowEof = false);
-    void appendAutomaticHeaders(const HttpClientRequest& request, std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader);
-    void retainResponseCookies(const HttpClientRequest& request, const HttpClientResponse& response);
+    void appendAutomaticHeaders(const HttpClientRequestStorage& request, std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader);
+    void retainResponseCookies(const HttpClientRequestStorage& request, const HttpClientResponse& response);
     void addCookie(std::string_view name, std::string_view value);
     static void decodeResponseContentEncoding(HttpClientResponse& response, bool contentSemanticsPresent, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource);
     [[nodiscard]] static std::size_t cookieStorageBytes(

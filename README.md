@@ -161,27 +161,31 @@ default. Cleartext uses HTTP/1.1 unless `kHttp2Only` explicitly requests h2
 prior knowledge.
 
 ```cpp
-auto upstream = ruvia::HttpClientConfig::https("api.example.com");
-upstream.connectionsPerWorker = 2;
-upstream.maxConcurrentHttp2StreamsPerConnection = 100;
-upstream.maxBufferedRequestsPerWorker = 1024;
-upstream.writeTimeout = std::chrono::seconds(30);
-upstream.requestTimeout = std::chrono::seconds(10);
-ruvia::app().useHttpClient("upstream", std::move(upstream));
+ruvia::app().useHttpClient({
+    .alias = "upstream",
+    .scheme = ruvia::HttpScheme::kHttps,
+    .host = "api.example.com",
+    .connectionsPerWorker = 2,
+    .maxConcurrentHttp2StreamsPerConnection = 100,
+    .maxBufferedRequestsPerWorker = 1024,
+    .writeTimeout = std::chrono::seconds(30),
+    .requestTimeout = std::chrono::seconds(10),
+});
 ```
 
-Handlers use an origin-bound handle and request builder. The builder owns method,
-target, headers, and body
-in PMR memory, so no borrowed input needs to survive suspension:
+Handlers use an origin-bound handle and the protocol target's existing borrowed
+`HttpClientRequestView`. The handle copies that view into request PMR memory
+before returning the lazy operation, so its inputs only need to survive the
+synchronous `send()` call:
 
 ```cpp
 ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
     auto client = c.httpClient("upstream");
-    auto request = client.newRequest(ruvia::HttpKnownMethod::kGet, "/v1/data");
-
-    auto operation = client.withOptions({
+    auto operation = client.send({
+        .target = "/v1/data",
+    }, {
         .timeout = std::chrono::seconds(2),
-    }).sendRequest(std::move(request));
+    });
     auto response = co_await std::move(operation);
     c.status(response.status());
     co_return c.body(response.body());
@@ -216,14 +220,14 @@ Additional operations wait in the bounded per-worker queue and fail with
 `kQueueFull` when it is full or `kTimeout` when `acquireTimeout` expires.
 
 The current response API is deliberately buffered, matching Drogon's regular
-`sendRequest` model; it is not a streaming download API. Cleartext HTTP/2 uses
+`send` model; it is not a streaming download API. Cleartext HTTP/2 uses
 RFC 9113 prior knowledge when `kHttp2Only` is selected. HTTP/1.1
 `Upgrade: h2c` is not performed implicitly, so a server that only accepts the
 Upgrade transition must be configured for HTTP/1 or exposed through TLS/ALPN.
 
-The Controller-facing surface provides `newRequest(method, target)`,
-`setHeader()`, `appendHeader()`, `setBody()`, `sendRequest()`, origin inspection,
-and a single `stats()` snapshot. Requests are awaited as scoped
+The Controller-facing surface provides one `send(HttpClientRequestView,
+OperationOptions)` operation, origin inspection, and a single `stats()`
+snapshot. Requests are awaited as scoped
 coroutine operations; there are no blocking overloads or callback ownership model.
 All pool configuration is immutable after startup. A handle automatically
 observes its request or worker stop token; an explicit operation token is
@@ -231,8 +235,9 @@ combined with that ambient token rather than replacing it.
 
 Automatic cookies are disabled by default. Set `cookiesEnabled = true` in the
 startup configuration to retain matching `Set-Cookie` response fields and send
-them on later requests. `request.addCookie()` adds a cookie to one request;
-`HttpClientConfig::cookies` seeds every worker-local jar at startup.
+them on later requests. A per-request cookie is an ordinary `cookie` header in
+the supplied `HttpClientRequestView`; `HttpClientConfig::cookies` seeds every
+worker-local jar at startup.
 `maxCookiesPerWorker` and
 `maxCookieBytesPerWorker` bound each worker-local jar; automatic cookies beyond
 either bound are ignored, while invalid or over-capacity startup configuration

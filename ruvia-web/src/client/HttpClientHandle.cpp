@@ -9,7 +9,6 @@
 #include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/client/HttpClientContentEncoding.h"
-#include "ruvia/http/detail/cookie/CookieValidation.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
@@ -71,7 +70,7 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
 
 }  // namespace detail
 
-HttpClientRequest::HttpClientRequest(
+detail::HttpClientRequestStorage::HttpClientRequestStorage(
     std::string_view method,
     std::string_view target,
     std::pmr::memory_resource* resource)
@@ -80,19 +79,7 @@ HttpClientRequest::HttpClientRequest(
       headers_(detail::httpPmrResourceOrDefault(resource)),
       body_(detail::httpPmrResourceOrDefault(resource)) {}
 
-HttpClientRequest& HttpClientRequest::setHeader(std::string_view name, std::string_view value) {
-    auto* const resource = headers_.get_allocator().resource();
-    Header replacement(name, value, resource);
-    for (auto& ch : replacement.name) {
-        ch = static_cast<char>(detail::httpAsciiToLower(static_cast<unsigned char>(ch)));
-    }
-    headers_.reserve(headers_.size() + 1);
-    removeHeader(name);
-    headers_.push_back(std::move(replacement));
-    return *this;
-}
-
-HttpClientRequest& HttpClientRequest::appendHeader(std::string_view name, std::string_view value) {
+detail::HttpClientRequestStorage& detail::HttpClientRequestStorage::appendHeader(std::string_view name, std::string_view value) {
     auto& header = headers_.emplace_back(name, value, headers_.get_allocator().resource());
     // HTTP field names are case-insensitive, but HTTP/2 requires their wire form
     // to be lowercase (RFC 9113 Section 8.2). Normalize once at the owning public
@@ -105,55 +92,9 @@ HttpClientRequest& HttpClientRequest::appendHeader(std::string_view name, std::s
     return *this;
 }
 
-HttpClientRequest& HttpClientRequest::removeHeader(std::string_view name) {
-    std::erase_if(headers_, [name](const Header& header) { return headerNameEquals(header.name, name); });
-    return *this;
-}
-
-HttpClientRequest& HttpClientRequest::setContentType(std::string_view contentType) {
-    return setHeader("content-type", contentType);
-}
-
-HttpClientRequest& HttpClientRequest::addCookie(std::string_view name, std::string_view value) {
-    if (!isValidHttpHeaderName(name) || !detail::isValidCookieValue(value)) {
-        throw std::invalid_argument("invalid HTTP client request cookie");
-    }
-    const auto match = std::ranges::find_if(headers_, [](const Header& header) { return headerNameEquals(header.name, "cookie"); });
-    auto* const resource = headers_.get_allocator().resource();
-    auto appendCookiePair = [name, value](std::pmr::string& target) {
-        if (!target.empty()) target.append("; ");
-        target.append(name);
-        target.push_back('=');
-        target.append(value);
-    };
-    if (match == headers_.end()) {
-        std::pmr::string cookieValue(resource);
-        appendCookiePair(cookieValue);
-        headers_.emplace_back("cookie", "", resource);
-        headers_.back().value.swap(cookieValue);
-    } else {
-        std::pmr::string cookieValue(match->value, resource);
-        appendCookiePair(cookieValue);
-        match->value.swap(cookieValue);
-    }
-    return *this;
-}
-
-HttpClientRequest& HttpClientRequest::setBody(std::string_view body) {
+detail::HttpClientRequestStorage& detail::HttpClientRequestStorage::setBody(std::string_view body) {
     body_.assign(body);
     hasBody_ = true;
-    return *this;
-}
-
-HttpClientRequest& HttpClientRequest::setBody(std::span<const std::byte> body) {
-    body_.assign(reinterpret_cast<const char*>(body.data()), body.size());
-    hasBody_ = true;
-    return *this;
-}
-
-HttpClientRequest& HttpClientRequest::clearBody() noexcept {
-    body_.clear();
-    hasBody_ = false;
     return *this;
 }
 
@@ -175,25 +116,19 @@ HttpClientHandle HttpClientHandle::withOptions(OperationOptions options) const {
     return copy;
 }
 
-HttpClientRequest HttpClientHandle::newRequest(HttpKnownMethod method, std::string_view target) const {
+ScopedOperation<HttpClientResponse> HttpClientHandle::send(
+    const HttpClientRequestView& view,
+    OperationOptions options) const {
     requireActive();
-    const auto token = knownHttpMethodToken(method);
-    if (token.empty()) {
-        throw std::invalid_argument("unknown HTTP method requires an explicit token");
-    }
-    return HttpClientRequest(token, target, detail::httpPmrResourceOrDefault(resource_));
-}
-
-HttpClientRequest HttpClientHandle::newRequest(std::string_view method, std::string_view target) const {
-    requireActive();
-    return HttpClientRequest(method, target, detail::httpPmrResourceOrDefault(resource_));
-}
-
-ScopedOperation<HttpClientResponse> HttpClientHandle::sendRequest(HttpClientRequest request) const {
-    requireActive();
+    detail::HttpClientRequestStorage request(
+        view.method.view(), view.target.view(), detail::httpPmrResourceOrDefault(resource_));
+    for (const auto& header : view.headers) request.appendHeader(header.name(), header.value());
+    if (const auto* bytes = view.content.borrowedBytes()) request.setBody(bytes->value());
+    options = detail::mergeOperationOptions(options_, std::move(options));
+    detail::validateOperationOptions(options);
     return detail::makeScopedOperation(
         operationScope(),
-        pool_->execute(std::move(request), options_, detail::httpPmrResourceOrDefault(resource_)));
+        pool_->execute(std::move(request), std::move(options), detail::httpPmrResourceOrDefault(resource_)));
 }
 
 HttpClientStats HttpClientHandle::stats() const {

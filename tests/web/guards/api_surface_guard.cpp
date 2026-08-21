@@ -607,29 +607,18 @@ template <typename T>
 concept HasDynamicHttpClientFactory = requires { T::newHttpClient(std::string_view{}); };
 
 template <typename T>
-concept HasHttpClientRequestSetPath = requires(T& request) { request.setPath(std::string_view{}); };
-
-template <typename T>
-concept HasHttpClientRequestMethodTargetMutators = requires(T& request) {
-    request.setMethod(ruvia::HttpKnownMethod::kGet);
-} || requires(T& request) {
-    request.setTarget(std::string_view{});
+concept HasHttpClientRequestBuilder = requires(const T& client) {
+    client.newRequest(ruvia::HttpKnownMethod::kGet, std::string_view{});
 };
 
 template <typename T>
-concept HasHttpClientRequestSetContentTypeString = requires(T& request) { request.setContentTypeString(std::string_view{}); };
-
-template <typename T>
-concept HasHttpClientRequestAddHeader = requires(T& request) {
-    request.addHeader(std::string_view{}, std::string_view{});
+concept HasHttpClientWithOptions = requires(const T& client) {
+    client.withOptions(ruvia::OperationOptions{});
 };
 
 template <typename T>
-concept HasEmptyHttpClientRequestFactory = requires(const T& client) { client.newRequest(); };
-
-template <typename T>
-concept HasHttpClientPerCallOptions = requires(const T& client, ruvia::HttpClientRequest request) {
-    client.sendRequest(std::move(request), ruvia::OperationOptions{});
+concept HasAliasedUseHttpClient = requires(T& app, ruvia::HttpClientConfig config) {
+    app.useHttpClient(std::string_view{}, std::move(config));
 };
 
 template <typename T>
@@ -2502,34 +2491,23 @@ static_assert(std::same_as<decltype(std::declval<const ruvia::Context&>().httpCl
 static_assert(std::same_as<decltype(std::declval<const ruvia::Context&>().httpClient(std::string_view{})), ruvia::HttpClientHandle>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::WebWorkerContext&>().httpClient()), ruvia::HttpClientHandle>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::WebWorkerContext&>().httpClient(std::string_view{})), ruvia::HttpClientHandle>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientHandle&>().newRequest(ruvia::HttpKnownMethod::kGet, "/")), ruvia::HttpClientRequest>);
-static_assert(!HasEmptyHttpClientRequestFactory<ruvia::HttpClientHandle>);
 static_assert(!HasDynamicHttpClientFactory<ruvia::HttpClientHandle>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientHandle&>().sendRequest(std::declval<ruvia::HttpClientRequest>())), ruvia::ScopedOperation<ruvia::HttpClientResponse>>);
-static_assert(!HasHttpClientPerCallOptions<ruvia::HttpClientHandle>);
-static_assert(!std::is_copy_constructible_v<ruvia::HttpClientRequest>);
-static_assert(std::is_move_constructible_v<ruvia::HttpClientRequest>);
-static_assert(!HasHttpClientRequestMethodTargetMutators<ruvia::HttpClientRequest>);
-static_assert(!HasHttpClientRequestSetPath<ruvia::HttpClientRequest>);
-static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientRequest&>().setContentType(std::string_view{})), ruvia::HttpClientRequest&>);
-static_assert(!HasHttpClientRequestSetContentTypeString<ruvia::HttpClientRequest>);
-static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientRequest&>().appendHeader(std::string_view{}, std::string_view{})), ruvia::HttpClientRequest&>);
-static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientRequest&>().setHeader(std::string_view{}, std::string_view{})), ruvia::HttpClientRequest&>);
-static_assert(!HasHttpClientRequestAddHeader<ruvia::HttpClientRequest>);
-static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientRequest&>().setBody(std::string_view{})), ruvia::HttpClientRequest&>);
+static_assert(!HasHttpClientRequestBuilder<ruvia::HttpClientHandle>);
+static_assert(!HasHttpClientWithOptions<ruvia::HttpClientHandle>);
 static_assert(!HasHttpClientStatsAliases<ruvia::HttpClientHandle>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientHandle&>().host()), std::string_view>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientHandle&>().scheme()), ruvia::HttpScheme>);
 static_assert(!HasHttpClientSchemeAliases<ruvia::HttpClientHandle>);
 static_assert(!HasHttpClientRuntimeConfiguration<ruvia::HttpClientHandle>);
-static_assert(!std::is_default_constructible_v<ruvia::HttpClientConfig>);
-static_assert(std::same_as<decltype(ruvia::HttpClientConfig::http(std::string_view{})), ruvia::HttpClientConfig>);
-static_assert(std::same_as<decltype(ruvia::HttpClientConfig::https(std::string_view{})), ruvia::HttpClientConfig>);
+static_assert(std::is_aggregate_v<ruvia::HttpClientConfig>);
+static_assert(std::same_as<decltype(ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "localhost"}), ruvia::HttpClientConfig>);
+static_assert(std::is_aggregate_v<ruvia::HttpClientRequestView>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientHandle&>().send(ruvia::HttpClientRequestView{.target = "/"})), ruvia::ScopedOperation<ruvia::HttpClientResponse>>);
 static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientConfig&>().writeTimeout), std::optional<std::chrono::milliseconds>>);
 static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientConfig&>().maxCookiesPerWorker), std::size_t>);
 static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientConfig&>().maxCookieBytesPerWorker), std::size_t>);
-static_assert(std::same_as<decltype(std::declval<ruvia::App&>().useHttpClient(ruvia::HttpClientConfig::http("localhost"))), ruvia::App&>);
-static_assert(std::same_as<decltype(std::declval<ruvia::App&>().useHttpClient(std::string_view{}, ruvia::HttpClientConfig::https("localhost"))), ruvia::App&>);
+static_assert(std::same_as<decltype(std::declval<ruvia::App&>().useHttpClient(ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "localhost"})), ruvia::App&>);
+static_assert(!HasAliasedUseHttpClient<ruvia::App>);
 static_assert(!std::is_copy_constructible_v<ruvia::HttpClientResponse>);
 static_assert(std::is_move_constructible_v<ruvia::HttpClientResponse>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientResponse&>().headers()), std::span<const ruvia::HttpClientResponseHeader>>);

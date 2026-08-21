@@ -20,23 +20,11 @@ inline void validateHttpClientUserAgent(std::string_view userAgent) {
 
 template <typename Config>
 void validateHttpClientConfig(const Config& config) {
-    const auto scheme = [&]() {
-        if constexpr (requires { config.scheme(); }) {
-            return config.scheme();
-        } else {
-            return config.scheme;
-        }
-    }();
-    const auto host = [&]() -> std::string_view {
-        if constexpr (requires { config.host(); }) {
-            return config.host();
-        } else {
-            return config.host;
-        }
-    }();
-    const auto port = [&]() {
-        if constexpr (requires { config.port(); }) {
-            return config.port();
+    const auto scheme = config.scheme;
+    const std::string_view host = config.host;
+    const std::uint16_t port = [&]() {
+        if constexpr (requires { config.port.value_or(std::uint16_t{}); }) {
+            return config.port.value_or(scheme == HttpScheme::kHttps ? 443 : 80);
         } else {
             return config.port;
         }

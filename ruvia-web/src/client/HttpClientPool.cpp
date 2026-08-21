@@ -261,7 +261,7 @@ bool HttpClientPool::cookieCapacityAvailable(
         std::min(retainedBytes, config_.maxCookieBytesPerWorker);
 }
 
-void HttpClientPool::appendAutomaticHeaders(const HttpClientRequest& request, std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader) {
+void HttpClientPool::appendAutomaticHeaders(const HttpClientRequestStorage& request, std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader) {
     const auto hasHeader = [&headers](std::string_view name) {
         return std::ranges::any_of(headers, [name](const HttpHeaderView& header) { return headerNameEquals(header.name(), name); });
     };
@@ -297,7 +297,7 @@ void HttpClientPool::appendAutomaticHeaders(const HttpClientRequest& request, st
     if (!cookieHeader.empty()) headers.emplace_back("cookie", cookieHeader);
 }
 
-void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, const HttpClientResponse& response) {
+void HttpClientPool::retainResponseCookies(const HttpClientRequestStorage& request, const HttpClientResponse& response) {
     if (!cookiesEnabled_) return;
     const auto now = std::chrono::system_clock::now();
     for (const auto& header : response.headers()) {
@@ -650,7 +650,7 @@ Task<void> HttpClientPool::ensureConnected(
     if (connection.protocol == WireProtocol::kHttp2) co_await initializeHttp2(connection, timeout);
 }
 
-Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, OperationOptions options, std::pmr::memory_resource* responseResource) {
+Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequestStorage request, OperationOptions options, std::pmr::memory_resource* responseResource) {
     responseResource = httpPmrResourceOrDefault(responseResource);
     const OperationTimeout timeout(options.timeout.has_value() ? options.timeout : config_.requestTimeout);
     const auto acquireTimeout = timeout.constrainedBy(config_.acquireTimeout);

@@ -22,7 +22,8 @@ namespace ruvia {
 namespace detail {
 class HttpClientPool;
 class HttpClientRegistry;
-struct HttpClientRequestAccess;
+class HttpClientRequestStorage;
+struct HttpClientRequestStorageAccess;
 }
 
 class Context;
@@ -34,37 +35,11 @@ enum class HttpClientProtocol : std::uint8_t {
     kHttp2Only,
 };
 
-class HttpClientConfig final {
-public:
-    [[nodiscard]] static HttpClientConfig http(std::string_view host) {
-        return HttpClientConfig(host, HttpScheme::kHttp, 80);
-    }
-
-    [[nodiscard]] static HttpClientConfig https(std::string_view host) {
-        return HttpClientConfig(host, HttpScheme::kHttps, 443);
-    }
-
-    [[nodiscard]] std::string_view host() const& noexcept {
-        return host_;
-    }
-    std::string_view host() const&& = delete;
-
-    [[nodiscard]] HttpScheme scheme() const noexcept {
-        return scheme_;
-    }
-
-    [[nodiscard]] std::uint16_t port() const noexcept {
-        return port_;
-    }
-
-    HttpClientConfig& setPort(std::uint16_t port) {
-        if (port == 0) {
-            throw std::invalid_argument("http client port must be greater than zero");
-        }
-        port_ = port;
-        return *this;
-    }
-
+struct HttpClientConfig final {
+    std::string alias{"default"};
+    HttpScheme scheme{HttpScheme::kHttps};
+    std::string host;
+    std::optional<std::uint16_t> port;
     std::size_t connectionsPerWorker{1};
     std::size_t maxConcurrentHttp2StreamsPerConnection{100};
     std::size_t maxBufferedRequestsPerWorker{1024};
@@ -86,14 +61,6 @@ public:
     std::string privateKeyPassword;
     std::string userAgent{"Ruvia"};
     std::vector<std::pair<std::string, std::string>> cookies;
-
-private:
-    HttpClientConfig(std::string_view host, HttpScheme scheme, std::uint16_t port)
-        : host_(host), scheme_(scheme), port_(port) {}
-
-    std::string host_;
-    HttpScheme scheme_;
-    std::uint16_t port_;
 };
 
 class HttpClientError final : public std::runtime_error {
@@ -123,21 +90,17 @@ private:
     Code code_;
 };
 
-class HttpClientRequest final {
-public:
-    HttpClientRequest(const HttpClientRequest&) = delete;
-    HttpClientRequest& operator=(const HttpClientRequest&) = delete;
-    HttpClientRequest(HttpClientRequest&&) noexcept = default;
-    HttpClientRequest& operator=(HttpClientRequest&&) noexcept = default;
+namespace detail {
 
-    HttpClientRequest& setHeader(std::string_view name, std::string_view value);
-    HttpClientRequest& appendHeader(std::string_view name, std::string_view value);
-    HttpClientRequest& removeHeader(std::string_view name);
-    HttpClientRequest& setContentType(std::string_view contentType);
-    HttpClientRequest& addCookie(std::string_view name, std::string_view value);
-    HttpClientRequest& setBody(std::string_view body);
-    HttpClientRequest& setBody(std::span<const std::byte> body);
-    HttpClientRequest& clearBody() noexcept;
+class HttpClientRequestStorage final {
+public:
+    HttpClientRequestStorage(const HttpClientRequestStorage&) = delete;
+    HttpClientRequestStorage& operator=(const HttpClientRequestStorage&) = delete;
+    HttpClientRequestStorage(HttpClientRequestStorage&&) noexcept = default;
+    HttpClientRequestStorage& operator=(HttpClientRequestStorage&&) noexcept = default;
+
+    HttpClientRequestStorage& appendHeader(std::string_view name, std::string_view value);
+    HttpClientRequestStorage& setBody(std::string_view body);
 
     [[nodiscard]] std::string_view method() const& noexcept { return method_; }
     [[nodiscard]] std::string_view method() const&& = delete;
@@ -147,8 +110,8 @@ public:
     [[nodiscard]] std::string_view body() const&& = delete;
 
 private:
-    friend class HttpClientHandle;
-    friend struct detail::HttpClientRequestAccess;
+    friend class ::ruvia::HttpClientHandle;
+    friend struct HttpClientRequestStorageAccess;
 
     struct Header final {
         Header(std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
@@ -157,7 +120,7 @@ private:
         std::pmr::string value;
     };
 
-    HttpClientRequest(
+    HttpClientRequestStorage(
         std::string_view method,
         std::string_view target,
         std::pmr::memory_resource* resource);
@@ -168,6 +131,8 @@ private:
     std::pmr::string body_;
     bool hasBody_{false};
 };
+
+}  // namespace detail
 
 class HttpClientResponse final {
 public:
@@ -215,10 +180,9 @@ public:
     HttpClientHandle(const HttpClientHandle& other);
     HttpClientHandle& operator=(const HttpClientHandle&) = delete;
 
-    [[nodiscard]] HttpClientRequest newRequest(HttpKnownMethod method, std::string_view target) const;
-    [[nodiscard]] HttpClientRequest newRequest(std::string_view method, std::string_view target) const;
-    [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const;
-    [[nodiscard]] ScopedOperation<HttpClientResponse> sendRequest(HttpClientRequest request) const;
+    [[nodiscard]] ScopedOperation<HttpClientResponse> send(
+        const HttpClientRequestView& request,
+        OperationOptions options = {}) const;
     [[nodiscard]] HttpClientStats stats() const;
     [[nodiscard]] std::string_view host() const&;
     [[nodiscard]] std::string_view host() const&& = delete;
@@ -226,7 +190,10 @@ public:
     [[nodiscard]] HttpScheme scheme() const;
 private:
     friend class detail::HttpClientRegistry;
+    friend class Context;
+    friend class WebWorkerContext;
     HttpClientHandle(detail::HttpClientPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope) noexcept;
+    [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
     detail::HttpClientPool* pool_{nullptr};
