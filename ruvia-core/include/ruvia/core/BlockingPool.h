@@ -47,7 +47,10 @@
 namespace ruvia {
 
 struct BlockingPoolOptions final {
-    // 0 selects std::thread::hardware_concurrency() (at least one).
+    // 0 selects half of std::thread::hardware_concurrency(), clamped to 2..8.
+    // Blocking work benefits from some oversubscription on small machines, but
+    // the default must not create one process thread per logical CPU on large
+    // hosts. Set an explicit value when the workload has different needs.
     std::size_t threadCount{0};
     // Queued tasks waiting for a free thread. 0 selects threadCount * 64.
     // The queue is bounded on purpose: an unbounded one converts an overloaded

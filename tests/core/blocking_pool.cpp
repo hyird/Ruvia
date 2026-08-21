@@ -29,6 +29,16 @@ namespace {
 
 using ruvia::BlockingPool;
 using ruvia::BlockingPoolOptions;
+
+[[nodiscard]] bool blockingPoolDefaultsAreBoundedByCpuPolicy() {
+    BlockingPool pool;
+    const bool valid = pool.threadCount() >= 2 &&
+                       pool.threadCount() <= 8 &&
+                       pool.queueCapacity() == pool.threadCount() * 64;
+    pool.stop();
+    pool.join();
+    return valid;
+}
 using ruvia::BlockingStatus;
 using ruvia::BlockingSubmitStatus;
 using ruvia::Task;
@@ -499,9 +509,10 @@ int main() {
         rejectsEmptyTask = rejectsEmptyTask && pool.submit([] {}) == BlockingSubmitStatus::kPoolStopped;
     }
 
+    const bool defaultSizing = blockingPoolDefaultsAreBoundedByCpuPolicy();
     const bool destructionDoesNotJoin = testDestructionDoesNotJoinRunningCallable();
     const bool joinStopsAndWaits = testJoinStopsAndWaitsForRunningCallable();
     const bool joinRejectsPoolThread = testJoinRejectsPoolThreadBeforeStopping();
-    const bool allPassed = results && workerStaysFree && throwingMoveResult && cancelled && timeout && saturatingTimeout && stoppedPool && queueFull && workerStopping && stoppedWorker && rejectsEmptyTask && destructionDoesNotJoin && joinStopsAndWaits && joinRejectsPoolThread;
+    const bool allPassed = defaultSizing && results && workerStaysFree && throwingMoveResult && cancelled && timeout && saturatingTimeout && stoppedPool && queueFull && workerStopping && stoppedWorker && rejectsEmptyTask && destructionDoesNotJoin && joinStopsAndWaits && joinRejectsPoolThread;
     return allPassed ? 0 : 1;
 }

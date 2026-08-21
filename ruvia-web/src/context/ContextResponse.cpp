@@ -117,7 +117,7 @@ void* Context::workerStateInstance(const void* typeKey) const {
 
 BlockingPool& Context::blockingPool() const {
     if (blockingPool_ == nullptr) {
-        throw std::logic_error("no blocking pool is configured: call App::setBlockingPool() before App::run()");
+        throw std::logic_error("blocking pool is disabled");
     }
     return *blockingPool_;
 }

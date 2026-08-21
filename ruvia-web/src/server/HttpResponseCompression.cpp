@@ -8,6 +8,7 @@
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/detail/response/ResponseHeaderUtils.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/core/memory/ProcessResource.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +18,36 @@
 
 namespace ruvia::detail {
 namespace {
+
+enum class BufferedCompressionAttemptStatus : std::uint8_t {
+    kCompressed,
+    kNotSmaller,
+    kFailed,
+};
+
+struct BufferedCompressionAttempt final {
+    explicit BufferedCompressionAttempt(BufferedCompressionAttemptStatus status) noexcept
+        : status(status), bytes(processResource()) {}
+
+    BufferedCompressionAttempt(BufferedCompressionAttemptStatus status, std::pmr::string bytes) noexcept
+        : status(status), bytes(std::move(bytes)) {}
+
+    BufferedCompressionAttemptStatus status;
+    std::pmr::string bytes;
+};
+
+[[nodiscard]] BufferedCompressionAttempt encodeBufferedBody(HttpContentCoding coding, std::pmr::string plain) {
+    const auto maxEncodedBytes = plain.empty() ? 0 : plain.size() - 1;
+    auto encoding = encodeHttpContent(coding, plain, maxEncodedBytes, processResource());
+    if (auto* encoded = encoding.encoded(); encoded != nullptr) {
+        return BufferedCompressionAttempt(BufferedCompressionAttemptStatus::kCompressed, std::move(*encoded).takeBytes());
+    }
+    const auto* failure = encoding.failure();
+    if (failure != nullptr && failure->error() == HttpContentEncodeError::kEncodedSizeExceeded) {
+        return BufferedCompressionAttempt(BufferedCompressionAttemptStatus::kNotSmaller);
+    }
+    return BufferedCompressionAttempt(BufferedCompressionAttemptStatus::kFailed);
+}
 
 [[nodiscard]] bool mediaTypeStartsWith(std::string_view mediaType, std::string_view prefix) noexcept {
     return mediaType.size() >= prefix.size() && httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
@@ -122,7 +153,7 @@ HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingS
     // previously lived only on the compress-success path.
     addVaryToken(response, "Accept-Encoding");
 
-    if (coding == HttpContentCoding::kIdentity || responseContent.size() < options.minBytes) {
+    if (coding == HttpContentCoding::kIdentity || responseContent.size() < options.minBytes || responseContent.size() > options.maxBytes || responseContent.size() > options.syncBytes) {
         return HttpResponseCompressionResult::makeNotApplicable();
     }
     const auto body = responseContent.bytes();
@@ -152,6 +183,62 @@ HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingS
         return HttpResponseCompressionResult::makeFailed();
     }
     return HttpResponseCompressionResult::makeCompressed();
+}
+
+Task<HttpResponseCompressionResult> applyResponseCompressionAsync(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, HttpResponse& response, CompressionConfig options, BlockingPool* pool, const WorkerHandle& worker) {
+    const auto& responseContent = responseBody(response);
+    if (responseContent.file().has_value() || httpResponseCompressionEligibility(selection, requestMethod, response, ResponseStreamKind::kGeneric) != HttpResponseCompressionEligibility::kEligible) {
+        co_return HttpResponseCompressionResult::makeNotApplicable();
+    }
+
+    const auto coding = selection.coding();
+    const auto size = responseContent.size();
+    if (size <= options.syncBytes) {
+        co_return applyResponseCompression(selection, requestMethod, response, options);
+    }
+    if (pool == nullptr) {
+        // An explicitly disabled pool removes the offload boundary, not the
+        // configured compression policy. Extend the synchronous range through
+        // maxBytes and keep the same eligibility/commit behavior.
+        options.syncBytes = options.maxBytes;
+        co_return applyResponseCompression(selection, requestMethod, response, options);
+    }
+    addVaryToken(response, "Accept-Encoding");
+    if (coding == HttpContentCoding::kIdentity || size < options.minBytes || size > options.maxBytes) {
+        co_return HttpResponseCompressionResult::makeNotApplicable();
+    }
+
+    try {
+        std::pmr::string plain(responseContent.bytes(), processResource());
+        auto result = co_await tryRunBlocking(*pool, worker, [coding, plain = std::move(plain)]() mutable {
+            return encodeBufferedBody(coding, std::move(plain));
+        });
+        if (result.failed()) {
+            co_return HttpResponseCompressionResult::makeFailed();
+        }
+        if (!result.completed()) {
+            // Queue saturation and shutdown are overload/lifecycle outcomes,
+            // not broken encoders. Preserve the identity representation.
+            co_return HttpResponseCompressionResult::makeNotApplicable();
+        }
+        auto attempt = std::move(result).value();
+        if (attempt.status == BufferedCompressionAttemptStatus::kNotSmaller) {
+            co_return HttpResponseCompressionResult::makeNotApplicable();
+        }
+        if (attempt.status != BufferedCompressionAttemptStatus::kCompressed || attempt.bytes.empty()) {
+            co_return HttpResponseCompressionResult::makeFailed();
+        }
+        try {
+            replaceResponseBodyWithContentEncoding(response, std::move(attempt.bytes), httpContentCodingToken(coding));
+        } catch (...) {
+            co_return HttpResponseCompressionResult::makeFailed();
+        }
+        co_return HttpResponseCompressionResult::makeCompressed();
+    } catch (...) {
+        // Failure to allocate/copy the request-owned input or create the
+        // one-shot transport leaves the original identity body intact.
+        co_return HttpResponseCompressionResult::makeFailed();
+    }
 }
 
 bool prepareStreamingResponseCompression(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, HttpResponse& response, ResponseStreamKind kind) {

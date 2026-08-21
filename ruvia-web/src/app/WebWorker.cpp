@@ -31,7 +31,7 @@ WebWorkerContext::WebWorkerContext(WorkerHandle worker, std::pmr::memory_resourc
 
 BlockingPool& WebWorkerContext::blockingPool() const {
     if (blockingPool_ == nullptr) {
-        throw std::logic_error("no blocking pool is configured: call App::setBlockingPool() before App::run()");
+        throw std::logic_error("blocking pool is disabled");
     }
     return *blockingPool_;
 }

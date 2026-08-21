@@ -138,10 +138,17 @@ int main() {
             ruvia::detail::RouteTable routes(worker.resource());
             ruvia::test::Http2SansIoSessionFixture fixture;
             fixture.options.documentRoot.root = &root;
-            fixture.options.compression.reset();
+            fixture.options.compression.emplace();
             auto dispatcher = std::make_shared<WorkerDispatcher>(io, 64);
             const auto workerHandle = WorkerHandleAccess::make(dispatcher);
-            co_await taskAsAwaitable(runHttp2SansIoSession(sock, routes, worker, fixture.context(ContextServices{}.withPlainTransport("127.0.0.1").withWorker(workerHandle))));
+            co_await taskAsAwaitable(runHttp2SansIoSession(
+                sock,
+                routes,
+                worker,
+                fixture.context(ContextServices{}
+                                    .withPlainTransport("127.0.0.1")
+                                    .withWorker(workerHandle)
+                                    .withPrecompressedStaticFiles())));
         },
         asio::detached);
 

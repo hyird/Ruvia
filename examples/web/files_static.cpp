@@ -41,25 +41,30 @@ private:
 };
 
 int main() {
-    ruvia::StaticRootOptions staticOptions;
-    staticOptions.indexFile = "index.html";
-    staticOptions.cacheControl = "public, max-age=3600";
-    staticOptions.enableRanges = true;
-    staticOptions.enableValidators = true;
+    gAssets = std::make_unique<ruvia::StaticRoot>(
+        examplesRoot() / "public",
+        ruvia::StaticRootOptions{
+            .cacheControl = "public, max-age=3600",
+            .indexFile = "index.html",
+            .enableRanges = true,
+            .enableValidators = true,
+        });
 
-    gAssets = std::make_unique<ruvia::StaticRoot>(examplesRoot() / "public", std::move(staticOptions));
-
-    ruvia::DocumentRootConfig documentRoot;
-    documentRoot.root = examplesRoot() / "public";
-    documentRoot.staticOptions.indexFile = "index.html";
-    documentRoot.staticOptions.cacheControl = "public, max-age=3600";
+    auto documentRoot = ruvia::DocumentRootConfig{
+        .root = examplesRoot() / "public",
+        .staticOptions = {
+            .cacheControl = "public, max-age=3600",
+            .indexFile = "index.html",
+        },
+    };
     // Development-only document-root refresh and browser reload:
-    // documentRoot.runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
-    // documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds(500);
-    // documentRoot.runtimeOptions.enableLiveReload = true;
-    // documentRoot.runtimeOptions.onDemandCompressionMaxBytes = 2 * 1024 * 1024;
-    // Polling requires an application blocking pool:
-    // ruvia::app().setBlockingPool(ruvia::BlockingPoolOptions{.threadCount = 2});
+    // For development, initialize runtimeOptions in the aggregate above:
+    // .runtimeOptions = {
+    //     .refreshMode = ruvia::DocumentRootRefreshMode::kPolling,
+    //     .refreshInterval = std::chrono::milliseconds(500),
+    //     .enableLiveReload = true,
+    // },
+    // The application blocking pool is enabled by default.
 
-    ruvia::app().setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8083)}).setWorkersPerListener(2).setSignalShutdown(true).setCompression(ruvia::CompressionConfig{.minBytes = 128}).setDocumentRoot(std::move(documentRoot)).run();
+    ruvia::app().setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8083)}).setWorkersPerListener(2).setSignalShutdown(true).setCompression(ruvia::CompressionConfig{}).setDocumentRoot(std::move(documentRoot)).run();
 }

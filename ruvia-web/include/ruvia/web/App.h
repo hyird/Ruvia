@@ -75,17 +75,19 @@ public:
     // unbounded. A route's ruvia::BodyLimit<N> bounds even that.
     App& setStreamBodyLimit(std::optional<std::size_t> bytes);
     App& setMaxWebSocketMessageBytes(std::size_t bytes);
+    // Disabled by default. Presence enables response coding and precompressed
+    // static sidecar negotiation; std::nullopt disables both.
     App& setCompression(std::optional<CompressionConfig> config);
     App& setCors(std::optional<CorsConfig> config);
     App& setDocumentRoot(DocumentRootConfig config);
     App& setMemoryPoolConfig(MemoryPoolConfig config);
-    // Enables Context::runBlocking(): one process-wide pool of ordinary threads
-    // that handlers offload blocking work to, so a blocking call cannot freeze
-    // the single-threaded worker that owns the connection. Absent by default --
-    // an app that never offloads should not pay for idle threads, and one that
-    // does should size the pool for its own workload. run() starts the threads
-    // before the first request; after workers stop, running callables are not
-    // awaited and may finish on the pool's detached state.
+    // Configures the process-wide ordinary-thread pool used by
+    // Context::runBlocking() and large buffered-response compression. It is
+    // enabled by default with bounded CPU-based sizing; std::nullopt explicitly
+    // disables it, making large buffered-response compression synchronous.
+    // run() starts the threads before the first request; after workers stop,
+    // running callables are not awaited and may finish on the pool's detached
+    // state.
     App& setBlockingPool(std::optional<BlockingPoolOptions> options);
 
     App& onError(HttpErrorHandler handler);

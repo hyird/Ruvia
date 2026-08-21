@@ -404,7 +404,7 @@ private:
     const detail::RouteTable* routes_{nullptr};
     const detail::WorkerStateRegistry* workerStates_{nullptr};
     BlockingPool* blockingPool_{nullptr};
-    bool deferredStaticFileCompression_{false};
+    bool precompressedStaticFiles_{false};
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
     detail::ContextRequestBodySource requestBodySource_;

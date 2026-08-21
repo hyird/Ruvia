@@ -60,7 +60,7 @@ int main() {
     memory.requestInitialBufferBytes = 4096;
     const auto httpPort = app.env().get<std::uint16_t>("RUVIA_HTTP_PORT").value_or(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8087));
     std::optional<ruvia::CompressionConfig> compression;
-    if (app.env().get<bool>("RUVIA_GZIP").value_or(true)) {
+    if (app.env().get<bool>("RUVIA_GZIP").value_or(false)) {
         compression.emplace();
     }
     std::optional<ruvia::CorsConfig> cors;

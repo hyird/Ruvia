@@ -2,6 +2,9 @@
 
 #include <cstdint>
 
+#include "ruvia/core/BlockingPool.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/core/WorkerHandle.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -23,10 +26,11 @@ enum class HttpResponseCodingAvailability : std::uint8_t {
 };
 
 // Pure response-policy result. It deliberately does not inspect the body
-// alternative: a static file has a separate deferred path, while buffered and
-// streaming responses share the same metadata policy. Identity is considered
-// eligible here when the representation may vary; callers that need to create
-// an encoder must still reject identity explicitly.
+// alternative: static files are selected from indexed representations and are
+// skipped by response encoding, while buffered and streaming responses share
+// the same metadata policy. Identity is considered eligible here when the
+// representation may vary; callers that need to create an encoder must still
+// reject identity explicitly.
 enum class HttpResponseCompressionEligibility : std::uint8_t {
     kIneligible,
     kEligible,
@@ -153,6 +157,13 @@ private:
 }
 
 [[nodiscard]] HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, HttpResponse& response, const CompressionConfig& options);
+
+// Applies the same policy as applyResponseCompression(), but offloads an
+// in-memory body above syncBytes to the bounded blocking pool. A disabled pool
+// extends synchronous compression through maxBytes; rejection by an existing
+// pool is an intentional identity fallback. Encoder/commit failures remain
+// typed failures so a client that forbids identity receives a terminal error.
+[[nodiscard]] Task<HttpResponseCompressionResult> applyResponseCompressionAsync(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, HttpResponse& response, CompressionConfig options, BlockingPool* pool, const WorkerHandle& worker);
 
 [[nodiscard]] HttpResponseCompressionEligibility httpResponseCompressionEligibility(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, const HttpResponse& response, ResponseStreamKind kind) noexcept;
 

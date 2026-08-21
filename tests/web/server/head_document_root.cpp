@@ -25,7 +25,6 @@
 
 #include <zlib.h>
 
-#include "ruvia/core/BlockingPool.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/StaticFiles.h"
@@ -163,11 +162,9 @@ int main() {
         {},
         {});
     routerImpl.finalize();
-    ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1});
     ruvia::detail::HttpServerOptions options;
     options.documentRoot.root = &root;
-    options.blockingPool = &pool;
-    options.compression->minBytes = 1;
+    options.compression.emplace();
 
     ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
     server.start();
@@ -227,23 +224,21 @@ int main() {
         }
     }
 
-    // When identity is explicitly forbidden, an unindexed file must still be
-    // served if the configured runtime can compress it. The document-root
-    // fallback defers the strict representation decision until this blocking
-    // compression step completes.
+    // With compression enabled, an indexed precompressed sidecar is selected
+    // directly. Static files are never compressed on the request path.
     if (rc == 0) {
         asio::write(sock, asio::buffer(std::string_view(
             "GET /asset.txt HTTP/1.1\r\nHost: localhost\r\n"
             "Accept-Encoding: gzip, identity;q=0\r\n\r\n")), ec);
         const std::string compressedHead = readHead(sock, buffer, ec);
         if (!compressedHead.starts_with("HTTP/1.1 200")) {
-            fail(7, "deferred static compression did not return 200");
+            fail(7, "precompressed static sidecar did not return 200");
         } else if (compressedHead.find("Content-Encoding: gzip") == std::string::npos) {
-            fail(8, "deferred static compression did not advertise gzip");
+            fail(8, "precompressed static sidecar did not advertise gzip");
         } else {
             const std::size_t length = contentLength(compressedHead);
-            if (length == std::string_view::npos || length >= kFileBody.size()) {
-                fail(9, "deferred static compression did not reduce the file");
+            if (length != sidecarBody.size()) {
+                fail(9, "precompressed static sidecar Content-Length mismatch");
             } else {
                 std::string encoded(length, '\0');
                 const std::size_t have = std::min(buffer.size(), length);
@@ -255,38 +250,22 @@ int main() {
                     asio::read(sock, asio::buffer(encoded.data() + have, length - have), ec);
                 }
                 if (ec || gzipDecode(encoded) != kFileBody) {
-                    fail(10, "deferred static compression body was not valid gzip");
+                    fail(10, "precompressed static sidecar body was not valid gzip");
                 }
             }
         }
     }
 
-    // A handler's Context::staticFile uses the same deferred policy as the
-    // document-root fallback. This file has no sidecar, so a successful 200
-    // proves the final buffered-response stage, not sidecar selection.
+    // Context::staticFile follows the same sidecar-only policy. This file has
+    // no sidecar and identity is forbidden, so it must not be compressed on a
+    // worker or in the blocking pool.
     if (rc == 0) {
         asio::write(sock, asio::buffer(std::string_view(
             "GET /handler-static HTTP/1.1\r\nHost: localhost\r\n"
             "Accept-Encoding: gzip, identity;q=0\r\n\r\n")), ec);
         const std::string routeHead = readHead(sock, buffer, ec);
-        if (!routeHead.starts_with("HTTP/1.1 200")) {
-            fail(11, "Context::staticFile route was not compressed successfully");
-        } else if (routeHead.find("Content-Encoding: gzip") == std::string::npos) {
-            fail(12, "Context::staticFile route did not advertise gzip");
-        } else {
-            const std::size_t length = contentLength(routeHead);
-            std::string encoded(length == std::string_view::npos ? 0 : length, '\0');
-            const std::size_t have = std::min(buffer.size(), encoded.size());
-            if (have != 0) {
-                asio::buffer_copy(asio::buffer(encoded.data(), have), buffer.data());
-                buffer.consume(have);
-            }
-            if (have < encoded.size()) {
-                asio::read(sock, asio::buffer(encoded.data() + have, encoded.size() - have), ec);
-            }
-            if (ec || gzipDecode(encoded) != kFileBody) {
-                fail(13, "Context::staticFile route body was not valid gzip");
-            }
+        if (!routeHead.starts_with("HTTP/1.1 406")) {
+            fail(11, "Context::staticFile compressed a file without a sidecar");
         }
     }
 
@@ -294,10 +273,8 @@ int main() {
     server.stop();
     server.join();
 
-    // A precompressed sidecar is a complete representation in its own right;
-    // it must remain usable when runtime compression is disabled. Before the
-    // negotiation/capability split this request was rejected at head parsing,
-    // before the document-root index could select asset.txt.gz.
+    // Disabling compression also disables sidecar negotiation. Even when gzip
+    // is accepted, the identity representation is returned if it is allowed.
     options.compression.reset();
     ruvia::detail::HttpServer sidecarServer(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
     sidecarServer.start();
@@ -306,25 +283,25 @@ int main() {
     asio::streambuf sidecarBuffer;
     asio::write(sidecarSocket, asio::buffer(std::string_view(
         "GET /asset.txt HTTP/1.1\r\nHost: localhost\r\n"
-        "Accept-Encoding: gzip, identity;q=0\r\n\r\n")), ec);
+        "Accept-Encoding: gzip\r\n\r\n")), ec);
     const std::string sidecarHead = readHead(sidecarSocket, sidecarBuffer, ec);
     if (!sidecarHead.starts_with("HTTP/1.1 200")) {
-        fail(14, "a precompressed sidecar was rejected when runtime compression was disabled");
-    } else if (sidecarHead.find("Content-Encoding: gzip") == std::string::npos) {
-        fail(15, "the static sidecar response lost Content-Encoding: gzip");
+        fail(12, "compression-disabled static file was not served as identity");
+    } else if (sidecarHead.find("Content-Encoding:") != std::string::npos) {
+        fail(13, "compression-disabled static file selected a sidecar");
     } else {
         const std::size_t length = contentLength(sidecarHead);
-        std::string encoded(length == std::string_view::npos ? 0 : length, '\0');
-        const std::size_t have = std::min(sidecarBuffer.size(), encoded.size());
+        std::string body(length == std::string_view::npos ? 0 : length, '\0');
+        const std::size_t have = std::min(sidecarBuffer.size(), body.size());
         if (have != 0) {
-            asio::buffer_copy(asio::buffer(encoded.data(), have), sidecarBuffer.data());
+            asio::buffer_copy(asio::buffer(body.data(), have), sidecarBuffer.data());
             sidecarBuffer.consume(have);
         }
-        if (have < encoded.size()) {
-            asio::read(sidecarSocket, asio::buffer(encoded.data() + have, encoded.size() - have), ec);
+        if (have < body.size()) {
+            asio::read(sidecarSocket, asio::buffer(body.data() + have, body.size() - have), ec);
         }
-        if (ec || gzipDecode(encoded) != kFileBody) {
-            fail(16, "the static sidecar response body was not the indexed gzip representation");
+        if (ec || body != kFileBody) {
+            fail(14, "compression-disabled static file was not the identity representation");
         }
     }
     sidecarSocket.close(ec);
