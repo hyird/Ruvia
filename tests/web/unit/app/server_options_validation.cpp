@@ -3,16 +3,19 @@
 #include <chrono>
 #include <concepts>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/detail/app/AppState.h"
 #include "ruvia/web/App.h"
+#include "ruvia/web/StaticFiles.h"
 
 namespace {
 
@@ -47,6 +50,9 @@ private:
 using ruvia::detail::HttpServerOptions;
 using ruvia::detail::validateHttpServerOptions;
 
+template <typename T>
+concept HasLegacyHttpClientOriginLimit = requires(T& options) { options.maxHttpClientOriginsPerWorker; };
+
 template <typename Fn>
 bool throwsInvalid(Fn&& fn) {
     try {
@@ -55,6 +61,14 @@ bool throwsInvalid(Fn&& fn) {
     } catch (const std::invalid_argument&) {
         return true;
     }
+}
+
+ruvia::TlsIdentity tlsIdentity(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::string privateKeyPassword = {}) {
+    return ruvia::TlsIdentity::fromFiles({
+        .certificateChainFile = std::move(certificateChainFile),
+        .privateKeyFile = std::move(privateKeyFile),
+        .privateKeyPassword = std::move(privateKeyPassword),
+    });
 }
 
 }  // namespace
@@ -68,13 +82,16 @@ RUVIA_TEST(validate_server_options_accepts_defaults) {
     static_assert(std::same_as<decltype(HttpServerOptions{}.maxRequestsPerConnection), std::optional<std::size_t>>);
     static_assert(std::same_as<decltype(HttpServerOptions{}.maxStreamBodyBytes), std::optional<std::size_t>>);
     static_assert(std::same_as<decltype(HttpServerOptions{}.defaultRateLimitPerWorker), std::optional<ruvia::RateLimitRule>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.rateLimitSlotsPerWorker), std::size_t>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.rateLimitCapacityPerWorker), std::size_t>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.httpClientOriginCacheCapacityPerWorker), std::size_t>);
+    static_assert(!HasLegacyHttpClientOriginLimit<HttpServerOptions>);
     RUVIA_CHECK(!HttpServerOptions{}.maxStreamBodyBytes.has_value());
     RUVIA_CHECK(!HttpServerOptions{}.compression.has_value());
     RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.minBytes, std::size_t{1024});
     RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.syncBytes, std::size_t{64} * 1024);
     RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.maxBytes, std::size_t{64} * 1024 * 1024);
-    RUVIA_CHECK_EQ(HttpServerOptions{}.rateLimitSlotsPerWorker, ruvia::kDefaultRateLimitSlotsPerWorker);
+    RUVIA_CHECK_EQ(HttpServerOptions{}.rateLimitCapacityPerWorker, ruvia::kDefaultRateLimitCapacityPerWorker);
+    RUVIA_CHECK_EQ(HttpServerOptions{}.httpClientOriginCacheCapacityPerWorker, std::size_t{64});
     // An unconfigured server is bounded by default against connection floods.
     RUVIA_CHECK(HttpServerOptions{}.maxConnections.has_value());
     RUVIA_CHECK_EQ(*HttpServerOptions{}.maxConnections, std::size_t{1024});
@@ -106,23 +123,35 @@ RUVIA_TEST(validate_server_options_rejects_invalid_compression_thresholds) {
 }
 
 RUVIA_TEST(validate_server_options_owns_document_root_runtime_policy) {
+    namespace fs = std::filesystem;
     HttpServerOptions options;
-    options.documentRoot.runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
-    options.documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds::zero();
-    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
-
-    options.documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds(1);
-    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
-
-    options.documentRoot.runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kImmutable;
-    options.documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds::zero();
+    RUVIA_CHECK(options.documentRoot.root() == nullptr);
+    RUVIA_CHECK(options.documentRoot.refreshOptions() == nullptr);
     RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerOptions(options); }));
 
-    // Browser reload assets need a changing root revision. Exposing them
-    // while the root is immutable would silently promise live reload that can
-    // never observe a filesystem change.
-    options.documentRoot.runtimeOptions.enableLiveReload = true;
+    const auto dir = fs::temp_directory_path() / "ruvia_server_options_document_root";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    ruvia::StaticRoot root(dir);
+    options.documentRoot = HttpServerOptions::DocumentRoot::standalone(root);
+    RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    options.documentRoot = HttpServerOptions::DocumentRoot::refreshing(
+        root, {.refreshInterval = std::chrono::milliseconds(1)});
+    // An App-managed refreshing root needs the blocking pool that performs
+    // directory scans off the event loop.
     RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1});
+    options.blockingPool = &pool;
+    options.documentRoot = HttpServerOptions::DocumentRoot::refreshing(
+        root, {.refreshInterval = std::chrono::milliseconds::zero()});
+    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    options.documentRoot = HttpServerOptions::DocumentRoot::refreshing(
+        root, {.refreshInterval = std::chrono::milliseconds(1)});
+    RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerOptions(options); }));
+    fs::remove_all(dir);
 }
 
 RUVIA_TEST(validate_server_options_rejects_configured_nonpositive_timeout) {
@@ -181,12 +210,12 @@ RUVIA_TEST(validate_server_options_rejects_nonpositive_limits) {
     }
     {
         HttpServerOptions options;
-        options.rateLimitSlotsPerWorker = 0;
+        options.rateLimitCapacityPerWorker = 0;
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.rateLimitSlotsPerWorker = 3;
+        options.rateLimitCapacityPerWorker = 3;
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
@@ -310,25 +339,44 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
     static_assert(!std::is_default_constructible_v<ruvia::ListenerConfig>);
     static_assert(!std::is_aggregate_v<ruvia::ListenerConfig>);
 
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsIdentity::fromFiles({}, "key.pem"); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsIdentity::fromFiles("cert.pem", {}); }));
+    RUVIA_CHECK(throwsInvalid([] {
+        (void)ruvia::TlsIdentity::fromFiles({
+            .certificateChainFile = {},
+            .privateKeyFile = "key.pem",
+        });
+    }));
+    RUVIA_CHECK(throwsInvalid([] {
+        (void)ruvia::TlsIdentity::fromFiles({
+            .certificateChainFile = "cert.pem",
+            .privateKeyFile = {},
+        });
+    }));
     RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsClientCertificatePolicy::required({}); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ListenerConfig::http({}, 8080); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ListenerConfig::http("127.0.0.1", 0); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ListenerConfig::redirectHttpToHttps({}, 8080, 8443); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ListenerConfig::redirectHttpToHttps("127.0.0.1", 8443, 8443); }));
+    RUVIA_CHECK(throwsInvalid([] {
+        (void)ruvia::ListenerConfig::http({.address = {}, .port = 8080});
+    }));
+    RUVIA_CHECK(throwsInvalid([] {
+        (void)ruvia::ListenerConfig::http({.address = "127.0.0.1", .port = 0});
+    }));
+    RUVIA_CHECK(throwsInvalid([] {
+        (void)ruvia::ListenerConfig::redirectHttpToHttps({.address = {}, .port = 8080, .targetHttpsPort = 8443});
+    }));
+    RUVIA_CHECK(throwsInvalid([] {
+        (void)ruvia::ListenerConfig::redirectHttpToHttps({.address = "127.0.0.1", .port = 8443, .targetHttpsPort = 8443});
+    }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setProcessSignalHandlers(static_cast<ruvia::ProcessSignalHandlerPolicy>(0xFF)); }));
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({}); }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::http("127.0.0.1", 8080), ruvia::ListenerConfig::http("0.0.0.0", 8080)}); }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::redirectHttpToHttps("127.0.0.1", 8080, 8443)}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::http({.address = "127.0.0.1", .port = 8080}), ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8080})}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::redirectHttpToHttps({.address = "127.0.0.1", .port = 8080, .targetHttpsPort = 8443})}); }));
 }
 
 RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {
-    auto tls = ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles("cert.pem", "key.pem"));
-    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity({}, ruvia::TlsIdentity::fromFiles("other.pem", "other.key")); }));
-    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity("example.com:443", ruvia::TlsIdentity::fromFiles("other.pem", "other.key")); }));
-    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity("127.0.0.1", ruvia::TlsIdentity::fromFiles("other.pem", "other.key")); }));
-    tls.addSniIdentity("Example.com", ruvia::TlsIdentity::fromFiles("other.pem", "other.key"));
-    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity("example.COM", ruvia::TlsIdentity::fromFiles("third.pem", "third.key")); }));
+    auto tls = ruvia::TlsConfig(tlsIdentity("cert.pem", "key.pem"));
+    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity({.host = {}, .identity = tlsIdentity("other.pem", "other.key")}); }));
+    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity({.host = "example.com:443", .identity = tlsIdentity("other.pem", "other.key")}); }));
+    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity({.host = "127.0.0.1", .identity = tlsIdentity("other.pem", "other.key")}); }));
+    tls.addSniIdentity({.host = "Example.com", .identity = tlsIdentity("other.pem", "other.key")});
+    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity({.host = "example.COM", .identity = tlsIdentity("third.pem", "third.key")}); }));
 }
 
 RUVIA_TEST(tls_identity_owns_password_independently_of_caller_resource) {
@@ -337,7 +385,7 @@ RUVIA_TEST(tls_identity_owns_password_independently_of_caller_resource) {
     std::optional<ruvia::TlsIdentity> identity;
     {
         const std::pmr::string password(expected, &callerResource);
-        identity.emplace(ruvia::TlsIdentity::fromFiles("cert.pem", "key.pem", password));
+        identity.emplace(tlsIdentity("cert.pem", "key.pem", std::string(password.data(), password.size())));
     }
     callerResource.release();
     RUVIA_CHECK_EQ(identity->privateKeyPassword(), std::string_view(expected));

@@ -40,7 +40,9 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(Ht
     using Connection = SocketWebSocketConnection<Stream>;
     std::optional<Connection> webSocketConnection;
     auto upgradeAndRun = [&](Context& context) -> Task<void> {
-        const auto handshake = makeWebSocketServerHandshake(d.parsed.request, webSocketEndpoint.subprotocols(), d.memory.resource());
+        const auto handshake = makeWebSocketServerHandshake(
+            d.parsed.request,
+            {.supportedSubprotocols = webSocketEndpoint.subprotocols(), .resource = d.memory.resource()});
         if (const auto ec = co_await writeWebSocketHandshake(d.stream, handshake); ec) {
             co_return;
         }

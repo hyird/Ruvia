@@ -43,7 +43,7 @@ struct FileErrorHandler final {
 
     ruvia::Task<ruvia::HttpResponse> operator()(ruvia::Context& context, ruvia::HttpErrorInfo info) const {
         context.status(info.status());
-        co_return context.staticFile(*root, "error.txt", "text/plain");
+        co_return context.staticFile(*root, {.relativePath = "error.txt", .contentType = "text/plain"});
     }
 };
 
@@ -67,7 +67,7 @@ int main() {
     impl.finalize();
 
     ruvia::detail::HttpServerOptions options;
-    options.documentRoot.root = &root;
+    options.documentRoot = ruvia::detail::HttpServerOptions::DocumentRoot::standalone(root);
     options.compression.emplace();
 
     ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);

@@ -51,7 +51,7 @@ RUVIA_TEST(sansio_driver_h2_get_round_trip) {
                     }
                     if (const auto* messageEnd = event->messageEnd()) {
                         const auto streamId = messageEnd->streamId();
-                        ruvia::HttpResponse response(&resource);
+                        ruvia::HttpResponse response({.resource = &resource});
                         response.status(ruvia::http_status::kOk);
                         response.body("pong");
                         const auto* stream = c.stream(streamId);
@@ -237,7 +237,7 @@ RUVIA_TEST(sansio_driver_h2_bodyless_response_survives_empty_accept_encoding_set
                 co_return;
             }
 
-            ruvia::detail::HpackDecoder decoder(std::pmr::get_default_resource());
+            ruvia::detail::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             for (;;) {
                 char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;

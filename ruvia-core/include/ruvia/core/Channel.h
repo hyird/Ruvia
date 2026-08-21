@@ -36,6 +36,11 @@ enum class ChannelSendStatus : std::uint8_t {
 template <typename T>
 class ChannelSender;
 
+struct ChannelOptions final {
+    std::size_t capacity{0};
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 template <typename T>
 class ChannelSendResult final {
 public:
@@ -292,7 +297,7 @@ private:
     std::shared_ptr<detail::ChannelState<T>> state_;
     friend class ChannelReceiver<T>;
     template <typename U>
-    friend auto makeChannel(WorkerHandle, std::size_t, std::pmr::memory_resource*);
+    friend auto makeChannel(WorkerHandle, ChannelOptions);
 };
 
 template <typename T>
@@ -347,14 +352,14 @@ private:
 
     std::shared_ptr<detail::ChannelState<T>> state_;
     template <typename U>
-    friend auto makeChannel(WorkerHandle, std::size_t, std::pmr::memory_resource*);
+    friend auto makeChannel(WorkerHandle, ChannelOptions);
 };
 
 template <typename T>
-[[nodiscard]] auto makeChannel(WorkerHandle worker, std::size_t capacity, std::pmr::memory_resource* resource = nullptr) {
-    auto* resolved = detail::pmrResourceOrDefault(resource);
+[[nodiscard]] auto makeChannel(WorkerHandle worker, ChannelOptions options) {
+    auto* resolved = detail::pmrResourceOrDefault(options.resource);
     std::pmr::polymorphic_allocator<detail::ChannelState<T>> allocator(resolved);
-    auto state = std::allocate_shared<detail::ChannelState<T>>(allocator, std::move(worker), capacity, resolved);
+    auto state = std::allocate_shared<detail::ChannelState<T>>(allocator, std::move(worker), options.capacity, resolved);
     detail::WorkerHandleAccess::registerShutdownListener(state->worker, state);
     return std::pair(ChannelSender<T>(state), ChannelReceiver<T>(state));
 }

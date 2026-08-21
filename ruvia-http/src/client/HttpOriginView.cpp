@@ -16,16 +16,25 @@ void validateOriginHost(std::string_view host) {
     }
 }
 
-}  // namespace
-
-HttpOriginView HttpOriginView::http(std::string_view host, std::uint16_t port) {
-    validateOriginHost(host);
-    return HttpOriginView(HttpScheme::kHttp, host, port);
+std::uint16_t resolvedOriginPort(HttpScheme scheme, const HttpOriginOptions& options) noexcept {
+    if (options.port.has_value()) {
+        return *options.port;
+    }
+    return scheme == HttpScheme::kHttps ? std::uint16_t{443} : std::uint16_t{80};
 }
 
-HttpOriginView HttpOriginView::https(std::string_view host, std::uint16_t port) {
+}  // namespace
+
+HttpOriginView HttpOriginView::http(HttpOriginOptions options) {
+    const auto host = options.host.view();
     validateOriginHost(host);
-    return HttpOriginView(HttpScheme::kHttps, host, port);
+    return HttpOriginView(HttpScheme::kHttp, host, resolvedOriginPort(HttpScheme::kHttp, options));
+}
+
+HttpOriginView HttpOriginView::https(HttpOriginOptions options) {
+    const auto host = options.host.view();
+    validateOriginHost(host);
+    return HttpOriginView(HttpScheme::kHttps, host, resolvedOriginPort(HttpScheme::kHttps, options));
 }
 
 }  // namespace ruvia

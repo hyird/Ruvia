@@ -28,7 +28,7 @@ RUVIA_RESPONSE_MODEL(HttpErrorResponseModel,
     RUVIA_OPTIONAL_FIELD(details, ruvia::Array<HttpValidationIssueResponseModel>));
 
 [[nodiscard]] std::pmr::string serializeErrorResponse(HttpErrorInfo error, std::pmr::memory_resource* resource) {
-    HttpErrorResponseModel model(resource);
+    HttpErrorResponseModel model({.resource = resource});
     model.set<"error">(error.statusText())
         .set<"code">(error.code())
         .set<"message">(error.message());
@@ -36,13 +36,13 @@ RUVIA_RESPONSE_MODEL(HttpErrorResponseModel,
         auto& details = model.ensure<"details">();
         details.reserve(error.validationIssues().size());
         for (const auto& issue : error.validationIssues()) {
-            details.emplace_back(resource)
+            details.emplace_back(ModelOptions{.resource = resource})
                 .set<"field">(issue.field())
                 .set<"code">(issue.code())
                 .set<"message">(issue.message());
         }
     }
-    return toJson(model, resource);
+    return toJson(model, {.resource = resource});
 }
 
 [[nodiscard]] std::string_view defaultErrorCodeValue(HttpStatusCode status) noexcept {
@@ -88,11 +88,11 @@ RUVIA_RESPONSE_MODEL(HttpErrorResponseModel,
 
 }  // namespace
 
-HttpError::HttpError(HttpStatusCode status, std::string_view code, std::string_view message, std::string_view statusText)
-    : status_(status),
-      statusText_(statusText, detail::processResource()),
-      code_(code, detail::processResource()),
-      message_(message, detail::processResource()) {}
+HttpError::HttpError(HttpErrorInfoOptions options)
+    : status_(options.status),
+      statusText_(options.statusText.view(), detail::processResource()),
+      code_(options.code.view(), detail::processResource()),
+      message_(options.message.view(), detail::processResource()) {}
 
 HttpError::HttpError(const HttpError& other)
     : status_(other.status_),
@@ -115,7 +115,7 @@ const char* HttpError::what() const noexcept {
 }
 
 HttpErrorInfo HttpError::info() const& noexcept {
-    return HttpErrorInfo(status_, code_, message_, statusText_);
+    return HttpErrorInfo({.status = status_, .code = code_, .message = message_, .statusText = statusText_});
 }
 
 std::string_view defaultErrorCode(HttpStatusCode status) noexcept {
@@ -125,7 +125,7 @@ std::string_view defaultErrorCode(HttpStatusCode status) noexcept {
 HttpResponse detail::makeDefaultErrorResponse(std::pmr::memory_resource* resource, HttpErrorInfo error) {
     error = normalizeHttpErrorInfo(error);
 
-    HttpResponse response(resource);
+    HttpResponse response({.resource = resource});
     reserveResponseHeaders(response, 1);
     response.status(error.status());
     setResponseHeaderStableView(response, "Content-Type", "application/json");
@@ -150,9 +150,9 @@ Task<HttpResponse> detail::invokeErrorHandler(Context& context, HttpErrorInfo er
         } catch (const std::exception&) {
             // The error handler itself threw; keep transport output deterministic
             // and avoid echoing exception detail to the client.
-            co_return makeDefaultErrorResponse(context.resource(), HttpErrorInfo(ruvia::http_status::kInternalServerError, "error_handler_failed", "error handler failed"));
+            co_return makeDefaultErrorResponse(context.resource(), HttpErrorInfo({.status = ruvia::http_status::kInternalServerError, .code = "error_handler_failed", .message = "error handler failed"}));
         } catch (...) {
-            co_return makeDefaultErrorResponse(context.resource(), HttpErrorInfo(ruvia::http_status::kInternalServerError, "error_handler_failed", "error handler failed"));
+            co_return makeDefaultErrorResponse(context.resource(), HttpErrorInfo({.status = ruvia::http_status::kInternalServerError, .code = "error_handler_failed", .message = "error handler failed"}));
         }
     }
 

@@ -100,23 +100,23 @@ HttpContentCodingFieldResult parseHttpContentCoding(std::string_view value) noex
     return parser.finish();
 }
 
-HttpContentDecodeResult decodeHttpContent(HttpContentCoding coding, std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
+HttpContentDecodeResult decodeHttpContent(HttpContentCoding coding, std::string_view input, HttpContentDecodeOptions options) {
     detail::ContentDecodeAttempt attempt = HttpContentDecodeError::kUnsupportedCoding;
     switch (coding) {
         case HttpContentCoding::kGzip:
-            attempt = detail::decodeGzipContent(input, maxDecodedBytes, resource);
+            attempt = detail::decodeGzipContent(input, options.maxDecodedBytes, options.resource);
             break;
         case HttpContentCoding::kBrotli:
-            attempt = detail::decodeBrotliContent(input, maxDecodedBytes, resource);
+            attempt = detail::decodeBrotliContent(input, options.maxDecodedBytes, options.resource);
             break;
         case HttpContentCoding::kZstd:
-            attempt = detail::decodeZstdContent(input, maxDecodedBytes, resource);
+            attempt = detail::decodeZstdContent(input, options.maxDecodedBytes, options.resource);
             break;
         case HttpContentCoding::kIdentity: {
-            if (input.size() > maxDecodedBytes) {
+            if (input.size() > options.maxDecodedBytes) {
                 attempt = HttpContentDecodeError::kDecodedSizeExceeded;
             } else {
-                attempt = std::pmr::string(input, detail::httpPmrResourceOrDefault(resource));
+                attempt = std::pmr::string(input, detail::httpPmrResourceOrDefault(options.resource));
             }
             break;
         }
@@ -127,23 +127,23 @@ HttpContentDecodeResult decodeHttpContent(HttpContentCoding coding, std::string_
     return HttpContentDecodeResult::makeFailure(std::get<HttpContentDecodeError>(attempt));
 }
 
-HttpContentEncodeResult encodeHttpContent(HttpContentCoding coding, std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
+HttpContentEncodeResult encodeHttpContent(HttpContentCoding coding, std::string_view input, HttpContentEncodeOptions options) {
     detail::ContentEncodeAttempt attempt = HttpContentEncodeError::kEncoderFailure;
     switch (coding) {
         case HttpContentCoding::kBrotli:
-            attempt = detail::encodeBrotliContent(input, maxEncodedBytes, resource);
+            attempt = detail::encodeBrotliContent(input, options.maxEncodedBytes, options.resource);
             break;
         case HttpContentCoding::kZstd:
-            attempt = detail::encodeZstdContent(input, maxEncodedBytes, resource);
+            attempt = detail::encodeZstdContent(input, options.maxEncodedBytes, options.resource);
             break;
         case HttpContentCoding::kGzip:
-            attempt = detail::encodeGzipContent(input, maxEncodedBytes, resource);
+            attempt = detail::encodeGzipContent(input, options.maxEncodedBytes, options.resource);
             break;
         case HttpContentCoding::kIdentity: {
-            if (input.size() > maxEncodedBytes) {
+            if (input.size() > options.maxEncodedBytes) {
                 attempt = HttpContentEncodeError::kEncodedSizeExceeded;
             } else {
-                attempt = std::pmr::string(input, detail::httpPmrResourceOrDefault(resource));
+                attempt = std::pmr::string(input, detail::httpPmrResourceOrDefault(options.resource));
             }
             break;
         }

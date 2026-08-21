@@ -22,9 +22,9 @@ SetCookiePlan::SetCookiePlan(std::string_view name, std::string_view value, cons
       priorityText_(options.priority ? cookiePriorityToken(*options.priority) : std::string_view{}),
       sameSiteText_(options.sameSite ? cookieSameSiteToken(*options.sameSite) : std::string_view{}),
       hasMaxAge_(options.maxAge.has_value()),
-      httpOnly_(options.httpOnly),
-      secure_(options.secure),
-      partitioned_(options.partitioned) {
+      httpOnly_(cookieAttributeEmitted(options.httpOnly)),
+      secure_(cookieAttributeEmitted(options.secure)),
+      partitioned_(cookieAttributeEmitted(options.partitioned)) {
     if (options.expires.has_value()) {
         const auto expiresTime = std::chrono::system_clock::to_time_t(*options.expires);
         const auto utc = httpUtcTm(expiresTime);

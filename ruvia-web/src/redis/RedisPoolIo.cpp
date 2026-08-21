@@ -4,6 +4,7 @@
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
+#include "ruvia/web/detail/TcpSocketOptions.h"
 
 #include <asio/connect.hpp>
 #include <asio/ip/tcp.hpp>
@@ -31,10 +32,10 @@ void RedisPool::close(Connection& connection) noexcept {
 
 void RedisPool::configureSocket(Connection& connection) noexcept {
     std::error_code ignored;
-    if (config_.tcpNoDelay) {
+    if (tcpNoDelayEnabled(config_.tcpNoDelay)) {
         connection.socket.set_option(asio::ip::tcp::no_delay(true), ignored);
     }
-    if (config_.keepAlive) {
+    if (tcpKeepAliveEnabled(config_.tcpKeepAlive)) {
         connection.socket.set_option(asio::socket_base::keep_alive(true), ignored);
     }
 }

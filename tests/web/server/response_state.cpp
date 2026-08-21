@@ -50,7 +50,7 @@ RUVIA_TEST(finalize_buffered_response_preserves_request_version_and_persistence)
 
     Http1ServerRequestParser parser;
     const auto finalize = [&](std::string_view request) {
-        HttpResponse response(std::pmr::new_delete_resource());
+        HttpResponse response({.resource = std::pmr::new_delete_resource()});
         response.status(ruvia::http_status::kOk);
         ruvia::detail::Http1RequestSequence requestSequence(std::nullopt);
         const auto plan = finalizeBufferedRouteResponse(response, parser.parseMessage(request).connectionPlan, requestSequence);
@@ -78,7 +78,7 @@ RUVIA_TEST(http1_final_response_commit_requirement_preserves_typed_failure) {
     Http1ServerRequestParser parser;
     const auto requestPlan = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n").connectionPlan;
 
-    HttpResponse propagated(std::pmr::new_delete_resource());
+    HttpResponse propagated({.resource = std::pmr::new_delete_resource()});
     propagated.status(ruvia::http_status::kUpgradeRequired);
     bool caughtTypedFailure = false;
     try {
@@ -99,13 +99,13 @@ RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {
     const auto requestPlan = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n").connectionPlan;
     Http1RequestSequence requestSequence(std::optional<std::size_t>{5});
     for (std::size_t completed = 0; completed < 4; ++completed) {
-        HttpResponse response(std::pmr::new_delete_resource());
+        HttpResponse response({.resource = std::pmr::new_delete_resource()});
         const auto connectionPlan = finalizeBufferedRouteResponse(response, requestPlan, requestSequence);
         RUVIA_CHECK(connectionPlan.disposition() == Http1ClosePolicy::kAllowReuse);
         RUVIA_CHECK(!response.header("Connection").has_value());
     }
 
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     const auto connectionPlan = finalizeBufferedRouteResponse(response, requestPlan, requestSequence);
     RUVIA_CHECK(connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse);
     RUVIA_CHECK_EQ(std::string(response.header("Connection").value_or(std::string_view{})), std::string("close"));
@@ -136,7 +136,7 @@ RUVIA_TEST(http1_request_sequence_unifies_buffered_and_committed_completion) {
     const auto parsed = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     const auto streamPlan = http1PlanResponseStream(parsed, requestSequence.nextResponseClosePolicy());
     RUVIA_CHECK(streamPlan.closePolicy() == Http1ClosePolicy::kCloseAfterResponse);
-    HttpResponse streamResponse(std::pmr::new_delete_resource());
+    HttpResponse streamResponse({.resource = std::pmr::new_delete_resource()});
     const auto prepared = prepareStream(std::move(streamResponse), ResponseStreamKind::kGeneric, streamPlan, ResponseTrailerIntent::kNone);
     RUVIA_CHECK(prepared.connectionPlan().disposition() == Http1ClosePolicy::kCloseAfterResponse);
     requestSequence.completeCommittedResponse(prepared.connectionPlan());
@@ -155,7 +155,7 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
     Http1ServerRequestParser parser;
     constexpr std::string_view request = "POST / HTTP/1.0\r\nConnection: keep-alive\r\nContent-Length: 1\r\n\r\nx";
 
-    HttpResponse completeResponse(std::pmr::new_delete_resource());
+    HttpResponse completeResponse({.resource = std::pmr::new_delete_resource()});
     completeResponse.body("response");
     ruvia::detail::Http1RequestSequence completeRequestSequence(std::nullopt);
     const auto completePlan = finalizeBodyRouteResponse(completeResponse, parser.parseMessage(request).connectionPlan, completeRequestSequence, Http1RequestBodyConsumption::kComplete);
@@ -163,7 +163,7 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
     RUVIA_CHECK(completePlan.protocolVersion() == ruvia::HttpProtocolVersion::kHttp10);
     RUVIA_CHECK_EQ(std::string(completeResponse.header("Connection").value_or(std::string_view{})), std::string("keep-alive"));
 
-    HttpResponse incompleteResponse(std::pmr::new_delete_resource());
+    HttpResponse incompleteResponse({.resource = std::pmr::new_delete_resource()});
     incompleteResponse.body("response");
     ruvia::detail::Http1RequestSequence incompleteRequestSequence(std::nullopt);
     const auto incompletePlan = finalizeBodyRouteResponse(incompleteResponse, parser.parseMessage(request).connectionPlan, incompleteRequestSequence, Http1RequestBodyConsumption::kIncomplete);

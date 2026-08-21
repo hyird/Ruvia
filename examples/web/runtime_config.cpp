@@ -78,7 +78,11 @@ int main() {
     if (!cert.empty() && !key.empty()) {
         std::string password;
         assignIfPresent(password, app.env().get("RUVIA_TLS_PASSWORD"));
-        ruvia::TlsConfig tls(ruvia::TlsIdentity::fromFiles(cert, key, password));
+        ruvia::TlsConfig tls(ruvia::TlsIdentity::fromFiles({
+            .certificateChainFile = cert,
+            .privateKeyFile = key,
+            .privateKeyPassword = password,
+        }));
         const auto verifyFile = pathOrEmpty(app.env().get("RUVIA_TLS_VERIFY_FILE"));
         if (!verifyFile.empty()) {
             tls.setClientCertificatePolicy(ruvia::TlsClientCertificatePolicy::optional(verifyFile));
@@ -87,15 +91,29 @@ int main() {
         std::vector<ruvia::ListenerConfig> listeners;
         listeners.reserve(2);
         if (app.env().get<bool>("RUVIA_AUTO_HTTPS").value_or(false)) {
-            listeners.push_back(ruvia::ListenerConfig::redirectHttpToHttps("0.0.0.0", httpPort, httpsPort));
+            listeners.push_back(ruvia::ListenerConfig::redirectHttpToHttps({
+                .address = "0.0.0.0",
+                .port = httpPort,
+                .targetHttpsPort = httpsPort,
+            }));
         } else {
-            listeners.push_back(ruvia::ListenerConfig::http("0.0.0.0", httpPort));
+            listeners.push_back(ruvia::ListenerConfig::http({
+                .address = "0.0.0.0",
+                .port = httpPort,
+            }));
         }
-        listeners.push_back(ruvia::ListenerConfig::https("0.0.0.0", httpsPort, std::move(tls)));
+        listeners.push_back(ruvia::ListenerConfig::https({
+            .address = "0.0.0.0",
+            .port = httpsPort,
+            .tls = std::move(tls),
+        }));
         app.setListeners(std::move(listeners));
     } else {
-        app.setListeners({ruvia::ListenerConfig::http("0.0.0.0", httpPort)});
+        app.setListeners({ruvia::ListenerConfig::http({
+            .address = "0.0.0.0",
+            .port = httpPort,
+        })});
     }
 
-    app.setSignalShutdown(true).run();
+    app.setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).run();
 }

@@ -148,17 +148,17 @@ RUVIA_TEST(request_body_zstd_rejects_bytes_after_the_last_frame) {
 RUVIA_TEST(http_request_content_decoder_owns_protocol_failure_status) {
     auto* resource = std::pmr::get_default_resource();
 
-    const auto invalid = decodeHttpRequestContent(HttpContentCoding::kGzip, "not-gzip", 1024, resource);
+    const auto invalid = decodeHttpRequestContent(HttpContentCoding::kGzip, "not-gzip", {.maxDecodedBytes = 1024, .resource = resource});
     RUVIA_CHECK(invalid.protocolFailure() != nullptr);
     RUVIA_CHECK(invalid.decoderFailure() == nullptr);
     RUVIA_CHECK_EQ(invalid.protocolFailure()->protocolError().status(), ruvia::http_status::kBadRequest);
 
-    const auto oversized = decodeHttpRequestContent(HttpContentCoding::kIdentity, "too large", 4, resource);
+    const auto oversized = decodeHttpRequestContent(HttpContentCoding::kIdentity, "too large", {.maxDecodedBytes = 4, .resource = resource});
     RUVIA_CHECK(oversized.protocolFailure() != nullptr);
     RUVIA_CHECK(oversized.decoderFailure() == nullptr);
     RUVIA_CHECK_EQ(oversized.protocolFailure()->protocolError().status(), ruvia::http_status::kContentTooLarge);
 
-    const auto unsupported = decodeHttpRequestContent(static_cast<HttpContentCoding>(255), {}, 1024, resource);
+    const auto unsupported = decodeHttpRequestContent(static_cast<HttpContentCoding>(255), {}, {.maxDecodedBytes = 1024, .resource = resource});
     RUVIA_CHECK(unsupported.protocolFailure() != nullptr);
     RUVIA_CHECK(unsupported.decoderFailure() == nullptr);
     RUVIA_CHECK_EQ(unsupported.protocolFailure()->protocolError().status(), ruvia::http_status::kUnsupportedMediaType);

@@ -34,12 +34,21 @@ concept SecurityHeaderRange = std::ranges::contiguous_range<Range> && std::same_
 }  // namespace detail
 
 // Legacy browser XSS filters can introduce vulnerabilities in otherwise safe
-// pages. Modern policy explicitly disables them with X-XSS-Protection: 0;
-// applications targeting only browsers that ignore the obsolete header may
-// choose not to emit it.
-enum class LegacyXssFilterPolicy : std::uint8_t {
-    kDisable,
-    kOmitHeader,
+// pages. Modern policy either emits X-XSS-Protection: 0 to disable the obsolete
+// auditor, or omits the obsolete header entirely for clients that ignore it.
+enum class XssProtectionHeaderPolicy : std::uint8_t {
+    kEmitDisabled,
+    kOmit,
+};
+
+enum class DefaultSecurityHeaderPolicy : std::uint8_t {
+    kOmit,
+    kEmitDefault,
+};
+
+enum class SecurityHeaderConflictPolicy : std::uint8_t {
+    kPreserveExisting,
+    kReplaceExisting,
 };
 
 struct SecurityHeadersOptions final {
@@ -98,19 +107,19 @@ struct SecurityHeadersOptions final {
         std::span<const SecurityHeader> headers_{};
     };
 
-    bool contentTypeOptions = true;
-    bool frameOptions = true;
+    DefaultSecurityHeaderPolicy contentTypeOptionsHeader = DefaultSecurityHeaderPolicy::kEmitDefault;
+    DefaultSecurityHeaderPolicy frameOptionsHeader = DefaultSecurityHeaderPolicy::kEmitDefault;
     // Emitted only for requests received over TLS. Plain HTTP responses must
     // never carry Strict-Transport-Security.
-    bool strictTransportSecurity = true;
-    LegacyXssFilterPolicy legacyXssFilter = LegacyXssFilterPolicy::kDisable;
+    DefaultSecurityHeaderPolicy strictTransportSecurityHeader = DefaultSecurityHeaderPolicy::kEmitDefault;
+    XssProtectionHeaderPolicy xssProtectionHeader = XssProtectionHeaderPolicy::kEmitDisabled;
 
     ::ruvia::BorrowedText contentSecurityPolicy = "default-src 'self'";
     ::ruvia::BorrowedText referrerPolicy = "strict-origin-when-cross-origin";
     ::ruvia::BorrowedText permissionsPolicy = "geolocation=(), microphone=(), camera=()";
 
     HeaderInit customHeaders{};
-    bool overwriteExisting = false;
+    SecurityHeaderConflictPolicy existingHeaders = SecurityHeaderConflictPolicy::kPreserveExisting;
 };
 
 static_assert(sizeof(SecurityHeadersOptions::HeaderInit) == sizeof(std::span<const SecurityHeader>));

@@ -64,7 +64,7 @@ int main() {
     std::thread peer([&] { peerContext.run(); });
 
     static constexpr std::array migrations{
-        ruvia::DbMigration{"001_never_runs", "CREATE TABLE ruvia_never_runs (id INT)"}};
+        ruvia::DbMigration{{.id = "001_never_runs", .sql = "CREATE TABLE ruvia_never_runs (id INT)"}}};
     bool threw = false;
     bool typed = false;
     std::string message;

@@ -22,7 +22,12 @@ using ruvia::detail::WsLivenessMode;
 WebSocketLifecycleOptions options(int pingMs, int pongMs, int closeMs = 5000) {
     WebSocketLifecycleOptions opts;
     if (pingMs > 0) {
-        opts.heartbeat = pongMs > 0 ? ruvia::WebSocketHeartbeatPolicy::periodic(std::chrono::milliseconds(pingMs), std::chrono::milliseconds(pongMs)) : ruvia::WebSocketHeartbeatPolicy::periodic(std::chrono::milliseconds(pingMs));
+        opts.heartbeat = ruvia::WebSocketHeartbeatPolicy::periodic({
+            .pingInterval = std::chrono::milliseconds(pingMs),
+            .pongTimeout = pongMs > 0
+                ? std::optional<std::chrono::milliseconds>(std::chrono::milliseconds(pongMs))
+                : std::nullopt,
+        });
     }
     opts.closeHandshakeTimeout = closeMs > 0 ? std::optional<std::chrono::milliseconds>(std::chrono::milliseconds(closeMs)) : std::nullopt;
     return opts;
@@ -37,7 +42,9 @@ WebSocketLivenessDecision decide(const WebSocketLifecycleOptions& opts, WsLivene
 RUVIA_TEST(ws_heartbeat_policy_requires_positive_durations) {
     bool zeroRejected = false;
     try {
-        (void)ruvia::WebSocketHeartbeatPolicy::periodic(std::chrono::milliseconds(0));
+        (void)ruvia::WebSocketHeartbeatPolicy::periodic({
+            .pingInterval = std::chrono::milliseconds(0),
+        });
     } catch (const std::invalid_argument&) {
         zeroRejected = true;
     }
@@ -45,7 +52,10 @@ RUVIA_TEST(ws_heartbeat_policy_requires_positive_durations) {
 
     bool negativeRejected = false;
     try {
-        (void)ruvia::WebSocketHeartbeatPolicy::periodic(std::chrono::milliseconds(1000), std::chrono::milliseconds(-1));
+        (void)ruvia::WebSocketHeartbeatPolicy::periodic({
+            .pingInterval = std::chrono::milliseconds(1000),
+            .pongTimeout = std::chrono::milliseconds(-1),
+        });
     } catch (const std::invalid_argument&) {
         negativeRejected = true;
     }
@@ -72,7 +82,7 @@ RUVIA_TEST(ws_heartbeat_pong_timeout) {
     RUVIA_CHECK(decide(options(1000, 500), WsLivenessMode::kOpen, WebSocketAwaitingPong(1000), false, 0, 1600) == WebSocketLivenessDecision::kAbortTransport);
     // Still within the pong timeout -> idle.
     RUVIA_CHECK(decide(options(1000, 500), WsLivenessMode::kOpen, WebSocketAwaitingPong(1000), false, 0, 1400) == WebSocketLivenessDecision::kIdle);
-    // The one-argument policy uses the ping interval as the pong timeout.
+    // Omitting pongTimeout uses the ping interval as the pong timeout.
     RUVIA_CHECK(decide(options(1000, 0), WsLivenessMode::kOpen, WebSocketAwaitingPong(1000), false, 0, 2200) == WebSocketLivenessDecision::kAbortTransport);
     RUVIA_CHECK(decide(options(1000, 0), WsLivenessMode::kOpen, WebSocketAwaitingPong(1000), false, 0, 1500) == WebSocketLivenessDecision::kIdle);
 }

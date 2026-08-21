@@ -64,7 +64,7 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                 co_return;
             }
 
-            ruvia::detail::HpackDecoder decoder(std::pmr::get_default_resource());
+            ruvia::detail::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             bool contentSent = false;
             bool supportedEnded = false;
             while (!(gotContinue && gotUnsupportedFinal && supportedEnded)) {
@@ -174,7 +174,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
                 co_return;
             }
 
-            ruvia::detail::HpackDecoder decoder(std::pmr::get_default_resource());
+            ruvia::detail::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             while (!(gotBodyEnd && gotInvalidReset)) {
                 char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
@@ -316,7 +316,7 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                 co_return;
             }
 
-            ruvia::detail::HpackDecoder decoder(std::pmr::get_default_resource());
+            ruvia::detail::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             bool sawHead = false;
             for (;;) {
                 char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];

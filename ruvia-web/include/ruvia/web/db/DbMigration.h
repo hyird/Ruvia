@@ -2,7 +2,6 @@
 
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/http/detail/util/BorrowedView.h"
 
 #include <chrono>
 #include <cstdint>
@@ -30,6 +29,12 @@ enum class DbMigrationAtomicity : std::uint8_t {
     kUnwrapped,
 };
 
+struct DbMigrationOptions final {
+    BorrowedText id;
+    BorrowedText sql;
+    DbMigrationAtomicity atomicity{DbMigrationAtomicity::kTransactional};
+};
+
 // Immutable migration descriptor borrowing stable application storage. String
 // literals and owning-string lvalues preserve constexpr/zero-allocation use;
 // owning-string rvalues are rejected before an async run can retain them.
@@ -45,23 +50,17 @@ enum class DbMigrationAtomicity : std::uint8_t {
 // backend.
 class DbMigration final {
 public:
-    constexpr DbMigration(std::string_view id, std::string_view sql, DbMigrationAtomicity atomicity = DbMigrationAtomicity::kTransactional) noexcept
-        : id_(id),
-          sql_(sql),
-          atomicity_(atomicity) {}
-
-    template <detail::HttpTemporaryOwningCharString String>
-    DbMigration(String&&, std::string_view, DbMigrationAtomicity = DbMigrationAtomicity::kTransactional) = delete;
-
-    template <detail::HttpTemporaryOwningCharString String>
-    DbMigration(std::string_view, String&&, DbMigrationAtomicity = DbMigrationAtomicity::kTransactional) = delete;
+    constexpr explicit DbMigration(DbMigrationOptions options) noexcept
+        : id_(options.id),
+          sql_(options.sql),
+          atomicity_(options.atomicity) {}
 
     [[nodiscard]] constexpr std::string_view id() const noexcept {
-        return id_;
+        return id_.view();
     }
 
     [[nodiscard]] constexpr std::string_view sql() const noexcept {
-        return sql_;
+        return sql_.view();
     }
 
     [[nodiscard]] constexpr DbMigrationAtomicity atomicity() const noexcept {
@@ -69,14 +68,15 @@ public:
     }
 
 private:
-    std::string_view id_;
-    std::string_view sql_;
+    BorrowedText id_;
+    BorrowedText sql_;
     DbMigrationAtomicity atomicity_;
 };
 
-struct DbMigrationOptions final {
+struct DbMigratorOptions final {
     std::string table{"ruvia_schema_migrations"};
     std::chrono::seconds lockTimeout{30};
+    std::pmr::memory_resource* resource{nullptr};
 };
 
 class DbMigrationReport final {
@@ -121,18 +121,18 @@ private:
 // or queryTimeout a stalled backend blocks startup indefinitely.
 class DbMigrator final {
 public:
-    // The configuration and migration-table name are copied into resource;
-    // their source PMR storage may be released after construction. The
-    // supplied resource itself must outlive this migrator.
-    explicit DbMigrator(const DbConfig& config, const DbMigrationOptions& options = {}, std::pmr::memory_resource* resource = nullptr);
+    // The configuration and migration-table name are copied into options.resource;
+    // their source PMR storage may be released after construction. The supplied
+    // resource itself must outlive this migrator.
+    explicit DbMigrator(const DbConfig& config, DbMigratorOptions options = {});
 
     [[nodiscard]] DbMigrationReport migrate(std::span<const DbMigration> migrations) const;
 
-    [[nodiscard]] static DbMigrationReport migrate(const DbConfig& config, std::span<const DbMigration> migrations, const DbMigrationOptions& options = {}, std::pmr::memory_resource* resource = nullptr);
+    [[nodiscard]] static DbMigrationReport migrate(const DbConfig& config, std::span<const DbMigration> migrations, DbMigratorOptions options = {});
 
 private:
     DbConfig config_;
-    DbMigrationOptions options_;
+    DbMigratorOptions options_;
     std::pmr::memory_resource* resource_;
 };
 

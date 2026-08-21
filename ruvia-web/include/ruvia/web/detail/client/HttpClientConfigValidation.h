@@ -7,6 +7,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
+#include "ruvia/web/detail/TcpSocketOptions.h"
 #include "ruvia/http/detail/cookie/CookieValidation.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
@@ -20,23 +21,11 @@ inline void validateHttpClientUserAgent(std::string_view userAgent) {
 
 template <typename Config>
 void validateHttpClientConfig(const Config& config) {
-    const auto scheme = [&]() {
-        if constexpr (requires { config.scheme(); }) {
-            return config.scheme();
-        } else {
-            return config.scheme;
-        }
-    }();
-    const auto host = [&]() -> std::string_view {
-        if constexpr (requires { config.host(); }) {
-            return config.host();
-        } else {
-            return config.host;
-        }
-    }();
-    const auto port = [&]() {
-        if constexpr (requires { config.port(); }) {
-            return config.port();
+    const auto scheme = config.scheme;
+    const std::string_view host = config.host;
+    const std::uint16_t port = [&]() {
+        if constexpr (requires { config.port.value_or(std::uint16_t{}); }) {
+            return config.port.value_or(scheme == HttpScheme::kHttps ? 443 : 80);
         } else {
             return config.port;
         }
@@ -49,6 +38,16 @@ void validateHttpClientConfig(const Config& config) {
         config.protocol != HttpClientProtocol::kHttp2Only) {
         throw std::invalid_argument("http client protocol is invalid");
     }
+    if (config.tlsPeerVerification != HttpClientTlsPeerVerificationPolicy::kVerify &&
+        config.tlsPeerVerification != HttpClientTlsPeerVerificationPolicy::kSkipVerification) {
+        throw std::invalid_argument("http client TLS peer verification policy is invalid");
+    }
+    if (config.receivedCookies != HttpClientReceivedCookiePolicy::kIgnore &&
+        config.receivedCookies != HttpClientReceivedCookiePolicy::kRetainAndSend) {
+        throw std::invalid_argument("http client received cookie policy is invalid");
+    }
+    validateTcpNoDelayPolicy(config.tcpNoDelay);
+    validateTcpKeepAlivePolicy(config.tcpKeepAlive);
     ensureConfigHost(host, "http client host must not be empty", "http client host is invalid", kSeparatedPortHostRules);
     if (port == 0) {
         throw std::invalid_argument("http client port must be greater than zero");

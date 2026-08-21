@@ -13,6 +13,10 @@
 
 namespace ruvia::detail {
 
+struct HpackDecoderOptions final {
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 class HpackDecodeResult;
 
 enum class HpackDecodeError { kNeedMore, kIntegerOverflow, kInvalidIndex, kInvalidString, kInvalidHuffman, kDynamicTableSize, kCallbackRejected };
@@ -133,7 +137,7 @@ public:
         bool active_{true};
     };
 
-    explicit HpackDecoder(std::pmr::memory_resource* resource);
+    explicit HpackDecoder(HpackDecoderOptions options = {});
 
     HpackDecoder(const HpackDecoder&) = delete;
     HpackDecoder& operator=(const HpackDecoder&) = delete;

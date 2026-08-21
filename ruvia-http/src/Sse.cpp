@@ -40,7 +40,7 @@ void appendUnsigned(std::pmr::string& frame, std::uint64_t value) {
 
 }  // namespace
 
-std::pmr::string formatSseMessage(const SseMessage& message, std::pmr::memory_resource* resource) {
+std::pmr::string formatSseMessage(const SseMessage& message, SseFormatOptions options) {
     if (message.event.view().find_first_of("\r\n") != std::string_view::npos || (message.id.has_value() && message.id->view().find_first_of("\r\n") != std::string_view::npos)) {
         throw std::invalid_argument("SSE event and id must not contain CR or LF");
     }
@@ -51,7 +51,7 @@ std::pmr::string formatSseMessage(const SseMessage& message, std::pmr::memory_re
         throw std::invalid_argument("SSE retry delay must not be negative");
     }
 
-    std::pmr::string frame(detail::httpPmrResourceOrDefault(resource));
+    std::pmr::string frame(detail::httpPmrResourceOrDefault(options.resource));
     if (!message.event.empty()) {
         frame.append("event: ");
         frame.append(message.event.data(), message.event.size());

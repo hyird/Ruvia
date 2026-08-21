@@ -9,10 +9,12 @@
 #include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/client/HttpClientContentEncoding.h"
-#include "ruvia/http/detail/cookie/CookieValidation.h"
 #include "ruvia/web/Context.h"
+#include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
+#include "client/HttpClientResponseState.h"
+#include "ruvia/core/memory/PmrObject.h"
 
 namespace ruvia {
 namespace {
@@ -25,18 +27,191 @@ bool headerNameEquals(std::string_view left, std::string_view right) noexcept {
 
 }  // namespace
 
-HttpClientResponse::HttpClientResponse(std::pmr::memory_resource* resource)
-    : headers_(detail::httpPmrResourceOrDefault(resource)), trailers_(detail::httpPmrResourceOrDefault(resource)),
-      body_(detail::httpPmrResourceOrDefault(resource)) {}
+HttpClientResponse::HttpClientResponse(
+    std::pmr::memory_resource* resource,
+    const WorkerHandle& worker,
+    detail::HttpClientPool& pool)
+    : state_(detail::constructPmrObject<detail::HttpClientResponseState>(
+          detail::httpPmrResourceOrDefault(resource), worker, detail::httpPmrResourceOrDefault(resource))),
+      body_(state_) {
+    state_->pool = &pool;
+}
+
+HttpClientResponse::HttpClientResponse(detail::HttpClientResponseState* state, bool retain) noexcept
+    : state_(state), body_(state), consumer_(false) {
+    if (retain && state_ != nullptr) ++state_->references;
+}
+
+HttpClientResponse::HttpClientResponse(HttpClientResponse&& other) noexcept
+    : state_(std::exchange(other.state_, nullptr)), body_(state_), consumer_(other.consumer_) {
+    other.body_.state_ = nullptr;
+}
+
+HttpClientResponse& HttpClientResponse::operator=(HttpClientResponse&& other) noexcept {
+    if (this == &other) return *this;
+    if (body_.operationScope_.hasPendingOperations() || other.body_.operationScope_.hasPendingOperations()) std::terminate();
+    std::swap(state_, other.state_);
+    std::swap(consumer_, other.consumer_);
+    body_.state_ = state_;
+    other.body_.state_ = other.state_;
+    return *this;
+}
+
+HttpClientResponse::~HttpClientResponse() {
+    body_.operationScope_.close();
+    release();
+}
+
+void HttpClientResponse::release() noexcept {
+    if (state_ == nullptr) return;
+    auto* state = std::exchange(state_, nullptr);
+    body_.state_ = nullptr;
+    if (consumer_ && !state->complete && !state->abandoned && state->pool != nullptr) state->pool->abandonResponse(*state);
+    if (state->references == 0) std::terminate();
+    if (--state->references == 0) detail::destroyPmrObject(state, state->resource);
+}
+
+HttpStatusCode HttpClientResponse::status() const noexcept { return state_->status; }
+HttpProtocolVersion HttpClientResponse::protocolVersion() const noexcept { return state_->protocolVersion; }
+std::span<const HttpClientResponseHeader> HttpClientResponse::headers() const& noexcept { return state_->headers; }
+std::span<const HttpClientResponseHeader> HttpClientResponse::trailers() const& noexcept { return state_->trailers; }
+
+HttpClientResponseBody::HttpClientResponseBody(HttpClientResponseBody&& other) noexcept
+    : state_(std::exchange(other.state_, nullptr)) {
+    if (other.operationScope_.hasPendingOperations()) std::terminate();
+}
+
+HttpClientResponseBody& HttpClientResponseBody::operator=(HttpClientResponseBody&& other) noexcept {
+    if (this == &other) return *this;
+    if (operationScope_.hasPendingOperations() || other.operationScope_.hasPendingOperations()) std::terminate();
+    state_ = std::exchange(other.state_, nullptr);
+    readActive_ = false;
+    return *this;
+}
+
+HttpClientResponseBody::~HttpClientResponseBody() {
+    operationScope_.close();
+}
+
+bool HttpClientResponseBody::complete() const noexcept {
+    return state_ == nullptr ||
+        (state_->complete && state_->offset == state_->buffered.size() && state_->pending.empty());
+}
+
+ScopedOperation<std::optional<std::string_view>> HttpClientResponseBody::read() {
+    if (readActive_) throw std::logic_error("HTTP client response body operation is already active");
+    return detail::makeScopedOperation(operationScope_, readTask());
+}
+
+Task<std::optional<std::string_view>> HttpClientResponseBody::readTask() {
+    struct Guard final {
+        bool& active;
+        explicit Guard(bool& value) : active(value) { active = true; }
+        ~Guard() { active = false; }
+    } guard(readActive_);
+    state_->incrementalRead = true;
+    while (state_->offset == state_->buffered.size() && state_->pending.empty() && !state_->complete) {
+        state_->buffered.clear();
+        state_->offset = 0;
+        co_await state_->dataSignal.wait();
+    }
+    if (state_->offset == state_->buffered.size() && !state_->pending.empty()) {
+        if (state_->http2DataPending && state_->pool != nullptr) state_->pool->releaseResponseData(*state_);
+        state_->buffered.clear();
+        state_->offset = 0;
+        state_->buffered.swap(state_->pending);
+        state_->spaceSignal.notify();
+    }
+    if (state_->offset == state_->buffered.size()) {
+        if (state_->failure) std::rethrow_exception(state_->failure);
+        if (state_->errorCode) throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode), "HTTP response body read failed");
+        co_return std::nullopt;
+    }
+    constexpr std::size_t kChunkBytes = 16 * 1024;
+    const auto count = std::min(kChunkBytes, state_->buffered.size() - state_->offset);
+    const auto chunk = std::string_view(state_->buffered).substr(state_->offset, count);
+    state_->offset += count;
+    co_return chunk;
+}
+
+ScopedOperation<std::pmr::string> HttpClientResponseBody::readAll(std::size_t maxBytes) {
+    if (readActive_) throw std::logic_error("HTTP client response body operation is already active");
+    return detail::makeScopedOperation(operationScope_, readAllTask(maxBytes));
+}
+
+Task<std::pmr::string> HttpClientResponseBody::readAllTask(std::size_t maxBytes) {
+    struct Guard final {
+        bool& active;
+        explicit Guard(bool& value) : active(value) { active = true; }
+        ~Guard() { active = false; }
+    } guard(readActive_);
+    state_->collectAll = true;
+    if (state_->http2DataPending && state_->pool != nullptr) state_->pool->releaseResponseData(*state_);
+    state_->spaceSignal.notify();
+    while (!state_->complete) co_await state_->dataSignal.wait();
+    if (state_->failure) std::rethrow_exception(state_->failure);
+    if (state_->errorCode) throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode), "HTTP response body read failed");
+    const auto remaining = state_->buffered.size() - state_->offset;
+    const auto totalRemaining = remaining + state_->pending.size();
+    const auto effectiveLimit = std::min(maxBytes, state_->bufferedLimit);
+    if (totalRemaining > effectiveLimit) {
+        throw HttpClientError(HttpClientError::Code::kResponseTooLarge,
+            "HTTP response body exceeds readAll byte limit");
+    }
+    std::pmr::string result(state_->resource);
+    result.assign(state_->buffered.data() + state_->offset, remaining);
+    result.append(state_->pending);
+    state_->offset = state_->buffered.size();
+    state_->pending.clear();
+    co_return result;
+}
+
+ScopedOperation<void> HttpClientResponseBody::pipeTo(ResponseStreamWriter& output) {
+    if (readActive_) throw std::logic_error("HTTP client response body operation is already active");
+    return detail::makeScopedOperation(operationScope_, pipeToTask(output));
+}
+
+Task<void> HttpClientResponseBody::pipeToTask(ResponseStreamWriter& output) {
+    struct Guard final {
+        bool& active;
+        explicit Guard(bool& value) : active(value) { active = true; }
+        ~Guard() { active = false; }
+    } guard(readActive_);
+    state_->incrementalRead = true;
+    constexpr std::size_t kChunkBytes = 16 * 1024;
+    for (;;) {
+        while (state_->offset == state_->buffered.size() && state_->pending.empty() && !state_->complete) {
+            state_->buffered.clear();
+            state_->offset = 0;
+            co_await state_->dataSignal.wait();
+        }
+        if (state_->offset == state_->buffered.size() && !state_->pending.empty()) {
+            if (state_->http2DataPending && state_->pool != nullptr) state_->pool->releaseResponseData(*state_);
+            state_->buffered.clear();
+            state_->offset = 0;
+            state_->buffered.swap(state_->pending);
+            state_->spaceSignal.notify();
+        }
+        if (state_->offset == state_->buffered.size()) {
+            if (state_->failure) std::rethrow_exception(state_->failure);
+            if (state_->errorCode) throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode), "HTTP response body forwarding failed");
+            co_return;
+        }
+        const auto count = std::min(kChunkBytes, state_->buffered.size() - state_->offset);
+        const auto chunk = std::string_view(state_->buffered).substr(state_->offset, count);
+        co_await output.write(chunk);
+        state_->offset += count;
+    }
+}
 
 std::optional<std::string_view> HttpClientResponse::header(std::string_view name) const& noexcept {
-    const auto match = std::ranges::find_if(headers_, [name](const auto& header) { return headerNameEquals(header.name(), name); });
-    return match == headers_.end() ? std::nullopt : std::optional<std::string_view>(match->value());
+    const auto match = std::ranges::find_if(state_->headers, [name](const auto& header) { return headerNameEquals(header.name(), name); });
+    return match == state_->headers.end() ? std::nullopt : std::optional<std::string_view>(match->value());
 }
 
 std::optional<std::string_view> HttpClientResponse::trailer(std::string_view name) const& noexcept {
-    const auto match = std::ranges::find_if(trailers_, [name](const auto& header) { return headerNameEquals(header.name(), name); });
-    return match == trailers_.end() ? std::nullopt : std::optional<std::string_view>(match->value());
+    const auto match = std::ranges::find_if(state_->trailers, [name](const auto& header) { return headerNameEquals(header.name(), name); });
+    return match == state_->trailers.end() ? std::nullopt : std::optional<std::string_view>(match->value());
 }
 
 namespace detail {
@@ -45,7 +220,8 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
     if (!contentSemanticsPresent) {
         return;
     }
-    const auto parsedCoding = httpClientContentCodingOf(response.headers_);
+    if (response.state_->incrementalRead) return;
+    const auto parsedCoding = httpClientContentCodingOf(response.state_->headers);
     const auto* coding = parsedCoding.coding();
     if (coding == nullptr) {
         throw HttpClientError(HttpClientError::Code::kProtocolError, "unsupported HTTP response Content-Encoding");
@@ -53,10 +229,14 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
     if (*coding == HttpContentCoding::kIdentity) {
         return;
     }
-    auto decoded = decodeHttpContent(*coding, response.body_, maxDecodedBytes, resource);
+    if (!response.state_->pending.empty()) {
+        response.state_->buffered.append(response.state_->pending);
+        response.state_->pending.clear();
+    }
+    auto decoded = decodeHttpContent(*coding, response.state_->buffered, {.maxDecodedBytes = maxDecodedBytes, .resource = resource});
     if (auto* content = decoded.decoded()) {
         auto bytes = std::move(*content).takeBytes();
-        response.body_.swap(bytes);
+        response.state_->buffered.swap(bytes);
         return;
     }
     const auto* failure = decoded.failure();
@@ -71,7 +251,7 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
 
 }  // namespace detail
 
-HttpClientRequest::HttpClientRequest(
+detail::HttpClientRequestStorage::HttpClientRequestStorage(
     std::string_view method,
     std::string_view target,
     std::pmr::memory_resource* resource)
@@ -80,19 +260,7 @@ HttpClientRequest::HttpClientRequest(
       headers_(detail::httpPmrResourceOrDefault(resource)),
       body_(detail::httpPmrResourceOrDefault(resource)) {}
 
-HttpClientRequest& HttpClientRequest::setHeader(std::string_view name, std::string_view value) {
-    auto* const resource = headers_.get_allocator().resource();
-    Header replacement(name, value, resource);
-    for (auto& ch : replacement.name) {
-        ch = static_cast<char>(detail::httpAsciiToLower(static_cast<unsigned char>(ch)));
-    }
-    headers_.reserve(headers_.size() + 1);
-    removeHeader(name);
-    headers_.push_back(std::move(replacement));
-    return *this;
-}
-
-HttpClientRequest& HttpClientRequest::appendHeader(std::string_view name, std::string_view value) {
+detail::HttpClientRequestStorage& detail::HttpClientRequestStorage::appendHeader(std::string_view name, std::string_view value) {
     auto& header = headers_.emplace_back(name, value, headers_.get_allocator().resource());
     // HTTP field names are case-insensitive, but HTTP/2 requires their wire form
     // to be lowercase (RFC 9113 Section 8.2). Normalize once at the owning public
@@ -105,55 +273,9 @@ HttpClientRequest& HttpClientRequest::appendHeader(std::string_view name, std::s
     return *this;
 }
 
-HttpClientRequest& HttpClientRequest::removeHeader(std::string_view name) {
-    std::erase_if(headers_, [name](const Header& header) { return headerNameEquals(header.name, name); });
-    return *this;
-}
-
-HttpClientRequest& HttpClientRequest::setContentType(std::string_view contentType) {
-    return setHeader("content-type", contentType);
-}
-
-HttpClientRequest& HttpClientRequest::addCookie(std::string_view name, std::string_view value) {
-    if (!isValidHttpHeaderName(name) || !detail::isValidCookieValue(value)) {
-        throw std::invalid_argument("invalid HTTP client request cookie");
-    }
-    const auto match = std::ranges::find_if(headers_, [](const Header& header) { return headerNameEquals(header.name, "cookie"); });
-    auto* const resource = headers_.get_allocator().resource();
-    auto appendCookiePair = [name, value](std::pmr::string& target) {
-        if (!target.empty()) target.append("; ");
-        target.append(name);
-        target.push_back('=');
-        target.append(value);
-    };
-    if (match == headers_.end()) {
-        std::pmr::string cookieValue(resource);
-        appendCookiePair(cookieValue);
-        headers_.emplace_back("cookie", "", resource);
-        headers_.back().value.swap(cookieValue);
-    } else {
-        std::pmr::string cookieValue(match->value, resource);
-        appendCookiePair(cookieValue);
-        match->value.swap(cookieValue);
-    }
-    return *this;
-}
-
-HttpClientRequest& HttpClientRequest::setBody(std::string_view body) {
+detail::HttpClientRequestStorage& detail::HttpClientRequestStorage::setBody(std::string_view body) {
     body_.assign(body);
     hasBody_ = true;
-    return *this;
-}
-
-HttpClientRequest& HttpClientRequest::setBody(std::span<const std::byte> body) {
-    body_.assign(reinterpret_cast<const char*>(body.data()), body.size());
-    hasBody_ = true;
-    return *this;
-}
-
-HttpClientRequest& HttpClientRequest::clearBody() noexcept {
-    body_.clear();
-    hasBody_ = false;
     return *this;
 }
 
@@ -175,25 +297,19 @@ HttpClientHandle HttpClientHandle::withOptions(OperationOptions options) const {
     return copy;
 }
 
-HttpClientRequest HttpClientHandle::newRequest(HttpKnownMethod method, std::string_view target) const {
+ScopedOperation<HttpClientResponse> HttpClientHandle::send(
+    const HttpClientRequestView& view,
+    OperationOptions options) const {
     requireActive();
-    const auto token = knownHttpMethodToken(method);
-    if (token.empty()) {
-        throw std::invalid_argument("unknown HTTP method requires an explicit token");
-    }
-    return HttpClientRequest(token, target, detail::httpPmrResourceOrDefault(resource_));
-}
-
-HttpClientRequest HttpClientHandle::newRequest(std::string_view method, std::string_view target) const {
-    requireActive();
-    return HttpClientRequest(method, target, detail::httpPmrResourceOrDefault(resource_));
-}
-
-ScopedOperation<HttpClientResponse> HttpClientHandle::sendRequest(HttpClientRequest request) const {
-    requireActive();
+    detail::HttpClientRequestStorage request(
+        view.method.view(), view.target.view(), detail::httpPmrResourceOrDefault(resource_));
+    for (const auto& header : view.headers) request.appendHeader(header.name(), header.value());
+    if (const auto* bytes = view.content.borrowedBytes()) request.setBody(bytes->value());
+    options = detail::mergeOperationOptions(options_, std::move(options));
+    detail::validateOperationOptions(options);
     return detail::makeScopedOperation(
         operationScope(),
-        pool_->execute(std::move(request), options_, detail::httpPmrResourceOrDefault(resource_)));
+        pool_->execute(std::move(request), std::move(options), detail::httpPmrResourceOrDefault(resource_)));
 }
 
 HttpClientStats HttpClientHandle::stats() const {
@@ -216,15 +332,9 @@ HttpScheme HttpClientHandle::scheme() const {
     return pool_->scheme();
 }
 
-HttpClientHandle Context::httpClient() const {
+HttpClientHandle Context::httpClient(HttpClientConfig config) const {
     if (httpClients_ == nullptr) throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
-    return httpClients_->get(resource(), operationScope_).withOptions(
-        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
-}
-
-HttpClientHandle Context::httpClient(std::string_view alias) const {
-    if (httpClients_ == nullptr) throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
-    return httpClients_->get(alias, resource(), operationScope_).withOptions(
+    return httpClients_->get(std::move(config), resource(), operationScope_).withOptions(
         OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 

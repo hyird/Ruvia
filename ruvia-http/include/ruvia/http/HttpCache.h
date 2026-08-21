@@ -7,26 +7,67 @@
 
 namespace ruvia {
 
+enum class CacheControlDirective : std::uint16_t {
+    kNoStore = 1U << 0,
+    kNoCache = 1U << 1,
+    kNoTransform = 1U << 2,
+    kMustRevalidate = 1U << 3,
+    kProxyRevalidate = 1U << 4,
+    kPrivate = 1U << 5,
+    kPublic = 1U << 6,
+    kImmutable = 1U << 7,
+    kOnlyIfCached = 1U << 8,
+    kMaxStaleAny = 1U << 9,
+};
+
 // Parsed HTTP Cache-Control directives (RFC 9111 section 5.2). Unknown directives are ignored.
-// Boolean directives are flags; delta-seconds directives are optional (absent = not present).
+// Boolean directives are queried by directive enum; delta-seconds directives are optional (absent = not present).
 // This type reports wire directives only; cache freshness and reuse policy belong to the caller.
-struct CacheControl {
-    bool noStore{false};
-    bool noCache{false};      // bare or field-name form -- both require revalidation
-    bool noTransform{false};  // intermediaries must not transform the content
-    bool mustRevalidate{false};
-    bool proxyRevalidate{false};
-    bool isPrivate{false};  // "private" (not for a shared cache)
-    bool isPublic{false};
-    bool immutable{false};
-    bool onlyIfCached{false};  // request directive
-    bool maxStaleAny{false};   // bare request max-stale
-    std::optional<std::uint64_t> maxAge;
-    std::optional<std::uint64_t> maxStale;
-    std::optional<std::uint64_t> minFresh;
-    std::optional<std::uint64_t> sMaxAge;
-    std::optional<std::uint64_t> staleWhileRevalidate;
-    std::optional<std::uint64_t> staleIfError;
+class CacheControl final {
+public:
+    [[nodiscard]] constexpr bool has(CacheControlDirective directive) const noexcept {
+        const auto mask = static_cast<std::uint16_t>(directive);
+        return mask != 0U && (mask & (mask - 1U)) == 0U && (directives_ & mask) != 0U;
+    }
+
+    [[nodiscard]] constexpr std::optional<std::uint64_t> maxAge() const noexcept {
+        return maxAge_;
+    }
+
+    [[nodiscard]] constexpr std::optional<std::uint64_t> maxStale() const noexcept {
+        return maxStale_;
+    }
+
+    [[nodiscard]] constexpr std::optional<std::uint64_t> minFresh() const noexcept {
+        return minFresh_;
+    }
+
+    [[nodiscard]] constexpr std::optional<std::uint64_t> sMaxAge() const noexcept {
+        return sMaxAge_;
+    }
+
+    [[nodiscard]] constexpr std::optional<std::uint64_t> staleWhileRevalidate() const noexcept {
+        return staleWhileRevalidate_;
+    }
+
+    [[nodiscard]] constexpr std::optional<std::uint64_t> staleIfError() const noexcept {
+        return staleIfError_;
+    }
+
+private:
+    friend class CacheControlFieldParser;
+
+    constexpr void set(CacheControlDirective directive) noexcept {
+        directives_ |= static_cast<std::uint16_t>(directive);
+    }
+
+    std::uint16_t directives_{0};
+    std::optional<std::uint64_t> maxAge_;
+    std::optional<std::uint64_t> maxStale_;
+    std::optional<std::uint64_t> minFresh_;
+    std::optional<std::uint64_t> sMaxAge_;
+    std::optional<std::uint64_t> staleWhileRevalidate_;
+    std::optional<std::uint64_t> staleIfError_;
 };
 
 // Incrementally parses every Cache-Control field line as one logical directive

@@ -152,7 +152,7 @@ std::string zstdDecompress(std::string_view data) {
 const std::string kCompressibleBody(2048, 'a');
 
 HttpResponse responseWithBody(std::string_view body) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.body(body);
     return response;
 }
@@ -340,7 +340,10 @@ RUVIA_TEST(streaming_compression_owns_one_typed_encoder_lifecycle) {
     RUVIA_CHECK(compression.finish() == ruvia::detail::HttpContentEncodeStep::kFinished);
     RUVIA_CHECK(!compression.active());
 
-    const auto decoded = ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, encoded, kCompressibleBody.size(), std::pmr::get_default_resource());
+    const auto decoded = ruvia::decodeHttpContent(
+        ruvia::HttpContentCoding::kGzip,
+        encoded,
+        {.maxDecodedBytes = kCompressibleBody.size(), .resource = std::pmr::get_default_resource()});
     RUVIA_CHECK(decoded.decoded() != nullptr);
     if (const auto* content = decoded.decoded()) {
         RUVIA_CHECK_EQ(content->bytes(), std::string_view(kCompressibleBody));
@@ -582,7 +585,7 @@ RUVIA_TEST(buffered_response_compression_failure_is_not_negotiation_miss) {
     RUVIA_CHECK(parsed.messageReady() != nullptr);
 
     ToggleMemoryResource resource;
-    auto response = HttpResponse(&resource);
+    auto response = HttpResponse({.resource = &resource});
     response.body(kCompressibleBody);
     // Keep the already-owned identity body valid, then make the encoder's
     // process-resource allocation fail. This reaches the typed encoder failure
@@ -612,7 +615,7 @@ RUVIA_TEST(encoded_response_commit_is_transactional_on_header_allocation_failure
     // while staging Content-Length must not publish Content-Encoding first:
     // otherwise the identity body would be emitted as a gzip representation.
     ToggleMemoryResource resource;
-    auto response = HttpResponse(&resource);
+    auto response = HttpResponse({.resource = &resource});
     response.body("identity");
     response.header("Content-Length", "8");
     std::pmr::string encoded("compressed", &resource);
@@ -632,7 +635,7 @@ RUVIA_TEST(encoded_response_commit_is_transactional_on_header_allocation_failure
     // Strong-validator weakening is staged before the body and the encoding
     // field as well. A failure there leaves all identity metadata untouched.
     resource.failAllocations(false);
-    auto withEtag = HttpResponse(&resource);
+    auto withEtag = HttpResponse({.resource = &resource});
     withEtag.body("identity");
     withEtag.header("ETag", "\"v1\"");
     std::pmr::string encodedWithEtag("compressed", &resource);
@@ -755,7 +758,7 @@ RUVIA_TEST(compress_respects_no_transform) {
 RUVIA_TEST(compress_respects_no_transform_in_later_cache_control_field) {
     auto response = responseWithBody(kCompressibleBody);
     response.header("Cache-Control", "public");
-    response.header("Cache-Control", "no-transform", HttpResponse::HeaderOptions{.append = true});
+    response.header("Cache-Control", "no-transform", HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
     RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
 }
 

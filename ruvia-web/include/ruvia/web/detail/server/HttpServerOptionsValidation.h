@@ -16,23 +16,11 @@ inline void validateHttpServerTlsIdentity(const HttpServerOptions::TlsIdentity& 
 }
 
 inline void validateDocumentRootRuntimeOptions(const HttpServerOptions& options) {
-    if (options.documentRoot.runtimeOptions.enableLiveReload && options.documentRoot.runtimeOptions.refreshMode != DocumentRootRefreshMode::kPolling) {
-        throw std::invalid_argument("document root live reload requires polling refresh");
-    }
-    switch (options.documentRoot.runtimeOptions.refreshMode) {
-        case DocumentRootRefreshMode::kImmutable:
-            break;
-        case DocumentRootRefreshMode::kPolling:
-            ensurePositiveDuration(options.documentRoot.runtimeOptions.refreshInterval, "document root refresh interval must be greater than zero");
-            if (options.documentRoot.root == nullptr) {
-                throw std::invalid_argument("document root polling requires a document root");
-            }
-            if (options.blockingPool == nullptr) {
-                throw std::invalid_argument("document root polling cannot run while the blocking pool is disabled");
-            }
-            break;
-        default:
-            throw std::invalid_argument("document root refresh mode is invalid");
+    const auto* refresh = options.documentRoot.refreshOptions();
+    if (refresh == nullptr) return;
+    ensurePositiveDuration(refresh->refreshInterval, "document root refresh interval must be greater than zero");
+    if (options.blockingPool == nullptr) {
+        throw std::invalid_argument("document root refresh cannot run while the blocking pool is disabled");
     }
 }
 
@@ -40,11 +28,12 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
     ensurePositiveOptionalDurations("configured server timeouts must be greater than zero", options.idleTimeout, options.requestHeaderTimeout, options.requestBodyTimeout, options.writeTimeout);
     ensurePositiveDuration(options.scanInterval, "connection scan interval must be greater than 0");
     ensurePositiveSize(options.workerMailboxCapacity, "worker mailbox capacity must be greater than 0");
-    if (!std::has_single_bit(options.rateLimitSlotsPerWorker)) {
-        throw std::invalid_argument("rate-limit slots per worker must be a power of two");
+    if (!std::has_single_bit(options.rateLimitCapacityPerWorker)) {
+        throw std::invalid_argument("rate-limit capacity per worker must be a power of two");
     }
     ensurePositiveSize(options.memoryConfig.requestInitialBufferBytes, "memory pool config values must be greater than 0");
     ensurePositiveSize(options.maxBufferedBodyBytes, "buffered body limit must be greater than 0");
+    ensurePositiveSize(options.httpClientOriginCacheCapacityPerWorker, "HTTP client origin cache capacity must be greater than 0");
     ensurePositiveOptionalSize(options.maxStreamBodyBytes, "configured stream body limit must be greater than zero");
     ensurePositiveSize(options.maxWebSocketMessageBytes, "websocket message limit must be greater than 0");
     ensurePositiveOptionalSize(options.maxConnections, "configured connection limit must be greater than zero");

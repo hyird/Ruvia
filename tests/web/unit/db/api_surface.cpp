@@ -4,6 +4,7 @@
 #include <chrono>
 #include <concepts>
 #include <cstdint>
+#include <future>
 #include <initializer_list>
 #include <memory_resource>
 #include <new>
@@ -22,6 +23,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/web/db/DbClient.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbPoolOperations.h"
@@ -195,12 +197,18 @@ concept AcceptsLvalueDbValueText = requires(String& value) { ruvia::DbValue(valu
 static_assert(!AcceptsTemporaryDbValueText<std::string>);
 static_assert(!AcceptsTemporaryDbValueText<const std::string>);
 static_assert(AcceptsLvalueDbValueText<std::string>);
+static_assert(std::constructible_from<ruvia::DbValue, ruvia::BorrowedText>);
 
 template <typename String, typename Migration = ruvia::DbMigration>
-concept AcceptsAnyTemporaryDbMigrationText = requires(String&& value) { Migration{std::forward<String>(value), "SELECT 1"}; } || requires(String&& value) { Migration{"migration", std::forward<String>(value)}; } || requires(Migration& migration, String&& value) { migration.id = std::forward<String>(value); } || requires(Migration& migration, String&& value) { migration.sql = std::forward<String>(value); };
+concept AcceptsAnyTemporaryDbMigrationText = requires(String&& value) { ruvia::DbMigrationOptions{.id = std::forward<String>(value), .sql = "SELECT 1"}; } || requires(String&& value) { ruvia::DbMigrationOptions{.id = "migration", .sql = std::forward<String>(value)}; };
 
 template <typename String, typename Migration = ruvia::DbMigration>
-concept AcceptsLvalueDbMigrationText = requires(String& value) { Migration{value, value}; };
+concept AcceptsLvalueDbMigrationText = requires(String& value) { Migration{{.id = value, .sql = value}}; };
+
+template <typename Migration = ruvia::DbMigration>
+concept HasPositionalDbMigrationConstructor = requires {
+    Migration(ruvia::BorrowedText{"migration"}, ruvia::BorrowedText{"SELECT 1"});
+};
 
 template <typename T>
 concept HasDbMigrationTextAccessors = requires(const T& migration) {
@@ -212,8 +220,13 @@ static_assert(!AcceptsAnyTemporaryDbMigrationText<std::string>);
 static_assert(!AcceptsAnyTemporaryDbMigrationText<const std::string>);
 static_assert(!AcceptsAnyTemporaryDbMigrationText<std::pmr::string>);
 static_assert(AcceptsLvalueDbMigrationText<std::string>);
+static_assert(std::is_aggregate_v<ruvia::DbMigrationOptions>);
+static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.id), ruvia::BorrowedText>);
+static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.sql), ruvia::BorrowedText>);
+static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.atomicity), ruvia::DbMigrationAtomicity>);
+static_assert(!HasPositionalDbMigrationConstructor<ruvia::DbMigration>);
 static_assert(HasDbMigrationTextAccessors<ruvia::DbMigration>);
-constexpr ruvia::DbMigration kCompileTimeMigration("migration", "SELECT 1");
+constexpr ruvia::DbMigration kCompileTimeMigration{{.id = "migration", .sql = "SELECT 1"}};
 static_assert(kCompileTimeMigration.id() == "migration");
 static_assert(kCompileTimeMigration.sql() == "SELECT 1");
 
@@ -293,6 +306,15 @@ concept HasDbTransactionInitializerListParams = requires(T& transaction, std::in
 static_assert(HasDbHandleDefaultParams<ruvia::DbHandle>);
 static_assert(HasDbHandleSpanParams<ruvia::DbHandle>);
 static_assert(!HasDbHandleInitializerListParams<ruvia::DbHandle>);
+static_assert(std::constructible_from<ruvia::DbClient, ruvia::EventLoop, ruvia::DbConfig>);
+static_assert(!std::copy_constructible<ruvia::DbClient>);
+static_assert(!std::move_constructible<ruvia::DbClient>);
+static_assert(std::same_as<decltype(std::declval<ruvia::DbClient&>().connect()), std::future<void>>);
+static_assert(HasDbHandleDefaultParams<ruvia::DbClient>);
+static_assert(HasDbHandleSpanParams<ruvia::DbClient>);
+static_assert(!HasDbHandleInitializerListParams<ruvia::DbClient>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().withOptions(ruvia::OperationOptions{})), ruvia::DbHandle>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().worker()), const ruvia::WorkerHandle&>);
 static_assert(std::same_as<
               decltype(std::declval<const ruvia::DbHandle&>().withOptions(
                   ruvia::OperationOptions{})),
@@ -634,6 +656,7 @@ RUVIA_TEST(scoped_operation_scope_tracks_cold_owner_operations) {
 RUVIA_TEST(db_value_and_result_storage_have_one_live_alternative) {
     const ruvia::DbValue nullValue(nullptr);
     const ruvia::DbValue textValue("value");
+    const ruvia::DbValue borrowedTextValue(ruvia::BorrowedText("borrowed-value"));
     const ruvia::DbValue signedValue(-7);
     const ruvia::DbValue unsignedValue(std::uint64_t{9});
     const ruvia::DbValue doubleValue(1.5);
@@ -642,6 +665,8 @@ RUVIA_TEST(db_value_and_result_storage_have_one_live_alternative) {
     RUVIA_CHECK(ValueAccess::type(nullValue) == ruvia::detail::DbValueType::kNull);
     RUVIA_CHECK(ValueAccess::type(textValue) == ruvia::detail::DbValueType::kString);
     RUVIA_CHECK_EQ(ValueAccess::text(textValue), std::string_view("value"));
+    RUVIA_CHECK(ValueAccess::type(borrowedTextValue) == ruvia::detail::DbValueType::kString);
+    RUVIA_CHECK_EQ(ValueAccess::text(borrowedTextValue), std::string_view("borrowed-value"));
     RUVIA_CHECK(ValueAccess::type(signedValue) == ruvia::detail::DbValueType::kSigned);
     RUVIA_CHECK_EQ(ValueAccess::signedValue(signedValue), std::int64_t{-7});
     RUVIA_CHECK(ValueAccess::type(unsignedValue) == ruvia::detail::DbValueType::kUnsigned);
@@ -846,8 +871,8 @@ RUVIA_TEST(db_handle_copy_rejects_after_parent_scope_closes) {
 
 RUVIA_TEST(db_migrator_validates_before_opening_connection) {
     const std::array<ruvia::DbMigration, 2> migrations{{
-        ruvia::DbMigration{"duplicate", "SELECT 1"},
-        ruvia::DbMigration{"duplicate", "SELECT 2"},
+        ruvia::DbMigration{{.id = "duplicate", .sql = "SELECT 1"}},
+        ruvia::DbMigration{{.id = "duplicate", .sql = "SELECT 2"}},
     }};
     bool rejected = false;
     try {
@@ -861,7 +886,7 @@ RUVIA_TEST(db_migrator_validates_before_opening_connection) {
 #ifdef RUVIA_ENABLE_POSTGRESQL
 RUVIA_TEST(db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_connecting) {
     auto config = ruvia::DbConfig::postgreSql();
-    ruvia::DbMigrationOptions options;
+    ruvia::DbMigratorOptions options;
     options.lockTimeout = std::chrono::seconds::max();
 
     bool rejected = false;
@@ -883,11 +908,12 @@ RUVIA_TEST(db_migrator_copies_public_configuration) {
         config.username = std::string(80, 'u');
         config.password = std::string(80, 'p');
         config.database = std::string(80, 'd');
-        ruvia::DbMigrationOptions options{
+        ruvia::DbMigratorOptions options{
             .table = std::string(80, 't'),
             .lockTimeout = std::chrono::seconds(30),
+            .resource = &targetResource,
         };
-        migrator.emplace(config, options, &targetResource);
+        migrator.emplace(config, options);
     }
     migrator.reset();
     RUVIA_CHECK(true);

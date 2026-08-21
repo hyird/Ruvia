@@ -36,7 +36,7 @@ inline Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) 
         if (!remoteEc) {
             assignRemoteAddress(remoteAddress, remoteEndpoint.address());
         }
-        ContextServices baseServices = ContextServices(&dataAccess_.databases(), &dataAccess_.redis(), &rateLimiter_, options_.maxBufferedBodyBytes, &workerHandle_, &httpClients_)
+        ContextServices baseServices = ContextServices(&workerData_.databases(), &workerData_.redis(), &rateLimiter_, options_.maxBufferedBodyBytes, &workerHandle_, &httpClients_)
             .withStopToken(stopToken_)
             .withWorkerStates(workerStates_)
             .withBlockingPool(options_.blockingPool)

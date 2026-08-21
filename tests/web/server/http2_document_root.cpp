@@ -137,7 +137,7 @@ int main() {
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
             ruvia::test::Http2SansIoSessionFixture fixture;
-            fixture.options.documentRoot.root = &root;
+            fixture.options.documentRoot = ruvia::detail::HttpServerOptions::DocumentRoot::standalone(root);
             fixture.options.compression.emplace();
             auto dispatcher = std::make_shared<WorkerDispatcher>(io, 64);
             const auto workerHandle = WorkerHandleAccess::make(dispatcher);
@@ -189,7 +189,7 @@ int main() {
             if (!co_await requestHeaders("HEAD", 3)) co_return;
             if (!co_await requestHeaders("GET", 5, "gzip, identity;q=0")) co_return;
 
-            HpackDecoder decoder(std::pmr::get_default_resource());
+            HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             while (!getStream.ended || !headStream.ended || !sidecarStream.ended) {
                 char headerBytes[kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;

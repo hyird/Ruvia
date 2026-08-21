@@ -89,7 +89,7 @@ std::pmr::vector<std::pmr::string> redisSetArgs(std::string_view key, std::strin
                 throw std::invalid_argument("redis set condition is invalid");
         }
     }
-    if (options.returnPrevious) {
+    if (redisSetReturnsPrevious(options.previousValue)) {
         emplaceRedisString(args, "GET");
     }
     if (options.expiration && options.expiration->keepsExisting()) {
@@ -203,7 +203,8 @@ std::pmr::vector<std::pmr::string> redisXReadGroupArgs(std::string_view group, s
     }
 
     std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(6 + streams.size() * 2 + (options.count.has_value() ? 2 : 0) + (options.block.has_value() ? 2 : 0) + (options.noAck ? 1 : 0));
+    const auto useNoAck = redisXReadGroupUsesNoAck(options.acknowledgement);
+    args.reserve(6 + streams.size() * 2 + (options.count.has_value() ? 2 : 0) + (options.block.has_value() ? 2 : 0) + (useNoAck ? 1 : 0));
     emplaceRedisString(args, "XREADGROUP");
     emplaceRedisString(args, "GROUP");
     emplaceRedisString(args, group);
@@ -222,7 +223,7 @@ std::pmr::vector<std::pmr::string> redisXReadGroupArgs(std::string_view group, s
             emplaceRedisString(args, "0");
         }
     }
-    if (options.noAck) {
+    if (useNoAck) {
         emplaceRedisString(args, "NOACK");
     }
     emplaceRedisString(args, "STREAMS");

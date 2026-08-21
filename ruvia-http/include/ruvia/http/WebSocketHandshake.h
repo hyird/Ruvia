@@ -22,6 +22,11 @@ namespace detail {
 struct WebSocketHandshakeValidationResultAccess;
 }  // namespace detail
 
+struct WebSocketServerHandshakeOptions final {
+    std::string_view supportedSubprotocols{};
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 class WebSocketHandshakeAccepted final {
 private:
     friend class WebSocketHandshakeValidationResult;
@@ -135,7 +140,7 @@ public:
     void forEachResponsePart(Visitor&&) const&& = delete;
 
 private:
-    friend WebSocketServerHandshake makeWebSocketServerHandshake(const HttpRequest&, std::string_view, std::pmr::memory_resource*);
+    friend WebSocketServerHandshake makeWebSocketServerHandshake(const HttpRequest&, WebSocketServerHandshakeOptions);
 
     inline static constexpr auto kSwitchingProtocolsPrefix = [] {
         constexpr std::string_view protocol = "HTTP/1.1 ";
@@ -179,7 +184,6 @@ private:
 // or server-preference storage.
 [[nodiscard]] WebSocketServerHandshake makeWebSocketServerHandshake(
     const HttpRequest& request,
-    std::string_view supportedSubprotocols,
-    std::pmr::memory_resource* resource = nullptr);
+    WebSocketServerHandshakeOptions options = {});
 
 }  // namespace ruvia

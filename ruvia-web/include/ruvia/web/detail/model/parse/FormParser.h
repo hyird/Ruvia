@@ -83,7 +83,7 @@ template <typename T>
     std::optional<std::pmr::string> decodedStorage;
     auto decoded = input;
     if (encoding == FormValueEncoding::kUrlEncoded && hasFormEncoding(input)) {
-        decodedStorage = decodeUrlComponent(input, UrlDecodeMode::kForm, resource);
+        decodedStorage = decodeUrlComponent(input, {.mode = UrlDecodeMode::kForm, .resource = resource});
         if (!decodedStorage.has_value()) {
             return std::nullopt;
         }
@@ -93,7 +93,7 @@ template <typename T>
     if constexpr (isRuviaString<FieldT>) {
         if (!decodedStorage.has_value()) {
             if (stringStorage == ModelStringStorage::kOwned) {
-                return FieldT(decoded, resource);
+                return FieldT(decoded, ::ruvia::ModelOptions{.resource = resource});
             }
             return ModelValueFactory::makeString(decoded, resource);
         }

@@ -38,11 +38,11 @@ namespace {
     std::string_view domain) noexcept {
     const auto parsed = parseSetCookie(value);
     return parsed.has_value() &&
-        isValidHttpHeaderName(parsed->name) &&
-        setCookieWireNameMatches(parsed->name, wirePrefix, cookieName) &&
-        parsed->hasPathAttribute == hasPath &&
-        (!hasPath || parsed->path == path) &&
-        detail::httpAsciiEqualsIgnoreCase(parsed->domain, domain);
+        isValidHttpHeaderName(parsed->name()) &&
+        setCookieWireNameMatches(parsed->name(), wirePrefix, cookieName) &&
+        parsed->has(HttpSetCookieAttribute::kPath) == hasPath &&
+        (!hasPath || parsed->path() == path) &&
+        detail::httpAsciiEqualsIgnoreCase(parsed->domain(), domain);
 }
 
 }  // namespace
@@ -67,13 +67,14 @@ HttpResponseHeader& HttpResponse::upsertSetCookieHeaderUninitializedValue(
 
 void HttpResponse::upsertSetCookieHeaderValidated(std::string_view value) {
     const auto parsed = parseSetCookie(value);
-    const auto cookieName = parsed.has_value() && isValidHttpHeaderName(parsed->name) ? parsed->name : std::string_view{};
+    const auto cookieName = parsed.has_value() && isValidHttpHeaderName(parsed->name()) ? parsed->name() : std::string_view{};
     if (cookieName.empty()) {
         appendHeaderValidated("Set-Cookie", value, detail::kResponseHeaderSetCookie);
         return;
     }
 
-    auto* retained = findSetCookieHeader({}, cookieName, parsed->hasPathAttribute, parsed->path, parsed->domain);
+    const auto hasPath = parsed->has(HttpSetCookieAttribute::kPath);
+    auto* retained = findSetCookieHeader({}, cookieName, hasPath, parsed->path(), parsed->domain());
     if (retained == nullptr) {
         appendHeaderValidated("Set-Cookie", value, detail::kResponseHeaderSetCookie);
         return;
@@ -81,7 +82,7 @@ void HttpResponse::upsertSetCookieHeaderValidated(std::string_view value) {
 
     headers_.assign(*retained, "Set-Cookie", value, detail::kResponseHeaderSetCookie);
     detail::setResponseHeaderAppend(*retained, true);
-    eraseLaterSetCookieHeaders(*retained, {}, cookieName, parsed->hasPathAttribute, parsed->path, parsed->domain);
+    eraseLaterSetCookieHeaders(*retained, {}, cookieName, hasPath, parsed->path(), parsed->domain());
 }
 
 HttpResponseHeader* HttpResponse::findSetCookieHeader(

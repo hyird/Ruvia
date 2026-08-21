@@ -3,6 +3,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -21,9 +22,19 @@ struct EnvState;
 
 }  // namespace detail
 
+enum class DotenvExistingVariablePolicy : std::uint8_t {
+    kPreserve,
+    kOverride,
+};
+
+enum class DotenvMissingFilePolicy : std::uint8_t {
+    kIgnore,
+    kRequire,
+};
+
 struct DotenvOptions {
-    bool overrideExisting{false};
-    bool required{false};
+    DotenvExistingVariablePolicy existingVariables{DotenvExistingVariablePolicy::kPreserve};
+    DotenvMissingFilePolicy missingFile{DotenvMissingFilePolicy::kIgnore};
 };
 
 class DotenvResult final {

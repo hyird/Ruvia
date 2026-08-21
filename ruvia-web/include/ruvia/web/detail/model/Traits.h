@@ -138,7 +138,7 @@ template <typename T>
     } else if constexpr (isRuviaBoxedArray<T>) {
         return ModelValueFactory::makeBoxedArray<T>(resource);
     } else if constexpr (isRequestModel<T> || isResponseModel<T>) {
-        return T(resource);
+        return T(ModelOptions{.resource = resource});
     } else {
         (void)resource;
         return T{};

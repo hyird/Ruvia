@@ -57,9 +57,9 @@ namespace {
         }
     }
 
-    result.enableRanges = source.enableRanges;
-    result.enableValidators = source.enableValidators;
-    result.serveDotfiles = source.serveDotfiles;
+    result.rangeRequests = source.rangeRequests;
+    result.responseValidators = source.responseValidators;
+    result.dotfiles = source.dotfiles;
     return result;
 }
 
@@ -292,7 +292,8 @@ void App::run() {
         if (state.documentRootConfig.has_value()) {
             const auto documentRootPath = detail::makePathFromNativePath(state.documentRootConfig->root);
             runtime->documentRoot = detail::makePmrObject<StaticRoot>(runtimeResource, documentRootPath, makeStaticRootOptions(state.documentRootConfig->staticOptions));
-            preparedOptions.documentRoot.runtimeOptions = state.documentRootConfig->runtimeOptions;
+            preparedOptions.documentRoot = detail::HttpServerOptions::DocumentRoot::refreshing(
+                *runtime->documentRoot, state.documentRootConfig->runtimeOptions);
         }
 
         if (state.blockingPool.has_value()) {
@@ -310,7 +311,7 @@ void App::run() {
 
         const auto addWorkers = [&state, &runtime, &controllerRegistrars, &preparedOptions, runtimeResource](const detail::AppListenerConfig& listener) {
             const asio::ip::tcp::endpoint endpoint(asio::ip::make_address(std::string_view(listener.address)), listener.port);
-            auto listenerOptions = detail::makeListenerOptions(preparedOptions, listener.transport, runtime->documentRoot.get());
+            auto listenerOptions = detail::makeListenerOptions(preparedOptions, listener.transport);
             for (std::size_t i = 0; i < state.workersPerListener; ++i) {
                 auto workerOptions = i + 1 == state.workersPerListener ? std::move(listenerOptions) : listenerOptions;  // NOLINT(bugprone-use-after-move): moved only on
                                                                                                                         // the final iteration
@@ -328,7 +329,7 @@ void App::run() {
                         state.redis
 #endif
                     },
-                    state.workerStates, state.httpClients, std::move(workerOptions));
+                    state.workerStates, std::span<const detail::HttpClientDefinition>{}, std::move(workerOptions));
                 runtime->controllers.push_back(std::move(controllers));
                 runtime->routers.push_back(std::move(router));
                 runtime->workers.push_back(std::move(worker));
@@ -352,7 +353,7 @@ void App::run() {
     std::thread signalThread;
 
     try {
-        if (state.signalShutdown) {
+        if (state.processSignalHandlers == ProcessSignalHandlerPolicy::kInstall) {
             addShutdownSignals(signals);
             signals.async_wait([this](const std::error_code& ec, int) {
                 if (!ec) {

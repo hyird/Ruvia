@@ -1,6 +1,8 @@
 // Outbound HTTP client usage from a Ruvia Controller.
 
+#include <array>
 #include <chrono>
+#include <span>
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
@@ -12,45 +14,86 @@ public:
 
     RUVIA_ROUTES_BEGIN
     RUVIA_POST("/forward", forward);
+    RUVIA_GET_STREAM("/forward-stream", forwardStream);
     RUVIA_ROUTES_END
 
 private:
     ruvia::Task<ruvia::HttpResponse> forward(ruvia::Context& c) {
         const auto incomingBody = co_await c.req().text();
-        auto client = c.httpClient("backend");
-        auto request = client.newRequest(ruvia::HttpKnownMethod::kPost, "/v1/orders");
-        request.setContentType(c.req().header("content-type").value_or("application/octet-stream"))
-            .setBody(incomingBody);
-        if (const auto authorization = c.req().header("authorization")) {
-            request.appendHeader("authorization", *authorization);
-        }
+        auto client = c.httpClient({
+            .scheme = ruvia::HttpScheme::kHttps,
+            .host = "api.example.com",
+            .connectionsPerWorker = 4,
+            .protocol = ruvia::HttpClientProtocol::kNegotiate,
+            .receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend,
+        });
 
         try {
-            auto operation = client.withOptions({
+            std::array<ruvia::HttpHeaderView, 2> headers{};
+            std::size_t headerCount = 0;
+            headers[headerCount++] = {
+                "content-type",
+                c.req().header("content-type").value_or("application/octet-stream"),
+            };
+            if (const auto authorization = c.req().header("authorization")) {
+                headers[headerCount++] = {"authorization", *authorization};
+            }
+            auto operation = client.send({
+                .method = "POST",
+                .target = "/v1/orders",
+                .headers = std::span(headers).first(headerCount),
+                .content = ruvia::HttpClientRequestContentView::bytes(incomingBody),
+            }, {
                 .timeout = std::chrono::seconds(5),
-            }).sendRequest(std::move(request));
+            });
             auto response = co_await std::move(operation);
             c.status(response.status());
             if (const auto contentType = response.header("content-type")) {
                 c.header("content-type", *contentType);
             }
-            co_return c.body(response.body());
+            co_return c.body(co_await response.body().readAll());
         } catch (const ruvia::HttpClientError& error) {
             const auto status = error.code() == ruvia::HttpClientError::Code::kTimeout
                 ? ruvia::http_status::kGatewayTimeout
                 : ruvia::http_status::kBadGateway;
-            co_return c.error(status, "upstream_error", error.what());
+            co_return c.error({.status = status, .code = "upstream_error", .message = error.what()});
         }
+    }
+
+    ruvia::Task<void> forwardStream(ruvia::Context& c) {
+        auto client = c.httpClient({
+            .scheme = ruvia::HttpScheme::kHttps,
+            .host = "api.example.com",
+            .connectionsPerWorker = 4,
+        });
+        std::array<ruvia::HttpHeaderView, 1> headers{};
+        std::size_t headerCount = 0;
+        if (const auto authorization = c.req().header("authorization")) {
+            headers[headerCount++] = {"authorization", *authorization};
+        }
+        std::string errorBody;
+        try {
+            auto response = co_await client.send({
+                .target = "/v1/events",
+                .headers = std::span(headers).first(headerCount),
+            });
+            c.status(response.status());
+            if (const auto contentType = response.header("content-type")) {
+                c.header("content-type", *contentType);
+            }
+            co_await response.body().pipeTo(c.stream());
+        } catch (const ruvia::HttpClientError& error) {
+            c.status(error.code() == ruvia::HttpClientError::Code::kTimeout
+                ? ruvia::http_status::kGatewayTimeout
+                : ruvia::http_status::kBadGateway);
+            errorBody = error.what();
+        }
+        if (!errorBody.empty()) co_await c.streamText().write(errorBody);
     }
 };
 
 int main() {
-    auto backend = ruvia::HttpClientConfig::https("api.example.com");
-    backend.protocol = ruvia::HttpClientProtocol::kNegotiate;
-    backend.connectionsPerWorker = 4;
-    backend.cookiesEnabled = true;
     ruvia::app()
-        .setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8080)})
-        .useHttpClient("backend", std::move(backend))
+        .setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8080})})
         .run();
 }

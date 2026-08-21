@@ -23,8 +23,10 @@
 #include "ruvia/http/detail/cookie/CookieValidation.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+#include "ruvia/http/detail/client/HttpClientContentEncoding.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/integration/WorkerCancellationPost.h"
+#include "client/HttpClientResponseState.h"
 
 namespace ruvia::detail {
 namespace {
@@ -119,8 +121,8 @@ HttpClientPool::Connection::Connection(Connection&&) noexcept = default;
 HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& worker, HttpClientConfigStorage config, std::pmr::memory_resource* resource)
     : ioContext_(ioContext), worker_(worker), resource_(httpPmrResourceOrDefault(resource)), config_(std::move(config)),
       tlsContext_(asio::ssl::context::tls_client), connections_(resource_), scheduler_(httpClientSchedulerSlots(config_), resource_),
-      backgroundTasks_(worker_, resource_),
-      cookies_(resource_), cookiesEnabled_(config_.cookiesEnabled) {
+      backgroundTasks_(worker_, {.resource = resource_}),
+      cookies_(resource_) {
     validateHttpClientConfig(config_);
     for (const auto& [name, value] : config_.cookies) addCookie(name, value);
     configureTls();
@@ -132,7 +134,7 @@ HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& 
 HttpClientPool::~HttpClientPool() { closeNow(); }
 
 void HttpClientPool::configureTls() {
-    if (config_.verifyCertificate) {
+    if (config_.tlsPeerVerification == HttpClientTlsPeerVerificationPolicy::kVerify) {
         tlsContext_.set_verify_mode(asio::ssl::verify_peer);
         if (config_.caFile.empty()) tlsContext_.set_default_verify_paths();
         else tlsContext_.load_verify_file(std::string(config_.caFile));
@@ -261,7 +263,7 @@ bool HttpClientPool::cookieCapacityAvailable(
         std::min(retainedBytes, config_.maxCookieBytesPerWorker);
 }
 
-void HttpClientPool::appendAutomaticHeaders(const HttpClientRequest& request, std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader) {
+void HttpClientPool::appendAutomaticHeaders(const HttpClientRequestStorage& request, std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader) {
     const auto hasHeader = [&headers](std::string_view name) {
         return std::ranges::any_of(headers, [name](const HttpHeaderView& header) { return headerNameEquals(header.name(), name); });
     };
@@ -284,7 +286,7 @@ void HttpClientPool::appendAutomaticHeaders(const HttpClientRequest& request, st
     }
     const auto path = requestPathOnly(request.target());
     for (const auto& cookie : cookies_) {
-        if (!cookie.persistent && !cookiesEnabled_) continue;
+        if (!cookie.persistent && config_.receivedCookies == HttpClientReceivedCookiePolicy::kIgnore) continue;
         if (cookie.secure && config_.scheme != HttpScheme::kHttps) continue;
         if (!cookieDomainMatches(config_.host, cookie.domain) || !cookiePathMatches(path, cookie.path)) continue;
         if (!cookieHeader.empty()) cookieHeader.append("; ");
@@ -297,49 +299,59 @@ void HttpClientPool::appendAutomaticHeaders(const HttpClientRequest& request, st
     if (!cookieHeader.empty()) headers.emplace_back("cookie", cookieHeader);
 }
 
-void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, const HttpClientResponse& response) {
-    if (!cookiesEnabled_) return;
+void HttpClientPool::retainResponseCookies(const HttpClientRequestStorage& request, const HttpClientResponse& response) {
+    if (config_.receivedCookies == HttpClientReceivedCookiePolicy::kIgnore) return;
     const auto now = std::chrono::system_clock::now();
     for (const auto& header : response.headers()) {
         if (!headerNameEquals(header.name(), "set-cookie")) continue;
         const auto parsed = parseSetCookie(header.value());
-        if (!parsed || (parsed->secure && config_.scheme != HttpScheme::kHttps) ||
-            !cookieDomainMatches(config_.host, parsed->domain) ||
-            !canSerializeReceivedCookie(parsed->name, parsed->value)) continue;
+        if (!parsed) continue;
+        const auto parsedName = parsed->name();
+        const auto parsedValue = parsed->value();
+        const auto parsedPath = parsed->path();
+        const auto parsedDomain = parsed->domain();
+        const bool parsedSecure = parsed->has(HttpSetCookieAttribute::kSecure);
+        const bool parsedHasPath = parsed->has(HttpSetCookieAttribute::kPath);
+        const bool parsedSameSiteNone = parsed->has(HttpSetCookieAttribute::kSameSiteNone);
+        if ((parsedSecure && config_.scheme != HttpScheme::kHttps) ||
+            !cookieDomainMatches(config_.host, parsedDomain) ||
+            !canSerializeReceivedCookie(parsedName, parsedValue)) continue;
 
-        const auto path = parsed->path.empty() || parsed->path.front() != '/' ? defaultCookiePath(request.target()) : parsed->path;
-        const bool securePrefixed = cookieNameStartsWithIgnoreCase(parsed->name, "__Secure-");
-        const bool hostPrefixed = cookieNameStartsWithIgnoreCase(parsed->name, "__Host-");
-        const bool namelessPrefix = parsed->name.empty() &&
-            (cookieNameStartsWithIgnoreCase(parsed->value, "__Secure-") ||
-                cookieNameStartsWithIgnoreCase(parsed->value, "__Host-"));
-        if (namelessPrefix || (parsed->sameSiteNone && !parsed->secure) ||
-            (securePrefixed && (!parsed->secure || config_.scheme != HttpScheme::kHttps)) ||
-            (hostPrefixed && (!parsed->secure || config_.scheme != HttpScheme::kHttps ||
-                !parsed->hasPathAttribute || parsed->path != "/" || !parsed->domain.empty()))) continue;
+        const auto path = parsedPath.empty() || parsedPath.front() != '/' ? defaultCookiePath(request.target()) : parsedPath;
+        const bool securePrefixed = cookieNameStartsWithIgnoreCase(parsedName, "__Secure-");
+        const bool hostPrefixed = cookieNameStartsWithIgnoreCase(parsedName, "__Host-");
+        const bool namelessPrefix = parsedName.empty() &&
+            (cookieNameStartsWithIgnoreCase(parsedValue, "__Secure-") ||
+                cookieNameStartsWithIgnoreCase(parsedValue, "__Host-"));
+        if (namelessPrefix || (parsedSameSiteNone && !parsedSecure) ||
+            (securePrefixed && (!parsedSecure || config_.scheme != HttpScheme::kHttps)) ||
+            (hostPrefixed && (!parsedSecure || config_.scheme != HttpScheme::kHttps ||
+                !parsedHasPath || parsedPath != "/" || !parsedDomain.empty()))) continue;
         std::optional<std::chrono::system_clock::time_point> expires;
         bool remove = false;
-        if (parsed->maxAgeSeconds) {
-            remove = *parsed->maxAgeSeconds <= 0;
-            if (!remove) expires = cookieExpiration(now, *parsed->maxAgeSeconds);
-        } else if (parsed->expires) {
-            remove = *parsed->expires <= std::chrono::system_clock::to_time_t(now);
+        const auto maxAgeSeconds = parsed->maxAgeSeconds();
+        const auto expiresAt = parsed->expires();
+        if (maxAgeSeconds) {
+            remove = *maxAgeSeconds <= 0;
+            if (!remove) expires = cookieExpiration(now, *maxAgeSeconds);
+        } else if (expiresAt) {
+            remove = *expiresAt <= std::chrono::system_clock::to_time_t(now);
             if (!remove) {
                 const auto expirationLimit = std::chrono::system_clock::to_time_t(
                     cookieExpiration(now, detail::kMaxCookieAgeSeconds));
                 expires = std::chrono::system_clock::from_time_t(
-                    std::min(*parsed->expires, expirationLimit));
+                    std::min(*expiresAt, expirationLimit));
             }
         }
-        const auto parsedIdentityDomain = parsed->domain.empty()
+        const auto parsedIdentityDomain = parsedDomain.empty()
             ? std::string_view(config_.host)
-            : parsed->domain;
-        const bool parsedHostOnly = parsed->domain.empty();
+            : parsedDomain;
+        const bool parsedHostOnly = parsedDomain.empty();
         const auto match = std::ranges::find_if(cookies_, [&](const StoredCookie& cookie) {
             const auto cookieIdentityDomain = cookie.domain.empty()
                 ? std::string_view(config_.host)
                 : std::string_view(cookie.domain);
-            return !cookie.persistent && cookie.name == parsed->name &&
+            return !cookie.persistent && cookie.name == parsedName &&
                 cookie.hostOnly == parsedHostOnly && cookie.path == path &&
                 httpAsciiEqualsIgnoreCase(cookieIdentityDomain, parsedIdentityDomain);
         });
@@ -350,17 +362,17 @@ void HttpClientPool::retainResponseCookies(const HttpClientRequest& request, con
             }
             continue;
         }
-        const auto replacementBytes = cookieStorageBytes(parsed->name, parsed->value, path, parsed->domain);
+        const auto replacementBytes = cookieStorageBytes(parsedName, parsedValue, path, parsedDomain);
         const auto replacedBytes = match == cookies_.end()
             ? 0
             : cookieStorageBytes(match->name, match->value, match->path, match->domain);
         if (!cookieCapacityAvailable(replacedBytes, replacementBytes, match == cookies_.end())) continue;
         auto makeStoredCookie = [&]() {
-            StoredCookie cookie(parsed->name, parsed->value, resource_);
+            StoredCookie cookie(parsedName, parsedValue, resource_);
             cookie.path.assign(path);
-            cookie.domain.assign(parsed->domain);
+            cookie.domain.assign(parsedDomain);
             cookie.expires = expires;
-            cookie.secure = parsed->secure;
+            cookie.secure = parsedSecure;
             cookie.hostOnly = parsedHostOnly;
             cookie.persistent = false;
             return cookie;
@@ -613,8 +625,8 @@ Task<void> HttpClientPool::ensureConnected(
     if (connectTimedOut) throw HttpClientError(HttpClientError::Code::kTimeout, "http client connect timed out");
     if (connected.errorCode()) throw HttpClientError(HttpClientError::Code::kConnectFailed, connected.errorCode().message());
     std::error_code ignored;
-    if (config_.tcpNoDelay) connection.stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), ignored);
-    if (config_.keepAlive) connection.stream.lowest_layer().set_option(asio::socket_base::keep_alive(true), ignored);
+    if (tcpNoDelayEnabled(config_.tcpNoDelay)) connection.stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), ignored);
+    if (tcpKeepAliveEnabled(config_.tcpKeepAlive)) connection.stream.lowest_layer().set_option(asio::socket_base::keep_alive(true), ignored);
 
     if (config_.scheme == HttpScheme::kHttps) {
         SSL_clear(connection.stream.native_handle());
@@ -625,7 +637,9 @@ Task<void> HttpClientPool::ensureConnected(
             SSL_set_tlsext_host_name(connection.stream.native_handle(), config_.host.c_str()) != 1) {
             throw HttpClientError(HttpClientError::Code::kTlsFailed, "failed to set TLS SNI host");
         }
-        if (config_.verifyCertificate) connection.stream.set_verify_callback(asio::ssl::host_name_verification(std::string(config_.host)));
+        if (config_.tlsPeerVerification == HttpClientTlsPeerVerificationPolicy::kVerify) {
+            connection.stream.set_verify_callback(asio::ssl::host_name_verification(std::string(config_.host)));
+        }
         static constexpr unsigned char both[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
         static constexpr unsigned char h1[] = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
         static constexpr unsigned char h2[] = {2, 'h', '2'};
@@ -650,8 +664,53 @@ Task<void> HttpClientPool::ensureConnected(
     if (connection.protocol == WireProtocol::kHttp2) co_await initializeHttp2(connection, timeout);
 }
 
-Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, OperationOptions options, std::pmr::memory_resource* responseResource) {
-    responseResource = httpPmrResourceOrDefault(responseResource);
+Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequestStorage request, OperationOptions options, std::pmr::memory_resource*) {
+    // The public request is copied from request-local borrowed storage. Once
+    // the response head is returned, transport work may continue beyond the
+    // handler frame, so move it onto the worker-owned resource before spawning.
+    std::pmr::vector<HttpHeaderView> requestHeaders(resource_);
+    const auto requestView = HttpClientRequestStorageAccess::view(request, requestHeaders);
+    HttpClientRequestStorage ownedRequest(requestView.method.view(), requestView.target.view(), resource_);
+    for (const auto& header : requestView.headers) ownedRequest.appendHeader(header.name(), header.value());
+    if (const auto* bytes = requestView.content.borrowedBytes()) ownedRequest.setBody(bytes->value());
+    HttpClientResponse response(resource_, worker_, *this);
+    auto* state = response.state_;
+    state->bufferedLimit = config_.maxResponseBytes;
+    backgroundTasks_.spawn(executeInto(std::move(ownedRequest), std::move(options), state));
+    while (!state->headReady && !state->failure && !state->errorCode) co_await state->headSignal.wait();
+    if (state->failure) std::rethrow_exception(state->failure);
+    if (state->errorCode) {
+        const auto code = static_cast<HttpClientError::Code>(*state->errorCode);
+        throw HttpClientError(code, "HTTP client request failed before the response head");
+    }
+    const auto contentCoding = httpClientContentCodingOf(state->headers);
+    if (contentCoding.coding() == nullptr || *contentCoding.coding() != HttpContentCoding::kIdentity) {
+        state->collectAll = true;
+        if (state->http2DataPending) releaseResponseData(*state);
+        state->spaceSignal.notify();
+        while (!state->complete) co_await state->dataSignal.wait();
+        if (state->failure) std::rethrow_exception(state->failure);
+        if (state->errorCode) throw HttpClientError(static_cast<HttpClientError::Code>(*state->errorCode), "HTTP client encoded response failed");
+    }
+    co_return response;
+}
+
+Task<void> HttpClientPool::executeInto(HttpClientRequestStorage request, OperationOptions options, HttpClientResponseState* state) {
+    HttpClientResponse keepAlive(state, true);
+    try {
+        co_await executeRequestInto(std::move(request), std::move(options), state);
+    } catch (const HttpClientError&) {
+        state->failure = std::current_exception();
+    } catch (...) {
+        state->failure = std::current_exception();
+    }
+    state->complete = true;
+    state->headSignal.notify();
+    state->dataSignal.notify();
+}
+
+Task<void> HttpClientPool::executeRequestInto(HttpClientRequestStorage request, OperationOptions options, HttpClientResponseState* state) {
+    HttpClientResponse response(state, true);
     const OperationTimeout timeout(options.timeout.has_value() ? options.timeout : config_.requestTimeout);
     const auto acquireTimeout = timeout.constrainedBy(config_.acquireTimeout);
     if (requestsBuffered_ >= config_.maxBufferedRequestsPerWorker) {
@@ -671,6 +730,7 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, Oper
     ++requestsInFlight_;
     Lease lease(*this, index);
     auto& connection = lease.connection();
+    state->connectionIndex = index % connections_.size();
     bool discardConnection = true;
     try {
         co_await ensureConnected(connection, timeout, acquireTimeout, options.stopToken);
@@ -680,9 +740,8 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, Oper
             // not discard that shared connection.
             discardConnection = false;
         }
-        HttpClientResponse response(responseResource);
         if (connection.protocol == WireProtocol::kHttp2) {
-            response = co_await executeHttp2(connection, request, timeout, options.stopToken, responseResource);
+            co_await executeHttp2(connection, request, timeout, options.stopToken, response);
         } else {
             // A negotiated HTTP/1 connection can have several operations that
             // already hold outer HTTP/2-capacity slots. Waiting for this
@@ -743,6 +802,7 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, Oper
             if (options.stopToken.stoppable()) {
                 cancellationId = nextCancellationId();
                 connection.cancellationId = cancellationId;
+                state->cancellationId = cancellationId;
                 options.stopToken.registerCallback(
                     stopRegistration,
                     WorkerCancellationPost<HttpClientOperationCancellationMailbox>(cancellationMailbox_, cancellationId));
@@ -760,18 +820,41 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequest request, Oper
                 }
             } cancellationRegistrationGuard{connection, cancellationId, stopRegistration};
             if (options.stopToken.stopRequested()) cancelOperationById(cancellationId);
-            response = co_await executeHttp1(connection, request, timeout, responseResource);
+            co_await executeHttp1(connection, request, timeout, response);
         }
         retainResponseCookies(request, response);
         --requestsInFlight_;
         ++completedRequests_;
-        co_return response;
+        co_return;
     } catch (...) {
         --requestsInFlight_;
         ++failedRequests_;
         if (discardConnection) lease.discard();
         throw;
     }
+}
+
+void HttpClientPool::abandonResponse(HttpClientResponseState& state) noexcept {
+    if (state.abandoned) return;
+    state.abandoned = true;
+    if (state.http2) {
+        if (state.connectionIndex < connections_.size() && state.requestId != 0) {
+            cancelHttp2Stream(connections_[state.connectionIndex], state.requestId, AbortReason::kCancelled);
+        }
+    } else if (state.cancellationId != 0) {
+        cancelOperationById(state.cancellationId);
+    }
+    state.spaceSignal.notify();
+}
+
+void HttpClientPool::releaseResponseData(HttpClientResponseState& state) noexcept {
+    if (!state.http2DataPending || state.connectionIndex >= connections_.size() || state.streamId == 0) return;
+    auto& connection = connections_[state.connectionIndex];
+    if (connection.http2) {
+        connection.http2->releaseAllReceivedData(state.streamId);
+        connection.http2Runtime->writeSignal.notify();
+    }
+    state.http2DataPending = false;
 }
 
 }  // namespace ruvia::detail

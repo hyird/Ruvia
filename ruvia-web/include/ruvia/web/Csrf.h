@@ -11,6 +11,11 @@
 
 namespace ruvia {
 
+struct CsrfProtectionOptions final {
+    ::ruvia::BorrowedText cookieName{"XSRF-TOKEN"};
+    ::ruvia::BorrowedText headerName{"X-XSRF-TOKEN"};
+};
+
 // Stateless CSRF protection using the double-submit-cookie pattern (no
 // server-side session store needed, so it works across SO_REUSEPORT workers).
 // A safe request (GET/HEAD/OPTIONS) without a token cookie is issued a fresh
@@ -21,9 +26,9 @@ namespace ruvia {
 // and "X-XSRF-TOKEN" and can be rebranded per app.
 class CsrfProtection final : public Middleware<CsrfProtection> {
 public:
-    explicit CsrfProtection(::ruvia::BorrowedText cookieName = "XSRF-TOKEN", ::ruvia::BorrowedText headerName = "X-XSRF-TOKEN")
-        : cookieName_(cookieName),
-          headerName_(headerName) {
+    explicit CsrfProtection(CsrfProtectionOptions options = {})
+        : cookieName_(options.cookieName),
+          headerName_(options.headerName) {
         if (!isValidHttpHeaderName(cookieName_.view())) {
             throw std::invalid_argument("CSRF cookie name must be a valid HTTP token");
         }

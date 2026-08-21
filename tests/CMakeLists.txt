@@ -488,6 +488,8 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_add_unit_sources(ruvia_web_unit_tests ruvia::web PRIVATE
         web/unit/db/api_surface.cpp
         web/unit/db/migration.cpp)
+    ruvia_add_test(ruvia_guard_db_client_api
+        web/guards/db_client_api_guard.cpp LIB ruvia::web LABELS "database;guards")
 endif()
 
 # Driver-specific parameter encoding is tested against the same library that
@@ -520,6 +522,8 @@ endif()
 # Needs no database: it drives the migration runner against a socket that
 # accepts and stays silent, which is what an unscanned deadline used to hang on.
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
+    ruvia_add_test(ruvia_standalone_db_client web/server/db_client.cpp
+        LIB ruvia::web TIMEOUT 15 LABELS "database;worker")
     ruvia_add_test(ruvia_db_migration_timeout web/server/db_migration_timeout.cpp
         LIB ruvia::web TIMEOUT 60 LABELS "database")
 endif()
@@ -754,8 +758,8 @@ if(RUVIA_BUILD_WEB)
 
     ruvia_add_test(ruvia_web_worker
         web/server/worker.cpp LIB ruvia::web TIMEOUT 30)
-    ruvia_add_test(ruvia_data_access
-        web/server/data_access.cpp LIB ruvia::web TIMEOUT 30)
+    ruvia_add_test(ruvia_standalone_http_client
+        web/server/standalone_http_client.cpp LIB ruvia::web TIMEOUT 30)
     ruvia_add_test(ruvia_app_web_worker
         web/server/app_web_worker.cpp LIB ruvia::web TIMEOUT 30)
     ruvia_add_test(ruvia_app_startup_retry

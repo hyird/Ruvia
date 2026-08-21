@@ -120,7 +120,7 @@ inline ruvia::Task<ruvia::HttpResponse> invalidHttp2ResponseHandler(void*, ruvia
 // pacing path (distinct from the file-body path).
 constexpr std::size_t kLargeBufferedBytes = 100000;
 inline ruvia::Task<ruvia::HttpResponse> largeBufferedHandler(void*, ruvia::Context&) {
-    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
     std::string body(kLargeBufferedBytes, 'Q');
     response.body(body);
@@ -171,7 +171,7 @@ constexpr std::uint64_t kLargeFileBytes = 200000;  // > default send window (655
 // A plain (buffered) route returning a FILE body larger than the send window: this is
 // the path that had NO stream signal, so a window block could never be woken.
 inline ruvia::Task<ruvia::HttpResponse> largeFileHandler(void*, ruvia::Context&) {
-    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
     ruvia::detail::setResponseFileBody(response, std::filesystem::path(largeFilePath()), kLargeFileBytes, 0, kLargeFileBytes);
     co_return response;

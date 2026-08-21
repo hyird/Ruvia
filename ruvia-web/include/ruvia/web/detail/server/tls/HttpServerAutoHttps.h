@@ -50,7 +50,7 @@ inline void appendHttpsPort(std::pmr::string& location, std::uint16_t httpsPort)
 }
 
 inline HttpResponse makeAutoHttpsRedirectResponse(const HttpRequest& request, RequestMemory& memory, std::uint16_t httpsPort) {
-    HttpResponse response(memory.resource());
+    HttpResponse response({.resource = memory.resource()});
     response.status(ruvia::http_status::kPermanentRedirect);
 
     const auto host = hostWithoutExplicitPort(requestKnownHeader(request, RequestKnownHeader::kHost));

@@ -23,6 +23,7 @@
 #include <asio/use_future.hpp>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/web/App.h"
 #include "ruvia/web/redis/RedisHandle.h"
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
@@ -267,6 +268,43 @@ concept HasLegacyRedisSetOptionBooleans = requires(T& options) {
     options.keepTtl;
 };
 
+template <typename T>
+concept HasRedisSetReturnPreviousBoolean = requires(T& options) { options.returnPrevious = true; };
+
+template <typename T>
+concept HasRedisSetPreviousValuePolicy = requires(T& options) { options.previousValue = ruvia::RedisSetPreviousValuePolicy::kReturn; };
+
+template <typename T>
+concept HasRedisXReadGroupNoAckBoolean = requires(T& options) { options.noAck = true; };
+
+template <typename T>
+concept HasRedisXReadGroupAcknowledgementPolicy = requires(T& options) { options.acknowledgement = ruvia::RedisXReadGroupAcknowledgementPolicy::kNoAck; };
+
+template <typename T>
+concept HasRedisTcpNoDelayBoolean = requires(T& config) { config.tcpNoDelay = true; };
+
+template <typename T>
+concept HasRedisKeepAliveBoolean = requires(T& config) { config.keepAlive = true; };
+
+template <typename T>
+concept HasRedisTcpSocketPolicies = requires(T& config) {
+    { config.tcpNoDelay } -> std::same_as<ruvia::TcpNoDelayPolicy&>;
+    { config.tcpKeepAlive } -> std::same_as<ruvia::TcpKeepAlivePolicy&>;
+};
+
+template <typename T>
+concept HasRedisRegistrationOptions = requires(T& app, ruvia::RedisConfig config) {
+    { app.useRedis(ruvia::RedisRegistrationOptions{.config = config}) } ->
+        std::same_as<ruvia::App&>;
+};
+
+template <typename T>
+concept HasRedisRegistrationPositional = requires(T& app, ruvia::RedisConfig config) {
+    app.useRedis(config);
+} || requires(T& app, ruvia::RedisConfig config) {
+    app.useRedis(std::string_view{}, config);
+};
+
 template <typename Match>
 concept AcceptsRedisScanMatch = requires(Match&& match) { ruvia::RedisScanOptions{.match = std::forward<Match>(match)}; };
 
@@ -355,8 +393,11 @@ static_assert(!std::assignable_from<ruvia::RedisPipeline&, ruvia::RedisPipeline&
 static_assert(std::move_constructible<ruvia::RedisTransaction>);
 static_assert(!std::assignable_from<ruvia::RedisTransaction&, ruvia::RedisTransaction&&>);
 static_assert(!HasLegacyRedisSetOptionBooleans<ruvia::RedisSetOptions>);
+static_assert(!HasRedisSetReturnPreviousBoolean<ruvia::RedisSetOptions>);
+static_assert(HasRedisSetPreviousValuePolicy<ruvia::RedisSetOptions>);
 static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().condition), std::optional<ruvia::RedisSetCondition>>);
 static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().expiration), std::optional<ruvia::RedisSetExpiration>>);
+static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().previousValue), ruvia::RedisSetPreviousValuePolicy>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::RedisSetResult&>().applied()), bool>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::RedisSetResult&>().previous()), const std::optional<std::pmr::string>&>);
 static_assert(!std::default_initializable<ruvia::RedisSetExpiration>);
@@ -367,6 +408,9 @@ static_assert(std::same_as<decltype(ruvia::RedisScanOptions{}.count), std::optio
 static_assert(std::is_aggregate_v<ruvia::RedisScanOptions>);
 static_assert(std::is_aggregate_v<ruvia::OperationOptions>);
 static_assert(std::is_aggregate_v<ruvia::RedisXReadGroupOptions>);
+static_assert(!HasRedisXReadGroupNoAckBoolean<ruvia::RedisXReadGroupOptions>);
+static_assert(HasRedisXReadGroupAcknowledgementPolicy<ruvia::RedisXReadGroupOptions>);
+static_assert(std::same_as<decltype(std::declval<ruvia::RedisXReadGroupOptions>().acknowledgement), ruvia::RedisXReadGroupAcknowledgementPolicy>);
 static_assert(!HasRedisXReadGroupOperationMember<ruvia::RedisXReadGroupOptions>);
 static_assert(!HasRedisPerCallCommandOptions<ruvia::RedisHandle>);
 static_assert(!HasRedisBlockingPerCallOptions<ruvia::RedisHandle>);
@@ -377,6 +421,15 @@ static_assert(ruvia::RedisConfig{}.acquireTimeout.has_value());
 static_assert(ruvia::RedisConfig{}.connectTimeout == std::chrono::seconds(5));
 static_assert(ruvia::RedisConfig{}.commandTimeout == std::chrono::seconds(30));
 static_assert(ruvia::RedisConfig{}.acquireTimeout == std::chrono::seconds(5));
+static_assert(HasRedisTcpSocketPolicies<ruvia::RedisConfig>);
+static_assert(ruvia::RedisConfig{}.tcpNoDelay == ruvia::TcpNoDelayPolicy::kEnable);
+static_assert(ruvia::RedisConfig{}.tcpKeepAlive == ruvia::TcpKeepAlivePolicy::kSystemDefault);
+static_assert(!HasRedisTcpNoDelayBoolean<ruvia::RedisConfig>);
+static_assert(!HasRedisKeepAliveBoolean<ruvia::RedisConfig>);
+static_assert(std::is_aggregate_v<ruvia::RedisRegistrationOptions>);
+static_assert(std::same_as<decltype(ruvia::RedisRegistrationOptions{.config = ruvia::RedisConfig{}}.alias), std::string>);
+static_assert(HasRedisRegistrationOptions<ruvia::App>);
+static_assert(!HasRedisRegistrationPositional<ruvia::App>);
 constexpr ruvia::RedisScanOptions kLiteralRedisScanOptions{
     .match = "session:*",
 };

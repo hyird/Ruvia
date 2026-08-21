@@ -19,16 +19,14 @@ class RedisRegistry;
 struct DbDefinition;
 struct RedisDefinition;
 
-// Common worker-local integration owner used by both HttpServer workers and
-// application-created EventLoops. It has no App, Context, Router, or HTTP
-// server dependency.
-class DataAccessState final {
+// Owns the database and Redis registries attached to one HTTP server worker.
+class WorkerDataState final {
 public:
-    DataAccessState(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, ConnectionScanner& scanner);
-    ~DataAccessState();
+    WorkerDataState(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, ConnectionScanner& scanner);
+    ~WorkerDataState();
 
-    DataAccessState(const DataAccessState&) = delete;
-    DataAccessState& operator=(const DataAccessState&) = delete;
+    WorkerDataState(const WorkerDataState&) = delete;
+    WorkerDataState& operator=(const WorkerDataState&) = delete;
 
     [[nodiscard]] Task<void> connect();
     void closeNow() noexcept;

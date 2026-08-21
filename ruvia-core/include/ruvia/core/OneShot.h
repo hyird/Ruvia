@@ -34,6 +34,10 @@ enum class OneShotCompleteStatus : std::uint8_t {
 template <typename T>
 class OneShotCompletion;
 
+struct OneShotOptions final {
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 template <typename T>
 class OneShotCompleteResult final {
 public:
@@ -275,7 +279,7 @@ private:
         : state_(std::move(state)) {}
     std::shared_ptr<detail::OneShotState<T>> state_;
     template <typename U>
-    friend auto makeOneShot(WorkerHandle, std::pmr::memory_resource*);
+    friend auto makeOneShot(WorkerHandle, OneShotOptions);
 };
 
 template <typename T>
@@ -348,12 +352,12 @@ private:
         : state_(std::move(state)) {}
     std::shared_ptr<detail::OneShotState<T>> state_;
     template <typename U>
-    friend auto makeOneShot(WorkerHandle, std::pmr::memory_resource*);
+    friend auto makeOneShot(WorkerHandle, OneShotOptions);
 };
 
 template <typename T>
-[[nodiscard]] auto makeOneShot(WorkerHandle worker, std::pmr::memory_resource* resource = nullptr) {
-    auto* resolved = detail::pmrResourceOrDefault(resource);
+[[nodiscard]] auto makeOneShot(WorkerHandle worker, OneShotOptions options = {}) {
+    auto* resolved = detail::pmrResourceOrDefault(options.resource);
     std::pmr::polymorphic_allocator<detail::OneShotState<T>> allocator(resolved);
     auto state = std::allocate_shared<detail::OneShotState<T>>(allocator, std::move(worker));
     detail::WorkerHandleAccess::registerShutdownListener(state->worker, state);

@@ -221,7 +221,7 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
 #if !defined(_WIN32)
 ruvia::Task<ruvia::HttpResponse> largeHeaderNotFoundHandler(ruvia::Context& context) {
     (void)context;
-    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kNotFound);
     static const std::string bigValue(40000, 'a');
     response.header("x-large", bigValue);
@@ -337,7 +337,7 @@ std::string& truncatedFileBodyPath() {
 // no longer honour the content-length it already sent.
 ruvia::Task<ruvia::HttpResponse> truncatedFileBodyHandler(ruvia::Context& context) {
     (void)context;
-    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
     constexpr std::uint64_t declaredLength = 40000;
     ruvia::detail::setResponseFileBody(response, std::filesystem::path(truncatedFileBodyPath()), declaredLength, 0, declaredLength);
@@ -355,7 +355,7 @@ std::string& missingFileBodyPath() {
 // already been sent -- the file-removed-before-serve case.
 ruvia::Task<ruvia::HttpResponse> missingFileBodyHandler(ruvia::Context& context) {
     (void)context;
-    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
     constexpr std::uint64_t declaredLength = 40000;
     ruvia::detail::setResponseFileBody(response, std::filesystem::path(missingFileBodyPath()), declaredLength, 0, declaredLength);

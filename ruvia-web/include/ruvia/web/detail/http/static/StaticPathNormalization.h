@@ -21,7 +21,7 @@ namespace ruvia::detail {
 // document root and reject every attempt to ascend above it.
 [[nodiscard]] inline std::pmr::string normalizeStaticRelativePath(std::string_view input, std::pmr::polymorphic_allocator<char> allocator) {
     if (!input.empty() && (input.front() == '/' || input.front() == '\\' || isWindowsDrivePath(input))) {
-        throw HttpError(ruvia::http_status::kForbidden, "forbidden", "invalid static file path");
+        throw HttpError({.status = ruvia::http_status::kForbidden, .code = "forbidden", .message = "invalid static file path"});
     }
 
     std::pmr::string output(allocator);
@@ -35,7 +35,7 @@ namespace ruvia::detail {
         if (!segment.empty() && segment != ".") {
             if (segment == "..") {
                 if (output.empty()) {
-                    throw HttpError(ruvia::http_status::kForbidden, "forbidden", "invalid static file path");
+                    throw HttpError({.status = ruvia::http_status::kForbidden, .code = "forbidden", .message = "invalid static file path"});
                 }
                 const auto previousSlash = output.rfind('/');
                 if (previousSlash == std::pmr::string::npos) {

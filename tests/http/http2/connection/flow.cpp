@@ -464,7 +464,7 @@ RUVIA_TEST(http2_connection_connect_response_tunnel_end_allocation_failure_is_re
         RUVIA_CHECK(stream->remoteReceive().connectPendingEndStream() != nullptr);
     }
 
-    ruvia::HttpResponse accepted(&resource);
+    ruvia::HttpResponse accepted({.resource = &resource});
     accepted.status(ruvia::http_status::kOk);
 
     resource.rejectAllocationsOfSize(2 * sizeof(ruvia::detail::Http2Event));
@@ -1310,7 +1310,7 @@ RUVIA_TEST(http2_connection_submit_data_blocks_then_drains_on_window) {
     handshakeWithWindow(conn, 3);  // stream 1 starts with a 3-byte send window
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "10");
     const auto headResult = conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
@@ -1366,7 +1366,7 @@ RUVIA_TEST(http2_connection_queued_terminal_data_closes_stream_after_drain) {
     handshakeWithWindow(conn, 3);
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "5");
     const auto headResult = conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
@@ -1409,7 +1409,7 @@ RUVIA_TEST(http2_connection_submit_data_reserves_output_before_accepting_state) 
     handshakeWithWindow(conn, 1024);
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "1024");
     const auto head = conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
@@ -1439,7 +1439,7 @@ RUVIA_TEST(http2_connection_window_update_drain_is_transactional_on_allocation_f
     handshakeWithWindow(conn, 3);
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "5000");
     const auto head = conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
@@ -1677,7 +1677,7 @@ RUVIA_TEST(http2_connection_peer_goaway_drains_without_truncating_server_request
     RUVIA_CHECK_EQ(ruvia::detail::http2Read32(reinterpret_cast<const unsigned char*>(reset.data() + 9)), static_cast<std::uint32_t>(Http2ErrorCode::kRefusedStream));
     server.consumeOutput(reset.size());
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.body("ok");
     RUVIA_CHECK(responseHeadSubmitted(submitBufferedResponseHead(server, 1, response)));
@@ -1745,7 +1745,7 @@ RUVIA_TEST(http2_connection_begin_drain_refuses_new_streams) {
     conn.consumeOutput(rst5.size());
 
     // Stream 1 (opened before the drain) can still be answered.
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.body("ok");
     RUVIA_CHECK(responseHeadSubmitted(submitBufferedResponseHead(conn, 1, response)));

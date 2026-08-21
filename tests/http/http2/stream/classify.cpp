@@ -20,7 +20,7 @@ bool rejectHeader(void*, std::string_view, std::string_view) {
 }  // namespace
 
 RUVIA_TEST(classify_header_decode_result) {
-    HpackDecoder decoder(std::pmr::get_default_resource());
+    HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     // A clean decode is OK.
     RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode({}, nullptr, nullptr)) == HeaderDecodeStatus::kOk);
     // A header-validation callback rejection is a protocol error.

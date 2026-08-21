@@ -12,19 +12,20 @@ RUVIA_RESPONSE_MODEL(HealthResponseModel,
 }  // namespace
 
 HttpResponse makeHealthResponse(Context& context) {
-    HealthResponseModel model(context.resource());
+    HealthResponseModel model({.resource = context.resource()});
     model.set<"status">("ok");
     return context.json(model);
 }
 
-HttpResponse makeReadyResponse(Context& context, bool ready, std::string_view reason) {
-    HealthResponseModel model(context.resource());
-    if (ready) {
+HttpResponse makeReadinessResponse(Context& context, ReadinessResponseOptions options) {
+    HealthResponseModel model({.resource = context.resource()});
+    if (options.state == ReadinessState::kReady) {
         model.set<"status">("ready");
         return context.json(model);
     }
 
     model.set<"status">("not_ready");
+    const auto reason = options.unavailableReason.view();
     if (!reason.empty()) {
         model.set<"reason">(reason);
     }

@@ -171,7 +171,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_success_ignores_accept_encoding_rejection)
                 co_return;
             }
 
-            ruvia::detail::HpackDecoder decoder(std::pmr::get_default_resource());
+            ruvia::detail::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             for (;;) {
                 char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
@@ -429,7 +429,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_permessage_deflate) {
             }
 
             // Handshake HEADERS: decode and capture the echoed extension.
-            ruvia::detail::HpackDecoder decoder(std::pmr::get_default_resource());
+            ruvia::detail::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             ruvia::detail::Http2FrameHeader header{};
             for (;;) {
                 char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];

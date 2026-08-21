@@ -28,8 +28,8 @@
 
 namespace ruvia::detail {
 
-struct HttpClientRequestAccess final {
-    [[nodiscard]] static HttpClientRequestView view(const HttpClientRequest& request, std::pmr::vector<HttpHeaderView>& headers);
+struct HttpClientRequestStorageAccess final {
+    [[nodiscard]] static HttpClientRequestView view(const HttpClientRequestStorage& request, std::pmr::vector<HttpHeaderView>& headers);
 };
 
 class HttpClientPool;
@@ -42,27 +42,30 @@ public:
     HttpClientPool(const HttpClientPool&) = delete;
     HttpClientPool& operator=(const HttpClientPool&) = delete;
 
-    [[nodiscard]] Task<HttpClientResponse> execute(HttpClientRequest request, OperationOptions options, std::pmr::memory_resource* responseResource);
+    [[nodiscard]] Task<HttpClientResponse> execute(HttpClientRequestStorage request, OperationOptions options, std::pmr::memory_resource* responseResource);
     void closeNow() noexcept;
     [[nodiscard]] Task<void> join();
     [[nodiscard]] HttpClientStats stats() const noexcept;
     [[nodiscard]] std::string_view host() const noexcept { return config_.host; }
     [[nodiscard]] std::uint16_t port() const noexcept;
     [[nodiscard]] HttpScheme scheme() const noexcept { return config_.scheme; }
+    [[nodiscard]] bool matches(const HttpClientConfig& config) const noexcept;
 
 private:
     friend class WorkerCancellationMailbox<HttpClientPool>;
+    friend class ::ruvia::HttpClientResponse;
+    friend class ::ruvia::HttpClientResponseBody;
 
     enum class WireProtocol : std::uint8_t { kUnknown, kHttp1, kHttp2 };
     enum class AbortReason : std::uint8_t { kNone, kTimeout, kCancelled, kClosing };
     enum class DeadlineKind : std::uint8_t { kResolve, kSocket };
 
     struct Http2PendingStream final {
-        Http2PendingStream(const WorkerHandle& worker, std::pmr::memory_resource* responseResource)
-            : signal(worker), response(responseResource) {}
+        Http2PendingStream(const WorkerHandle& worker, HttpClientResponse& value)
+            : signal(worker), response(&value) {}
 
         WorkerSignal signal;
-        HttpClientResponse response;
+        HttpClientResponse* response;
         std::optional<HttpClientError::Code> error;
         std::exception_ptr failure;
         std::uint64_t requestId{0};
@@ -180,12 +183,14 @@ private:
     [[nodiscard]] Task<void> initializeHttp2(Connection& connection, const OperationTimeout& timeout);
     [[nodiscard]] Task<void> runHttp2Reader(Connection& connection, std::uint64_t generation);
     [[nodiscard]] Task<void> runHttp2Writer(Connection& connection, std::uint64_t generation);
-    [[nodiscard]] Task<HttpClientResponse> executeHttp1(Connection& connection, const HttpClientRequest& request, const OperationTimeout& timeout, std::pmr::memory_resource* responseResource);
-    [[nodiscard]] Task<HttpClientResponse> executeHttp2(Connection& connection, const HttpClientRequest& request, const OperationTimeout& timeout, StopToken stopToken, std::pmr::memory_resource* responseResource);
+    [[nodiscard]] Task<void> executeInto(HttpClientRequestStorage request, OperationOptions options, HttpClientResponseState* state);
+    [[nodiscard]] Task<void> executeRequestInto(HttpClientRequestStorage request, OperationOptions options, HttpClientResponseState* state);
+    [[nodiscard]] Task<void> executeHttp1(Connection& connection, const HttpClientRequestStorage& request, const OperationTimeout& timeout, HttpClientResponse& response);
+    [[nodiscard]] Task<void> executeHttp2(Connection& connection, const HttpClientRequestStorage& request, const OperationTimeout& timeout, StopToken stopToken, HttpClientResponse& response);
     [[nodiscard]] Task<void> write(Connection& connection, std::string_view bytes, const OperationTimeout& timeout);
     [[nodiscard]] Task<std::size_t> readSome(Connection& connection, std::span<char> bytes, const OperationTimeout& timeout, bool allowEof = false);
-    void appendAutomaticHeaders(const HttpClientRequest& request, std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader);
-    void retainResponseCookies(const HttpClientRequest& request, const HttpClientResponse& response);
+    void appendAutomaticHeaders(const HttpClientRequestStorage& request, std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader);
+    void retainResponseCookies(const HttpClientRequestStorage& request, const HttpClientResponse& response);
     void addCookie(std::string_view name, std::string_view value);
     static void decodeResponseContentEncoding(HttpClientResponse& response, bool contentSemanticsPresent, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource);
     [[nodiscard]] static std::size_t cookieStorageBytes(
@@ -207,6 +212,8 @@ private:
     void finishHttp2SessionTask(Connection& connection, std::uint64_t generation) noexcept;
     void submitHttp2Reset(Connection& connection, std::uint32_t streamId) noexcept;
     void cancelHttp2Stream(Connection& connection, std::uint64_t requestId, AbortReason reason) noexcept;
+    void abandonResponse(HttpClientResponseState& state) noexcept;
+    void releaseResponseData(HttpClientResponseState& state) noexcept;
     void removeHttp2Pending(Connection& connection, Http2PendingStream& pending) noexcept;
     [[nodiscard]] Task<void> waitForHttp2SessionStop(
         Connection& connection,
@@ -230,27 +237,30 @@ private:
     std::size_t bytesReceived_{0};
     std::size_t cookieBytes_{0};
     std::uint64_t nextCancellationId_{0};
-    bool cookiesEnabled_{false};
     bool backgroundJoined_{false};
 };
 
 class HttpClientRegistry final {
 public:
-    HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions);
+    HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions, std::size_t maxOriginsPerWorker = 64);
     ~HttpClientRegistry();
     HttpClientRegistry(const HttpClientRegistry&) = delete;
     HttpClientRegistry& operator=(const HttpClientRegistry&) = delete;
 
     void closeNow() noexcept;
     [[nodiscard]] Task<void> join();
+    [[nodiscard]] HttpClientHandle get(HttpClientConfig config, std::pmr::memory_resource* resource, ScopedOperationScope& scope);
+    // Internal harness access for registries constructed with fixed definitions.
     [[nodiscard]] HttpClientHandle get(std::pmr::memory_resource* resource, ScopedOperationScope& scope) const;
-    [[nodiscard]] HttpClientHandle get(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& scope) const;
 private:
     struct Entry final {
         std::pmr::string alias;
         std::unique_ptr<HttpClientPool, PmrObjectDeleter<HttpClientPool>> pool;
     };
     std::pmr::memory_resource* resource_;
+    asio::io_context* ioContext_;
+    const WorkerHandle* worker_;
+    std::size_t maxOriginsPerWorker_;
     std::pmr::vector<Entry> pools_;
     std::pmr::vector<std::size_t> aliasIndex_;
     std::optional<std::size_t> defaultPoolIndex_;

@@ -35,6 +35,15 @@ concept CookieDomainAccepts = requires(ruvia::CookieOptions& options, Text&& tex
 template <typename Name, typename Value, typename Options>
 concept CanConstructSetCookiePlan = requires(Name&& name, Value&& value, Options&& options) { ruvia::detail::SetCookiePlan(std::forward<Name>(name), std::forward<Value>(value), std::forward<Options>(options)); };
 
+template <typename T>
+concept HasCookieHttpOnlyBoolean = requires(T& options) { options.httpOnly = true; };
+
+template <typename T>
+concept HasCookieSecureBoolean = requires(T& options) { options.secure = true; };
+
+template <typename T>
+concept HasCookiePartitionedBoolean = requires(T& options) { options.partitioned = true; };
+
 }  // namespace
 
 static_assert(CookiePathAccepts<std::string&>);
@@ -53,6 +62,12 @@ static_assert(!CanConstructSetCookiePlan<std::string_view, const std::string, ru
 static_assert(!CanConstructSetCookiePlan<std::pmr::string, std::string_view, ruvia::CookieOptions&>);
 static_assert(!CanConstructSetCookiePlan<std::string_view, std::string_view, ruvia::CookieOptions>);
 static_assert(!CanConstructSetCookiePlan<std::string_view, std::string_view, const ruvia::CookieOptions>);
+static_assert(std::same_as<decltype(ruvia::CookieOptions{}.httpOnly), ruvia::CookieAttributePolicy>);
+static_assert(std::same_as<decltype(ruvia::CookieOptions{}.secure), ruvia::CookieAttributePolicy>);
+static_assert(std::same_as<decltype(ruvia::CookieOptions{}.partitioned), ruvia::CookieAttributePolicy>);
+static_assert(!HasCookieHttpOnlyBoolean<ruvia::CookieOptions>);
+static_assert(!HasCookieSecureBoolean<ruvia::CookieOptions>);
+static_assert(!HasCookiePartitionedBoolean<ruvia::CookieOptions>);
 // Naming only the two attributes under test is the point of a designated
 // initializer, and every other CookieOptions member has a default member
 // initializer, so nothing is left uninitialized. GCC still reports the omitted
@@ -117,7 +132,7 @@ RUVIA_TEST(cookie_samesite_enum_maps_to_wire_tokens) {
 
     ruvia::CookieOptions none;
     none.sameSite = ruvia::CookieSameSite::kNone;
-    none.secure = true;
+    none.secure = ruvia::CookieAttributePolicy::kEmit;
     RUVIA_CHECK(!rejects(none));
 
     RUVIA_CHECK(!ruvia::CookieOptions{}.sameSite.has_value());
@@ -129,12 +144,12 @@ RUVIA_TEST(cookie_samesite_enum_maps_to_wire_tokens) {
 RUVIA_TEST(cookie_samesite_none_requires_secure) {
     ruvia::CookieOptions insecureNone;
     insecureNone.sameSite = ruvia::CookieSameSite::kNone;
-    insecureNone.secure = false;
+    insecureNone.secure = ruvia::CookieAttributePolicy::kOmit;
     RUVIA_CHECK(rejects(insecureNone));  // RFC 6265bis §5.5
 
     ruvia::CookieOptions secureNone;
     secureNone.sameSite = ruvia::CookieSameSite::kNone;
-    secureNone.secure = true;
+    secureNone.secure = ruvia::CookieAttributePolicy::kEmit;
     RUVIA_CHECK(!rejects(secureNone));
 }
 
@@ -247,19 +262,28 @@ RUVIA_TEST(cookie_validation_rejects_injection_and_bad_options) {
     badPrefix.prefix = static_cast<ruvia::CookiePrefix>(255);
     RUVIA_CHECK(rejectsCookie("sid", "value", badPrefix));
     ruvia::CookieOptions partitioned;
-    partitioned.partitioned = true;  // partitioned requires Secure
+    partitioned.partitioned = ruvia::CookieAttributePolicy::kEmit;  // partitioned requires Secure
     RUVIA_CHECK(rejectsCookie("sid", "value", partitioned));
+    ruvia::CookieOptions badHttpOnly;
+    badHttpOnly.httpOnly = static_cast<ruvia::CookieAttributePolicy>(255);
+    RUVIA_CHECK(rejectsCookie("sid", "value", badHttpOnly));
+    ruvia::CookieOptions badSecure;
+    badSecure.secure = static_cast<ruvia::CookieAttributePolicy>(255);
+    RUVIA_CHECK(rejectsCookie("sid", "value", badSecure));
+    ruvia::CookieOptions badPartitioned;
+    badPartitioned.partitioned = static_cast<ruvia::CookieAttributePolicy>(255);
+    RUVIA_CHECK(rejectsCookie("sid", "value", badPartitioned));
 }
 
 RUVIA_TEST(cookie_secure_prefix_requires_secure) {
     ruvia::CookieOptions secured;
     secured.prefix = ruvia::CookiePrefix::kSecure;
-    secured.secure = true;
+    secured.secure = ruvia::CookieAttributePolicy::kEmit;
     RUVIA_CHECK(!rejects(secured));
 
     ruvia::CookieOptions insecure;
     insecure.prefix = ruvia::CookiePrefix::kSecure;
-    insecure.secure = false;
+    insecure.secure = ruvia::CookieAttributePolicy::kOmit;
     RUVIA_CHECK(rejects(insecure));  // __Secure- requires Secure
 }
 
@@ -267,11 +291,11 @@ RUVIA_TEST(cookie_host_prefix_requires_secure_root_path_no_domain) {
     // __Host- is the strictest prefix (RFC 6265bis 4.1.3.2).
     ruvia::CookieOptions valid;
     valid.prefix = ruvia::CookiePrefix::kHost;
-    valid.secure = true;  // path defaults to "/", domain is empty
+    valid.secure = ruvia::CookieAttributePolicy::kEmit;  // path defaults to "/", domain is empty
     RUVIA_CHECK(!rejects(valid));
 
     ruvia::CookieOptions notSecure = valid;
-    notSecure.secure = false;
+    notSecure.secure = ruvia::CookieAttributePolicy::kOmit;
     RUVIA_CHECK(rejects(notSecure));
 
     ruvia::CookieOptions subPath = valid;
@@ -296,13 +320,13 @@ RUVIA_TEST(cookie_literal_prefix_name_enforces_requirements) {
     // RFC 6265bis user agents match these prefixes case-insensitively. Reject
     // every spelling the UA would reject instead of emitting a silently dropped
     // cookie.
-    ruvia::CookieOptions insecure;                           // secure defaults to false
+    ruvia::CookieOptions insecure;                           // Secure defaults to omitted
     RUVIA_CHECK(rejectsWithName("__Secure-tok", insecure));  // __Secure- requires Secure
     RUVIA_CHECK(rejectsWithName("__secure-tok", insecure));
     RUVIA_CHECK(rejectsWithName("__SeCuRe-tok", insecure));
 
     ruvia::CookieOptions hostBadDomain;
-    hostBadDomain.secure = true;
+    hostBadDomain.secure = ruvia::CookieAttributePolicy::kEmit;
     hostBadDomain.domain = "example.com";  // __Host- forbids Domain
     RUVIA_CHECK(rejectsWithName("__Host-sid", hostBadDomain));
     RUVIA_CHECK(rejectsWithName("__HOST-sid", hostBadDomain));
@@ -310,11 +334,11 @@ RUVIA_TEST(cookie_literal_prefix_name_enforces_requirements) {
 
     // A literal-prefixed name that meets the constraints is accepted.
     ruvia::CookieOptions okSecure;
-    okSecure.secure = true;
+    okSecure.secure = ruvia::CookieAttributePolicy::kEmit;
     RUVIA_CHECK(!rejectsWithName("__Secure-tok", okSecure));
     RUVIA_CHECK(!rejectsWithName("__sEcUrE-tok", okSecure));
     ruvia::CookieOptions okHost;
-    okHost.secure = true;  // path defaults to "/", domain empty
+    okHost.secure = ruvia::CookieAttributePolicy::kEmit;  // path defaults to "/", domain empty
     RUVIA_CHECK(!rejectsWithName("__Host-sid", okHost));
     RUVIA_CHECK(!rejectsWithName("__hOsT-sid", okHost));
 

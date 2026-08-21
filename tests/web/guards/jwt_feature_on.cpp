@@ -14,7 +14,8 @@ int main() {
     const auto token = ruvia::jwtSign(signOptions);
 
     ruvia::JwtVerifyOptions verifyOptions;
+    verifyOptions.token = token;
     verifyOptions.secret = signOptions.secret;
-    const auto payload = ruvia::jwtVerify(token, verifyOptions);
+    const auto payload = ruvia::jwtVerify(verifyOptions);
     return payload.subject() == std::string_view("feature-gate") ? 0 : 1;
 }

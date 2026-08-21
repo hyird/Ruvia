@@ -44,9 +44,11 @@ using ruvia::HttpContentCoding;
 using ruvia::parseHttpContentCoding;
 using ruvia::HttpContentDecodeError;
 using ruvia::HttpContentDecodeFailure;
+using ruvia::HttpContentDecodeOptions;
 using ruvia::HttpContentDecodeResult;
 using ruvia::HttpContentEncodeError;
 using ruvia::HttpContentEncodeFailure;
+using ruvia::HttpContentEncodeOptions;
 using ruvia::HttpContentEncodeResult;
 using ruvia::HttpDecodedContent;
 using ruvia::HttpEncodedContent;
@@ -201,7 +203,7 @@ inline std::string zstdCompressWithWindow(std::string_view data, int windowLog) 
 }
 
 inline std::string decoded(HttpContentCoding coding, std::string_view input, std::size_t maxBytes) {
-    auto result = decodeHttpContent(coding, input, maxBytes, std::pmr::get_default_resource());
+    auto result = decodeHttpContent(coding, input, {.maxDecodedBytes = maxBytes, .resource = std::pmr::get_default_resource()});
     const auto* content = result.decoded();
     if (content == nullptr) {
         throw std::runtime_error("test content decode failed");
@@ -210,7 +212,7 @@ inline std::string decoded(HttpContentCoding coding, std::string_view input, std
 }
 
 inline HttpContentDecodeError decodeError(HttpContentCoding coding, std::string_view input, std::size_t maxBytes = kDecodedBodyLimit) {
-    const auto result = decodeHttpContent(coding, input, maxBytes, std::pmr::get_default_resource());
+    const auto result = decodeHttpContent(coding, input, {.maxDecodedBytes = maxBytes, .resource = std::pmr::get_default_resource()});
     const auto* failure = result.failure();
     if (failure == nullptr) {
         throw std::runtime_error("test content decode unexpectedly succeeded");
@@ -294,7 +296,7 @@ static_assert(!std::default_initializable<HttpContentDecodeFailure>);
 static_assert(std::same_as<decltype(std::declval<HttpContentDecodeResult&>().decoded()), HttpDecodedContent*>);
 static_assert(std::same_as<decltype(std::declval<const HttpContentDecodeResult&>().failure()), const HttpContentDecodeFailure*>);
 static_assert(std::same_as<decltype(std::declval<HttpDecodedContent&&>().takeBytes()), std::pmr::string>);
-static_assert(std::same_as<decltype(decodeHttpContent(HttpContentCoding::kGzip, std::string_view{}, std::size_t{}, static_cast<std::pmr::memory_resource*>(nullptr))), HttpContentDecodeResult>);
+static_assert(std::same_as<decltype(decodeHttpContent(HttpContentCoding::kGzip, std::string_view{}, HttpContentDecodeOptions{.maxDecodedBytes = 0, .resource = nullptr})), HttpContentDecodeResult>);
 static_assert(!std::default_initializable<HttpRequestContentDecodeResult>);
 static_assert(!std::copy_constructible<HttpRequestContentDecodeResult>);
 static_assert(std::move_constructible<HttpRequestContentDecodeResult>);
@@ -302,7 +304,7 @@ static_assert(!std::is_move_assignable_v<HttpRequestContentDecodeResult>);
 static_assert(std::same_as<decltype(std::declval<HttpRequestContentDecodeResult&>().decoded()), HttpDecodedContent*>);
 static_assert(std::same_as<decltype(std::declval<const HttpRequestContentDecodeResult&>().protocolFailure()), const HttpRequestContentDecodeProtocolFailure*>);
 static_assert(std::same_as<decltype(std::declval<const HttpRequestContentDecodeResult&>().decoderFailure()), const HttpRequestContentDecoderFailure*>);
-static_assert(std::same_as<decltype(decodeHttpRequestContent(HttpContentCoding::kGzip, std::string_view{}, std::size_t{}, static_cast<std::pmr::memory_resource*>(nullptr))), HttpRequestContentDecodeResult>);
+static_assert(std::same_as<decltype(decodeHttpRequestContent(HttpContentCoding::kGzip, std::string_view{}, HttpContentDecodeOptions{.maxDecodedBytes = 0, .resource = nullptr})), HttpRequestContentDecodeResult>);
 static_assert(!std::default_initializable<HttpContentEncodeResult>);
 static_assert(!std::copy_constructible<HttpContentEncodeResult>);
 static_assert(std::move_constructible<HttpContentEncodeResult>);
@@ -314,7 +316,7 @@ static_assert(!ExposesRvalueEncodeFailure<HttpContentEncodeResult>);
 static_assert(std::same_as<decltype(std::declval<HttpContentEncodeResult&>().encoded()), HttpEncodedContent*>);
 static_assert(std::same_as<decltype(std::declval<const HttpContentEncodeResult&>().failure()), const HttpContentEncodeFailure*>);
 static_assert(std::same_as<decltype(std::declval<HttpEncodedContent&&>().takeBytes()), std::pmr::string>);
-static_assert(std::same_as<decltype(encodeHttpContent(HttpContentCoding::kGzip, std::string_view{}, std::size_t{}, static_cast<std::pmr::memory_resource*>(nullptr))), HttpContentEncodeResult>);
+static_assert(std::same_as<decltype(encodeHttpContent(HttpContentCoding::kGzip, std::string_view{}, HttpContentEncodeOptions{.maxEncodedBytes = 0, .resource = nullptr})), HttpContentEncodeResult>);
 
 inline std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t truncateBy) {
     const std::size_t bound = ZSTD_compressBound(plain.size());
@@ -325,7 +327,10 @@ inline std::optional<std::string> zstdRoundTrip(std::string_view plain, std::siz
     }
     compressed.resize(written - truncateBy);
 
-    const auto result = ruvia::decodeHttpContent(HttpContentCoding::kZstd, compressed, ruvia::kDefaultMaxBufferedBodyBytes, std::pmr::get_default_resource());
+    const auto result = ruvia::decodeHttpContent(
+        HttpContentCoding::kZstd,
+        compressed,
+        {.maxDecodedBytes = ruvia::kDefaultMaxBufferedBodyBytes, .resource = std::pmr::get_default_resource()});
     const auto* decoded = result.decoded();
     if (decoded == nullptr) {
         return std::nullopt;

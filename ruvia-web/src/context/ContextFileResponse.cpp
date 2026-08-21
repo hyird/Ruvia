@@ -26,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 namespace ruvia {
 namespace {
@@ -92,8 +93,8 @@ struct FileResponseSource final {
     std::time_t modifiedSeconds{0};
     std::string_view contentType;
     std::string_view cacheControl;
-    bool enableRanges{false};
-    bool enableValidators{false};
+    StaticRangeRequestPolicy rangeRequests{StaticRangeRequestPolicy::kIgnore};
+    StaticResponseValidatorPolicy responseValidators{StaticResponseValidatorPolicy::kOmit};
     std::string_view precomputedEtag;
     std::string_view precomputedLastModified;
     HttpContentCoding contentCoding{HttpContentCoding::kIdentity};
@@ -106,6 +107,8 @@ template <typename ApplyResponseState>
     std::pmr::string lastModifiedStorage(context.resource());
     std::string_view etag;
     std::string_view lastModified;
+    const bool honorRangeRequests = source.rangeRequests == StaticRangeRequestPolicy::kHonor;
+    const bool emitResponseValidators = source.responseValidators == StaticResponseValidatorPolicy::kEmit;
     // RFC 9110 §8.8.2.1 forbids an origin server from emitting a
     // Last-Modified value later than the message origination time. Filesystems
     // can legitimately contain future mtimes (clock skew, archives, or an
@@ -116,7 +119,7 @@ template <typename ApplyResponseState>
     const auto responseSeconds = std::time(nullptr);
     const bool lastModifiedIsActual = source.modifiedSeconds <= responseSeconds;
     const auto validatorModifiedSeconds = lastModifiedIsActual ? source.modifiedSeconds : responseSeconds;
-    if (source.enableValidators) {
+    if (emitResponseValidators) {
         if (source.precomputedEtag.empty()) {
             etagStorage = detail::makeStaticFileSnapshotEtag(context.resource(), source.size, source.modifiedToken, source.path.identity());
             etag = etagStorage;
@@ -146,10 +149,10 @@ template <typename ApplyResponseState>
         if (source.contentCoding != HttpContentCoding::kIdentity) {
             detail::setResponseHeaderStableView(response, "Content-Encoding", httpContentCodingToken(source.contentCoding));
         }
-        if (source.enableRanges) {
+        if (honorRangeRequests) {
             detail::setResponseHeaderStableView(response, "Accept-Ranges", "bytes");
         }
-        if (source.enableValidators) {
+        if (emitResponseValidators) {
             response.header("ETag", etag);
             response.header("Last-Modified", lastModified);
         }
@@ -168,13 +171,13 @@ template <typename ApplyResponseState>
     auto setFileBody = [&](HttpResponse& response, std::uint64_t offset, std::uint64_t length) { source.path.setBody(response, source.size, offset, length); };
     auto setFullFileBody = [&](HttpResponse& response) { source.path.setFullBody(response, source.size); };
     auto makeHeaderOnlyResponse = [&](std::optional<HttpStatusCode> statusCode) {
-        HttpResponse response(context.resource());
+        HttpResponse response({.resource = context.resource()});
         addFileHeaders(response);
         applyFileResponseState(response, statusCode);
         return response;
     };
     auto makeFullFileResponse = [&](std::optional<HttpStatusCode> statusCode) {
-        HttpResponse response(context.resource());
+        HttpResponse response({.resource = context.resource()});
         addFileHeaders(response);
         setFullFileBody(response);
         applyFileResponseState(response, statusCode);
@@ -191,7 +194,7 @@ template <typename ApplyResponseState>
     if (methodPlan.evaluatesPreconditions) {
         const auto etagConditions = fileEtagConditions(request, etag);
         if (etagConditions.ifMatch.present && !etagConditions.ifMatch.matches()) {
-            throw HttpError(ruvia::http_status::kPreconditionFailed, "precondition_failed", "file precondition failed");
+            throw HttpError({.status = ruvia::http_status::kPreconditionFailed, .code = "precondition_failed", .message = "file precondition failed"});
         }
         // RFC 9110 §13.2.2 step 2: If-Unmodified-Since is evaluated only when If-Match
         // is absent -- a present If-Match takes precedence and the (weaker) date
@@ -199,14 +202,14 @@ template <typename ApplyResponseState>
         // when If-None-Match is present. Presence is tracked separately because an
         // empty list is still a present field and must take precedence over the date.
         if (!etagConditions.ifMatch.present && !conditional.ifUnmodifiedSince.empty() && !httpDateUnmodified(conditional.ifUnmodifiedSince, validatorModifiedSeconds)) {
-            throw HttpError(ruvia::http_status::kPreconditionFailed, "precondition_failed", "file precondition failed");
+            throw HttpError({.status = ruvia::http_status::kPreconditionFailed, .code = "precondition_failed", .message = "file precondition failed"});
         }
 
         if (etagConditions.ifNoneMatch.matches()) {
             if (methodPlan.usesNotModifiedResponse) {
                 return makeHeaderOnlyResponse(http_status::kNotModified);
             }
-            throw HttpError(ruvia::http_status::kPreconditionFailed, "precondition_failed", "file precondition failed");
+            throw HttpError({.status = ruvia::http_status::kPreconditionFailed, .code = "precondition_failed", .message = "file precondition failed"});
         }
 
         if (methodPlan.evaluatesIfModifiedSince && !etagConditions.ifNoneMatch.present && !conditional.ifModifiedSince.empty() && httpDateNotModified(conditional.ifModifiedSince, validatorModifiedSeconds)) {
@@ -217,16 +220,16 @@ template <typename ApplyResponseState>
     // RFC 9110 §14.2 defines Range only for GET. In particular, HEAD must
     // describe the full selected representation rather than returning partial
     // response metadata for content that will never be sent.
-    if (methodPlan.evaluatesRange && source.enableRanges && !conditional.range.empty()) {
+    if (methodPlan.evaluatesRange && honorRangeRequests && !conditional.range.empty()) {
         // RFC 9110 13.1.5: honor the Range only if a present If-Range matches
-        // the current representation. When validators are disabled this root
-        // exposes no ETag/Last-Modified, so an If-Range can never be confirmed
-        // -- the condition MUST be treated as not matching and the full
-        // representation served, rather than a 206 stitched from bytes the
-        // client cannot verify it still holds. Gating on source.enableValidators (as
+        // the current representation. When response validators are omitted,
+        // this root exposes no ETag/Last-Modified, so an If-Range can never be
+        // confirmed -- the condition MUST be treated as not matching and the
+        // full representation served, rather than a 206 stitched from bytes the
+        // client cannot verify it still holds. Gating on validator emission (as
         // before) skipped the check entirely and returned a 206. A range with
-        // no If-Range is still honored without validators.
-        if (conditional.hasIfRange && (!source.enableValidators || !ifRangeAllows(conditional.ifRange, etag, validatorModifiedSeconds, lastModifiedIsActual))) {
+        // no If-Range is still honored without response validator headers.
+        if (conditional.hasIfRange && (!emitResponseValidators || !ifRangeAllows(conditional.ifRange, etag, validatorModifiedSeconds, lastModifiedIsActual))) {
             return makeFullFileResponse(std::nullopt);
         }
 
@@ -237,7 +240,7 @@ template <typename ApplyResponseState>
             return makeFullFileResponse(std::nullopt);
         }
         if (rangeResolution.unsatisfiable()) {
-            HttpResponse response(context.resource());
+            HttpResponse response({.resource = context.resource()});
             detail::setResponseContentRangeUnsatisfied(response, source.size);
             addFileHeaders(response);
             applyFileResponseState(response, http_status::kRangeNotSatisfiable);
@@ -245,7 +248,7 @@ template <typename ApplyResponseState>
         }
 
         const auto& resolved = *rangeResolution.resolved();
-        HttpResponse response(context.resource());
+        HttpResponse response({.resource = context.resource()});
         addFileHeaders(response);
         detail::setResponseContentRange(response, resolved.offset(), resolved.length(), source.size);
         setFileBody(response, resolved.offset(), resolved.length());
@@ -258,24 +261,25 @@ template <typename ApplyResponseState>
 
 }  // namespace
 
-HttpResponse Context::file(const std::filesystem::path& path, std::string_view contentType) const {
+HttpResponse Context::file(FileResponseOptions options) const {
     std::error_code ec;
-    const auto snapshot = detail::snapshotResponseFile(path.c_str(), ec);
+    const auto snapshot = detail::snapshotResponseFile(options.path.c_str(), ec);
     if (ec) {
-        throw HttpError(ruvia::http_status::kNotFound, "not_found", "file not found");
+        throw HttpError({.status = ruvia::http_status::kNotFound, .code = "not_found", .message = "file not found"});
     }
 
+    const auto contentType = options.contentType.view();
     const auto applyState = [this](HttpResponse& response, std::optional<HttpStatusCode> statusCode) { applyResponseState(response, statusCode); };
     return makeFileResponse(*this, request_,
         FileResponseSource{
-            .path = FileResponsePath::copying(path, snapshot.identity),
+            .path = FileResponsePath::copying(std::move(options.path), snapshot.identity),
             .size = snapshot.size,
             .modifiedToken = snapshot.modifiedToken,
             .modifiedSeconds = snapshot.modifiedSeconds,
             .contentType = contentType,
             .cacheControl = {},
-            .enableRanges = true,
-            .enableValidators = true,
+            .rangeRequests = StaticRangeRequestPolicy::kHonor,
+            .responseValidators = StaticResponseValidatorPolicy::kEmit,
             .precomputedEtag = {},
             .precomputedLastModified = {},
             .contentCoding = HttpContentCoding::kIdentity,
@@ -284,12 +288,14 @@ HttpResponse Context::file(const std::filesystem::path& path, std::string_view c
         applyState);
 }
 
-HttpResponse Context::staticFile(const StaticRoot& root, std::string_view relativePath, std::string_view contentType) const {
+HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptions options) const {
     const auto mode = precompressedStaticFiles_ ? detail::StaticFileSelectionMode::kPrecompressed : detail::StaticFileSelectionMode::kIdentityOnly;
-    return staticFile(root, relativePath, contentType, mode);
+    return staticFile(root, options, mode);
 }
 
-HttpResponse Context::staticFile(const StaticRoot& root, std::string_view relativePath, std::string_view contentType, detail::StaticFileSelectionMode mode) const {
+HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptions options, detail::StaticFileSelectionMode mode) const {
+    const auto relativePath = options.relativePath.view();
+    const auto contentType = options.contentType.view();
     // Percent-decode the request path before matching it against the static index,
     // whose keys are the real (decoded) on-disk names -- so a file whose name holds
     // an encoded octet (a space "%20", UTF-8, parentheses, ...) resolves instead of
@@ -301,16 +307,16 @@ HttpResponse Context::staticFile(const StaticRoot& root, std::string_view relati
     // it; a malformed escape falls back to the raw bytes (which simply miss).
     std::optional<std::pmr::string> decodedPath;
     if (detail::hasUrlEncoding(relativePath, detail::UrlDecodeMode::kPercent)) {
-        decodedPath = detail::decodeUrlComponent(relativePath, detail::UrlDecodeMode::kPercent, resource());
+        decodedPath = detail::decodeUrlComponent(relativePath, {.mode = detail::UrlDecodeMode::kPercent, .resource = resource()});
     }
     const std::string_view lookupPath = decodedPath.has_value() ? std::string_view(*decodedPath) : relativePath;
     if (lookupPath.find('\0') != std::string_view::npos) {
-        throw HttpError(ruvia::http_status::kForbidden, "forbidden", "invalid static file path");
+        throw HttpError({.status = ruvia::http_status::kForbidden, .code = "forbidden", .message = "invalid static file path"});
     }
     auto relative = detail::normalizeStaticRelativePath(lookupPath, allocator<char>());
 
     if (relative.empty() && !detail::StaticRootAccess::hasDirectoryIndex(root)) {
-        throw HttpError(ruvia::http_status::kForbidden, "forbidden", "invalid static file path");
+        throw HttpError({.status = ruvia::http_status::kForbidden, .code = "forbidden", .message = "invalid static file path"});
     }
 
     auto entry = detail::StaticRootAccess::find(root, relative);
@@ -323,7 +329,7 @@ HttpResponse Context::staticFile(const StaticRoot& root, std::string_view relati
         entry = detail::StaticRootAccess::find(root, relative);
     }
     if (!entry.has_value()) {
-        throw HttpError(ruvia::http_status::kNotFound, "not_found", "file not found");
+        throw HttpError({.status = ruvia::http_status::kNotFound, .code = "not_found", .message = "file not found"});
     }
     const auto& baseEntry = *entry;
 
@@ -331,7 +337,7 @@ HttpResponse Context::staticFile(const StaticRoot& root, std::string_view relati
     // validators come from the variant, the Content-Type from the base entry.
     const auto served = selectStaticFileRepresentation(root, relative, request_, resource(), baseEntry, mode);
     if (!served.has_value()) {
-        throw HttpError(ruvia::http_status::kNotAcceptable, "not_acceptable", "no acceptable response content coding");
+        throw HttpError({.status = ruvia::http_status::kNotAcceptable, .code = "not_acceptable", .message = "no acceptable response content coding"});
     }
     const auto& servedEntry = served->entry();
 
@@ -344,8 +350,8 @@ HttpResponse Context::staticFile(const StaticRoot& root, std::string_view relati
             .modifiedSeconds = servedEntry.modifiedSeconds(),
             .contentType = contentType.empty() ? baseEntry.contentType() : contentType,
             .cacheControl = baseEntry.cacheControl(),
-            .enableRanges = baseEntry.rangesEnabled(),
-            .enableValidators = baseEntry.validatorsEnabled(),
+            .rangeRequests = baseEntry.rangeRequests(),
+            .responseValidators = baseEntry.responseValidators(),
             .precomputedEtag = servedEntry.etag(),
             .precomputedLastModified = servedEntry.lastModified(),
             .contentCoding = served->contentCoding(),

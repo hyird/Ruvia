@@ -151,13 +151,13 @@ RUVIA_TEST(cors_max_age_distinguishes_absence_from_zero) {
         "Access-Control-Request-Method: POST\r\n\r\n");
 
     auto absent = corsOptions("https://app.example", false);
-    HttpResponse absentResponse(std::pmr::new_delete_resource());
+    HttpResponse absentResponse({.resource = std::pmr::new_delete_resource()});
     applyCorsHeaders(result.request, absentResponse, absent);
     RUVIA_CHECK(!absentResponse.header("Access-Control-Max-Age").has_value());
 
     auto zero = corsOptions("https://app.example", false);
     zero.maxAge.emplace(std::chrono::seconds(0));
-    HttpResponse zeroResponse(std::pmr::new_delete_resource());
+    HttpResponse zeroResponse({.resource = std::pmr::new_delete_resource()});
     applyCorsHeaders(result.request, zeroResponse, zero);
     RUVIA_CHECK_EQ(zeroResponse.header("Access-Control-Max-Age").value_or(""), std::string_view("0"));
 }
@@ -165,7 +165,7 @@ RUVIA_TEST(cors_max_age_distinguishes_absence_from_zero) {
 RUVIA_TEST(cors_runtime_sets_static_configured_origin) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     applyCorsHeaders(result.request, response, corsOptions("https://app.example", false));
 
     // The configured origin is emitted verbatim -- the request Origin is never reflected.
@@ -179,7 +179,7 @@ RUVIA_TEST(cors_runtime_sets_static_configured_origin) {
 RUVIA_TEST(cors_runtime_wildcard_has_no_vary_origin) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://any.example\r\n\r\n");
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     applyCorsHeaders(result.request, response, corsOptions("*", false));
 
     RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Origin").value_or(""), std::string_view("*"));
@@ -190,7 +190,7 @@ RUVIA_TEST(cors_runtime_credentials_belong_to_specific_origin) {
     {
         Http1ServerRequestParser parser;
         const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
-        HttpResponse response(std::pmr::new_delete_resource());
+        HttpResponse response({.resource = std::pmr::new_delete_resource()});
         applyCorsHeaders(result.request, response, corsOptions("https://app.example", true));
         RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Credentials").value_or(""), std::string_view("true"));
     }
@@ -202,7 +202,7 @@ RUVIA_TEST(cors_static_response_metadata_is_cache_stable_without_origin) {
     {
         Http1ServerRequestParser parser;
         const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-        HttpResponse response(std::pmr::new_delete_resource());
+        HttpResponse response({.resource = std::pmr::new_delete_resource()});
         auto cors = corsOptions("*", false);
         cors.exposeHeaders = ruvia::CorsHeaderNames::of({"X-Total-Count"});
         applyCorsHeaders(result.request, response, cors);
@@ -213,7 +213,7 @@ RUVIA_TEST(cors_static_response_metadata_is_cache_stable_without_origin) {
     {
         Http1ServerRequestParser parser;
         const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-        HttpResponse response(std::pmr::new_delete_resource());
+        HttpResponse response({.resource = std::pmr::new_delete_resource()});
         applyCorsHeaders(result.request, response, corsOptions("https://app.example", true));
         RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Origin").value_or(""), std::string_view("https://app.example"));
         RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Credentials").value_or(""), std::string_view("true"));
@@ -226,7 +226,7 @@ RUVIA_TEST(cors_options_variants_declare_every_request_dependency) {
     const auto result = parser.parseMessage(
         "OPTIONS / HTTP/1.1\r\nHost: x\r\n"
         "Access-Control-Request-Method: POST\r\n\r\n");
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     applyCorsHeaders(result.request, response, corsOptions("*", false));
 
     const auto vary = response.header("Vary").value_or("");
@@ -242,7 +242,7 @@ RUVIA_TEST(cors_preflight_reflects_methods_and_requested_headers) {
         "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
         "Access-Control-Request-Method: POST\r\n"
         "Access-Control-Request-Headers: X-Custom\r\n\r\n");
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.header("Allow", "GET, POST, OPTIONS");  // the route-advertised methods
 
     auto cors = corsOptions("https://app.example", false);
@@ -264,7 +264,7 @@ RUVIA_TEST(cors_preflight_reflects_every_request_header_field_line) {
         "Access-Control-Request-Method: POST\r\n"
         "Access-Control-Request-Headers: , X-One,\r\n"
         "Access-Control-Request-Headers: X-Two, X-Three\r\n\r\n");
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     applyCorsHeaders(result.request, response, corsOptions("https://app.example", false));
 
     std::size_t reflectedLines = 0;
@@ -289,7 +289,7 @@ RUVIA_TEST(cors_preflight_prefers_configured_allow_headers) {
         "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
         "Access-Control-Request-Method: POST\r\n"
         "Access-Control-Request-Headers: X-Requested\r\n\r\n");
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
 
     auto cors = corsOptions("https://app.example", false);
     cors.requestHeaders = ruvia::CorsRequestHeadersPolicy::fixed({"Authorization", "X-Configured"});
@@ -308,7 +308,7 @@ RUVIA_TEST(cors_runtime_exposes_configured_headers_on_simple_response) {
     {
         Http1ServerRequestParser parser;
         const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
-        HttpResponse response(std::pmr::new_delete_resource());
+        HttpResponse response({.resource = std::pmr::new_delete_resource()});
         auto cors = corsOptions("https://app.example", false);
         cors.exposeHeaders = ruvia::CorsHeaderNames::of({"X-Total-Count", "X-Request-Id"});
         applyCorsHeaders(result.request, response, cors);
@@ -321,7 +321,7 @@ RUVIA_TEST(cors_runtime_exposes_configured_headers_on_simple_response) {
         const auto result = parser.parseMessage(
             "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
             "Access-Control-Request-Method: POST\r\n\r\n");
-        HttpResponse response(std::pmr::new_delete_resource());
+        HttpResponse response({.resource = std::pmr::new_delete_resource()});
         auto cors = corsOptions("https://app.example", false);
         cors.exposeHeaders = ruvia::CorsHeaderNames::of({"X-Total-Count"});
         applyCorsHeaders(result.request, response, cors);

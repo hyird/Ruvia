@@ -152,7 +152,7 @@ template <typename T>
         if (parsed->encoding() == JsonStringEncoding::kLiteral) {
             input = remaining;
             if (stringStorage == ModelStringStorage::kOwned) {
-                return FieldT(parsed->raw(), resource);
+                return FieldT(parsed->raw(), ::ruvia::ModelOptions{.resource = resource});
             }
             return ModelValueFactory::makeString(parsed->raw(), resource);
         }

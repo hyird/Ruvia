@@ -137,7 +137,7 @@ void probeChannel() {
         [&](ruvia::WorkerHandle worker) {
             auto pair =
                 ruvia::makeChannel<DetachDispatcherOnMove>(
-                    std::move(worker), 1);
+                    std::move(worker), {.capacity = 1});
             sender =
                 std::make_shared<
                     ruvia::ChannelSender<DetachDispatcherOnMove>>(

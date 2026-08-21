@@ -74,8 +74,16 @@ DotenvResult detail::loadEnvFromExecutableDirectory(Env& env, DotenvOptions opti
 }
 
 DotenvResult detail::loadEnvFromFile(Env& env, const std::filesystem::path& path, DotenvOptions options) {
+    if (options.existingVariables != DotenvExistingVariablePolicy::kPreserve &&
+        options.existingVariables != DotenvExistingVariablePolicy::kOverride) {
+        throw std::invalid_argument("dotenv existing variable policy is invalid");
+    }
+    if (options.missingFile != DotenvMissingFilePolicy::kIgnore &&
+        options.missingFile != DotenvMissingFilePolicy::kRequire) {
+        throw std::invalid_argument("dotenv missing file policy is invalid");
+    }
     if (std::ifstream probe(path); !probe) {
-        if (options.required) {
+        if (options.missingFile == DotenvMissingFilePolicy::kRequire) {
             throw std::runtime_error("dotenv file not found: " + path.string());
         }
         return detail::DotenvResultAccess::make(false);
@@ -89,7 +97,7 @@ DotenvResult detail::loadEnvFromFile(Env& env, const std::filesystem::path& path
         auto& variables = state.variables;
         auto it = findVariableSlot(variables, entry.name);
         if (it != variables.end() && std::string_view(it->name) == std::string_view(entry.name)) {
-            if (!options.overrideExisting) {
+            if (options.existingVariables == DotenvExistingVariablePolicy::kPreserve) {
                 detail::DotenvResultAccess::incrementVariablesSkipped(result);
                 continue;
             }

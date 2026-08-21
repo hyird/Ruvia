@@ -1,7 +1,6 @@
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbUtils.h"
-#include "ruvia/web/detail/integration/DataAccessDefinitions.h"
 
 #include <chrono>
 #include <algorithm>
@@ -102,7 +101,7 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_res
             throw std::invalid_argument("duplicate database alias");
         }
 
-        auto config = cloneDbConfig(definition.config, resource_);
+        auto config = detail::DbConfigStorage(definition.config, resource_);
         validateDbConfig(config);
         PoolOwner owner;
         switch (definition.config.driver) {

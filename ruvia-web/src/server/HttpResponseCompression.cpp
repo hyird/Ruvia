@@ -38,7 +38,7 @@ struct BufferedCompressionAttempt final {
 
 [[nodiscard]] BufferedCompressionAttempt encodeBufferedBody(HttpContentCoding coding, std::pmr::string plain) {
     const auto maxEncodedBytes = plain.empty() ? 0 : plain.size() - 1;
-    auto encoding = encodeHttpContent(coding, plain, maxEncodedBytes, processResource());
+    auto encoding = encodeHttpContent(coding, plain, {.maxEncodedBytes = maxEncodedBytes, .resource = processResource()});
     if (auto* encoded = encoding.encoded(); encoded != nullptr) {
         return BufferedCompressionAttempt(BufferedCompressionAttemptStatus::kCompressed, std::move(*encoded).takeBytes());
     }
@@ -125,7 +125,7 @@ HttpResponseCompressionEligibility httpResponseCompressionEligibility(const Http
         return HttpResponseCompressionEligibility::kIneligible;
     }
 
-    if (responseHasKnownHeader(response, kResponseHeaderContentEncoding) || responseHasKnownHeader(response, kResponseHeaderContentRange) || (kind != ResponseStreamKind::kSse && responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType))) || responseCacheControl(response).noTransform) {
+    if (responseHasKnownHeader(response, kResponseHeaderContentEncoding) || responseHasKnownHeader(response, kResponseHeaderContentRange) || (kind != ResponseStreamKind::kSse && responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType))) || responseCacheControl(response).has(CacheControlDirective::kNoTransform)) {
         return HttpResponseCompressionEligibility::kIneligible;
     }
     return HttpResponseCompressionEligibility::kEligible;
@@ -160,7 +160,7 @@ HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingS
     const auto maxEncodedBytes = body.empty() ? 0 : body.size() - 1;
     std::optional<HttpContentEncodeResult> encoding;
     try {
-        encoding.emplace(encodeHttpContent(coding, body, maxEncodedBytes, responseResource(response)));
+        encoding.emplace(encodeHttpContent(coding, body, {.maxEncodedBytes = maxEncodedBytes, .resource = responseResource(response)}));
     } catch (...) {
         return HttpResponseCompressionResult::makeFailed();
     }

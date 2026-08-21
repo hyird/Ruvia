@@ -29,14 +29,14 @@ namespace {
 
 }  // namespace
 
-TlsIdentity TlsIdentity::fromFiles(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::string_view privateKeyPassword) {
-    if (certificateChainFile.empty()) {
+TlsIdentity TlsIdentity::fromFiles(TlsIdentityFileOptions options) {
+    if (options.certificateChainFile.empty()) {
         throw std::invalid_argument("TLS certificate chain file must not be empty");
     }
-    if (privateKeyFile.empty()) {
+    if (options.privateKeyFile.empty()) {
         throw std::invalid_argument("TLS private key file must not be empty");
     }
-    return TlsIdentity(std::move(certificateChainFile), std::move(privateKeyFile), std::string(privateKeyPassword));
+    return TlsIdentity(std::move(options.certificateChainFile), std::move(options.privateKeyFile), std::move(options.privateKeyPassword));
 }
 
 TlsClientCertificatePolicy TlsClientCertificatePolicy::optional(std::filesystem::path verifyFile) {
@@ -58,43 +58,43 @@ TlsConfig& TlsConfig::setClientCertificatePolicy(TlsClientCertificatePolicy poli
     return *this;
 }
 
-TlsConfig& TlsConfig::addSniIdentity(std::string_view host, TlsIdentity identity) {
-    detail::ensureSniHost(host, "SNI host must not be empty", "SNI host is invalid");
+TlsConfig& TlsConfig::addSniIdentity(TlsSniIdentityOptions options) {
+    detail::ensureSniHost(options.host, "SNI host must not be empty", "SNI host is invalid");
     for (const auto& configured : sniIdentities_) {
-        if (asciiEqualsIgnoreCase(configured.host(), host)) {
+        if (asciiEqualsIgnoreCase(configured.host(), options.host)) {
             throw std::invalid_argument("SNI hosts must be unique");
         }
     }
-    sniIdentities_.push_back(TlsSniIdentity(std::string(host), std::move(identity)));
+    sniIdentities_.push_back(TlsSniIdentity(std::move(options.host), std::move(options.identity)));
     return *this;
 }
 
-ListenerConfig ListenerConfig::http(std::string_view address, std::uint16_t port) {
-    if (address.empty()) {
+ListenerConfig ListenerConfig::http(HttpListenerOptions options) {
+    if (options.address.empty()) {
         throw std::invalid_argument("HTTP listen address must not be empty");
     }
-    detail::ensureNonZeroPort(port, "HTTP listen port must not be zero");
-    return ListenerConfig(Http{std::string(address), port});
+    detail::ensureNonZeroPort(options.port, "HTTP listen port must not be zero");
+    return ListenerConfig(Http{std::move(options.address), options.port});
 }
 
-ListenerConfig ListenerConfig::https(std::string_view address, std::uint16_t port, TlsConfig tls) {
-    if (address.empty()) {
+ListenerConfig ListenerConfig::https(HttpsListenerOptions options) {
+    if (options.address.empty()) {
         throw std::invalid_argument("HTTPS listen address must not be empty");
     }
-    detail::ensureNonZeroPort(port, "HTTPS listen port must not be zero");
-    return ListenerConfig(Https{std::string(address), port, std::move(tls)});
+    detail::ensureNonZeroPort(options.port, "HTTPS listen port must not be zero");
+    return ListenerConfig(Https{std::move(options.address), options.port, std::move(options.tls)});
 }
 
-ListenerConfig ListenerConfig::redirectHttpToHttps(std::string_view address, std::uint16_t port, std::uint16_t targetHttpsPort) {
-    if (address.empty()) {
+ListenerConfig ListenerConfig::redirectHttpToHttps(RedirectHttpToHttpsListenerOptions options) {
+    if (options.address.empty()) {
         throw std::invalid_argument("HTTP redirect listen address must not be empty");
     }
-    detail::ensureNonZeroPort(port, "HTTP redirect listen port must not be zero");
-    detail::ensureNonZeroPort(targetHttpsPort, "HTTPS redirect target port must not be zero");
-    if (port == targetHttpsPort) {
+    detail::ensureNonZeroPort(options.port, "HTTP redirect listen port must not be zero");
+    detail::ensureNonZeroPort(options.targetHttpsPort, "HTTPS redirect target port must not be zero");
+    if (options.port == options.targetHttpsPort) {
         throw std::invalid_argument("HTTP redirect and HTTPS target ports must be different");
     }
-    return ListenerConfig(RedirectHttpToHttps{std::string(address), port, targetHttpsPort});
+    return ListenerConfig(RedirectHttpToHttps{std::move(options.address), options.port, options.targetHttpsPort});
 }
 
 }  // namespace ruvia

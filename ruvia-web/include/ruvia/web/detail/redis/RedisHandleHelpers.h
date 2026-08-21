@@ -22,6 +22,8 @@ namespace ruvia::detail {
 void throwIfRedisError(const RedisValue& value);
 void throwIfRedisTransactionReplyError(const RedisValue& value, std::size_t index);
 [[nodiscard]] bool validateRedisPooledCommand(std::span<const std::string_view> args, bool allowBlocking);
+[[nodiscard]] bool redisSetReturnsPrevious(RedisSetPreviousValuePolicy policy);
+[[nodiscard]] bool redisXReadGroupUsesNoAck(RedisXReadGroupAcknowledgementPolicy policy);
 
 [[nodiscard]] std::pmr::vector<std::pmr::string> ownRedisArgs(std::span<const std::string_view> args, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::vector<std::pmr::string> ownRedisArgs(std::initializer_list<std::string_view> args, std::pmr::memory_resource* resource);

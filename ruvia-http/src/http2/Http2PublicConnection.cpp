@@ -439,8 +439,8 @@ Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2Role 
     : impl_(std::make_unique<Impl>(resource, role)) {
     impl_->connection.beginConnection();
 }
-Http2Connection Http2Connection::server(std::pmr::memory_resource* resource) { return Http2Connection(resource, Http2Role::kServer); }
-Http2Connection Http2Connection::client(std::pmr::memory_resource* resource) { return Http2Connection(resource, Http2Role::kClient); }
+Http2Connection Http2Connection::server(Http2ConnectionOptions options) { return Http2Connection(options.resource, Http2Role::kServer); }
+Http2Connection Http2Connection::client(Http2ConnectionOptions options) { return Http2Connection(options.resource, Http2Role::kClient); }
 Http2Connection::~Http2Connection() = default;
 Http2Connection::Http2Connection(Http2Connection&&) noexcept = default;
 Http2Connection& Http2Connection::operator=(Http2Connection&&) noexcept = default;

@@ -45,7 +45,7 @@ struct OwnedHttpErrorInfo final {
     }
 
     OwnedHttpErrorInfo(std::pmr::memory_resource* resource, std::exception_ptr exception)
-        : OwnedHttpErrorInfo(HttpErrorInfo(ruvia::http_status::kInternalServerError, {}, "unhandled exception"), resource) {
+        : OwnedHttpErrorInfo(HttpErrorInfo({.status = ruvia::http_status::kInternalServerError, .message = "unhandled exception"}), resource) {
         assignExceptionError(*this, exception);
     }
 
@@ -60,7 +60,7 @@ struct OwnedHttpErrorInfo final {
         }
         validationIssues = std::move(copied);
 
-        info = HttpErrorInfo(source.status(), code, message, statusText, validationIssues);
+        info = HttpErrorInfo({.status = source.status(), .code = code, .message = message, .statusText = statusText, .validationIssues = validationIssues});
     }
 };
 
@@ -72,26 +72,26 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
     } catch (const ValidationError& error) {
         errorInfo.assign(error.info());
     } catch (const detail::UnsupportedRequestContentCoding& error) {
-        errorInfo.assign(HttpErrorInfo(HttpUnsupportedContentCoding::status(), "unsupported_content_coding", error.what()));
+        errorInfo.assign(HttpErrorInfo({.status = HttpUnsupportedContentCoding::status(), .code = "unsupported_content_coding", .message = error.what()}));
     } catch (const HttpError& error) {
         errorInfo.assign(error.info());
     } catch (const HttpProtocolError& error) {
-        errorInfo.assign(HttpErrorInfo(error.status(), {}, error.what()));
+        errorInfo.assign(HttpErrorInfo({.status = error.status(), .message = error.what()}));
     } catch (const BlockingOperationRejected& error) {
         // The blocking pool refused the work or the worker is going away. That
         // is capacity, not a bug in the request: answer it like any other
         // overload instead of a 500. The message is the framework's own and
         // names no application internals.
-        errorInfo.assign(HttpErrorInfo(ruvia::http_status::kServiceUnavailable, "blocking_pool_unavailable", error.what()));
+        errorInfo.assign(HttpErrorInfo({.status = ruvia::http_status::kServiceUnavailable, .code = "blocking_pool_unavailable", .message = error.what()}));
     } catch (const std::exception&) {
         // An unexpected exception (e.g. a database/library error) may carry
         // internal detail -- table names, query fragments, file paths. Do NOT echo
         // what() to the client: normalizeError renders a generic "Internal Server
         // Error" body. The exception_ptr is still set on the Context, so an onError
         // handler can log or inspect the full detail server-side.
-        errorInfo.assign(HttpErrorInfo(ruvia::http_status::kInternalServerError, {}, {}));
+        errorInfo.assign(HttpErrorInfo({.status = ruvia::http_status::kInternalServerError}));
     } catch (...) {
-        errorInfo.assign(HttpErrorInfo(ruvia::http_status::kInternalServerError, {}, {}));
+        errorInfo.assign(HttpErrorInfo({.status = ruvia::http_status::kInternalServerError}));
     }
 }
 
@@ -154,7 +154,7 @@ Task<HttpResponse> detail::RouteTable::handleError(Context& context, HttpErrorIn
 Task<HttpResponse> detail::RouteTable::handleNotFound(const HttpRequest& request, RequestMemory& memory, ContextServices services) const {
     const auto notFoundHandler = notFoundHandlerFor(request.path());
     if (notFoundHandler == nullptr && unmatchedMiddlewareCount_ == 0) {
-        co_return makeDefaultErrorResponse(memory.resource(), HttpErrorInfo(ruvia::http_status::kNotFound, {}, "route not found"));
+        co_return makeDefaultErrorResponse(memory.resource(), HttpErrorInfo({.status = ruvia::http_status::kNotFound, .message = "route not found"}));
     }
 
     auto context = detail::ContextAccess::make(memory, request, withRouteHandlers(services, *this, errorHandlerFor(request.path()), notFoundHandler));
@@ -163,7 +163,7 @@ Task<HttpResponse> detail::RouteTable::handleNotFound(const HttpRequest& request
     // before; wrapping it in the chain must not change which layer answers it.
     auto terminal = [this, notFoundHandler](Context& terminalContext) -> Task<HttpResponse> {
         if (notFoundHandler == nullptr) {
-            co_return makeDefaultErrorResponse(terminalContext.resource(), HttpErrorInfo(ruvia::http_status::kNotFound, {}, "route not found"));
+            co_return makeDefaultErrorResponse(terminalContext.resource(), HttpErrorInfo({.status = ruvia::http_status::kNotFound, .message = "route not found"}));
         }
         std::exception_ptr exception;
         try {

@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/Callback.h"
@@ -29,6 +30,16 @@ using HttpErrorHandler = detail::Callback<Task<HttpResponse>(Context&, HttpError
 
 // Answers a request that matched no route.
 using HttpNotFoundHandler = detail::Callback<Task<HttpResponse>(Context&)>;
+
+struct ScopedErrorHandlerOptions final {
+    BorrowedText prefix;
+    HttpErrorHandler handler{nullptr};
+};
+
+struct ScopedNotFoundHandlerOptions final {
+    BorrowedText prefix;
+    HttpNotFoundHandler handler{nullptr};
+};
 
 static_assert(sizeof(HttpErrorHandler) == 5 * sizeof(void*));
 static_assert(sizeof(HttpNotFoundHandler) == 5 * sizeof(void*));

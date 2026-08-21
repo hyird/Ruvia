@@ -11,6 +11,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <memory_resource>
 #include <semaphore>
 #include <stdexcept>
 #include <thread>
@@ -20,10 +21,27 @@
 template <typename T>
 concept HasRvalueWorkerBorrow = requires(T&& receiver) { std::move(receiver).worker(); };
 
+template <typename T>
+concept HasPositionalChannelFactory = requires(ruvia::WorkerHandle worker) {
+    ruvia::makeChannel<T>(worker, std::size_t{1});
+} || requires(ruvia::WorkerHandle worker, std::pmr::memory_resource* resource) {
+    ruvia::makeChannel<T>(worker, std::size_t{1}, resource);
+};
+
+template <typename T>
+concept HasChannelOptionsFactory = requires(ruvia::WorkerHandle worker) {
+    ruvia::makeChannel<T>(worker, ruvia::ChannelOptions{.capacity = 1});
+};
+
 static_assert(!std::is_default_constructible_v<ruvia::ChannelReceiver<int>>);
 static_assert(std::is_move_constructible_v<ruvia::ChannelReceiver<int>>);
 static_assert(!std::is_move_assignable_v<ruvia::ChannelReceiver<int>>);
 static_assert(!HasRvalueWorkerBorrow<ruvia::ChannelReceiver<int>>);
+static_assert(std::is_aggregate_v<ruvia::ChannelOptions>);
+static_assert(std::same_as<decltype(ruvia::ChannelOptions{}.capacity), std::size_t>);
+static_assert(std::same_as<decltype(ruvia::ChannelOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(HasChannelOptionsFactory<int>);
+static_assert(!HasPositionalChannelFactory<int>);
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::ChannelReceiver<int>&>().receive(std::declval<ruvia::StopToken>())), ruvia::Task<ruvia::WorkerWaitResult<int>>>);
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::ChannelReceiver<int>&>().receiveFor(std::chrono::seconds(1), std::declval<ruvia::StopToken>())), ruvia::Task<ruvia::WorkerWaitResult<int>>>);
 
@@ -77,7 +95,7 @@ ruvia::Task<void> receiveAfterLateCancellation(ruvia::ChannelReceiver<int>& rece
 }
 
 ruvia::Task<ruvia::WorkerWaitResult<int>> makeColdReceiveAfterReceiverClose(ruvia::WorkerHandle worker, bool timed) {
-    auto [sender, receiver] = ruvia::makeChannel<int>(std::move(worker), 1);
+    auto [sender, receiver] = ruvia::makeChannel<int>(std::move(worker), {.capacity = 1});
     if (timed) {
         return receiver.receiveFor(std::chrono::seconds(1));
     }
@@ -93,7 +111,7 @@ ruvia::Task<void> verifyColdReceiverTasks(ruvia::Task<ruvia::WorkerWaitResult<in
 ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     {
         ruvia::StopSource source;
-        auto [cancelSender, cancelReceiver] = ruvia::makeChannel<int>(worker, 1);
+        auto [cancelSender, cancelReceiver] = ruvia::makeChannel<int>(worker, {.capacity = 1});
         std::binary_semaphore receiverScheduled{0};
         std::thread stopper([&] {
             receiverScheduled.acquire();
@@ -114,7 +132,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     {
         ruvia::StopSource source;
         source.requestStop();
-        auto [cancelSender, cancelReceiver] = ruvia::makeChannel<int>(worker, 1);
+        auto [cancelSender, cancelReceiver] = ruvia::makeChannel<int>(worker, {.capacity = 1});
         const auto cancelled = co_await cancelReceiver.receive(source.token());
         if (cancelled.status() != ruvia::WorkerWaitStatus::kCancelled) {
             co_return;
@@ -123,7 +141,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
 
     {
         ruvia::StopSource source;
-        auto [lateSender, lateReceiver] = ruvia::makeChannel<int>(worker, 1);
+        auto [lateSender, lateReceiver] = ruvia::makeChannel<int>(worker, {.capacity = 1});
         bool generationSafe = false;
         ruvia::TaskScope scope(worker);
         scope.spawn(receiveAfterLateCancellation(lateReceiver, source.token(), generationSafe));
@@ -142,7 +160,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
         }
     }
 
-    auto [sender, receiver] = ruvia::makeChannel<int>(worker, 2);
+    auto [sender, receiver] = ruvia::makeChannel<int>(worker, {.capacity = 2});
     auto activeReceiver = std::move(receiver);
     const auto send1 = sender.send(1);
     const auto send2 = sender.send(2);
@@ -198,7 +216,7 @@ int main() {
         asio::io_context ioContext;
         const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
         const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
-        auto [sender, receiver] = ruvia::makeChannel<int>(worker, 1);
+        auto [sender, receiver] = ruvia::makeChannel<int>(worker, {.capacity = 1});
         if (!sender.send(9).accepted()) {
             return 1;
         }
@@ -218,7 +236,7 @@ int main() {
         asio::io_context ioContext;
         const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
         const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
-        auto [sender, receiver] = ruvia::makeChannel<ThrowingMove>(worker, 1);
+        auto [sender, receiver] = ruvia::makeChannel<ThrowingMove>(worker, {.capacity = 1});
         std::binary_semaphore receiverScheduled{0};
         asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(receiveThrowingMove(receiver, recoveredValue)), asio::detached);
         asio::post(ioContext, [&receiverScheduled] { receiverScheduled.release(); });

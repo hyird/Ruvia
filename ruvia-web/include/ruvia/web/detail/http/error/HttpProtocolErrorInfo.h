@@ -15,7 +15,7 @@ namespace ruvia::detail {
     const std::string_view message(error.what());
     auto* storage = static_cast<char*>(resource->allocate(message.size(), alignof(char)));
     std::memcpy(storage, message.data(), message.size());
-    return HttpErrorInfo(error.status(), {}, std::string_view(storage, message.size()));
+    return HttpErrorInfo({.status = error.status(), .message = std::string_view(storage, message.size())});
 }
 
 }  // namespace ruvia::detail

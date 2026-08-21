@@ -72,7 +72,7 @@ template <typename Function>
 }  // namespace
 
 RUVIA_TEST(response_body_has_one_storage_alternative) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
 
     RUVIA_CHECK(responseBody(response).empty() != nullptr);
     RUVIA_CHECK_EQ(activeAlternativeCount(responseBody(response)), std::size_t{1});
@@ -101,7 +101,7 @@ RUVIA_TEST(response_body_has_one_storage_alternative) {
 }
 
 RUVIA_TEST(response_public_body_owns_its_source) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     std::string source = "owned copy";
 
     response.body(source);
@@ -113,7 +113,7 @@ RUVIA_TEST(response_public_body_owns_its_source) {
 }
 
 RUVIA_TEST(response_body_materializes_only_ephemeral_borrow) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     std::string source = "ephemeral";
     setResponseBodyBorrowedView(response, source);
 
@@ -131,7 +131,7 @@ RUVIA_TEST(response_body_materializes_only_ephemeral_borrow) {
 }
 
 RUVIA_TEST(response_body_file_view_is_atomic_and_non_default) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     const std::filesystem::path ownedPath("owned-fixture.bin");
     setResponseFileBody(response, ownedPath, 20, 5, 7);
 
@@ -177,7 +177,7 @@ RUVIA_TEST(response_body_file_view_is_atomic_and_non_default) {
 }
 
 RUVIA_TEST(response_body_file_transition_validates_before_replacement) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.body("preserved");
 
     RUVIA_CHECK(throwsInvalidArgument([&] { setResponseFileBody(response, std::filesystem::path{}, 10); }));
@@ -189,8 +189,8 @@ RUVIA_TEST(response_body_file_transition_validates_before_replacement) {
 RUVIA_TEST(response_body_move_preserves_active_alternative) {
     std::pmr::monotonic_buffer_resource sourceResource;
     std::pmr::monotonic_buffer_resource targetResource;
-    HttpResponse source(&sourceResource);
-    HttpResponse target(&targetResource);
+    HttpResponse source({.resource = &sourceResource});
+    HttpResponse target({.resource = &targetResource});
     source.body("move-owned");
     setResponseBodyBorrowedView(target, "replaced");
 

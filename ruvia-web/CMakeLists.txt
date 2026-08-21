@@ -25,6 +25,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Testing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/WebWorker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/CookieSignature.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClient.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientHandle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientHttp1.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientHttp2.cpp
@@ -61,10 +62,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSessionEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSendWindow.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/DataAccess.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/DataAccessDefinitions.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/DataAccessServiceState.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/DataAccessState.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/WorkerDataState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ratelimit/RateLimitDecision.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/PathSegments.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/Router.cpp
@@ -90,14 +88,15 @@ set(RUVIA_WEB_SOURCES
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     list(APPEND RUVIA_WEB_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbClient.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHandle.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbStreamResult.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTransaction.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPreparedStatement.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHostResolution.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMigration.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPreparedStatement.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbRegistry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSlotSocket.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbStreamResult.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTransaction.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTypes.cpp)
 endif()
 
@@ -107,7 +106,7 @@ if(RUVIA_ENABLE_MARIADB)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMysqlRuntime.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolIo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolLifecycle.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSql.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSql.cpp)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL)

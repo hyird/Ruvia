@@ -18,6 +18,11 @@ namespace ruvia::detail {
 
 enum class UrlDecodeMode : std::uint8_t { kPercent, kForm };
 
+struct UrlDecodeOptions final {
+    UrlDecodeMode mode{UrlDecodeMode::kPercent};
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 [[nodiscard]] inline bool hasUrlEncoding(std::string_view value, UrlDecodeMode mode) noexcept {
     return std::ranges::any_of(value, [mode](char c) noexcept { return c == '%' || (mode == UrlDecodeMode::kForm && c == '+'); });
 }
@@ -55,12 +60,12 @@ enum class UrlDecodeMode : std::uint8_t { kPercent, kForm };
 // Returns the complete decoded component or no value for malformed percent
 // encoding. The caller never supplies mutable storage, so a failure cannot
 // expose the prefix decoded before the bad escape.
-[[nodiscard]] inline std::optional<std::pmr::string> decodeUrlComponent(std::string_view input, UrlDecodeMode mode, std::pmr::memory_resource* resource) {
-    std::pmr::string output(httpPmrResourceOrDefault(resource));
+[[nodiscard]] inline std::optional<std::pmr::string> decodeUrlComponent(std::string_view input, UrlDecodeOptions options = {}) {
+    std::pmr::string output(httpPmrResourceOrDefault(options.resource));
     output.reserve(input.size());
     for (std::size_t i = 0; i < input.size(); ++i) {
         const char c = input[i];
-        if (mode == UrlDecodeMode::kForm && c == '+') {
+        if (options.mode == UrlDecodeMode::kForm && c == '+') {
             output.push_back(' ');
             continue;
         }

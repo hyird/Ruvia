@@ -30,7 +30,7 @@ template <typename Visitor>
             return dispatchJsonObjectFieldVisitor(visitorRef, name, value);
         }
 
-        auto decodedName = decodeUrlComponent(name, UrlDecodeMode::kForm, resource);
+        auto decodedName = decodeUrlComponent(name, {.mode = UrlDecodeMode::kForm, .resource = resource});
         if (!decodedName.has_value()) {
             valid = false;
             return false;

@@ -86,8 +86,8 @@ RUVIA_TEST(http_client_identity_content_decode_accepts_a_null_resource) {
 }
 
 RUVIA_TEST(http_client_content_decode_consumes_concatenated_gzip_members) {
-    auto firstEncoding = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, "first-", 1024, std::pmr::get_default_resource());
-    auto secondEncoding = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, "second", 1024, std::pmr::get_default_resource());
+    auto firstEncoding = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, "first-", {.maxEncodedBytes = 1024, .resource = std::pmr::get_default_resource()});
+    auto secondEncoding = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, "second", {.maxEncodedBytes = 1024, .resource = std::pmr::get_default_resource()});
     RUVIA_CHECK(firstEncoding.encoded() != nullptr);
     RUVIA_CHECK(secondEncoding.encoded() != nullptr);
     if (firstEncoding.encoded() == nullptr || secondEncoding.encoded() == nullptr) {

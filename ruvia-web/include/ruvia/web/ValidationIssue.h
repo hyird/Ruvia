@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/http/BorrowedText.h"
 
 namespace ruvia {
 
@@ -14,6 +15,13 @@ class Validator;
 namespace detail {
 struct ValidationIssueAccess;
 }
+
+struct ValidationIssueOptions final {
+    BorrowedText field;
+    BorrowedText code;
+    BorrowedText message;
+    std::pmr::memory_resource* resource{nullptr};
+};
 
 class ValidationIssue final {
 public:
@@ -37,8 +45,8 @@ private:
     friend class Validator;
     friend struct detail::ValidationIssueAccess;
 
-    ValidationIssue(std::string_view fieldName, std::string_view codeValue, std::string_view messageValue, std::pmr::memory_resource* resource = nullptr)
-        : ValidationIssue(detail::ResolvedPmrResourceTag{}, fieldName, codeValue, messageValue, detail::pmrResourceOrDefault(resource)) {}
+    explicit ValidationIssue(ValidationIssueOptions options)
+        : ValidationIssue(detail::ResolvedPmrResourceTag{}, options.field.view(), options.code.view(), options.message.view(), detail::pmrResourceOrDefault(options.resource)) {}
 
     ValidationIssue(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : field_(resource),
@@ -59,7 +67,7 @@ namespace detail {
 
 struct ValidationIssueAccess final {
     [[nodiscard]] static ValidationIssue copy(const ValidationIssue& issue, std::pmr::memory_resource* resource) {
-        return ValidationIssue(issue.field(), issue.code(), issue.message(), resource);
+        return ValidationIssue({.field = issue.field(), .code = issue.code(), .message = issue.message(), .resource = resource});
     }
 };
 

@@ -8,13 +8,14 @@ Task<void> WebSocketConnection<Transport>::write(WebSocketOpcode opcode, std::st
 }
 
 template <typename Transport>
-Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string_view reason) {
+Task<void> WebSocketConnection<Transport>::close(::ruvia::WebSocketCloseOptions options) {
     co_await waitForHeartbeatWrite();
+    const auto reason = options.reason.view();
     bool flushOutput = false;
     bool awaitPeerClose = false;
     {
         WriteGuard writeGuard(*this, WritePhase::kApplication);
-        switch (protocol_.submitClose(code, reason)) {
+        switch (protocol_.submitClose(options.code, reason)) {
             case WsCloseSubmitStatus::kAccepted:
                 flushOutput = true;
                 awaitPeerClose = true;

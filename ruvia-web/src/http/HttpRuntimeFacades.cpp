@@ -71,8 +71,9 @@ ruvia::Task<void> writeWebSocketPayload(void* target, ruvia::Task<void> (*write)
     co_await write(target, opcode, payload);
 }
 
-ruvia::Task<void> closeWebSocketWithReason(void* target, ruvia::Task<void> (*close)(void*, std::uint16_t, std::string_view), std::uint16_t code, std::pmr::string reason) {
-    co_await close(target, code, reason);
+ruvia::Task<void> closeWebSocketWithReason(void* target, ruvia::Task<void> (*close)(void*, ruvia::WebSocketCloseOptions), ruvia::WebSocketCloseOptions options, std::pmr::string reason) {
+    options.reason = reason;
+    co_await close(target, options);
 }
 
 }  // namespace
@@ -225,10 +226,10 @@ ScopedOperation<void> WebSocket::ping(std::pmr::string&& payload) {
     return write(WebSocketOpcode::kPing, std::move(payload));
 }
 
-ScopedOperation<void> WebSocket::close(std::uint16_t code, std::string_view reason) {
+ScopedOperation<void> WebSocket::close(WebSocketCloseOptions options) {
     requireActive();
-    std::pmr::string owned(reason, detail::processResource());
-    return detail::makeScopedOperation(operationScope_, closeWebSocketWithReason(target_, close_, code, std::move(owned)));
+    std::pmr::string owned(options.reason.view(), detail::processResource());
+    return detail::makeScopedOperation(operationScope_, closeWebSocketWithReason(target_, close_, options, std::move(owned)));
 }
 
 void WebSocket::abort() noexcept {
@@ -251,7 +252,7 @@ ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::pmr::string&
 
 ScopedOperation<void> SseWriter::write(const SseMessage& message) {
     auto& streamWriter = writer();
-    auto frame = formatSseMessage(message, detail::processResource());
+    auto frame = formatSseMessage(message, {.resource = detail::processResource()});
     return streamWriter.write(std::move(frame));
 }
 

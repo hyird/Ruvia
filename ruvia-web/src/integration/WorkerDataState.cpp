@@ -1,19 +1,14 @@
-#include "ruvia/web/detail/integration/DataAccessState.h"
+#include "ruvia/web/detail/integration/WorkerDataState.h"
 
 #include <memory>
-#include <utility>
 
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 
-// The worker-local owner of the database and Redis registries: one per worker,
-// connected and closed with that worker, and reachable from a Context without
-// any HTTP or App dependency.
-
 namespace ruvia::detail {
 
-class DataAccessState::Impl final {
+class WorkerDataState::Impl final {
 public:
     Impl(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const DbDefinition> databaseDefinitions, std::span<const RedisDefinition> redisDefinitions, ConnectionScanner& scanner)
         : databases(ioContext, resource, databaseDefinitions, &worker),
@@ -32,12 +27,12 @@ public:
     ConnectionScanner::WorkerMaintenanceRegistration redisDeadlineCheck;
 };
 
-DataAccessState::DataAccessState(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, ConnectionScanner& scanner)
+WorkerDataState::WorkerDataState(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, ConnectionScanner& scanner)
     : impl_(std::make_unique<Impl>(ioContext, worker, resource, databases, redis, scanner)) {}
 
-DataAccessState::~DataAccessState() = default;
+WorkerDataState::~WorkerDataState() = default;
 
-Task<void> DataAccessState::connect() {
+Task<void> WorkerDataState::connect() {
     try {
         if (!impl_->databases.empty()) {
             co_await impl_->databases.connect();
@@ -51,28 +46,28 @@ Task<void> DataAccessState::connect() {
     }
 }
 
-void DataAccessState::closeNow() noexcept {
+void WorkerDataState::closeNow() noexcept {
     impl_->redis.closeNow();
     impl_->databases.closeNow();
 }
 
-bool DataAccessState::hasMaintenance() const noexcept {
+bool WorkerDataState::hasMaintenance() const noexcept {
     return impl_->databases.needsDeadlineScan() || impl_->redis.needsDeadlineScan();
 }
 
-DbRegistry& DataAccessState::databases() noexcept {
+DbRegistry& WorkerDataState::databases() noexcept {
     return impl_->databases;
 }
 
-const DbRegistry& DataAccessState::databases() const noexcept {
+const DbRegistry& WorkerDataState::databases() const noexcept {
     return impl_->databases;
 }
 
-RedisRegistry& DataAccessState::redis() noexcept {
+RedisRegistry& WorkerDataState::redis() noexcept {
     return impl_->redis;
 }
 
-const RedisRegistry& DataAccessState::redis() const noexcept {
+const RedisRegistry& WorkerDataState::redis() const noexcept {
     return impl_->redis;
 }
 

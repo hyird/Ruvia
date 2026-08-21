@@ -120,8 +120,7 @@ public:
     // and wire framing remain the protocol driver's responsibility. Pass
     // DocumentRootBinding::none() when no root is configured,
     // DocumentRootBinding::standalone(root) for an immutable root, or
-    // DocumentRootBinding::configured(root, runtimeOptions) for a server-owned
-    // root with live-reload policy.
+    // DocumentRootBinding::configured(root) for a server-owned refreshing root.
     Task<HttpResponse> dispatchBufferedResponse(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, DocumentRootBinding documentRoot, ContextServices services = {}, StaticFileSelectionMode staticFileMode = StaticFileSelectionMode::kIdentityOnly) const;
     Task<HttpResponse> handleError(const HttpRequest& request, RequestMemory& memory, HttpErrorInfo error, ContextServices services = {}) const;
     Task<HttpResponse> handleException(const HttpRequest& request, RequestMemory& memory, std::exception_ptr exception, ContextServices services = {}) const;

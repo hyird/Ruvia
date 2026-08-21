@@ -91,7 +91,7 @@ static_assert(!ExposesAnyRvalueModelBoxedArrayBorrow<ruvia::BoxedArray<ruvia::In
 RUVIA_TEST(model_list_clear_and_destructor_release_owned_elements) {
     CountingMemoryResource resource;
     {
-        ruvia::BoxedArray<TrackedValue> values(&resource);
+        ruvia::BoxedArray<TrackedValue> values({.resource = &resource});
         values.emplace(1);
         values.emplace(2);
         RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{2});
@@ -113,11 +113,11 @@ RUVIA_TEST(model_list_move_assignment_transfers_element_resource) {
     CountingMemoryResource sourceResource;
     CountingMemoryResource targetResource;
     {
-        ruvia::BoxedArray<TrackedValue> source(&sourceResource);
+        ruvia::BoxedArray<TrackedValue> source({.resource = &sourceResource});
         source.emplace(4);
         source.emplace(5);
 
-        ruvia::BoxedArray<TrackedValue> target(&targetResource);
+        ruvia::BoxedArray<TrackedValue> target({.resource = &targetResource});
         target.emplace(9);
         RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{3});
 

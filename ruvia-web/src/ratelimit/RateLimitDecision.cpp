@@ -43,7 +43,7 @@ void setUnsignedHeader(HttpResponse& response, std::string_view name, std::uint6
 }  // namespace
 
 HttpErrorInfo rateLimitRejectionError() noexcept {
-    return HttpErrorInfo(ruvia::http_status::kTooManyRequests, "too_many_requests", "rate limit exceeded");
+    return HttpErrorInfo({.status = ruvia::http_status::kTooManyRequests, .code = "too_many_requests", .message = "rate limit exceeded"});
 }
 
 void applyRateLimitRejectionHeaders(HttpResponse& response, const RateLimitRejection& rejection) {
@@ -66,7 +66,12 @@ bool applyRouteRateLimit(Context& context, const RouteRateLimitOptions& options)
     }
 
     const auto error = rateLimitRejectionError();
-    auto response = context.error(error.status(), error.code(), error.message(), error.statusText());
+    auto response = context.error({
+        .status = error.status(),
+        .code = error.code(),
+        .message = error.message(),
+        .statusText = error.statusText(),
+    });
     applyRouteRateLimitRejectionHeaders(response, *rejection, options.rule.maxRequests());
     context.respond(std::move(response));
     return false;

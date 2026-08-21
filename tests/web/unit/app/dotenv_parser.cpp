@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <cstdint>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/web/detail/app/EnvState.h"
@@ -17,7 +18,19 @@ using ruvia::detail::readDotenvEntries;
 template <typename T>
 concept ExposesAnyRvalueEnvBorrow = requires { std::declval<const T&&>().get("NAME"); } || requires { std::declval<const T&&>().template get<std::string_view>("NAME"); };
 
+template <typename T>
+concept HasDotenvOverrideExistingBoolean = requires(T& options) { options.overrideExisting; };
+
+template <typename T>
+concept HasDotenvRequiredBoolean = requires(T& options) { options.required; };
+
 static_assert(!ExposesAnyRvalueEnvBorrow<ruvia::Env>);
+static_assert(std::is_same_v<decltype(ruvia::DotenvOptions{}.existingVariables), ruvia::DotenvExistingVariablePolicy>);
+static_assert(std::is_same_v<decltype(ruvia::DotenvOptions{}.missingFile), ruvia::DotenvMissingFilePolicy>);
+static_assert(ruvia::DotenvOptions{}.existingVariables == ruvia::DotenvExistingVariablePolicy::kPreserve);
+static_assert(ruvia::DotenvOptions{}.missingFile == ruvia::DotenvMissingFilePolicy::kIgnore);
+static_assert(!HasDotenvOverrideExistingBoolean<ruvia::DotenvOptions>);
+static_assert(!HasDotenvRequiredBoolean<ruvia::DotenvOptions>);
 
 std::filesystem::path writeTempEnv(std::string_view name, std::string_view contents) {
     const auto path = std::filesystem::temp_directory_path() / name;
@@ -216,4 +229,70 @@ RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
         badInfThrew = std::string_view(error.what()).find("BAD_INF") != std::string_view::npos;
     }
     RUVIA_CHECK(badInfThrew);
+}
+
+RUVIA_TEST(dotenv_options_use_explicit_policies) {
+    const auto first = writeTempEnv("ruvia_dotenv_policy_first.env", "KEY=first\n");
+    const auto second = writeTempEnv("ruvia_dotenv_policy_second.env", "KEY=second\nNEW=value\n");
+    const auto missing = std::filesystem::temp_directory_path() / "ruvia_dotenv_policy_missing.env";
+    std::filesystem::remove(missing);
+
+    ruvia::Env env;
+    const auto initial = ruvia::detail::loadEnvFromFile(env, first, {});
+    RUVIA_CHECK(initial.loaded());
+    RUVIA_CHECK_EQ(initial.variablesSet(), std::size_t{1});
+    RUVIA_CHECK_EQ(env.get("KEY").value_or(""), std::string_view("first"));
+
+    const auto preserved = ruvia::detail::loadEnvFromFile(env, second, {});
+    RUVIA_CHECK_EQ(preserved.variablesSet(), std::size_t{1});
+    RUVIA_CHECK_EQ(preserved.variablesSkipped(), std::size_t{1});
+    RUVIA_CHECK_EQ(env.get("KEY").value_or(""), std::string_view("first"));
+    RUVIA_CHECK_EQ(env.get("NEW").value_or(""), std::string_view("value"));
+
+    const auto overridden = ruvia::detail::loadEnvFromFile(
+        env,
+        second,
+        {.existingVariables = ruvia::DotenvExistingVariablePolicy::kOverride});
+    RUVIA_CHECK_EQ(overridden.variablesSet(), std::size_t{2});
+    RUVIA_CHECK_EQ(overridden.variablesSkipped(), std::size_t{0});
+    RUVIA_CHECK_EQ(env.get("KEY").value_or(""), std::string_view("second"));
+
+    const auto ignoredMissing = ruvia::detail::loadEnvFromFile(env, missing, {});
+    RUVIA_CHECK(!ignoredMissing.loaded());
+
+    bool requiredMissingThrew = false;
+    try {
+        (void)ruvia::detail::loadEnvFromFile(
+            env,
+            missing,
+            {.missingFile = ruvia::DotenvMissingFilePolicy::kRequire});
+    } catch (const std::runtime_error&) {
+        requiredMissingThrew = true;
+    }
+    RUVIA_CHECK(requiredMissingThrew);
+
+    bool invalidExistingPolicyThrew = false;
+    try {
+        (void)ruvia::detail::loadEnvFromFile(
+            env,
+            first,
+            {.existingVariables = static_cast<ruvia::DotenvExistingVariablePolicy>(0xFF)});
+    } catch (const std::invalid_argument&) {
+        invalidExistingPolicyThrew = true;
+    }
+    RUVIA_CHECK(invalidExistingPolicyThrew);
+
+    bool invalidMissingPolicyThrew = false;
+    try {
+        (void)ruvia::detail::loadEnvFromFile(
+            env,
+            first,
+            {.missingFile = static_cast<ruvia::DotenvMissingFilePolicy>(0xFF)});
+    } catch (const std::invalid_argument&) {
+        invalidMissingPolicyThrew = true;
+    }
+    RUVIA_CHECK(invalidMissingPolicyThrew);
+
+    std::filesystem::remove(first);
+    std::filesystem::remove(second);
 }
