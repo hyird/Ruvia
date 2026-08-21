@@ -457,7 +457,7 @@ wakes a waiting thread; it never spawns one per call.
 
 ```cpp
 ruvia::app().setBlockingPool(ruvia::BlockingPoolOptions{
-    .threadCount = 8,     // 0 selects hardware_concurrency()
+    .threadCount = 8,     // 0 selects half the logical CPUs, clamped to 2..8
     .queueCapacity = 512, // 0 selects threadCount * 64
 });
 
@@ -502,10 +502,26 @@ must remain self-contained. Call `BlockingPool::join()` explicitly when an
 owner needs a completion barrier. `BlockingPool` is a `ruvia::core` type and
 can be used directly outside Web; both layers use `runBlocking(...)` for the
 throwing form and `tryRunBlocking(...)` for the status-returning form.
-`App::setBlockingPool()` is absent by default: an application that never
-offloads should not pay for idle threads.
+`App` creates a blocking pool by default using half the logical CPUs, clamped
+to 2..8 threads, with 64 queued tasks per thread. Pass `std::nullopt` to
+`App::setBlockingPool()` when an application intentionally needs no offload
+capacity and should not pay for idle threads. Large buffered responses then
+compress synchronously on their worker when response compression is enabled.
 
 ## Static Files and Compression
+
+Response compression is disabled by default. Enable negotiated gzip, Brotli,
+or zstd explicitly with `setCompression(CompressionConfig{})`; pass
+`std::nullopt` to disable it again.
+
+Buffered API responses use one bounded policy: bodies below `minBytes` remain
+identity, bodies through `syncBytes` are compressed on the worker, bodies
+through `maxBytes` are compressed on the default bounded blocking pool, and
+larger bodies remain identity. The defaults are 1 KiB, 64 KiB, and 64 MiB.
+If the pool is explicitly disabled, bodies through `maxBytes` are compressed
+synchronously instead. Rejection by an enabled pool falls back to identity.
+Whenever a policy fallback would use identity but the client forbids it, the
+result is `406 Not Acceptable`.
 
 `DocumentRootConfig` builds a static-root index at startup. The default
 `DocumentRootRefreshMode::kImmutable` keeps requests on the index and does not
@@ -517,14 +533,16 @@ poll increments `App::httpStats().documentRootRefreshFailures` without stopping
 the worker:
 
 ```cpp
-ruvia::DocumentRootConfig documentRoot;
-documentRoot.root = "public";
-documentRoot.runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
-documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds(500);
-documentRoot.runtimeOptions.enableLiveReload = true;
+auto documentRoot = ruvia::DocumentRootConfig{
+    .root = "public",
+    .runtimeOptions = {
+        .refreshMode = ruvia::DocumentRootRefreshMode::kPolling,
+        .refreshInterval = std::chrono::milliseconds(500),
+        .enableLiveReload = true,
+    },
+};
 
 ruvia::app()
-    .setBlockingPool(ruvia::BlockingPoolOptions{.threadCount = 2})
     .setCompression(ruvia::CompressionConfig{})
     .setDocumentRoot(std::move(documentRoot))
     .run();
@@ -538,23 +556,20 @@ hidden by a hash collision.
 It is only valid with `DocumentRootRefreshMode::kPolling`; enabling it with
 the immutable refresh mode is rejected during server-option validation.
 
-Static files prefer checked-in `.br`, `.gz`, or `.zst` sidecars whose mtime is
-at least as new as the identity file; an older sidecar is ignored so an update
-cannot serve stale decoded bytes. If no usable sidecar is available, an accepted coding can be produced for a complete file no larger
-than `DocumentRootRuntimeOptions::onDemandCompressionMaxBytes` through the blocking
-pool, subject to `CompressionConfig::minBytes`. Ranges, large files, pool
-rejection, and a coding that would not make the representation smaller keep the
-original file response, preserving the zero-copy path. File or encoder failures
-remain server errors when identity is forbidden. `setCompression()` also enables incremental gzip, Brotli, or zstd for
-response streams; each handler write is flushed through the encoder so SSE and
-other low-latency streams do not wait for a full buffered response.
-When both a document root and compression are configured, file responses returned
-by `Context::staticFile()` and `Context::file()` use the same Accept-Encoding
-negotiation and deferred-compression stage as the document-root fallback. The
-response plan is finalized only after that stage, so HTTP/1 and HTTP/2 advertise
-the compressed length and framing consistently. A standalone `Context` created
-without server services keeps `staticFile()` strict and does not defer an
-unacceptable identity response.
+When compression is enabled, static files may select checked-in `.br`, `.gz`,
+or `.zst` sidecars whose mtime is at least as new as the identity file; an older
+sidecar is ignored so an update cannot serve stale decoded bytes. Static files
+never perform request-time compression and do not use the buffered-response
+size thresholds. Without a usable sidecar they retain the identity/zero-copy
+path when identity is acceptable, otherwise the response is `406 Not Acceptable`.
+Disabling compression also disables sidecar negotiation. `Context::file()`
+always serves the selected file as identity; `Context::staticFile()` and the
+document-root fallback can negotiate indexed sidecars when the server switch is
+enabled.
+
+`setCompression()` also enables incremental gzip, Brotli, or zstd for response
+streams; each handler write is flushed through the encoder so SSE and other
+low-latency streams do not wait for a full buffered response.
 An application-provided known `Content-Encoding` (including a stack composed only
 of known codings) is treated as an already-built representation and every coding
 must still be acceptable to the request's `Accept-Encoding`; otherwise the response

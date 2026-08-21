@@ -1,7 +1,8 @@
 // Protocol errors may be answered by the user error handler. If that handler
-// returns a file while deferred static-file compression is enabled, the HTTP/1
-// session must not dereference a response-coding selection that was never
-// negotiated because parsing failed before a complete request head existed.
+// returns a static file while precompressed static-file negotiation is enabled,
+// the HTTP/1 session must not dereference a response-coding selection that was
+// never negotiated because parsing failed before a complete request head
+// existed. No request-time file compression is involved.
 
 #include <cstdio>
 #include <chrono>
@@ -67,7 +68,7 @@ int main() {
 
     ruvia::detail::HttpServerOptions options;
     options.documentRoot.root = &root;
-    options.compression->minBytes = 1;
+    options.compression.emplace();
 
     ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
     server.start();

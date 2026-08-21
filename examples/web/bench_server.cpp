@@ -116,11 +116,10 @@ int main() {
     auto& app = ruvia::app();
     app.setListeners({topology}).setWorkersPerListener(4).setSignalShutdown(true).setMaxRequestsPerConnection(1u << 30).setMaxConnectionsPerWorker(20000);
 
-    // Response compression is on by default. Set NO_COMPRESSION=1 for an
-    // apples-to-apples comparison against servers that ship it off (so the
-    // per-response Accept-Encoding negotiation is not counted against Ruvia).
-    if (const char* noCompression = std::getenv("NO_COMPRESSION"); noCompression != nullptr && noCompression[0] == '1') {
-        app.setCompression(std::nullopt);
+    // Response compression is off by default. Enable it explicitly when the
+    // benchmark is intended to include negotiation and encoding work.
+    if (const char* compression = std::getenv("COMPRESSION"); compression != nullptr && compression[0] == '1') {
+        app.setCompression(ruvia::CompressionConfig{});
     }
 
     app.run();

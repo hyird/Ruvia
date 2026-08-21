@@ -36,7 +36,7 @@ inline Context::Context(RequestMemory& memory, const HttpRequest& request, std::
       routes_(services.routes()),
       workerStates_(services.workerStates()),
       blockingPool_(services.blockingPool()),
-      deferredStaticFileCompression_(services.deferredStaticFileCompression()),
+      precompressedStaticFiles_(services.precompressedStaticFiles()),
       routeRateLimitScope_(routeRateLimitScope),
       maxDecodedBodyBytes_(services.maxDecodedBodyBytes()),
       requestBodySource_(services.requestBodySource()),
@@ -67,8 +67,8 @@ struct ContextAccess final {
         return Context(memory, request, routePath, paramNames, paramValues, paramCount, routeRateLimitScope, services);
     }
 
-    [[nodiscard]] static HttpResponse staticFileForDeferredCompression(Context& context, const StaticRoot& root, std::string_view relativePath, std::string_view contentType = {}) {
-        return context.staticFile(root, relativePath, contentType, StaticFileSelectionMode::kAllowDeferredCompression);
+    [[nodiscard]] static HttpResponse staticFileWithPrecompressedVariants(Context& context, const StaticRoot& root, std::string_view relativePath, std::string_view contentType = {}) {
+        return context.staticFile(root, relativePath, contentType, StaticFileSelectionMode::kPrecompressed);
     }
 
     [[nodiscard]] static const HttpRequest& request(const Context& context) noexcept {

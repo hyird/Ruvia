@@ -38,7 +38,6 @@
 #include "ruvia/web/detail/server/request/RequestBodyLimit.h"
 #include "ruvia/web/detail/server/request/RequestMemoryArena.h"
 #include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
-#include "ruvia/web/detail/server/response/HttpStaticFileCompression.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
@@ -447,53 +446,32 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                     "response stream dispatch returned no HTTP/2 terminal alternative");
             }
         } else {
-            auto bufferedResult = co_await routes_->dispatchBufferedResponse(
+            response = co_await routes_->dispatchBufferedResponse(
                 request,
                 resolution,
                 requestMemory,
                 options.documentRoot.binding(),
                 dispatchServices,
-                baseServices.deferredStaticFileCompression() ? StaticFileSelectionMode::kAllowDeferredCompression : StaticFileSelectionMode::kStrict);
-            response = std::move(bufferedResult).takeResponse();
+                baseServices.precompressedStaticFiles() ? StaticFileSelectionMode::kPrecompressed : StaticFileSelectionMode::kIdentityOnly);
         }
 
-        if (baseServices.deferredStaticFileCompression() && responseBody(response).file().has_value()) {
-            const auto* const responseCodingSelection = responseCodingPolicy.selection();
-            if (responseCodingSelection != nullptr) {
-                const auto compressionResult = co_await tryCompressStaticFileResponse(
-                    response,
-                    *responseCodingSelection,
-                    request.knownMethod(),
-                    *options.compression,
-                    options.documentRoot.runtimeOptions.onDemandCompressionMaxBytes,
-                    options.blockingPool,
-                    baseServices.worker());
-                if (!compressionResult.compressed() && httpResponseNeedsNotAcceptable(responseCodingPolicy, request, response) && responseBody(response).file().has_value()) {
-                    response = co_await routes_->handleError(
-                        request,
-                        requestMemory,
-                        httpStaticFileCompressionError(compressionResult),
-                        requestServices);
-                }
-            }
-        }
     } while (false);
 
-    auto preparation = prepareBufferedHttpResponse(request, responseCodingPolicy, response, options);
+    auto preparation = co_await prepareBufferedHttpResponseAsync(request, responseCodingPolicy, response, options, baseServices.worker());
     if (const auto error = httpBufferedResponsePreparationError(responseCodingPolicy, request, response, preparation.compressionResult())) {
         response = co_await routes_->handleError(
             request,
             requestMemory,
             *error,
             requestServices);
-        preparation = prepareBufferedHttpResponse(request, responseCodingPolicy, response, options);
+        preparation = co_await prepareBufferedHttpResponseAsync(request, responseCodingPolicy, response, options, baseServices.worker());
         if (httpBufferedResponsePreparationError(responseCodingPolicy, request, response, preparation.compressionResult()).has_value()) {
             // The negotiated coding could not be installed even on the
             // generated terminal error. This is an explicit terminal error
             // representation, not a silent identity fallback of the original
             // application response.
             responseCodingPolicy = HttpResponseCodingPolicy::disabled();
-            preparation = prepareBufferedHttpResponse(request, responseCodingPolicy, response, options);
+            preparation = co_await prepareBufferedHttpResponseAsync(request, responseCodingPolicy, response, options, baseServices.worker());
         }
     }
     const auto writePlan = preparation.writePlan();

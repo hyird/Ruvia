@@ -11,6 +11,7 @@
 #include <type_traits>
 
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
+#include "ruvia/web/detail/app/AppState.h"
 #include "ruvia/web/App.h"
 
 namespace {
@@ -69,11 +70,39 @@ RUVIA_TEST(validate_server_options_accepts_defaults) {
     static_assert(std::same_as<decltype(HttpServerOptions{}.defaultRateLimitPerWorker), std::optional<ruvia::RateLimitRule>>);
     static_assert(std::same_as<decltype(HttpServerOptions{}.rateLimitSlotsPerWorker), std::size_t>);
     RUVIA_CHECK(!HttpServerOptions{}.maxStreamBodyBytes.has_value());
+    RUVIA_CHECK(!HttpServerOptions{}.compression.has_value());
+    RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.minBytes, std::size_t{1024});
+    RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.syncBytes, std::size_t{64} * 1024);
+    RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.maxBytes, std::size_t{64} * 1024 * 1024);
     RUVIA_CHECK_EQ(HttpServerOptions{}.rateLimitSlotsPerWorker, ruvia::kDefaultRateLimitSlotsPerWorker);
     // An unconfigured server is bounded by default against connection floods.
     RUVIA_CHECK(HttpServerOptions{}.maxConnections.has_value());
     RUVIA_CHECK_EQ(*HttpServerOptions{}.maxConnections, std::size_t{1024});
     RUVIA_CHECK(!throwsInvalid([] { validateHttpServerOptions(HttpServerOptions{}); }));
+}
+
+RUVIA_TEST(app_enables_a_bounded_blocking_pool_by_default) {
+    ruvia::detail::AppState state;
+    RUVIA_CHECK(state.blockingPool.has_value());
+    if (state.blockingPool.has_value()) {
+        RUVIA_CHECK_EQ(state.blockingPool->threadCount, std::size_t{0});
+        RUVIA_CHECK_EQ(state.blockingPool->queueCapacity, std::size_t{0});
+    }
+}
+
+RUVIA_TEST(validate_server_options_rejects_invalid_compression_thresholds) {
+    HttpServerOptions options;
+    options.compression = ruvia::CompressionConfig{.minBytes = 0};
+    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    options.compression = ruvia::CompressionConfig{.minBytes = 1024, .syncBytes = 512};
+    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    options.compression = ruvia::CompressionConfig{.minBytes = 1024, .syncBytes = 4096, .maxBytes = 2048};
+    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    options.compression = ruvia::CompressionConfig{};
+    RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerOptions(options); }));
 }
 
 RUVIA_TEST(validate_server_options_owns_document_root_runtime_policy) {

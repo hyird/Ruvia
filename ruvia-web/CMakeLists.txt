@@ -83,7 +83,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpConnectionState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpFileWrite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseCompression.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpStaticFileCompression.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerAccept.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/TrustedProxies.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerLifecycle.cpp

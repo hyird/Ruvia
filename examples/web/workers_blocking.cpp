@@ -118,10 +118,10 @@ int main() {
         // Each worker builds its own WorkerStats before serving; the factory
         // form (useWorkerState<T>(fn)) covers non-default-constructible types.
         .useWorkerState<WorkerStats>()
-        // One pool for the whole process, shared by every worker. Without it,
-        // runBlocking() reports the missing configuration instead of blocking
-        // a worker. App::blockingPoolStats() reports queue depth and rejections
-        // to size these two numbers from.
+        // One pool for the whole process, shared by every worker. App provides
+        // a bounded pool by default; this overrides its size for the example.
+        // App::blockingPoolStats() reports queue depth and rejections for
+        // production tuning.
         .setBlockingPool(ruvia::BlockingPoolOptions{
             .threadCount = 4,
             .queueCapacity = 128,

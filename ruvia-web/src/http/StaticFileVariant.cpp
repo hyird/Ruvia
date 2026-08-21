@@ -25,6 +25,10 @@ namespace {
 // resource. Index lookups only (no per-request filesystem stat).
 
 std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const StaticRoot& root, std::string_view relative, const HttpRequest& request, std::pmr::memory_resource* resource, detail::StaticRootEntryView identity, detail::StaticFileSelectionMode mode) {
+    if (mode == detail::StaticFileSelectionMode::kIdentityOnly) {
+        return StaticFileRepresentation(identity, HttpContentCoding::kIdentity);
+    }
+
     detail::HttpResponseCodingQualities qualities;
     for (const auto& header : request.headers()) {
         if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Accept-Encoding")) {
@@ -73,17 +77,6 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
         }
     }
 
-    // The document-root runtime may perform a complete-file compression pass
-    // after routing. Preserve the file descriptor as an identity response only
-    // for that explicitly deferred path; the protocol driver will either
-    // replace it with the selected coding or turn it into 406 if compression
-    // cannot produce an acceptable representation. Direct staticFile() calls
-    // stay strict and return no representation here.
-    const auto preferredResult = detail::HttpResponseCodingSelection::select(qualities);
-    const auto* preferred = preferredResult.selected();
-    if (mode == detail::StaticFileSelectionMode::kAllowDeferredCompression && preferred != nullptr && preferred->coding() != HttpContentCoding::kIdentity && !preferred->identityAccepted()) {
-        return StaticFileRepresentation(identity, HttpContentCoding::kIdentity);
-    }
     return std::nullopt;
 }
 

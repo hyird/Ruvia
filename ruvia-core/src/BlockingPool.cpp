@@ -22,7 +22,9 @@ namespace {
     if (requested != 0) {
         return requested;
     }
-    return std::max(std::size_t{1}, std::size_t{std::thread::hardware_concurrency()});
+    const auto hardwareThreads = std::size_t{std::thread::hardware_concurrency()};
+    const auto halfHardwareThreads = (hardwareThreads + 1) / 2;
+    return std::clamp(halfHardwareThreads, std::size_t{2}, std::size_t{8});
 }
 
 [[nodiscard]] std::size_t resolveQueueCapacity(std::size_t requested, std::size_t threadCount) noexcept {
