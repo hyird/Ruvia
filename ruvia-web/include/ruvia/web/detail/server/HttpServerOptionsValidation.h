@@ -28,7 +28,7 @@ inline void validateDocumentRootRuntimeOptions(const HttpServerOptions& options)
                 throw std::invalid_argument("document root polling requires a document root");
             }
             if (options.blockingPool == nullptr) {
-                throw std::invalid_argument("document root polling requires a blocking pool");
+                throw std::invalid_argument("document root polling cannot run while the blocking pool is disabled");
             }
             break;
         default:
@@ -49,6 +49,15 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
     ensurePositiveSize(options.maxWebSocketMessageBytes, "websocket message limit must be greater than 0");
     ensurePositiveOptionalSize(options.maxConnections, "configured connection limit must be greater than zero");
     ensurePositiveOptionalSize(options.maxRequestsPerConnection, "configured requests-per-connection limit must be greater than zero");
+    if (options.compression.has_value()) {
+        ensurePositiveSize(options.compression->minBytes, "compression minimum size must be greater than zero");
+        if (options.compression->syncBytes < options.compression->minBytes) {
+            throw std::invalid_argument("compression synchronous size must not be smaller than the minimum size");
+        }
+        if (options.compression->maxBytes < options.compression->syncBytes) {
+            throw std::invalid_argument("compression maximum size must not be smaller than the synchronous size");
+        }
+    }
     validateDocumentRootRuntimeOptions(options);
     if (const auto* tls = options.tls()) {
         validateHttpServerTlsIdentity(tls->identity);

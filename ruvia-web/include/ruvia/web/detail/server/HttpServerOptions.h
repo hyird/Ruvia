@@ -166,7 +166,7 @@ struct HttpServerOptions final {
     ListenerTransport transport;
     // Presence enables the policy; absence bypasses it without retaining an
     // inactive configuration state.
-    std::optional<CompressionConfig> compression{std::in_place};
+    std::optional<CompressionConfig> compression;
     std::optional<CorsOptions> cors;
     DocumentRoot documentRoot;
     // Peers whose forwarding headers may be believed. Empty by default, so an
@@ -176,9 +176,9 @@ struct HttpServerOptions final {
     TrustedProxySet trustedProxies;
     AccessLogSink accessLog;
     const Env* env{nullptr};
-    // Process-wide, owned by App::run() and shared by every worker. Null when
-    // the app configured no pool; Context::runBlocking() then reports the
-    // missing configuration instead of blocking the worker.
+    // Process-wide, owned by App::run() and shared by every worker. Null only
+    // when the app explicitly disabled the default pool; runBlocking() then
+    // reports that state instead of blocking the worker.
     BlockingPool* blockingPool{nullptr};
     WorkerFailureSink workerFailure;
     ConnectionFailureSink connectionFailure;

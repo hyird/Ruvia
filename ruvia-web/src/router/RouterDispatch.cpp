@@ -92,8 +92,8 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
 
     auto context = detail::ContextAccess::make(memory, request);
     try {
-        if (staticFileMode == detail::StaticFileSelectionMode::kAllowDeferredCompression) {
-            return detail::ContextAccess::staticFileForDeferredCompression(context, *root, relative);
+        if (staticFileMode == detail::StaticFileSelectionMode::kPrecompressed) {
+            return detail::ContextAccess::staticFileWithPrecompressedVariants(context, *root, relative);
         }
         return context.staticFile(*root, relative);
     } catch (const HttpError& error) {
@@ -132,17 +132,16 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchWebSocket(const Ht
 }
 
 Task<HttpResponse> detail::RouteTable::dispatch(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services) const {
-    auto result = co_await dispatchRequest(request, resolution, memory, services, DocumentRootBinding::none(), DispatchFailure::kPropagate, StaticFileSelectionMode::kStrict);
-    co_return std::move(result).takeResponse();
+    co_return co_await dispatchRequest(request, resolution, memory, services, DocumentRootBinding::none(), DispatchFailure::kPropagate, StaticFileSelectionMode::kIdentityOnly);
 }
 
-Task<detail::BufferedResponseDispatchResult> detail::RouteTable::dispatchRequest(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services, DocumentRootBinding documentRoot, DispatchFailure failure, StaticFileSelectionMode staticFileMode) const {
+Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services, DocumentRootBinding documentRoot, DispatchFailure failure, StaticFileSelectionMode staticFileMode) const {
     std::exception_ptr dispatchException;
     try {
         const auto* resolved = resolution.resolved();
         if (resolved == nullptr) {
             if (auto documentResponse = selectDocumentRootFallback(documentRoot, request, memory, staticFileMode)) {
-                co_return detail::BufferedResponseDispatchResult::makeDocumentRoot(std::move(*documentResponse));
+                co_return std::move(*documentResponse);
             }
             // One handleError co_await serves both rejection kinds: each
             // co_await expression reserves its own slots for the call's
@@ -170,11 +169,11 @@ Task<detail::BufferedResponseDispatchResult> detail::RouteTable::dispatchRequest
                 // Otherwise the method is known here but this path has nothing:
                 // an ordinary 404, which the fallback below produces.
             } else if (request.knownMethod() == HttpKnownMethod::kOptions && request.path() == "*") {
-                co_return detail::BufferedResponseDispatchResult::makeApplication(makeAllowNoContentResponse(memory, allowedMethodsForServer(), extensionMethodsForServer()));
+                co_return makeAllowNoContentResponse(memory, allowedMethodsForServer(), extensionMethodsForServer());
             } else if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
                 extensionMethods = extensionMethodsFor(request.path(), extensionMethodBuffer);
                 if (request.knownMethod() == HttpKnownMethod::kOptions) {
-                    co_return detail::BufferedResponseDispatchResult::makeApplication(makeAllowNoContentResponse(memory, methodNotAllowed->allowedMethods(), extensionMethods));
+                    co_return makeAllowNoContentResponse(memory, methodNotAllowed->allowedMethods(), extensionMethods);
                 }
                 error = HttpErrorInfo(ruvia::http_status::kMethodNotAllowed, {}, "method not allowed");
                 allowedMethods = methodNotAllowed->allowedMethods();
@@ -185,10 +184,10 @@ Task<detail::BufferedResponseDispatchResult> detail::RouteTable::dispatchRequest
                 if (allowedMethods != 0 || !extensionMethods.empty()) {
                     setAllowHeader(response, allowedMethods, extensionMethods);
                 }
-                co_return detail::BufferedResponseDispatchResult::makeApplication(std::move(response));
+                co_return std::move(response);
             }
 
-            co_return detail::BufferedResponseDispatchResult::makeApplication(co_await handleNotFound(request, memory, services));
+            co_return co_await handleNotFound(request, memory, services);
         }
 
         auto context = makeRouteContext(memory, request, *resolved, withRouteHandlers(services, *this, errorHandlerFor(request.path()), notFoundHandlerFor(request.path())));
@@ -198,21 +197,21 @@ Task<detail::BufferedResponseDispatchResult> detail::RouteTable::dispatchRequest
             if (route.endpoint().buffered() == nullptr) {
                 throw std::logic_error("streaming route requires its dedicated dispatch path");
             }
-            co_return detail::BufferedResponseDispatchResult::makeApplication(co_await invokeRoute(route, context));
+            co_return co_await invokeRoute(route, context);
         } catch (...) {
             exception = std::current_exception();
         }
-        co_return detail::BufferedResponseDispatchResult::makeApplication(co_await handleException(context, exception));
+        co_return co_await handleException(context, exception);
     } catch (...) {
         if (failure == DispatchFailure::kPropagate) {
             throw;
         }
         dispatchException = std::current_exception();
     }
-    co_return detail::BufferedResponseDispatchResult::makeApplication(co_await handleException(request, memory, dispatchException, services));
+    co_return co_await handleException(request, memory, dispatchException, services);
 }
 
-Task<detail::BufferedResponseDispatchResult> detail::RouteTable::dispatchBufferedResponse(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, DocumentRootBinding documentRoot, ContextServices services, StaticFileSelectionMode staticFileMode) const {
+Task<HttpResponse> detail::RouteTable::dispatchBufferedResponse(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, DocumentRootBinding documentRoot, ContextServices services, StaticFileSelectionMode staticFileMode) const {
     // Plain forwarding, not a coroutine: document-root selection and the
     // failure policy live in the existing dispatch frame, so the unified
     // application entry adds no request-path allocation.

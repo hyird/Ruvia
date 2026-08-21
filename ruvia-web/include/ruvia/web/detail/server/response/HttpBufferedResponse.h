@@ -88,6 +88,7 @@ public:
 
 private:
     friend HttpBufferedResponsePreparation prepareBufferedHttpResponse(const HttpRequest&, const HttpResponseCodingPolicy&, HttpResponse&, const HttpServerOptions&);
+    friend Task<HttpBufferedResponsePreparation> prepareBufferedHttpResponseAsync(const HttpRequest&, const HttpResponseCodingPolicy&, HttpResponse&, const HttpServerOptions&, const WorkerHandle&);
 
     HttpBufferedResponsePreparation(HttpBufferedResponseWritePlan writePlan, HttpResponseCompressionResult compressionResult) noexcept
         : writePlan_(writePlan),
@@ -168,6 +169,30 @@ private:
         }
     }
     return HttpBufferedResponsePreparation(httpBufferedResponseWritePlan(request.knownMethod(), response), compressionResult);
+}
+
+// Runtime preparation preserves the synchronous fast path for small in-memory
+// responses and offloads larger eligible bodies through the configured bounded
+// pool. Tests and non-runtime consumers can keep using the synchronous helper
+// above when no worker resumption boundary exists.
+[[nodiscard]] inline Task<HttpBufferedResponsePreparation> prepareBufferedHttpResponseAsync(const HttpRequest& request, const HttpResponseCodingPolicy& policy, HttpResponse& response, const HttpServerOptions& options, const WorkerHandle& worker) {
+    materializeResponseBody(response);
+    if (options.cors.has_value()) {
+        applyCorsHeaders(request, response, *options.cors);
+    }
+    auto compressionResult = HttpResponseCompressionResult::makeNotApplicable();
+    if (options.compression.has_value()) {
+        if (const auto* selection = policy.selection()) {
+            compressionResult = co_await applyResponseCompressionAsync(
+                *selection,
+                request.knownMethod(),
+                response,
+                *options.compression,
+                options.blockingPool,
+                worker);
+        }
+    }
+    co_return HttpBufferedResponsePreparation(httpBufferedResponseWritePlan(request.knownMethod(), response), compressionResult);
 }
 
 }  // namespace ruvia::detail

@@ -14,7 +14,6 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "ruvia/http/HttpKnownMethod.h"
@@ -41,97 +40,6 @@ namespace ruvia::detail {
 class DbRegistry;
 class RedisRegistry;
 class RouterImpl;
-
-// A buffered dispatch carries the source of its response all the way to the
-// protocol driver. The driver may apply runtime-only work such as deferred
-// static-file compression, but it must not infer that source from a second
-// boolean maintained beside the response.
-class BufferedApplicationResponse final {
-public:
-    [[nodiscard]] const HttpResponse& response() const& noexcept {
-        return response_;
-    }
-    const HttpResponse& response() const&& = delete;
-
-    [[nodiscard]] HttpResponse takeResponse() && noexcept {
-        return std::move(response_);
-    }
-
-private:
-    friend class BufferedResponseDispatchResult;
-
-    explicit BufferedApplicationResponse(HttpResponse response) noexcept
-        : response_(std::move(response)) {}
-
-    HttpResponse response_;
-};
-
-class BufferedDocumentRootResponse final {
-public:
-    [[nodiscard]] const HttpResponse& response() const& noexcept {
-        return response_;
-    }
-    const HttpResponse& response() const&& = delete;
-
-    [[nodiscard]] HttpResponse takeResponse() && noexcept {
-        return std::move(response_);
-    }
-
-private:
-    friend class BufferedResponseDispatchResult;
-
-    explicit BufferedDocumentRootResponse(HttpResponse response) noexcept
-        : response_(std::move(response)) {}
-
-    HttpResponse response_;
-};
-
-class BufferedResponseDispatchResult final {
-public:
-    [[nodiscard]] static BufferedResponseDispatchResult makeApplication(HttpResponse response) noexcept {
-        return BufferedResponseDispatchResult(BufferedApplicationResponse(std::move(response)));
-    }
-
-    [[nodiscard]] static BufferedResponseDispatchResult makeDocumentRoot(HttpResponse response) noexcept {
-        return BufferedResponseDispatchResult(BufferedDocumentRootResponse(std::move(response)));
-    }
-
-    [[nodiscard]] const BufferedApplicationResponse* application() const& noexcept {
-        return std::get_if<BufferedApplicationResponse>(&value_);
-    }
-    const BufferedApplicationResponse* application() const&& = delete;
-
-    [[nodiscard]] const BufferedDocumentRootResponse* documentRoot() const& noexcept {
-        return std::get_if<BufferedDocumentRootResponse>(&value_);
-    }
-    const BufferedDocumentRootResponse* documentRoot() const&& = delete;
-
-    [[nodiscard]] const HttpResponse& response() const& noexcept {
-        return std::visit(
-            [](const auto& alternative) noexcept -> const HttpResponse& {
-                return alternative.response();
-            },
-            value_);
-    }
-    const HttpResponse& response() const&& = delete;
-
-    [[nodiscard]] HttpResponse takeResponse() && noexcept {
-        return std::visit(
-            [](auto&& alternative) noexcept -> HttpResponse {
-                return std::move(alternative).takeResponse();
-            },
-            std::move(value_));
-    }
-
-private:
-    using Value = std::variant<BufferedApplicationResponse, BufferedDocumentRootResponse>;
-
-    template <typename Alternative>
-    explicit BufferedResponseDispatchResult(Alternative alternative) noexcept
-        : value_(std::move(alternative)) {}
-
-    Value value_;
-};
 
 struct NextAccess final {
     [[nodiscard]] static constexpr Next make(NextState state, NextInvoke invoke) noexcept {
@@ -213,8 +121,8 @@ public:
     // DocumentRootBinding::none() when no root is configured,
     // DocumentRootBinding::standalone(root) for an immutable root, or
     // DocumentRootBinding::configured(root, runtimeOptions) for a server-owned
-    // root with live-reload/on-demand-compression policy.
-    Task<BufferedResponseDispatchResult> dispatchBufferedResponse(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, DocumentRootBinding documentRoot, ContextServices services = {}, StaticFileSelectionMode staticFileMode = StaticFileSelectionMode::kStrict) const;
+    // root with live-reload policy.
+    Task<HttpResponse> dispatchBufferedResponse(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, DocumentRootBinding documentRoot, ContextServices services = {}, StaticFileSelectionMode staticFileMode = StaticFileSelectionMode::kIdentityOnly) const;
     Task<HttpResponse> handleError(const HttpRequest& request, RequestMemory& memory, HttpErrorInfo error, ContextServices services = {}) const;
     Task<HttpResponse> handleException(const HttpRequest& request, RequestMemory& memory, std::exception_ptr exception, ContextServices services = {}) const;
     // Absence means the bound output handled the request; a value is the one
@@ -288,7 +196,7 @@ private:
     [[nodiscard]] const RouteEntry* findDynamic(HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethods(std::string_view path, HttpKnownMethod requestedMethod) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethodsForServer() const noexcept;
-    [[nodiscard]] Task<BufferedResponseDispatchResult> dispatchRequest(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services, DocumentRootBinding documentRoot, DispatchFailure failure, StaticFileSelectionMode staticFileMode) const;
+    [[nodiscard]] Task<HttpResponse> dispatchRequest(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services, DocumentRootBinding documentRoot, DispatchFailure failure, StaticFileSelectionMode staticFileMode) const;
     [[nodiscard]] Task<HttpResponse> invokeRoute(const RouteEntry& route, Context& context) const;
     [[nodiscard]] Task<HttpResponse> invokeRouteWithMiddleware(const RouteEntry& route, Context& context) const;
     [[nodiscard]] Task<void> invokeMiddlewareAt(const RouteEntry& route, std::size_t index, Context& context) const;

@@ -279,16 +279,13 @@ HttpResponse Context::file(const std::filesystem::path& path, std::string_view c
             .precomputedEtag = {},
             .precomputedLastModified = {},
             .contentCoding = HttpContentCoding::kIdentity,
-            // A server-enabled static-file policy may transform this file in
-            // the protocol session after the handler returns. Standalone
-            // Context::file keeps its historical byte-for-byte behavior.
-            .negotiatesEncoding = deferredStaticFileCompression_,
+            .negotiatesEncoding = false,
         },
         applyState);
 }
 
 HttpResponse Context::staticFile(const StaticRoot& root, std::string_view relativePath, std::string_view contentType) const {
-    const auto mode = deferredStaticFileCompression_ ? detail::StaticFileSelectionMode::kAllowDeferredCompression : detail::StaticFileSelectionMode::kStrict;
+    const auto mode = precompressedStaticFiles_ ? detail::StaticFileSelectionMode::kPrecompressed : detail::StaticFileSelectionMode::kIdentityOnly;
     return staticFile(root, relativePath, contentType, mode);
 }
 

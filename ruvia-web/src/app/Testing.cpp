@@ -291,8 +291,7 @@ TestResponse TestApp::request(const TestRequest& request) {
                 HttpErrorInfo(bodyLimitError->status(), {}, bodyLimitError->what()),
                 services));
         }
-        auto result = co_await detail::taskAsAwaitable(routes.dispatchBufferedResponse(parsed, resolution, requestMemory, detail::DocumentRootBinding::none(), services));
-        co_return std::move(result).takeResponse();
+        co_return co_await detail::taskAsAwaitable(routes.dispatchBufferedResponse(parsed, resolution, requestMemory, detail::DocumentRootBinding::none(), services));
     };
     auto future = asio::co_spawn(context, dispatch(), asio::use_future);
     context.run();

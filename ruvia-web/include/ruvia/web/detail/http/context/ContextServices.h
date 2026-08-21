@@ -196,18 +196,16 @@ public:
         return blockingPool_;
     }
 
-    // Server-owned static-file policy. A standalone Context keeps file()
-    // byte-for-byte and staticFile() strict; the HTTP server enables this
-    // capability when its document-root compression policy is active so a
-    // handler-produced file response follows the same deferred-compression
-    // path as the document-root fallback.
-    [[nodiscard]] constexpr bool deferredStaticFileCompression() const noexcept {
-        return deferredStaticFileCompression_;
+    // Server-owned static-file policy. When response compression is enabled,
+    // staticFile() may negotiate an existing precompressed sidecar. It never
+    // performs request-time file compression.
+    [[nodiscard]] constexpr bool precompressedStaticFiles() const noexcept {
+        return precompressedStaticFiles_;
     }
 
-    [[nodiscard]] ContextServices withDeferredStaticFileCompression(bool enabled = true) const noexcept {
+    [[nodiscard]] ContextServices withPrecompressedStaticFiles(bool enabled = true) const noexcept {
         auto services = *this;
-        services.deferredStaticFileCompression_ = enabled;
+        services.precompressedStaticFiles_ = enabled;
         return services;
     }
 
@@ -269,7 +267,7 @@ private:
     const RouteTable* routes_{nullptr};
     const WorkerStateRegistry* workerStates_{nullptr};
     BlockingPool* blockingPool_{nullptr};
-    bool deferredStaticFileCompression_{false};
+    bool precompressedStaticFiles_{false};
 
     ContextRequestBodySource requestBodySource_;
     ContextResponseOutput responseOutput_;

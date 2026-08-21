@@ -136,7 +136,7 @@ struct AppState final {
     std::pmr::vector<std::pair<std::pmr::string, HttpNotFoundHandler>> prefixNotFoundHandlers{appResource()};
     std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewares{appResource()};
     std::pmr::vector<WorkerStateDefinition> workerStates{appResource()};
-    std::optional<BlockingPoolOptions> blockingPool;
+    std::optional<BlockingPoolOptions> blockingPool{std::in_place};
     std::pmr::vector<AppHook> onStartHooks{appResource()};
     std::pmr::vector<AppHook> onStopHooks{appResource()};
     std::pmr::vector<HttpClientDefinition> httpClients{appResource()};
