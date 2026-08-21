@@ -60,7 +60,7 @@ ruvia::Task<void> writeExpiredInvalidSse(ruvia::SseWriter& writer, bool& lifetim
 
 ruvia::MultipartReader makeExpiredMultipartReader() {
     ruvia::detail::BodyReaderBinding<ImmediateBodySource> binding;
-    return ruvia::MultipartReader(binding.facade(), ruvia::MultipartBoundary("BOUNDARY"), ruvia::detail::processResource());
+    return ruvia::MultipartReader(binding.facade(), {.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = ruvia::detail::processResource()});
 }
 
 ruvia::Task<void> readExpiredMultipart(ruvia::MultipartReader& reader, bool& rejected) {

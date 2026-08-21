@@ -25,8 +25,12 @@ struct SseMessage final {
     std::optional<std::chrono::milliseconds> retry;
 };
 
+struct SseFormatOptions final {
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 // Build one complete UTF-8 event-stream block. Invalid event/id line syntax
 // throws std::invalid_argument.
-[[nodiscard]] std::pmr::string formatSseMessage(const SseMessage& message, std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] std::pmr::string formatSseMessage(const SseMessage& message, SseFormatOptions options = {});
 
 }  // namespace ruvia

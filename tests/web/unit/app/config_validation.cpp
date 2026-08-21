@@ -10,7 +10,8 @@
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
-#include "ruvia/web/detail/integration/DataAccessDefinitions.h"
+#include "ruvia/web/detail/db/DbConfigStorage.h"
+#include "ruvia/web/detail/redis/RedisConfigStorage.h"
 
 namespace {
 
@@ -114,7 +115,15 @@ RUVIA_TEST(app_document_root_rejects_invalid_static_options_at_configuration) {
     RUVIA_CHECK(throwsInvalid([&config] { ruvia::app().setDocumentRoot(std::move(config)); }));
 }
 
-RUVIA_TEST(data_access_config_clones_public_strings_into_internal_pmr_storage) {
+RUVIA_TEST(app_document_root_rejects_disabled_refresh) {
+    ruvia::DocumentRootConfig disabledRefresh;
+    disabledRefresh.root = "public";
+    disabledRefresh.runtimeOptions.refreshInterval = std::chrono::milliseconds::zero();
+    RUVIA_CHECK(throwsInvalid([&disabledRefresh] { ruvia::app().setDocumentRoot(std::move(disabledRefresh)); }));
+
+}
+
+RUVIA_TEST(integration_config_copies_public_strings_into_internal_pmr_storage) {
     std::pmr::unsynchronized_pool_resource targetResource;
 #if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
     std::optional<ruvia::detail::DbConfigStorage> database;
@@ -131,7 +140,7 @@ RUVIA_TEST(data_access_config_clones_public_strings_into_internal_pmr_storage) {
         source.username = std::string(80, 'u');
         source.password = std::string(80, 'p');
         source.database = std::string(80, 'd');
-        database.emplace(ruvia::detail::cloneDbConfig(source, &targetResource));
+        database.emplace(source, &targetResource);
         RUVIA_CHECK(database->host.get_allocator().resource() == &targetResource);
         RUVIA_CHECK(database->username.get_allocator().resource() == &targetResource);
         RUVIA_CHECK(database->password.get_allocator().resource() == &targetResource);
@@ -144,7 +153,7 @@ RUVIA_TEST(data_access_config_clones_public_strings_into_internal_pmr_storage) {
             .username = std::string(80, 'x'),
             .password = std::string(80, 'y'),
         };
-        redis.emplace(ruvia::detail::cloneRedisConfig(sourceRedis, &targetResource));
+        redis.emplace(sourceRedis, &targetResource);
         RUVIA_CHECK(redis->host.get_allocator().resource() == &targetResource);
         RUVIA_CHECK(redis->username.get_allocator().resource() == &targetResource);
         RUVIA_CHECK(redis->password.get_allocator().resource() == &targetResource);

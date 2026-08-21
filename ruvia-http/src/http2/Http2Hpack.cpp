@@ -7,8 +7,8 @@
 
 namespace ruvia::detail {
 
-HpackDecoder::HpackDecoder(std::pmr::memory_resource* resource)
-    : resource_(httpPmrResourceOrDefault(resource)),
+HpackDecoder::HpackDecoder(HpackDecoderOptions options)
+    : resource_(httpPmrResourceOrDefault(options.resource)),
       dynamic_(resource_),
       nameScratch_(resource_),
       valueScratch_(resource_) {}

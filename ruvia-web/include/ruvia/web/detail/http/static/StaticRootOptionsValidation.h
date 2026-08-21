@@ -10,7 +10,19 @@
 
 namespace ruvia::detail {
 
+[[nodiscard]] inline bool staticRootServesDotfiles(StaticDotfilePolicy policy) {
+    switch (policy) {
+        case StaticDotfilePolicy::kDeny:
+            return false;
+        case StaticDotfilePolicy::kServe:
+            return true;
+        default:
+            throw std::invalid_argument("invalid static dotfile policy");
+    }
+}
+
 inline void validateStaticRootOptions(const StaticRootOptions& options) {
+    (void)staticRootServesDotfiles(options.dotfiles);
     if (!ruvia::isValidHttpHeaderValue(options.cacheControl) || (!options.defaultContentType.empty() && !ruvia::detail::isValidHttpContentTypeFieldValue(options.defaultContentType))) {
         throw std::invalid_argument("invalid static file header value");
     }

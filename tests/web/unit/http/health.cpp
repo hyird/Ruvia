@@ -24,7 +24,7 @@ RUVIA_TEST(health_responses_use_context_response_state) {
     auto request = ruvia::detail::HttpRequestAccess::make();
     auto context = makeContext(memory, request);
     context.header("X-Trace", "health");
-    context.setCookie("probe", "ok");
+    context.setCookie({.name = "probe", .value = "ok"});
 
     const auto response = ruvia::makeHealthResponse(context);
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
@@ -34,14 +34,29 @@ RUVIA_TEST(health_responses_use_context_response_state) {
     RUVIA_CHECK_EQ(ruvia::detail::responseBody(response).bytes(), std::string_view("{\"status\":\"ok\"}"));
 }
 
-RUVIA_TEST(ready_response_keeps_explicit_failure_status) {
+RUVIA_TEST(readiness_response_defaults_to_ready) {
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = ruvia::detail::HttpRequestAccess::make();
+    auto context = makeContext(memory, request);
+
+    const auto response = ruvia::makeReadinessResponse(context);
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
+    RUVIA_CHECK_EQ(ruvia::detail::responseBody(response).bytes(), std::string_view("{\"status\":\"ready\"}"));
+}
+
+RUVIA_TEST(readiness_response_keeps_explicit_failure_status) {
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
     auto request = ruvia::detail::HttpRequestAccess::make();
     auto context = makeContext(memory, request);
     context.status(ruvia::http_status::kCreated);
 
-    const auto response = ruvia::makeReadyResponse(context, false, "database is unavailable");
+    const auto response = ruvia::makeReadinessResponse(context, {
+        .state = ruvia::ReadinessState::kUnavailable,
+        .unavailableReason = "database is unavailable",
+    });
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kServiceUnavailable);
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
     RUVIA_CHECK_EQ(ruvia::detail::responseBody(response).bytes(), std::string_view("{\"status\":\"not_ready\",\"reason\":\"database is unavailable\"}"));

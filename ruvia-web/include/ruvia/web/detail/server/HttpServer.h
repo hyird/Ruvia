@@ -22,7 +22,7 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/WebWorker.h"
-#include "ruvia/web/detail/integration/DataAccessState.h"
+#include "ruvia/web/detail/integration/WorkerDataState.h"
 #include "ruvia/web/detail/server/session/HttpConnectionState.h"
 #include "ruvia/web/detail/ratelimit/RateLimiter.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
@@ -106,7 +106,7 @@ private:
     std::pmr::vector<DocumentRootPtr> retiredDocumentRoots_;
     HttpServerOptions options_;
     ConnectionScanner connectionScanner_;
-    DataAccessState dataAccess_;
+    WorkerDataState workerData_;
     HttpClientRegistry httpClients_;
     WorkerStateRegistry workerStates_;
     std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;

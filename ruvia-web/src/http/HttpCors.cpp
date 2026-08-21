@@ -40,7 +40,7 @@ void reflectCorsRequestHeaderNames(const HttpRequest& request, HttpResponse& res
                 setResponseHeaderIfMissing(response, kResponseHeaderAccessControlAllowHeaders, "Access-Control-Allow-Headers", name);
                 first = false;
             } else {
-                response.header("Access-Control-Allow-Headers", name, HttpResponse::HeaderOptions{.append = true});
+                response.header("Access-Control-Allow-Headers", name, HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
             }
             return true;
         });

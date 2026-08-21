@@ -145,10 +145,10 @@ private:
     const HttpResponseCompressionResult& compressionResult) noexcept {
     const auto* selection = policy.selection();
     if (selection != nullptr && compressionResult.failed() && selection->coding() != HttpContentCoding::kIdentity && !selection->identityAccepted() && httpResponseBodyPlan(request.knownMethod(), response.status()).statusAllowsBody()) {
-        return HttpErrorInfo(http_status::kInternalServerError, "response_compression_failed", "response compression failed");
+        return HttpErrorInfo({.status = http_status::kInternalServerError, .code = "response_compression_failed", .message = "response compression failed"});
     }
     if (httpResponseNeedsNotAcceptable(policy, request, response)) {
-        return HttpErrorInfo(http_status::kNotAcceptable, "not_acceptable", "no acceptable response content coding");
+        return HttpErrorInfo({.status = http_status::kNotAcceptable, .code = "not_acceptable", .message = "no acceptable response content coding"});
     }
     return std::nullopt;
 }

@@ -52,10 +52,10 @@ void addUncheckedHeader(HttpResponse& response, std::string_view name, std::stri
 }  // namespace
 
 RUVIA_TEST(final_response_control_entry_points_own_only_their_protocol) {
-    HttpResponse http1(std::pmr::get_default_resource());
+    HttpResponse http1({.resource = std::pmr::get_default_resource()});
     http1.header("Connection", "close");
-    http1.header("Connection", "Upgrade", HttpResponse::HeaderOptions{.append = true});
-    http1.header("Connection", "X-Hop", HttpResponse::HeaderOptions{.append = true});
+    http1.header("Connection", "Upgrade", HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
+    http1.header("Connection", "X-Hop", HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
     http1.header("Upgrade", "websocket");
     http1.header("X-Hop", "value");
 
@@ -70,7 +70,7 @@ RUVIA_TEST(final_response_control_entry_points_own_only_their_protocol) {
         RUVIA_CHECK(http1Control->upgradeProtocols().hasProtocol());
     }
 
-    HttpResponse http2(std::pmr::get_default_resource());
+    HttpResponse http2({.resource = std::pmr::get_default_resource()});
     http2.header("X-Trace", "ok");
     const auto http2Result = http2FinalResponseControlPlan(http2);
     RUVIA_CHECK(http2Result.failure() == nullptr);
@@ -78,27 +78,27 @@ RUVIA_TEST(final_response_control_entry_points_own_only_their_protocol) {
 }
 
 RUVIA_TEST(final_response_control_failure_never_exposes_protocol_alternative) {
-    HttpResponse invalidConnection(std::pmr::get_default_resource());
+    HttpResponse invalidConnection({.resource = std::pmr::get_default_resource()});
     addUncheckedHeader(invalidConnection, "Connection", ", close");
     RUVIA_CHECK(isHttp1Failure(invalidConnection, Http1FinalResponseControlPlanError::kInvalidConnectionField));
 
-    HttpResponse invalidUpgrade(std::pmr::get_default_resource());
+    HttpResponse invalidUpgrade({.resource = std::pmr::get_default_resource()});
     addUncheckedHeader(invalidUpgrade, "Upgrade", "web socket");
     RUVIA_CHECK(isHttp1Failure(invalidUpgrade, Http1FinalResponseControlPlanError::kInvalidUpgradeField));
 
-    HttpResponse missingUpgrade(std::pmr::get_default_resource());
+    HttpResponse missingUpgrade({.resource = std::pmr::get_default_resource()});
     missingUpgrade.status(ruvia::http_status::kUpgradeRequired);
     RUVIA_CHECK(isHttp1Failure(missingUpgrade, Http1FinalResponseControlPlanError::kUpgradeRequired));
     RUVIA_CHECK(isHttp2Failure(missingUpgrade, Http2FinalResponseControlPlanError::kUpgradeUnavailable));
 
-    HttpResponse teResponseField(std::pmr::get_default_resource());
+    HttpResponse teResponseField({.resource = std::pmr::get_default_resource()});
     addUncheckedHeader(teResponseField, "TE", "trailers");
     RUVIA_CHECK(isHttp1Failure(teResponseField, Http1FinalResponseControlPlanError::kTeFieldForbidden));
 }
 
 RUVIA_TEST(final_response_control_rejects_end_to_end_connection_options) {
     for (const std::string_view option : {"content-length", "DATE", "Set-Cookie"}) {
-        HttpResponse response(std::pmr::get_default_resource());
+        HttpResponse response({.resource = std::pmr::get_default_resource()});
         addUncheckedHeader(response, "Connection", option);
         RUVIA_CHECK(isHttp1Failure(response, Http1FinalResponseControlPlanError::kInvalidConnectionField));
     }
@@ -114,7 +114,7 @@ RUVIA_TEST(final_response_control_rejects_every_http2_connection_specific_field)
         {"Upgrade", "websocket"},
     };
     for (const auto& [name, value] : fields) {
-        HttpResponse response(std::pmr::get_default_resource());
+        HttpResponse response({.resource = std::pmr::get_default_resource()});
         if (name == "TE") {
             addUncheckedHeader(response, name, value);
         } else {

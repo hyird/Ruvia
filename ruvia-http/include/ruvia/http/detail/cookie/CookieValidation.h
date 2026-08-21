@@ -112,7 +112,21 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
     return {};
 }
 
+[[nodiscard]] inline bool cookieAttributeEmitted(CookieAttributePolicy policy) {
+    switch (policy) {
+        case CookieAttributePolicy::kOmit:
+            return false;
+        case CookieAttributePolicy::kEmit:
+            return true;
+    }
+    throw std::invalid_argument("invalid cookie attribute policy");
+}
+
 inline void validateCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
+    const auto httpOnly = cookieAttributeEmitted(options.httpOnly);
+    const auto secure = cookieAttributeEmitted(options.secure);
+    const auto partitioned = cookieAttributeEmitted(options.partitioned);
+    (void)httpOnly;
     if (!isValidHttpHeaderName(name)) {
         throw std::invalid_argument("invalid cookie name");
     }
@@ -142,13 +156,13 @@ inline void validateCookie(std::string_view name, std::string_view value, const 
     if (options.sameSite && cookieSameSiteToken(*options.sameSite).empty()) {
         throw std::invalid_argument("invalid cookie SameSite");
     }
-    if (options.sameSite == CookieSameSite::kNone && !options.secure) {
+    if (options.sameSite == CookieSameSite::kNone && !secure) {
         throw std::invalid_argument("SameSite=None cookie requires Secure");
     }
     if (options.prefix && cookiePrefixText(*options.prefix).empty()) {
         throw std::invalid_argument("invalid cookie prefix");
     }
-    if (options.partitioned && !options.secure) {
+    if (partitioned && !secure) {
         throw std::invalid_argument("partitioned cookie requires Secure");
     }
     // User agents apply __Host-/__Secure- constraints case-insensitively. Mirror
@@ -158,11 +172,11 @@ inline void validateCookie(std::string_view name, std::string_view value, const 
     const bool hostPrefixed = options.prefix == CookiePrefix::kHost || (!options.prefix && cookieNameStartsWithIgnoreCase(name, "__Host-"));
     const bool securePrefixed = options.prefix == CookiePrefix::kSecure || (!options.prefix && cookieNameStartsWithIgnoreCase(name, "__Secure-"));
     if (hostPrefixed) {
-        if (!options.secure || options.path != "/" || !options.domain.empty()) {
+        if (!secure || options.path != "/" || !options.domain.empty()) {
             throw std::invalid_argument("__Host- cookie requires Secure, Path=/, and no Domain");
         }
     } else if (securePrefixed) {
-        if (!options.secure) {
+        if (!secure) {
             throw std::invalid_argument("__Secure- cookie requires Secure");
         }
     }

@@ -4,7 +4,6 @@
 #include <exception>
 #include <utility>
 
-#include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 
 namespace ruvia {
@@ -15,8 +14,8 @@ namespace detail {
 
 // A request-time view of one document-root binding. The object is deliberately
 // not default-constructible or aggregate-initializable: callers must choose
-// between no root, a standalone immutable root, and a server-configured root
-// with its runtime policy. It is move-only because a polling binding is also
+// between no root, a standalone immutable root, and a server-configured root.
+// It is move-only because a configured binding is also
 // the request's lifetime lease for its worker-owned immutable root snapshot.
 // A server retires the old snapshot until this lease is destroyed; copying the
 // view would make that ownership boundary ambiguous and could reintroduce a
@@ -32,8 +31,8 @@ public:
         return DocumentRootBinding(&root, nullptr);
     }
 
-    [[nodiscard]] static DocumentRootBinding configured(const StaticRoot& root, const DocumentRootRuntimeOptions& runtimeOptions) noexcept {
-        return DocumentRootBinding(&root, &runtimeOptions);
+    [[nodiscard]] static DocumentRootBinding configured(const StaticRoot& root) noexcept {
+        return DocumentRootBinding(&root, &root);
     }
 
     ~DocumentRootBinding() {
@@ -45,13 +44,13 @@ public:
 
     DocumentRootBinding(DocumentRootBinding&& other) noexcept
         : root_(std::exchange(other.root_, nullptr)),
-          runtimeOptions_(std::exchange(other.runtimeOptions_, nullptr)) {}
+          leasedRoot_(std::exchange(other.leasedRoot_, nullptr)) {}
 
     DocumentRootBinding& operator=(DocumentRootBinding&& other) noexcept {
         if (this != &other) {
             reset();
             root_ = std::exchange(other.root_, nullptr);
-            runtimeOptions_ = std::exchange(other.runtimeOptions_, nullptr);
+            leasedRoot_ = std::exchange(other.leasedRoot_, nullptr);
         }
         return *this;
     }
@@ -60,35 +59,30 @@ public:
         return root_;
     }
 
-    [[nodiscard]] const DocumentRootRuntimeOptions* runtimeOptions() const noexcept {
-        return runtimeOptions_;
-    }
-
 private:
     [[nodiscard]] bool tracksSnapshot() const noexcept {
-        return root_ != nullptr && runtimeOptions_ != nullptr && runtimeOptions_->refreshMode == DocumentRootRefreshMode::kPolling;
+        return leasedRoot_ != nullptr;
     }
 
-    explicit DocumentRootBinding(const StaticRoot* root, const DocumentRootRuntimeOptions* runtimeOptions) noexcept
+    explicit DocumentRootBinding(const StaticRoot* root, const StaticRoot* leasedRoot) noexcept
         : root_(root),
-          runtimeOptions_(runtimeOptions) {
+          leasedRoot_(leasedRoot) {
         if (tracksSnapshot()) {
-            StaticRootAccess::acquireBinding(*root_);
+            StaticRootAccess::acquireBinding(*leasedRoot_);
         }
     }
 
     void reset() noexcept {
-        const auto* const root = root_;
-        const bool tracked = tracksSnapshot();
+        const auto* const leasedRoot = leasedRoot_;
         root_ = nullptr;
-        runtimeOptions_ = nullptr;
-        if (tracked) {
-            StaticRootAccess::releaseBinding(*root);
+        leasedRoot_ = nullptr;
+        if (leasedRoot != nullptr) {
+            StaticRootAccess::releaseBinding(*leasedRoot);
         }
     }
 
     const StaticRoot* root_;
-    const DocumentRootRuntimeOptions* runtimeOptions_;
+    const StaticRoot* leasedRoot_;
 };
 
 static_assert(sizeof(DocumentRootBinding) == 2 * sizeof(void*));

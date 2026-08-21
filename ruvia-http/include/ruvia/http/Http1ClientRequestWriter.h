@@ -22,24 +22,9 @@ class Http1ClientResponseParser;
 // the emitted field and the resulting content gate cannot disagree. How long an
 // I/O runtime waits before releasing a continue-gated body remains runtime
 // policy, not an HTTP message-model setting.
-class Http1ClientRequestWirePolicy final {
-public:
-    constexpr explicit Http1ClientRequestWirePolicy(Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse,
-        HttpClientRequestExpectation expectation = HttpClientRequestExpectation::kNone) noexcept
-        : closePolicy_(closePolicy),
-          expectation_(expectation) {}
-
-    [[nodiscard]] constexpr Http1ClosePolicy closePolicy() const noexcept {
-        return closePolicy_;
-    }
-
-    [[nodiscard]] constexpr HttpClientRequestExpectation expectation() const noexcept {
-        return expectation_;
-    }
-
-private:
-    Http1ClosePolicy closePolicy_;
-    HttpClientRequestExpectation expectation_;
+struct Http1ClientRequestWirePolicy final {
+    Http1ClosePolicy closePolicy{Http1ClosePolicy::kAllowReuse};
+    HttpClientRequestExpectation expectation{HttpClientRequestExpectation::kNone};
 };
 
 namespace detail {
@@ -333,11 +318,15 @@ private:
 // origin-form target.
 class Http1ClientRequestWriter final {
 public:
-    explicit Http1ClientRequestWriter(std::pmr::memory_resource* resource = nullptr) noexcept;
+    struct Options final {
+        std::pmr::memory_resource* resource{nullptr};
+    };
 
-    [[nodiscard]] Http1ClientRequestPrepareResult prepare(const HttpOriginView& origin, const HttpClientRequestView& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy()) const;
+    explicit Http1ClientRequestWriter(Options options = {}) noexcept;
 
-    [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy()) const;
+    [[nodiscard]] Http1ClientRequestPrepareResult prepare(const HttpOriginView& origin, const HttpClientRequestView& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = {}) const;
+
+    [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = {}) const;
 
 private:
     std::pmr::memory_resource* resource_;

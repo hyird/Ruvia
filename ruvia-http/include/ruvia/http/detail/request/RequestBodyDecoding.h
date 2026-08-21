@@ -82,7 +82,7 @@ public:
     const HttpRequestContentDecoderFailure* decoderFailure() const&& = delete;
 
 private:
-    friend HttpRequestContentDecodeResult decodeHttpRequestContent(HttpContentCoding, std::string_view, std::size_t, std::pmr::memory_resource*);
+    friend HttpRequestContentDecodeResult decodeHttpRequestContent(HttpContentCoding, std::string_view, HttpContentDecodeOptions);
 
     using Value = std::variant<HttpDecodedContent, HttpRequestContentDecodeProtocolFailure, HttpRequestContentDecoderFailure>;
 
@@ -102,8 +102,8 @@ private:
     Value value_;
 };
 
-[[nodiscard]] inline HttpRequestContentDecodeResult decodeHttpRequestContent(HttpContentCoding coding, std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
-    auto result = decodeHttpContent(coding, input, maxDecodedBytes, resource);
+[[nodiscard]] inline HttpRequestContentDecodeResult decodeHttpRequestContent(HttpContentCoding coding, std::string_view input, HttpContentDecodeOptions options) {
+    auto result = decodeHttpContent(coding, input, options);
     if (auto* decoded = result.decoded()) {
         return HttpRequestContentDecodeResult(std::move(*decoded));
     }

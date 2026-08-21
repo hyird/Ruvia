@@ -327,7 +327,7 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
         "Sec-WebSocket-Extensions: permessage-deflate; server_max_window_bits=15\r\n"
         "\r\n");
     std::string supported = "chat";
-    const auto handshake = ruvia::makeWebSocketServerHandshake(request, supported);
+    const auto handshake = ruvia::makeWebSocketServerHandshake(request, {.supportedSubprotocols = supported});
     supported.front() = 'X';
 
     std::string response;

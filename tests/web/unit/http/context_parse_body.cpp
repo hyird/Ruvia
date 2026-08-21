@@ -113,18 +113,19 @@ RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
     HttpRequestAccess::setResource(request, requestMemory.resource());
     auto context = ContextAccess::make(requestMemory, request);
 
-    // With the default (non-.all) options, a "[]" field keeps every value (an
-    // array) while a repeated scalar field is compacted to its last value.
+    // With the default last-value policy, a "[]" field keeps every value and
+    // still reports its explicit array name; a repeated scalar field is
+    // compacted to its last value.
     asio::io_context& io = ruvia::test::newTestIoContext();
     std::size_t tagsSize = 0;
-    bool tagsArray = false;
+    bool tagsArrayName = false;
     std::size_t xSize = 0;
     std::string xValue;
-    asio::co_spawn(io, parseArrayForm(context, tagsSize, tagsArray, xSize, xValue), asio::detached);
+    asio::co_spawn(io, parseArrayForm(context, tagsSize, tagsArrayName, xSize, xValue), asio::detached);
     io.run();
 
     RUVIA_CHECK_EQ(tagsSize, std::size_t{2});  // both array elements kept
-    RUVIA_CHECK(tagsArray);                    // flagged as an array
+    RUVIA_CHECK(tagsArrayName);                // named with []
     RUVIA_CHECK_EQ(xSize, std::size_t{1});     // repeated scalar compacted to one
     RUVIA_CHECK_EQ(xValue, std::string("2"));  // last value wins
 }
@@ -299,12 +300,18 @@ RUVIA_TEST(context_parse_body_all_retains_duplicates_and_selects_last_value) {
 
     std::size_t valueCount = 0;
     std::string selectedValue;
+    bool valueMultiple = false;
+    bool valueArrayName = true;
     asio::io_context& io = ruvia::test::newTestIoContext();
-    asio::co_spawn(io, parseAllRepeatedScalar(context, valueCount, selectedValue), asio::detached);
+    asio::co_spawn(io,
+        parseAllRepeatedScalar(context, valueCount, selectedValue, valueMultiple, valueArrayName),
+        asio::detached);
     io.run();
 
     RUVIA_CHECK_EQ(valueCount, std::size_t{2});
     RUVIA_CHECK_EQ(selectedValue, std::string("last"));
+    RUVIA_CHECK(valueMultiple);
+    RUVIA_CHECK(!valueArrayName);
 }
 
 RUVIA_TEST(context_parse_body_multipart_yields_text_field_and_file_blob) {

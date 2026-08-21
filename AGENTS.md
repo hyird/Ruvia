@@ -27,6 +27,7 @@ ruvia-web   -> ruvia-core + ruvia-http
 - 默认中文回复。
 - 不要回退、覆盖或整理用户已有改动，除非用户明确要求。
 - 需求不清时只问一个必要问题；能从仓库上下文判断时直接执行。
+- 默认优先选择长期正确、最优雅清晰的一等抽象、清晰命名和稳定边界，即使改动面更大；不要为了缩小 diff 把新能力塞进语义不匹配的旧接口或 `detail` 旁路。
 - 讨论协议行为时，以 HTTP、TLS、WebSocket、SSE、HTTP/2 相关 RFC 和标准优先。
 - 如果项目约束与协议标准冲突，优先修实现和文档以符合标准。
 - README 不写内部重构历史；AGENTS 不累积逐类型防回归目录。
@@ -201,6 +202,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - `App::setWorkersPerListener()` 配置每个 listener 的 worker 数；总 worker 数是 listener 数乘以该值，禁止恢复含糊的总线程数命名。
 - listener 通过 `App::setListeners(std::vector<ListenerConfig>)` 原子配置；每项自带 bind address、port 和 transport，端口必须唯一，HTTP→HTTPS redirect 必须指向同一列表中的 HTTPS listener，不恢复全局 listen address 或固定单/双 listener topology 类型。公开配置必须在 setter 中一次性归一化到 App PMR 存储。
 - `App::run()` 创建 acceptor/server/thread per worker。
+- outbound HTTP 与 DB 能力属于直接绑定 `EventLoop` 的一等 client 对象，不属于 `App`、HTTP `Context` 或特殊 worker context。应用自己创建或 attach 的 worker 默认可以构造同一套 `HttpClient` / `DbClient`；client 的连接、内存、取消和 shutdown 保持 worker-local，App 的 `Context`/`WebWorkerContext` 只提供同一底层实现的便捷入口。不得为自建 worker 增加聚合能力 service 或 `detail` 旁路。
 - 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。
 - shutdown 只能在各 worker 自己的 `io_context` 上直接关闭 acceptor、活跃 socket 和 worker 资源；不等待请求优雅排空。
 - idle/header/body/write timeout、连接数限制和请求数限制保持 per-worker 所有权。

@@ -72,25 +72,26 @@ HttpProtocolError MultipartBodyParseFailure::protocolError() const noexcept {
     return multipartProtocolError(error_);
 }
 
-MultipartParser::MultipartParser(MultipartBoundary boundary, std::pmr::memory_resource* resource)
-    : resource_(detail::httpPmrResourceOrDefault(resource)),
-      boundary_(std::move(boundary)),
+MultipartParser::MultipartParser(MultipartParseOptions options)
+    : resource_(detail::httpPmrResourceOrDefault(options.resource)),
+      boundary_(std::move(options.boundary)),
       input_(resource_),
       currentName_(resource_),
       currentFilename_(resource_),
       currentContentType_(resource_) {}
 
-MultipartParser::MultipartParser(std::string_view completeBody, MultipartBoundary boundary, std::pmr::memory_resource* resource, CompleteInputTag)
-    : resource_(detail::httpPmrResourceOrDefault(resource)),
-      boundary_(std::move(boundary)),
+MultipartParser::MultipartParser(std::string_view completeBody, MultipartParseOptions options, CompleteInputTag)
+    : resource_(detail::httpPmrResourceOrDefault(options.resource)),
+      boundary_(std::move(options.boundary)),
       input_(detail::MultipartBorrowedInput{completeBody}),
       currentName_(resource_),
       currentFilename_(resource_),
       currentContentType_(resource_) {}
 
-MultipartBodyParseResult parseMultipartBody(std::string_view body, MultipartBoundary boundary, std::pmr::memory_resource* resource) {
-    resource = detail::httpPmrResourceOrDefault(resource);
-    MultipartParser parser(body, std::move(boundary), resource, MultipartParser::CompleteInputTag{});
+MultipartBodyParseResult parseMultipartBody(std::string_view body, MultipartParseOptions options) {
+    auto* const resource = detail::httpPmrResourceOrDefault(options.resource);
+    options.resource = resource;
+    MultipartParser parser(body, std::move(options), MultipartParser::CompleteInputTag{});
     std::pmr::vector<MultipartPart> parts(resource);
     for (;;) {
         auto result = parser.poll();

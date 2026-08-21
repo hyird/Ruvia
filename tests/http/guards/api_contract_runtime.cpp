@@ -124,7 +124,7 @@ int main() {
     std::pmr::string hpackBlock(&publicProtocolResource);
     ruvia::HpackEncoder::encodeHeader(hpackBlock, "x-public", "yes");
     std::pair<std::string, std::string> decodedHeader;
-    ruvia::HpackDecoder hpackDecoder(&publicProtocolResource);
+    ruvia::HpackDecoder hpackDecoder({.resource = &publicProtocolResource});
     const auto hpackResult = hpackDecoder.decode(hpackBlock, [&](std::string_view name, std::string_view value) {
         decodedHeader.first.assign(name);
         decodedHeader.second.assign(value);
@@ -161,7 +161,7 @@ int main() {
         return 60;
     }
 
-    auto publicHttp2 = ruvia::Http2Connection::client(&publicProtocolResource);
+    auto publicHttp2 = ruvia::Http2Connection::client({.resource = &publicProtocolResource});
     if (!publicHttp2.pendingOutput().starts_with(ruvia::kHttp2ClientPreface)) {
         return 60;
     }
@@ -194,7 +194,7 @@ int main() {
         return 60;
     }
 
-    auto publicResetClient = ruvia::Http2Connection::client(&publicProtocolResource);
+    auto publicResetClient = ruvia::Http2Connection::client({.resource = &publicProtocolResource});
     (void)publicResetClient.consumeOutput(publicResetClient.pendingOutput().size());
     for (std::size_t index = 0; index < 256; ++index) {
         const auto submitted = publicResetClient.submitRequestHead(ruvia::Http2RegularRequestHeadView{
@@ -210,14 +210,14 @@ int main() {
         (void)publicResetClient.consumeOutput(publicResetClient.pendingOutput().size());
     }
 
-    auto publicConnectClient = ruvia::Http2Connection::client(&publicProtocolResource);
+    auto publicConnectClient = ruvia::Http2Connection::client({.resource = &publicProtocolResource});
     (void)publicConnectClient.consumeOutput(publicConnectClient.pendingOutput().size());
     const auto publicConnect = publicConnectClient.submitRequestHead(
         ruvia::Http2ConnectRequestHeadView{.authority = "example.test:443"});
     if (publicConnect.submitted() == nullptr) return 63;
     (void)publicConnectClient.submitReset(publicConnect.submitted()->streamId(), ruvia::Http2ErrorCode::kCancel);
 
-    auto publicExtendedConnectClient = ruvia::Http2Connection::client(&publicProtocolResource);
+    auto publicExtendedConnectClient = ruvia::Http2Connection::client({.resource = &publicProtocolResource});
     (void)publicExtendedConnectClient.consumeOutput(publicExtendedConnectClient.pendingOutput().size());
     const auto unavailableExtendedConnect = publicExtendedConnectClient.submitRequestHead(
         ruvia::Http2ExtendedConnectRequestHeadView{.protocol = "websocket", .scheme = "https", .authority = "example.test", .target = "/ws"});
@@ -239,7 +239,7 @@ int main() {
     if (publicExtendedConnect.submitted() == nullptr) return 66;
     (void)publicExtendedConnectClient.submitReset(publicExtendedConnect.submitted()->streamId(), ruvia::Http2ErrorCode::kCancel);
 
-    auto publicServer = ruvia::Http2Connection::server(&publicProtocolResource);
+    auto publicServer = ruvia::Http2Connection::server({.resource = &publicProtocolResource});
     (void)publicServer.consumeOutput(publicServer.pendingOutput().size());
     std::pmr::string publicRequestHead(&publicProtocolResource);
     ruvia::HpackEncoder::encodeHeader(publicRequestHead, ":method", "POST");
@@ -268,7 +268,7 @@ int main() {
     auto* secondChunk = secondChunkEvent ? secondChunkEvent->messageBodyChunk() : nullptr;
     if (publicRequestHeadEvent == nullptr || publicRequestHeadEvent->request().method() != "POST" || firstChunk == nullptr || firstChunk->bytes() != "a" || secondChunk == nullptr || secondChunk->bytes() != "b" || !publicRequestEnd || publicRequestEnd->messageEnd() == nullptr) return 62;
 
-    auto otherPublicServer = ruvia::Http2Connection::server(&publicProtocolResource);
+    auto otherPublicServer = ruvia::Http2Connection::server({.resource = &publicProtocolResource});
     (void)otherPublicServer.consumeOutput(otherPublicServer.pendingOutput().size());
     if (otherPublicServer.feed(publicRequestWire) != ruvia::Http2FeedResult::kAccepted) return 62;
     auto otherRequestEvent = otherPublicServer.nextEvent();
@@ -295,15 +295,15 @@ int main() {
 
     bool invalidWebSocketCompressionRejected = false;
     try {
-        ruvia::WebSocketServerOptions invalidOptions;
+        ruvia::WebSocketServerConnectionOptions invalidOptions{.resource = &publicProtocolResource};
         invalidOptions.compression = static_cast<ruvia::WebSocketCompression>(255);
-        ruvia::WebSocketServerConnection invalidWebSocket(&publicProtocolResource, invalidOptions);
+        ruvia::WebSocketServerConnection invalidWebSocket(invalidOptions);
     } catch (const std::invalid_argument&) {
         invalidWebSocketCompressionRejected = true;
     }
     if (!invalidWebSocketCompressionRejected) return 60;
 
-    ruvia::WebSocketServerConnection publicWebSocket(&publicProtocolResource);
+    ruvia::WebSocketServerConnection publicWebSocket({.resource = &publicProtocolResource});
     constexpr std::array<unsigned char, 6> websocketPayload{'p', 'u', 'b', 'l', 'i', 'c'};
     constexpr std::array<unsigned char, 4> websocketMask{1, 2, 3, 4};
     std::array<char, 12> websocketFrame{};
@@ -319,11 +319,11 @@ int main() {
     }
 
     const auto sseFrame = ruvia::formatSseMessage(ruvia::SseMessage{
-        .data = "public", .retry = std::chrono::milliseconds::zero()}, &publicProtocolResource);
+        .data = "public", .retry = std::chrono::milliseconds::zero()}, {.resource = &publicProtocolResource});
     bool negativeRetryRejected = false;
     try {
         (void)ruvia::formatSseMessage(
-            ruvia::SseMessage{.retry = std::chrono::milliseconds{-1}}, &publicProtocolResource);
+            ruvia::SseMessage{.retry = std::chrono::milliseconds{-1}}, {.resource = &publicProtocolResource});
     } catch (const std::invalid_argument&) {
         negativeRetryRejected = true;
     }
@@ -335,7 +335,7 @@ int main() {
     cacheControlParser.update("public, max-age=invalid");
     cacheControlParser.update("no-transform, max-age=60");
     const auto installedCacheControl = cacheControlParser.finish();
-    if (!installedCacheControl.isPublic || !installedCacheControl.noTransform || installedCacheControl.maxAge.has_value()) {
+    if (!installedCacheControl.has(ruvia::CacheControlDirective::kPublic) || !installedCacheControl.has(ruvia::CacheControlDirective::kNoTransform) || installedCacheControl.maxAge().has_value()) {
         return 54;
     }
     if (!ruvia::detail::isValidCookieAttribute("/a path") || ruvia::detail::isValidCookieAttribute("/a\tpath") || ruvia::detail::isValidCookieAttribute("/caf\xc3\xa9") || !ruvia::detail::cookieNameStartsWithIgnoreCase("__sEcUrE-id", "__Secure-")) {
@@ -351,16 +351,24 @@ int main() {
         return 52;
     }
 
-    const auto decodedUrl = ruvia::detail::decodeUrlComponent("installed%20decoder", ruvia::detail::UrlDecodeMode::kPercent, std::pmr::get_default_resource());
-    const auto malformedUrl = ruvia::detail::decodeUrlComponent("prefix%2", ruvia::detail::UrlDecodeMode::kPercent, std::pmr::get_default_resource());
+    const auto decodedUrl = ruvia::detail::decodeUrlComponent(
+        "installed%20decoder", {.mode = ruvia::detail::UrlDecodeMode::kPercent, .resource = std::pmr::get_default_resource()});
+    const auto malformedUrl = ruvia::detail::decodeUrlComponent(
+        "prefix%2", {.mode = ruvia::detail::UrlDecodeMode::kPercent, .resource = std::pmr::get_default_resource()});
     if (!decodedUrl.has_value() || std::string_view(*decodedUrl) != "installed decoder" || malformedUrl.has_value()) {
         return 51;
     }
-    auto encodedContent = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, "installed content encoder", 1024, std::pmr::get_default_resource());
+    auto encodedContent = ruvia::encodeHttpContent(
+        ruvia::HttpContentCoding::kGzip,
+        "installed content encoder",
+        {.maxEncodedBytes = 1024, .resource = std::pmr::get_default_resource()});
     if (encodedContent.encoded() == nullptr || encodedContent.failure() != nullptr || encodedContent.encoded()->bytes().empty()) {
         return 50;
     }
-    const auto identityDecode = ruvia::decodeHttpContent(ruvia::HttpContentCoding::kIdentity, "identity", 8, std::pmr::get_default_resource());
+    const auto identityDecode = ruvia::decodeHttpContent(
+        ruvia::HttpContentCoding::kIdentity,
+        "identity",
+        {.maxDecodedBytes = 8, .resource = std::pmr::get_default_resource()});
     if (identityDecode.decoded() == nullptr || identityDecode.failure() != nullptr || identityDecode.decoded()->bytes() != "identity") {
         return 49;
     }
@@ -405,13 +413,10 @@ int main() {
         return 36;
     }
 
-    const auto headSemantics = ruvia::detail::httpResponseContentSemantics(ruvia::HttpKnownMethod::kHead, ruvia::http_status::kOk);
-    const auto tunnelSemantics = ruvia::detail::httpResponseContentSemantics(ruvia::HttpKnownMethod::kConnect, ruvia::http_status::kOk);
-    if (headSemantics != ruvia::detail::HttpResponseContentSemantics::kWithoutContent || tunnelSemantics != ruvia::detail::HttpResponseContentSemantics::kConnectTunnel) {
-        return 36;
-    }
+    static_assert(ruvia::detail::httpResponseContentSemantics(ruvia::HttpKnownMethod::kHead, ruvia::http_status::kOk) == ruvia::detail::HttpResponseContentSemantics::kWithoutContent);
+    static_assert(ruvia::detail::httpResponseContentSemantics(ruvia::HttpKnownMethod::kConnect, ruvia::http_status::kOk) == ruvia::detail::HttpResponseContentSemantics::kConnectTunnel);
 
-    const auto outboundOrigin = ruvia::HttpOriginView::https("example.test");
+    const auto outboundOrigin = ruvia::HttpOriginView::https({.host = "example.test"});
     ruvia::HttpClientRequestView outboundRequest;
     outboundRequest.method = "POST";
     outboundRequest.target = "/submit";
@@ -428,7 +433,7 @@ int main() {
         return 17;
     }
     std::array<char, 512> expectHeadBuffer;
-    const auto expectPrepared = ruvia::Http1ClientRequestWriter().prepare(outboundOrigin, outboundRequest, expectHeadBuffer, ruvia::Http1ClientRequestWirePolicy(ruvia::Http1ClosePolicy::kAllowReuse, ruvia::HttpClientRequestExpectation::kContinue));
+    const auto expectPrepared = ruvia::Http1ClientRequestWriter().prepare(outboundOrigin, outboundRequest, expectHeadBuffer, ruvia::Http1ClientRequestWirePolicy{.expectation = ruvia::HttpClientRequestExpectation::kContinue});
     const auto* expectWire = expectPrepared.prepared();
     if (expectWire == nullptr || expectWire->contentPlan().continueGated() == nullptr || expectWire->head().find("Expect: 100-continue\r\n") == std::string_view::npos) {
         return 25;
@@ -447,14 +452,14 @@ int main() {
     if (expectFinalHead == nullptr || expectFinalHead->plan().withoutContent() == nullptr || expectFinalHead->plan().requestContentSignal().has_value()) {
         return 25;
     }
-    const auto zeroPortOrigin = ruvia::HttpOriginView::http("example.test", 0);
+    const auto zeroPortOrigin = ruvia::HttpOriginView::http({.host = "example.test", .port = 0});
     const auto zeroPortAuthority = ruvia::detail::makeHttpOriginAuthority(zeroPortOrigin, std::pmr::get_default_resource());
     if (zeroPortAuthority != "example.test:0") {
         return 20;
     }
     bool invalidOriginRejected = false;
     try {
-        (void)ruvia::HttpOriginView::http("");
+        (void)ruvia::HttpOriginView::http({.host = ""});
     } catch (const std::invalid_argument&) {
         invalidOriginRejected = true;
     }
@@ -462,16 +467,22 @@ int main() {
         return 21;
     }
 
-    const auto redirectRequestPlan = ruvia::planHttpClientRedirectRequest(outboundRequest, ruvia::http_status::kTemporaryRedirect, std::pmr::get_default_resource());
+    const auto redirectRequestPlan = ruvia::planHttpClientRedirectRequest(
+        outboundRequest,
+        {.status = ruvia::http_status::kTemporaryRedirect, .resource = std::pmr::get_default_resource()});
     if (redirectRequestPlan.method() != "POST" || redirectRequestPlan.contentDisposition() != ruvia::HttpClientRedirectContentDisposition::kPreserve) {
         return 38;
     }
 
-    const auto redirectTarget = ruvia::resolveHttpClientRedirectTarget(outboundOrigin, "/base/current", "../next?x=1", std::pmr::get_default_resource());
+    const auto redirectTarget = ruvia::resolveHttpClientRedirectTarget(
+        outboundOrigin,
+        {.currentTarget = "/base/current", .location = "../next?x=1", .resource = std::pmr::get_default_resource()});
     if (redirectTarget.resolved() == nullptr || redirectTarget.failure() != nullptr || redirectTarget.resolved()->crossOrigin() || redirectTarget.resolved()->target() != "/next?x=1") {
         return 28;
     }
-    const auto crossOrigin = ruvia::resolveHttpClientRedirectTarget(outboundOrigin, "/base/current", "https://other.test/next", std::pmr::get_default_resource());
+    const auto crossOrigin = ruvia::resolveHttpClientRedirectTarget(
+        outboundOrigin,
+        {.currentTarget = "/base/current", .location = "https://other.test/next", .resource = std::pmr::get_default_resource()});
     if (crossOrigin.resolved() == nullptr || crossOrigin.failure() != nullptr || !crossOrigin.resolved()->crossOrigin()) {
         return 29;
     }
@@ -487,11 +498,11 @@ int main() {
     if (wsNeedInput.needInput() == nullptr || wsNeedInput.frame() != nullptr || wsNeedInput.failure() != nullptr) {
         return 31;
     }
-    const auto multipart = ruvia::parseMultipartBody("--x--\r\n", ruvia::MultipartBoundary("x"));
+    const auto multipart = ruvia::parseMultipartBody("--x--\r\n", {.boundary = ruvia::MultipartBoundary("x")});
     if (multipart.failure() != nullptr || multipart.body() == nullptr || !multipart.body()->parts().empty()) {
         return 3;
     }
-    ruvia::MultipartParser multipartParser(ruvia::MultipartBoundary("x"), std::pmr::get_default_resource());
+    ruvia::MultipartParser multipartParser({.boundary = ruvia::MultipartBoundary("x"), .resource = std::pmr::get_default_resource()});
     multipartParser.feed("--x--");
     const auto multipartNeedInput = multipartParser.poll();
     if (multipartNeedInput.needInput() == nullptr) {
@@ -502,7 +513,7 @@ int main() {
     if (multipartDone.done() == nullptr) {
         return 19;
     }
-    ruvia::MultipartParser failedMultipartParser(ruvia::MultipartBoundary("x"), std::pmr::get_default_resource());
+    ruvia::MultipartParser failedMultipartParser({.boundary = ruvia::MultipartBoundary("x"), .resource = std::pmr::get_default_resource()});
     failedMultipartParser.feed(std::string(64 * 1024 + 1, 'p'));
     const auto multipartFailure = failedMultipartParser.poll();
     const auto repeatedMultipartFailure = failedMultipartParser.poll();

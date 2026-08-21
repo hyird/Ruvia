@@ -89,11 +89,11 @@ inline asio::awaitable<void> parseTrailingEmptyDotSegment(ruvia::Context& contex
     exactPathFound = static_cast<bool>(form.get("profile.name."));
 }
 
-inline asio::awaitable<void> parseArrayForm(ruvia::Context& context, std::size_t& tagsSize, bool& tagsArray, std::size_t& xSize, std::string& xValue) {
+inline asio::awaitable<void> parseArrayForm(ruvia::Context& context, std::size_t& tagsSize, bool& tagsArrayName, std::size_t& xSize, std::string& xValue) {
     const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {}));
     const auto tags = form.get("tags[]");
     tagsSize = tags.size();
-    tagsArray = tags.isArray();
+    tagsArrayName = tags.hasArrayName();
     const auto x = form.get("x");
     xSize = x.size();
     if (const auto xv = x.value(); xv.has_value()) {
@@ -146,12 +146,18 @@ inline asio::awaitable<void> parseWithFieldCap(ruvia::Context& context, std::siz
     }
 }
 
-inline asio::awaitable<void> parseAllRepeatedScalar(ruvia::Context& context, std::size_t& valueCount, std::string& selectedValue) {
+inline asio::awaitable<void> parseAllRepeatedScalar(ruvia::Context& context,
+    std::size_t& valueCount,
+    std::string& selectedValue,
+    bool& valueMultiple,
+    bool& valueArrayName) {
     const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {
                                                                                             .repeatedScalars = ruvia::ContextRequest::RepeatedScalarPolicy::kRetainAll,
                                                                                         }));
     const auto value = form.get("x");
     valueCount = value.size();
+    valueMultiple = value.multiple();
+    valueArrayName = value.hasArrayName();
     if (const auto selected = value.value()) {
         selectedValue.assign(selected->data(), selected->size());
     }

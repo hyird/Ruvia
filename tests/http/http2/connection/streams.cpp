@@ -347,7 +347,7 @@ RUVIA_TEST(http2_connection_unpin_frees_completed_stream) {
     driveGetRequest(conn, &resource);
     conn.pinStream(1);
     RUVIA_CHECK(conn.stream(1) != nullptr);
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kNoContent);
     const auto headResult = submitBufferedResponseHead(conn, 1, response);
     RUVIA_CHECK(responseHeadSubmitted(headResult));

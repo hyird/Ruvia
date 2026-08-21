@@ -34,7 +34,7 @@ template <typename Headers>
     if (coding == nullptr) {
         return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kUnsupportedCoding);
     }
-    return decodeHttpContent(*coding, encodedContent, maxDecodedBytes, resource);
+    return decodeHttpContent(*coding, encodedContent, {.maxDecodedBytes = maxDecodedBytes, .resource = resource});
 }
 
 }  // namespace ruvia::detail

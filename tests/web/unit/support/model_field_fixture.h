@@ -25,10 +25,10 @@ template <typename T>
 concept HasQueriesVectorAccessor = requires(const T& request) { request.queries(std::string_view{}); };
 
 template <typename T>
-concept ParsesAnyRvalueOwningString = requires(std::string&& body) { T::parse(std::move(body), std::pmr::get_default_resource()); } || requires(const std::string&& body) { T::parse(std::move(body), std::pmr::get_default_resource()); };
+concept ParsesAnyRvalueOwningString = requires(std::string&& body) { T::parse(std::move(body), ruvia::ModelParseOptions{.resource = std::pmr::get_default_resource()}); } || requires(const std::string&& body) { T::parse(std::move(body), ruvia::ModelParseOptions{.resource = std::pmr::get_default_resource()}); };
 
 template <typename T>
-concept ParsesLvalueOwningString = requires(const std::string& body) { T::parse(body, std::pmr::get_default_resource()); };
+concept ParsesLvalueOwningString = requires(const std::string& body) { T::parse(body, ruvia::ModelParseOptions{.resource = std::pmr::get_default_resource()}); };
 
 static_assert(!HasCookiesAccessor<ruvia::HttpRequest>);
 static_assert(!HasQueryListAccessor<ruvia::HttpRequest>);

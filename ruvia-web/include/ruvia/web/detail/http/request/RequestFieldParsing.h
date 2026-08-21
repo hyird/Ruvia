@@ -54,7 +54,7 @@ inline void appendLowerAscii(std::pmr::string& output, std::string_view input) {
 
 [[nodiscard]] inline bool assignUrlDecodedOrCopy(std::pmr::string& output, std::string_view input, detail::UrlDecodeMode mode) {
     if (detail::hasUrlEncoding(input, mode)) {
-        auto decoded = detail::decodeUrlComponent(input, mode, output.get_allocator().resource());
+        auto decoded = detail::decodeUrlComponent(input, {.mode = mode, .resource = output.get_allocator().resource()});
         if (decoded.has_value()) {
             output = std::move(*decoded);
             return true;

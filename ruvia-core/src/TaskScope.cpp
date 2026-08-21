@@ -18,9 +18,9 @@ struct TaskScope::Node {
     Node* next{nullptr};
 };
 
-TaskScope::TaskScope(const WorkerHandle& worker, std::pmr::memory_resource* resource)
+TaskScope::TaskScope(const WorkerHandle& worker, TaskScopeOptions options)
     : worker_(worker),
-      resource_(detail::pmrResourceOrDefault(resource)) {
+      resource_(detail::pmrResourceOrDefault(options.resource)) {
     if (!worker_.valid()) {
         throw std::invalid_argument("task scope requires a valid worker");
     }

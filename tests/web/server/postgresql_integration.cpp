@@ -222,11 +222,11 @@ int main() {
         const auto config = testConfig();
         runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker) { return withDatabase(ioContext, worker, config, true); });
 
-        const std::array migrations{ruvia::DbMigration{"001_create_items",
-            "CREATE TABLE ruvia_pg_integration_items ("
-            "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
-            "value TEXT NOT NULL)"}};
-        ruvia::DbMigrationOptions options;
+        const std::array migrations{ruvia::DbMigration{{.id = "001_create_items",
+            .sql = "CREATE TABLE ruvia_pg_integration_items ("
+                   "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
+                   "value TEXT NOT NULL)"}}};
+        ruvia::DbMigratorOptions options;
         options.table = kMigrationsTable;
         const auto first = ruvia::DbMigrator::migrate(config, migrations, options);
         const auto second = ruvia::DbMigrator::migrate(config, migrations, options);
@@ -235,26 +235,26 @@ int main() {
 
         // Editing an applied migration changes nothing on a machine that
         // already ran it, so the edit is reported rather than skipped.
-        const std::array edited{ruvia::DbMigration{"001_create_items",
-            "CREATE TABLE ruvia_pg_integration_items ("
-            "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
-            "value TEXT NOT NULL, note TEXT)"}};
+        const std::array edited{ruvia::DbMigration{{.id = "001_create_items",
+            .sql = "CREATE TABLE ruvia_pg_integration_items ("
+                   "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
+                   "value TEXT NOT NULL, note TEXT)"}}};
         dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }),
             "an edited migration body was accepted");
 
         // CREATE INDEX CONCURRENTLY is refused inside a transaction block, so
         // it reports whether the default wrap is really there -- and whether
         // naming the exception really lifts it.
-        const std::array wrapped{ruvia::DbMigration{"002_concurrent_index",
-            "CREATE INDEX CONCURRENTLY ruvia_pg_integration_items_value_idx "
-            "ON ruvia_pg_integration_items (value)"}};
+        const std::array wrapped{ruvia::DbMigration{{.id = "002_concurrent_index",
+            .sql = "CREATE INDEX CONCURRENTLY ruvia_pg_integration_items_value_idx "
+                   "ON ruvia_pg_integration_items (value)"}}};
         dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, wrapped, options); }),
             "a transactional migration did not run inside a transaction block");
 
-        const std::array unwrapped{ruvia::DbMigration{"002_concurrent_index",
-            "CREATE INDEX CONCURRENTLY ruvia_pg_integration_items_value_idx "
-            "ON ruvia_pg_integration_items (value)",
-            ruvia::DbMigrationAtomicity::kUnwrapped}};
+        const std::array unwrapped{ruvia::DbMigration{{.id = "002_concurrent_index",
+            .sql = "CREATE INDEX CONCURRENTLY ruvia_pg_integration_items_value_idx "
+                   "ON ruvia_pg_integration_items (value)",
+            .atomicity = ruvia::DbMigrationAtomicity::kUnwrapped}}};
         const auto concurrent = ruvia::DbMigrator::migrate(config, unwrapped, options);
         dbRequire(concurrent.applied().size() == 1,
             "an unwrapped migration was not applied outside a transaction block");

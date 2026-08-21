@@ -103,7 +103,7 @@ private:
 
 // Decode an HPACK block into (name, value) pairs; returns whether it succeeded.
 bool decodeBlock(std::string_view block, Collector& out) {
-    HpackDecoder decoder(std::pmr::get_default_resource());
+    HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     const auto result = decoder.decode(block, &out, &collect);
     return result.decoded() != nullptr;
 }
@@ -243,7 +243,7 @@ RUVIA_TEST(hpack_integer_overflow_is_rejected) {
     // An indexed field whose index integer overflows uint32 (FF FF FF FF FF 0F)
     // must be reported as an integer overflow, not silently wrapped to a small
     // (and possibly valid) index (RFC 7541 5.1).
-    HpackDecoder decoder(std::pmr::get_default_resource());
+    HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     Collector out;
     const auto block = bytes({0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F});
     const auto result = decoder.decode(block, &out, &collect);
@@ -262,7 +262,7 @@ RUVIA_TEST(hpack_integer_overflow_chunk_bound_is_rejected) {
     // sum guard. FF 80 80 80 80 1F holds the running value at 0x7f through four
     // zero-payload continuations, so ONLY this chunk-bound guard can catch the
     // final 0x1f<<28 overflow -- removing it would silently wrap (RFC 7541 5.1).
-    HpackDecoder decoder(std::pmr::get_default_resource());
+    HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     Collector out;
     const auto block = bytes({0xFF, 0x80, 0x80, 0x80, 0x80, 0x1F});
     const auto result = decoder.decode(block, &out, &collect);
@@ -357,7 +357,7 @@ RUVIA_TEST(hpack_indexed_name_referencing_the_evicted_entry_is_safe) {
 // complete in the MSVC debug standard library.
 RUVIA_TEST(hpack_dynamic_insert_allocation_failure_preserves_table) {
     ToggleRejectingMemoryResource resource;
-    HpackDecoder decoder(&resource);
+    HpackDecoder decoder({.resource = &resource});
 
     // Set the table to exactly one tiny entry, then insert "a: b". The vector
     // has one live element and normally one capacity slot at this point.
@@ -392,7 +392,7 @@ RUVIA_TEST(hpack_dynamic_insert_allocation_failure_preserves_table) {
 
 RUVIA_TEST(hpack_header_callback_allocation_failure_rolls_back_stream_state) {
     ToggleRejectingMemoryResource resource;
-    HpackDecoder decoder(&resource);
+    HpackDecoder decoder({.resource = &resource});
     Http2StreamState stream(1, &resource);
 
     std::string largePath(4096, 'p');
@@ -437,7 +437,7 @@ RUVIA_TEST(hpack_header_callback_allocation_failure_rolls_back_stream_state) {
 
 RUVIA_TEST(hpack_field_block_allocation_failure_rolls_back_prior_dynamic_inserts) {
     RejectLargeAllocationsResource resource;
-    HpackDecoder decoder(&resource);
+    HpackDecoder decoder({.resource = &resource});
 
     // Both fields use incremental indexing. The second value is large enough
     // to fail while materialising its dynamic-table entry, after the first
@@ -509,7 +509,7 @@ RUVIA_TEST(hpack_rejects_more_than_two_size_updates_at_block_start) {
     // the beginning of one field block: the smallest intervening maximum and
     // the final maximum. Accepting a third update admits an HPACK representation
     // that the peer is forbidden to generate.
-    HpackDecoder decoder(std::pmr::get_default_resource());
+    HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     Collector out;
     const auto result = decoder.decode(bytes({0x20, 0x21, 0x22, 0x82}), &out, &collect);
     const auto* failure = result.failure();
@@ -522,7 +522,7 @@ RUVIA_TEST(hpack_rejects_more_than_two_size_updates_at_block_start) {
 RUVIA_TEST(hpack_rejects_decreasing_second_size_update) {
     // With two updates, RFC 7541 section 4.2 requires the smallest value first
     // and the final value second. A 10 -> 5 sequence reverses that order.
-    HpackDecoder decoder(std::pmr::get_default_resource());
+    HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     Collector out;
     const auto result = decoder.decode(bytes({0x2a, 0x25, 0x82}), &out, &collect);
     const auto* failure = result.failure();
@@ -568,7 +568,7 @@ RUVIA_TEST(hpack_size_update_exceeding_settings_max_is_rejected) {
 
 RUVIA_TEST(hpack_size_update_to_zero_evicts_dynamic_table) {
     // The dynamic table persists across decode() calls, so use one decoder.
-    HpackDecoder decoder(std::pmr::get_default_resource());
+    HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
 
     // Literal with incremental indexing adds "custom-key: custom-value".
     std::string add;
@@ -628,7 +628,7 @@ bool rejectAtCallback(void* target, std::string_view name, std::string_view valu
 // rejection, but a later block referencing an entry the rejected block inserted must
 // still decode correctly. Regression for the P0 where decode aborted mid-block.
 RUVIA_TEST(hpack_callback_rejection_keeps_dynamic_table_consistent) {
-    HpackDecoder decoder(std::pmr::get_default_resource());
+    HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
 
     // Block A: three literal-with-incremental-indexing headers (0x40 prefix, new name),
     // hand-encoded so each is inserted into the dynamic table. The callback rejects the

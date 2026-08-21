@@ -242,18 +242,18 @@ WebSocketServerNegotiation::WebSocketServerNegotiation(std::string_view subproto
     : subprotocol_(subprotocol, httpPmrResourceOrDefault(resource)),
       compression_(compression) {}
 
-WebSocketServerNegotiation makeWebSocketServerNegotiation(const HttpRequest& request, std::string_view supportedSubprotocols, std::pmr::memory_resource* resource) {
-    return WebSocketServerNegotiation(chooseWebSocketSubprotocol(request, supportedSubprotocols), webSocketNegotiatePermessageDeflate(request), resource);
+WebSocketServerNegotiation makeWebSocketServerNegotiation(const HttpRequest& request, WebSocketServerNegotiationOptions options) {
+    return WebSocketServerNegotiation(chooseWebSocketSubprotocol(request, options.supportedSubprotocols), webSocketNegotiatePermessageDeflate(request), options.resource);
 }
 
 }  // namespace ruvia::detail
 
 namespace ruvia {
 
-WebSocketServerHandshake makeWebSocketServerHandshake(const HttpRequest& request, std::string_view supportedSubprotocols, std::pmr::memory_resource* resource) {
+WebSocketServerHandshake makeWebSocketServerHandshake(const HttpRequest& request, WebSocketServerHandshakeOptions options) {
     detail::WebSocketAcceptKey accept;
     detail::encodeWebSocketAccept(accept, detail::requestKnownHeader(request, detail::RequestKnownHeader::kSecWebSocketKey));
-    std::pmr::string subprotocol(detail::chooseWebSocketSubprotocol(request, supportedSubprotocols), detail::httpPmrResourceOrDefault(resource));
+    std::pmr::string subprotocol(detail::chooseWebSocketSubprotocol(request, options.supportedSubprotocols), detail::httpPmrResourceOrDefault(options.resource));
     return WebSocketServerHandshake(accept, std::move(subprotocol), detail::webSocketNegotiatePermessageDeflate(request));
 }
 

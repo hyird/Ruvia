@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/http/BorrowedText.h"
 #include "ruvia/web/OperationOptions.h"
 
 #include <charconv>
@@ -154,10 +155,6 @@ private:
 
 class DbValue final {
 private:
-    struct BorrowedText final {
-        std::string_view value;
-    };
-
     using Storage = std::variant<std::monostate, BorrowedText, std::pmr::string, std::int64_t, std::uint64_t, double, bool>;
 
 public:
@@ -218,10 +215,6 @@ private:
 
 class DbField final {
 private:
-    struct BorrowedText final {
-        std::string_view value;
-    };
-
     using Storage = std::variant<std::monostate, std::pmr::string, BorrowedText>;
 
 public:

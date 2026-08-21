@@ -113,7 +113,7 @@ std::vector<CollectedPart> parseMultipart(std::vector<std::string> chunks, std::
     ChunkSource source{std::move(chunks), 0};
     std::optional<BodyReader> bodyReader;
     ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
-    MultipartReader reader(*bodyReader, ruvia::MultipartBoundary(boundary), std::pmr::get_default_resource());
+    MultipartReader reader(*bodyReader, {.boundary = ruvia::MultipartBoundary(boundary), .resource = std::pmr::get_default_resource()});
 
     std::vector<CollectedPart> parts;
     asio::io_context ctx(1);
@@ -163,7 +163,7 @@ RUVIA_TEST(multipart_reader_rejects_concurrent_consumers) {
     SuspendedChunkSource source(io);
     std::optional<BodyReader> bodyReader;
     ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
-    MultipartReader reader(*bodyReader, ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    MultipartReader reader(*bodyReader, {.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
     bool firstCompleted = false;
     bool secondRejected = false;
 
@@ -237,7 +237,7 @@ RUVIA_TEST(multipart_reader_drains_a_split_epilogue_before_reporting_done) {
 
     std::optional<BodyReader> bodyReader;
     ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
-    MultipartReader reader(*bodyReader, ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    MultipartReader reader(*bodyReader, {.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
     std::vector<CollectedPart> parts;
     asio::io_context context(1);
     auto future = asio::co_spawn(context, ruvia::detail::taskAsAwaitable(collectParts(reader, parts)), asio::use_future);
@@ -408,7 +408,7 @@ RUVIA_TEST(multipart_reader_rejects_invalid_boundary_terminator_without_bufferin
 
     std::optional<BodyReader> bodyReader;
     ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
-    MultipartReader reader(*bodyReader, ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    MultipartReader reader(*bodyReader, {.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
 
     std::vector<CollectedPart> parts;
     asio::io_context ctx(1);

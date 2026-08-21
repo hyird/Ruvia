@@ -44,7 +44,7 @@ Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2Role 
       input_(resource),
       output_(resource),
       streams_(resource),
-      decoder_(resource),
+      decoder_({.resource = resource}),
       peerSettings_(role),
       events_(resource),
       pendingSends_(resource),

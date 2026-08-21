@@ -89,28 +89,30 @@ struct SessionCommitPlan final {
 }
 
 inline void appendSessionCookieHeader(HttpResponse& response, std::pmr::memory_resource* resource, std::string_view id, bool secure) {
-    CookieOptions options;
-    options.httpOnly = true;
-    options.secure = secure;
-    options.sameSite = CookieSameSite::kLax;
+    const CookieOptions options{
+        .sameSite = CookieSameSite::kLax,
+        .httpOnly = CookieAttributePolicy::kEmit,
+        .secure = secure ? CookieAttributePolicy::kEmit : CookieAttributePolicy::kOmit,
+    };
     const SetCookiePlan plan("sid", id, options);
     std::pmr::string setCookie(resource);
     setCookie.resize(plan.size());
     plan.write(setCookie.data());
-    response.header("Set-Cookie", setCookie, {.append = true});
+    response.header("Set-Cookie", setCookie, {.mode = ruvia::HttpResponseHeaderMode::kAppend});
 }
 
 inline void appendExpiredSessionCookieHeader(HttpResponse& response, std::pmr::memory_resource* resource, bool secure) {
-    CookieOptions options;
-    options.httpOnly = true;
-    options.secure = secure;
-    options.sameSite = CookieSameSite::kLax;
-    options.maxAge = std::chrono::seconds(0);
+    const CookieOptions options{
+        .sameSite = CookieSameSite::kLax,
+        .maxAge = std::chrono::seconds(0),
+        .httpOnly = CookieAttributePolicy::kEmit,
+        .secure = secure ? CookieAttributePolicy::kEmit : CookieAttributePolicy::kOmit,
+    };
     const SetCookiePlan plan("sid", "", options);
     std::pmr::string setCookie(resource);
     setCookie.resize(plan.size());
     plan.write(setCookie.data());
-    response.header("Set-Cookie", setCookie, {.append = true});
+    response.header("Set-Cookie", setCookie, {.mode = ruvia::HttpResponseHeaderMode::kAppend});
 }
 
 }  // namespace ruvia::detail

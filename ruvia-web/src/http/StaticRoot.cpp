@@ -1,7 +1,6 @@
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -107,16 +106,6 @@ void hashValue(std::uint64_t& hash, const T& value) noexcept {
     return hash;
 }
 
-[[nodiscard]] std::uint64_t nextStaticRootRevision() noexcept {
-    static std::atomic<std::uint64_t> next{1};
-    for (;;) {
-        const auto revision = next.fetch_add(1, std::memory_order_relaxed);
-        if (revision != 0) {
-            return revision;
-        }
-    }
-}
-
 [[nodiscard]] bool sameStaticRootEntry(const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) noexcept {
     return left.relativePath == right.relativePath &&
            left.filePath == right.filePath &&
@@ -155,7 +144,7 @@ std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::findVariant
     if (entry == nullptr) {
         return std::nullopt;
     }
-    return detail::StaticRootEntryView(entry->filePath.c_str(), entry->contentType, state.cacheControl, entry->etag, entry->lastModified, entry->size, entry->identity, entry->modifiedToken, entry->modifiedSeconds, state.enableRanges, state.enableValidators, entry->directlyServable);
+    return detail::StaticRootEntryView(entry->filePath.c_str(), entry->contentType, state.cacheControl, entry->etag, entry->lastModified, entry->size, entry->identity, entry->modifiedToken, entry->modifiedSeconds, state.rangeRequests, state.responseValidators, entry->directlyServable);
 }
 
 bool detail::StaticRootAccess::isIndexedDirectory(const StaticRoot& root, std::string_view relativePath) noexcept {
@@ -200,18 +189,14 @@ StaticRootOptions detail::StaticRootAccess::options(const StaticRoot& root) {
             break;
         }
     }
-    result.enableRanges = state.enableRanges;
-    result.enableValidators = state.enableValidators;
-    result.serveDotfiles = state.serveDotfiles;
+    result.rangeRequests = state.rangeRequests;
+    result.responseValidators = state.responseValidators;
+    result.dotfiles = state.dotfiles;
     return result;
 }
 
 std::uint64_t detail::StaticRootAccess::fingerprint(const StaticRoot& root) noexcept {
     return root.state_->fingerprint;
-}
-
-std::uint64_t detail::StaticRootAccess::revision(const StaticRoot& root) noexcept {
-    return root.state_->revision;
 }
 
 void detail::StaticRootAccess::acquireBinding(const StaticRoot& root) noexcept {
@@ -237,9 +222,9 @@ bool detail::StaticRootAccess::sameSnapshot(const StaticRoot& left, const Static
         lhs.cacheControl != rhs.cacheControl ||
         lhs.defaultContentType != rhs.defaultContentType ||
         lhs.fileTypeKind != rhs.fileTypeKind ||
-        lhs.enableRanges != rhs.enableRanges ||
-        lhs.enableValidators != rhs.enableValidators ||
-        lhs.serveDotfiles != rhs.serveDotfiles ||
+        lhs.rangeRequests != rhs.rangeRequests ||
+        lhs.responseValidators != rhs.responseValidators ||
+        lhs.dotfiles != rhs.dotfiles ||
         lhs.fileTypeExtensions != rhs.fileTypeExtensions ||
         lhs.directories != rhs.directories ||
         lhs.mimeTypes.size() != rhs.mimeTypes.size() ||
@@ -291,9 +276,10 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
             state.fileTypeExtensions.emplace_back(extension);
         }
     }
-    state.enableRanges = options.enableRanges;
-    state.enableValidators = options.enableValidators;
-    state.serveDotfiles = options.serveDotfiles;
+    state.rangeRequests = options.rangeRequests;
+    state.responseValidators = options.responseValidators;
+    state.dotfiles = options.dotfiles;
+    const auto serveDotfiles = detail::staticRootServesDotfiles(options.dotfiles);
     if (!state.indexFile.empty()) {
         state.directories.push_back({});
     }
@@ -323,7 +309,7 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         }
         // Default-deny hidden paths: skip dotfiles and do not descend into
         // dot-directories (.git, .ssh, ...) so their contents are never indexed.
-        if (!options.serveDotfiles && hasHiddenPathSegment(relative)) {
+        if (!serveDotfiles && hasHiddenPathSegment(relative)) {
             if (std::filesystem::is_directory(status)) {
                 iter.disable_recursion_pending();
             }
@@ -352,7 +338,7 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         if (ec) {
             throw std::filesystem::filesystem_error("snapshot static file root entry", filePath, ec);
         }
-        const auto enableValidators = state.enableValidators;
+        const auto emitResponseValidators = state.responseValidators == StaticResponseValidatorPolicy::kEmit;
         detail::StaticRootEntry entry(upstream);
         entry.relativePath = std::move(relative);
         detail::assignNativePath(entry.filePath, filePath);
@@ -362,7 +348,7 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         entry.modifiedToken = snapshot.modifiedToken;
         entry.modifiedSeconds = snapshot.modifiedSeconds;
         entry.directlyServable = directlyServable;
-        if (enableValidators) {
+        if (emitResponseValidators) {
             entry.etag = detail::makeStaticFileSnapshotEtag(upstream, snapshot.size, snapshot.modifiedToken, snapshot.identity);
             entry.lastModified = detail::httpFormatDate(upstream, snapshot.modifiedSeconds);
         }
@@ -375,7 +361,6 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
     std::ranges::sort(state.directories);
     state.directories.erase(std::ranges::unique(state.directories).begin(), state.directories.end());
     state.fingerprint = staticRootFingerprint(state);
-    state.revision = nextStaticRootRevision();
 }
 
 StaticRoot::~StaticRoot() = default;

@@ -139,15 +139,15 @@ TestApp& TestApp::onNotFound(HttpNotFoundHandler handler) {
     return *this;
 }
 
-TestApp& TestApp::onError(std::string_view prefix, HttpErrorHandler handler) {
+TestApp& TestApp::onError(ScopedErrorHandlerOptions options) {
     impl_->requireConfigurable();
-    appendPrefixHandler(impl_->prefixErrorHandlers, prefix, std::move(handler));
+    appendPrefixHandler(impl_->prefixErrorHandlers, options.prefix.view(), std::move(options.handler));
     return *this;
 }
 
-TestApp& TestApp::onNotFound(std::string_view prefix, HttpNotFoundHandler handler) {
+TestApp& TestApp::onNotFound(ScopedNotFoundHandlerOptions options) {
     impl_->requireConfigurable();
-    appendPrefixHandler(impl_->prefixNotFoundHandlers, prefix, std::move(handler));
+    appendPrefixHandler(impl_->prefixNotFoundHandlers, options.prefix.view(), std::move(options.handler));
     return *this;
 }
 
@@ -282,13 +282,13 @@ TestResponse TestApp::request(const TestRequest& request) {
     auto dispatch = [&]() -> asio::awaitable<HttpResponse> {
         if (parseError.has_value()) {
             const auto error = httpParseProtocolError(*parseError);
-            co_return co_await detail::taskAsAwaitable(routes.handleError(parsed, requestMemory, HttpErrorInfo(error.status(), {}, error.what()), services));
+            co_return co_await detail::taskAsAwaitable(routes.handleError(parsed, requestMemory, HttpErrorInfo({.status = error.status(), .message = error.what()}), services));
         }
         if (bodyLimitError.has_value()) {
             co_return co_await detail::taskAsAwaitable(routes.handleError(
                 parsed,
                 requestMemory,
-                HttpErrorInfo(bodyLimitError->status(), {}, bodyLimitError->what()),
+                HttpErrorInfo({.status = bodyLimitError->status(), .message = bodyLimitError->what()}),
                 services));
         }
         co_return co_await detail::taskAsAwaitable(routes.dispatchBufferedResponse(parsed, resolution, requestMemory, detail::DocumentRootBinding::none(), services));

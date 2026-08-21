@@ -3,6 +3,7 @@
 #ifdef RUVIA_ENABLE_JWT
 
 #include <chrono>
+#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -12,6 +13,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia {
@@ -22,11 +24,21 @@ struct JwtPayloadAccess;
 
 enum class JwtAlgorithm { kHs256, kHs384, kHs512 };
 
+enum class JwtExpirationClaimPolicy : std::uint8_t {
+    kRequire,
+    kAllowMissing,
+};
+
+struct JwtClaimOptions final {
+    BorrowedText name;
+    BorrowedText value;
+};
+
 class JwtClaim final {
 public:
-    JwtClaim(std::string_view name, std::string_view value)
-        : name_(std::in_place_type<std::string>, name),
-          value_(std::in_place_type<std::string>, value) {}
+    explicit JwtClaim(JwtClaimOptions options)
+        : name_(std::in_place_type<std::string>, options.name.view()),
+          value_(std::in_place_type<std::string>, options.value.view()) {}
 
     [[nodiscard]] std::string_view name() const& noexcept {
         return text(name_);
@@ -67,16 +79,28 @@ struct JwtSignOptions final {
     std::optional<std::chrono::seconds> expiresIn{std::chrono::hours(1)};
     std::optional<std::chrono::seconds> notBeforeDelay;
     std::vector<JwtClaim> claims;
+    std::pmr::memory_resource* resource{nullptr};
 };
 
 struct JwtVerifyOptions final {
+    BorrowedText token;
     JwtAlgorithm algorithm{JwtAlgorithm::kHs256};
     std::string secret;
     std::string issuer;
     std::string subject;
     std::string audience;
     std::chrono::seconds leeway{0};
-    bool requireExpiration{true};
+    JwtExpirationClaimPolicy expirationClaim{JwtExpirationClaimPolicy::kRequire};
+    std::pmr::memory_resource* resource{nullptr};
+};
+
+struct JwtDecodeUnverifiedOptions final {
+    BorrowedText token;
+    std::pmr::memory_resource* resource{nullptr};
+};
+
+struct JwtPayloadOptions final {
+    std::pmr::memory_resource* resource{nullptr};
 };
 
 class JwtPayload final {
@@ -102,10 +126,10 @@ public:
 
 private:
     friend struct detail::JwtPayloadAccess;
-    friend JwtPayload jwtDecodeUnverified(std::string_view, std::pmr::memory_resource*);
-    friend JwtPayload jwtVerify(std::string_view, const JwtVerifyOptions&, std::pmr::memory_resource*);
+    friend JwtPayload jwtDecodeUnverified(JwtDecodeUnverifiedOptions);
+    friend JwtPayload jwtVerify(const JwtVerifyOptions&);
 
-    explicit JwtPayload(std::pmr::memory_resource* resource = nullptr);
+    explicit JwtPayload(JwtPayloadOptions options = {});
 
     std::pmr::string issuer_;
     std::pmr::string subject_;
@@ -117,9 +141,9 @@ private:
     std::pmr::vector<JwtClaim> claims_;
 };
 
-[[nodiscard]] std::pmr::string jwtSign(const JwtSignOptions& options, std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] JwtPayload jwtVerify(std::string_view token, const JwtVerifyOptions& options, std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] JwtPayload jwtDecodeUnverified(std::string_view token, std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] std::pmr::string jwtSign(const JwtSignOptions& options);
+[[nodiscard]] JwtPayload jwtVerify(const JwtVerifyOptions& options);
+[[nodiscard]] JwtPayload jwtDecodeUnverified(JwtDecodeUnverifiedOptions options);
 [[nodiscard]] std::optional<std::string_view> jwtBearerToken(std::string_view authorization) noexcept;
 
 template <detail::HttpTemporaryOwningCharString Authorization>

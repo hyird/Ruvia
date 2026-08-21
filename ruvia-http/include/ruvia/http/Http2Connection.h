@@ -36,6 +36,10 @@ enum class Http2RequestContentReleaseStatus : std::uint8_t { kReleased, kNotPend
 enum class Http2ServerRequestReleaseStatus : std::uint8_t { kReleased, kClosed, kInvalidLease };
 enum class Http2StreamCloseSource : std::uint8_t { kLocal, kPeer, kPeerGoaway };
 
+struct Http2ConnectionOptions final {
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 class Http2RequestContent;
 
 class Http2RequestWithoutContent final {
@@ -85,14 +89,14 @@ struct Http2RegularRequestHeadView final {
     BorrowedText scheme{"https"};
     std::optional<BorrowedText> authority;
     BorrowedText target{"/"};
-    HttpClientRequestView::HeaderInit headers{};
+    std::span<const HttpHeaderView> headers{};
     Http2RequestContent content{Http2RequestContent::none()};
     HttpClientRequestExpectation expectation{HttpClientRequestExpectation::kNone};
 };
 
 struct Http2ConnectRequestHeadView final {
     BorrowedText authority;
-    HttpClientRequestView::HeaderInit headers{};
+    std::span<const HttpHeaderView> headers{};
 };
 
 struct Http2ExtendedConnectRequestHeadView final {
@@ -100,7 +104,7 @@ struct Http2ExtendedConnectRequestHeadView final {
     BorrowedText scheme{"https"};
     BorrowedText authority;
     BorrowedText target{"/"};
-    HttpClientRequestView::HeaderInit headers{};
+    std::span<const HttpHeaderView> headers{};
 };
 
 enum class Http2RequestHeadSubmitError : std::uint8_t { kInvalidState, kConnectionUnavailable, kPeerStreamLimitReached, kLocalStreamCapacityReached, kPeerCapabilityUnavailable, kInvalidMessage };
@@ -351,8 +355,8 @@ private:
 // string temporaries are rejected at compile time.
 class Http2Connection final {
 public:
-    [[nodiscard]] static Http2Connection server(std::pmr::memory_resource* resource = nullptr);
-    [[nodiscard]] static Http2Connection client(std::pmr::memory_resource* resource = nullptr);
+    [[nodiscard]] static Http2Connection server(Http2ConnectionOptions options = {});
+    [[nodiscard]] static Http2Connection client(Http2ConnectionOptions options = {});
     ~Http2Connection();
     Http2Connection(const Http2Connection&) = delete;
     Http2Connection& operator=(const Http2Connection&) = delete;

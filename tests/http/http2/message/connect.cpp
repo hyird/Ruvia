@@ -166,7 +166,7 @@ void feedStandardConnect(Http2Connection& server, std::pmr::memory_resource* res
 void openStandardTunnel(Http2Connection& server, std::pmr::memory_resource* resource) {
     feedStandardConnect(server, resource);
     drainEvents(server);
-    ruvia::HttpResponse response(resource);
+    ruvia::HttpResponse response({.resource = resource});
     response.status(ruvia::http_status::kOk);
     (void)server.submitConnectResponseHead(1, response);
     server.consumeOutput(server.pendingOutput().size());
@@ -184,7 +184,7 @@ HeaderObservation decodeSingleHeaderFrame(std::pmr::memory_resource* resource, s
     if (bytes.size() < 9 + header.length) {
         return observation;
     }
-    HpackDecoder decoder(resource);
+    HpackDecoder decoder({.resource = resource});
     const auto decodeResult = decoder.decode(bytes.substr(9, header.length), &observation, &observeHeader);
     RUVIA_CHECK(decodeResult.decoded() != nullptr);
     return observation;
@@ -400,22 +400,22 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
     RUVIA_CHECK(pending != nullptr);
     RUVIA_CHECK(pending->form() == Http2ConnectForm::kStandard);
 
-    ruvia::HttpResponse invalidBody(&resource);
+    ruvia::HttpResponse invalidBody({.resource = &resource});
     invalidBody.status(ruvia::http_status::kOk);
     invalidBody.body("not tunnel metadata");
     RUVIA_CHECK(server.submitConnectResponseHead(1, invalidBody) == Http2SubmitStatus::kInvalidMessage);
-    ruvia::HttpResponse invalidLength(&resource);
+    ruvia::HttpResponse invalidLength({.resource = &resource});
     invalidLength.status(ruvia::http_status::kOk);
     invalidLength.header("Content-Length", "0");
     RUVIA_CHECK(server.submitConnectResponseHead(1, invalidLength) == Http2SubmitStatus::kInvalidMessage);
-    ruvia::HttpResponse invalidConnection(&resource);
+    ruvia::HttpResponse invalidConnection({.resource = &resource});
     invalidConnection.status(ruvia::http_status::kOk);
     invalidConnection.header("Connection", "close");
     RUVIA_CHECK(server.submitConnectResponseHead(1, invalidConnection) == Http2SubmitStatus::kInvalidMessage);
     RUVIA_CHECK(server.pendingOutput().empty());
     RUVIA_CHECK(stream->tunnel().pending() != nullptr);
 
-    ruvia::HttpResponse accepted(&resource);
+    ruvia::HttpResponse accepted({.resource = &resource});
     accepted.status(ruvia::http_status::kOk);
     accepted.header("X-Tunnel", "ready");
     RUVIA_CHECK(server.submitConnectResponseHead(1, accepted) == Http2SubmitStatus::kAccepted);
@@ -546,7 +546,7 @@ RUVIA_TEST(http2_connect_server_rejection_accepts_empty_terminal_data) {
     RUVIA_CHECK(stream != nullptr);
     RUVIA_CHECK(stream->remoteReceive().connectPending() != nullptr);
 
-    ruvia::HttpResponse rejected(&resource);
+    ruvia::HttpResponse rejected({.resource = &resource});
     rejected.status(ruvia::http_status::kForbidden);
     const auto submitted = server.submitResponseHead(1, rejected, ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kConnect, rejected));
     RUVIA_CHECK(submitted.submitted() != nullptr);
@@ -585,7 +585,7 @@ RUVIA_TEST(http2_connect_pending_accepts_empty_request_half_close) {
     RUVIA_CHECK(!server.nextEvent().has_value());
     RUVIA_CHECK(stream->remoteReceive().connectPendingEndStream() != nullptr);
 
-    ruvia::HttpResponse accepted(&resource);
+    ruvia::HttpResponse accepted({.resource = &resource});
     accepted.status(ruvia::http_status::kOk);
     RUVIA_CHECK(server.submitConnectResponseHead(1, accepted) == Http2SubmitStatus::kAccepted);
     RUVIA_CHECK(stream->remoteReceive().endStream() != nullptr);

@@ -186,7 +186,7 @@ private:
     const bool generateUpgradeOption = preserveUpgrade && !responseOptions.upgrade();
     if (generateUpgradeOption) {
         if (responseOptions.hasField()) {
-            response.header("Connection", "Upgrade", HttpResponse::HeaderOptions{.append = true});
+            response.header("Connection", "Upgrade", HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
         } else {
             setResponseHeaderStableView(response, "Connection", "Upgrade");
         }
@@ -198,7 +198,7 @@ private:
         http1MarkConnectionClose(response, preserveUpgrade ? Http1ConnectionCloseFieldPolicy::kPreserveUpgrade : Http1ConnectionCloseFieldPolicy::kCloseOnly);
     } else if (plan.protocolVersion() == HttpProtocolVersion::kHttp10 && !responseOptions.keepAlive()) {
         if (responseOptions.hasField() || generateUpgradeOption) {
-            response.header("Connection", "keep-alive", HttpResponse::HeaderOptions{.append = true});
+            response.header("Connection", "keep-alive", HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
         } else {
             setResponseHeaderStableView(response, "Connection", "keep-alive");
         }

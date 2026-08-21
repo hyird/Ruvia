@@ -27,6 +27,11 @@ enum class CookiePriority : std::uint8_t {
     kHigh,
 };
 
+enum class CookieAttributePolicy : std::uint8_t {
+    kOmit,
+    kEmit,
+};
+
 struct CookieOptions final {
     // Cookie attributes are retained by SetCookiePlan until serialization.
     // Keep their zero-copy representation, but reject owning-string rvalues so
@@ -38,9 +43,9 @@ struct CookieOptions final {
     std::optional<std::chrono::system_clock::time_point> expires;
     std::optional<std::chrono::seconds> maxAge;
     std::optional<CookiePrefix> prefix;
-    bool httpOnly{false};
-    bool secure{false};
-    bool partitioned{false};
+    CookieAttributePolicy httpOnly{CookieAttributePolicy::kOmit};
+    CookieAttributePolicy secure{CookieAttributePolicy::kOmit};
+    CookieAttributePolicy partitioned{CookieAttributePolicy::kOmit};
 };
 
 }  // namespace ruvia

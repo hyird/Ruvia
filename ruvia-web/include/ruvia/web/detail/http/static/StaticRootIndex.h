@@ -55,17 +55,16 @@ struct StaticRootState final {
     std::pmr::vector<std::pmr::string> fileTypeExtensions;
     std::pmr::vector<StaticRootEntry> entries;
     std::pmr::vector<std::pmr::string> directories;
-    bool enableRanges{true};
-    bool enableValidators{true};
-    bool serveDotfiles{false};
-    // Polling request leases are charged to this worker-owned snapshot, not to
+    StaticRangeRequestPolicy rangeRequests{StaticRangeRequestPolicy::kHonor};
+    StaticResponseValidatorPolicy responseValidators{StaticResponseValidatorPolicy::kEmit};
+    StaticDotfilePolicy dotfiles{StaticDotfilePolicy::kDeny};
+    // Refresh request leases are charged to this worker-owned snapshot, not to
     // the server globally. The refresh loop can therefore reclaim unrelated
     // retired snapshots while a long request still holds an older one.
     // Application-owned immutable roots outlive all workers and never touch
     // this counter from their concurrent request paths.
     std::size_t activeBindings{0};
     std::uint64_t fingerprint{0};
-    std::uint64_t revision{0};
 
     explicit StaticRootState(std::pmr::memory_resource* resource)
         : root(resource),
@@ -116,18 +115,18 @@ public:
         return modifiedSeconds_;
     }
 
-    [[nodiscard]] bool rangesEnabled() const noexcept {
-        return rangesEnabled_;
+    [[nodiscard]] StaticRangeRequestPolicy rangeRequests() const noexcept {
+        return rangeRequests_;
     }
 
-    [[nodiscard]] bool validatorsEnabled() const noexcept {
-        return validatorsEnabled_;
+    [[nodiscard]] StaticResponseValidatorPolicy responseValidators() const noexcept {
+        return responseValidators_;
     }
 
 private:
     friend class StaticRootAccess;
 
-    StaticRootEntryView(const NativePathChar* filePath, std::string_view contentType, std::string_view cacheControl, std::string_view etag, std::string_view lastModified, std::uint64_t size, ResponseFileIdentity identity, std::uint64_t modifiedToken, std::time_t modifiedSeconds, bool rangesEnabled, bool validatorsEnabled, bool directlyServable) noexcept
+    StaticRootEntryView(const NativePathChar* filePath, std::string_view contentType, std::string_view cacheControl, std::string_view etag, std::string_view lastModified, std::uint64_t size, ResponseFileIdentity identity, std::uint64_t modifiedToken, std::time_t modifiedSeconds, StaticRangeRequestPolicy rangeRequests, StaticResponseValidatorPolicy responseValidators, bool directlyServable) noexcept
         : filePath_(filePath),
           contentType_(contentType),
           cacheControl_(cacheControl),
@@ -137,8 +136,8 @@ private:
           identity_(identity),
           modifiedToken_(modifiedToken),
           modifiedSeconds_(modifiedSeconds),
-          rangesEnabled_(rangesEnabled),
-          validatorsEnabled_(validatorsEnabled),
+          rangeRequests_(rangeRequests),
+          responseValidators_(responseValidators),
           directlyServable_(directlyServable) {}
 
     const NativePathChar* filePath_;
@@ -150,8 +149,8 @@ private:
     ResponseFileIdentity identity_;
     std::uint64_t modifiedToken_;
     std::time_t modifiedSeconds_;
-    bool rangesEnabled_;
-    bool validatorsEnabled_;
+    StaticRangeRequestPolicy rangeRequests_;
+    StaticResponseValidatorPolicy responseValidators_;
     bool directlyServable_;
 };
 
@@ -164,7 +163,6 @@ public:
     [[nodiscard]] static bool isIndexedDirectory(const StaticRoot& root, std::string_view relativePath) noexcept;
     [[nodiscard]] static StaticRootOptions options(const StaticRoot& root);
     [[nodiscard]] static std::uint64_t fingerprint(const StaticRoot& root) noexcept;
-    [[nodiscard]] static std::uint64_t revision(const StaticRoot& root) noexcept;
     [[nodiscard]] static bool sameSnapshot(const StaticRoot& left, const StaticRoot& right) noexcept;
     static void acquireBinding(const StaticRoot& root) noexcept;
     static void releaseBinding(const StaticRoot& root) noexcept;

@@ -16,13 +16,14 @@ Task<void> executeRedisPing(RedisCommandExecutor executor, std::pmr::vector<std:
 Task<RedisSetResult> executeRedisSet(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, RedisSetOptions options, std::pmr::memory_resource* resource) {
     auto reply = co_await executeOwnedRedisCommand(std::move(executor), std::move(args), resource);
     throwIfRedisError(reply);
+    const auto returnsPrevious = redisSetReturnsPrevious(options.previousValue);
     if (reply.null()) {
-        const bool applied = options.returnPrevious &&
+        const bool applied = returnsPrevious &&
             (!options.condition.has_value() || *options.condition == RedisSetCondition::kIfAbsent);
         co_return RedisTypesAccess::setResult(applied);
     }
     const auto text = redisValueString(reply);
-    if (!options.returnPrevious) {
+    if (!returnsPrevious) {
         if (!httpAsciiEqualsIgnoreCase(text, "OK")) {
             throw RedisError(RedisError::Code::kCommandError, "unexpected redis set reply");
         }

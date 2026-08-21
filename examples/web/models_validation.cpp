@@ -124,8 +124,8 @@ private:
         if (roles) {
             response.set<"roleCount">(ruvia::UInt32{static_cast<std::uint32_t>(roles->size())});
         }
-        response.ensure<"tags">().emplace_back(ruvia::String("created", c.resource()));
-        response.ensure<"tags">().emplace_back(ruvia::String("validated", c.resource()));
+        response.ensure<"tags">().emplace_back(ruvia::String("created", {.resource = c.resource()}));
+        response.ensure<"tags">().emplace_back(ruvia::String("validated", {.resource = c.resource()}));
         c.status(ruvia::http_status::kCreated);
         co_return c.json(response);
     }
@@ -223,5 +223,5 @@ private:
 };
 
 int main() {
-    ruvia::app().setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8081)}).setWorkersPerListener(2).setSignalShutdown(true).run();
+    ruvia::app().setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8081})}).setWorkersPerListener(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).run();
 }

@@ -44,7 +44,7 @@ detail::DbValueType DbValue::type() const noexcept {
 
 std::string_view DbValue::text() const& noexcept {
     if (const auto* borrowed = std::get_if<BorrowedText>(&storage_)) {
-        return borrowed->value;
+        return borrowed->view();
     }
     if (const auto* owned = std::get_if<std::pmr::string>(&storage_)) {
         return *owned;
@@ -122,7 +122,7 @@ std::optional<std::string_view> DbField::value() const& noexcept {
         return *owned;
     }
     if (const auto* borrowed = std::get_if<BorrowedText>(&storage_)) {
-        return borrowed->value;
+        return borrowed->view();
     }
     return std::nullopt;
 }

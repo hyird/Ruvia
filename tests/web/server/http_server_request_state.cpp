@@ -235,7 +235,7 @@ RUVIA_TEST(http1_prepared_stream_head_binds_wire_signal_to_final_connection_disp
     Http1ServerRequestParser parser;
     const auto prepare = [&](std::string_view request, Http1ClosePolicy closePolicy, std::string_view responseConnection) {
         const auto plan = http1PlanResponseStream(parser.parseMessage(request), closePolicy);
-        ruvia::HttpResponse response(std::pmr::get_default_resource());
+        ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
         response.status(ruvia::http_status::kOk);
         if (!responseConnection.empty()) {
             response.header("Connection", responseConnection);
@@ -278,7 +278,7 @@ RUVIA_TEST(http1_prepared_stream_head_owns_exact_wire_framing) {
     Http1ServerRequestParser parser;
     const auto prepare = [&](std::string_view request) {
         const auto plan = http1PlanResponseStream(parser.parseMessage(request), Http1ClosePolicy::kAllowReuse);
-        ruvia::HttpResponse response(std::pmr::get_default_resource());
+        ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
         response.status(ruvia::http_status::kOk);
         response.header("Transfer-Encoding", "gzip, chunked");
         response.header("Content-Length", "99");
@@ -318,7 +318,7 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
     Http1ServerRequestParser parser;
     const auto prepare = [&](std::string_view request, ruvia::HttpStatusCode status, Http1ClosePolicy closePolicy) {
         const auto plan = http1PlanResponseStream(parser.parseMessage(request), closePolicy);
-        ruvia::HttpResponse response(std::pmr::get_default_resource());
+        ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
         response.status(status);
         return prepareStream(std::move(response), ResponseStreamKind::kGeneric, plan, ResponseTrailerIntent::kNone);
     };
@@ -350,7 +350,7 @@ RUVIA_TEST(http1_stream_commit_plan_exposes_exact_trailer_capability) {
     Http1ServerRequestParser parser;
     const auto prepare = [&parser](std::string_view request) {
         const auto plan = http1PlanResponseStream(parser.parseMessage(request), Http1ClosePolicy::kAllowReuse);
-        ruvia::HttpResponse response(std::pmr::get_default_resource());
+        ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
         response.status(ruvia::http_status::kOk);
         return prepareStream(std::move(response), ResponseStreamKind::kGeneric, plan, ResponseTrailerIntent::kPresent);
     };

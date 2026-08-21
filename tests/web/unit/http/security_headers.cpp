@@ -22,11 +22,13 @@ namespace {
 
 using ruvia::applySecurityHeaders;
 using ruvia::Context;
+using ruvia::DefaultSecurityHeaderPolicy;
 using ruvia::HttpResponse;
-using ruvia::LegacyXssFilterPolicy;
 using ruvia::RequestMemory;
+using ruvia::SecurityHeaderConflictPolicy;
 using ruvia::SecurityHeader;
 using ruvia::SecurityHeadersOptions;
+using ruvia::XssProtectionHeaderPolicy;
 using ruvia::WorkerMemory;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::ContextServices;
@@ -119,11 +121,20 @@ concept AcceptsSecurityCustomHeaders = requires(Headers&& headers) {
 template <typename Headers>
 concept AssignsSecurityCustomHeaders = requires(SecurityHeadersOptions& options, Headers&& headers) { options.customHeaders = std::forward<Headers>(headers); };
 
+template <typename T>
+concept HasSecurityHeadersOverwriteExistingBoolean = requires(T& options) { options.overwriteExisting = true; };
+
 using SecurityHeaderArray = std::array<SecurityHeader, 1>;
 using SecurityHeaderVector = std::vector<SecurityHeader>;
 
 static_assert(std::is_aggregate_v<SecurityHeader>);
 static_assert(std::is_aggregate_v<SecurityHeadersOptions>);
+static_assert(SecurityHeadersOptions{}.contentTypeOptionsHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
+static_assert(SecurityHeadersOptions{}.frameOptionsHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
+static_assert(SecurityHeadersOptions{}.strictTransportSecurityHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
+static_assert(std::same_as<decltype(SecurityHeadersOptions{}.existingHeaders), SecurityHeaderConflictPolicy>);
+static_assert(SecurityHeadersOptions{}.existingHeaders == SecurityHeaderConflictPolicy::kPreserveExisting);
+static_assert(!HasSecurityHeadersOverwriteExistingBoolean<SecurityHeadersOptions>);
 constexpr SecurityHeader kLiteralSecurityHeader{
     .name = "X-Test",
     .value = "value",
@@ -233,21 +244,38 @@ RUVIA_TEST(security_headers_emit_hsts_only_for_tls_contexts) {
     RUVIA_CHECK_EQ(tls.response().header("Strict-Transport-Security"), std::string_view("max-age=31536000; includeSubDomains"));
 }
 
-RUVIA_TEST(security_headers_legacy_xss_filter_policy_is_explicit) {
-    static_assert(SecurityHeadersOptions{}.legacyXssFilter == LegacyXssFilterPolicy::kDisable);
+RUVIA_TEST(security_headers_xss_protection_header_policy_is_explicit) {
+    static_assert(SecurityHeadersOptions{}.xssProtectionHeader == XssProtectionHeaderPolicy::kEmitDisabled);
 
     SecurityContextFixture fixture;
-    SecurityHeadersOptions options;
-    options.legacyXssFilter = LegacyXssFilterPolicy::kOmitHeader;
+    const SecurityHeadersOptions options{
+        .xssProtectionHeader = XssProtectionHeaderPolicy::kOmit,
+    };
     applySecurityHeaders(fixture.context(), options);
 
     RUVIA_CHECK(!fixture.response().header("X-XSS-Protection").has_value());
 }
 
-RUVIA_TEST(security_headers_reject_invalid_legacy_xss_filter_policy) {
+RUVIA_TEST(security_headers_reject_invalid_xss_protection_header_policy) {
     SecurityContextFixture fixture;
-    SecurityHeadersOptions options;
-    options.legacyXssFilter = static_cast<LegacyXssFilterPolicy>(0xFF);
+    const SecurityHeadersOptions options{
+        .xssProtectionHeader = static_cast<XssProtectionHeaderPolicy>(0xFF),
+    };
+
+    bool rejected = false;
+    try {
+        applySecurityHeaders(fixture.context(), options);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(security_headers_reject_invalid_default_header_policy) {
+    SecurityContextFixture fixture;
+    const SecurityHeadersOptions options{
+        .frameOptionsHeader = static_cast<DefaultSecurityHeaderPolicy>(0xFF),
+    };
 
     bool rejected = false;
     try {
@@ -274,8 +302,8 @@ RUVIA_TEST(security_headers_empty_policy_is_not_emitted) {
 RUVIA_TEST(security_headers_disabled_options_omit_headers) {
     SecurityContextFixture fixture;
     SecurityHeadersOptions options;
-    options.frameOptions = false;
-    options.strictTransportSecurity = false;
+    options.frameOptionsHeader = DefaultSecurityHeaderPolicy::kOmit;
+    options.strictTransportSecurityHeader = DefaultSecurityHeaderPolicy::kOmit;
     applySecurityHeaders(fixture.context(), options);
     const auto& response = fixture.response();
 
@@ -318,7 +346,7 @@ RUVIA_TEST(security_headers_custom_hsts_is_still_tls_only) {
         {"Strict-Transport-Security", "max-age=1"},
     };
     SecurityHeadersOptions options;
-    options.strictTransportSecurity = false;
+    options.strictTransportSecurityHeader = DefaultSecurityHeaderPolicy::kOmit;
     options.customHeaders = custom;
 
     SecurityContextFixture plain(ContextServices{}.withPlainTransport("192.0.2.1"));
@@ -330,19 +358,34 @@ RUVIA_TEST(security_headers_custom_hsts_is_still_tls_only) {
     RUVIA_CHECK_EQ(tls.response().header("Strict-Transport-Security"), std::string_view("max-age=1"));
 }
 
-RUVIA_TEST(security_headers_respect_overwrite_existing_flag) {
-    // The default (overwriteExisting = false) must not clobber a header a handler
-    // already set -- the middleware only supplies defaults.
+RUVIA_TEST(security_headers_respect_existing_header_conflict_policy) {
+    // The default preserves a header a handler already set -- the middleware
+    // only supplies defaults.
     SecurityContextFixture keep;
     keep.context().header("X-Frame-Options", "SAMEORIGIN");
     applySecurityHeaders(keep.context(), SecurityHeadersOptions{});
     RUVIA_CHECK_EQ(keep.response().header("X-Frame-Options"), std::string_view("SAMEORIGIN"));
 
-    // With overwriteExisting = true, the security default replaces it.
     SecurityContextFixture replace;
     replace.context().header("X-Frame-Options", "SAMEORIGIN");
-    SecurityHeadersOptions overwrite;
-    overwrite.overwriteExisting = true;
-    applySecurityHeaders(replace.context(), overwrite);
+    applySecurityHeaders(replace.context(),
+        SecurityHeadersOptions{
+            .existingHeaders = SecurityHeaderConflictPolicy::kReplaceExisting,
+        });
     RUVIA_CHECK_EQ(replace.response().header("X-Frame-Options"), std::string_view("DENY"));
+}
+
+RUVIA_TEST(security_headers_reject_invalid_conflict_policy) {
+    SecurityContextFixture fixture;
+    const SecurityHeadersOptions options{
+        .existingHeaders = static_cast<SecurityHeaderConflictPolicy>(0xFF),
+    };
+
+    bool rejected = false;
+    try {
+        applySecurityHeaders(fixture.context(), options);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
 }

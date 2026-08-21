@@ -17,12 +17,12 @@ namespace {
 
 void storeRepeatedNextError(Context& context) {
     detail::ContextAccess::setError(context, std::make_exception_ptr(std::logic_error("next() called multiple times")));
-    detail::ContextAccess::setResponse(context, detail::makeDefaultErrorResponse(context.resource(), HttpErrorInfo(ruvia::http_status::kInternalServerError, "next_called_multiple_times", "next() called multiple times")));
+    detail::ContextAccess::setResponse(context, detail::makeDefaultErrorResponse(context.resource(), HttpErrorInfo({.status = ruvia::http_status::kInternalServerError, .code = "next_called_multiple_times", .message = "next() called multiple times"})));
 }
 
 void storeNextAfterResponseError(Context& context) {
     detail::ContextAccess::setError(context, std::make_exception_ptr(std::logic_error("next() called after respond()")));
-    detail::ContextAccess::setResponse(context, detail::makeDefaultErrorResponse(context.resource(), HttpErrorInfo(ruvia::http_status::kInternalServerError, "next_called_after_response", "next() called after respond()")));
+    detail::ContextAccess::setResponse(context, detail::makeDefaultErrorResponse(context.resource(), HttpErrorInfo({.status = ruvia::http_status::kInternalServerError, .code = "next_called_after_response", .message = "next() called after respond()"})));
 }
 
 detail::NextState::Control* makeNextControl(Context& context) {

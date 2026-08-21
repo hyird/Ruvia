@@ -68,7 +68,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
         const auto tokenResult = detail::generateSecureToken(idBuffer);
         const auto* token = tokenResult.ready();
         if (token == nullptr) {
-            c.respond(c.error(ruvia::http_status::kInternalServerError, "secure_random_failed", "secure token generation failed"));
+            c.respond(c.error({.status = ruvia::http_status::kInternalServerError, .code = "secure_random_failed", .message = "secure token generation failed"}));
             co_return;
         }
         existingId = token->value();

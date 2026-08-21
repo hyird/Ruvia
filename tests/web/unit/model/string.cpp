@@ -55,7 +55,7 @@ static_assert(!ExposesRvalueFixedStringView<ruvia::FixedString<6>>);
 RUVIA_TEST(model_string_public_construction_owns_input) {
     CountingMemoryResource resource;
     std::string input(128, 'a');
-    ruvia::String value(input, &resource);
+    ruvia::String value(input, {.resource = &resource});
     input.assign(input.size(), 'b');
     const std::string expected(128, 'a');
 
@@ -76,7 +76,7 @@ RUVIA_TEST(model_string_parser_factory_can_borrow_input) {
 
 RUVIA_TEST(model_string_owned_assignment_is_alias_safe) {
     CountingMemoryResource resource;
-    ruvia::String value(std::string(128, 'd'), &resource);
+    ruvia::String value(std::string(128, 'd'), {.resource = &resource});
     const auto alias = value.view().substr(31, 64);
 
     value.assignOwned(alias);
@@ -92,8 +92,8 @@ RUVIA_TEST(model_string_move_assignment_transfers_resource) {
     {
         const std::string sourceText(128, 's');
         const std::string targetText(128, 't');
-        ruvia::String source(sourceText, &sourceResource);
-        ruvia::String target(targetText, &targetResource);
+        ruvia::String source(sourceText, {.resource = &sourceResource});
+        ruvia::String target(targetText, {.resource = &targetResource});
 
         target = std::move(source);
         RUVIA_CHECK_EQ(target.resource(), &sourceResource);

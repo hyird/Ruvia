@@ -80,6 +80,28 @@ bool redisValueIntegerBool(const RedisValue& value) {
     throw RedisError(RedisError::Code::kProtocolError, "redis boolean reply is not 0 or 1");
 }
 
+bool redisSetReturnsPrevious(RedisSetPreviousValuePolicy policy) {
+    switch (policy) {
+        case RedisSetPreviousValuePolicy::kDiscard:
+            return false;
+        case RedisSetPreviousValuePolicy::kReturn:
+            return true;
+        default:
+            throw std::invalid_argument("redis set previous value policy is invalid");
+    }
+}
+
+bool redisXReadGroupUsesNoAck(RedisXReadGroupAcknowledgementPolicy policy) {
+    switch (policy) {
+        case RedisXReadGroupAcknowledgementPolicy::kTrackPending:
+            return false;
+        case RedisXReadGroupAcknowledgementPolicy::kNoAck:
+            return true;
+        default:
+            throw std::invalid_argument("redis xreadgroup acknowledgement policy is invalid");
+    }
+}
+
 std::span<const RedisValue> redisValueArray(const RedisValue& value) {
     if (value.kind() == RedisValue::Kind::kError) {
         throw RedisError(RedisError::Code::kCommandError, value.error());

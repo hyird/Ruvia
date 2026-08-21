@@ -123,56 +123,56 @@ void CacheControlFieldParser::update(std::string_view value) noexcept {
         const auto arg = eq == std::string_view::npos ? std::string_view{} : token.substr(eq + 1);
 
         if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "no-store")) {
-            value_.noStore = true;
+            value_.set(CacheControlDirective::kNoStore);
         } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) && detail::httpAsciiEqualsIgnoreCase(name, "no-cache")) {
-            value_.noCache = true;
+            value_.set(CacheControlDirective::kNoCache);
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "no-transform")) {
-            value_.noTransform = true;
+            value_.set(CacheControlDirective::kNoTransform);
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "must-revalidate")) {
-            value_.mustRevalidate = true;
+            value_.set(CacheControlDirective::kMustRevalidate);
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "proxy-revalidate")) {
-            value_.proxyRevalidate = true;
+            value_.set(CacheControlDirective::kProxyRevalidate);
         } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) && detail::httpAsciiEqualsIgnoreCase(name, "private")) {
-            value_.isPrivate = true;
+            value_.set(CacheControlDirective::kPrivate);
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "public")) {
-            value_.isPublic = true;
+            value_.set(CacheControlDirective::kPublic);
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "immutable")) {
-            value_.immutable = true;
+            value_.set(CacheControlDirective::kImmutable);
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "only-if-cached")) {
-            value_.onlyIfCached = true;
+            value_.set(CacheControlDirective::kOnlyIfCached);
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "max-age")) {
             if (!maxAgeSeen_) {
                 maxAgeSeen_ = true;
-                value_.maxAge = parseDeltaSeconds(arg);
+                value_.maxAge_ = parseDeltaSeconds(arg);
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "max-stale")) {
             if (!maxStaleSeen_) {
                 maxStaleSeen_ = true;
                 if (!hasArgument) {
-                    value_.maxStaleAny = true;
+                    value_.set(CacheControlDirective::kMaxStaleAny);
                 } else {
-                    value_.maxStale = parseDeltaSeconds(arg);
+                    value_.maxStale_ = parseDeltaSeconds(arg);
                 }
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "min-fresh")) {
             if (!minFreshSeen_) {
                 minFreshSeen_ = true;
-                value_.minFresh = parseDeltaSeconds(arg);
+                value_.minFresh_ = parseDeltaSeconds(arg);
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "s-maxage")) {
             if (!sMaxAgeSeen_) {
                 sMaxAgeSeen_ = true;
-                value_.sMaxAge = parseDeltaSeconds(arg);
+                value_.sMaxAge_ = parseDeltaSeconds(arg);
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "stale-while-revalidate")) {
             if (!staleWhileRevalidateSeen_) {
                 staleWhileRevalidateSeen_ = true;
-                value_.staleWhileRevalidate = parseDeltaSeconds(arg);
+                value_.staleWhileRevalidate_ = parseDeltaSeconds(arg);
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "stale-if-error")) {
             if (!staleIfErrorSeen_) {
                 staleIfErrorSeen_ = true;
-                value_.staleIfError = parseDeltaSeconds(arg);
+                value_.staleIfError_ = parseDeltaSeconds(arg);
             }
         }
     }

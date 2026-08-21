@@ -156,7 +156,10 @@ struct DeadlineAwareErrorHandler final {
     impl.finalize();
 
     ruvia::detail::HttpServerOptions options;
-    options.defaultRateLimitPerWorker = ruvia::RateLimitRule::fixedWindow(1, 60s);
+    options.defaultRateLimitPerWorker = ruvia::RateLimitRule::fixedWindow({
+        .maxRequests = 1,
+        .window = 60s,
+    });
 
     ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
     server.start();
@@ -228,7 +231,7 @@ struct DeadlineAwareErrorHandler final {
                 co_return;
             }
 
-            HpackDecoder decoder(std::pmr::get_default_resource());
+            HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             while (!result.ended) {
                 char headerBytes[kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;

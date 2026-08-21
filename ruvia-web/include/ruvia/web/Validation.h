@@ -31,28 +31,35 @@ template <typename T>
 
 }  // namespace detail
 
+struct ValidationErrorOptions final {
+    HttpStatusCode status{http_status::kBadRequest};
+    BorrowedText code{"validation_failed"};
+    BorrowedText message{"request validation failed"};
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 class ValidationError final : public std::exception {
 public:
     using IssueList = std::pmr::vector<ValidationIssue>;
 
-    explicit ValidationError(const IssueList& issues, HttpStatusCode statusCode = http_status::kBadRequest, std::string_view code = "validation_failed", std::string_view message = "request validation failed", std::pmr::memory_resource* resource = nullptr)
-        : resource_(detail::pmrResourceOrDefault(resource)),
+    explicit ValidationError(const IssueList& issues, ValidationErrorOptions options = {})
+        : resource_(detail::pmrResourceOrDefault(options.resource)),
           issues_(resource_),
-          statusCode_(statusCode),
-          code_(code, resource_),
-          message_(message, resource_) {
+          statusCode_(options.status),
+          code_(options.code.view(), resource_),
+          message_(options.message.view(), resource_) {
         issues_.reserve(issues.size());
         for (const auto& issue : issues) {
-            issues_.push_back(ValidationIssue(issue.field(), issue.code(), issue.message(), resource_));
+            issues_.push_back(ValidationIssue({.field = issue.field(), .code = issue.code(), .message = issue.message(), .resource = resource_}));
         }
     }
 
-    explicit ValidationError(IssueList&& issues, HttpStatusCode statusCode = http_status::kBadRequest, std::string_view code = "validation_failed", std::string_view message = "request validation failed", std::pmr::memory_resource* resource = nullptr)
-        : resource_(detail::pmrResourceOrDefault(resource)),
+    explicit ValidationError(IssueList&& issues, ValidationErrorOptions options = {})
+        : resource_(detail::pmrResourceOrDefault(options.resource)),
           issues_(std::move(issues), resource_),
-          statusCode_(statusCode),
-          code_(code, resource_),
-          message_(message, resource_) {}
+          statusCode_(options.status),
+          code_(options.code.view(), resource_),
+          message_(options.message.view(), resource_) {}
 
     [[nodiscard]] const char* what() const noexcept override {
         return message_.c_str();
@@ -64,7 +71,7 @@ public:
     [[nodiscard]] const IssueList& issues() const&& = delete;
 
     [[nodiscard]] HttpErrorInfo info() const& noexcept {
-        return HttpErrorInfo(statusCode_, code_, message_, {}, issues_);
+        return HttpErrorInfo({.status = statusCode_, .code = code_, .message = message_, .validationIssues = issues_});
     }
     [[nodiscard]] HttpErrorInfo info() const&& = delete;
 
@@ -80,12 +87,16 @@ class Validator final {
 public:
     using IssueList = ValidationError::IssueList;
 
-    explicit Validator(std::pmr::memory_resource* resource = nullptr)
-        : resource_(detail::pmrResourceOrDefault(resource)),
+    struct Options final {
+        std::pmr::memory_resource* resource{nullptr};
+    };
+
+    explicit Validator(Options options = {})
+        : resource_(detail::pmrResourceOrDefault(options.resource)),
           issues_(resource_) {}
 
     Validator& add(std::string_view field, std::string_view code, std::string_view message) & {
-        issues_.push_back(ValidationIssue(field, code, message, resource_));
+        issues_.push_back(ValidationIssue({.field = field, .code = code, .message = message, .resource = resource_}));
         return *this;
     }
 
@@ -155,15 +166,21 @@ public:
         return resource_;
     }
 
-    void throwIfInvalid(HttpStatusCode statusCode = http_status::kBadRequest, std::string_view code = "validation_failed", std::string_view message = "request validation failed") const& {
+    void throwIfInvalid(ValidationErrorOptions options = {}) const& {
         if (!ok()) {
-            throw ValidationError(issues_, statusCode, code, message, resource_);
+            if (options.resource == nullptr) {
+                options.resource = resource_;
+            }
+            throw ValidationError(issues_, options);
         }
     }
 
-    void throwIfInvalid(HttpStatusCode statusCode = http_status::kBadRequest, std::string_view code = "validation_failed", std::string_view message = "request validation failed") && {
+    void throwIfInvalid(ValidationErrorOptions options = {}) && {
         if (!ok()) {
-            throw ValidationError(std::move(issues_), statusCode, code, message, resource_);
+            if (options.resource == nullptr) {
+                options.resource = resource_;
+            }
+            throw ValidationError(std::move(issues_), options);
         }
     }
 

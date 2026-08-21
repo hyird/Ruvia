@@ -49,6 +49,18 @@ template <typename T>
     requires requires { typename T::RuviaRequestModelSchema; }
 struct FormBody<T, void> : std::true_type {};
 
+struct ModelOptions final {
+    std::pmr::memory_resource* resource{nullptr};
+};
+
+struct ModelParseOptions final {
+    std::pmr::memory_resource* resource{nullptr};
+};
+
+struct ModelSerializeOptions final {
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 template <std::size_t N>
 struct FixedString {
     char value[N]{};
@@ -79,11 +91,11 @@ template <std::size_t LeftN, std::size_t RightN>
 
 class String final {
 public:
-    explicit String(std::pmr::memory_resource* resource = nullptr)
-        : String(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+    explicit String(ModelOptions options = {})
+        : String(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(options.resource)) {}
 
-    String(std::string_view value, std::pmr::memory_resource* resource = nullptr)
-        : resource_(detail::pmrResourceOrDefault(resource)),
+    String(std::string_view value, ModelOptions options = {})
+        : resource_(detail::pmrResourceOrDefault(options.resource)),
           storage_(std::in_place_type<std::pmr::string>, value, resource_) {}
 
     String(const String&) = delete;
@@ -240,8 +252,8 @@ class BoxedArray final {
 public:
     using value_type = T;
 
-    explicit BoxedArray(std::pmr::memory_resource* resource = nullptr)
-        : BoxedArray(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+    explicit BoxedArray(ModelOptions options = {})
+        : BoxedArray(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(options.resource)) {}
 
     BoxedArray(const BoxedArray&) = delete;
     BoxedArray& operator=(const BoxedArray&) = delete;
@@ -307,8 +319,8 @@ public:
     template <typename... Args>
     T& emplace(Args&&... args) & {
         T* value = nullptr;
-        if constexpr (sizeof...(Args) == 0 && std::constructible_from<T, std::pmr::memory_resource*>) {
-            value = detail::constructPmrObject<T>(detail::ResolvedPmrResourceTag{}, resource_, resource_);
+        if constexpr (sizeof...(Args) == 0 && std::constructible_from<T, ModelOptions>) {
+            value = detail::constructPmrObject<T>(detail::ResolvedPmrResourceTag{}, resource_, ModelOptions{.resource = resource_});
         } else {
             value = detail::constructPmrObject<T>(detail::ResolvedPmrResourceTag{}, resource_, std::forward<Args>(args)...);
         }

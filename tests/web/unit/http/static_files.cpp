@@ -59,7 +59,7 @@ RUVIA_TEST(static_root_serves_dotfiles_when_opted_in) {
     const auto dir = makeDotfileRoot();
     ruvia::StaticRootOptions options;
     options.fileTypes = ruvia::StaticFileTypePolicy::all();
-    options.serveDotfiles = true;
+    options.dotfiles = ruvia::StaticDotfilePolicy::kServe;
     ruvia::StaticRoot root(dir, std::move(options));
 
     RUVIA_CHECK(served(root, ".env"));

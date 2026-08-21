@@ -11,6 +11,7 @@
 #include <chrono>
 #include <concepts>
 #include <memory>
+#include <memory_resource>
 #include <semaphore>
 #include <stdexcept>
 #include <thread>
@@ -23,11 +24,25 @@ concept HasRvalueWorkerWaitValue = requires(T&& result) { std::move(result).valu
 template <typename T>
 concept HasRvalueWorkerBorrow = requires(T&& receiver) { std::move(receiver).worker(); };
 
+template <typename T>
+concept HasPositionalOneShotResourceFactory = requires(ruvia::WorkerHandle worker, std::pmr::memory_resource* resource) {
+    ruvia::makeOneShot<T>(worker, resource);
+};
+
+template <typename T>
+concept HasOneShotOptionsFactory = requires(ruvia::WorkerHandle worker, std::pmr::memory_resource* resource) {
+    ruvia::makeOneShot<T>(worker, ruvia::OneShotOptions{.resource = resource});
+};
+
 static_assert(!std::is_default_constructible_v<ruvia::OneShotReceiver<int>>);
 static_assert(std::is_move_constructible_v<ruvia::OneShotReceiver<int>>);
 static_assert(!std::is_move_assignable_v<ruvia::OneShotReceiver<int>>);
 static_assert(!HasRvalueWorkerWaitValue<ruvia::WorkerWaitResult<int>>);
 static_assert(!HasRvalueWorkerBorrow<ruvia::OneShotReceiver<int>>);
+static_assert(std::is_aggregate_v<ruvia::OneShotOptions>);
+static_assert(std::same_as<decltype(ruvia::OneShotOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(HasOneShotOptionsFactory<int>);
+static_assert(!HasPositionalOneShotResourceFactory<int>);
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::WorkerWaitResult<int>&>().status()), ruvia::WorkerWaitStatus>);
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::WorkerWaitResult<int>&>().value()), const int&>);
 static_assert(!std::is_constructible_v<ruvia::WorkerWaitResult<int>, ruvia::WorkerWaitStatus>);

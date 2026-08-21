@@ -106,6 +106,11 @@ enum class HttpClientRedirectContentDisposition : std::uint8_t {
     kDrop,
 };
 
+struct HttpClientRedirectRequestPlanOptions final {
+    HttpStatusCode status;
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 // The method is copied into caller-selected PMR storage so the plan does not
 // inherit the request or request-method backing storage lifetime.
 class HttpClientRedirectRequestPlan final {
@@ -125,7 +130,7 @@ public:
     }
 
 private:
-    friend HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequestView&, HttpStatusCode, std::pmr::memory_resource*);
+    friend HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequestView&, HttpClientRedirectRequestPlanOptions);
 
     HttpClientRedirectRequestPlan(std::string_view method, HttpClientRedirectContentDisposition contentDisposition, std::pmr::memory_resource* resource);
 
@@ -133,7 +138,7 @@ private:
     HttpClientRedirectContentDisposition contentDisposition_;
 };
 
-[[nodiscard]] HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequestView& request, HttpStatusCode status, std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequestView& request, HttpClientRedirectRequestPlanOptions options);
 
 // This classification has no alternative-specific payload, so an enum is the
 // complete result rather than a status coupled to unrelated fields.
@@ -152,6 +157,12 @@ enum class HttpClientRedirectResolutionError : std::uint8_t {
     // than http/https). The response itself is well-formed; the I/O owner
     // decides whether to surface the response or fail the exchange.
     kUnsupportedScheme,
+};
+
+struct HttpClientRedirectTargetOptions final {
+    std::string_view currentTarget{};
+    std::string_view location{};
+    std::pmr::memory_resource* resource{nullptr};
 };
 
 class HttpClientRedirectResolutionResult;
@@ -253,7 +264,7 @@ public:
     const HttpClientRedirectResolutionFailure* failure() const&& = delete;
 
 private:
-    friend HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOriginView&, std::string_view, std::string_view, std::pmr::memory_resource*);
+    friend HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOriginView&, HttpClientRedirectTargetOptions);
 
     using Value = std::variant<HttpClientResolvedRedirect, HttpClientRedirectResolutionFailure>;
 
@@ -274,6 +285,6 @@ private:
     Value value_;
 };
 
-[[nodiscard]] HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOriginView& origin, HttpClientRedirectTargetOptions options);
 
 }  // namespace ruvia

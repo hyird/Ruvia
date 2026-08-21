@@ -58,8 +58,7 @@ public:
     [[nodiscard]] RedisHandle redis() const;
     [[nodiscard]] RedisHandle redis(std::string_view alias) const;
 #endif
-    [[nodiscard]] HttpClientHandle httpClient() const;
-    [[nodiscard]] HttpClientHandle httpClient(std::string_view alias) const;
+    [[nodiscard]] HttpClientHandle httpClient(HttpClientConfig config) const;
 
 private:
     friend class detail::WebWorkerDispatch;

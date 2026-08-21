@@ -16,17 +16,22 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/OperationOptions.h"
 #include "ruvia/web/ScopedOperation.h"
+#include "ruvia/web/TcpSocketOptions.h"
 
 namespace ruvia {
 
 namespace detail {
 class HttpClientPool;
 class HttpClientRegistry;
-struct HttpClientRequestAccess;
+class HttpClientRequestStorage;
+class HttpClientResponseState;
+struct HttpClientRequestStorageAccess;
 }
 
 class Context;
 class HttpClientHandle;
+class ResponseStreamWriter;
+class WorkerHandle;
 
 enum class HttpClientProtocol : std::uint8_t {
     kNegotiate,
@@ -34,37 +39,20 @@ enum class HttpClientProtocol : std::uint8_t {
     kHttp2Only,
 };
 
-class HttpClientConfig final {
-public:
-    [[nodiscard]] static HttpClientConfig http(std::string_view host) {
-        return HttpClientConfig(host, HttpScheme::kHttp, 80);
-    }
+enum class HttpClientTlsPeerVerificationPolicy : std::uint8_t {
+    kVerify,
+    kSkipVerification,
+};
 
-    [[nodiscard]] static HttpClientConfig https(std::string_view host) {
-        return HttpClientConfig(host, HttpScheme::kHttps, 443);
-    }
+enum class HttpClientReceivedCookiePolicy : std::uint8_t {
+    kIgnore,
+    kRetainAndSend,
+};
 
-    [[nodiscard]] std::string_view host() const& noexcept {
-        return host_;
-    }
-    std::string_view host() const&& = delete;
-
-    [[nodiscard]] HttpScheme scheme() const noexcept {
-        return scheme_;
-    }
-
-    [[nodiscard]] std::uint16_t port() const noexcept {
-        return port_;
-    }
-
-    HttpClientConfig& setPort(std::uint16_t port) {
-        if (port == 0) {
-            throw std::invalid_argument("http client port must be greater than zero");
-        }
-        port_ = port;
-        return *this;
-    }
-
+struct HttpClientConfig final {
+    HttpScheme scheme{HttpScheme::kHttps};
+    std::string host;
+    std::optional<std::uint16_t> port;
     std::size_t connectionsPerWorker{1};
     std::size_t maxConcurrentHttp2StreamsPerConnection{100};
     std::size_t maxBufferedRequestsPerWorker{1024};
@@ -76,24 +64,16 @@ public:
     std::optional<std::chrono::milliseconds> acquireTimeout{5000};
     std::size_t maxResponseBytes{16 * 1024 * 1024};
     HttpClientProtocol protocol{HttpClientProtocol::kNegotiate};
-    bool verifyCertificate{true};
-    bool tcpNoDelay{true};
-    bool keepAlive{true};
-    bool cookiesEnabled{false};
+    HttpClientTlsPeerVerificationPolicy tlsPeerVerification{HttpClientTlsPeerVerificationPolicy::kVerify};
+    TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
+    TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kEnable};
+    HttpClientReceivedCookiePolicy receivedCookies{HttpClientReceivedCookiePolicy::kIgnore};
     std::string caFile;
     std::string certificateChainFile;
     std::string privateKeyFile;
     std::string privateKeyPassword;
     std::string userAgent{"Ruvia"};
     std::vector<std::pair<std::string, std::string>> cookies;
-
-private:
-    HttpClientConfig(std::string_view host, HttpScheme scheme, std::uint16_t port)
-        : host_(host), scheme_(scheme), port_(port) {}
-
-    std::string host_;
-    HttpScheme scheme_;
-    std::uint16_t port_;
 };
 
 class HttpClientError final : public std::runtime_error {
@@ -123,21 +103,17 @@ private:
     Code code_;
 };
 
-class HttpClientRequest final {
-public:
-    HttpClientRequest(const HttpClientRequest&) = delete;
-    HttpClientRequest& operator=(const HttpClientRequest&) = delete;
-    HttpClientRequest(HttpClientRequest&&) noexcept = default;
-    HttpClientRequest& operator=(HttpClientRequest&&) noexcept = default;
+namespace detail {
 
-    HttpClientRequest& setHeader(std::string_view name, std::string_view value);
-    HttpClientRequest& appendHeader(std::string_view name, std::string_view value);
-    HttpClientRequest& removeHeader(std::string_view name);
-    HttpClientRequest& setContentType(std::string_view contentType);
-    HttpClientRequest& addCookie(std::string_view name, std::string_view value);
-    HttpClientRequest& setBody(std::string_view body);
-    HttpClientRequest& setBody(std::span<const std::byte> body);
-    HttpClientRequest& clearBody() noexcept;
+class HttpClientRequestStorage final {
+public:
+    HttpClientRequestStorage(const HttpClientRequestStorage&) = delete;
+    HttpClientRequestStorage& operator=(const HttpClientRequestStorage&) = delete;
+    HttpClientRequestStorage(HttpClientRequestStorage&&) noexcept = default;
+    HttpClientRequestStorage& operator=(HttpClientRequestStorage&&) noexcept = default;
+
+    HttpClientRequestStorage& appendHeader(std::string_view name, std::string_view value);
+    HttpClientRequestStorage& setBody(std::string_view body);
 
     [[nodiscard]] std::string_view method() const& noexcept { return method_; }
     [[nodiscard]] std::string_view method() const&& = delete;
@@ -147,8 +123,9 @@ public:
     [[nodiscard]] std::string_view body() const&& = delete;
 
 private:
-    friend class HttpClientHandle;
-    friend struct detail::HttpClientRequestAccess;
+    friend class ::ruvia::HttpClientHandle;
+    friend class HttpClientPool;
+    friend struct HttpClientRequestStorageAccess;
 
     struct Header final {
         Header(std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
@@ -157,7 +134,7 @@ private:
         std::pmr::string value;
     };
 
-    HttpClientRequest(
+    HttpClientRequestStorage(
         std::string_view method,
         std::string_view target,
         std::pmr::memory_resource* resource);
@@ -169,36 +146,84 @@ private:
     bool hasBody_{false};
 };
 
+}  // namespace detail
+
+class HttpClientResponseBody final {
+public:
+    HttpClientResponseBody(const HttpClientResponseBody&) = delete;
+    HttpClientResponseBody& operator=(const HttpClientResponseBody&) = delete;
+    HttpClientResponseBody(HttpClientResponseBody&& other) noexcept;
+    HttpClientResponseBody& operator=(HttpClientResponseBody&& other) noexcept;
+    ~HttpClientResponseBody();
+
+    // The returned view remains valid until the next body operation. A null
+    // optional is the only end-of-body signal; an empty data chunk is never
+    // returned. Reads are linear and concurrent operations are rejected.
+    [[nodiscard]] ScopedOperation<std::optional<std::string_view>> read();
+
+    // Collects the unread remainder of this same stream. maxBytes is a caller
+    // bound in addition to the origin's transport bound.
+    [[nodiscard]] ScopedOperation<std::pmr::string> readAll(
+        std::size_t maxBytes = 16 * 1024 * 1024);
+
+    // Copies this same stream into a controller response stream with natural
+    // backpressure. This is the common forwarding path for both small and
+    // long-lived upstream responses.
+    [[nodiscard]] ScopedOperation<void> pipeTo(ResponseStreamWriter& output);
+
+    [[nodiscard]] bool complete() const noexcept;
+
+private:
+    friend class HttpClientResponse;
+    friend class detail::HttpClientPool;
+
+    [[nodiscard]] Task<std::optional<std::string_view>> readTask();
+    [[nodiscard]] Task<std::pmr::string> readAllTask(std::size_t maxBytes);
+    [[nodiscard]] Task<void> pipeToTask(ResponseStreamWriter& output);
+
+    explicit HttpClientResponseBody(detail::HttpClientResponseState* state) noexcept
+        : state_(state) {}
+
+    detail::HttpClientResponseState* state_{nullptr};
+    bool readActive_{false};
+    detail::ScopedOperationScope operationScope_;
+};
+
 class HttpClientResponse final {
 public:
     HttpClientResponse(const HttpClientResponse&) = delete;
     HttpClientResponse& operator=(const HttpClientResponse&) = delete;
-    HttpClientResponse(HttpClientResponse&&) noexcept = default;
-    HttpClientResponse& operator=(HttpClientResponse&&) noexcept = default;
+    HttpClientResponse(HttpClientResponse&& other) noexcept;
+    HttpClientResponse& operator=(HttpClientResponse&& other) noexcept;
+    ~HttpClientResponse();
 
-    [[nodiscard]] HttpStatusCode status() const noexcept { return status_; }
-    [[nodiscard]] HttpProtocolVersion protocolVersion() const noexcept { return protocolVersion_; }
-    [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const& noexcept { return headers_; }
+    [[nodiscard]] HttpStatusCode status() const noexcept;
+    [[nodiscard]] HttpProtocolVersion protocolVersion() const noexcept;
+    [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const& noexcept;
     [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const&& = delete;
-    [[nodiscard]] std::span<const HttpClientResponseHeader> trailers() const& noexcept { return trailers_; }
+    [[nodiscard]] std::span<const HttpClientResponseHeader> trailers() const& noexcept;
     [[nodiscard]] std::span<const HttpClientResponseHeader> trailers() const&& = delete;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view) const&& = delete;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const& noexcept;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view) const&& = delete;
-    [[nodiscard]] std::string_view body() const& noexcept { return body_; }
-    [[nodiscard]] std::string_view body() const&& = delete;
+    [[nodiscard]] HttpClientResponseBody& body() & noexcept { return body_; }
+    [[nodiscard]] const HttpClientResponseBody& body() const& = delete;
+    [[nodiscard]] HttpClientResponseBody& body() && = delete;
 
 private:
     friend class detail::HttpClientPool;
 
-    explicit HttpClientResponse(std::pmr::memory_resource* resource = nullptr);
+    HttpClientResponse(
+        std::pmr::memory_resource* resource,
+        const WorkerHandle& worker,
+        detail::HttpClientPool& pool);
+    HttpClientResponse(detail::HttpClientResponseState* state, bool retain) noexcept;
+    void release() noexcept;
 
-    HttpStatusCode status_{http_status::kOk};
-    HttpProtocolVersion protocolVersion_{HttpProtocolVersion::kHttp11};
-    std::pmr::vector<HttpClientResponseHeader> headers_;
-    std::pmr::vector<HttpClientResponseHeader> trailers_;
-    std::pmr::string body_;
+    detail::HttpClientResponseState* state_{nullptr};
+    HttpClientResponseBody body_{state_};
+    bool consumer_{true};
 };
 
 struct HttpClientStats {
@@ -215,10 +240,9 @@ public:
     HttpClientHandle(const HttpClientHandle& other);
     HttpClientHandle& operator=(const HttpClientHandle&) = delete;
 
-    [[nodiscard]] HttpClientRequest newRequest(HttpKnownMethod method, std::string_view target) const;
-    [[nodiscard]] HttpClientRequest newRequest(std::string_view method, std::string_view target) const;
-    [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const;
-    [[nodiscard]] ScopedOperation<HttpClientResponse> sendRequest(HttpClientRequest request) const;
+    [[nodiscard]] ScopedOperation<HttpClientResponse> send(
+        const HttpClientRequestView& request,
+        OperationOptions options = {}) const;
     [[nodiscard]] HttpClientStats stats() const;
     [[nodiscard]] std::string_view host() const&;
     [[nodiscard]] std::string_view host() const&& = delete;
@@ -226,7 +250,10 @@ public:
     [[nodiscard]] HttpScheme scheme() const;
 private:
     friend class detail::HttpClientRegistry;
+    friend class Context;
+    friend class WebWorkerContext;
     HttpClientHandle(detail::HttpClientPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope) noexcept;
+    [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
     detail::HttpClientPool* pool_{nullptr};

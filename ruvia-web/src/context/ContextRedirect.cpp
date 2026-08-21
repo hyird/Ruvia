@@ -199,14 +199,16 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
 
 }  // namespace
 
-HttpResponse Context::redirect(std::string_view location, HttpStatusCode statusCode) const {
+HttpResponse Context::redirect(RedirectResponseOptions options) const {
+    const auto location = options.location.view();
+    const auto statusCode = options.status;
     if (!isRedirectStatus(statusCode)) {
         throw std::invalid_argument("redirect status must be 301, 302, 303, 307, or 308");
     }
     if (redirectLocationContainsLineBreak(location)) {
         throw std::invalid_argument("redirect location must not contain CR or LF");
     }
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     applyResponseState(response, statusCode);
     if (redirectLocationNeedsEncoding(location)) {
         auto encodedLocation = encodeRedirectLocation(location, resource());

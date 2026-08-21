@@ -24,7 +24,8 @@ enum class WebSocketAbortDisposition : std::uint8_t { kAbortTransport, kNoTransp
 enum class WebSocketOutputConsumeStatus : std::uint8_t { kPending, kDrained, kOutOfRange };
 enum class WebSocketFeedStatus : std::uint8_t { kAccepted, kInactive };
 
-struct WebSocketServerOptions final {
+struct WebSocketServerConnectionOptions final {
+    std::pmr::memory_resource* resource{nullptr};
     ProtocolByteLimit messageLimit{ProtocolByteLimit::unlimited()};
     WebSocketCompression compression{WebSocketCompression::kDisabled};
 };
@@ -132,7 +133,7 @@ private:
 // masked). Event views remain valid until the next feed() or nextEvent().
 class WebSocketServerConnection final {
 public:
-    explicit WebSocketServerConnection(std::pmr::memory_resource* resource = nullptr, WebSocketServerOptions options = {});
+    explicit WebSocketServerConnection(WebSocketServerConnectionOptions options = {});
     ~WebSocketServerConnection();
     WebSocketServerConnection(const WebSocketServerConnection&) = delete;
     WebSocketServerConnection& operator=(const WebSocketServerConnection&) = delete;

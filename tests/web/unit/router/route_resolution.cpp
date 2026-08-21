@@ -63,7 +63,7 @@ static_assert(kLiteralWebSocketOptions.subprotocols == "chat.v1");
 static_assert("chat.v1" == kLiteralWebSocketOptions.subprotocols);
 
 ruvia::Task<ruvia::HttpResponse> routeHandler(void*, ruvia::Context& context) {
-    co_return ruvia::HttpResponse(context.resource());
+    co_return ruvia::HttpResponse({.resource = context.resource()});
 }
 
 ruvia::Task<void> streamRouteHandler(void*, ruvia::Context&) {
@@ -92,7 +92,9 @@ RUVIA_TEST(route_endpoint_binds_handler_shape_and_only_relevant_metadata) {
     std::pmr::string sourceProtocols("chat, superchat", std::pmr::get_default_resource());
     ruvia::WebSocketRouteOptions options;
     options.subprotocols = sourceProtocols;
-    options.lifecycle.heartbeat = ruvia::WebSocketHeartbeatPolicy::periodic(std::chrono::milliseconds(25));
+    options.lifecycle.heartbeat = ruvia::WebSocketHeartbeatPolicy::periodic({
+        .pingInterval = std::chrono::milliseconds(25),
+    });
     const auto webSocket = RouteEndpoint::webSocket(std::pmr::get_default_resource(), RouteStreamHandler(nullptr, &streamRouteHandler), options);
     sourceProtocols.assign("mutated");
     RUVIA_CHECK(webSocket.buffered() == nullptr);

@@ -56,7 +56,7 @@ RUVIA_TEST(request_model_required_and_optional_fields_are_structural) {
     RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("requiredValue"));
     RUVIA_CHECK(!ruvia::fromJson<RequiredOptionalModel>("{}").has_value());
 
-    RUVIA_CHECK(!ruvia::fromForm<RequiredOptionalModel>("", std::pmr::get_default_resource()).has_value());
+    RUVIA_CHECK(!ruvia::fromForm<RequiredOptionalModel>("", {.resource = std::pmr::get_default_resource()}).has_value());
     auto partialForm = ruvia::detail::ModelParseAccess::parseFormBorrowedPartial<RequiredOptionalModel>("", std::pmr::get_default_resource());
     RUVIA_CHECK(partialForm.has_value());
     if (partialForm) {
@@ -196,6 +196,26 @@ RUVIA_TEST(validation_error_preserves_special_characters_as_typed_data) {
         RUVIA_CHECK_EQ(issues.size(), std::size_t{1});
         RUVIA_CHECK_EQ(issues[0].field(), std::string_view("f\"x"));
         RUVIA_CHECK_EQ(issues[0].message(), std::string_view("a\"b\\c"));
+    }
+}
+
+RUVIA_TEST(validation_error_options_control_reported_error_info) {
+    Validator v;
+    v.add("field", "required", "missing");
+
+    try {
+        v.throwIfInvalid({
+            .status = ruvia::http_status::kUnprocessableContent,
+            .code = "invalid_payload",
+            .message = "payload failed validation",
+        });
+        RUVIA_CHECK(false);
+    } catch (const ruvia::ValidationError& error) {
+        const auto info = error.info();
+        RUVIA_CHECK_EQ(info.status(), ruvia::http_status::kUnprocessableContent);
+        RUVIA_CHECK_EQ(info.code(), std::string_view("invalid_payload"));
+        RUVIA_CHECK_EQ(info.message(), std::string_view("payload failed validation"));
+        RUVIA_CHECK_EQ(info.validationIssues().size(), std::size_t{1});
     }
 }
 

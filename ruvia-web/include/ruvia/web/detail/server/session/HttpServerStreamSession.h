@@ -120,7 +120,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
 
         std::optional<RequestMemory> requestMemoryStorage;
         auto& requestMemory = emplaceRequestMemory(requestMemoryStorage, memory_, std::span<std::byte>(workSet->arenaBlock, sizeof(workSet->arenaBlock)));
-        HttpResponse response(requestMemory.resource());
+        HttpResponse response({.resource = requestMemory.resource()});
         HttpResponseCodingPolicy responseCodingPolicy = HttpResponseCodingPolicy::disabled();
         // Holds the next pipelined request from the moment a body route hands it
         // over until the read buffer is cleaned up below. Declared before
@@ -220,7 +220,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                 }
                 if (const auto* redirect = options_.redirect()) {
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
-                        closingRejection = Http1ClosingRejection::error(HttpErrorInfo(ruvia::http_status::kBadRequest, {}, "missing Host header"));
+                        closingRejection = Http1ClosingRejection::error(HttpErrorInfo({.status = ruvia::http_status::kBadRequest, .message = "missing Host header"}));
                         break;
                     }
                     response = makeAutoHttpsRedirectResponse(parsed.request, requestMemory, redirect->httpsPort);
@@ -228,10 +228,11 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                         response = co_await routes.handleError(
                             parsed.request,
                             requestMemory,
-                            HttpErrorInfo(
-                                ruvia::http_status::kNotAcceptable,
-                                "not_acceptable",
-                                "no acceptable response content coding"),
+                            HttpErrorInfo({
+                                .status = ruvia::http_status::kNotAcceptable,
+                                .code = "not_acceptable",
+                                .message = "no acceptable response content coding",
+                            }),
                             requestServices);
                         // The redirect branch commits directly because its
                         // connection is intentionally closing; make the
@@ -298,7 +299,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     // A response stream commits its representation before a
                     // buffered status can be inspected. WebSocket upgrades do
                     // not select an HTTP response representation.
-                    closingRejection = Http1ClosingRejection::error(HttpErrorInfo(ruvia::http_status::kNotAcceptable, "not_acceptable", "no acceptable response content coding"));
+                    closingRejection = Http1ClosingRejection::error(HttpErrorInfo({.status = ruvia::http_status::kNotAcceptable, .code = "not_acceptable", .message = "no acceptable response content coding"}));
                     break;
                 }
                 const auto maxRequestBodyBytes = requestBodyByteLimit(endpoint.requestBodyMode(), options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes, resolved->route().maxRequestBodyBytes());

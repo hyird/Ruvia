@@ -13,12 +13,16 @@
 
 namespace ruvia {
 
+struct TaskScopeOptions final {
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 class TaskScope final {
 public:
     // The worker is borrowed: the scope must not outlive the caller's
     // address-stable handle, matching the borrow-only hot-path rule.
-    explicit TaskScope(const WorkerHandle& worker, std::pmr::memory_resource* resource = nullptr);
-    TaskScope(WorkerHandle&&, std::pmr::memory_resource* = nullptr) = delete;
+    explicit TaskScope(const WorkerHandle& worker, TaskScopeOptions options = {});
+    TaskScope(WorkerHandle&&, TaskScopeOptions = {}) = delete;
     ~TaskScope();
 
     TaskScope(const TaskScope&) = delete;

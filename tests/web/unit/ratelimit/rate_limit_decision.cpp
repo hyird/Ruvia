@@ -133,7 +133,7 @@ RUVIA_TEST(http1_closing_rejection_has_exclusive_error_alternatives) {
     RUVIA_CHECK(none.error() == nullptr);
     RUVIA_CHECK(none.rateLimit() == nullptr);
 
-    const auto ordinary = Http1ClosingRejection::error(ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, "bad request"));
+    const auto ordinary = Http1ClosingRejection::error(ruvia::HttpErrorInfo({.status = ruvia::http_status::kBadRequest, .message = "bad request"}));
     RUVIA_CHECK(ordinary.error() != nullptr);
     RUVIA_CHECK_EQ(ordinary.error()->status(), ruvia::http_status::kBadRequest);
     RUVIA_CHECK(ordinary.rateLimit() == nullptr);
@@ -151,7 +151,10 @@ RUVIA_TEST(rate_limit_enforces_per_key_request_budget) {
     // maxRequests admissions and is then denied, while a different key is counted
     // independently and is unaffected. A 60s window keeps every call in the test
     // inside one window, so the outcome is deterministic without clock control.
-    const auto rule = RateLimitRule::fixedWindow(3, std::chrono::seconds(60));
+    const auto rule = RateLimitRule::fixedWindow({
+        .maxRequests = 3,
+        .window = std::chrono::seconds(60),
+    });
     RateLimiter limiter(rule, RouteRateLimitPresence::kAbsent, 16);
     RUVIA_CHECK(limiter.hasDefaultRule());
 
@@ -172,13 +175,21 @@ RUVIA_TEST(rate_limit_oversized_key_honors_fail_mode) {
     // A remote address longer than the fixed inline key buffer cannot be tracked.
     // Under failClosed (the default) such a request is DENIED rather than silently
     // admitted, so an attacker cannot bypass the limiter with an overlong key.
-    const auto closed = RateLimitRule::fixedWindow(5, std::chrono::seconds(1), RateLimitOverflowPolicy::kDeny);
+    const auto closed = RateLimitRule::fixedWindow({
+        .maxRequests = 5,
+        .window = std::chrono::seconds(1),
+        .overflowPolicy = RateLimitOverflowPolicy::kDeny,
+    });
     RateLimiter closedLimiter(closed, RouteRateLimitPresence::kAbsent, 8);
     const std::string longKey(100, 'a');
     RUVIA_CHECK(!rateLimitAllowed(decideRequestRateLimit(&closedLimiter, longKey)));
 
     // Under failOpen the same request is admitted (availability over strictness).
-    const auto open = RateLimitRule::fixedWindow(5, std::chrono::seconds(1), RateLimitOverflowPolicy::kAllow);
+    const auto open = RateLimitRule::fixedWindow({
+        .maxRequests = 5,
+        .window = std::chrono::seconds(1),
+        .overflowPolicy = RateLimitOverflowPolicy::kAllow,
+    });
     RateLimiter openLimiter(open, RouteRateLimitPresence::kAbsent, 8);
     RUVIA_CHECK(rateLimitAllowed(decideRequestRateLimit(&openLimiter, longKey)));
 }
@@ -193,7 +204,10 @@ RUVIA_TEST(rate_limiter_now_ms_is_positive_and_monotonic) {
 RUVIA_TEST(rate_limit_rule_rejects_invalid_fixed_windows) {
     bool zeroRequestsRejected = false;
     try {
-        (void)RateLimitRule::fixedWindow(0, std::chrono::milliseconds(1));
+        (void)RateLimitRule::fixedWindow({
+            .maxRequests = 0,
+            .window = std::chrono::milliseconds(1),
+        });
     } catch (const std::invalid_argument&) {
         zeroRequestsRejected = true;
     }
@@ -201,7 +215,10 @@ RUVIA_TEST(rate_limit_rule_rejects_invalid_fixed_windows) {
 
     bool zeroWindowRejected = false;
     try {
-        (void)RateLimitRule::fixedWindow(1, std::chrono::milliseconds(0));
+        (void)RateLimitRule::fixedWindow({
+            .maxRequests = 1,
+            .window = std::chrono::milliseconds(0),
+        });
     } catch (const std::invalid_argument&) {
         zeroWindowRejected = true;
     }
@@ -209,13 +226,21 @@ RUVIA_TEST(rate_limit_rule_rejects_invalid_fixed_windows) {
 
     bool invalidOverflowPolicyRejected = false;
     try {
-        (void)RateLimitRule::fixedWindow(1, std::chrono::milliseconds(1), static_cast<RateLimitOverflowPolicy>(0xFF));
+        (void)RateLimitRule::fixedWindow({
+            .maxRequests = 1,
+            .window = std::chrono::milliseconds(1),
+            .overflowPolicy = static_cast<RateLimitOverflowPolicy>(0xFF),
+        });
     } catch (const std::invalid_argument&) {
         invalidOverflowPolicyRejected = true;
     }
     RUVIA_CHECK(invalidOverflowPolicyRejected);
 
-    const auto valid = RateLimitRule::fixedWindow(100, std::chrono::seconds(60), RateLimitOverflowPolicy::kAllow);
+    const auto valid = RateLimitRule::fixedWindow({
+        .maxRequests = 100,
+        .window = std::chrono::seconds(60),
+        .overflowPolicy = RateLimitOverflowPolicy::kAllow,
+    });
     RUVIA_CHECK_EQ(valid.maxRequests(), std::size_t{100});
     RUVIA_CHECK(valid.window() == std::chrono::milliseconds(60000));
     RUVIA_CHECK(valid.overflowPolicy() == RateLimitOverflowPolicy::kAllow);
@@ -225,8 +250,11 @@ RUVIA_TEST(route_rate_limit_429_carries_retry_after_and_ratelimit_headers) {
     // The per-route limiter's rejection path (applyRouteRateLimit) had no coverage:
     // the RateLimiter core is tested, but not the 429 response it produces with the
     // Retry-After and X-RateLimit-* advisory headers a client relies on.
-    RateLimiter limiter(std::nullopt, RouteRateLimitPresence::kPresent, ruvia::kDefaultRateLimitSlotsPerWorker, std::pmr::get_default_resource());
-    const RouteRateLimitOptions options{.rule = RateLimitRule::fixedWindow(1, std::chrono::seconds(60))};
+    RateLimiter limiter(std::nullopt, RouteRateLimitPresence::kPresent, ruvia::kDefaultRateLimitCapacityPerWorker, std::pmr::get_default_resource());
+    const RouteRateLimitOptions options{.rule = RateLimitRule::fixedWindow({
+        .maxRequests = 1,
+        .window = std::chrono::seconds(60),
+    })};
     const std::uintptr_t scope = 0xABCD;
 
     // The first request under this (scope, empty-IP) key is admitted with no response.

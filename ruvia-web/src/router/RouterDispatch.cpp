@@ -6,11 +6,7 @@
 #include <utility>
 
 #include "ruvia/web/StaticFiles.h"
-#include "ruvia/web/ServerConfig.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
 
 // Choosing what answers a request: the matched route, a 405 with Allow, the
@@ -26,52 +22,9 @@ void setAllowHeader(HttpResponse& response, std::uint32_t methodMask, std::span<
 }
 
 HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t methodMask, std::span<const std::string_view> extensionMethods = {}) {
-    HttpResponse response(memory.resource());
+    HttpResponse response({.resource = memory.resource()});
     response.status(ruvia::http_status::kNoContent);
     setAllowHeader(response, methodMask, extensionMethods);
-    return response;
-}
-
-[[nodiscard]] std::optional<HttpResponse> selectLiveReloadAsset(const detail::DocumentRootBinding& documentRoot, const HttpRequest& request, RequestMemory& memory) {
-    const auto* const root = documentRoot.root();
-    const auto* const runtime = documentRoot.runtimeOptions();
-    if (root == nullptr || runtime == nullptr || !runtime->enableLiveReload || (request.knownMethod() != HttpKnownMethod::kGet && request.knownMethod() != HttpKnownMethod::kHead)) {
-        return std::nullopt;
-    }
-
-    constexpr std::string_view kScriptPath = "/__ruvia/live-reload.js";
-    constexpr std::string_view kVersionPath = "/__ruvia/live-reload-version";
-    if (request.path() != kScriptPath && request.path() != kVersionPath) {
-        return std::nullopt;
-    }
-
-    HttpResponse response(memory.resource());
-    response.header("Cache-Control", "no-store");
-    if (request.path() == kScriptPath) {
-        constexpr std::string_view kScript = R"JS((() => {
-  let previous = null;
-  const poll = () => fetch('/__ruvia/live-reload-version', {cache: 'no-store'})
-    .then((response) => response.text())
-    .then((version) => {
-      if (previous !== null && version !== previous) {
-        window.location.reload();
-        return;
-      }
-      previous = version;
-    })
-    .catch(() => {})
-    .finally(() => window.setTimeout(poll, 500));
-  poll();
-})();
-)JS";
-        response.header("Content-Type", "application/javascript; charset=UTF-8");
-        detail::setResponseBodyStaticView(response, kScript);
-    } else {
-        std::pmr::string version(memory.resource());
-        detail::appendHttpFormattedNumber(version, detail::StaticRootAccess::revision(*root), "failed to format live reload version");
-        response.header("Content-Type", "text/plain; charset=UTF-8");
-        detail::setResponseBodyOwned(response, std::move(version));
-    }
     return response;
 }
 
@@ -79,10 +32,6 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
     const auto* const root = documentRoot.root();
     if (root == nullptr || (request.knownMethod() != HttpKnownMethod::kGet && request.knownMethod() != HttpKnownMethod::kHead)) {
         return std::nullopt;
-    }
-
-    if (auto liveReloadAsset = selectLiveReloadAsset(documentRoot, request, memory)) {
-        return liveReloadAsset;
     }
 
     auto relative = request.path();
@@ -93,9 +42,9 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
     auto context = detail::ContextAccess::make(memory, request);
     try {
         if (staticFileMode == detail::StaticFileSelectionMode::kPrecompressed) {
-            return detail::ContextAccess::staticFileWithPrecompressedVariants(context, *root, relative);
+            return detail::ContextAccess::staticFileWithPrecompressedVariants(context, *root, {.relativePath = relative});
         }
-        return context.staticFile(*root, relative);
+        return context.staticFile(*root, {.relativePath = relative});
     } catch (const HttpError& error) {
         // A document-root miss is allowed to fall through to the router's
         // normal not-found path. A real response error (for example 406 when
@@ -159,10 +108,10 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& reques
                 // RFC 9110 15.5.6/15.6.2: 405 says the method is known here but
                 // unsupported by this resource; a token no route registered is
                 // not known here at all, so it stays 501 whatever the path holds.
-                error = HttpErrorInfo(ruvia::http_status::kNotImplemented, {}, "method not implemented");
+                error = HttpErrorInfo({.status = ruvia::http_status::kNotImplemented, .message = "method not implemented"});
             } else if (request.knownMethod() == HttpKnownMethod::kUnknown) {
                 if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
-                    error = HttpErrorInfo(ruvia::http_status::kMethodNotAllowed, {}, "method not allowed");
+                    error = HttpErrorInfo({.status = ruvia::http_status::kMethodNotAllowed, .message = "method not allowed"});
                     allowedMethods = methodNotAllowed->allowedMethods();
                     extensionMethods = extensionMethodsFor(request.path(), extensionMethodBuffer);
                 }
@@ -175,7 +124,7 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& reques
                 if (request.knownMethod() == HttpKnownMethod::kOptions) {
                     co_return makeAllowNoContentResponse(memory, methodNotAllowed->allowedMethods(), extensionMethods);
                 }
-                error = HttpErrorInfo(ruvia::http_status::kMethodNotAllowed, {}, "method not allowed");
+                error = HttpErrorInfo({.status = ruvia::http_status::kMethodNotAllowed, .message = "method not allowed"});
                 allowedMethods = methodNotAllowed->allowedMethods();
             }
 

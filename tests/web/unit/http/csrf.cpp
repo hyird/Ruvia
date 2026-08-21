@@ -137,10 +137,10 @@ RUVIA_TEST(csrf_token_is_48_lowercase_hex_chars) {
 }
 
 RUVIA_TEST(csrf_custom_names_validate_at_construction) {
-    RUVIA_CHECK(!throwsInvalid([] { (void)ruvia::CsrfProtection("APP-XSRF", "X-APP-XSRF"); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::CsrfProtection("", "X-XSRF-TOKEN"); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::CsrfProtection("bad;name", "X-XSRF-TOKEN"); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::CsrfProtection("XSRF-TOKEN", "Bad Header"); }));
+    RUVIA_CHECK(!throwsInvalid([] { (void)ruvia::CsrfProtection({.cookieName = "APP-XSRF", .headerName = "X-APP-XSRF"}); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::CsrfProtection({.cookieName = "", .headerName = "X-XSRF-TOKEN"}); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::CsrfProtection({.cookieName = "bad;name", .headerName = "X-XSRF-TOKEN"}); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::CsrfProtection({.cookieName = "XSRF-TOKEN", .headerName = "Bad Header"}); }));
 }
 
 RUVIA_TEST(csrf_token_requires_a_large_enough_buffer) {

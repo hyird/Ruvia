@@ -42,15 +42,15 @@ private:
 
 template <typename T>
     requires JsonBody<T>::value
-[[nodiscard]] std::optional<T> fromJson(std::string_view body, std::pmr::memory_resource* resource = nullptr) {
+[[nodiscard]] std::optional<T> fromJson(std::string_view body, ModelParseOptions options = {}) {
     return detail::ModelJsonAccess::parseOwned<T>(
-        body, detail::pmrResourceOrDefault(resource));
+        body, detail::pmrResourceOrDefault(options.resource));
 }
 
 template <typename T>
     requires detail::isResponseModel<T>
-[[nodiscard]] inline std::pmr::string toJson(const T& value, std::pmr::memory_resource* resource = nullptr) {
-    std::pmr::string output(detail::pmrResourceOrDefault(resource));
+[[nodiscard]] inline std::pmr::string toJson(const T& value, ModelSerializeOptions options = {}) {
+    std::pmr::string output(detail::pmrResourceOrDefault(options.resource));
     output.reserve(detail::jsonSizeHintValue(value));
     detail::appendJsonValue(output, value);
     return output;

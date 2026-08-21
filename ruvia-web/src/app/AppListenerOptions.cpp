@@ -29,10 +29,9 @@ void assignTlsFileName(std::pmr::string& output, const std::filesystem::path& pa
 
 }  // namespace
 
-HttpServerOptions makeListenerOptions(const HttpServerOptions& base, HttpServerOptions::ListenerTransport transport, const StaticRoot* documentRoot) {
+HttpServerOptions makeListenerOptions(const HttpServerOptions& base, HttpServerOptions::ListenerTransport transport) {
     auto options = base;
     options.transport = std::move(transport);
-    options.documentRoot.root = documentRoot;
     return options;
 }
 

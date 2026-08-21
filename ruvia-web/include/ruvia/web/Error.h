@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/web/ValidationIssue.h"
@@ -27,6 +28,43 @@ concept HttpTemporaryOwningValidationIssueRange =
 
 }  // namespace detail
 
+class BorrowedValidationIssues final {
+public:
+    constexpr BorrowedValidationIssues() noexcept = default;
+
+    constexpr BorrowedValidationIssues(std::span<const ValidationIssue> issues) noexcept
+        : issues_(issues) {}
+
+    template <typename Range>
+        requires std::is_lvalue_reference_v<Range&&> &&
+        std::ranges::contiguous_range<Range> &&
+        std::same_as<std::remove_cv_t<std::ranges::range_value_t<Range>>, ValidationIssue>
+    constexpr BorrowedValidationIssues(Range&& issues) noexcept
+        : issues_(std::ranges::data(issues), std::ranges::size(issues)) {}
+
+    template <detail::HttpTemporaryOwningValidationIssueRange Issues>
+    BorrowedValidationIssues(Issues&&) = delete;
+
+    [[nodiscard]] constexpr std::span<const ValidationIssue> view() const noexcept {
+        return issues_;
+    }
+
+    [[nodiscard]] constexpr operator std::span<const ValidationIssue>() const noexcept {
+        return issues_;
+    }
+
+private:
+    std::span<const ValidationIssue> issues_{};
+};
+
+struct HttpErrorInfoOptions final {
+    HttpStatusCode status{http_status::kInternalServerError};
+    BorrowedText code;
+    BorrowedText message;
+    BorrowedText statusText;
+    BorrowedValidationIssues validationIssues;
+};
+
 // Non-owning Web application error metadata used by Context and custom error
 // handlers. Every borrowed value must outlive this view; basic_string rvalues
 // and temporary owning validation-issue ranges are rejected. The JSON error
@@ -34,24 +72,12 @@ concept HttpTemporaryOwningValidationIssueRange =
 // this type belongs to ruvia-web.
 class HttpErrorInfo final {
 public:
-    constexpr HttpErrorInfo(HttpStatusCode status = http_status::kInternalServerError, std::string_view code = {}, std::string_view message = {}, std::string_view statusText = {}, std::span<const ValidationIssue> validationIssues = {}) noexcept
-        : status_(status),
-          statusText_(statusText),
-          code_(code),
-          message_(message),
-          validationIssues_(validationIssues) {}
-
-    template <detail::HttpTemporaryOwningCharString String>
-    HttpErrorInfo(HttpStatusCode, String&&, std::string_view = {}, std::string_view = {}, std::span<const ValidationIssue> = {}) = delete;
-
-    template <detail::HttpTemporaryOwningCharString String>
-    HttpErrorInfo(HttpStatusCode, std::string_view, String&&, std::string_view = {}, std::span<const ValidationIssue> = {}) = delete;
-
-    template <detail::HttpTemporaryOwningCharString String>
-    HttpErrorInfo(HttpStatusCode, std::string_view, std::string_view, String&&, std::span<const ValidationIssue> = {}) = delete;
-
-    template <detail::HttpTemporaryOwningValidationIssueRange Issues>
-    HttpErrorInfo(HttpStatusCode, std::string_view, std::string_view, std::string_view, Issues&&) = delete;
+    constexpr explicit HttpErrorInfo(HttpErrorInfoOptions options = {}) noexcept
+        : status_(options.status),
+          statusText_(options.statusText.view()),
+          code_(options.code.view()),
+          message_(options.message.view()),
+          validationIssues_(options.validationIssues.view()) {}
 
     [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
@@ -83,7 +109,7 @@ private:
 
 class HttpError final : public std::exception {
 public:
-    HttpError(HttpStatusCode status, std::string_view code, std::string_view message, std::string_view statusText = {});
+    explicit HttpError(HttpErrorInfoOptions options);
     HttpError(const HttpError& other);
     HttpError& operator=(const HttpError& other);
     HttpError(HttpError&&) noexcept = default;

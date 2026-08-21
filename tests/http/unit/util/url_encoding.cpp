@@ -11,7 +11,7 @@
 namespace {
 
 std::optional<std::string> urlDecode(std::string_view in, ruvia::detail::UrlDecodeMode mode) {
-    auto decoded = ruvia::detail::decodeUrlComponent(in, mode, std::pmr::get_default_resource());
+    auto decoded = ruvia::detail::decodeUrlComponent(in, {.mode = mode, .resource = std::pmr::get_default_resource()});
     if (!decoded.has_value()) {
         return std::nullopt;
     }

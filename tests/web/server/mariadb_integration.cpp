@@ -52,12 +52,12 @@ using ruvia::testing::dbRequire;
 using ruvia::testing::dbThrowsOn;
 
 void exerciseMigrations(const ruvia::DbConfig& config) {
-    ruvia::DbMigrationOptions options;
+    ruvia::DbMigratorOptions options;
     options.table = "ruvia_mariadb_integration_migrations";
 
-    const std::array migrations{ruvia::DbMigration{"001_create_migrated",
-        "CREATE TABLE IF NOT EXISTS ruvia_mariadb_integration_migrated ("
-        "id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, value VARCHAR(64) NOT NULL)"}};
+    const std::array migrations{ruvia::DbMigration{{.id = "001_create_migrated",
+        .sql = "CREATE TABLE IF NOT EXISTS ruvia_mariadb_integration_migrated ("
+               "id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, value VARCHAR(64) NOT NULL)"}}};
     // The report owns its ids, so it is bound before they are read: the span
     // accessors are deleted on an rvalue for exactly that reason.
     const auto first = ruvia::DbMigrator::migrate(config, migrations, options);
@@ -67,9 +67,9 @@ void exerciseMigrations(const ruvia::DbConfig& config) {
 
     // Editing an applied migration changes nothing on a machine that already
     // ran it, so the edit is reported rather than skipped.
-    const std::array edited{ruvia::DbMigration{"001_create_migrated",
-        "CREATE TABLE IF NOT EXISTS ruvia_mariadb_integration_migrated ("
-        "id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, value VARCHAR(128) NOT NULL)"}};
+    const std::array edited{ruvia::DbMigration{{.id = "001_create_migrated",
+        .sql = "CREATE TABLE IF NOT EXISTS ruvia_mariadb_integration_migrated ("
+               "id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, value VARCHAR(128) NOT NULL)"}}};
     dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }), "an edited migration body was accepted");
 }
 

@@ -99,7 +99,7 @@ RUVIA_TEST(http2_connection_response_head_does_not_publish_local_phase_before_ou
     // response lifecycle state is allowed to publish.
     stream->localHeaderBlock().reserve(64 * 1024);
     const std::string largeValue(64'000, 'x');
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.header("X-Large", largeValue);
 
@@ -119,7 +119,7 @@ RUVIA_TEST(http2_connection_response_head_does_not_publish_local_phase_before_ou
 
     // The same stream remains a valid retry target once the resource recovers.
     resource.rejectAllocations(false);
-    ruvia::HttpResponse retry(&resource);
+    ruvia::HttpResponse retry({.resource = &resource});
     retry.status(ruvia::http_status::kOk);
     retry.header("X-Large", largeValue);
     const auto retried = conn.submitStreamingResponseHead(1, std::move(retry), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
@@ -163,7 +163,9 @@ RUVIA_TEST(http2_connection_websocket_handshake_clears_staged_block_on_encoding_
                                                      "Sec-WebSocket-Protocol: ") +
         largeProtocol + "\r\n\r\n";
     const auto negotiationRequest = negotiationParser.parseMessage(std::string_view(negotiationBytes));
-    auto negotiation = ruvia::detail::makeWebSocketServerNegotiation(negotiationRequest.request, largeProtocol, &resource);
+    auto negotiation = ruvia::detail::makeWebSocketServerNegotiation(
+        negotiationRequest.request,
+        {.supportedSubprotocols = largeProtocol, .resource = &resource});
 
     resource.rejectAllocations();
     bool allocationFailed = false;
@@ -180,7 +182,9 @@ RUVIA_TEST(http2_connection_websocket_handshake_clears_staged_block_on_encoding_
     RUVIA_CHECK(stream->localSend().headPending() != nullptr);
 
     resource.rejectAllocations(false);
-    auto retryNegotiation = ruvia::detail::makeWebSocketServerNegotiation(negotiationRequest.request, largeProtocol, &resource);
+    auto retryNegotiation = ruvia::detail::makeWebSocketServerNegotiation(
+        negotiationRequest.request,
+        {.supportedSubprotocols = largeProtocol, .resource = &resource});
     const auto retried = conn.submitWebSocketHandshake(1, std::move(retryNegotiation));
     RUVIA_CHECK(retried.submitted() != nullptr);
     RUVIA_CHECK(stream->localHeaderBlock().empty());
@@ -265,7 +269,7 @@ RUVIA_TEST(http2_connection_buffered_response_length_is_transactional) {
     handshake(conn);
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.body("hello");
     RUVIA_CHECK(responseHeadSubmitted(submitBufferedResponseHead(conn, 1, response)));
@@ -299,7 +303,7 @@ RUVIA_TEST(http2_connection_buffered_response_length_is_transactional) {
 
 RUVIA_TEST(http2_connection_response_head_submit_result_is_discriminated) {
     std::pmr::monotonic_buffer_resource resource;
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.body("ok");
 
@@ -323,7 +327,7 @@ RUVIA_TEST(http2_connection_response_head_submit_result_is_discriminated) {
     Http2Connection streaming(&resource);
     handshake(streaming);
     driveGetRequest(streaming, &resource);
-    ruvia::HttpResponse streamingHead(&resource);
+    ruvia::HttpResponse streamingHead({.resource = &resource});
     streamingHead.status(ruvia::http_status::kOk);
     const auto streamingSubmitted = streaming.submitStreamingResponseHead(1, std::move(streamingHead), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
     RUVIA_CHECK(streamingSubmitted.submitted() != nullptr);
@@ -336,7 +340,7 @@ RUVIA_TEST(http2_connection_buffered_response_requires_matching_prepared_plan) {
     handshake(connection);
     driveGetRequest(connection, &resource);
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kMultiStatus);
     response.body("old");
 
@@ -371,13 +375,13 @@ RUVIA_TEST(http2_connection_rejects_duplicate_response_head_without_output) {
     handshake(conn);
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse first(&resource);
+    ruvia::HttpResponse first({.resource = &resource});
     first.status(ruvia::http_status::kOk);
     const auto firstResult = conn.submitStreamingResponseHead(1, std::move(first), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
     RUVIA_CHECK(responseHeadSubmitted(firstResult));
     conn.consumeOutput(conn.pendingOutput().size());
 
-    ruvia::HttpResponse duplicate(&resource);
+    ruvia::HttpResponse duplicate({.resource = &resource});
     duplicate.status(ruvia::http_status::kOk);
     const auto duplicateResult = submitBufferedResponseHead(conn, 1, duplicate);
     RUVIA_CHECK(responseHeadSubmitFailureMessage(duplicateResult) == "invalid HTTP/2 response head submission state");
@@ -398,7 +402,7 @@ RUVIA_TEST(http2_connection_rejects_head_api_for_wrong_role) {
     RUVIA_CHECK(request.submitted() != nullptr);
     const auto streamId = submittedRequestStreamId(request);
     client.consumeOutput(client.pendingOutput().size());
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     const auto result = submitBufferedResponseHead(client, streamId, response);
     RUVIA_CHECK(responseHeadSubmitFailureMessage(result) == "invalid HTTP/2 response head submission state");
@@ -444,7 +448,7 @@ RUVIA_TEST(http2_connection_request_content_alternatives_own_wire_framing) {
         RUVIA_CHECK_EQ(out.size(), static_cast<std::size_t>(9 + frame.length));
 
         RequestContentLengthObservation observation;
-        HpackDecoder decoder(&resource);
+        HpackDecoder decoder({.resource = &resource});
         const auto decodeResult = decoder.decode(out.substr(9, frame.length), &observation, &observeRequestContentLength);
         RUVIA_CHECK(decodeResult.decoded() != nullptr);
         if (expectedContentLength.empty()) {
@@ -612,17 +616,17 @@ RUVIA_TEST(http2_connection_rejects_oversized_response_heads_transactionally) {
         RUVIA_CHECK(connection.stream(1)->localSend().headPending() != nullptr);
     };
 
-    ruvia::HttpResponse oversized(&resource);
+    ruvia::HttpResponse oversized({.resource = &resource});
     oversized.header("X-Oversized", std::string(ruvia::kMaxHttpHeaderBytes, 'x'));
     checkRejected(std::move(oversized));
 
-    ruvia::HttpResponse tooMany(&resource);
+    ruvia::HttpResponse tooMany({.resource = &resource});
     for (std::size_t i = 0; i <= ruvia::kMaxHttpHeaderFields; ++i) {
         tooMany.header("X-Field-" + std::to_string(i), "value");
     }
     checkRejected(std::move(tooMany));
 
-    ruvia::HttpResponse generatedOverflow(&resource);
+    ruvia::HttpResponse generatedOverflow({.resource = &resource});
     for (std::size_t i = 0; i < ruvia::kMaxHttpHeaderFields - 1; ++i) {
         generatedOverflow.header("X-Generated-" + std::to_string(i), "value");
     }
@@ -668,7 +672,7 @@ RUVIA_TEST(http2_connection_encodes_non_http_request_without_authority) {
     const auto out = client.pendingOutput();
     const auto frame = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
     RequestContentLengthObservation observation;
-    HpackDecoder decoder(&resource);
+    HpackDecoder decoder({.resource = &resource});
     const auto decoded = decoder.decode(out.substr(9, frame.length), &observation, &observeRequestContentLength);
     RUVIA_CHECK(decoded.decoded() != nullptr);
     RUVIA_CHECK_EQ(observation.scheme, std::string("git+ssh"));
@@ -694,7 +698,7 @@ RUVIA_TEST(http2_connection_encodes_non_http_userinfo_authority) {
     const auto out = client.pendingOutput();
     const auto frame = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
     RequestContentLengthObservation observation;
-    HpackDecoder decoder(&resource);
+    HpackDecoder decoder({.resource = &resource});
     const auto decoded = decoder.decode(out.substr(9, frame.length), &observation, &observeRequestContentLength);
     RUVIA_CHECK(decoded.decoded() != nullptr);
     RUVIA_CHECK_EQ(observation.authorityCount, std::size_t{1});
@@ -712,7 +716,7 @@ RUVIA_TEST(http2_connection_encodes_options_asterisk_path) {
     const auto out = client.pendingOutput();
     const auto frame = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
     RequestContentLengthObservation observation;
-    HpackDecoder decoder(&resource);
+    HpackDecoder decoder({.resource = &resource});
     const auto decoded = decoder.decode(out.substr(9, frame.length), &observation, &observeRequestContentLength);
     RUVIA_CHECK(decoded.decoded() != nullptr);
     RUVIA_CHECK_EQ(observation.path, std::string("*"));
@@ -824,7 +828,7 @@ RUVIA_TEST(http2_connection_interim_head_preserves_final_head_phase) {
     RUVIA_CHECK((infoFrame.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
     conn.consumeOutput(informational.size());
 
-    ruvia::HttpResponse finalResponse(&resource);
+    ruvia::HttpResponse finalResponse({.resource = &resource});
     finalResponse.status(ruvia::http_status::kOk);
     const auto finalResult = submitBufferedResponseHead(conn, 1, finalResponse);
     RUVIA_CHECK(responseHeadSubmitted(finalResult));
@@ -842,7 +846,7 @@ RUVIA_TEST(http2_connection_submit_streaming_response_head_and_chunks) {
     handshake(conn);
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse resp(&resource);
+    ruvia::HttpResponse resp({.resource = &resource});
     resp.status(ruvia::http_status::kOk);
     const auto headResult = conn.submitStreamingResponseHead(1, std::move(resp), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
     RUVIA_CHECK(responseHeadSubmitted(headResult));
@@ -873,7 +877,7 @@ RUVIA_TEST(http2_connection_streaming_rejects_invalid_content_length_before_head
     driveGetRequest(conn, &resource);
 
     for (const std::string_view invalid : {std::string_view{"x"}, std::string_view{"-1"}, std::string_view{"5,5"}, std::string_view{"18446744073709551616"}}) {
-        ruvia::HttpResponse response(&resource);
+        ruvia::HttpResponse response({.resource = &resource});
         response.status(ruvia::http_status::kOk);
         response.header("Content-Length", invalid);
         const auto result = conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
@@ -886,7 +890,7 @@ RUVIA_TEST(http2_connection_streaming_rejects_invalid_content_length_before_head
     }
 
     // A valid retry still owns the initial-head transition.
-    ruvia::HttpResponse valid(&resource);
+    ruvia::HttpResponse valid({.resource = &resource});
     valid.status(ruvia::http_status::kOk);
     valid.header("Content-Length", "5");
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(valid), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
@@ -903,7 +907,7 @@ RUVIA_TEST(http2_connection_rejects_invalid_response_trailer_field_names_before_
         handshake(conn);
         driveGetRequest(conn, &resource);
 
-        ruvia::HttpResponse response(&resource);
+        ruvia::HttpResponse response({.resource = &resource});
         response.status(ruvia::http_status::kOk);
         ruvia::detail::setResponseHeaderStableView(response, "Trailer", value);
         const auto result = submitBufferedResponseHead(conn, 1, response);
@@ -924,7 +928,7 @@ RUVIA_TEST(http2_connection_rejects_invalid_response_trailer_field_names_before_
     Http2Connection conn(&resource);
     handshake(conn);
     driveGetRequest(conn, &resource);
-    ruvia::HttpResponse valid(&resource);
+    ruvia::HttpResponse valid({.resource = &resource});
     valid.status(ruvia::http_status::kOk);
     valid.header("Trailer", "ETag, X-Checksum");
     RUVIA_CHECK(responseHeadSubmitted(submitBufferedResponseHead(conn, 1, valid)));

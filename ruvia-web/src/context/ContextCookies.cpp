@@ -44,22 +44,29 @@ namespace {
     return signedValue;
 }
 
-}  // namespace
-
-void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
+void writeCookie(HttpResponse& response, std::string_view name, std::string_view value, const CookieOptions& options) {
     const detail::SetCookiePlan plan(name, value, options);
-    auto& header = detail::upsertResponseSetCookieUninitializedValue(responseState_.activeResponse(), plan.wirePrefix(), plan.name(), plan.path(), plan.domain(), plan.size());
+    auto& header = detail::upsertResponseSetCookieUninitializedValue(response, plan.wirePrefix(), plan.name(), plan.path(), plan.domain(), plan.size());
     plan.write(detail::responseHeaderValueBegin(header));
 }
 
-void Context::setSignedCookie(std::string_view name, std::string_view value, std::string_view secret, const CookieOptions& options) {
-    std::pmr::string wireName(resource());
-    setCookie(name, composeSignedCookieValue(resource(), cookieWireName(wireName, name, options), value, secret), options);
+}  // namespace
+
+void Context::setCookie(SetCookieOptions options) {
+    writeCookie(responseState_.activeResponse(), options.name.view(), options.value.view(), options.attributes);
 }
 
-void Context::deleteCookie(std::string_view name, CookieOptions options) {
-    options.maxAge = std::chrono::seconds(0);
-    setCookie(name, "", options);
+void Context::setSignedCookie(SetSignedCookieOptions options) {
+    std::pmr::string wireName(resource());
+    const auto name = options.name.view();
+    const auto value = options.value.view();
+    const auto secret = options.secret.view();
+    writeCookie(responseState_.activeResponse(), name, composeSignedCookieValue(resource(), cookieWireName(wireName, name, options.attributes), value, secret), options.attributes);
+}
+
+void Context::deleteCookie(DeleteCookieOptions options) {
+    options.attributes.maxAge = std::chrono::seconds(0);
+    writeCookie(responseState_.activeResponse(), options.name.view(), "", options.attributes);
 }
 
 }  // namespace ruvia

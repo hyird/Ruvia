@@ -146,7 +146,7 @@ static_assert(!HasMultipartError<ruvia::MultipartStreamPart>);
 static_assert(!HasMultipartError<ruvia::MultipartPollDone>);
 static_assert(!HasMultipartError<ruvia::MultipartPollFailure>);
 static_assert(HasMultipartProtocolError<ruvia::MultipartPollFailure>);
-static_assert(std::same_as<decltype(ruvia::parseMultipartBody(std::string_view{}, ruvia::MultipartBoundary("x"), std::pmr::get_default_resource())), ruvia::MultipartBodyParseResult>);
+static_assert(std::same_as<decltype(ruvia::parseMultipartBody(std::string_view{}, ruvia::MultipartParseOptions{.boundary = ruvia::MultipartBoundary("x"), .resource = std::pmr::get_default_resource()})), ruvia::MultipartBodyParseResult>);
 static_assert(!std::default_initializable<ruvia::MultipartBodyParseResult>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartBodyParseResult&>().body()), const ruvia::MultipartBody*>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartBodyParseResult&>().failure()), const ruvia::MultipartBodyParseFailure*>);
@@ -304,7 +304,7 @@ RUVIA_TEST(multipart_boundary_from_content_type) {
 }
 
 RUVIA_TEST(multipart_parser_commits_an_eof_close_only_after_finish_input) {
-    ruvia::MultipartParser parser(ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    ruvia::MultipartParser parser({.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
     parser.feed(
         "--BOUNDARY\r\n"
         "Content-Disposition: form-data; name=\"field\"\r\n"
@@ -387,7 +387,7 @@ RUVIA_TEST(multipart_borrowed_input_is_complete_and_rejects_feed) {
 }
 
 RUVIA_TEST(multipart_parser_reports_typed_incomplete_body) {
-    ruvia::MultipartParser parser(ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    ruvia::MultipartParser parser({.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
     parser.feed(
         "--BOUNDARY\r\n"
         "Content-Disposition: form-data; name=\"field\"\r\n"
@@ -466,7 +466,7 @@ RUVIA_TEST(multipart_part_preserves_empty_filename_parameter_presence) {
         "\r\n"
         "data\r\n"
         "--BOUNDARY--\r\n";
-    const auto complete = ruvia::parseMultipartBody(body, ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    const auto complete = ruvia::parseMultipartBody(body, {.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
     RUVIA_CHECK(complete.failure() == nullptr);
     if (complete.body() != nullptr) {
         const auto& parts = complete.body()->parts();
@@ -477,7 +477,7 @@ RUVIA_TEST(multipart_part_preserves_empty_filename_parameter_presence) {
         }
     }
 
-    ruvia::MultipartParser parser(ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    ruvia::MultipartParser parser({.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
     parser.feed(body);
     parser.finishInput();
     const auto streamed = parser.poll();
@@ -504,7 +504,7 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
         std::string body = "--BOUNDARY\r\n";
         body.append(invalid);
         body.append("\r\n\r\nvalue\r\n--BOUNDARY--\r\n");
-        const auto complete = ruvia::parseMultipartBody(body, ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+        const auto complete = ruvia::parseMultipartBody(body, {.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
         RUVIA_CHECK(complete.failure() != nullptr);
         if (complete.failure() != nullptr) {
             RUVIA_CHECK_EQ(complete.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
@@ -549,7 +549,7 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_header_blocks) {
         std::string body = "--BOUNDARY\r\n";
         body.append(invalid);
         body.append("\r\n\r\nvalue\r\n--BOUNDARY--\r\n");
-        const auto complete = ruvia::parseMultipartBody(body, ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+        const auto complete = ruvia::parseMultipartBody(body, {.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
         RUVIA_CHECK(complete.failure() != nullptr);
         if (complete.failure() != nullptr) {
             RUVIA_CHECK_EQ(complete.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
@@ -675,7 +675,7 @@ RUVIA_TEST(multipart_complete_body_parser_returns_borrowed_part_bodies) {
         "Content-Type: text/plain\r\n\r\n"
         "file-data\r\n"
         "--BOUNDARY--\r\n";
-    const auto parsed = ruvia::parseMultipartBody(body, ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    const auto parsed = ruvia::parseMultipartBody(body, {.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
     RUVIA_CHECK(parsed.failure() == nullptr);
     const auto& parts = parsed.body()->parts();
     RUVIA_CHECK_EQ(parts.size(), std::size_t{2});
@@ -690,7 +690,9 @@ RUVIA_TEST(multipart_complete_body_parser_returns_borrowed_part_bodies) {
 }
 
 RUVIA_TEST(multipart_complete_body_parser_rejects_malformed_body) {
-    const auto parsed = ruvia::parseMultipartBody("--BOUNDARY\r\nContent-Disposition: form-data; name=\"x\"\r\n\r\nmissing close", ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    const auto parsed = ruvia::parseMultipartBody(
+        "--BOUNDARY\r\nContent-Disposition: form-data; name=\"x\"\r\n\r\nmissing close",
+        {.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
     RUVIA_CHECK(parsed.body() == nullptr);
     RUVIA_CHECK(parsed.failure() != nullptr);
     RUVIA_CHECK_EQ(parsed.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
@@ -699,12 +701,12 @@ RUVIA_TEST(multipart_complete_body_parser_rejects_malformed_body) {
 
 RUVIA_TEST(multipart_complete_body_parser_shares_incremental_limits) {
     std::string oversizedPreamble(64 * 1024 + 1, 'x');
-    const auto complete = ruvia::parseMultipartBody(oversizedPreamble, ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    const auto complete = ruvia::parseMultipartBody(oversizedPreamble, {.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
     RUVIA_CHECK(complete.failure() != nullptr);
     RUVIA_CHECK_EQ(complete.failure()->protocolError().status(), ruvia::http_status::kContentTooLarge);
     RUVIA_CHECK_EQ(std::string_view(complete.failure()->protocolError().what()), std::string_view("multipart preamble exceeds limit"));
 
-    ruvia::MultipartParser incremental(ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
+    ruvia::MultipartParser incremental({.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = std::pmr::get_default_resource()});
     incremental.feed(oversizedPreamble);
     const auto streamed = incremental.poll();
     RUVIA_CHECK(streamed.failure() != nullptr);
@@ -724,7 +726,7 @@ RUVIA_TEST(multipart_complete_body_parser_shares_incremental_limits) {
 
 RUVIA_TEST(multipart_complete_limits_cannot_be_bypassed_by_terminators) {
     auto* const resource = std::pmr::get_default_resource();
-    const auto parse = [resource](std::string_view body) { return ruvia::parseMultipartBody(body, ruvia::MultipartBoundary("BOUNDARY"), resource); };
+    const auto parse = [resource](std::string_view body) { return ruvia::parseMultipartBody(body, {.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = resource}); };
     const auto checkFailure = [&ruvia_ctx, &parse, resource](const std::string& body, std::string_view message) {
         const auto result = parse(body);
         RUVIA_CHECK(result.failure() != nullptr);
@@ -733,7 +735,7 @@ RUVIA_TEST(multipart_complete_limits_cannot_be_bypassed_by_terminators) {
             RUVIA_CHECK_EQ(std::string_view(failure->protocolError().what()), message);
         }
 
-        ruvia::MultipartParser incremental(ruvia::MultipartBoundary("BOUNDARY"), resource);
+        ruvia::MultipartParser incremental({.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = resource});
         incremental.feed(body);
         incremental.finishInput();
         const auto streamed = incremental.poll();

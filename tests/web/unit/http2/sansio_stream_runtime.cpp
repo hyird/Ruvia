@@ -81,13 +81,13 @@ using ruvia::detail::RequestBodyMode;
 using ruvia::detail::RouteResolution;
 
 ruvia::HttpResponse invalidStreamingHead(ruvia::Context&) {
-    ruvia::HttpResponse response(std::pmr::new_delete_resource());
+    ruvia::HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.header("Content-Length", "not-a-number");
     return response;
 }
 
 ruvia::HttpResponse okStreamingHead(ruvia::Context&) {
-    return ruvia::HttpResponse(std::pmr::new_delete_resource());
+    return ruvia::HttpResponse({.resource = std::pmr::new_delete_resource()});
 }
 
 [[nodiscard]] HttpResponseCodingSelection identityResponseCoding() {
@@ -529,7 +529,7 @@ RUVIA_TEST(http2_buffered_response_writer_reports_failure_when_reset_output_allo
     ruvia::WorkerMemory workerMemory;
     ruvia::detail::Http2BufferedResponseWriter writer(connection, table, workerMemory, writeSignal);
 
-    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.header("Connection", "close");
     const auto writePlan = ruvia::detail::httpBufferedResponseWritePlan(
         ruvia::HttpKnownMethod::kGet, response);

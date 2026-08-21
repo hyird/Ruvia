@@ -12,7 +12,7 @@
 namespace {
 
 ruvia::HttpResponse makeResponse() {
-    return ruvia::HttpResponse(std::pmr::new_delete_resource());
+    return ruvia::HttpResponse({.resource = std::pmr::new_delete_resource()});
 }
 
 class FailingAllocationResource final : public std::pmr::memory_resource {
@@ -48,7 +48,7 @@ private:
 
 RUVIA_TEST(session_cookie_append_preserves_existing_set_cookie) {
     auto response = makeResponse();
-    response.header("Set-Cookie", "theme=light", {.append = true});
+    response.header("Set-Cookie", "theme=light", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
 
     ruvia::detail::appendSessionCookieHeader(response, std::pmr::new_delete_resource(), "abcdef", false);
 

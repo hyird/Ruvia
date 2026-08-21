@@ -90,7 +90,7 @@ void ContextRequest::RequestFormData::Object::rebuildEntries() {
 
     entries_.reserve(builds.size());
     for (const auto& build : builds) {
-        entries_.push_back(Entry::make(currentResource, directChildName(form_->fields_[build.firstIndex], path()), false));
+        entries_.push_back(Group::make(currentResource, directChildName(form_->fields_[build.firstIndex], path()), false));
         auto& formEntry = entries_.back();
         for (std::size_t i = build.begin; i < build.end; ++i) {
             formEntry.add(form_->fields_[order[i]]);
@@ -172,7 +172,7 @@ void ContextRequest::RequestFormData::rebuildEntries() {
 
     entries_.reserve(builds.size());
     for (const auto& build : builds) {
-        entries_.push_back(Entry::make(resource, entryName(fields_[build.firstIndex]), false));
+        entries_.push_back(Group::make(resource, entryName(fields_[build.firstIndex]), false));
         auto& entry = entries_.back();
         for (std::size_t i = build.begin; i < build.end; ++i) {
             entry.add(fields_[order[i]]);
@@ -223,7 +223,7 @@ void ContextRequest::RequestFormData::rebuildPathEntries(std::pmr::memory_resour
 
     pathEntries_.reserve(builds.size());
     for (const auto& build : builds) {
-        pathEntries_.push_back(Entry::make(resource, pathEntryName(fields_[build.firstIndex]), false));
+        pathEntries_.push_back(Group::make(resource, pathEntryName(fields_[build.firstIndex]), false));
         auto& entry = pathEntries_.back();
         for (std::size_t i = build.begin; i < build.end; ++i) {
             entry.add(fields_[order[i]]);

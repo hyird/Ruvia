@@ -119,7 +119,7 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
 
     Http1ServerRequestParser parser;
     const auto emitFor = [&](std::string_view request) {
-        HttpResponse response(std::pmr::new_delete_resource());
+        HttpResponse response({.resource = std::pmr::new_delete_resource()});
         response.body("hello");
         const auto connectionPlan = commitResponse(response, parser.parseMessage(request).connectionPlan);
         const auto responsePlan = http1BufferedResponsePlan(httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response), connectionPlan);
@@ -140,7 +140,7 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
 }
 
 RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.status(ruvia::http_status::kMultiStatus);
     response.body("planned");
     const auto plan = http1BufferedResponsePlan(ruvia::detail::httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response), connectionPlanFor(ruvia::HttpProtocolVersion::kHttp11));
@@ -152,7 +152,7 @@ RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
 }
 
 RUVIA_TEST(http1_response_head_rejects_representation_plan_mismatch) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.status(ruvia::http_status::kMultiStatus);
     response.body("old");
     const auto plan = http1BufferedResponsePlan(ruvia::detail::httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response), connectionPlanFor(ruvia::HttpProtocolVersion::kHttp11));
@@ -164,7 +164,7 @@ RUVIA_TEST(http1_response_head_rejects_representation_plan_mismatch) {
 
 RUVIA_TEST(http1_response_head_validates_trailer_field_names) {
     const auto rejects = [&ruvia_ctx](std::string_view value) {
-        HttpResponse response(std::pmr::new_delete_resource());
+        HttpResponse response({.resource = std::pmr::new_delete_resource()});
         ruvia::detail::setResponseHeaderStableView(response, "Trailer", value);
         RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(response); }));
     };
@@ -173,34 +173,34 @@ RUVIA_TEST(http1_response_head_validates_trailer_field_names) {
     rejects("X-Checksum, bad field");
     rejects(",");
 
-    HttpResponse valid(std::pmr::new_delete_resource());
+    HttpResponse valid({.resource = std::pmr::new_delete_resource()});
     valid.header("Trailer", "ETag, X-Checksum");
     const auto validHead = emitChunkedStreamHead(valid);
     RUVIA_CHECK(validHead.find("Trailer: ETag, X-Checksum\r\n") != std::string_view::npos);
 
-    HttpResponse empty(std::pmr::new_delete_resource());
+    HttpResponse empty({.resource = std::pmr::new_delete_resource()});
     empty.header("Trailer", "");
     RUVIA_CHECK(!throwsInvalid([&] { (void)emitBufferedHead(empty); }));
 }
 
 RUVIA_TEST(http1_response_head_rejects_non_empty_trailer_without_chunked_framing) {
-    HttpResponse buffered(std::pmr::new_delete_resource());
+    HttpResponse buffered({.resource = std::pmr::new_delete_resource()});
     buffered.header("Trailer", "ETag");
     RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(buffered); }));
 
-    HttpResponse knownLength(std::pmr::new_delete_resource());
+    HttpResponse knownLength({.resource = std::pmr::new_delete_resource()});
     knownLength.header("Trailer", "ETag");
     RUVIA_CHECK(throwsInvalid([&] { (void)emitKnownLengthStreamHead(knownLength, 5); }));
 
-    HttpResponse closeDelimited(std::pmr::new_delete_resource());
+    HttpResponse closeDelimited({.resource = std::pmr::new_delete_resource()});
     closeDelimited.header("Trailer", "ETag");
     RUVIA_CHECK(throwsInvalid([&] { (void)emitCloseDelimitedStreamHead(closeDelimited); }));
 
-    HttpResponse head(std::pmr::new_delete_resource());
+    HttpResponse head({.resource = std::pmr::new_delete_resource()});
     head.header("Trailer", "ETag");
     RUVIA_CHECK(throwsInvalid([&] { (void)emitChunkedStreamHead(head, HttpKnownMethod::kHead); }));
 
-    HttpResponse chunked(std::pmr::new_delete_resource());
+    HttpResponse chunked({.resource = std::pmr::new_delete_resource()});
     chunked.header("Trailer", "ETag");
     RUVIA_CHECK(!throwsInvalid([&] { (void)emitChunkedStreamHead(chunked); }));
 }
@@ -211,12 +211,12 @@ RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
 
     Http1ServerRequestParser parser;
 
-    HttpResponse http10(std::pmr::new_delete_resource());
+    HttpResponse http10({.resource = std::pmr::new_delete_resource()});
     const auto http10Plan = commitResponse(http10, parser.parseMessage("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n").connectionPlan);
     RUVIA_CHECK(http10Plan.disposition() == Http1ClosePolicy::kAllowReuse);
     RUVIA_CHECK_EQ(std::string(http10.header("Connection").value_or(std::string_view{})), std::string("keep-alive"));
 
-    HttpResponse http10Upgrade(std::pmr::new_delete_resource());
+    HttpResponse http10Upgrade({.resource = std::pmr::new_delete_resource()});
     http10Upgrade.header("Connection", "upgrade");
     const auto http10UpgradePlan = commitResponse(http10Upgrade, parser.parseMessage("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n").connectionPlan);
     RUVIA_CHECK(http10UpgradePlan.disposition() == Http1ClosePolicy::kAllowReuse);
@@ -224,16 +224,16 @@ RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
     RUVIA_CHECK(http10UpgradeHead.find("Connection: upgrade\r\n") != std::string_view::npos);
     RUVIA_CHECK(http10UpgradeHead.find("Connection: keep-alive\r\n") != std::string_view::npos);
 
-    HttpResponse applicationClose(std::pmr::new_delete_resource());
+    HttpResponse applicationClose({.resource = std::pmr::new_delete_resource()});
     applicationClose.header("Connection", "upgrade");
-    applicationClose.header("Connection", "close", HttpResponse::HeaderOptions{.append = true});
+    applicationClose.header("Connection", "close", HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
     const auto applicationClosePlan = commitResponse(applicationClose, parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n").connectionPlan);
     RUVIA_CHECK(applicationClosePlan.disposition() == Http1ClosePolicy::kCloseAfterResponse);
     RUVIA_CHECK_EQ(std::string(applicationClose.header("Connection").value_or(std::string_view{})), std::string("close"));
     const auto applicationCloseHead = emitBufferedHead(applicationClose);
     RUVIA_CHECK_EQ(countOccurrences(applicationCloseHead, "Connection: "), std::size_t{1});
 
-    HttpResponse runtimeClose(std::pmr::new_delete_resource());
+    HttpResponse runtimeClose({.resource = std::pmr::new_delete_resource()});
     const auto runtimeClosePlan = commitResponse(runtimeClose, parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n").connectionPlan.requireClose());
     RUVIA_CHECK(runtimeClosePlan.disposition() == Http1ClosePolicy::kCloseAfterResponse);
     RUVIA_CHECK_EQ(std::string(runtimeClose.header("Connection").value_or(std::string_view{})), std::string("close"));
@@ -244,13 +244,13 @@ RUVIA_TEST(http1_protocol_finalizer_generates_upgrade_pairing) {
 
     Http1ServerRequestParser parser;
     const auto requestPlan = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n").connectionPlan;
-    HttpResponse unpaired(std::pmr::new_delete_resource());
+    HttpResponse unpaired({.resource = std::pmr::new_delete_resource()});
     unpaired.status(ruvia::http_status::kUpgradeRequired);
     unpaired.header("Upgrade", "websocket");
     RUVIA_CHECK(commitResponse(unpaired, requestPlan).disposition() == ruvia::Http1ClosePolicy::kAllowReuse);
     RUVIA_CHECK_EQ(std::string(unpaired.header("Connection").value_or(std::string_view{})), std::string("Upgrade"));
 
-    HttpResponse closing(std::pmr::new_delete_resource());
+    HttpResponse closing({.resource = std::pmr::new_delete_resource()});
     closing.header("Upgrade", "websocket");
     RUVIA_CHECK(commitResponse(closing, requestPlan.requireClose()).disposition() == ruvia::Http1ClosePolicy::kCloseAfterResponse);
     RUVIA_CHECK_EQ(std::string(closing.header("Connection").value_or(std::string_view{})), std::string("close, Upgrade"));
@@ -263,7 +263,7 @@ RUVIA_TEST(http1_protocol_finalizer_rejects_upgrade_required_without_protocol) {
     Http1ServerRequestParser parser;
     const auto requestPlan = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n").connectionPlan;
 
-    HttpResponse missingUpgrade(std::pmr::new_delete_resource());
+    HttpResponse missingUpgrade({.resource = std::pmr::new_delete_resource()});
     missingUpgrade.status(ruvia::http_status::kUpgradeRequired);
     const auto result = ruvia::detail::http1CommitFinalResponse(missingUpgrade, requestPlan);
     RUVIA_CHECK(result.committed() == nullptr);
@@ -275,7 +275,7 @@ RUVIA_TEST(http1_protocol_finalizer_rejects_upgrade_required_without_protocol) {
 RUVIA_TEST(http1_stream_prepare_preserves_typed_final_commit_failure) {
     ruvia::detail::Http1ServerRequestParser parser;
     const auto streamPlan = ruvia::detail::http1PlanResponseStream(parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n"), ruvia::Http1ClosePolicy::kAllowReuse);
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.status(ruvia::http_status::kUpgradeRequired);
 
     const auto result = ruvia::detail::prepareHttp1ResponseStreamHead(std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, streamPlan, ruvia::detail::ResponseTrailerIntent::kNone);
@@ -285,7 +285,7 @@ RUVIA_TEST(http1_stream_prepare_preserves_typed_final_commit_failure) {
 }
 
 RUVIA_TEST(response_head_emits_well_formed_normal) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.status(ruvia::http_status::kOk);
     response.header("X-Foo", "bar");
     response.body("hello");
@@ -300,7 +300,7 @@ RUVIA_TEST(response_head_emits_well_formed_normal) {
 }
 
 RUVIA_TEST(response_head_extension_status_uses_an_empty_reason_phrase) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.status(ruvia::HttpStatusCode::fromValue(299));
     const auto head = emitBufferedHead(response);
 
@@ -311,7 +311,7 @@ RUVIA_TEST(response_head_extension_status_uses_an_empty_reason_phrase) {
 }
 
 RUVIA_TEST(response_head_preserves_explicit_server_and_does_not_duplicate_date) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.header("Server", "custom");
     response.header("Date", "Wed, 21 Oct 2015 07:28:00 GMT");
     response.body("x");
@@ -325,7 +325,7 @@ RUVIA_TEST(response_head_preserves_explicit_server_and_does_not_duplicate_date) 
 RUVIA_TEST(response_head_suppresses_auto_content_length) {
     // A streaming/chunked writer owns framing itself. Caller-provided framing is
     // replaced by one canonical chunked field and no Content-Length survives.
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.body("hello");
     response.header("Transfer-Encoding", "gzip, chunked");
     response.header("Content-Length", "999");
@@ -337,7 +337,7 @@ RUVIA_TEST(response_head_suppresses_auto_content_length) {
 }
 
 RUVIA_TEST(http1_response_head_rejects_http10_chunked_payload_plan) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.body("hello");
     const auto plan = http1ChunkedResponseStreamHeadPlan(httpResponseBodyPlan(HttpKnownMethod::kGet, response.status()), connectionPlanFor(ruvia::HttpProtocolVersion::kHttp10));
 
@@ -345,7 +345,7 @@ RUVIA_TEST(http1_response_head_rejects_http10_chunked_payload_plan) {
 }
 
 RUVIA_TEST(http1_known_length_stream_owns_canonical_length_and_status_semantics) {
-    HttpResponse get(std::pmr::new_delete_resource());
+    HttpResponse get({.resource = std::pmr::new_delete_resource()});
     get.header("Content-Length", "999");
     get.header("Transfer-Encoding", "chunked");
     const auto getHead = emitKnownLengthStreamHead(get, 5);
@@ -353,11 +353,11 @@ RUVIA_TEST(http1_known_length_stream_owns_canonical_length_and_status_semantics)
     RUVIA_CHECK(getHead.find("Content-Length: 5\r\n") != std::string_view::npos);
     RUVIA_CHECK(getHead.find("Transfer-Encoding:") == std::string_view::npos);
 
-    HttpResponse head(std::pmr::new_delete_resource());
+    HttpResponse head({.resource = std::pmr::new_delete_resource()});
     const auto headWire = emitKnownLengthStreamHead(head, 5, HttpKnownMethod::kHead);
     RUVIA_CHECK(headWire.find("Content-Length: 5\r\n") != std::string_view::npos);
 
-    HttpResponse noContent(std::pmr::new_delete_resource());
+    HttpResponse noContent({.resource = std::pmr::new_delete_resource()});
     noContent.status(ruvia::http_status::kNoContent);
     noContent.header("Content-Length", "5");
     const auto noContentWire = emitKnownLengthStreamHead(noContent, 5);
@@ -366,14 +366,14 @@ RUVIA_TEST(http1_known_length_stream_owns_canonical_length_and_status_semantics)
 }
 
 RUVIA_TEST(http1_chunked_stream_does_not_invent_framing_for_head) {
-    HttpResponse metadata(std::pmr::new_delete_resource());
+    HttpResponse metadata({.resource = std::pmr::new_delete_resource()});
     metadata.header("Content-Length", "5");
     metadata.header("Transfer-Encoding", "chunked");
     const auto metadataWire = emitChunkedStreamHead(metadata, HttpKnownMethod::kHead);
     RUVIA_CHECK(metadataWire.find("Content-Length: 5\r\n") != std::string_view::npos);
     RUVIA_CHECK(metadataWire.find("Transfer-Encoding:") == std::string_view::npos);
 
-    HttpResponse unknown(std::pmr::new_delete_resource());
+    HttpResponse unknown({.resource = std::pmr::new_delete_resource()});
     const auto unknownWire = emitChunkedStreamHead(unknown, HttpKnownMethod::kHead);
     RUVIA_CHECK(unknownWire.find("Content-Length:") == std::string_view::npos);
     RUVIA_CHECK(unknownWire.find("Transfer-Encoding:") == std::string_view::npos);
@@ -388,7 +388,7 @@ RUVIA_TEST(http1_consumed_request_body_can_commit_a_reusable_known_length_stream
         "\r\n"
         "x");
     const auto streamPlan = ruvia::detail::http1PlanConsumedResponseStream(parsed, ruvia::Http1ClosePolicy::kAllowReuse);
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     const auto preparedResult = ruvia::detail::prepareHttp1KnownLengthResponseStreamHead(
         std::move(response),
         5,
@@ -407,7 +407,7 @@ RUVIA_TEST(http1_consumed_request_body_can_commit_a_reusable_known_length_stream
 }
 
 RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.body("streamed");
     response.header("Transfer-Encoding", "chunked");
     response.header("Content-Length", "8");
@@ -422,7 +422,7 @@ RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {
     RUVIA_CHECK(metadataHead.find("Transfer-Encoding:") == std::string_view::npos);
     RUVIA_CHECK(metadataHead.find("Content-Length: 8\r\n") != std::string_view::npos);
 
-    HttpResponse notModified(std::pmr::new_delete_resource());
+    HttpResponse notModified({.resource = std::pmr::new_delete_resource()});
     notModified.status(ruvia::http_status::kNotModified);
     notModified.header("Transfer-Encoding", "chunked");
     notModified.header("Content-Length", "123");
@@ -432,30 +432,30 @@ RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {
 }
 
 RUVIA_TEST(response_head_validates_explicit_content_length_metadata) {
-    HttpResponse malformed(std::pmr::new_delete_resource());
+    HttpResponse malformed({.resource = std::pmr::new_delete_resource()});
     malformed.status(ruvia::http_status::kNotModified);
     malformed.header("Content-Length", "invalid");
     RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(malformed); }));
 
-    HttpResponse conflicting(std::pmr::new_delete_resource());
+    HttpResponse conflicting({.resource = std::pmr::new_delete_resource()});
     conflicting.status(ruvia::http_status::kNotModified);
     conflicting.header("Content-Length", "7, 8");
     RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(conflicting); }));
 
-    HttpResponse equivalent(std::pmr::new_delete_resource());
+    HttpResponse equivalent({.resource = std::pmr::new_delete_resource()});
     equivalent.status(ruvia::http_status::kNotModified);
     equivalent.header("Content-Length", "0007, 7");
     const auto canonical = emitBufferedHead(equivalent);
     RUVIA_CHECK_EQ(countOccurrences(canonical, "Content-Length: "), std::size_t{1});
     RUVIA_CHECK(canonical.find("Content-Length: 7\r\n") != std::string_view::npos);
 
-    HttpResponse headMetadata(std::pmr::new_delete_resource());
+    HttpResponse headMetadata({.resource = std::pmr::new_delete_resource()});
     headMetadata.header("Content-Length", "bad");
     RUVIA_CHECK(throwsInvalid([&] { (void)emitCloseDelimitedStreamHead(headMetadata, HttpKnownMethod::kHead); }));
 }
 
 RUVIA_TEST(response_head_bodyless_status_omits_auto_content_length) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.status(ruvia::http_status::kNoContent);
     const auto head = emitBufferedHead(response);
     RUVIA_CHECK(head.starts_with("HTTP/1.1 204 No Content\r\n"));
@@ -468,7 +468,7 @@ RUVIA_TEST(response_head_reset_content_canonicalizes_zero_length) {
     // body and contradictory framing, both buffered and streaming head emission
     // must suppress it and retain an unambiguous persistent HTTP/1 message.
     for (const bool streaming : {false, true}) {
-        HttpResponse response(std::pmr::new_delete_resource());
+        HttpResponse response({.resource = std::pmr::new_delete_resource()});
         response.status(ruvia::http_status::kResetContent);
         response.body("must-not-be-sent");
         response.header("Content-Length", "16");
@@ -488,7 +488,7 @@ RUVIA_TEST(response_head_heap_spill_preserves_full_output) {
     // (reserveAdditional) emit path runs. Every header must survive intact and
     // the precomputed size bound must not undercount -- an undercount would let
     // the unchecked raw stack sink overflow or the output truncate.
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.status(ruvia::http_status::kOk);
     const std::string big(200, 'v');
     for (int i = 0; i < 10; ++i) {
@@ -506,17 +506,17 @@ RUVIA_TEST(response_head_heap_spill_preserves_full_output) {
 }
 
 RUVIA_TEST(response_head_rejects_oversized_field_section) {
-    HttpResponse oversized(std::pmr::new_delete_resource());
+    HttpResponse oversized({.resource = std::pmr::new_delete_resource()});
     oversized.header("X-Oversized", std::string(ruvia::kMaxHttpHeaderBytes, 'v'));
     RUVIA_CHECK(throwsLength([&] { (void)emitBufferedHead(oversized); }));
 
-    HttpResponse tooMany(std::pmr::new_delete_resource());
+    HttpResponse tooMany({.resource = std::pmr::new_delete_resource()});
     for (std::size_t i = 0; i <= ruvia::kMaxHttpHeaderFields; ++i) {
         tooMany.header("X-Field-" + std::to_string(i), "value");
     }
     RUVIA_CHECK(throwsLength([&] { (void)emitBufferedHead(tooMany); }));
 
-    HttpResponse generatedOverflow(std::pmr::new_delete_resource());
+    HttpResponse generatedOverflow({.resource = std::pmr::new_delete_resource()});
     for (std::size_t i = 0; i < ruvia::kMaxHttpHeaderFields - 1; ++i) {
         generatedOverflow.header("X-Generated-" + std::to_string(i), "value");
     }
@@ -527,17 +527,17 @@ RUVIA_TEST(response_head_rejects_oversized_field_section) {
 }
 
 RUVIA_TEST(response_head_rejects_malformed_header_name_and_value) {
-    HttpResponse badName(std::pmr::new_delete_resource());
+    HttpResponse badName({.resource = std::pmr::new_delete_resource()});
     ruvia::detail::setResponseHeaderStableView(badName, "Bad Name", "value");
     RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(badName); }));
 
-    HttpResponse badValue(std::pmr::new_delete_resource());
+    HttpResponse badValue({.resource = std::pmr::new_delete_resource()});
     ruvia::detail::setResponseHeaderStableView(badValue, "X-Test", std::string_view("bad\r\nvalue", 10));
     RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(badValue); }));
 }
 
 RUVIA_TEST(response_head_rejects_request_only_te_field) {
-    HttpResponse response(std::pmr::new_delete_resource());
+    HttpResponse response({.resource = std::pmr::new_delete_resource()});
     ruvia::detail::setResponseHeaderStableView(response, "TE", "trailers");
     RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(response); }));
 }

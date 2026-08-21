@@ -14,6 +14,7 @@
 
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/BorrowedText.h"
+#include "ruvia/web/TcpSocketOptions.h"
 
 namespace ruvia {
 
@@ -54,8 +55,8 @@ struct RedisConfig {
     std::optional<std::size_t> maxReplyBytes{64 * 1024 * 1024};
     // Must be greater than zero.
     std::size_t maxArrayDepth{64};
-    bool tcpNoDelay{true};
-    bool keepAlive{false};
+    TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
+    TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kSystemDefault};
 };
 
 class RedisBlockWait final {
@@ -91,10 +92,15 @@ struct RedisStreamReadView final {
     BorrowedText id;
 };
 
+enum class RedisXReadGroupAcknowledgementPolicy : std::uint8_t {
+    kTrackPending,
+    kNoAck,
+};
+
 struct RedisXReadGroupOptions final {
     std::optional<std::uint64_t> count;
     std::optional<RedisBlockWait> block;
-    bool noAck{false};
+    RedisXReadGroupAcknowledgementPolicy acknowledgement{RedisXReadGroupAcknowledgementPolicy::kTrackPending};
 };
 
 enum class RedisSetCondition : std::uint8_t {
@@ -137,10 +143,15 @@ private:
     Value value_;
 };
 
+enum class RedisSetPreviousValuePolicy : std::uint8_t {
+    kDiscard,
+    kReturn,
+};
+
 struct RedisSetOptions final {
     std::optional<RedisSetCondition> condition;
     std::optional<RedisSetExpiration> expiration;
-    bool returnPrevious{false};
+    RedisSetPreviousValuePolicy previousValue{RedisSetPreviousValuePolicy::kDiscard};
 };
 
 namespace detail {

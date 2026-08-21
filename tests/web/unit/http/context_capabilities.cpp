@@ -122,7 +122,7 @@ ruvia::Task<void> writeWebSocket(void*, ruvia::WebSocketOpcode, std::string_view
     co_return;
 }
 
-ruvia::Task<void> closeWebSocket(void*, std::uint16_t, std::string_view) {
+ruvia::Task<void> closeWebSocket(void*, ruvia::WebSocketCloseOptions) {
     co_return;
 }
 

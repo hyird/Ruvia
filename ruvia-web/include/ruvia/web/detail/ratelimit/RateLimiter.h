@@ -99,14 +99,14 @@ enum class RouteRateLimitPresence : std::uint8_t {
 template <typename Clock>
 class BasicRateLimiter {
 public:
-    BasicRateLimiter(std::optional<RateLimitRule> defaultRulePerWorker, RouteRateLimitPresence routeRules, std::size_t slotCount, std::pmr::memory_resource* resource = nullptr)
+    BasicRateLimiter(std::optional<RateLimitRule> defaultRulePerWorker, RouteRateLimitPresence routeRules, std::size_t capacity, std::pmr::memory_resource* resource = nullptr)
         : defaultRulePerWorker_(std::move(defaultRulePerWorker)),
           slots_(pmrResourceOrDefault(resource)) {
-        if (!std::has_single_bit(slotCount)) {
-            throw std::invalid_argument("rate-limit slot count must be a power of two");
+        if (!std::has_single_bit(capacity)) {
+            throw std::invalid_argument("rate-limit capacity must be a power of two");
         }
         if (defaultRulePerWorker_.has_value() || routeRules == RouteRateLimitPresence::kPresent) {
-            slots_.resize(slotCount);
+            slots_.resize(capacity);
         }
     }
 
@@ -117,7 +117,7 @@ public:
         return defaultRulePerWorker_.has_value();
     }
 
-    [[nodiscard]] std::size_t slotCapacity() const noexcept {
+    [[nodiscard]] std::size_t keyCapacity() const noexcept {
         return slots_.size();
     }
 
