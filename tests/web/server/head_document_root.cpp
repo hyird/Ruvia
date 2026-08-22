@@ -30,7 +30,7 @@
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 namespace {
 
@@ -166,9 +166,9 @@ int main() {
     options.documentRoot = ruvia::detail::HttpServerOptions::DocumentRoot::standalone(root);
     options.compression.emplace();
 
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
     server.start();
-    const auto endpoint = server.localEndpoint();
+    const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
 
     int rc = 0;
     auto fail = [&](int code, const char* message) {
@@ -276,10 +276,10 @@ int main() {
     // Disabling compression also disables sidecar negotiation. Even when gzip
     // is accepted, the identity representation is returned if it is allowed.
     options.compression.reset();
-    ruvia::detail::HttpServer sidecarServer(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
+    ruvia::detail::WebWorkerRuntime sidecarServer(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
     sidecarServer.start();
     asio::ip::tcp::socket sidecarSocket(ctx);
-    sidecarSocket.connect(sidecarServer.localEndpoint(), ec);
+    sidecarSocket.connect(sidecarServer.localEndpoint(ruvia::ListenerId{1}), ec);
     asio::streambuf sidecarBuffer;
     asio::write(sidecarSocket, asio::buffer(std::string_view(
         "GET /asset.txt HTTP/1.1\r\nHost: localhost\r\n"

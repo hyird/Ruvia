@@ -63,13 +63,11 @@ struct RedisRegistrationOptions final {
 
 class App final : public detail::AppConfiguration<App> {
 public:
-    ~App();
-
     [[nodiscard]] const Env& env() const noexcept;
     App& loadDotenv(DotenvOptions options = {});
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
     App& setListeners(std::vector<ListenerConfig> listeners);
-    App& setWorkersPerListener(std::size_t workersPerListener);
+    App& setWorkerCount(std::size_t workerCount);
     App& setProcessSignalHandlers(ProcessSignalHandlerPolicy policy);
     App& setWorkerMailboxCapacity(std::size_t capacity);
     App& setIdleTimeout(std::optional<std::chrono::milliseconds> timeout);
@@ -190,6 +188,7 @@ private:
     };
 
     App();
+    ~App();
 
     App(const App&) = delete;
     App& operator=(const App&) = delete;

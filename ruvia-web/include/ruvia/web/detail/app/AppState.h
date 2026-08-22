@@ -23,6 +23,7 @@
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
 #endif
 #include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/web/detail/server/HttpServerListener.h"
 
 namespace ruvia::detail {
 
@@ -104,18 +105,19 @@ struct AppDocumentRootConfig final {
 };
 
 struct AppListenerConfig final {
-    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerOptions::PlainHttp)
-        : address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerOptions::PlainHttp>) {}
+    AppListenerConfig(ListenerId configuredId, std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerListenerDefinition::PlainHttp)
+        : id(configuredId), address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerListenerDefinition::PlainHttp>) {}
 
-    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerOptions::Tls configuredTransport)
-        : address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerOptions::Tls>, std::move(configuredTransport)) {}
+    AppListenerConfig(ListenerId configuredId, std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerListenerDefinition::Tls configuredTransport)
+        : id(configuredId), address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerListenerDefinition::Tls>, std::move(configuredTransport)) {}
 
-    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerOptions::RedirectHttpToHttps configuredTransport)
-        : address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerOptions::RedirectHttpToHttps>, configuredTransport) {}
+    AppListenerConfig(ListenerId configuredId, std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerListenerDefinition::RedirectHttpToHttps configuredTransport)
+        : id(configuredId), address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerListenerDefinition::RedirectHttpToHttps>, configuredTransport) {}
 
+    ListenerId id;
     std::pmr::string address;
     std::uint16_t port;
-    HttpServerOptions::ListenerTransport transport;
+    HttpServerListenerDefinition::Transport transport;
 };
 
 struct AppState final {
@@ -123,7 +125,7 @@ struct AppState final {
     ~AppState();
 
     std::pmr::vector<AppListenerConfig> listeners{appResource()};
-    std::size_t workersPerListener;
+    std::size_t workerCount;
     ProcessSignalHandlerPolicy processSignalHandlers{ProcessSignalHandlerPolicy::kExternalOwner};
     AccessLogCallback accessLogCallback;
     ConnectionFailureCallback connectionFailureCallback;
@@ -150,7 +152,7 @@ struct AppState final {
     mutable std::mutex mutex;
     // App::stop() borrows the runtime graph across user stop hooks so it can
     // preserve the public hook-before-worker-close ordering without retaining
-    // raw HttpServer pointers past graph destruction. App::run() is the sole
+    // raw WebWorkerRuntime pointers past graph destruction. App::run() is the sole
     // graph owner and waits for every such borrow before resetting it.
     AppRuntimeBorrowGate runtimeBorrows;
     AppLifecycle lifecycle;

@@ -23,7 +23,7 @@
 #include "ruvia/core/BlockingPool.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 namespace {
 
@@ -112,9 +112,9 @@ int main() {
         root, documentRootRuntime);
     options.blockingPool = &pool;
 
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
     server.start();
-    const auto endpoint = server.localEndpoint();
+    const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
 
     int rc = 0;
     auto fail = [&](int code, const char* message) {

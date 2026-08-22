@@ -52,7 +52,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpCors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpRuntimeFacades.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/MultipartReader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ScopedOperation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/SecurityHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Session.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticFileTypes.cpp
@@ -81,9 +80,10 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpConnectionState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpFileWrite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseCompression.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerAccept.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerListener.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/TrustedProxies.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerLifecycle.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WebWorkerRuntime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WebWorkerRuntimeAccept.cpp
 )
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)

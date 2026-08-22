@@ -444,8 +444,8 @@ int main() {
     auto config = redisConfig(app.env());
     app.useRedis({.config = config})
         .useRedis({.alias = "cache", .config = config})
-        .setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090)})})
-        .setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2))
+        .setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "0.0.0.0", .port = app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090)})})
+        .setWorkerCount(app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2))
         .setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall)
         .run();
 }

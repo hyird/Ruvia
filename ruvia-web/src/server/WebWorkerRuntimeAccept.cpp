@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 #include "ruvia/web/detail/server/session/HttpServerSessionEntry.h"
 
 #include "ruvia/core/detail/io/AsioAwait.h"
@@ -11,14 +11,26 @@
 #include <asio/detached.hpp>
 #include <asio/recycling_allocator.hpp>
 #include <chrono>
+#include <stdexcept>
 #include <system_error>
 #include <utility>
 
 namespace ruvia::detail {
 
-Task<void> HttpServer::acceptLoop() {
+Task<void> WebWorkerRuntime::superviseListener(HttpServerListener& listener) {
+    try {
+        co_await acceptLoop(listener);
+        if (httpServerWorkerRunning(workerState_)) {
+            throw std::runtime_error("HTTP listener stopped unexpectedly");
+        }
+    } catch (...) {
+        failWorker(std::current_exception());
+    }
+}
+
+Task<void> WebWorkerRuntime::acceptLoop(HttpServerListener& listener) {
     for (;;) {
-        auto acceptCompletion = co_await asyncAsio<asio::ip::tcp::socket>([this](auto handler) mutable { acceptor_.async_accept(std::move(handler)); });
+        auto acceptCompletion = co_await asyncAsio<asio::ip::tcp::socket>([&listener](auto handler) mutable { listener.acceptor.async_accept(std::move(handler)); });
         const auto ec = acceptCompletion.errorCode();
         auto socket = std::move(acceptCompletion).takeResult();
 
@@ -57,7 +69,7 @@ Task<void> HttpServer::acceptLoop() {
         // unspawned lease closes the socket and returns its slot.
         try {
             AcceptedConnectionLease connection(std::move(socket), activeConnectionCount_);
-            asio::co_spawn(ioContext_, taskAsAwaitable(handleSession(std::move(connection))), asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
+            asio::co_spawn(ioContext_, taskAsAwaitable(handleSession(listener, std::move(connection))), asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
             continue;
         } catch (...) {
             acceptFailures_.fetch_add(1, std::memory_order_relaxed);

@@ -1,8 +1,8 @@
 // Worker-local user state: app-registered state must materialize once per
-// worker, persist across requests AND connections on that worker, be the same
-// instance the WebWorker dispatch path sees, fail loudly for an unregistered
-// type, and be destroyed with the worker. Drives one real single-worker
-// HTTP/1.1 loopback server.
+// worker, persist across requests, connections, and listeners on that worker,
+// be the same instance the WebWorker dispatch path sees, fail loudly for an
+// unregistered type, and be destroyed with the worker. Drives one real worker
+// with two independently bound HTTP/1.1 listeners.
 
 #include <cctype>
 #include <chrono>
@@ -24,7 +24,7 @@
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 namespace {
 
@@ -63,7 +63,9 @@ ruvia::Task<ruvia::HttpResponse> countHandler(void*, ruvia::Context& context) {
     auto& state = context.workerState<ProbeState>();
     ++state.counter;
     std::pmr::string body(context.resource());
-    body.append("count:");
+    body.append("listener:");
+    body.append(std::to_string(ruvia::getConnInfo(context).listener().value()));
+    body.append(";count:");
     body.append(std::to_string(state.counter));
     co_return context.body(std::move(body));
 }
@@ -144,11 +146,24 @@ int main() {
             ruvia::detail::WorkerStateDefinition::make<ProbeState>([&worker] { return ProbeState(worker); }),
         };
 
+        const auto loopback = asio::ip::make_address("127.0.0.1");
+        ruvia::detail::HttpServerListenerDefinition listeners[] = {
+            {ruvia::ListenerId{1}, asio::ip::tcp::endpoint(loopback, 0)},
+            {ruvia::ListenerId{2}, asio::ip::tcp::endpoint(loopback, 0)},
+        };
         ruvia::detail::HttpServerOptions options;
-        ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, {}, std::span<const ruvia::detail::WorkerStateDefinition>(workerStates, 1), options);
+        ruvia::detail::WebWorkerRuntime server(
+            std::span<const ruvia::detail::HttpServerListenerDefinition>(listeners),
+            impl.routeTable(),
+            {.workerStates = std::span<const ruvia::detail::WorkerStateDefinition>(workerStates, 1)},
+            options);
         worker = server.worker();
         server.start();
-        const auto endpoint = server.localEndpoint();
+        const auto firstEndpoint = server.localEndpoint(ruvia::ListenerId{1});
+        const auto secondEndpoint = server.localEndpoint(ruvia::ListenerId{2});
+        if (firstEndpoint == secondEndpoint) {
+            fail(10, "independent listeners resolved to the same endpoint");
+        }
 
         asio::io_context ctx;
         std::error_code ec;
@@ -157,25 +172,25 @@ int main() {
         // state is per WORKER, not per request or per connection.
         {
             asio::ip::tcp::socket sock(ctx);
-            sock.connect(endpoint, ec);
+            sock.connect(firstEndpoint, ec);
             asio::streambuf buffer;
             asio::write(sock, asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
-            if (readResponse(sock, buffer, ec).find("count:1") == std::string::npos) {
+            if (readResponse(sock, buffer, ec).find("listener:1;count:1") == std::string::npos) {
                 fail(1, "first request did not see a fresh worker state");
             }
             asio::write(sock, asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
-            if (rc == 0 && readResponse(sock, buffer, ec).find("count:2") == std::string::npos) {
+            if (rc == 0 && readResponse(sock, buffer, ec).find("listener:1;count:2") == std::string::npos) {
                 fail(2, "second request did not see the first request's mutation");
             }
             sock.close(ec);
         }
         if (rc == 0) {
             asio::ip::tcp::socket sock(ctx);
-            sock.connect(endpoint, ec);
+            sock.connect(secondEndpoint, ec);
             asio::streambuf buffer;
             asio::write(sock, asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
-            if (readResponse(sock, buffer, ec).find("count:3") == std::string::npos) {
-                fail(3, "a new connection did not see the worker-scoped state");
+            if (readResponse(sock, buffer, ec).find("listener:2;count:3") == std::string::npos) {
+                fail(3, "the second listener did not share the worker-scoped state");
             }
 
             // The WebWorker dispatch path shares the same instance.
@@ -194,7 +209,7 @@ int main() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
                 asio::write(sock, asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
-                if (rc == 0 && readResponse(sock, buffer, ec).find("count:14") == std::string::npos) {
+                if (rc == 0 && readResponse(sock, buffer, ec).find("listener:2;count:14") == std::string::npos) {
                     fail(5, "HTTP and dispatch paths did not share one instance");
                 }
             }

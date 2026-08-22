@@ -199,9 +199,13 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - worker 线程只跑事件循环，不得阻塞。同步、阻塞、CPU 密集的调用必须经 `BlockingPool` 卸载到独立线程；卸载的可调用体在外部线程运行，只能按值/移动捕获自有数据，不得捕获 `Context`、请求内存或任何 worker 私有状态。停机不等待仍在运行的卸载任务：挂起的协程立即以 `kWorkerStopping` 恢复，池线程的结果被丢弃。
 - 池归 `App` 进程级所有并被所有 worker 共享，线程在 `App::run()` 一次性建立并常驻至停机，不得按调用创建线程；队列必须有界，满时向调用方回报拒绝，不得无界排队。
 - 卸载是上一条 handle 借用规则的唯一豁免：结果可能比发起它的请求活得久，`runBlocking` 因此复制一次 `WorkerHandle` 取得所有权。豁免仅限此路径，不得据此在其他请求期代码复制 handle。
-- `App::setWorkersPerListener()` 配置每个 listener 的 worker 数；总 worker 数是 listener 数乘以该值，禁止恢复含糊的总线程数命名。
+- `App::setWorkerCount()` 配置进程内完整 Web worker runtime 的总数。每个 worker
+  独立拥有全部 listener 的 acceptor，并在同一 worker-local runtime 中只创建一份
+  DB、Redis、outbound HTTP client 和 user state；listener 数量不得乘增 worker 或
+  数据资源。
 - listener 通过 `App::setListeners(std::vector<ListenerConfig>)` 原子配置；每项自带 bind address、port 和 transport，端口必须唯一，HTTP→HTTPS redirect 必须指向同一列表中的 HTTPS listener，不恢复全局 listen address 或固定单/双 listener topology 类型。公开配置必须在 setter 中一次性归一化到 App PMR 存储。
-- `App::run()` 创建 acceptor/server/thread per worker。
+- `App::run()` 为每个 worker 创建一个线程和完整 runtime，并为该 worker 的每个
+  listener 创建独立 acceptor；连接由接受它的 worker 终身拥有，不跨线程迁移。
 - outbound HTTP 与 DB 能力属于直接绑定 `EventLoop` 的一等 client 对象，不属于 `App`、HTTP `Context` 或特殊 worker context。应用自己创建或 attach 的 worker 默认可以构造同一套 `HttpClient` / `DbClient`；client 的连接、内存、取消和 shutdown 保持 worker-local，App 的 `Context`/`WebWorkerContext` 只提供同一底层实现的便捷入口。不得为自建 worker 增加聚合能力 service 或 `detail` 旁路。
 - 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。
 - shutdown 只能在各 worker 自己的 `io_context` 上直接关闭 acceptor、活跃 socket 和 worker 资源；不等待请求优雅排空。
@@ -233,7 +237,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 ## 路由和中间件
 
-- Web 应用模型固定为一个进程一个 `App`：`ruvia::app()` 是唯一配置与生命周期入口，`App` 构造保持非公开；禁止增加可并存的 App 实例、显式 application builder 或实例级 controller 清单。
+- Web 应用模型固定为一个进程一个 `App`：`ruvia::app()` 是唯一配置与生命周期入口，`App` 的构造、析构、复制和移动保持非公开或禁用，并由默认执行的编译与运行门禁验证唯一实例；禁止增加可并存的 App 实例、显式 application builder 或实例级 controller 清单。
 - Controller 保持 CRTP + route macro 自动注册。声明 `RUVIA_ROUTES_BEGIN` / `RUVIA_ROUTES_END` 的 controller 必须在启动期自动进入进程级注册表；禁止增加 `useController<T>()`、手工 registrar 列表或要求使用者重复列举 controller。
 - controller registrar 按函数地址去重，并在首次生产或测试路由构建时封存；封存后注册必须硬错误，禁止不同 worker/TestApp 观察到不同 controller 集合。
 - 自动注册只覆盖最终程序实际保留并在 `App::run()` 前加载的 controller 翻译单元。静态库和 object library 必须通过安装包提供的 `ruvia_link_controllers()` 跨平台保留，动态模块的加载约束必须在面向使用者的文档中明确；不得要求用户维护 controller 类型清单，也不得用请求期动态发现补救链接或加载问题。

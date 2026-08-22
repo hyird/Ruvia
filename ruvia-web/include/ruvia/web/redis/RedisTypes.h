@@ -14,7 +14,7 @@
 
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/BorrowedText.h"
-#include "ruvia/web/TcpSocketOptions.h"
+#include "ruvia/core/TcpSocketOptions.h"
 
 namespace ruvia {
 

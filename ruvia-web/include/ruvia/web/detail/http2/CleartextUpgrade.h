@@ -74,9 +74,9 @@ Task<void> runHttp2ServerSession(Http2ServerSessionSetup<Stream> setup, std::str
 }
 
 template <typename Stream>
-Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(Http2ServerSessionSetup<Stream> setup, std::pmr::string& readBuffer, std::size_t& usedBytes) {
+Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(Http2ServerSessionSetup<Stream> setup, std::pmr::string& readBuffer, std::size_t& usedBytes, bool autoHttpsEnabled) {
     const auto current = std::string_view(readBuffer.data(), usedBytes);
-    switch (probeCleartextHttp2Preface(current, setup.options.redirect() != nullptr)) {
+    switch (probeCleartextHttp2Preface(current, autoHttpsEnabled)) {
         case CleartextHttp2Probe::kHttp1:
             co_return CleartextHttp2DispatchResult::kContinueHttp1;
         case CleartextHttp2Probe::kCompletePreface:

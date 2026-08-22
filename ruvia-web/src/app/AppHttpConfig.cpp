@@ -1,6 +1,6 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/app/AppConfigMutation.h"
-#include "ruvia/web/detail/app/ConfigValidation.h"
+#include "ruvia/core/detail/config/ConfigValidation.h"
 #include "ruvia/web/detail/http/static/StaticFileTypes.h"
 #include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"

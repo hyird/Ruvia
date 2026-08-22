@@ -29,14 +29,8 @@ void assignTlsFileName(std::pmr::string& output, const std::filesystem::path& pa
 
 }  // namespace
 
-HttpServerOptions makeListenerOptions(const HttpServerOptions& base, HttpServerOptions::ListenerTransport transport) {
-    auto options = base;
-    options.transport = std::move(transport);
-    return options;
-}
-
-HttpServerOptions::Tls makeTlsOptions(const TlsConfig& config, std::pmr::memory_resource* resource) {
-    HttpServerOptions::Tls tls(resource);
+HttpServerListenerDefinition::Tls makeTlsOptions(const TlsConfig& config, std::pmr::memory_resource* resource) {
+    HttpServerListenerDefinition::Tls tls(resource);
     assignTlsFileName(tls.identity.certificateChainFile, config.identity().certificateChainFile());
     assignTlsFileName(tls.identity.privateKeyFile, config.identity().privateKeyFile());
     tls.identity.privateKeyPassword = config.identity().privateKeyPassword();

@@ -22,7 +22,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/MultipartReader.h"
-#include "ruvia/web/ScopedOperation.h"
+#include "ruvia/core/ScopedOperation.h"
 #include "ruvia/web/RequestFields.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/http/context/RequestBindings.h"

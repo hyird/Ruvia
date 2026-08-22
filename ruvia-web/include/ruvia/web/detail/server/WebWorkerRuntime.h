@@ -2,34 +2,32 @@
 
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
-#include <asio/ssl/context.hpp>
 #include <exception>
 #include <memory>
 #include <memory_resource>
-#include <optional>
 #include <span>
-#include <string>
 #include <string_view>
 #include <thread>
-#include <utility>
 #include <vector>
 
 #include "ruvia/core/Task.h"
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/RuntimeLifecycle.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/WebWorker.h"
-#include "ruvia/web/detail/integration/WorkerDataState.h"
-#include "ruvia/web/detail/server/session/HttpConnectionState.h"
-#include "ruvia/web/detail/ratelimit/RateLimiter.h"
-#include "ruvia/web/detail/server/HttpServerOptions.h"
-#include "ruvia/web/detail/server/HttpServerWorkerState.h"
-#include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
-#include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
+#include "ruvia/web/detail/integration/WorkerDataState.h"
+#include "ruvia/web/detail/integration/WorkerState.h"
+#include "ruvia/web/detail/ratelimit/RateLimiter.h"
+#include "ruvia/web/detail/server/HttpServerListener.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
+#include "ruvia/web/detail/server/HttpServerWorkerState.h"
+#include "ruvia/web/detail/server/session/HttpConnectionState.h"
+
 namespace ruvia::detail {
 
 using TcpSocket = asio::ip::tcp::socket;
@@ -39,27 +37,34 @@ class AcceptedConnectionLease;
 class RouteTable;
 class WorkerDispatcher;
 class WebWorkerDispatch;
+struct DbDefinition;
+struct HttpClientDefinition;
+struct RedisDefinition;
+class WorkerStateDefinition;
 
-using SniContextStore = std::pmr::vector<asio::ssl::context>;
-using SniContextLookup = std::pmr::vector<std::pair<std::pmr::string, asio::ssl::context*>>;
+struct WebWorkerRuntimeResources final {
+    std::span<const DbDefinition> databases;
+    std::span<const RedisDefinition> redis;
+    std::span<const WorkerStateDefinition> workerStates;
+    std::span<const HttpClientDefinition> httpClients;
+};
 
-class HttpServer final {
+class WebWorkerRuntime final {
 public:
-    HttpServer(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases = {}, HttpServerOptions options = {});
-    HttpServer(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, HttpServerOptions options = {});
-    HttpServer(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, HttpServerOptions options = {});
-    HttpServer(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, std::span<const HttpClientDefinition> httpClients, HttpServerOptions options = {});
-    ~HttpServer();
+    WebWorkerRuntime(std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes, WebWorkerRuntimeResources resources = {}, HttpServerOptions options = {});
+    WebWorkerRuntime(HttpServerListenerDefinition listener, const RouteTable& routes, WebWorkerRuntimeResources resources = {}, HttpServerOptions options = {});
+    WebWorkerRuntime(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, WebWorkerRuntimeResources resources = {}, HttpServerOptions options = {});
+    ~WebWorkerRuntime();
 
-    HttpServer(const HttpServer&) = delete;
-    HttpServer& operator=(const HttpServer&) = delete;
+    WebWorkerRuntime(const WebWorkerRuntime&) = delete;
+    WebWorkerRuntime& operator=(const WebWorkerRuntime&) = delete;
 
     void start();
     void stop();
     // Lifecycle owners join from outside the server worker. Reject self-join
     // before touching std::thread so behavior is deterministic across platforms.
     void join();
-    [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
+    [[nodiscard]] asio::ip::tcp::endpoint localEndpoint(ListenerId listener) const;
     // Safe from any thread, at any point in the lifecycle.
     [[nodiscard]] HttpServerStats stats() const noexcept;
     [[nodiscard]] const WorkerHandle& worker() const& noexcept {
@@ -71,20 +76,22 @@ public:
 private:
     struct ValidatedOptionsTag final {};
     using DocumentRootPtr = std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>>;
+    using ListenerPtr = std::unique_ptr<HttpServerListener, PmrObjectDeleter<HttpServerListener>>;
 
-    HttpServer(ValidatedOptionsTag, asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, std::span<const HttpClientDefinition> httpClients, HttpServerOptions validatedOptions);
+    WebWorkerRuntime(ValidatedOptionsTag, std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes, WebWorkerRuntimeResources resources, HttpServerOptions validatedOptions);
 
-    void configureAcceptor();
-    void configureTlsContext();
+    void configureAcceptor(HttpServerListener& listener);
+    void configureTlsContext(HttpServerListener& listener);
     void stopOnContext() noexcept;
     void failWorker(std::exception_ptr failure) noexcept;
     void runIoContext() noexcept;
     Task<void> runWorker();
     Task<void> staticRootRefreshLoop();
-    Task<void> acceptLoop();
-    Task<void> handleSession(AcceptedConnectionLease connection);
+    Task<void> superviseListener(HttpServerListener& listener);
+    Task<void> acceptLoop(HttpServerListener& listener);
+    Task<void> handleSession(HttpServerListener& listener, AcceptedConnectionLease connection);
     template <typename Stream>
-    Task<void> handleStreamSession(Stream& stream, asio::ip::tcp::socket& socket, ContextServices services);
+    Task<void> handleStreamSession(HttpServerListener& listener, Stream& stream, asio::ip::tcp::socket& socket, ContextServices services);
     template <typename Stream>
     Task<void> handleHttp2Session(Stream& stream, asio::ip::tcp::socket& socket, ContextServices services, std::string_view initialBytes = {});
     asio::io_context ioContext_;
@@ -92,16 +99,10 @@ private:
     WorkerHandle workerHandle_;
     StopSource stopSource_;
     StopToken stopToken_{stopSource_.token()};
-    asio::ip::tcp::acceptor acceptor_;
-    std::optional<asio::ssl::context> tlsContext_;
-    asio::ip::tcp::endpoint endpoint_;
     const RouteTable& routes_;
     WorkerMemory memory_;
+    std::pmr::vector<ListenerPtr> listeners_;
     TaskScope backgroundTasks_;
-    // Per-host SNI contexts (RFC 6066), owned here so they outlive connections;
-    // sniLookup_ maps a lowercased host to its context for the SNI callback.
-    SniContextStore sniContexts_;
-    SniContextLookup sniLookup_;
     DocumentRootPtr ownedDocumentRoot_;
     std::pmr::vector<DocumentRootPtr> retiredDocumentRoots_;
     HttpServerOptions options_;

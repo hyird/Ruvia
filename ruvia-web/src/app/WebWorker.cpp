@@ -191,7 +191,7 @@ void WebWorkerDispatch::retire() noexcept {
     if (outstanding_.load(std::memory_order_acquire) != 0) {
         std::terminate();
     }
-    // A public handle may keep this terminal endpoint alive after HttpServer.
+    // A public handle may keep this terminal endpoint alive after WebWorkerRuntime.
     // Remove every callback/pointer into server-owned state before that state is
     // destroyed; terminal queries use only atomics and the stable WorkerHandle.
     failed_ = nullptr;

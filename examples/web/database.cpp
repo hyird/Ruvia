@@ -181,5 +181,5 @@ int main() {
         app.useDb({.config = config});
     }
 
-    app.setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8086})}).setWorkersPerListener(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).run();
+    app.setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "0.0.0.0", .port = 8086})}).setWorkerCount(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).run();
 }

@@ -27,16 +27,16 @@
 #include "ruvia/web/detail/http2/CleartextUpgrade.h"
 #include "ruvia/web/detail/server/tls/HttpServerAutoHttps.h"
 #include "ruvia/web/detail/server/request/HttpServerRequestState.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
-// Member-template definitions for HttpServer, kept out of its header so the
+// Member-template definitions for WebWorkerRuntime, kept out of its header so the
 // class stays readable. Included as an ordinary header: everything used here is
 // included here.
 
 namespace ruvia::detail {
 
 template <typename Stream>
-Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, ContextServices baseRouteServices) {
+Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, Stream& stream, TcpSocket& socket, ContextServices baseRouteServices) {
     // Resident connection identity (held for the whole connection): the scanner
     // entry, the keep-alive request sequence, the remote address, and the count
     // of buffered bytes. The heavy per-request working set (read buffer, request arena,
@@ -155,7 +155,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                             .services = baseRouteServices,
                             .workerState = workerState_,
                         },
-                        readBuffer, usedBytes);
+                        readBuffer, usedBytes, listener.redirect() != nullptr);
                     if (h2Result == CleartextHttp2DispatchResult::kSessionFinished) {
                         co_return;
                     }
@@ -218,7 +218,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(requestMemory.resource(), rejection->protocolError()));
                     break;
                 }
-                if (const auto* redirect = options_.redirect()) {
+                if (const auto* redirect = listener.redirect()) {
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
                         closingRejection = Http1ClosingRejection::error(HttpErrorInfo({.status = ruvia::http_status::kBadRequest, .message = "missing Host header"}));
                         break;
@@ -362,7 +362,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
 
             if (const auto* failure = parsed.failure()) {
                 if constexpr (kPlainTcp) {
-                    if (options_.redirect() == nullptr && shouldDropInvalidCleartextHttp1Input(bufferView, failure->source())) {
+                    if (listener.redirect() == nullptr && shouldDropInvalidCleartextHttp1Input(bufferView, failure->source())) {
                         co_return;
                     }
                 }

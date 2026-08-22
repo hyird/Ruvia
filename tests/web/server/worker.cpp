@@ -12,7 +12,7 @@
 #include "ruvia/core/Timer.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 namespace {
 
@@ -20,7 +20,7 @@ int testQueueFull() {
     ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
     ruvia::detail::HttpServerOptions options;
     options.workerMailboxCapacity = 1;
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
     auto worker = server.webWorker();
     std::promise<void> firstCompleted;
     auto firstFuture = firstCompleted.get_future();
@@ -66,7 +66,7 @@ int testQueueFull() {
 
 int testFailureStopsWorker() {
     ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
     auto worker = server.webWorker();
     server.start();
     if (worker.post([](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
@@ -89,7 +89,7 @@ int testFailureStopsWorker() {
 
 int testJoinFromWorkerIsRejectedBeforeWaiting() {
     ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
     auto worker = server.webWorker();
     server.start();
 
@@ -100,7 +100,7 @@ int testJoinFromWorkerIsRejectedBeforeWaiting() {
             try {
                 server.join();
             } catch (const std::logic_error& error) {
-                sawExpectedFailure = std::string_view(error.what()) == "cannot join an HTTP server from its worker";
+                sawExpectedFailure = std::string_view(error.what()) == "cannot join a Web worker runtime from its worker";
             }
             rejected.set_value(sawExpectedFailure);
             co_return;
@@ -119,7 +119,7 @@ int testJoinFromWorkerIsRejectedBeforeWaiting() {
 int testImmediateStopCancelsTimer() {
     ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
     ruvia::detail::HttpServerOptions options;
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
     auto worker = server.webWorker();
     server.start();
     if (worker.post([](ruvia::WebWorkerContext& context) -> ruvia::Task<void> { static_cast<void>(co_await ruvia::sleepFor(context.worker(), std::chrono::hours(1))); }) != ruvia::PostStatus::kAccepted) {
@@ -136,7 +136,7 @@ int testImmediateStopCancelsTimer() {
 int testImmediateStopSignalsTask() {
     ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
     ruvia::detail::HttpServerOptions options;
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
 
     auto webWorker = server.webWorker();
     if (!webWorker.valid() || webWorker.id() == 0) {
@@ -179,7 +179,7 @@ int testHandleOutlivesServerAsTerminalEndpoint() {
     ruvia::WebWorkerHandle worker;
     {
         ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
-        ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
+        ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
         worker = server.webWorker();
         server.start();
         server.stop();
@@ -193,14 +193,14 @@ int testHandleOutlivesServerAsTerminalEndpoint() {
 // A raw mailbox task that throws synchronously, queued ahead of a WebWorker
 // task, makes the dispatcher abandon the queued task when drain() rethrows. The
 // abandoned task's outstanding_ reservation must still be reconciled: otherwise
-// ~HttpServer's retire() sees a phantom in-flight task and std::terminate()s.
-// Reaching the end of this function runs ~HttpServer; on the buggy code it
+// ~WebWorkerRuntime's retire() sees a phantom in-flight task and std::terminate()s.
+// Reaching the end of this function runs ~WebWorkerRuntime; on the buggy code it
 // aborts the process here.
 int testAbandonedMailboxTaskReconciledOnThrow() {
     ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
     ruvia::detail::HttpServerOptions options;
     options.workerMailboxCapacity = 4;
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
     auto worker = server.webWorker();
 
     if (server.worker().post([] { throw std::runtime_error("raw mailbox task threw"); }) != ruvia::PostStatus::kAccepted) {

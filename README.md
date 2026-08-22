@@ -68,7 +68,7 @@ public:
 
 int main() {
     ruvia::app()
-        .setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8080})})
+        .setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "0.0.0.0", .port = 8080})})
         .setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall)
         .run();
 }
@@ -95,7 +95,16 @@ responses through `Context`. Set response metadata through `c.status()`,
 HTTP status APIs use `ruvia::HttpStatusCode`: prefer named values such as
 `ruvia::http_status::kCreated`, and use `HttpStatusCode::fromValue()` only for
 validated extension codes.
-`setListeners()` atomically installs any number of `ListenerConfig::http({...})`, `https({...})`, and `redirectHttpToHttps({...})` listeners. Redirect targets must name an HTTPS listener in the same list, ports must be unique, and total workers equal the listener count multiplied by `setWorkersPerListener()`.
+`setListeners()` atomically installs any number of
+`ListenerConfig::http(id, {...})`, `https(id, {...})`, and
+`redirectHttpToHttps(id, {...})` listeners. Redirect targets use a stable
+`ListenerId` naming an HTTPS listener in the same list, and ports and listener
+IDs must be unique. `setWorkerCount()` is the total Web worker count: every
+worker independently listens on the complete listener set and owns one
+worker-local DB, Redis, outbound HTTP client, and user-state set. Adding a
+listener does not multiply workers or data resources. During dispatch,
+`getConnInfo(c).listener()` identifies the listener that accepted the
+connection.
 Public startup configuration uses ordinary C++ values (`std::string`,
 `std::vector`, paths, durations, and spans); callers never choose a PMR
 resource. Ruvia copies retained configuration into process-owned storage before

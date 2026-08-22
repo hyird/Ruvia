@@ -11,7 +11,7 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
-#include "ruvia/web/detail/integration/WorkerCancellationPost.h"
+#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 #include "client/HttpClientResponseState.h"
 
 namespace ruvia::detail {

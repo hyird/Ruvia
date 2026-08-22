@@ -397,6 +397,7 @@ template <typename T>
 concept HasConnInfoCanonicalReadAccessors = requires(const T& info) {
     { info.remote().address() } -> std::same_as<std::string_view>;
     { info.scheme() } -> std::same_as<ruvia::HttpScheme>;
+    { info.listener() } -> std::same_as<ruvia::ListenerId>;
     { info.plain() } -> std::same_as<const ruvia::PlainConnectionTransport*>;
     { info.tls() } -> std::same_as<const ruvia::TlsConnectionTransport*>;
 };
@@ -1680,8 +1681,8 @@ concept HasAppRateLimitSlotsPerWorkerSetter = requires(T& app) {
 };
 
 template <typename T>
-concept HasAppWorkersPerListenerSetter = requires(T& app) {
-    { app.setWorkersPerListener(std::size_t{2}) } -> std::same_as<ruvia::App&>;
+concept HasAppWorkerCountSetter = requires(T& app) {
+    { app.setWorkerCount(std::size_t{2}) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
@@ -1847,7 +1848,7 @@ concept HasAppListenAddressPortSetter = requires(T& app) {
 
 template <typename T>
 concept HasAppListenerSetter = requires(T& app) {
-    { app.setListeners({ruvia::ListenerConfig::http({.address = "127.0.0.1", .port = 8080})}) } -> std::same_as<ruvia::App&>;
+    { app.setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = 8080})}) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
@@ -2821,7 +2822,7 @@ static_assert(!HasAppDefaultRateLimitPerWorkerTupleSetter<ruvia::App>);
 static_assert(HasAppRateLimitCapacityPerWorkerSetter<ruvia::App>);
 static_assert(!HasAppRateLimitSlotsPerWorkerSetter<ruvia::App>);
 static_assert(ruvia::kDefaultRateLimitCapacityPerWorker == 8192);
-static_assert(HasAppWorkersPerListenerSetter<ruvia::App>);
+static_assert(HasAppWorkerCountSetter<ruvia::App>);
 static_assert(std::same_as<std::underlying_type_t<ruvia::ProcessSignalHandlerPolicy>, std::uint8_t>);
 static_assert(HasAppProcessSignalHandlersSetter<ruvia::App>);
 static_assert(!HasAppProcessSignalHandlersBooleanSetter<ruvia::App>);
@@ -2882,18 +2883,21 @@ static_assert(HasAppListenerSetter<ruvia::App>);
 static_assert(std::is_aggregate_v<ruvia::HttpListenerOptions>);
 static_assert(std::is_aggregate_v<ruvia::HttpsListenerOptions>);
 static_assert(std::is_aggregate_v<ruvia::RedirectHttpToHttpsListenerOptions>);
+static_assert(std::constructible_from<ruvia::ListenerId, std::uint32_t>);
+static_assert(!std::default_initializable<ruvia::ListenerId>);
+static_assert(std::same_as<decltype(ruvia::ListenerId{1}.value()), std::uint32_t>);
 static_assert(!HasPositionalListenerFactories<ruvia::ListenerConfig>);
 static_assert(std::same_as<
-              decltype(ruvia::ListenerConfig::http()),
+              decltype(ruvia::ListenerConfig::http(ruvia::ListenerId{1})),
               ruvia::ListenerConfig>);
 static_assert(std::same_as<
-              decltype(ruvia::ListenerConfig::http({.address = "127.0.0.1", .port = 8080})),
+              decltype(ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = 8080})),
               ruvia::ListenerConfig>);
 static_assert(std::same_as<
-              decltype(ruvia::ListenerConfig::https({.address = "127.0.0.1", .port = 443, .tls = ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles({.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"}))})),
+              decltype(ruvia::ListenerConfig::https(ruvia::ListenerId{2}, {.address = "127.0.0.1", .port = 443, .tls = ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles({.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"}))})),
               ruvia::ListenerConfig>);
 static_assert(std::same_as<
-              decltype(ruvia::ListenerConfig::redirectHttpToHttps({.address = "127.0.0.1", .port = 80, .targetHttpsPort = 443})),
+              decltype(ruvia::ListenerConfig::redirectHttpToHttps(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = 80, .target = ruvia::ListenerId{2}})),
               ruvia::ListenerConfig>);
 static_assert(std::is_aggregate_v<ruvia::TlsIdentityFileOptions>);
 static_assert(std::same_as<

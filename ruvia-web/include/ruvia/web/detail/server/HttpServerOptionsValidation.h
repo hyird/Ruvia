@@ -4,12 +4,13 @@
 #include <stdexcept>
 
 #include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/web/detail/app/ConfigValidation.h"
+#include "ruvia/core/detail/config/ConfigValidation.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/web/detail/server/HttpServerListener.h"
 
 namespace ruvia::detail {
 
-inline void validateHttpServerTlsIdentity(const HttpServerOptions::TlsIdentity& identity) {
+inline void validateHttpServerTlsIdentity(const HttpServerListenerDefinition::TlsIdentity& identity) {
     if (identity.certificateChainFile.empty() || identity.privateKeyFile.empty()) {
         throw std::invalid_argument("TLS certificate chain and private key files must not be empty");
     }
@@ -48,7 +49,13 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
         }
     }
     validateDocumentRootRuntimeOptions(options);
-    if (const auto* tls = options.tls()) {
+}
+
+inline void validateHttpServerListener(const HttpServerListenerDefinition& listener) {
+    if (listener.id.value() == 0) {
+        throw std::invalid_argument("listener ID must not be zero");
+    }
+    if (const auto* tls = std::get_if<HttpServerListenerDefinition::Tls>(&listener.transport)) {
         validateHttpServerTlsIdentity(tls->identity);
         if (tls->clientCertificates.has_value()) {
             if (tls->clientCertificates->verifyFile.empty()) {
@@ -73,7 +80,7 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
             }
         }
     }
-    if (const auto* redirect = options.redirect()) {
+    if (const auto* redirect = std::get_if<HttpServerListenerDefinition::RedirectHttpToHttps>(&listener.transport)) {
         ensureNonZeroPort(redirect->httpsPort, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
     }
 }

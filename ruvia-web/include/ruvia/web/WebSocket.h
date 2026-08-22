@@ -2,7 +2,7 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/http/WebSocketProtocol.h"
-#include "ruvia/web/ScopedOperation.h"
+#include "ruvia/core/ScopedOperation.h"
 #include "ruvia/http/BorrowedText.h"
 
 #include <chrono>

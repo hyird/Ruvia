@@ -18,9 +18,8 @@
 
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/app/AppConfigGuards.h"
-#include "ruvia/web/detail/app/AppListenerOptions.h"
 #include "ruvia/core/detail/worker/WorkerSelection.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 
 namespace ruvia {
@@ -105,13 +104,13 @@ struct AppRuntimeGraph final {
     std::unique_ptr<BlockingPool, PmrObjectDeleter<BlockingPool>> blockingPool;
     std::pmr::vector<ControllerStore> controllers;
     std::pmr::vector<std::unique_ptr<detail::Router, PmrObjectDeleter<detail::Router>>> routers;
-    std::pmr::vector<std::unique_ptr<HttpServer, PmrObjectDeleter<HttpServer>>> workers;
+    std::pmr::vector<std::unique_ptr<WebWorkerRuntime, PmrObjectDeleter<WebWorkerRuntime>>> workers;
 };
 
 AppState::AppState()
-    : workersPerListener(std::max(1U, std::thread::hardware_concurrency())),
+    : workerCount(std::max(1U, std::thread::hardware_concurrency())),
       runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{detail::appResource()}) {
-    listeners.emplace_back(detail::appResource(), "0.0.0.0", 8080, HttpServerOptions::PlainHttp{});
+    listeners.emplace_back(ListenerId{1}, detail::appResource(), "0.0.0.0", 8080, HttpServerListenerDefinition::PlainHttp{});
 }
 
 AppState::~AppState() = default;
@@ -275,7 +274,7 @@ void App::run() {
     auto& state = *state_;
     auto* runtimeResource = detail::appResource();
     const auto controllerRegistrars = detail::sealControllerRegistrars();
-    std::pmr::vector<detail::HttpServer*> startedWorkers(runtimeResource);
+    std::pmr::vector<detail::WebWorkerRuntime*> startedWorkers(runtimeResource);
     auto runtime = detail::makePmrObject<detail::AppRuntimeGraph>(runtimeResource, runtimeResource);
 
     {
@@ -304,40 +303,41 @@ void App::run() {
             preparedOptions.blockingPool = runtime->blockingPool.get();
         }
 
-        const auto workerCount = state.workersPerListener * state.listeners.size();
+        const auto workerCount = state.workerCount;
         runtime->controllers.reserve(workerCount);
         runtime->routers.reserve(workerCount);
         runtime->workers.reserve(workerCount);
 
-        const auto addWorkers = [&state, &runtime, &controllerRegistrars, &preparedOptions, runtimeResource](const detail::AppListenerConfig& listener) {
-            const asio::ip::tcp::endpoint endpoint(asio::ip::make_address(std::string_view(listener.address)), listener.port);
-            auto listenerOptions = detail::makeListenerOptions(preparedOptions, listener.transport);
-            for (std::size_t i = 0; i < state.workersPerListener; ++i) {
-                auto workerOptions = i + 1 == state.workersPerListener ? std::move(listenerOptions) : listenerOptions;  // NOLINT(bugprone-use-after-move): moved only on
-                                                                                                                        // the final iteration
-                detail::ControllerStore controllers;
-                auto router = buildWorkerRouter(state, runtimeResource, controllers, controllerRegistrars);
-                auto& routes = detail::RouterImpl::from(*router);
-                auto worker = detail::makePmrObject<detail::HttpServer>(runtimeResource, endpoint, routes.routeTable(),
-                    std::span<const detail::DbDefinition>{
-#ifdef RUVIA_ENABLE_DATABASE
-                        state.databases
-#endif
-                    },
-                    std::span<const detail::RedisDefinition>{
-#ifdef RUVIA_ENABLE_REDIS
-                        state.redis
-#endif
-                    },
-                    state.workerStates, std::span<const detail::HttpClientDefinition>{}, std::move(workerOptions));
-                runtime->controllers.push_back(std::move(controllers));
-                runtime->routers.push_back(std::move(router));
-                runtime->workers.push_back(std::move(worker));
-            }
-        };
-
+        std::pmr::vector<detail::HttpServerListenerDefinition> listenerDefinitions(runtimeResource);
+        listenerDefinitions.reserve(state.listeners.size());
         for (const auto& listener : state.listeners) {
-            addWorkers(listener);
+            listenerDefinitions.emplace_back(
+                listener.id,
+                asio::ip::tcp::endpoint(asio::ip::make_address(std::string_view(listener.address)), listener.port),
+                listener.transport);
+        }
+
+        for (std::size_t i = 0; i < workerCount; ++i) {
+            auto workerOptions = i + 1 == workerCount ? std::move(preparedOptions) : preparedOptions;
+            detail::ControllerStore controllers;
+            auto router = buildWorkerRouter(state, runtimeResource, controllers, controllerRegistrars);
+            auto& routes = detail::RouterImpl::from(*router);
+            const detail::WebWorkerRuntimeResources workerResources{
+#ifdef RUVIA_ENABLE_DATABASE
+                .databases = std::span<const detail::DbDefinition>(state.databases),
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+                .redis = std::span<const detail::RedisDefinition>(state.redis),
+#endif
+                .workerStates = std::span<const detail::WorkerStateDefinition>(state.workerStates),
+            };
+            auto worker = detail::makePmrObject<detail::WebWorkerRuntime>(
+                runtimeResource,
+                std::span<const detail::HttpServerListenerDefinition>(listenerDefinitions),
+                routes.routeTable(), workerResources, std::move(workerOptions));
+            runtime->controllers.push_back(std::move(controllers));
+            runtime->routers.push_back(std::move(router));
+            runtime->workers.push_back(std::move(worker));
         }
 
         // All fallible startup preparation is complete. Memory configuration is
@@ -381,7 +381,7 @@ void App::run() {
         // the join() below would hang. Reconcile against a shutdown observed at any
         // point during startup by stopping everything we actually started; the
         // early break above only shrinks the window, it cannot close it, because
-        // start() runs after the lock is released. HttpServer::stop() is idempotent.
+        // start() runs after the lock is released. WebWorkerRuntime::stop() is idempotent.
         bool shutdownRequestedDuringStartup = false;
         {
             std::lock_guard lock(state.mutex);

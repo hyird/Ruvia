@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/web/db/DbRows.h"
-#include "ruvia/web/ScopedOperation.h"
+#include "ruvia/core/ScopedOperation.h"
 #include "ruvia/web/detail/db/DbParameterPack.h"
 
 #include <cstddef>

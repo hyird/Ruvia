@@ -6,6 +6,7 @@
 #include <variant>
 
 #include "ruvia/http/HttpClient.h"
+#include "ruvia/web/ListenerId.h"
 
 namespace ruvia {
 
@@ -98,6 +99,10 @@ public:
         return scheme_;
     }
 
+    [[nodiscard]] constexpr ListenerId listener() const noexcept {
+        return listener_;
+    }
+
     [[nodiscard]] constexpr const PlainConnectionTransport* plain() const& noexcept {
         return std::get_if<PlainConnectionTransport>(&transport_);
     }
@@ -112,24 +117,26 @@ private:
     friend class detail::ContextServices;
     friend ConnInfo getConnInfo(const Context& context) noexcept;
 
-    constexpr ConnInfo(std::string_view remoteAddress, PlainConnectionTransport transport) noexcept
+    constexpr ConnInfo(ListenerId listener, std::string_view remoteAddress, PlainConnectionTransport transport) noexcept
         : remote_(remoteAddress),
           client_(remoteAddress),
           transport_(transport),
-          scheme_(HttpScheme::kHttp) {}
+          scheme_(HttpScheme::kHttp),
+          listener_(listener) {}
 
-    constexpr ConnInfo(std::string_view remoteAddress, TlsConnectionTransport transport) noexcept
+    constexpr ConnInfo(ListenerId listener, std::string_view remoteAddress, TlsConnectionTransport transport) noexcept
         : remote_(remoteAddress),
           client_(remoteAddress),
           transport_(transport),
-          scheme_(HttpScheme::kHttps) {}
+          scheme_(HttpScheme::kHttps),
+          listener_(listener) {}
 
-    [[nodiscard]] static constexpr ConnInfo plain(std::string_view remoteAddress) noexcept {
-        return ConnInfo(remoteAddress, PlainConnectionTransport{});
+    [[nodiscard]] static constexpr ConnInfo plain(std::string_view remoteAddress, ListenerId listener = ListenerId{0}) noexcept {
+        return ConnInfo(listener, remoteAddress, PlainConnectionTransport{});
     }
 
-    [[nodiscard]] static constexpr ConnInfo tls(std::string_view remoteAddress, std::string_view clientCertificateSubject) noexcept {
-        return ConnInfo(remoteAddress, TlsConnectionTransport(clientCertificateSubject));
+    [[nodiscard]] static constexpr ConnInfo tls(std::string_view remoteAddress, std::string_view clientCertificateSubject, ListenerId listener = ListenerId{0}) noexcept {
+        return ConnInfo(listener, remoteAddress, TlsConnectionTransport(clientCertificateSubject));
     }
 
     // Applied only after the peer has been matched against the configured
@@ -160,6 +167,7 @@ private:
     Address client_;
     std::variant<PlainConnectionTransport, TlsConnectionTransport> transport_;
     HttpScheme scheme_;
+    ListenerId listener_;
     bool viaTrustedProxy_{false};
 };
 
