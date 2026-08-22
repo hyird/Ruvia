@@ -52,9 +52,6 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
 }
 
 inline void validateHttpServerListener(const HttpServerListenerDefinition& listener) {
-    if (listener.id.value() == 0) {
-        throw std::invalid_argument("listener ID must not be zero");
-    }
     if (const auto* tls = std::get_if<HttpServerListenerDefinition::Tls>(&listener.transport)) {
         validateHttpServerTlsIdentity(tls->identity);
         if (tls->clientCertificates.has_value()) {

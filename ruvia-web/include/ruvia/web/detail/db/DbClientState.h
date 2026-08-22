@@ -1,7 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <future>
 #include <memory>
 #include <memory_resource>
 #include <vector>
@@ -24,7 +23,7 @@ public:
     DbClientState& operator=(const DbClientState&) = delete;
 
     void bindStop();
-    [[nodiscard]] std::future<void> scheduleConnect();
+    [[nodiscard]] Task<void> connect();
     void requestClose() noexcept;
     [[nodiscard]] DbHandle handle(OperationOptions options);
 
@@ -35,7 +34,6 @@ public:
 private:
     enum class Phase : unsigned char {
         kFresh,
-        kConnectScheduled,
         kConnecting,
         kConnected,
         kClosing,
@@ -46,6 +44,7 @@ private:
     [[nodiscard]] static std::pmr::vector<DbDefinition> makeDefinitions(const DbConfig& config, std::pmr::memory_resource* resource);
     [[nodiscard]] static ConnectionScannerOptions scannerOptions();
 
+    [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<DbClientState> state);
     [[nodiscard]] Task<void> connectOnWorker();
     void requireConnectedOnWorker() const;
     void closeOnWorker() noexcept;

@@ -205,7 +205,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                 const auto handlerDeadline = effectiveHandlerDeadline(options_.deadline ? options_.deadline->handler : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
                 if (handlerDeadline > std::chrono::milliseconds::zero()) {
                     requestDeadline.emplace(stopToken_);
-                    requestDeadline->arm(workerHandle_, handlerDeadline);
+                    requestDeadline->arm(workerRuntime_.handle(), handlerDeadline);
                     requestServices = baseRouteServices.withStopToken(requestDeadline->token()).withRequestDeadline(&*requestDeadline);
                 }
 
@@ -246,7 +246,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                     break;
                 }
 
-                const auto appRateLimit = decideRequestRateLimit(&rateLimiter_, clientAddress);
+                const auto appRateLimit = decideRequestRateLimit(&capabilities_.rateLimiter(), clientAddress);
                 if (const auto* rejection = appRateLimit.rejection()) {
                     closingRejection = Http1ClosingRejection::rateLimit(rateLimitRejectionError(), *rejection);
                     break;
@@ -412,20 +412,20 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
         auto connectionPlan = requestCompletion->connectionPlan();
         if (requestCompletion->bufferedResponse() != nullptr) {
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
-            auto preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerHandle_);
+            auto preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerRuntime_.handle());
             if (const auto error = httpBufferedResponsePreparationError(responseCodingPolicy, parsed.request, response, preparation.compressionResult())) {
                 response = co_await routes.handleError(
                     parsed.request,
                     requestMemory,
                     *error,
                     requestServices);
-                preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerHandle_);
+                preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerRuntime_.handle());
                 if (httpBufferedResponsePreparationError(responseCodingPolicy, parsed.request, response, preparation.compressionResult()).has_value()) {
                     // The negotiated coding could not be installed even on
                     // the generated terminal error. Make the terminal error
                     // state explicit before allowing identity bytes.
                     responseCodingPolicy = HttpResponseCodingPolicy::disabled();
-                    preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerHandle_);
+                    preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerRuntime_.handle());
                 }
                 connectionPlan = requireHttp1FinalResponseCommit(response, connectionPlan);
                 requestCompletion = requestCompletion->withBufferedConnectionPlan(connectionPlan);

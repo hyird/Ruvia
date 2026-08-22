@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <asio/ip/address.hpp>
@@ -17,6 +18,7 @@ int controllerConstructed = 0;
 int controllerDestroyed = 0;
 int middlewareConstructed = 0;
 int middlewareDestroyed = 0;
+bool controllerObservedAppGate = true;
 
 class InstanceProbeMiddleware final : public ruvia::Middleware<InstanceProbeMiddleware> {
 public:
@@ -37,6 +39,14 @@ class InstanceProbeController final : public ruvia::Controller<InstanceProbeCont
 public:
     InstanceProbeController() {
         ++controllerConstructed;
+        const bool runtimeUnpublished = ruvia::app().workers().empty();
+        bool mutationRejected = false;
+        try {
+            ruvia::app().setWorkerCount(2);
+        } catch (const std::logic_error&) {
+            mutationRejected = true;
+        }
+        controllerObservedAppGate = controllerObservedAppGate && runtimeUnpublished && mutationRejected;
     }
 
     ~InstanceProbeController() {
@@ -78,9 +88,11 @@ int main() {
     bool startHookFinished = false;
     bool stopHookAfterStart = false;
     bool stopHookSawWorkersStopping = false;
+    bool hooksRanOnRunThread = true;
     std::size_t stopCalls = 0;
     std::vector<ruvia::WebWorkerHandle> workers;
     const auto ports = availablePorts();
+    const auto runThread = std::this_thread::get_id();
 
     app.setListeners({
             ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = ports[0]}),
@@ -89,6 +101,7 @@ int main() {
         .setWorkerCount(2)
         .setWorkerMailboxCapacity(8)
         .onStop([&] {
+            hooksRanOnRunThread = hooksRanOnRunThread && std::this_thread::get_id() == runThread;
             ++stopCalls;
             stopHookAfterStart = startHookFinished;
             stopHookSawWorkersStopping = !workers.empty();
@@ -97,17 +110,20 @@ int main() {
             }
         })
         .onStart([&] {
+            hooksRanOnRunThread = hooksRanOnRunThread && std::this_thread::get_id() == runThread;
             workers = app.workers();
             constexpr std::string_view key = "device-42";
             const auto first = app.workerFor(key);
             const auto second = app.workerFor(ruvia::detail::workerSelectionHash(key));
             stableSelection = workers.size() == 2 && first.valid() && first.id() == second.id();
+            for (const auto& worker : workers) {
+                stableSelection = stableSelection && worker.accepting();
+            }
             isolatedInstances = controllerConstructed == 2 && middlewareConstructed == 2;
             accepted = first.post([](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
                 throw std::runtime_error("app worker task failed");
                 co_return;
             }) == ruvia::PostStatus::kAccepted;
-            app.stop();
             startHookFinished = true;
         });
 
@@ -118,7 +134,7 @@ int main() {
         propagated = std::string_view(error.what()) == "app worker task failed";
     }
 
-    if (!rejectedZeroCapacity || !stableSelection || !accepted || !propagated || !stopHookAfterStart || !stopHookSawWorkersStopping || stopCalls != 1) {
+    if (!rejectedZeroCapacity || !controllerObservedAppGate || !stableSelection || !accepted || !propagated || !stopHookAfterStart || !stopHookSawWorkersStopping || !hooksRanOnRunThread || stopCalls != 1) {
         return 1;
     }
     if (!isolatedInstances) {

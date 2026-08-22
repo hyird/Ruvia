@@ -64,7 +64,7 @@ ruvia::Task<ruvia::HttpResponse> countHandler(void*, ruvia::Context& context) {
     ++state.counter;
     std::pmr::string body(context.resource());
     body.append("listener:");
-    body.append(std::to_string(ruvia::getConnInfo(context).listener().value()));
+    body.append(std::to_string(ruvia::getConnInfo(context).listener()->value()));
     body.append(";count:");
     body.append(std::to_string(state.counter));
     co_return context.body(std::move(body));

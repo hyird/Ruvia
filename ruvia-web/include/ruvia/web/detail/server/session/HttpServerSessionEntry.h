@@ -36,15 +36,9 @@ inline Task<void> WebWorkerRuntime::handleSession(HttpServerListener& listener, 
         if (!remoteEc) {
             assignRemoteAddress(remoteAddress, remoteEndpoint.address());
         }
-        ContextServices baseServices = ContextServices(&workerData_.databases(), &workerData_.redis(), &rateLimiter_, options_.maxBufferedBodyBytes, &workerHandle_, &httpClients_)
-            .withStopToken(stopToken_)
-            .withWorkerStates(workerStates_)
-            .withBlockingPool(options_.blockingPool)
-            .withPrecompressedStaticFiles(options_.compression.has_value())
-            .withTrustedProxies(options_.trustedProxies.empty() ? nullptr : &options_.trustedProxies);
-        if (options_.env != nullptr) {
-            baseServices = baseServices.withEnv(*options_.env);
-        }
+        ContextServices baseServices = capabilities_.contextServices()
+            .withWorker(workerRuntime_.handle())
+            .withStopToken(stopToken_);
         if (listener.tls() != nullptr) {
             asio::ssl::stream<TcpSocket&> tlsStream(socket, *listener.tlsContext);
             {

@@ -1,13 +1,18 @@
 #pragma once
 
 #include <cstdint>
+#include <stdexcept>
 
 namespace ruvia {
 
 class ListenerId final {
 public:
-    explicit constexpr ListenerId(std::uint32_t value) noexcept
-        : value_(value) {}
+    explicit constexpr ListenerId(std::uint32_t value)
+        : value_(value) {
+        if (value == 0) {
+            throw std::invalid_argument("listener ID must be greater than zero");
+        }
+    }
 
     [[nodiscard]] constexpr std::uint32_t value() const noexcept {
         return value_;

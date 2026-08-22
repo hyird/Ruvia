@@ -13,6 +13,7 @@
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
+#include "ruvia/web/detail/integration/WorkerCapabilities.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
@@ -130,15 +131,15 @@ using AbandonReservation = std::unique_ptr<WebWorkerDispatch, AbandonReservation
 
 }  // namespace
 
-WebWorkerDispatch::WebWorkerDispatch(asio::any_io_executor executor, WorkerHandle worker, std::pmr::memory_resource* resource, DbRegistry& databases, RedisRegistry& redis, HttpClientRegistry& httpClients, const WorkerStateRegistry& workerStates, BlockingPool* blockingPool, MoveOnlyFunction<void(std::exception_ptr)> failed)
+WebWorkerDispatch::WebWorkerDispatch(asio::any_io_executor executor, WorkerHandle worker, std::pmr::memory_resource* resource, WorkerCapabilities& capabilities, MoveOnlyFunction<void(std::exception_ptr)> failed)
     : executor_(std::move(executor)),
       worker_(std::move(worker)),
       resource_(pmrResourceOrDefault(resource)),
-      databases_(&databases),
-      redis_(&redis),
-      httpClients_(&httpClients),
-      workerStates_(&workerStates),
-      blockingPool_(blockingPool),
+      databases_(&capabilities.databases()),
+      redis_(&capabilities.redis()),
+      httpClients_(&capabilities.httpClients()),
+      workerStates_(&capabilities.workerStates()),
+      blockingPool_(capabilities.blockingPool()),
       failed_(std::move(failed)) {}
 
 WebWorkerDispatch::~WebWorkerDispatch() {

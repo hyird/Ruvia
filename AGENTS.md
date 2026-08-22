@@ -190,6 +190,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 ## 线程和运行时
 
 - 每个 worker 拥有一个 standalone Asio `io_context`。
+- `io_context`、dispatcher endpoint 和稳定 `WorkerHandle` 必须由同一个 worker runtime context 组装和退役；不得让不同 runtime 各自复制 handle 发布、detach 或 executor 绑定逻辑。
 - 连接不能跨线程迁移。
 - `Task` 是 lazy structured coroutine owner：未启动任务可以丢弃，已启动任务必须在所属执行上下文运行到完成；取消只能显式请求后 await/join，禁止通过析构销毁或静默 detach 挂起中的协程帧。
 - `WorkerHandle` 直接持有可关闭的稳定 dispatcher endpoint；热路径操作不得通过 `weak_ptr::lock()` 临时取得所有权，context owner 必须在销毁执行上下文前 detach endpoint，使逃逸句柄安全失效。请求期 `ContextServices`/`Context` 只借用 server 中地址稳定的 handle，不复制其共享所有权。
@@ -203,10 +204,14 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
   独立拥有全部 listener 的 acceptor，并在同一 worker-local runtime 中只创建一份
   DB、Redis、outbound HTTP client 和 user state；listener 数量不得乘增 worker 或
   数据资源。
+- 每个 Web worker 的 DB、Redis、outbound HTTP client、user state 和 rate limiter 必须由一个 worker capability owner 统一构造、启动、暴露和关闭；这些实例不得跨 worker 共享，也不得重新散落成相互独立的 runtime 生命周期字段。
 - listener 通过 `App::setListeners(std::vector<ListenerConfig>)` 原子配置；每项自带 bind address、port 和 transport，端口必须唯一，HTTP→HTTPS redirect 必须指向同一列表中的 HTTPS listener，不恢复全局 listen address 或固定单/双 listener topology 类型。公开配置必须在 setter 中一次性归一化到 App PMR 存储。
 - `App::run()` 为每个 worker 创建一个线程和完整 runtime，并为该 worker 的每个
   listener 创建独立 acceptor；连接由接受它的 worker 终身拥有，不跨线程迁移。
+- Web 启动必须先为全部 worker 完成 listener prepare，再启动全部 worker 并等待 worker-local DB/Redis 等能力全部 ready，最后一次性释放 serve 门禁；任何 worker 准备或启动失败都不得留下部分 worker 对外接收连接。`onStart` 只能在全部 worker 已进入 serving 后执行。
+- `App::run()` 的调用线程是 App 生命周期的唯一执行线程，负责 `onStart`、`onStop`、join 和失败重抛。`App::stop()`、信号线程和 worker failure 只能提交单调 stop request 并关闭稳定 endpoint，不得在调用方线程执行用户 hook；App 单例的配置、运行和 runtime 借用必须继续受同一生命周期门禁保护。
 - outbound HTTP 与 DB 能力属于直接绑定 `EventLoop` 的一等 client 对象，不属于 `App`、HTTP `Context` 或特殊 worker context。应用自己创建或 attach 的 worker 默认可以构造同一套 `HttpClient` / `DbClient`；client 的连接、内存、取消和 shutdown 保持 worker-local，App 的 `Context`/`WebWorkerContext` 只提供同一底层实现的便捷入口。不得为自建 worker 增加聚合能力 service 或 `detail` 旁路。
+- standalone `DbClient::connect()` 必须保持绑定 loop 上启动的 lazy `Task<void>`，与后续 query/execute 使用同一 worker-affine coroutine 契约；不得恢复由调用线程隐式调度的 `std::future` 特例。
 - 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。
 - shutdown 只能在各 worker 自己的 `io_context` 上直接关闭 acceptor、活跃 socket 和 worker 资源；不等待请求优雅排空。
 - idle/header/body/write timeout、连接数限制和请求数限制保持 per-worker 所有权。
@@ -244,7 +249,8 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 生产 `App` 与 `TestApp` 使用同一份进程级 controller 注册集合；需要不同 controller 集合的测试应拆成不同测试二进制，不得给 `TestApp` 增加实例级筛选旁路。
 - 路由注册只允许通过 controller/group/route 宏完成。
 - 不暴露直接 `Router::addRoute(...)` 或 `Router::group(...)` API。
-- 路由表、中间件链、controller factory 在 worker 启动前构建完成。
+- controller 和 middleware 实例保持 per-worker；进程只编译并拥有一份不可变路由查找计划，各 worker 的 route table 通过稳定 route index 绑定到该计划。绑定时必须验证 endpoint 模式、handler/middleware thunk、请求策略和 route shape 的完整启动期契约，禁止不同 worker 静默形成不同路由语义。
+- 路由表、中间件链、controller factory 和共享路由计划在 worker 启动前构建完成。
 - 请求期不得重建 route index、middleware chain 或 `std::function` 链。
 - App 注册的自包含 callback 必须由 App RAII 拥有并析构；worker、router 和请求服务只保存内部两指针 `CallbackRef`。公开 callback API 不得提供可制造悬垂引用的 `bind()`/`borrow()`。
 - 重复 method + path 或等价动态 route shape 必须启动期报错。

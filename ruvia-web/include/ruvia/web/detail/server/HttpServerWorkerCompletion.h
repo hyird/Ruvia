@@ -54,15 +54,58 @@ public:
         }
     }
 
+    [[nodiscard]] bool markServing() noexcept {
+        {
+            std::lock_guard lock(mutex_);
+            if (servingComplete_) {
+                return false;
+            }
+            serving_ = true;
+            servingComplete_ = true;
+        }
+        servingCv_.notify_all();
+        return true;
+    }
+
+    void markServingAborted() noexcept {
+        {
+            std::lock_guard lock(mutex_);
+            if (servingComplete_) {
+                return;
+            }
+            servingComplete_ = true;
+        }
+        servingCv_.notify_all();
+    }
+
+    [[nodiscard]] bool waitForServing() {
+        std::exception_ptr failure;
+        bool serving = false;
+        {
+            std::unique_lock lock(mutex_);
+            servingCv_.wait(lock, [this] { return servingComplete_ || workerFailure_ != nullptr; });
+            failure = workerFailure_;
+            serving = serving_;
+        }
+        if (failure != nullptr) {
+            std::rethrow_exception(failure);
+        }
+        return serving;
+    }
+
     [[nodiscard]] bool recordWorkerFailure(std::exception_ptr failure) noexcept {
         if (failure == nullptr) {
             return false;
         }
-        std::lock_guard lock(mutex_);
-        if (workerFailure_ != nullptr) {
-            return false;
+        {
+            std::lock_guard lock(mutex_);
+            if (workerFailure_ != nullptr) {
+                return false;
+            }
+            workerFailure_ = failure;
+            servingComplete_ = true;
         }
-        workerFailure_ = failure;
+        servingCv_.notify_all();
         return true;
     }
 
@@ -96,8 +139,11 @@ private:
 
     mutable std::mutex mutex_;
     std::condition_variable startupCv_;
+    std::condition_variable servingCv_;
     Startup startup_;
     std::exception_ptr workerFailure_;
+    bool serving_{false};
+    bool servingComplete_{false};
 };
 
 }  // namespace ruvia::detail

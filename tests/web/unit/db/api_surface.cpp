@@ -309,7 +309,7 @@ static_assert(!HasDbHandleInitializerListParams<ruvia::DbHandle>);
 static_assert(std::constructible_from<ruvia::DbClient, ruvia::EventLoop, ruvia::DbConfig>);
 static_assert(!std::copy_constructible<ruvia::DbClient>);
 static_assert(!std::move_constructible<ruvia::DbClient>);
-static_assert(std::same_as<decltype(std::declval<ruvia::DbClient&>().connect()), std::future<void>>);
+static_assert(std::same_as<decltype(std::declval<ruvia::DbClient&>().connect()), ruvia::Task<void>>);
 static_assert(HasDbHandleDefaultParams<ruvia::DbClient>);
 static_assert(HasDbHandleSpanParams<ruvia::DbClient>);
 static_assert(!HasDbHandleInitializerListParams<ruvia::DbClient>);

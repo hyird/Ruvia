@@ -1,5 +1,4 @@
 #include <concepts>
-#include <future>
 #include <initializer_list>
 #include <span>
 #include <stdexcept>
@@ -59,7 +58,7 @@ static_assert(std::constructible_from<ruvia::DbClient, ruvia::EventLoop, ruvia::
 static_assert(!std::default_initializable<ruvia::DbClient>);
 static_assert(!std::copy_constructible<ruvia::DbClient>);
 static_assert(!std::move_constructible<ruvia::DbClient>);
-static_assert(std::same_as<decltype(std::declval<ruvia::DbClient&>().connect()), std::future<void>>);
+static_assert(std::same_as<decltype(std::declval<ruvia::DbClient&>().connect()), ruvia::Task<void>>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().withOptions(ruvia::OperationOptions{})), ruvia::DbHandle>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().worker()), const ruvia::WorkerHandle&>);
 static_assert(HasDefaultOperations<ruvia::DbClient>);

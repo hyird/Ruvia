@@ -397,7 +397,7 @@ template <typename T>
 concept HasConnInfoCanonicalReadAccessors = requires(const T& info) {
     { info.remote().address() } -> std::same_as<std::string_view>;
     { info.scheme() } -> std::same_as<ruvia::HttpScheme>;
-    { info.listener() } -> std::same_as<ruvia::ListenerId>;
+    { info.listener() } -> std::same_as<std::optional<ruvia::ListenerId>>;
     { info.plain() } -> std::same_as<const ruvia::PlainConnectionTransport*>;
     { info.tls() } -> std::same_as<const ruvia::TlsConnectionTransport*>;
 };

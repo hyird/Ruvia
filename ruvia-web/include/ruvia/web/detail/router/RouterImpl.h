@@ -67,8 +67,9 @@ public:
     // descriptor is materialized exactly once per worker route graph; that
     // worker-local instance serves all routes in the graph.
     void setGlobalMiddlewares(std::span<const ControllerMiddlewareDescriptor> descriptors);
-    void finalize();
+    void finalize(const CompiledRoutePlan* compiledPlan = nullptr);
     [[nodiscard]] const RouteTable& routeTable() const;
+    [[nodiscard]] CompiledRoutePlanPtr releaseCompiledPlan();
 
     void registerRoute(HttpKnownMethod method, std::pmr::string path, RouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
     void registerResponseStreamRoute(HttpKnownMethod method, std::pmr::string path, RouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
@@ -174,7 +175,7 @@ private:
     [[nodiscard]] RouteMiddleware materializeMiddleware(ControllerMiddlewareDescriptor middleware);
     void appendMaterializedMiddlewares(std::pmr::vector<RouteMiddleware>& frames, std::span<const ControllerMiddlewareDescriptor> descriptors);
     [[nodiscard]] std::pmr::vector<RouteMiddleware> materializeMiddlewares(std::span<const ControllerMiddlewareDescriptor> first, std::span<const ControllerMiddlewareDescriptor> second = {});
-    void buildRouteTable(RouteTable& table) const;
+    void buildRouteTable(RouteTable& table, const CompiledRoutePlan* compiledPlan) const;
 
     struct RouteTableDeleter final {
         std::pmr::memory_resource* resource{nullptr};

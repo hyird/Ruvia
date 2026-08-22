@@ -221,7 +221,7 @@ void detail::RouterImpl::setGlobalMiddlewares(std::span<const ControllerMiddlewa
     globalMiddlewareDescriptors_.assign(descriptors.begin(), descriptors.end());
 }
 
-void detail::RouterImpl::finalize() {
+void detail::RouterImpl::finalize(const CompiledRoutePlan* compiledPlan) {
     if (routeTable_) {
         return;
     }
@@ -229,8 +229,8 @@ void detail::RouterImpl::finalize() {
     globalMiddlewareFrames_ = materializeMiddlewares(globalMiddlewareDescriptors_);
     validateNoDynamicRouteConflict(pendingRoutes_);
     std::unique_ptr<RouteTable, RouteTableDeleter> table(constructPmrObject<RouteTable>(resource_, resource_), RouteTableDeleter{resource_});
-    buildRouteTable(*table);
     table->hasRouteRateLimit_ = hasRouteRateLimit_;
+    buildRouteTable(*table, compiledPlan);
     table->setErrorHandler(errorHandler_);
     table->setNotFoundHandler(notFoundHandler_);
     if (!prefixErrorHandlers_.empty()) {
@@ -257,6 +257,13 @@ const detail::RouteTable& detail::RouterImpl::routeTable() const {
         throw std::logic_error("router has not been finalized");
     }
     return *routeTable_;
+}
+
+detail::CompiledRoutePlanPtr detail::RouterImpl::releaseCompiledPlan() {
+    if (!routeTable_) {
+        throw std::logic_error("router has not been finalized");
+    }
+    return routeTable_->releaseCompiledPlan();
 }
 
 }  // namespace ruvia

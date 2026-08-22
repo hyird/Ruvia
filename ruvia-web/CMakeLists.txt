@@ -18,6 +18,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppHttpConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppIntegrationConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppListenerOptions.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppRunCoordinator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Dotenv.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvPaths.cpp
@@ -61,6 +62,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSessionEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSendWindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/WorkerCapabilities.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/WorkerDataState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ratelimit/RateLimitDecision.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/PathSegments.cpp

@@ -21,6 +21,7 @@
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/router/RouteEntry.h"
+#include "ruvia/web/detail/router/CompiledRoutePlan.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/http/static/StaticFileVariant.h"
 #include "ruvia/web/detail/server/DocumentRootBinding.h"
@@ -129,6 +130,10 @@ public:
     Task<std::optional<HttpResponse>> dispatchResponseStream(const HttpRequest& request, const ResolvedRoute& route, RequestMemory& memory, ResponseStreamWriter& responseStream, ContextServices services = {}) const;
     Task<std::optional<HttpResponse>> dispatchWebSocket(const HttpRequest& request, const ResolvedRoute& route, RequestMemory& memory, const RouteStreamHandler& handler, ContextServices services = {}) const;
 
+    // App moves the first worker's compiled plan to process ownership, then
+    // binds every later worker table to that same immutable lookup structure.
+    [[nodiscard]] CompiledRoutePlanPtr releaseCompiledPlan();
+
 private:
     friend class RouterImpl;
 
@@ -139,38 +144,19 @@ private:
         kRespond,
     };
 
-    static constexpr std::size_t kRoutableMethodCount = 7;
-
-    struct PerfectSlot {
-        const RouteEntry* route{nullptr};
-    };
-
-    struct DynamicNode;
-
-    struct DynamicStaticChild {
-        std::pmr::string segment;
-        DynamicNode* node{nullptr};
-    };
-
-    struct DynamicNode {
-        DynamicNode()
-            : DynamicNode(nullptr) {}
-
-        explicit DynamicNode(std::pmr::memory_resource* resource)
-            : DynamicNode(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
-
-        DynamicNode(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
-            : staticChildren(resource) {}
-
-        std::pmr::vector<DynamicStaticChild> staticChildren;
-        DynamicNode* paramChild{nullptr};
-        const RouteEntry* route{nullptr};
-        const RouteEntry* wildcardRoute{nullptr};
-    };
+    static constexpr std::size_t kRoutableMethodCount = CompiledRoutePlan::kRoutableMethodCount;
+    static constexpr std::size_t kNoRouteIndex = CompiledRoutePlan::kNoRouteIndex;
+    using DynamicNode = CompiledRoutePlan::DynamicNode;
+    using DynamicStaticChild = CompiledRoutePlan::DynamicStaticChild;
 
     void buildPerfectHash();
     void buildDynamicRoutes();
     void buildAllowedMethodMask();
+    void bindCompiledPlan(const CompiledRoutePlan& plan);
+    void captureRouteIdentities();
+    void bindDynamicParamNames();
+    void bindDynamicParamNames(RouteEntry& route);
+    void buildServerExtensionMethodTokens();
 
 
     [[nodiscard]] static std::size_t methodIndex(HttpKnownMethod method) noexcept;
@@ -180,11 +166,11 @@ private:
     [[nodiscard]] static std::size_t nextPowerOfTwo(std::size_t value) noexcept;
     [[nodiscard]] static std::size_t dynamicNodeUpperBound(std::string_view path) noexcept;
     [[nodiscard]] static std::size_t dynamicParamNameUpperBound(std::string_view path) noexcept;
-    void insertDynamic(DynamicNode& root, RouteEntry& route);
+    void insertDynamic(DynamicNode& root, RouteEntry& route, std::size_t routeIndex);
     void appendDynamicParamName(RouteEntry& route, std::string_view name);
     static void sortDynamicNode(DynamicNode& node);
-    [[nodiscard]] static const RouteEntry* findDynamicNode(const DynamicNode& node, std::string_view path, RouteMatch& match) noexcept;
-    [[nodiscard]] static const RouteEntry* findDynamicNodeNoParams(const DynamicNode& node, std::string_view path) noexcept;
+    [[nodiscard]] static std::size_t findDynamicNode(const DynamicNode& node, std::string_view path, RouteMatch& match) noexcept;
+    [[nodiscard]] static std::size_t findDynamicNodeNoParams(const DynamicNode& node, std::string_view path) noexcept;
     [[nodiscard]] static const DynamicStaticChild* findDynamicStaticChild(const DynamicNode& node, std::string_view segment) noexcept;
     [[nodiscard]] static bool addParam(RouteMatch& match, std::string_view value) noexcept;
     [[nodiscard]] static bool sameDynamicShape(std::string_view left, std::string_view right) noexcept;
@@ -238,19 +224,12 @@ private:
     // exactly the way a route's chain does.
     // Indices into routes_ rather than pointers: routes_ is populated in two
     // passes and this is built after both.
-    std::pmr::vector<std::size_t> extensionRouteIndices_;
     std::pmr::vector<std::string_view> serverExtensionMethodTokens_;
     std::size_t unmatchedMiddlewareOffset_{0};
     std::size_t unmatchedMiddlewareCount_{0};
-    std::pmr::vector<PerfectSlot> exactSlots_;
-    std::array<DynamicNode, kRoutableMethodCount> dynamicRoots_{};
-    std::pmr::vector<DynamicNode> dynamicNodeArena_;
     std::pmr::vector<std::string_view> dynamicParamNames_;
-    std::uint32_t staticMethodMask_{0};
-    std::uint32_t dynamicMethodMask_{0};
-    std::uint32_t allowedMethodMask_{0};
-    std::uint64_t exactSeed_{0};
-    std::size_t exactMask_{0};
+    CompiledRoutePlanPtr ownedPlan_;
+    const CompiledRoutePlan* plan_{nullptr};
     HttpErrorHandlerRef errorHandler_{nullptr};
     HttpNotFoundHandlerRef notFoundHandler_{nullptr};
     std::pmr::vector<StoredPrefixHandler<HttpErrorHandlerRef>> prefixErrorHandlers_{resource_};

@@ -130,35 +130,48 @@ void loadVerifyFile(asio::ssl::context& context, const std::pmr::string& filenam
 
 }  // namespace
 
-WebWorkerRuntime::WebWorkerRuntime(TcpEndpoint endpoint, const RouteTable& routes, WebWorkerRuntimeResources resources, HttpServerOptions options)
-    : WebWorkerRuntime(HttpServerListenerDefinition(ListenerId{1}, std::move(endpoint)), routes, resources, std::move(options)) {}
+WebWorkerRuntime::WebWorkerRuntime(TcpEndpoint endpoint, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
+    : WebWorkerRuntime(HttpServerListenerDefinition(ListenerId{1}, std::move(endpoint)), routes, capabilities, std::move(options)) {}
 
-WebWorkerRuntime::WebWorkerRuntime(HttpServerListenerDefinition listener, const RouteTable& routes, WebWorkerRuntimeResources resources, HttpServerOptions options)
-    : WebWorkerRuntime(std::span<const HttpServerListenerDefinition>(&listener, 1), routes, resources, std::move(options)) {}
+WebWorkerRuntime::WebWorkerRuntime(HttpServerListenerDefinition listener, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
+    : WebWorkerRuntime(std::span<const HttpServerListenerDefinition>(&listener, 1), routes, capabilities, std::move(options)) {}
 
-WebWorkerRuntime::WebWorkerRuntime(std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes, WebWorkerRuntimeResources resources, HttpServerOptions options)
-    : WebWorkerRuntime(ValidatedOptionsTag{}, listeners, routes, resources, validatedHttpServerOptions(std::move(options))) {}
+WebWorkerRuntime::WebWorkerRuntime(std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
+    : WebWorkerRuntime(ValidatedOptionsTag{}, listeners, routes, capabilities, validatedHttpServerOptions(std::move(options))) {}
 
-WebWorkerRuntime::WebWorkerRuntime(ValidatedOptionsTag, std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes, WebWorkerRuntimeResources resources, HttpServerOptions validatedOptions)
+WebWorkerRuntime::WebWorkerRuntime(ValidatedOptionsTag, std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions)
     // One worker thread runs all I/O on this context; cross-thread access is
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
     : ioContext_(ASIO_CONCURRENCY_HINT_UNSAFE_IO),
-      workerDispatcher_(std::make_shared<WorkerDispatcher>(ioContext_, validatedOptions.workerMailboxCapacity)),
-      workerHandle_(WorkerHandleAccess::make(workerDispatcher_)),
+      serveGate_(ioContext_, std::chrono::steady_clock::time_point::max()),
+      workerRuntime_(ioContext_, validatedOptions.workerMailboxCapacity),
       routes_(routes),
       memory_(validatedOptions.memoryConfig),
       listeners_(memory_.resource()),
-      backgroundTasks_(workerHandle_, {.resource = memory_.resource()}),
+      backgroundTasks_(workerRuntime_.handle(), {.resource = memory_.resource()}),
       ownedDocumentRoot_(nullptr, PmrObjectDeleter<StaticRoot>{processResource()}),
       retiredDocumentRoots_(memory_.resource()),
       options_(std::move(validatedOptions)),
-      connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
-      workerData_(ioContext_, workerHandle_, memory_.resource(), resources.databases, resources.redis, connectionScanner_),
-      httpClients_(ioContext_, workerHandle_, memory_.resource(), resources.httpClients, options_.httpClientOriginCacheCapacityPerWorker),
-      workerStates_(memory_.resource(), resources.workerStates),
-      webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(), workerHandle_, memory_.resource(), workerData_.databases(), workerData_.redis(), httpClients_, workerStates_, options_.blockingPool, [this](std::exception_ptr failure) { failWorker(std::move(failure)); })),
-      rateLimiter_(options_.defaultRateLimitPerWorker, routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent : RouteRateLimitPresence::kAbsent, options_.rateLimitCapacityPerWorker, memory_.resource()),
+      connectionScanner_(workerRuntime_.handle(), makeConnectionScannerOptions(options_)),
+      capabilities_(
+          ioContext_,
+          workerRuntime_.handle(),
+          memory_.resource(),
+          capabilities,
+          WorkerCapabilityOptions{
+              .maxHttpClientOrigins = options_.httpClientOriginCacheCapacityPerWorker,
+              .defaultRateLimit = options_.defaultRateLimitPerWorker,
+              .routeRateLimits = routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent : RouteRateLimitPresence::kAbsent,
+              .rateLimitCapacity = options_.rateLimitCapacityPerWorker,
+              .maxDecodedBodyBytes = options_.maxBufferedBodyBytes,
+              .blockingPool = options_.blockingPool,
+              .env = options_.env,
+              .trustedProxies = options_.trustedProxies.empty() ? nullptr : &options_.trustedProxies,
+              .precompressedStaticFiles = options_.compression.has_value(),
+          },
+          connectionScanner_),
+      webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(), workerRuntime_.handle(), memory_.resource(), capabilities_, [this](std::exception_ptr failure) { failWorker(std::move(failure)); })),
       workSetPool_(memory_) {
     if (listeners.empty()) {
         throw std::invalid_argument("HTTP server worker requires at least one listener");
@@ -202,23 +215,42 @@ WebWorkerRuntime::~WebWorkerRuntime() {
     // dropped WebWorker task reconciles its outstanding_ reservation before
     // retire() checks it. Public handles may outlive this server, so detach also
     // leaves them a terminal endpoint before Asio objects are destroyed.
-    workerDispatcher_->detachContext();
+    workerRuntime_.detach();
     webWorkerDispatch_->retire();
 }
 
 void WebWorkerRuntime::start() {
+    prepare();
+    launch();
+    waitUntilReady();
+    requestServe();
+    if (!waitUntilServing()) {
+        throw std::runtime_error("web worker stopped before it began serving");
+    }
+}
+
+void WebWorkerRuntime::prepare() {
+    if (prepared_ || lifecycle_.state() != RuntimeLifecycle::State::kReady) {
+        throw std::logic_error("web worker runtime can only be prepared once");
+    }
+    for (const auto& listener : listeners_) {
+        configureAcceptor(*listener);
+        configureTlsContext(*listener);
+    }
+    prepared_ = true;
+}
+
+void WebWorkerRuntime::launch() {
+    if (!prepared_) {
+        throw std::logic_error("web worker runtime must be prepared before launch");
+    }
     if (!lifecycle_.start()) {
-        throw std::logic_error("http server worker cannot be restarted");
+        throw std::logic_error("web worker runtime cannot be launched twice");
     }
     workerState_ = HttpServerWorkerState::kRunning;
 
     try {
-        for (const auto& listener : listeners_) {
-            configureAcceptor(*listener);
-            configureTlsContext(*listener);
-        }
         workerThread_ = std::thread([this] { runIoContext(); });
-        workerCompletion_.waitForStartup();
     } catch (...) {
         (void)lifecycle_.requestStop();
         if (workerThread_.joinable()) {
@@ -231,18 +263,43 @@ void WebWorkerRuntime::start() {
     }
 }
 
+void WebWorkerRuntime::waitUntilReady() {
+    if (lifecycle_.state() == RuntimeLifecycle::State::kReady) {
+        throw std::logic_error("web worker runtime has not been launched");
+    }
+    workerCompletion_.waitForStartup();
+}
+
+void WebWorkerRuntime::requestServe() {
+    if (lifecycle_.state() != RuntimeLifecycle::State::kRunning) {
+        return;
+    }
+    asio::post(ioContext_, [this] {
+        if (!httpServerWorkerRunning(workerState_) || serveRequested_) {
+            return;
+        }
+        serveRequested_ = true;
+        std::error_code ignored;
+        serveGate_.cancel(ignored);
+    });
+}
+
+bool WebWorkerRuntime::waitUntilServing() {
+    return workerCompletion_.waitForServing();
+}
+
 void WebWorkerRuntime::stop() {
     if (!lifecycle_.requestStop()) {
         return;
     }
 
     webWorkerDispatch_->close();
-    workerDispatcher_->close();
+    workerRuntime_.close();
     asio::post(ioContext_, [this] { stopOnContext(); });
 }
 
 void WebWorkerRuntime::join() {
-    if (workerHandle_.isCurrent()) {
+    if (workerRuntime_.handle().isCurrent()) {
         throw std::logic_error("cannot join a Web worker runtime from its worker");
     }
     if (workerThread_.joinable()) {
@@ -373,7 +430,7 @@ void WebWorkerRuntime::stopOnContext() noexcept {
     workerState_ = HttpServerWorkerState::kStopped;
     stopSource_.requestStop();
     webWorkerDispatch_->close();
-    workerDispatcher_->close();
+    workerRuntime_.close();
     std::error_code ignored;
     for (const auto& listener : listeners_) {
         listener->acceptor.cancel(ignored);
@@ -381,11 +438,12 @@ void WebWorkerRuntime::stopOnContext() noexcept {
         listener->acceptor.close(ignored);
         ignored.clear();
     }
+    serveGate_.cancel(ignored);
+    ignored.clear();
     connectionScanner_.stop();
     connectionScanner_.closeAll();
-    workerData_.closeNow();
-    httpClients_.closeNow();
-    workerDispatcher_->stopTimers();
+    capabilities_.closeNow();
+    workerRuntime_.stopTimers();
 }
 
 void WebWorkerRuntime::failWorker(std::exception_ptr failure) noexcept {
@@ -402,9 +460,9 @@ void WebWorkerRuntime::failWorker(std::exception_ptr failure) noexcept {
 void WebWorkerRuntime::runIoContext() noexcept {
     bool workerFailed = false;
     try {
-        workerDispatcher_->runContext(
+        workerRuntime_.run(
             [this] {
-                workerStates_.initialize();
+                capabilities_.initializeWorkerState();
                 asio::co_spawn(ioContext_, taskAsAwaitable(runWorker()), asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
             },
             [this, &workerFailed](std::exception_ptr failure) noexcept {
@@ -414,7 +472,7 @@ void WebWorkerRuntime::runIoContext() noexcept {
                 lifecycle_.completeStop();
                 workerState_ = HttpServerWorkerState::kStopped;
             },
-            [this]() noexcept { workerStates_.shutdown(); });
+            [this]() noexcept { capabilities_.shutdownWorkerState(); });
     } catch (...) {
         const auto failure = std::current_exception();
         (void)workerCompletion_.markStartupFailed(failure);
@@ -439,14 +497,29 @@ Task<void> WebWorkerRuntime::runWorker() {
     bool backgroundJoinStarted = false;
     try {
         connectionScanner_.start();
-        co_await workerData_.connect();
+        co_await capabilities_.connect();
+        (void)workerCompletion_.markStartupReady();
+
+        const auto serveCompletion = co_await asyncAsio([this](auto handler) mutable {
+            serveGate_.async_wait(std::move(handler));
+        });
+        const auto serveError = serveCompletion.errorCode();
+        if (serveError && serveError != asio::error::operation_aborted) {
+            throw std::system_error(serveError, "web worker serve gate failed");
+        }
+        if (!serveRequested_ || !httpServerWorkerRunning(workerState_)) {
+            workerCompletion_.markServingAborted();
+            co_await capabilities_.join();
+            co_return;
+        }
+
         if (options_.documentRoot.refreshOptions() != nullptr) {
             backgroundTasks_.spawn(staticRootRefreshLoop());
         }
         for (const auto& listener : listeners_) {
             backgroundTasks_.spawn(superviseListener(*listener));
         }
-        (void)workerCompletion_.markStartupReady();
+        (void)workerCompletion_.markServing();
         backgroundJoinStarted = true;
         co_await backgroundTasks_.join();
     } catch (...) {
@@ -464,7 +537,7 @@ Task<void> WebWorkerRuntime::runWorker() {
         }
     }
     try {
-        co_await httpClients_.join();
+        co_await capabilities_.join();
     } catch (...) {
         const auto failure = std::current_exception();
         (void)workerCompletion_.markStartupFailed(failure);
@@ -485,7 +558,7 @@ Task<void> WebWorkerRuntime::staticRootRefreshLoop() {
         if (!httpServerWorkerRunning(workerState_)) {
             co_return;
         }
-        if (co_await sleepFor(workerHandle_, interval) == TimerSleepResult::kStopRequested) {
+        if (co_await sleepFor(workerRuntime_.handle(), interval) == TimerSleepResult::kStopRequested) {
             co_return;
         }
         if (!httpServerWorkerRunning(workerState_)) {
@@ -522,7 +595,7 @@ Task<void> WebWorkerRuntime::staticRootRefreshLoop() {
         }
         DocumentRootPtr candidate(nullptr, PmrObjectDeleter<StaticRoot>{processResource()});
         try {
-            auto rebuilt = co_await ruvia::tryRunBlocking(*options_.blockingPool, workerHandle_, [rootPath = std::move(rootPath), rootOptions = std::move(rootOptions)]() mutable {
+            auto rebuilt = co_await ruvia::tryRunBlocking(*options_.blockingPool, workerRuntime_.handle(), [rootPath = std::move(rootPath), rootOptions = std::move(rootOptions)]() mutable {
                 return makePmrObject<StaticRoot>(processResource(), rootPath, std::move(rootOptions));
             });
             if (!rebuilt.completed()) {

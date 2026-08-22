@@ -2,8 +2,8 @@
 
 #include "ruvia/web/App.h"
 
-#include <atomic>
 #include <cstddef>
+#include <condition_variable>
 #include <exception>
 #include <mutex>
 #include <optional>
@@ -55,43 +55,6 @@ struct AppStaticRootOptions final {
     StaticRangeRequestPolicy rangeRequests{StaticRangeRequestPolicy::kHonor};
     StaticResponseValidatorPolicy responseValidators{StaticResponseValidatorPolicy::kEmit};
     StaticDotfilePolicy dotfiles{StaticDotfilePolicy::kDeny};
-};
-
-// App::stop() may cross an arbitrary user hook while borrowing raw worker
-// pointers from AppRuntimeGraph. The App mutex closes acquisition against graph
-// reset; this gate lets existing borrowers release without needing that mutex.
-// The run owner waits without the App mutex so a stop hook may still call
-// workers()/workerFor(), then reacquires the mutex for the sole graph reset.
-class AppRuntimeBorrowGate final {
-public:
-    void acquire() noexcept {
-        count_.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    void release() noexcept {
-        const auto previous = count_.fetch_sub(1, std::memory_order_acq_rel);
-        if (previous == 0) {
-            std::terminate();
-        }
-        if (previous == 1) {
-            count_.notify_all();
-        }
-    }
-
-    void wait() const noexcept {
-        auto observed = count_.load(std::memory_order_acquire);
-        while (observed != 0) {
-            count_.wait(observed, std::memory_order_acquire);
-            observed = count_.load(std::memory_order_acquire);
-        }
-    }
-
-    [[nodiscard]] std::size_t count() const noexcept {
-        return count_.load(std::memory_order_acquire);
-    }
-
-private:
-    mutable std::atomic_size_t count_{0};
 };
 
 struct AppDocumentRootConfig final {
@@ -150,11 +113,7 @@ struct AppState final {
     std::unique_ptr<AppRuntimeGraph, PmrObjectDeleter<AppRuntimeGraph>> runtime;
 
     mutable std::mutex mutex;
-    // App::stop() borrows the runtime graph across user stop hooks so it can
-    // preserve the public hook-before-worker-close ordering without retaining
-    // raw WebWorkerRuntime pointers past graph destruction. App::run() is the sole
-    // graph owner and waits for every such borrow before resetting it.
-    AppRuntimeBorrowGate runtimeBorrows;
+    std::condition_variable lifecycleChanged;
     AppLifecycle lifecycle;
 };
 

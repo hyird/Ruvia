@@ -70,9 +70,6 @@ TlsConfig& TlsConfig::addSniIdentity(TlsSniIdentityOptions options) {
 }
 
 ListenerConfig ListenerConfig::http(ListenerId id, HttpListenerOptions options) {
-    if (id.value() == 0) {
-        throw std::invalid_argument("listener ID must not be zero");
-    }
     if (options.address.empty()) {
         throw std::invalid_argument("HTTP listen address must not be empty");
     }
@@ -81,9 +78,6 @@ ListenerConfig ListenerConfig::http(ListenerId id, HttpListenerOptions options) 
 }
 
 ListenerConfig ListenerConfig::https(ListenerId id, HttpsListenerOptions options) {
-    if (id.value() == 0) {
-        throw std::invalid_argument("listener ID must not be zero");
-    }
     if (options.address.empty()) {
         throw std::invalid_argument("HTTPS listen address must not be empty");
     }
@@ -92,9 +86,6 @@ ListenerConfig ListenerConfig::https(ListenerId id, HttpsListenerOptions options
 }
 
 ListenerConfig ListenerConfig::redirectHttpToHttps(ListenerId id, RedirectHttpToHttpsListenerOptions options) {
-    if (id.value() == 0 || options.target.value() == 0) {
-        throw std::invalid_argument("listener ID must not be zero");
-    }
     if (options.address.empty()) {
         throw std::invalid_argument("HTTP redirect listen address must not be empty");
     }
