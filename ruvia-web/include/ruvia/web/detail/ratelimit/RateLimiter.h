@@ -92,10 +92,11 @@ enum class RouteRateLimitPresence : std::uint8_t {
     kPresent,
 };
 
-// One fixed-window table owned and accessed by exactly one HttpServer worker.
-// Startup allocates every slot from WorkerMemory; request-path lookup mutates
-// ordinary worker-local state and performs no allocation, locking, atomics, or
-// cross-thread coordination. Keys are (route scope, normalized remote address).
+// One fixed-window table owned and accessed by exactly one WebWorkerRuntime
+// worker. Startup allocates every slot from WorkerMemory; request-path lookup
+// mutates ordinary worker-local state and performs no allocation, locking,
+// atomics, or cross-thread coordination. Keys are (route scope, normalized
+// remote address).
 template <typename Clock>
 class BasicRateLimiter {
 public:

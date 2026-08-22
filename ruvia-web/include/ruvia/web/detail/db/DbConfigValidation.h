@@ -3,7 +3,7 @@
 #ifdef RUVIA_ENABLE_DATABASE
 
 #include "ruvia/web/db/DbTypes.h"
-#include "ruvia/web/detail/app/ConfigValidation.h"
+#include "ruvia/core/detail/config/ConfigValidation.h"
 
 namespace ruvia::detail {
 

@@ -2,7 +2,7 @@
 
 #include "ruvia/web/redis/Redis.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
-#include "ruvia/web/detail/integration/WorkerCancellationPost.h"
+#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 #include "ruvia/core/WorkerHandle.h"
 
 #ifndef RUVIA_ENABLE_REDIS

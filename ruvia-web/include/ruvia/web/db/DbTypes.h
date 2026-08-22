@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/http/BorrowedText.h"
-#include "ruvia/web/OperationOptions.h"
+#include "ruvia/core/OperationOptions.h"
 
 #include <charconv>
 #include <chrono>

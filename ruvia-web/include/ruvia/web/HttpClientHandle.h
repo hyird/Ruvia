@@ -14,9 +14,9 @@
 
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/web/OperationOptions.h"
-#include "ruvia/web/ScopedOperation.h"
-#include "ruvia/web/TcpSocketOptions.h"
+#include "ruvia/core/OperationOptions.h"
+#include "ruvia/core/ScopedOperation.h"
+#include "ruvia/core/TcpSocketOptions.h"
 
 namespace ruvia {
 

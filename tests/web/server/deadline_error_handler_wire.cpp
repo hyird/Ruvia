@@ -40,7 +40,7 @@
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 #include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 #include "ruvia/web/detail/util/CallableRef.h"
 
 using namespace std::chrono_literals;
@@ -161,9 +161,9 @@ struct DeadlineAwareErrorHandler final {
         .window = 60s,
     });
 
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
     server.start();
-    const auto endpoint = server.localEndpoint();
+    const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
 
     int rc = 0;
     std::chrono::steady_clock::duration elapsed{};

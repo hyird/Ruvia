@@ -5,7 +5,7 @@
 #include "ruvia/core/Timer.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/Sse.h"
-#include "ruvia/web/ScopedOperation.h"
+#include "ruvia/core/ScopedOperation.h"
 #include "ruvia/web/detail/util/CallableRef.h"
 
 #include <chrono>

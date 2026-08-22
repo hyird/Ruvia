@@ -2,6 +2,7 @@
 #include "ruvia/web/detail/app/EnvState.h"
 #include "ruvia/web/detail/app/AppListenerOptions.h"
 
+#include <algorithm>
 #include <bit>
 #include <memory_resource>
 #include <stdexcept>
@@ -29,6 +30,9 @@ App& App::setListeners(std::vector<ListenerConfig> listeners) {
     for (std::size_t i = 0; i < listeners.size(); ++i) {
         const auto port = portOf(listeners[i]);
         for (std::size_t j = i + 1; j < listeners.size(); ++j) {
+            if (listeners[i].id_ == listeners[j].id_) {
+                throw std::invalid_argument("listener IDs must be unique");
+            }
             if (port == portOf(listeners[j])) {
                 throw std::invalid_argument("listener ports must be unique");
             }
@@ -36,7 +40,7 @@ App& App::setListeners(std::vector<ListenerConfig> listeners) {
         if (const auto* redirect = std::get_if<ListenerConfig::RedirectHttpToHttps>(&listeners[i].listener_); redirect != nullptr) {
             bool targetExists = false;
             for (const auto& candidate : listeners) {
-                if (const auto* https = std::get_if<ListenerConfig::Https>(&candidate.listener_); https != nullptr && https->port == redirect->targetHttpsPort) {
+                if (std::holds_alternative<ListenerConfig::Https>(candidate.listener_) && candidate.id_ == redirect->target) {
                     targetExists = true;
                     break;
                 }
@@ -47,19 +51,23 @@ App& App::setListeners(std::vector<ListenerConfig> listeners) {
         }
     }
 
-    return detail::mutateStoppedApp(*this, *state_, "cannot change listeners while app is running", [&listeners](detail::AppState& state) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change listeners while app is running", [&listeners, &portOf](detail::AppState& state) {
         auto* const resource = detail::appResource();
         std::pmr::vector<detail::AppListenerConfig> replacement(resource);
         replacement.reserve(listeners.size());
         for (const auto& listener : listeners) {
             std::visit(
-                [&replacement, resource]<typename Listener>(const Listener& config) {
+                [&replacement, &listeners, &listener, &portOf, resource]<typename Listener>(const Listener& config) {
                     if constexpr (std::is_same_v<Listener, ListenerConfig::Http>) {
-                        replacement.emplace_back(resource, config.address, config.port, detail::HttpServerOptions::PlainHttp{});
+                        replacement.emplace_back(listener.id_, resource, config.address, config.port, detail::HttpServerListenerDefinition::PlainHttp{});
                     } else if constexpr (std::is_same_v<Listener, ListenerConfig::Https>) {
-                        replacement.emplace_back(resource, config.address, config.port, detail::makeTlsOptions(config.tls, resource));
+                        replacement.emplace_back(listener.id_, resource, config.address, config.port, detail::makeTlsOptions(config.tls, resource));
                     } else {
-                        replacement.emplace_back(resource, config.address, config.port, detail::HttpServerOptions::RedirectHttpToHttps{config.targetHttpsPort});
+                        const auto target = std::find_if(listeners.begin(), listeners.end(), [&config](const ListenerConfig& candidate) {
+                            return candidate.id_ == config.target;
+                        });
+                        if (target == listeners.end()) std::terminate();
+                        replacement.emplace_back(listener.id_, resource, config.address, config.port, detail::HttpServerListenerDefinition::RedirectHttpToHttps{portOf(*target)});
                     }
                 },
                 listener.listener_);
@@ -68,13 +76,13 @@ App& App::setListeners(std::vector<ListenerConfig> listeners) {
     });
 }
 
-App& App::setWorkersPerListener(std::size_t workersPerListener) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change workers per listener while app is running", [workersPerListener](detail::AppState& state) {
-        if (workersPerListener == 0) {
-            throw std::invalid_argument("workers per listener must be greater than 0");
+App& App::setWorkerCount(std::size_t workerCount) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change worker count while app is running", [workerCount](detail::AppState& state) {
+        if (workerCount == 0) {
+            throw std::invalid_argument("worker count must be greater than 0");
         }
 
-        state.workersPerListener = workersPerListener;
+        state.workerCount = workerCount;
     });
 }
 

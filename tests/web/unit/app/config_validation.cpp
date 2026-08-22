@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "ruvia/web/App.h"
-#include "ruvia/web/detail/app/ConfigValidation.h"
+#include "ruvia/core/detail/config/ConfigValidation.h"
 #include "ruvia/web/detail/db/DbConfigStorage.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
 

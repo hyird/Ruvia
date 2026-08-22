@@ -26,7 +26,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 using namespace std::chrono_literals;
 
@@ -49,9 +49,9 @@ int main() {
     options.idleTimeout = kIdleTimeout;
     options.scanInterval = 50ms;
 
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, std::move(options));
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, std::move(options));
     server.start();
-    const auto endpoint = server.localEndpoint();
+    const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
 
     int result = 0;
     {

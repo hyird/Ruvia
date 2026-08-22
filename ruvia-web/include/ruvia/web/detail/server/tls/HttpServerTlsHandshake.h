@@ -10,7 +10,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 // The two pieces the TLS half of a session needs: how a server-side handshake
 // is initiated as an async operation, and how the verified peer identity is

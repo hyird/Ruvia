@@ -85,7 +85,7 @@ _ruvia_assert_matches(
 _ruvia_assert_matches(
     core_local
     "${_core_local_include_pattern}"
-    "#include \"../ruvia-web/src/server/HttpServer.h\"")
+    "#include \"../ruvia-web/src/server/WebWorkerRuntime.h\"")
 _ruvia_assert_matches(
     web_local
     "${_web_local_include_pattern}"

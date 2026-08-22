@@ -14,9 +14,9 @@
 // Scope: buffered-response routes (including 404/405/501/OPTIONS fallbacks).
 // Streaming/SSE/WebSocket routes and handlers that await worker-bound
 // services (timers, db(), redis(), runBlocking()) need a running server; drive
-// those with a loopback HttpServer instead. A route Deadline is rejected with
-// std::logic_error before dispatch because this facade has no worker timer and
-// must not silently turn a bounded production route into an unbounded test.
+// those through a real loopback server instead. A route Deadline is rejected
+// with std::logic_error before dispatch because this facade has no worker timer
+// and must not silently turn a bounded production route into an unbounded test.
 
 #include <cstddef>
 #include <memory>

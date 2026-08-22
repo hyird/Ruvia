@@ -4,7 +4,7 @@
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
-#include "ruvia/web/detail/TcpSocketOptions.h"
+#include "ruvia/core/detail/io/TcpSocketOptions.h"
 
 #include <asio/connect.hpp>
 #include <asio/ip/tcp.hpp>

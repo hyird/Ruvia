@@ -15,7 +15,7 @@
 #include <asio/executor_work_guard.hpp>
 
 #include <ruvia/core/detail/util/FailureReport.h>
-#include <ruvia/core/detail/worker/WorkerDispatcher.h>
+#include <ruvia/core/detail/worker/WorkerRuntimeContext.h>
 #include <ruvia/core/detail/worker/WorkerSelection.h>
 
 namespace ruvia {
@@ -149,8 +149,7 @@ struct EventLoopState final {
         : contextOwnership(std::in_place_type<std::unique_ptr<asio::io_context>>, std::make_unique<asio::io_context>()),
           ioContext(std::addressof(**std::get_if<std::unique_ptr<asio::io_context>>(&contextOwnership))),
           work(asio::make_work_guard(*ioContext)),
-          dispatcher(std::make_shared<WorkerDispatcher>(*ioContext, mailboxCapacity)),
-          handle(WorkerHandleAccess::make(dispatcher)) {}
+          runtime(*ioContext, mailboxCapacity) {}
 
     EventLoopState(asio::io_context& externalContext, std::size_t mailboxCapacity)
         : contextOwnership(std::in_place_type<ExternalContextClaim>, externalContext),
@@ -160,14 +159,7 @@ struct EventLoopState final {
           // mailbox capacity: it throws std::invalid_argument for a zero
           // capacity while this member is constructed, before any body check
           // here could run. The owned-context constructor relies on the same.
-          dispatcher(std::make_shared<WorkerDispatcher>(*ioContext, mailboxCapacity)),
-          handle(WorkerHandleAccess::make(dispatcher)) {}
-
-    ~EventLoopState() {
-        // Dispatcher handles may escape EventLoop/EventLoopPool. Retire their
-        // endpoint while the owned or attached io_context is still alive.
-        dispatcher->detachContext();
-    }
+          runtime(*ioContext, mailboxCapacity) {}
 
     void retainExternalContext(const std::shared_ptr<EventLoopState>& self) noexcept {
         if (auto* claim = std::get_if<ExternalContextClaim>(&contextOwnership)) {
@@ -179,20 +171,20 @@ struct EventLoopState final {
         if (stopping.exchange(true, std::memory_order_acq_rel)) {
             return;
         }
-        dispatcher->close();
+        runtime.close();
         const bool externalContext = std::holds_alternative<ExternalContextClaim>(contextOwnership);
-        if (!runtimeStarted || dispatcher->isCurrent()) {
-            dispatcher->stopTimers();
+        if (!runtimeStarted || runtime.handle().isCurrent()) {
+            runtime.stopTimers();
             if (externalContext) {
                 finishExternalStop();
             }
         } else if (externalContext) {
-            dispatcher->deferOrTerminate([keepAlive = std::move(keepAlive)] {
-                keepAlive->dispatcher->stopTimers();
+            runtime.dispatcher().deferOrTerminate([keepAlive = std::move(keepAlive)] {
+                keepAlive->runtime.stopTimers();
                 keepAlive->finishExternalStop();
             });
         } else {
-            dispatcher->deferOrTerminate([dispatcher = dispatcher] { dispatcher->stopTimers(); });
+            runtime.dispatcher().deferOrTerminate([runtime = &runtime] { runtime->stopTimers(); });
         }
         work.reset();
     }
@@ -201,7 +193,7 @@ struct EventLoopState final {
         if (!std::holds_alternative<ExternalContextClaim>(contextOwnership)) {
             return;
         }
-        dispatcher->detachContext();
+        runtime.detach();
         ioContext = nullptr;
         std::get<ExternalContextClaim>(contextOwnership).service()->releaseState(this);
     }
@@ -212,15 +204,14 @@ struct EventLoopState final {
         }
         stopping.store(true, std::memory_order_release);
         work.reset();
-        dispatcher->detachContext();
+        runtime.detach();
         ioContext = nullptr;
     }
 
     ContextOwnership contextOwnership;
     asio::io_context* ioContext;
     asio::executor_work_guard<asio::io_context::executor_type> work;
-    std::shared_ptr<WorkerDispatcher> dispatcher;
-    WorkerHandle handle;
+    WorkerRuntimeContext runtime;
     std::thread thread;
     std::atomic_bool stopping{false};
     // Set by the owning pool; empty for an attached loop. Read only while
@@ -289,19 +280,19 @@ EventLoop::EventLoop(std::shared_ptr<detail::EventLoopState> state) noexcept
     : state_(std::move(state)) {}
 
 bool EventLoop::valid() const noexcept {
-    return state_ && state_->handle.valid();
+    return state_ && state_->runtime.handle().valid();
 }
 
 bool EventLoop::accepting() const noexcept {
-    return state_ && state_->handle.accepting();
+    return state_ && state_->runtime.handle().accepting();
 }
 
 bool EventLoop::isCurrent() const noexcept {
-    return state_ && state_->handle.isCurrent();
+    return state_ && state_->runtime.handle().isCurrent();
 }
 
 WorkerId EventLoop::id() const noexcept {
-    return state_ ? state_->handle.id() : 0;
+    return state_ ? state_->runtime.handle().id() : 0;
 }
 
 asio::io_context& EventLoop::ioContext() const& {
@@ -319,7 +310,7 @@ asio::io_context::executor_type EventLoop::executor() const {
 }
 
 WorkerHandle EventLoop::handle() const noexcept {
-    return state_ ? state_->handle : WorkerHandle{};
+    return state_ ? state_->runtime.handle() : WorkerHandle{};
 }
 
 EventLoopStopRegistration EventLoop::registerStopCallback(MoveOnlyFunction<void()> callback) const {
@@ -329,8 +320,8 @@ EventLoopStopRegistration EventLoop::registerStopCallback(MoveOnlyFunction<void(
     if (!callback) {
         throw std::invalid_argument("event loop stop callback must be callable");
     }
-    auto listener = std::make_shared<EventLoopStopListener>(state_->handle, std::move(callback), state_->failureSink);
-    detail::WorkerHandleAccess::registerShutdownListener(state_->handle, listener);
+    auto listener = std::make_shared<EventLoopStopListener>(state_->runtime.handle(), std::move(callback), state_->failureSink);
+    detail::WorkerHandleAccess::registerShutdownListener(state_->runtime.handle(), listener);
     return EventLoopStopRegistration(std::move(listener));
 }
 
@@ -345,7 +336,7 @@ EventLoopAttachment::EventLoopAttachment(EventLoopAttachment&& other) noexcept
     : state_(std::move(other.state_)) {}
 
 bool EventLoopAttachment::valid() const noexcept {
-    return state_ != nullptr && state_->handle.valid();
+    return state_ != nullptr && state_->runtime.handle().valid();
 }
 
 EventLoop EventLoopAttachment::loop() const noexcept {
@@ -397,7 +388,7 @@ struct EventLoopPool::Impl {
 
     void run(const std::shared_ptr<detail::EventLoopState>& loop) noexcept {
         try {
-            loop->dispatcher->runContext([this](std::exception_ptr failure) noexcept {
+            loop->runtime.run([this](std::exception_ptr failure) noexcept {
                 recordFailure(std::move(failure));
                 stop();
             });
@@ -491,7 +482,7 @@ void EventLoopPool::stop() noexcept {
 }
 
 void EventLoopPool::join() {
-    if (std::ranges::any_of(impl_->loops, [](const auto& loop) { return loop->dispatcher->isCurrent(); })) {
+    if (std::ranges::any_of(impl_->loops, [](const auto& loop) { return loop->runtime.handle().isCurrent(); })) {
         throw std::logic_error("cannot join an event loop pool from one of its workers");
     }
     impl_->stop();

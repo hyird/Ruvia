@@ -14,7 +14,7 @@
 
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/UrlEncoding.h"
-#include "ruvia/web/detail/util/DecimalNumber.h"
+#include "ruvia/core/detail/number/DecimalNumber.h"
 #include "ruvia/web/detail/model/Traits.h"
 
 // Internal URL-encoded form parser for RUVIA_REQUEST_MODEL.

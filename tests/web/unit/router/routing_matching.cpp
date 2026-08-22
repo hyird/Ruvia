@@ -6,6 +6,71 @@
 
 using TestRouteRateLimit = ruvia::RateLimit<1, 1000>;
 
+RUVIA_TEST(compiled_route_plan_is_shared_across_worker_bindings) {
+    ruvia::detail::Router firstRouter;
+    auto& first = ruvia::detail::RouterImpl::from(firstRouter);
+    addRoute(first, "/health");
+    addRoute(first, "/users/:id");
+    first.finalize();
+    auto plan = first.releaseCompiledPlan();
+
+    ruvia::detail::Router secondRouter;
+    auto& second = ruvia::detail::RouterImpl::from(secondRouter);
+    addRoute(second, "/health");
+    addRoute(second, "/users/:id");
+    second.finalize(plan.get());
+
+    const auto staticResolution = second.routeTable().resolve(HttpKnownMethod::kGet, "/health");
+    const auto dynamicResolution = second.routeTable().resolve(HttpKnownMethod::kGet, "/users/42");
+    RUVIA_CHECK(staticResolution.resolved() != nullptr);
+    RUVIA_CHECK(dynamicResolution.resolved() != nullptr);
+    RUVIA_CHECK_EQ(dynamicResolution.resolved()->match().size(), std::size_t{1});
+    RUVIA_CHECK_EQ(dynamicResolution.resolved()->match().values()[0], std::string_view("42"));
+}
+
+RUVIA_TEST(compiled_route_plan_rejects_a_different_worker_route_shape) {
+    ruvia::detail::Router firstRouter;
+    auto& first = ruvia::detail::RouterImpl::from(firstRouter);
+    addRoute(first, "/expected");
+    first.finalize();
+    auto plan = first.releaseCompiledPlan();
+
+    ruvia::detail::Router differentRouter;
+    auto& different = ruvia::detail::RouterImpl::from(differentRouter);
+    addRoute(different, "/different");
+    bool rejected = false;
+    try {
+        different.finalize(plan.get());
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(compiled_route_plan_rejects_a_different_worker_endpoint_contract) {
+    ruvia::detail::Router firstRouter;
+    auto& first = ruvia::detail::RouterImpl::from(firstRouter);
+    addRoute(first, "/events");
+    first.finalize();
+    auto plan = first.releaseCompiledPlan();
+
+    ruvia::detail::Router differentRouter;
+    auto& different = ruvia::detail::RouterImpl::from(differentRouter);
+    different.registerResponseStreamRoute(
+        HttpKnownMethod::kGet,
+        path("/events"),
+        ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
+        std::span<const ControllerMiddlewareDescriptor>{},
+        std::span<const ControllerMiddlewareDescriptor>{});
+    bool rejected = false;
+    try {
+        different.finalize(plan.get());
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+}
+
 RUVIA_TEST(route_rejects_duplicate_validated_model_types_at_registration) {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);

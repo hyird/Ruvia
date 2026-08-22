@@ -3,8 +3,8 @@
 #ifdef RUVIA_ENABLE_REDIS
 
 #include "ruvia/web/redis/RedisTypes.h"
-#include "ruvia/web/detail/app/ConfigValidation.h"
-#include "ruvia/web/detail/TcpSocketOptions.h"
+#include "ruvia/core/detail/config/ConfigValidation.h"
+#include "ruvia/core/detail/io/TcpSocketOptions.h"
 
 namespace ruvia::detail {
 

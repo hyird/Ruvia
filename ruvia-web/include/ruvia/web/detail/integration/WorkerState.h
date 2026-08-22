@@ -90,11 +90,11 @@ private:
     DestroyInstance destroyInstance_{nullptr};
 };
 
-// The per-worker instances. HttpServer explicitly initializes and destroys the
-// registry inside its active worker identity window; a throwing factory fails
-// startup before the worker dispatches callbacks or requests. Lookup is a
-// linear scan: the set is small, fixed after initialization, and read-only
-// afterwards.
+// The per-worker instances. WebWorkerRuntime explicitly initializes and
+// destroys the registry inside its active worker identity window; a throwing
+// factory fails startup before the worker dispatches callbacks or requests.
+// Lookup is a linear scan: the set is small, fixed after initialization, and
+// read-only afterwards.
 class WorkerStateRegistry final {
 public:
     WorkerStateRegistry(std::pmr::memory_resource* resource, std::span<const WorkerStateDefinition> definitions)

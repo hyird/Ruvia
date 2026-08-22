@@ -28,7 +28,7 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/util/CallableRef.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 namespace {
 
@@ -103,18 +103,18 @@ int main() {
     ruvia::detail::HttpServerOptions options;
     options.accessLog.callback = ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(listener);
 
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, std::move(options));
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, std::move(options));
     server.start();
 
     // A bodyless request keeps the whole pipelined successor in the read buffer.
-    const auto bodyless = logPipelinedBurst(server.localEndpoint(), listener,
+    const auto bodyless = logPipelinedBurst(server.localEndpoint(ruvia::ListenerId{1}), listener,
         "GET /first HTTP/1.1\r\nHost: localhost\r\n\r\n"
         "GET /second HTTP/1.1\r\nHost: localhost\r\n\r\n",
         2);
 
     // A known-length body puts the successor behind consumed body bytes, which
     // is a separate remainder path in the body reader.
-    const auto afterBody = logPipelinedBurst(server.localEndpoint(), listener,
+    const auto afterBody = logPipelinedBurst(server.localEndpoint(ruvia::ListenerId{1}), listener,
         "POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nhello"
         "GET /second HTTP/1.1\r\nHost: localhost\r\n\r\n",
         4);

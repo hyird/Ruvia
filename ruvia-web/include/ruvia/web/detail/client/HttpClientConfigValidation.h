@@ -5,9 +5,9 @@
 #include <string_view>
 
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/web/detail/app/ConfigValidation.h"
+#include "ruvia/core/detail/config/ConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
-#include "ruvia/web/detail/TcpSocketOptions.h"
+#include "ruvia/core/detail/io/TcpSocketOptions.h"
 #include "ruvia/http/detail/cookie/CookieValidation.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 

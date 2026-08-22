@@ -8,20 +8,22 @@
 namespace ruvia {
 
 void detail::RouteTable::buildPerfectHash() {
-    exactSlots_.clear();
-    exactSeed_ = 0;
-    exactMask_ = 0;
+    auto& plan = *ownedPlan_;
+    plan.exactSlots_.clear();
+    plan.exactSeed_ = 0;
+    plan.exactMask_ = 0;
 
-    std::pmr::vector<const RouteEntry*> exactRoutes(resource_);
+    std::pmr::vector<std::size_t> exactRoutes(resource_);
     exactRoutes.reserve(routes_.size());
-    for (const auto& route : routes_) {
+    for (std::size_t routeIndex = 0; routeIndex < routes_.size(); ++routeIndex) {
+        const auto& route = routes_[routeIndex];
         // Extension routes are resolved by the cold token scan, never by this
         // index. They must also stay out of it: the hash is keyed on the method
         // ENUM and the path, so two extension routes on one path -- which is
         // ordinary, e.g. PROPFIND and PURGE on the same resource -- would be
         // indistinguishable and no seed could ever separate them.
         if (!route.dynamic() && route.method() != HttpKnownMethod::kUnknown) {
-            exactRoutes.push_back(&route);
+            exactRoutes.push_back(routeIndex);
         }
     }
 
@@ -30,7 +32,7 @@ void detail::RouteTable::buildPerfectHash() {
     }
 
     auto slotCount = nextPowerOfTwo(exactRoutes.size());
-    std::pmr::vector<const RouteEntry*> candidate(resource_);
+    std::pmr::vector<std::size_t> candidate(resource_);
     std::pmr::vector<std::uint32_t> candidateMarks(resource_);
     std::uint32_t generation = 0;
 
@@ -42,23 +44,24 @@ void detail::RouteTable::buildPerfectHash() {
             ++generation;
             bool collision = false;
 
-            for (const auto* route : exactRoutes) {
-                const auto index = static_cast<std::size_t>(routeHash(route->method(), route->path(), seed)) & mask;
+            for (const auto routeIndex : exactRoutes) {
+                const auto& route = routes_[routeIndex];
+                const auto index = static_cast<std::size_t>(routeHash(route.method(), route.path(), seed)) & mask;
                 if (candidateMarks[index] == generation) {
                     collision = true;
                     break;
                 }
                 candidateMarks[index] = generation;
-                candidate[index] = route;
+                candidate[index] = routeIndex;
             }
 
             if (!collision) {
-                exactSlots_.resize(slotCount);
+                plan.exactSlots_.resize(slotCount);
                 for (std::size_t i = 0; i < slotCount; ++i) {
-                    exactSlots_[i].route = candidateMarks[i] == generation ? candidate[i] : nullptr;
+                    plan.exactSlots_[i].routeIndex = candidateMarks[i] == generation ? candidate[i] : kNoRouteIndex;
                 }
-                exactSeed_ = seed;
-                exactMask_ = mask;
+                plan.exactSeed_ = seed;
+                plan.exactMask_ = mask;
                 return;
             }
         }
@@ -74,31 +77,20 @@ void detail::RouteTable::buildPerfectHash() {
 }
 
 void detail::RouteTable::buildAllowedMethodMask() {
-    allowedMethodMask_ = 0;
-    staticMethodMask_ = 0;
-    serverExtensionMethodTokens_.clear();
-    serverExtensionMethodTokens_.reserve(extensionRouteIndices_.size());
+    auto& plan = *ownedPlan_;
+    plan.allowedMethodMask_ = 0;
+    plan.staticMethodMask_ = 0;
     for (const auto& route : routes_) {
         if (isRoutableMethod(route.method())) {
             const auto methodBit = 1U << methodIndex(route.method());
-            allowedMethodMask_ |= methodBit;
+            plan.allowedMethodMask_ |= methodBit;
             if (!route.dynamic()) {
-                staticMethodMask_ |= methodBit;
-            }
-        } else if (!route.methodToken().empty()) {
-            bool duplicate = false;
-            for (const auto token : serverExtensionMethodTokens_) {
-                if (token == route.methodToken()) {
-                    duplicate = true;
-                    break;
-                }
-            }
-            if (!duplicate) {
-                serverExtensionMethodTokens_.push_back(route.methodToken());
+                plan.staticMethodMask_ |= methodBit;
             }
         }
     }
-    allowedMethodMask_ |= 1U << methodIndex(HttpKnownMethod::kOptions);
+    plan.allowedMethodMask_ |= 1U << methodIndex(HttpKnownMethod::kOptions);
+    buildServerExtensionMethodTokens();
 }
 
 }  // namespace ruvia

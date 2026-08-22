@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/TcpSocketOptions.h"
+#include "ruvia/core/TcpSocketOptions.h"
 
 #include <stdexcept>
 

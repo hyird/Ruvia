@@ -702,6 +702,8 @@ if(RUVIA_BUILD_WEB)
         web/guards/error_header.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_app_lifecycle
         web/guards/app_lifecycle_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_app_singleton
+        web/guards/app_singleton_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_http2_session_lifecycle
         web/guards/http2_session_lifecycle_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_scoped_operation_lifetime_violation

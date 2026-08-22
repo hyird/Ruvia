@@ -6,9 +6,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include <asio/bind_executor.hpp>
-
-#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/db/DbClientState.h"
 #include "ruvia/web/detail/db/DbConfigStorage.h"
 
@@ -64,44 +61,12 @@ void DbClientState::bindStop() {
     });
 }
 
-std::future<void> DbClientState::scheduleConnect() {
-    auto completion = std::make_shared<std::promise<void>>();
-    auto future = completion->get_future();
-    auto expected = Phase::kFresh;
-    if (!phase_.compare_exchange_strong(expected, Phase::kConnectScheduled, std::memory_order_acq_rel, std::memory_order_acquire)) {
-        completion->set_exception(std::make_exception_ptr(std::logic_error("database client can only connect once")));
-        return future;
-    }
-    if (!worker_.accepting()) {
-        phase_.store(Phase::kClosed, std::memory_order_release);
-        stopSource_.requestStop();
-        completion->set_exception(std::make_exception_ptr(std::runtime_error("worker stopped before database client connected")));
-        return future;
-    }
+Task<void> DbClientState::connect() {
+    return connectOwned(shared_from_this());
+}
 
-    try {
-        WorkerHandleAccess::defer(worker_, [state = shared_from_this(), completion] {
-            try {
-                asyncStartTask(state->connectOnWorker(), asio::bind_executor(state->loop_.executor(), [state, completion](TaskCompletionResult<void> result) mutable {
-                    if (const auto* failed = result.failure()) {
-                        completion->set_exception(failed->exception());
-                    } else {
-                        completion->set_value();
-                    }
-                }));
-            } catch (...) {
-                const auto failure = std::current_exception();
-                state->closeOnWorker();
-                completion->set_exception(failure);
-                std::rethrow_exception(failure);
-            }
-        });
-    } catch (...) {
-        phase_.store(Phase::kClosed, std::memory_order_release);
-        stopSource_.requestStop();
-        completion->set_exception(std::current_exception());
-    }
-    return future;
+Task<void> DbClientState::connectOwned(std::shared_ptr<DbClientState> state) {
+    co_await state->connectOnWorker();
 }
 
 Task<void> DbClientState::connectOnWorker() {
@@ -110,12 +75,15 @@ Task<void> DbClientState::connectOnWorker() {
     }
 
     try {
-        if (stopSource_.stopRequested()) {
-            throw std::runtime_error("database client closed before connecting");
-        }
-        auto expected = Phase::kConnectScheduled;
+        auto expected = Phase::kFresh;
         if (!phase_.compare_exchange_strong(expected, Phase::kConnecting, std::memory_order_acq_rel, std::memory_order_acquire)) {
-            throw std::runtime_error("worker stopped before database client connected");
+            if (expected == Phase::kClosing || expected == Phase::kClosed) {
+                throw std::runtime_error("database client closed before connecting");
+            }
+            throw std::logic_error("database client can only connect once");
+        }
+        if (stopSource_.stopRequested() || !worker_.accepting()) {
+            throw std::runtime_error("database client closed before connecting");
         }
         if (databases_.needsDeadlineScan()) {
             scanner_.start();
@@ -209,8 +177,8 @@ DbClient::~DbClient() {
     state_->requestClose();
 }
 
-std::future<void> DbClient::connect() {
-    return state_->scheduleConnect();
+Task<void> DbClient::connect() {
+    return state_->connect();
 }
 
 DbHandle DbClient::withOptions(OperationOptions options) const {

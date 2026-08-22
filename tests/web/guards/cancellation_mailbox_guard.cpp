@@ -9,7 +9,7 @@
 #include "ruvia/core/MoveOnlyFunction.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/web/detail/integration/WorkerCancellationPost.h"
+#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 
 namespace {
 

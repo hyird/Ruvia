@@ -43,7 +43,7 @@
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 #include "ruvia/web/detail/util/CallableRef.h"
 
 namespace {
@@ -1019,14 +1019,14 @@ int main() {
     routerImpl.finalize();
 
     reportStage("main.plain-start");
-    ruvia::detail::HttpServer plain(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable());
+    ruvia::detail::WebWorkerRuntime plain(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable());
     plain.start();
     reportStage("main.http1-client");
-    const auto httpResult = runClient(plain.localEndpoint().port(), ruvia::HttpScheme::kHttp, ruvia::HttpClientProtocol::kHttp1Only);
+    const auto httpResult = runClient(plain.localEndpoint(ruvia::ListenerId{1}).port(), ruvia::HttpScheme::kHttp, ruvia::HttpClientProtocol::kHttp1Only);
     reportStage("main.http1-cookies");
-    const auto cookieResult = runCookies(plain.localEndpoint().port());
+    const auto cookieResult = runCookies(plain.localEndpoint(ruvia::ListenerId{1}).port());
     auto gatewayClientConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
-    gatewayClientConfig.port = plain.localEndpoint().port();
+    gatewayClientConfig.port = plain.localEndpoint(ruvia::ListenerId{1}).port();
     gatewayClientConfig.protocol = ruvia::HttpClientProtocol::kHttp1Only;
     ruvia::detail::Router gatewayRouter;
     auto& gatewayRouterImpl = ruvia::detail::RouterImpl::from(gatewayRouter);
@@ -1039,7 +1039,7 @@ int main() {
     };
     gatewayRouterImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/call", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(gatewayHandler), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
     gatewayRouterImpl.finalize();
-    ruvia::detail::HttpServer gateway(
+    ruvia::detail::WebWorkerRuntime gateway(
         asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
         gatewayRouterImpl.routeTable());
     reportStage("main.gateway-start");
@@ -1048,7 +1048,7 @@ int main() {
     asio::ip::tcp::socket gatewaySocket(gatewayClientIo);
     std::error_code gatewayEc;
     reportStage("main.gateway-exchange");
-    gatewaySocket.connect(gateway.localEndpoint(), gatewayEc);
+    gatewaySocket.connect(gateway.localEndpoint(ruvia::ListenerId{1}), gatewayEc);
     asio::write(gatewaySocket, asio::buffer(std::string_view("GET /call HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")), gatewayEc);
     std::string gatewayResponse;
     std::array<char, 1024> gatewayBuffer{};
@@ -1091,36 +1091,42 @@ int main() {
     const auto h2TlsTruncationResult = runHttp2TlsTruncationCheck(certPath, keyPath);
     reportStage("main.tls-truncation-h2-done");
     ruvia::detail::HttpServerOptions options;
-    ruvia::detail::HttpServerOptions::Tls tls;
+    ruvia::detail::HttpServerListenerDefinition::Tls tls;
     tls.identity.certificateChainFile = std::pmr::string(certPath.string(), std::pmr::get_default_resource());
     tls.identity.privateKeyFile = std::pmr::string(keyPath.string(), std::pmr::get_default_resource());
-    options.transport = std::move(tls);
-    ruvia::detail::HttpServer secure(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, std::move(options));
+    ruvia::detail::WebWorkerRuntime secure(
+        ruvia::detail::HttpServerListenerDefinition(
+            ruvia::ListenerId{1},
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
+            std::move(tls)),
+        routerImpl.routeTable(), {}, std::move(options));
     reportStage("main.secure-start");
     secure.start();
     reportStage("main.http2-client");
-    const auto h2Result = runClient(secure.localEndpoint().port(), ruvia::HttpScheme::kHttps, ruvia::HttpClientProtocol::kHttp2Only);
+    const auto h2Result = runClient(secure.localEndpoint(ruvia::ListenerId{1}).port(), ruvia::HttpScheme::kHttps, ruvia::HttpClientProtocol::kHttp2Only);
     reportStage("main.host-cookie");
-    const auto hostPrefixCookieResult = runHostPrefixedCookies(secure.localEndpoint().port());
+    const auto hostPrefixCookieResult = runHostPrefixedCookies(secure.localEndpoint(ruvia::ListenerId{1}).port());
     reportStage("main.verified-tls");
     const auto verifiedResult = runVerifiedTlsClient(
-        secure.localEndpoint().port(), "127.0.0.1", certPath);
+        secure.localEndpoint(ruvia::ListenerId{1}).port(), "127.0.0.1", certPath);
     reportStage("main.secure-stop");
     secure.stop();
     secure.join();
     ruvia::detail::HttpServerOptions mismatchOptions;
-    ruvia::detail::HttpServerOptions::Tls mismatchTls;
+    ruvia::detail::HttpServerListenerDefinition::Tls mismatchTls;
     mismatchTls.identity.certificateChainFile = std::pmr::string(mismatchCertPath.string(), std::pmr::get_default_resource());
     mismatchTls.identity.privateKeyFile = std::pmr::string(mismatchKeyPath.string(), std::pmr::get_default_resource());
-    mismatchOptions.transport = std::move(mismatchTls);
-    ruvia::detail::HttpServer mismatchSecure(
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
+    ruvia::detail::WebWorkerRuntime mismatchSecure(
+        ruvia::detail::HttpServerListenerDefinition(
+            ruvia::ListenerId{1},
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
+            std::move(mismatchTls)),
         routerImpl.routeTable(), {}, std::move(mismatchOptions));
     reportStage("main.hostname-mismatch-start");
     mismatchSecure.start();
     reportStage("main.hostname-mismatch");
     const auto hostnameFailureResult = runVerifiedTlsClient(
-        mismatchSecure.localEndpoint().port(), "127.0.0.1", mismatchCertPath, nullptr, nullptr, false);
+        mismatchSecure.localEndpoint(ruvia::ListenerId{1}).port(), "127.0.0.1", mismatchCertPath, nullptr, nullptr, false);
     mismatchSecure.stop();
     mismatchSecure.join();
     reportStage("main.hostname-mismatch-done");
@@ -1136,24 +1142,26 @@ int main() {
     }
 
     ruvia::detail::HttpServerOptions mtlsOptions;
-    ruvia::detail::HttpServerOptions::Tls mtls;
+    ruvia::detail::HttpServerListenerDefinition::Tls mtls;
     mtls.identity.certificateChainFile = std::pmr::string(certPath.string(), std::pmr::get_default_resource());
     mtls.identity.privateKeyFile = std::pmr::string(keyPath.string(), std::pmr::get_default_resource());
     mtls.clientCertificates.emplace(
         std::pmr::get_default_resource(), ruvia::TlsClientCertificateRequirement::kRequired);
     mtls.clientCertificates->verifyFile = std::pmr::string(certPath.string(), std::pmr::get_default_resource());
-    mtlsOptions.transport = std::move(mtls);
-    ruvia::detail::HttpServer mtlsServer(
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
+    ruvia::detail::WebWorkerRuntime mtlsServer(
+        ruvia::detail::HttpServerListenerDefinition(
+            ruvia::ListenerId{1},
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
+            std::move(mtls)),
         routerImpl.routeTable(), {}, std::move(mtlsOptions));
     reportStage("main.mtls-start");
     mtlsServer.start();
     reportStage("main.mtls-missing-cert");
     const auto missingClientCertificate = runVerifiedTlsClient(
-        mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, nullptr, nullptr, false, true);
+        mtlsServer.localEndpoint(ruvia::ListenerId{1}).port(), "127.0.0.1", certPath, nullptr, nullptr, false, true);
     reportStage("main.mtls-client-cert");
     const auto mtlsResult = runVerifiedTlsClient(
-        mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, &certPath, &keyPath);
+        mtlsServer.localEndpoint(ruvia::ListenerId{1}).port(), "127.0.0.1", certPath, &certPath, &keyPath);
     reportStage("main.mtls-stop");
     mtlsServer.stop();
     mtlsServer.join();

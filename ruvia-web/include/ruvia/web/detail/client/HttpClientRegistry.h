@@ -24,7 +24,7 @@
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
-#include "ruvia/web/detail/integration/WorkerCancellationPost.h"
+#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 
 namespace ruvia::detail {
 

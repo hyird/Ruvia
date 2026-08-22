@@ -28,7 +28,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 namespace {
 
@@ -168,9 +168,9 @@ int main() {
         ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 2});
         ruvia::detail::HttpServerOptions options;
         options.blockingPool = &pool;
-        ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, {}, std::span<const ruvia::detail::WorkerStateDefinition>{}, options);
+        ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
         server.start();
-        const auto endpoint = server.localEndpoint();
+        const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
 
         asio::io_context ctx;
         std::error_code ec;
@@ -225,9 +225,9 @@ int main() {
         ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1, .queueCapacity = 1});
         ruvia::detail::HttpServerOptions options;
         options.blockingPool = &pool;
-        ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, {}, std::span<const ruvia::detail::WorkerStateDefinition>{}, options);
+        ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
         server.start();
-        const auto endpoint = server.localEndpoint();
+        const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
 
         asio::io_context ctx;
         std::error_code ec;
@@ -289,9 +289,9 @@ int main() {
     // No pool configured: a loud failure, never a blocked worker.
     if (rc == 0) {
         ruvia::detail::HttpServerOptions options;
-        ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, {}, std::span<const ruvia::detail::WorkerStateDefinition>{}, options);
+        ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
         server.start();
-        const auto endpoint = server.localEndpoint();
+        const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
 
         asio::io_context ctx;
         std::error_code ec;
