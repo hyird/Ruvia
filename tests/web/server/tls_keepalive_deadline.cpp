@@ -39,7 +39,7 @@
 #include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/util/CallableRef.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 namespace {
 
@@ -165,17 +165,21 @@ int main() {
     routerImpl.finalize();
 
     ruvia::detail::HttpServerOptions options;
-    ruvia::detail::HttpServerOptions::Tls tls;
+    ruvia::detail::HttpServerListenerDefinition::Tls tls;
     tls.identity.certificateChainFile = std::pmr::string(certPath.string(), std::pmr::get_default_resource());
     tls.identity.privateKeyFile = std::pmr::string(keyPath.string(), std::pmr::get_default_resource());
-    options.transport = std::move(tls);
     options.requestHeaderTimeout = kRequestHeaderTimeout;
     options.requestBodyTimeout = kRequestBodyTimeout;
     options.scanInterval = 50ms;  // fire a leaked handshake deadline promptly
 
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, std::move(options));
+    ruvia::detail::WebWorkerRuntime server(
+        ruvia::detail::HttpServerListenerDefinition(
+            ruvia::ListenerId{1},
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
+            std::move(tls)),
+        routerImpl.routeTable(), {}, std::move(options));
     server.start();
-    const auto endpoint = server.localEndpoint();
+    const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
 
     int result = 0;
     {

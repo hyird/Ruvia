@@ -68,7 +68,7 @@ public:
 
 int main() {
     ruvia::app()
-        .setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8080})})
+        .setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "0.0.0.0", .port = 8080})})
         .setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall)
         .run();
 }
@@ -95,7 +95,17 @@ responses through `Context`. Set response metadata through `c.status()`,
 HTTP status APIs use `ruvia::HttpStatusCode`: prefer named values such as
 `ruvia::http_status::kCreated`, and use `HttpStatusCode::fromValue()` only for
 validated extension codes.
-`setListeners()` atomically installs any number of `ListenerConfig::http({...})`, `https({...})`, and `redirectHttpToHttps({...})` listeners. Redirect targets must name an HTTPS listener in the same list, ports must be unique, and total workers equal the listener count multiplied by `setWorkersPerListener()`.
+`setListeners()` atomically installs any number of
+`ListenerConfig::http(id, {...})`, `https(id, {...})`, and
+`redirectHttpToHttps(id, {...})` listeners. Redirect targets use a stable
+`ListenerId` naming an HTTPS listener in the same list, and ports and listener
+IDs must be unique. `setWorkerCount()` is the total Web worker count: every
+worker independently listens on the complete listener set and owns one
+worker-local DB, Redis, outbound HTTP client, and user-state set. Adding a
+listener does not multiply workers or data resources. During dispatch,
+`getConnInfo(c).listener()` identifies the listener that accepted the
+connection. It is empty only for a synthetic test context that did not pass
+through a configured listener; `ListenerId` itself is always nonzero.
 Public startup configuration uses ordinary C++ values (`std::string`,
 `std::vector`, paths, durations, and spans); callers never choose a PMR
 resource. Ruvia copies retained configuration into process-owned storage before
@@ -399,7 +409,6 @@ each client directly to any `EventLoop` created by `EventLoopPool` or
 connections between workers:
 
 ```cpp
-#include <future>
 #include <asio/co_spawn.hpp>
 #include <asio/use_future.hpp>
 #include <ruvia/core/EventLoopPool.h>
@@ -419,7 +428,10 @@ pg.host = "127.0.0.1";
 pg.database = "app";
 ruvia::DbClient db(loop, std::move(pg));
 
-auto ready = db.connect();
+auto ready = asio::co_spawn(
+    loop.executor(),
+    ruvia::asAwaitable(db.connect()),
+    asio::use_future);
 loops.start();
 ready.get();
 auto done = asio::co_spawn(
@@ -433,11 +445,12 @@ loops.stop();
 loops.join();
 ```
 
-`DbClient::connect()` schedules startup on its bound loop and reports completion
-through a future. Its result, stream, and transaction values remain
-worker-affine and must finish before the owning client and event loop are
-destroyed. `close()` is idempotent; `EventLoopPool::join()` (or the attached
-context owner's equivalent drain) is the shutdown barrier. App handlers use
+`DbClient::connect()` is a lazy `Task<void>` and must run on its bound loop, just
+like every later database operation; the `co_spawn` above only adapts the
+top-level completion to a future owned by `main`. Result, stream, and transaction
+values remain worker-affine and must finish before the owning client and event
+loop are destroyed. `close()` is idempotent; `EventLoopPool::join()` (or the
+attached context owner's equivalent drain) is the shutdown barrier. App handlers use
 `Context::httpClient()` and `Context::db()` as worker-local convenience views.
 Enable `RUVIA_ENABLE_POSTGRESQL` or `RUVIA_ENABLE_MARIADB` for `DbClient` and
 link `ruvia::web`; `ruvia::core` keeps no HTTP-client or database dependency.
@@ -483,9 +496,12 @@ Web job contract:
 provided by `ruvia::core`; their deadlines share the worker's single timer
 queue. Standalone operations can create a `StopSource`, pass its `token()` to
 channel, one-shot, timer, or blocking waits, and call `requestStop()` from any
-thread. `App::onStop()` hooks run once for explicitly enabled process signal handlers,
-direct `App::stop()`, and worker failure before the worker-local Web resources
-are closed.
+thread. `App::onStart()` runs only after every worker has connected its
+worker-local capabilities and started accepting on the complete listener set.
+`App::onStop()` runs once for explicitly enabled process signal handlers, direct
+`App::stop()`, and worker failure. Both hook sets execute on the
+thread inside `App::run()`; stop callers and worker threads only request
+shutdown and never run application hooks themselves.
 
 ## Blocking Work
 

@@ -9,32 +9,79 @@
 namespace ruvia {
 
 void detail::RouteTable::buildDynamicRoutes() {
-    dynamicMethodMask_ = 0;
-    dynamicNodeArena_.clear();
-    dynamicParamNames_.clear();
-    for (auto& root : dynamicRoots_) {
-        root = DynamicNode(resource_);
+    auto& plan = *ownedPlan_;
+    plan.dynamicMethodMask_ = 0;
+    plan.dynamicNodeArena_.clear();
+    for (auto& root : plan.dynamicRoots_) {
+        root = DynamicNode(plan.resource_);
     }
 
     std::size_t dynamicNodeCapacity = 0;
-    std::size_t dynamicParamNameCapacity = 0;
     for (const auto& route : routes_) {
         if (route.dynamic()) {
             dynamicNodeCapacity += dynamicNodeUpperBound(route.path());
-            dynamicParamNameCapacity += dynamicParamNameUpperBound(route.path());
         }
     }
-    dynamicNodeArena_.reserve(dynamicNodeCapacity);
-    dynamicParamNames_.reserve(dynamicParamNameCapacity);
+    plan.dynamicNodeArena_.reserve(dynamicNodeCapacity);
+    bindDynamicParamNames();
 
+    for (std::size_t routeIndex = 0; routeIndex < routes_.size(); ++routeIndex) {
+        auto& route = routes_[routeIndex];
+        if (route.dynamic()) {
+            plan.dynamicMethodMask_ |= 1U << methodIndex(route.method());
+            insertDynamic(plan.dynamicRoots_[methodIndex(route.method())], route, routeIndex);
+        }
+    }
+    for (auto& root : plan.dynamicRoots_) {
+        sortDynamicNode(root);
+    }
+}
+
+void detail::RouteTable::bindDynamicParamNames() {
+    dynamicParamNames_.clear();
+    std::size_t capacity = 0;
+    for (const auto& route : routes_) {
+        if (route.dynamic()) {
+            capacity += dynamicParamNameUpperBound(route.path());
+        }
+    }
+    dynamicParamNames_.reserve(capacity);
     for (auto& route : routes_) {
         if (route.dynamic()) {
-            dynamicMethodMask_ |= 1U << methodIndex(route.method());
-            insertDynamic(dynamicRoots_[methodIndex(route.method())], route);
+            bindDynamicParamNames(route);
         }
     }
-    for (auto& root : dynamicRoots_) {
-        sortDynamicNode(root);
+}
+
+void detail::RouteTable::bindDynamicParamNames(RouteEntry& route) {
+    route.setParamNames({});
+    auto path = route.path();
+    while (true) {
+        std::string_view segment;
+        std::string_view rest;
+        if (!splitRoutePathSegment(path, segment, rest)) {
+            return;
+        }
+        if (segment.empty()) {
+            throw std::invalid_argument("dynamic route path must not contain empty segments");
+        }
+        if (segment == "*") {
+            if (!rest.empty()) {
+                throw std::invalid_argument("wildcard route segment must be final");
+            }
+            appendDynamicParamName(route, "*");
+            return;
+        }
+        if (segment.front() == ':') {
+            if (segment.size() == 1) {
+                throw std::invalid_argument("route parameter name must not be empty");
+            }
+            appendDynamicParamName(route, segment.substr(1));
+        }
+        if (rest.empty()) {
+            return;
+        }
+        path = rest;
     }
 }
 
@@ -101,16 +148,16 @@ void detail::RouteTable::appendDynamicParamName(RouteEntry& route, std::string_v
     route.setParamNames(std::span<const std::string_view>(dynamicParamNames_.data() + offset, names.size() + 1));
 }
 
-void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route) {
+void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route, std::size_t routeIndex) {
     auto path = route.path();
     auto* node = &root;
-    route.setParamNames({});
+    auto& plan = *ownedPlan_;
 
     while (true) {
         std::string_view segment;
         std::string_view rest;
         if (!splitRoutePathSegment(path, segment, rest)) {
-            node->route = &route;
+            node->routeIndex = routeIndex;
             return;
         }
         if (segment.empty()) {
@@ -120,19 +167,16 @@ void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route) {
             if (!rest.empty()) {
                 throw std::invalid_argument("wildcard route segment must be final");
             }
-            appendDynamicParamName(route, "*");
-            node->wildcardRoute = &route;
+            node->wildcardRouteIndex = routeIndex;
             return;
         }
         if (segment.front() == ':') {
             if (segment.size() == 1) {
                 throw std::invalid_argument("route parameter name must not be empty");
             }
-            appendDynamicParamName(route, segment.substr(1));
-
             if (!node->paramChild) {
-                dynamicNodeArena_.emplace_back(resource_);
-                node->paramChild = &dynamicNodeArena_.back();
+                plan.dynamicNodeArena_.emplace_back(plan.resource_);
+                node->paramChild = &plan.dynamicNodeArena_.back();
             }
             node = node->paramChild;
         } else {
@@ -144,16 +188,16 @@ void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route) {
                 }
             }
             if (childNode == nullptr) {
-                dynamicNodeArena_.emplace_back(resource_);
-                childNode = &dynamicNodeArena_.back();
-                auto child = DynamicStaticChild{std::pmr::string(segment, resource_), childNode};
+                plan.dynamicNodeArena_.emplace_back(plan.resource_);
+                childNode = &plan.dynamicNodeArena_.back();
+                auto child = DynamicStaticChild{std::pmr::string(segment, plan.resource_), childNode};
                 node->staticChildren.push_back(std::move(child));
             }
             node = childNode;
         }
 
         if (rest.empty()) {
-            node->route = &route;
+            node->routeIndex = routeIndex;
             return;
         }
         path = rest;

@@ -1,30 +1,42 @@
-#include <atomic>
-#include <thread>
-
 #include <ruvia/web/detail/app/AppLifecycle.h>
-#include <ruvia/web/detail/app/AppState.h>
 
 namespace {
 
 using ruvia::detail::AppLifecycle;
 using ruvia::detail::AppLifecycleState;
-using ruvia::detail::AppRuntimeBorrowGate;
-using ruvia::detail::AppStartHooksCompletion;
 using ruvia::detail::AppStopRequest;
 
-bool normalRunAndStopClaimsHooksOnce() {
+bool normalRunAndStop() {
     AppLifecycle lifecycle;
-    return lifecycle.state() == AppLifecycleState::kStopped && !lifecycle.active() && lifecycle.beginRun() && lifecycle.state() == AppLifecycleState::kStarting && lifecycle.beginStartHooks() && lifecycle.completeStartHooks() == AppStartHooksCompletion::kRunning && lifecycle.state() == AppLifecycleState::kRunning && lifecycle.requestStop() == AppStopRequest::kStopWorkersAndRunHooks && lifecycle.requestStop() == AppStopRequest::kIgnored;
+    return lifecycle.state() == AppLifecycleState::kStopped &&
+           !lifecycle.active() &&
+           lifecycle.beginRun() &&
+           lifecycle.state() == AppLifecycleState::kPreparing &&
+           lifecycle.publishRuntime() &&
+           lifecycle.state() == AppLifecycleState::kStarting &&
+           lifecycle.markRunning() &&
+           lifecycle.state() == AppLifecycleState::kRunning &&
+           lifecycle.requestStop() == AppStopRequest::kRequested &&
+           lifecycle.requestStop() == AppStopRequest::kIgnored;
 }
 
-bool stopDuringStartupClaimsHooksOnce() {
+bool stopDuringPreparationIsDurable() {
     AppLifecycle lifecycle;
-    return lifecycle.beginRun() && lifecycle.requestStop() == AppStopRequest::kStopWorkersAndRunHooks && lifecycle.stopRequested() && !lifecycle.beginStartHooks() && lifecycle.requestStop() == AppStopRequest::kIgnored;
+    return lifecycle.beginRun() &&
+           lifecycle.requestStop() == AppStopRequest::kRequested &&
+           lifecycle.stopRequested() &&
+           !lifecycle.publishRuntime() &&
+           !lifecycle.markRunning() &&
+           lifecycle.requestStop() == AppStopRequest::kIgnored;
 }
 
-bool stopDuringStartHooksDefersHookClaim() {
+bool stopDuringStartupPreventsRunning() {
     AppLifecycle lifecycle;
-    return lifecycle.beginRun() && lifecycle.beginStartHooks() && lifecycle.requestStop() == AppStopRequest::kStopWorkers && lifecycle.state() == AppLifecycleState::kStopRequestedDuringStartHooks && lifecycle.requestStop() == AppStopRequest::kIgnored && lifecycle.completeStartHooks() == AppStartHooksCompletion::kRunDeferredStopHooks && lifecycle.state() == AppLifecycleState::kStopping && lifecycle.requestStop() == AppStopRequest::kIgnored;
+    return lifecycle.beginRun() &&
+           lifecycle.publishRuntime() &&
+           lifecycle.requestStop() == AppStopRequest::kRequested &&
+           !lifecycle.markRunning() &&
+           lifecycle.state() == AppLifecycleState::kStopping;
 }
 
 bool completedRunCanRestart() {
@@ -36,31 +48,8 @@ bool completedRunCanRestart() {
     return lifecycle.state() == AppLifecycleState::kStopped && lifecycle.beginRun();
 }
 
-bool runtimeGraphWaitsForEveryStopBorrow() {
-    AppRuntimeBorrowGate gate;
-    gate.acquire();
-    gate.acquire();
-
-    std::atomic_bool waiterStarted{false};
-    std::atomic_bool waiterReturned{false};
-    std::thread waiter([&] {
-        waiterStarted.store(true, std::memory_order_release);
-        gate.wait();
-        waiterReturned.store(true, std::memory_order_release);
-    });
-    while (!waiterStarted.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-
-    gate.release();
-    const bool retainedAfterFirstRelease = gate.count() == 1 && !waiterReturned.load(std::memory_order_acquire);
-    gate.release();
-    waiter.join();
-    return retainedAfterFirstRelease && gate.count() == 0 && waiterReturned.load(std::memory_order_acquire);
-}
-
 }  // namespace
 
 int main() {
-    return normalRunAndStopClaimsHooksOnce() && stopDuringStartupClaimsHooksOnce() && stopDuringStartHooksDefersHookClaim() && completedRunCanRestart() && runtimeGraphWaitsForEveryStopBorrow() ? 0 : 1;
+    return normalRunAndStop() && stopDuringPreparationIsDurable() && stopDuringStartupPreventsRunning() && completedRunCanRestart() ? 0 : 1;
 }

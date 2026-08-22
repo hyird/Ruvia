@@ -26,6 +26,7 @@
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/web/ListenerId.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/Callback.h"
 #include "ruvia/web/detail/CallbackRef.h"
@@ -175,17 +176,17 @@ struct HttpsListenerOptions final {
 struct RedirectHttpToHttpsListenerOptions final {
     std::string address{"0.0.0.0"};
     std::uint16_t port{8080};
-    std::uint16_t targetHttpsPort{443};
+    ListenerId target{ListenerId{1}};
 };
 
-// One independently replicated listener. App validates the complete listener
-// list atomically, including unique ports and redirect targets, before storing
-// it. This scales beyond the old fixed one/two-listener combinations.
+// One configured listener. App validates and stores the complete list
+// atomically, then replicates that same complete list into every worker
+// runtime.
 class ListenerConfig final {
 public:
-    [[nodiscard]] static ListenerConfig http(HttpListenerOptions options = {});
-    [[nodiscard]] static ListenerConfig https(HttpsListenerOptions options);
-    [[nodiscard]] static ListenerConfig redirectHttpToHttps(RedirectHttpToHttpsListenerOptions options);
+    [[nodiscard]] static ListenerConfig http(ListenerId id, HttpListenerOptions options = {});
+    [[nodiscard]] static ListenerConfig https(ListenerId id, HttpsListenerOptions options);
+    [[nodiscard]] static ListenerConfig redirectHttpToHttps(ListenerId id, RedirectHttpToHttpsListenerOptions options);
 
 private:
     friend class App;
@@ -204,14 +205,15 @@ private:
     struct RedirectHttpToHttps final {
         std::string address;
         std::uint16_t port;
-        std::uint16_t targetHttpsPort;
+        ListenerId target;
     };
 
     using Listener = std::variant<Http, Https, RedirectHttpToHttps>;
 
-    explicit ListenerConfig(Listener listener) noexcept
-        : listener_(std::move(listener)) {}
+    explicit ListenerConfig(ListenerId id, Listener listener) noexcept
+        : id_(id), listener_(std::move(listener)) {}
 
+    ListenerId id_;
     Listener listener_;
 };
 

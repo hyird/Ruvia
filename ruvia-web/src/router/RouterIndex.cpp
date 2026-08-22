@@ -28,7 +28,7 @@ detail::RouteResolution detail::RouteTable::resolveExtensionMethod(std::string_v
     if (!recognizesMethodToken(methodToken)) {
         return RouteResolution{};
     }
-    for (const auto index : extensionRouteIndices_) {
+    for (const auto index : plan_->extensionRouteIndices_) {
         const auto& route = routes_[index];
         // RFC 9110 9.1: the method token is case-sensitive.
         if (route.methodToken() == methodToken && route.path() == path) {
@@ -48,7 +48,7 @@ detail::RouteResolution detail::RouteTable::resolveExtensionMethod(std::string_v
 }
 
 bool detail::RouteTable::recognizesMethodToken(std::string_view methodToken) const noexcept {
-    for (const auto index : extensionRouteIndices_) {
+    for (const auto index : plan_->extensionRouteIndices_) {
         if (routes_[index].methodToken() == methodToken) {
             return true;
         }
@@ -57,7 +57,7 @@ bool detail::RouteTable::recognizesMethodToken(std::string_view methodToken) con
 }
 
 bool detail::RouteTable::hasExtensionRoutesFor(std::string_view path) const noexcept {
-    for (const auto index : extensionRouteIndices_) {
+    for (const auto index : plan_->extensionRouteIndices_) {
         if (routes_[index].path() == path) {
             return true;
         }
@@ -67,7 +67,7 @@ bool detail::RouteTable::hasExtensionRoutesFor(std::string_view path) const noex
 
 std::span<const std::string_view> detail::RouteTable::extensionMethodsFor(std::string_view path, std::span<std::string_view> buffer) const noexcept {
     std::size_t count = 0;
-    for (const auto index : extensionRouteIndices_) {
+    for (const auto index : plan_->extensionRouteIndices_) {
         if (count == buffer.size()) {
             break;
         }
@@ -151,7 +151,7 @@ const detail::RouteEntry* detail::RouteTable::findStaticRoute(HttpKnownMethod me
     if (!isRoutableMethod(method)) {
         return nullptr;
     }
-    if ((staticMethodMask_ & (1U << methodIndex(method))) == 0) {
+    if ((plan_->staticMethodMask_ & (1U << methodIndex(method))) == 0) {
         return nullptr;
     }
 
@@ -161,14 +161,17 @@ const detail::RouteEntry* detail::RouteTable::findStaticRoute(HttpKnownMethod me
 }
 
 const detail::RouteEntry* detail::RouteTable::findPerfect(HttpKnownMethod method, std::string_view path) const noexcept {
-    if (exactSlots_.empty()) {
+    if (plan_->exactSlots_.empty()) {
         return nullptr;
     }
 
-    const auto index = static_cast<std::size_t>(routeHash(method, path, exactSeed_)) & exactMask_;
-    const auto* route = exactSlots_[index].route;
-    if (route != nullptr && route->method() == method && route->path() == path) {
-        return route;
+    const auto index = static_cast<std::size_t>(routeHash(method, path, plan_->exactSeed_)) & plan_->exactMask_;
+    const auto routeIndex = plan_->exactSlots_[index].routeIndex;
+    if (routeIndex != kNoRouteIndex) {
+        const auto& route = routes_[routeIndex];
+        if (route.method() == method && route.path() == path) {
+            return &route;
+        }
     }
 
     return nullptr;
@@ -176,7 +179,7 @@ const detail::RouteEntry* detail::RouteTable::findPerfect(HttpKnownMethod method
 
 std::uint32_t detail::RouteTable::allowedMethods(std::string_view path, HttpKnownMethod requestedMethod) const noexcept {
     std::uint32_t mask = 0;
-    auto candidateMask = staticMethodMask_ | dynamicMethodMask_;
+    auto candidateMask = plan_->staticMethodMask_ | plan_->dynamicMethodMask_;
     // Keep OPTIONS in the candidate mask: a path whose only registered method is
     // OPTIONS must yield a non-zero Allow set so resolve() answers 405 (method known
     // but unsupported, RFC 9110 15.5.6) instead of 404. Clearing it here made such a
@@ -194,10 +197,10 @@ std::uint32_t detail::RouteTable::allowedMethods(std::string_view path, HttpKnow
 
         // resolve() already proved requestedMethod has no route for this path, so it
         // was cleared from the candidate mask above.
-        const bool hasStaticRoutes = (staticMethodMask_ & methodBit) != 0;
+        const bool hasStaticRoutes = (plan_->staticMethodMask_ & methodBit) != 0;
         const auto* const staticRoute = hasStaticRoutes ? findStaticRoute(method, path) : nullptr;
-        const auto* const dynamicRoute = (dynamicMethodMask_ & methodBit) != 0 ? findDynamicNodeNoParams(dynamicRoots_[i], path) : nullptr;
-        if (staticRoute != nullptr || dynamicRoute != nullptr) {
+        const auto dynamicRouteIndex = (plan_->dynamicMethodMask_ & methodBit) != 0 ? findDynamicNodeNoParams(plan_->dynamicRoots_[i], path) : kNoRouteIndex;
+        if (staticRoute != nullptr || dynamicRouteIndex != kNoRouteIndex) {
             mask |= 1U << i;
         }
     }
@@ -205,7 +208,7 @@ std::uint32_t detail::RouteTable::allowedMethods(std::string_view path, HttpKnow
 }
 
 std::uint32_t detail::RouteTable::allowedMethodsForServer() const noexcept {
-    return allowedMethodMask_;
+    return plan_->allowedMethodMask_;
 }
 
 }  // namespace ruvia

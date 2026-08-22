@@ -65,12 +65,151 @@ detail::RouteTable::RouteTable(std::pmr::memory_resource* resource)
     : resource_(detail::pmrResourceOrDefault(resource)),
       routes_(resource_),
       middlewareFrames_(resource_),
-      extensionRouteIndices_(resource_),
       serverExtensionMethodTokens_(resource_),
-      exactSlots_(resource_),
-      dynamicRoots_{DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_)},
-      dynamicNodeArena_(resource_),
-      dynamicParamNames_(resource_) {}
+      dynamicParamNames_(resource_),
+      ownedPlan_(nullptr, PmrObjectDeleter<CompiledRoutePlan>{resource_}) {
+    ownedPlan_ = makePmrObject<CompiledRoutePlan>(resource_, resource_);
+    plan_ = ownedPlan_.get();
+}
+
+detail::CompiledRoutePlanPtr detail::RouteTable::releaseCompiledPlan() {
+    if (ownedPlan_ == nullptr || plan_ != ownedPlan_.get()) {
+        throw std::logic_error("route table does not own a compiled plan");
+    }
+    auto result = std::move(ownedPlan_);
+    plan_ = result.get();
+    return result;
+}
+
+void detail::RouteTable::captureRouteIdentities() {
+    auto& identities = ownedPlan_->identities_;
+    identities.reserve(routes_.size());
+    for (const auto& route : routes_) {
+        auto& identity = identities.emplace_back(ownedPlan_->resource_);
+        identity.method = route.method();
+        identity.methodToken = route.methodToken();
+        identity.path = route.path();
+        identity.dynamic = route.dynamic();
+        identity.maxRequestBodyBytes = route.maxRequestBodyBytes();
+        identity.deadlineMs = route.deadlineMs();
+
+        const auto& endpoint = route.endpoint();
+        if (const auto* buffered = endpoint.buffered()) {
+            identity.endpointKind = CompiledRoutePlan::EndpointKind::kBuffered;
+            identity.requestBodyMode = buffered->requestBodyMode();
+            identity.bufferedInvoke = buffered->handler().invoke();
+        } else if (const auto* stream = endpoint.responseStream()) {
+            identity.endpointKind = CompiledRoutePlan::EndpointKind::kResponseStream;
+            identity.responseStreamKind = stream->kind();
+            identity.streamInvoke = stream->handler().invoke();
+        } else {
+            const auto& webSocket = *endpoint.webSocket();
+            identity.endpointKind = CompiledRoutePlan::EndpointKind::kWebSocket;
+            identity.streamInvoke = webSocket.handler().invoke();
+            identity.webSocketSubprotocols = webSocket.subprotocols();
+            if (webSocket.lifecycle().heartbeat.has_value()) {
+                identity.webSocketPingIntervalMs = webSocket.lifecycle().heartbeat->pingInterval().count();
+                identity.webSocketPongTimeoutMs = webSocket.lifecycle().heartbeat->pongTimeout().count();
+            }
+            if (webSocket.lifecycle().closeHandshakeTimeout.has_value()) {
+                identity.webSocketCloseTimeoutMs = webSocket.lifecycle().closeHandshakeTimeout->count();
+            }
+        }
+
+        identity.middlewareInvokes.reserve(route.middlewareCount());
+        for (std::size_t i = 0; i < route.middlewareCount(); ++i) {
+            identity.middlewareInvokes.push_back(middlewareFrames_[route.middlewareOffset() + i].invoke());
+        }
+    }
+
+    auto& unmatchedInvokes = ownedPlan_->unmatchedMiddlewareInvokes_;
+    unmatchedInvokes.reserve(unmatchedMiddlewareCount_);
+    for (std::size_t i = 0; i < unmatchedMiddlewareCount_; ++i) {
+        unmatchedInvokes.push_back(middlewareFrames_[unmatchedMiddlewareOffset_ + i].invoke());
+    }
+    ownedPlan_->hasRouteRateLimit_ = hasRouteRateLimit_;
+}
+
+void detail::RouteTable::bindCompiledPlan(const CompiledRoutePlan& plan) {
+    if (plan.identities_.size() != routes_.size() ||
+        plan.hasRouteRateLimit_ != hasRouteRateLimit_ ||
+        plan.unmatchedMiddlewareInvokes_.size() != unmatchedMiddlewareCount_) {
+        throw std::logic_error("worker route table differs from the compiled application plan");
+    }
+
+    for (std::size_t i = 0; i < unmatchedMiddlewareCount_; ++i) {
+        if (middlewareFrames_[unmatchedMiddlewareOffset_ + i].invoke() != plan.unmatchedMiddlewareInvokes_[i]) {
+            throw std::logic_error("worker route table differs from the compiled application plan");
+        }
+    }
+
+    for (std::size_t i = 0; i < routes_.size(); ++i) {
+        const auto& route = routes_[i];
+        const auto& identity = plan.identities_[i];
+        if (route.method() != identity.method ||
+            route.methodToken() != identity.methodToken ||
+            route.path() != identity.path ||
+            route.dynamic() != identity.dynamic ||
+            route.maxRequestBodyBytes() != identity.maxRequestBodyBytes ||
+            route.deadlineMs() != identity.deadlineMs ||
+            route.middlewareCount() != identity.middlewareInvokes.size()) {
+            throw std::logic_error("worker route table differs from the compiled application plan");
+        }
+
+        for (std::size_t middleware = 0; middleware < route.middlewareCount(); ++middleware) {
+            if (middlewareFrames_[route.middlewareOffset() + middleware].invoke() != identity.middlewareInvokes[middleware]) {
+                throw std::logic_error("worker route table differs from the compiled application plan");
+            }
+        }
+
+        const auto& endpoint = route.endpoint();
+        bool endpointMatches = false;
+        if (const auto* buffered = endpoint.buffered()) {
+            endpointMatches = identity.endpointKind == CompiledRoutePlan::EndpointKind::kBuffered &&
+                              identity.requestBodyMode == buffered->requestBodyMode() &&
+                              identity.bufferedInvoke == buffered->handler().invoke();
+        } else if (const auto* stream = endpoint.responseStream()) {
+            endpointMatches = identity.endpointKind == CompiledRoutePlan::EndpointKind::kResponseStream &&
+                              identity.responseStreamKind == stream->kind() &&
+                              identity.streamInvoke == stream->handler().invoke();
+        } else {
+            const auto& webSocket = *endpoint.webSocket();
+            const auto pingIntervalMs = webSocket.lifecycle().heartbeat.has_value()
+                                            ? webSocket.lifecycle().heartbeat->pingInterval().count()
+                                            : std::int64_t{-1};
+            const auto pongTimeoutMs = webSocket.lifecycle().heartbeat.has_value()
+                                           ? webSocket.lifecycle().heartbeat->pongTimeout().count()
+                                           : std::int64_t{-1};
+            const auto closeTimeoutMs = webSocket.lifecycle().closeHandshakeTimeout.has_value()
+                                            ? webSocket.lifecycle().closeHandshakeTimeout->count()
+                                            : std::int64_t{-1};
+            endpointMatches = identity.endpointKind == CompiledRoutePlan::EndpointKind::kWebSocket &&
+                              identity.streamInvoke == webSocket.handler().invoke() &&
+                              identity.webSocketSubprotocols == webSocket.subprotocols() &&
+                              identity.webSocketPingIntervalMs == pingIntervalMs &&
+                              identity.webSocketPongTimeoutMs == pongTimeoutMs &&
+                              identity.webSocketCloseTimeoutMs == closeTimeoutMs;
+        }
+        if (!endpointMatches) {
+            throw std::logic_error("worker route table differs from the compiled application plan");
+        }
+    }
+    ownedPlan_.reset();
+    plan_ = &plan;
+    buildServerExtensionMethodTokens();
+    bindDynamicParamNames();
+}
+
+void detail::RouteTable::buildServerExtensionMethodTokens() {
+    serverExtensionMethodTokens_.clear();
+    serverExtensionMethodTokens_.reserve(plan_->extensionRouteIndices_.size());
+    for (const auto routeIndex : plan_->extensionRouteIndices_) {
+        const auto token = routes_[routeIndex].methodToken();
+        if (std::ranges::find(serverExtensionMethodTokens_, token) == serverExtensionMethodTokens_.end()) {
+            serverExtensionMethodTokens_.push_back(token);
+        }
+    }
+}
 
 void detail::RouterImpl::validateNoDynamicRouteConflict(std::span<const PendingRoute> routes) {
     for (std::size_t i = 0; i < routes.size(); ++i) {
@@ -97,7 +236,7 @@ void detail::RouterImpl::validateNoDynamicRouteConflict(std::span<const PendingR
     return endpoint.buffered() != nullptr;
 }
 
-void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
+void detail::RouterImpl::buildRouteTable(RouteTable& table, const CompiledRoutePlan* compiledPlan) const {
     std::size_t headShadowCandidateCount = 0;
     std::size_t middlewareCount = 0;
     for (const auto& route : pendingRoutes_) {
@@ -183,13 +322,17 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
         table.routes_.push_back(std::move(shadow));
     }
 
-    // After both passes, so the indices are stable for the table's lifetime.
-    for (std::size_t i = 0; i < table.routes_.size(); ++i) {
-        if (table.routes_[i].method() == HttpKnownMethod::kUnknown) {
-            table.extensionRouteIndices_.push_back(i);
-        }
+    if (compiledPlan != nullptr) {
+        table.bindCompiledPlan(*compiledPlan);
+        return;
     }
 
+    for (std::size_t i = 0; i < table.routes_.size(); ++i) {
+        if (table.routes_[i].method() == HttpKnownMethod::kUnknown) {
+            table.ownedPlan_->extensionRouteIndices_.push_back(i);
+        }
+    }
+    table.captureRouteIdentities();
     table.buildAllowedMethodMask();
     table.buildPerfectHash();
     table.buildDynamicRoutes();

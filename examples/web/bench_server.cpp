@@ -113,12 +113,12 @@ int main() {
     const char* tlsKey = std::getenv("TLS_KEY");
     const auto topology = [&] {
         if (tlsCert == nullptr || tlsKey == nullptr) {
-            return ruvia::ListenerConfig::http({
+            return ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {
                 .address = "0.0.0.0",
                 .port = port,
             });
         }
-        return ruvia::ListenerConfig::https({
+        return ruvia::ListenerConfig::https(ruvia::ListenerId{2}, {
             .address = "0.0.0.0",
             .port = port,
             .tls = ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles({
@@ -129,7 +129,7 @@ int main() {
     }();
 
     auto& app = ruvia::app();
-    app.setListeners({topology}).setWorkersPerListener(4).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).setMaxRequestsPerConnection(1u << 30).setMaxConnectionsPerWorker(20000);
+    app.setListeners({topology}).setWorkerCount(4).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).setMaxRequestsPerConnection(1u << 30).setMaxConnectionsPerWorker(20000);
 
     // Response compression is off by default. Enable it explicitly when the
     // benchmark is intended to include negotiation and encoding work.

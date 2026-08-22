@@ -27,16 +27,16 @@
 #include "ruvia/web/detail/http2/CleartextUpgrade.h"
 #include "ruvia/web/detail/server/tls/HttpServerAutoHttps.h"
 #include "ruvia/web/detail/server/request/HttpServerRequestState.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
-// Member-template definitions for HttpServer, kept out of its header so the
+// Member-template definitions for WebWorkerRuntime, kept out of its header so the
 // class stays readable. Included as an ordinary header: everything used here is
 // included here.
 
 namespace ruvia::detail {
 
 template <typename Stream>
-Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, ContextServices baseRouteServices) {
+Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, Stream& stream, TcpSocket& socket, ContextServices baseRouteServices) {
     // Resident connection identity (held for the whole connection): the scanner
     // entry, the keep-alive request sequence, the remote address, and the count
     // of buffered bytes. The heavy per-request working set (read buffer, request arena,
@@ -155,7 +155,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                             .services = baseRouteServices,
                             .workerState = workerState_,
                         },
-                        readBuffer, usedBytes);
+                        readBuffer, usedBytes, listener.redirect() != nullptr);
                     if (h2Result == CleartextHttp2DispatchResult::kSessionFinished) {
                         co_return;
                     }
@@ -205,7 +205,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                 const auto handlerDeadline = effectiveHandlerDeadline(options_.deadline ? options_.deadline->handler : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
                 if (handlerDeadline > std::chrono::milliseconds::zero()) {
                     requestDeadline.emplace(stopToken_);
-                    requestDeadline->arm(workerHandle_, handlerDeadline);
+                    requestDeadline->arm(workerRuntime_.handle(), handlerDeadline);
                     requestServices = baseRouteServices.withStopToken(requestDeadline->token()).withRequestDeadline(&*requestDeadline);
                 }
 
@@ -218,7 +218,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(requestMemory.resource(), rejection->protocolError()));
                     break;
                 }
-                if (const auto* redirect = options_.redirect()) {
+                if (const auto* redirect = listener.redirect()) {
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
                         closingRejection = Http1ClosingRejection::error(HttpErrorInfo({.status = ruvia::http_status::kBadRequest, .message = "missing Host header"}));
                         break;
@@ -246,7 +246,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
                     break;
                 }
 
-                const auto appRateLimit = decideRequestRateLimit(&rateLimiter_, clientAddress);
+                const auto appRateLimit = decideRequestRateLimit(&capabilities_.rateLimiter(), clientAddress);
                 if (const auto* rejection = appRateLimit.rejection()) {
                     closingRejection = Http1ClosingRejection::rateLimit(rateLimitRejectionError(), *rejection);
                     break;
@@ -362,7 +362,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
 
             if (const auto* failure = parsed.failure()) {
                 if constexpr (kPlainTcp) {
-                    if (options_.redirect() == nullptr && shouldDropInvalidCleartextHttp1Input(bufferView, failure->source())) {
+                    if (listener.redirect() == nullptr && shouldDropInvalidCleartextHttp1Input(bufferView, failure->source())) {
                         co_return;
                     }
                 }
@@ -412,20 +412,20 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, Co
         auto connectionPlan = requestCompletion->connectionPlan();
         if (requestCompletion->bufferedResponse() != nullptr) {
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
-            auto preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerHandle_);
+            auto preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerRuntime_.handle());
             if (const auto error = httpBufferedResponsePreparationError(responseCodingPolicy, parsed.request, response, preparation.compressionResult())) {
                 response = co_await routes.handleError(
                     parsed.request,
                     requestMemory,
                     *error,
                     requestServices);
-                preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerHandle_);
+                preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerRuntime_.handle());
                 if (httpBufferedResponsePreparationError(responseCodingPolicy, parsed.request, response, preparation.compressionResult()).has_value()) {
                     // The negotiated coding could not be installed even on
                     // the generated terminal error. Make the terminal error
                     // state explicit before allowing identity bytes.
                     responseCodingPolicy = HttpResponseCodingPolicy::disabled();
-                    preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerHandle_);
+                    preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerRuntime_.handle());
                 }
                 connectionPlan = requireHttp1FinalResponseCommit(response, connectionPlan);
                 requestCompletion = requestCompletion->withBufferedConnectionPlan(connectionPlan);

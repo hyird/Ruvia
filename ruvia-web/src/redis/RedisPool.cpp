@@ -3,7 +3,7 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
-#include "ruvia/web/detail/integration/WorkerCancellationPost.h"
+#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 #include <asio/error.hpp>
 
 #include <limits>

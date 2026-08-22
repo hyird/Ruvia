@@ -17,7 +17,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 namespace {
 
@@ -49,13 +49,13 @@ int main() {
     impl.finalize();
 
     ruvia::detail::HttpServerOptions options;
-    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
     server.start();
 
     asio::io_context context;
     asio::ip::tcp::socket socket(context);
     std::error_code ec;
-    socket.connect(server.localEndpoint(), ec);
+    socket.connect(server.localEndpoint(ruvia::ListenerId{1}), ec);
     if (ec) {
         std::fputs("client failed to connect to websocket test server\n", stderr);
         server.stop();

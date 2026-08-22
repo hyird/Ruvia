@@ -261,7 +261,7 @@ TestResponse TestApp::request(const TestRequest& request) {
     const auto resolution = routes.resolve(parsed);
     const auto* resolved = resolution.resolved();
     if (!parseError.has_value() && resolved != nullptr && resolved->route().deadlineMs() != 0) {
-        throw std::logic_error("TestApp cannot dispatch a route with Deadline; use a loopback HttpServer");
+        throw std::logic_error("TestApp cannot dispatch a route with Deadline; use a loopback WebWorkerRuntime");
     }
 
     detail::ContextServices services(

@@ -15,13 +15,14 @@ namespace ruvia::detail {
 class DbRegistry;
 class RedisRegistry;
 class HttpClientRegistry;
+class WorkerCapabilities;
 class WorkerStateRegistry;
 
 class WebWorkerDispatch final : public std::enable_shared_from_this<WebWorkerDispatch> {
 public:
     using Task = MoveOnlyFunction<ruvia::Task<void>(WebWorkerContext&)>;
 
-    WebWorkerDispatch(asio::any_io_executor executor, WorkerHandle worker, std::pmr::memory_resource* resource, DbRegistry& databases, RedisRegistry& redis, HttpClientRegistry& httpClients, const WorkerStateRegistry& workerStates, BlockingPool* blockingPool, MoveOnlyFunction<void(std::exception_ptr)> failed);
+    WebWorkerDispatch(asio::any_io_executor executor, WorkerHandle worker, std::pmr::memory_resource* resource, WorkerCapabilities& capabilities, MoveOnlyFunction<void(std::exception_ptr)> failed);
     ~WebWorkerDispatch();
 
     WebWorkerDispatch(const WebWorkerDispatch&) = delete;

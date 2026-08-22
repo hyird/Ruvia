@@ -1,7 +1,6 @@
 #pragma once
 
 #include <concepts>
-#include <future>
 #include <initializer_list>
 #include <memory>
 #include <span>
@@ -10,6 +9,7 @@
 #include <utility>
 
 #include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/web/db/DbHandle.h"
 #include "ruvia/web/db/DbTypes.h"
 
@@ -32,10 +32,10 @@ public:
     DbClient(DbClient&&) = delete;
     DbClient& operator=(DbClient&&) = delete;
 
-    // Schedules initial connection on the bound loop. It may be called before
-    // the loop starts; wait on the future only while another thread drives the
-    // loop. A client connects exactly once.
-    [[nodiscard]] std::future<void> connect();
+    // Lazy and worker-affine: start/await it on the bound event loop. Creating
+    // more than one connect task is harmless; the first task that starts owns
+    // the one allowed connection attempt and later starters fail.
+    [[nodiscard]] Task<void> connect();
 
     [[nodiscard]] DbHandle withOptions(OperationOptions options) const;
 

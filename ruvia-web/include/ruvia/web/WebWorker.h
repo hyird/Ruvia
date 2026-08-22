@@ -13,7 +13,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/web/ScopedOperation.h"
+#include "ruvia/core/ScopedOperation.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/integration/BlockingCapability.h"
 #include "ruvia/web/detail/integration/WorkerStateCapability.h"
@@ -31,7 +31,6 @@ namespace ruvia {
 
 namespace detail {
 class DbRegistry;
-class HttpServer;
 class HttpClientRegistry;
 class RedisRegistry;
 class WebWorkerDispatch;

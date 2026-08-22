@@ -3,14 +3,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <exception>
 #include <memory_resource>
 #include <optional>
-#include <string>
-#include <utility>
 #include <variant>
-#include <vector>
 
 #include "ruvia/core/BlockingPool.h"
 #include "ruvia/core/detail/util/FailureReport.h"
@@ -47,7 +43,7 @@ struct ConnectionFailureRecordAccess final {
 // with the connection that produced it.
 struct ConnectionFailureSink final {
     ConnectionFailureCallbackRef callback;
-    // Owned by the HttpServer this sink was configured for; null before one
+    // Owned by the WebWorkerRuntime this sink was configured for; null before one
     // claims it. Counting here rather than at each reporting site keeps the
     // count and the callback from drifting apart as new sites are added.
     std::atomic<std::size_t>* counter{nullptr};
@@ -83,49 +79,6 @@ struct WorkerFailureSink final {
 // Fully normalized, worker-owned runtime options. Public callers configure App
 // with ServerConfig.h values; only the Web runtime constructs this state.
 struct HttpServerOptions final {
-    struct TlsIdentity final {
-        explicit TlsIdentity(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-            : certificateChainFile(resource), privateKeyFile(resource), privateKeyPassword(resource) {}
-
-        std::pmr::string certificateChainFile;
-        std::pmr::string privateKeyFile;
-        std::pmr::string privateKeyPassword;
-    };
-
-    struct TlsClientCertificatePolicy final {
-        explicit TlsClientCertificatePolicy(std::pmr::memory_resource* resource = std::pmr::get_default_resource(), ruvia::TlsClientCertificateRequirement configuredRequirement = ruvia::TlsClientCertificateRequirement::kOptional)
-            : verifyFile(resource), requirement(configuredRequirement) {}
-
-        std::pmr::string verifyFile;
-        ruvia::TlsClientCertificateRequirement requirement{ruvia::TlsClientCertificateRequirement::kOptional};
-    };
-
-    struct Tls final {
-        // An additional certificate selected by SNI server name (RFC 6066).
-        struct SniIdentity final {
-            explicit SniIdentity(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-                : host(resource), identity(resource) {}
-
-            std::pmr::string host;
-            TlsIdentity identity;
-        };
-
-        explicit Tls(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-            : identity(resource), sniIdentities(resource) {}
-
-        TlsIdentity identity;
-        std::optional<TlsClientCertificatePolicy> clientCertificates;
-        std::pmr::vector<SniIdentity> sniIdentities;
-    };
-
-    struct PlainHttp final {};
-
-    struct RedirectHttpToHttps final {
-        std::uint16_t httpsPort;
-    };
-
-    using ListenerTransport = std::variant<PlainHttp, Tls, RedirectHttpToHttps>;
-
     class DocumentRoot final {
         struct Standalone final {
             const StaticRoot* root;
@@ -208,7 +161,6 @@ struct HttpServerOptions final {
     std::optional<std::size_t> maxStreamBodyBytes;
     // WebSocket messages are assembled before delivery; this must be greater than 0.
     std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
-    ListenerTransport transport;
     // Presence enables the policy; absence bypasses it without retaining an
     // inactive configuration state.
     std::optional<CompressionConfig> compression;
@@ -230,15 +182,6 @@ struct HttpServerOptions final {
     std::optional<RateLimitRule> defaultRateLimitPerWorker;
     std::size_t rateLimitCapacityPerWorker{kDefaultRateLimitCapacityPerWorker};
 
-    [[nodiscard]] const Tls* tls() const& noexcept {
-        return std::get_if<Tls>(&transport);
-    }
-    const Tls* tls() const&& = delete;
-
-    [[nodiscard]] const RedirectHttpToHttps* redirect() const& noexcept {
-        return std::get_if<RedirectHttpToHttps>(&transport);
-    }
-    const RedirectHttpToHttps* redirect() const&& = delete;
 };
 
 }  // namespace ruvia::detail

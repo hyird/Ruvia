@@ -25,7 +25,7 @@ set(_exempt_pattern "(^|[^A-Za-z_])(inline|constexpr|consteval|static|template|i
 # Self-test: the pattern must match the shape that has actually gone wrong here,
 # and must ignore every spelling that is safe in a header. A pattern that stops
 # matching turns this guard into a no-op that reports success forever.
-set(_probe "Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {")
+set(_probe "Task<void> WebWorkerRuntime::handleSession(HttpServerListener& listener, AcceptedConnectionLease connection) {")
 string(REGEX MATCH "${_definition_pattern}" _probe_match "${_probe}")
 if(NOT _probe_match)
     message(FATAL_ERROR
@@ -54,7 +54,7 @@ set(_safe_lines
     "[[nodiscard]] inline bool httpHasToken(std::string_view value) noexcept {"
     "[[nodiscard]] constexpr bool isPatternMeta(char c) noexcept {"
     "    void memberDefinedInClassBody() {"
-    "class HttpServer final {"
+    "class WebWorkerRuntime final {"
     "namespace ruvia::detail {"
     "struct TlsServerHandshakeInitiator final {")
 foreach(_safe IN LISTS _safe_lines)

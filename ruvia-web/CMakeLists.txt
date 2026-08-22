@@ -18,6 +18,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppHttpConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppIntegrationConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppListenerOptions.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppRunCoordinator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Dotenv.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvPaths.cpp
@@ -52,7 +53,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpCors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpRuntimeFacades.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/MultipartReader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ScopedOperation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/SecurityHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Session.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticFileTypes.cpp
@@ -62,6 +62,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSessionEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSendWindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/WorkerCapabilities.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/WorkerDataState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ratelimit/RateLimitDecision.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/PathSegments.cpp
@@ -81,9 +82,10 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpConnectionState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpFileWrite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseCompression.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerAccept.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerListener.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/TrustedProxies.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerLifecycle.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WebWorkerRuntime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WebWorkerRuntimeAccept.cpp
 )
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)

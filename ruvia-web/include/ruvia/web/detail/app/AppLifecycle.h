@@ -4,27 +4,20 @@ namespace ruvia::detail {
 
 enum class AppLifecycleState {
     kStopped,
+    kPreparing,
     kStarting,
-    kStartHooksRunning,
     kRunning,
-    kStopRequestedDuringStartHooks,
     kStopping,
 };
 
 enum class AppStopRequest {
     kIgnored,
-    kStopWorkers,
-    kStopWorkersAndRunHooks,
+    kRequested,
 };
 
-enum class AppStartHooksCompletion {
-    kRunning,
-    kRunDeferredStopHooks,
-};
-
-// App owns the mutex protecting this state machine. Keeping transitions here
-// makes the stop-hook claim part of the lifecycle state instead of an
-// independently mutable flag.
+// App owns the mutex protecting this state machine. App::run() is the sole
+// lifecycle owner; other threads may only request the monotonic transition to
+// kStopping.
 class AppLifecycle final {
 public:
     [[nodiscard]] AppLifecycleState state() const noexcept {
@@ -36,45 +29,41 @@ public:
     }
 
     [[nodiscard]] bool stopRequested() const noexcept {
-        return state_ == AppLifecycleState::kStopRequestedDuringStartHooks || state_ == AppLifecycleState::kStopping;
+        return state_ == AppLifecycleState::kStopping;
     }
 
     [[nodiscard]] bool beginRun() noexcept {
         if (state_ != AppLifecycleState::kStopped) {
             return false;
         }
+        state_ = AppLifecycleState::kPreparing;
+        return true;
+    }
+
+    [[nodiscard]] bool publishRuntime() noexcept {
+        if (state_ != AppLifecycleState::kPreparing) {
+            return false;
+        }
         state_ = AppLifecycleState::kStarting;
         return true;
     }
 
-    [[nodiscard]] bool beginStartHooks() noexcept {
+    [[nodiscard]] bool markRunning() noexcept {
         if (state_ != AppLifecycleState::kStarting) {
             return false;
         }
-        state_ = AppLifecycleState::kStartHooksRunning;
-        return true;
-    }
-
-    [[nodiscard]] AppStartHooksCompletion completeStartHooks() noexcept {
-        if (state_ == AppLifecycleState::kStopRequestedDuringStartHooks) {
-            state_ = AppLifecycleState::kStopping;
-            return AppStartHooksCompletion::kRunDeferredStopHooks;
-        }
         state_ = AppLifecycleState::kRunning;
-        return AppStartHooksCompletion::kRunning;
+        return true;
     }
 
     [[nodiscard]] AppStopRequest requestStop() noexcept {
         switch (state_) {
+            case AppLifecycleState::kPreparing:
             case AppLifecycleState::kStarting:
             case AppLifecycleState::kRunning:
                 state_ = AppLifecycleState::kStopping;
-                return AppStopRequest::kStopWorkersAndRunHooks;
-            case AppLifecycleState::kStartHooksRunning:
-                state_ = AppLifecycleState::kStopRequestedDuringStartHooks;
-                return AppStopRequest::kStopWorkers;
+                return AppStopRequest::kRequested;
             case AppLifecycleState::kStopped:
-            case AppLifecycleState::kStopRequestedDuringStartHooks:
             case AppLifecycleState::kStopping:
                 return AppStopRequest::kIgnored;
         }
