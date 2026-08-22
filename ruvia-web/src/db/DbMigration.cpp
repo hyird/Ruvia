@@ -103,8 +103,8 @@ namespace {
     return detail::DbConfigStorage(source, resource);
 }
 
-struct DbMigrationOptionsStorage final {
-    DbMigrationOptionsStorage(const DbMigrationOptions& source, std::pmr::memory_resource* resource)
+struct DbMigratorOptionsStorage final {
+    DbMigratorOptionsStorage(const DbMigratorOptions& source, std::pmr::memory_resource* resource)
         : table(source.table, resource),
           lockTimeout(source.lockTimeout) {}
 
@@ -249,7 +249,7 @@ std::pmr::string detail::migrationChecksum(std::string_view sql, std::pmr::memor
 
 class detail::DbMigrationRunner final {
 public:
-    [[nodiscard]] static Task<DbMigrationReport> run(asio::io_context& ioContext, detail::DbMigrationDeadlineScanner& scanner, detail::DbConfigStorage config, std::span<const DbMigration> migrations, DbMigrationOptionsStorage options, std::pmr::memory_resource* resource) {
+    [[nodiscard]] static Task<DbMigrationReport> run(asio::io_context& ioContext, detail::DbMigrationDeadlineScanner& scanner, detail::DbConfigStorage config, std::span<const DbMigration> migrations, DbMigratorOptionsStorage options, std::pmr::memory_resource* resource) {
         auto* resolved = detail::pmrResourceOrDefault(resource);
         detail::validateMigrationList(migrations, config.driver);
         if (!detail::isValidMigrationTableName(options.table, config.driver)) {
@@ -346,7 +346,7 @@ private:
         }
     }
 
-    [[nodiscard]] static Task<void> applyMigrations(DbHandle& handle, DbDriver driver, std::span<const DbMigration> migrations, const DbMigrationOptionsStorage& options, DbMigrationReport& report, std::pmr::memory_resource* resource) {
+    [[nodiscard]] static Task<void> applyMigrations(DbHandle& handle, DbDriver driver, std::span<const DbMigration> migrations, const DbMigratorOptionsStorage& options, DbMigrationReport& report, std::pmr::memory_resource* resource) {
         (void)co_await handle.execute(buildCreateMigrationsTableSql(options.table, driver, resource));
 
         std::array<DbValue, 1> tableParams{DbValue{std::string_view(options.table)}};
@@ -395,19 +395,21 @@ private:
     }
 };
 
-DbMigrator::DbMigrator(const DbConfig& config, const DbMigrationOptions& options, std::pmr::memory_resource* resource)
+DbMigrator::DbMigrator(const DbConfig& config, DbMigratorOptions options)
     : config_(config),
       options_(options),
-      resource_(detail::pmrResourceOrDefault(resource)) {}
+      resource_(detail::pmrResourceOrDefault(options.resource)) {}
 
 DbMigrationReport DbMigrator::migrate(std::span<const DbMigration> migrations) const {
-    return migrate(config_, migrations, options_, resource_);
+    auto options = options_;
+    options.resource = resource_;
+    return migrate(config_, migrations, std::move(options));
 }
 
-DbMigrationReport DbMigrator::migrate(const DbConfig& config, std::span<const DbMigration> migrations, const DbMigrationOptions& options, std::pmr::memory_resource* resource) {
-    auto* resolved = detail::pmrResourceOrDefault(resource);
+DbMigrationReport DbMigrator::migrate(const DbConfig& config, std::span<const DbMigration> migrations, DbMigratorOptions options) {
+    auto* resolved = detail::pmrResourceOrDefault(options.resource);
     auto ownedConfig = cloneMigrationConfig(config, resolved);
-    auto ownedOptions = DbMigrationOptionsStorage(options, resolved);
+    auto ownedOptions = DbMigratorOptionsStorage(options, resolved);
     asio::io_context ioContext(1);
     // Outlives the coroutine that attaches to it and is destroyed before the
     // io_context, so no tick can observe either after it is gone.

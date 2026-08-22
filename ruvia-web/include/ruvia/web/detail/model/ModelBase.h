@@ -23,8 +23,8 @@ class ModelStorage {
 public:
     using RuviaSchema = ModelSchema<DescriptorTs...>;
 
-    explicit ModelStorage(std::pmr::memory_resource* resource = nullptr) noexcept
-        : resource_(detail::pmrResourceOrDefault(resource)) {
+    explicit ModelStorage(::ruvia::ModelOptions options = {}) noexcept
+        : resource_(detail::pmrResourceOrDefault(options.resource)) {
         static_assert(uniqueModelFieldNames<DescriptorTs...>(), "Ruvia model source field names must be unique");
         static_assert(uniqueModelWireNames<DescriptorTs...>(), "Ruvia model JSON field names must be unique");
     }
@@ -34,7 +34,7 @@ public:
             { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;
         }
     explicit ModelStorage(ResourceOwnerT& owner) noexcept
-        : ModelStorage(owner.resource()) {}
+        : ModelStorage(::ruvia::ModelOptions{.resource = owner.resource()}) {}
 
     template <FixedString Field>
     [[nodiscard]] decltype(auto) get() const& {
@@ -137,8 +137,8 @@ public:
     using RuviaModelBase = RequestModel;
     using RuviaRequestModelSchema = void;
 
-    explicit RequestModel(std::pmr::memory_resource* resource = nullptr) noexcept
-        : Base(resource) {
+    explicit RequestModel(::ruvia::ModelOptions options = {}) noexcept
+        : Base(options) {
         validateFieldTypes();
     }
 
@@ -147,7 +147,7 @@ public:
             { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;
         }
     explicit RequestModel(ResourceOwnerT& owner) noexcept
-        : RequestModel(owner.resource()) {}
+        : RequestModel(::ruvia::ModelOptions{.resource = owner.resource()}) {}
 
 private:
     friend struct detail::ModelJsonAccess;
@@ -221,7 +221,7 @@ private:
         if (depth > detail::kMaxJsonDepth) {
             return std::nullopt;
         }
-        DerivedT model{resource};
+        DerivedT model{::ruvia::ModelOptions{.resource = resource}};
         if (!model.ruviaMaterializeJson(input, depth, stringStorage)) {
             return std::nullopt;
         }
@@ -278,7 +278,7 @@ private:
 
     [[nodiscard]] static std::optional<DerivedT> ruviaMaterializeFormInput(
         const detail::ModelInput& input) {
-        DerivedT model{input.resource()};
+        DerivedT model{::ruvia::ModelOptions{.resource = input.resource()}};
         if (!model.ruviaMaterializeForm(input)) {
             return std::nullopt;
         }
@@ -409,8 +409,8 @@ public:
     using RuviaModelBase = ResponseModel;
     using RuviaResponseModelSchema = void;
 
-    explicit ResponseModel(std::pmr::memory_resource* resource = nullptr) noexcept
-        : Base(resource) {
+    explicit ResponseModel(::ruvia::ModelOptions options = {}) noexcept
+        : Base(options) {
         validateFieldTypes();
     }
 
@@ -419,7 +419,7 @@ public:
             { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;
         }
     explicit ResponseModel(ResourceOwnerT& owner) noexcept
-        : ResponseModel(owner.resource()) {}
+        : ResponseModel(::ruvia::ModelOptions{.resource = owner.resource()}) {}
 
 private:
     friend struct detail::ModelJsonAccess;

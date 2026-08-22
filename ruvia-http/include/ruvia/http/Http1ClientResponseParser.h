@@ -425,9 +425,13 @@ private:
 // only after protocol validation succeeds.
 class Http1ClientResponseParser final {
 public:
-    explicit Http1ClientResponseParser(Http1ClientExchangeState exchangeState, std::pmr::memory_resource* resource = nullptr) noexcept
+    struct Options final {
+        std::pmr::memory_resource* resource{nullptr};
+    };
+
+    explicit Http1ClientResponseParser(Http1ClientExchangeState exchangeState, Options options = {}) noexcept
         : exchangeState_(std::move(exchangeState)),
-          resource_(resource),
+          resource_(options.resource),
           requestContentPhase_(initialRequestContentPhase(exchangeState_)) {}
 
     Http1ClientResponseParser(const Http1ClientResponseParser&) = delete;

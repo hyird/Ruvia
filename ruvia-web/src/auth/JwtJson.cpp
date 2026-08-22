@@ -245,7 +245,7 @@ namespace {
 
 JwtPayload detail::JwtPayloadAccess::decodePayloadJson(std::string_view json, std::pmr::memory_resource* resource) {
     auto* resolved = detail::pmrResourceOrDefault(resource);
-    JwtPayload payload(resolved);
+    JwtPayload payload({.resource = resolved});
 
     bool registeredClaimInvalid = false;
 

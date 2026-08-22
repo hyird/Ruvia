@@ -401,7 +401,7 @@ int main() {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string block(&resource);
     ruvia::HpackEncoder::encodeHeader(block, "x-installed", "yes");
-    ruvia::HpackDecoder decoder(&resource);
+    ruvia::HpackDecoder decoder({.resource = &resource});
     std::pair<std::string, std::string> decoded;
     const auto result = decoder.decode(block, [&](std::string_view name, std::string_view value) {
         decoded.first.assign(name);
@@ -415,14 +415,14 @@ int main() {
     const auto parsed = ruvia::parseHttp2FrameHeader(frame);
     if (!parsed || parsed->type != static_cast<unsigned char>(ruvia::Http2FrameType::kSettings)) return 3;
 
-    auto http2 = ruvia::Http2Connection::client(&resource);
+    auto http2 = ruvia::Http2Connection::client({.resource = &resource});
     if (!http2.pendingOutput().starts_with(ruvia::kHttp2ClientPreface)) return 4;
 
-    ruvia::WebSocketServerConnection websocket(&resource);
+    ruvia::WebSocketServerConnection websocket({.resource = &resource});
     if (websocket.submitFrame(ruvia::WebSocketOpcode::kText, "installed") != ruvia::WebSocketFrameSubmitStatus::kAccepted || websocket.outputPlan().bytes().empty()) return 5;
 
     const auto event = ruvia::formatSseMessage(ruvia::SseMessage{
-        .data = "installed", .retry = std::chrono::milliseconds{5}}, &resource);
+        .data = "installed", .retry = std::chrono::milliseconds{5}}, {.resource = &resource});
     return event == "retry: 5\ndata: installed\n\n" ? 0 : 6;
 }
 ]=])

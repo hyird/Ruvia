@@ -153,18 +153,18 @@ HttpServer::HttpServer(ValidatedOptionsTag, TcpEndpoint endpoint, const RouteTab
       endpoint_(std::move(endpoint)),
       routes_(routes),
       memory_(validatedOptions.memoryConfig),
-      backgroundTasks_(workerHandle_, memory_.resource()),
+      backgroundTasks_(workerHandle_, {.resource = memory_.resource()}),
       sniContexts_(memory_.resource()),
       sniLookup_(memory_.resource()),
       ownedDocumentRoot_(nullptr, PmrObjectDeleter<StaticRoot>{processResource()}),
       retiredDocumentRoots_(memory_.resource()),
       options_(std::move(validatedOptions)),
       connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
-      dataAccess_(ioContext_, workerHandle_, memory_.resource(), databases, redis, connectionScanner_),
-      httpClients_(ioContext_, workerHandle_, memory_.resource(), httpClients, options_.maxHttpClientOriginsPerWorker),
+      workerData_(ioContext_, workerHandle_, memory_.resource(), databases, redis, connectionScanner_),
+      httpClients_(ioContext_, workerHandle_, memory_.resource(), httpClients, options_.httpClientOriginCacheCapacityPerWorker),
       workerStates_(memory_.resource(), workerStates),
-      webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(), workerHandle_, memory_.resource(), dataAccess_.databases(), dataAccess_.redis(), httpClients_, workerStates_, options_.blockingPool, [this](std::exception_ptr failure) { failWorker(std::move(failure)); })),
-      rateLimiter_(options_.defaultRateLimitPerWorker, routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent : RouteRateLimitPresence::kAbsent, options_.rateLimitSlotsPerWorker, memory_.resource()),
+      webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(), workerHandle_, memory_.resource(), workerData_.databases(), workerData_.redis(), httpClients_, workerStates_, options_.blockingPool, [this](std::exception_ptr failure) { failWorker(std::move(failure)); })),
+      rateLimiter_(options_.defaultRateLimitPerWorker, routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent : RouteRateLimitPresence::kAbsent, options_.rateLimitCapacityPerWorker, memory_.resource()),
       workSetPool_(memory_) {
     if (options_.documentRoot.refreshOptions() != nullptr) {
         const auto* configuredRoot = options_.documentRoot.root();
@@ -364,7 +364,7 @@ void HttpServer::stopOnContext() noexcept {
     acceptor_.close(ignored);
     connectionScanner_.stop();
     connectionScanner_.closeAll();
-    dataAccess_.closeNow();
+    workerData_.closeNow();
     httpClients_.closeNow();
     workerDispatcher_->stopTimers();
 }
@@ -420,7 +420,7 @@ Task<void> HttpServer::runWorker() {
     bool refreshStarted = false;
     try {
         connectionScanner_.start();
-        co_await dataAccess_.connect();
+        co_await workerData_.connect();
         (void)workerCompletion_.markStartupReady();
         if (options_.documentRoot.refreshOptions() != nullptr) {
             backgroundTasks_.spawn(staticRootRefreshLoop());

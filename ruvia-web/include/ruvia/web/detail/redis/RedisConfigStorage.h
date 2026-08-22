@@ -26,7 +26,7 @@ struct RedisConfigStorage final {
           maxReplyBytes(source.maxReplyBytes),
           maxArrayDepth(source.maxArrayDepth),
           tcpNoDelay(source.tcpNoDelay),
-          keepAlive(source.keepAlive) {}
+          tcpKeepAlive(source.tcpKeepAlive) {}
 
     RedisConfigStorage(const RedisConfigStorage& source, std::pmr::memory_resource* resource)
         : host(source.host, resource),
@@ -42,7 +42,7 @@ struct RedisConfigStorage final {
           maxReplyBytes(source.maxReplyBytes),
           maxArrayDepth(source.maxArrayDepth),
           tcpNoDelay(source.tcpNoDelay),
-          keepAlive(source.keepAlive) {}
+          tcpKeepAlive(source.tcpKeepAlive) {}
 
     std::pmr::string host;
     std::uint16_t port{6379};
@@ -56,8 +56,8 @@ struct RedisConfigStorage final {
     std::optional<std::chrono::milliseconds> acquireTimeout;
     std::optional<std::size_t> maxReplyBytes{64 * 1024 * 1024};
     std::size_t maxArrayDepth{64};
-    bool tcpNoDelay{true};
-    bool keepAlive{false};
+    TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
+    TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kSystemDefault};
 };
 
 struct RedisDefinition final {

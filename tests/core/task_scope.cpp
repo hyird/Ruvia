@@ -7,8 +7,9 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include <memory>
 #include <chrono>
+#include <concepts>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -18,9 +19,13 @@ static_assert(std::is_move_constructible_v<ruvia::Task<void>>);
 static_assert(!std::is_move_assignable_v<ruvia::Task<void>>);
 static_assert(std::is_move_constructible_v<ruvia::Task<int>>);
 static_assert(!std::is_move_assignable_v<ruvia::Task<int>>);
+static_assert(std::is_aggregate_v<ruvia::TaskScopeOptions>);
+static_assert(std::same_as<decltype(ruvia::TaskScopeOptions{}.resource), std::pmr::memory_resource*>);
 static_assert(std::is_constructible_v<ruvia::TaskScope, const ruvia::WorkerHandle&>);
-static_assert(std::is_constructible_v<ruvia::TaskScope, const ruvia::WorkerHandle&, std::pmr::memory_resource*>);
+static_assert(std::is_constructible_v<ruvia::TaskScope, const ruvia::WorkerHandle&, ruvia::TaskScopeOptions>);
+static_assert(!std::is_constructible_v<ruvia::TaskScope, const ruvia::WorkerHandle&, std::pmr::memory_resource*>);
 static_assert(!std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&>);
+static_assert(!std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&, ruvia::TaskScopeOptions>);
 static_assert(!std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&, std::pmr::memory_resource*>);
 
 namespace {

@@ -26,13 +26,13 @@ int main() {
     }
 
     const auto cache = ruvia::parseCacheControl("max-age=60");
-    if (!cache.maxAge.has_value() || *cache.maxAge != 60) {
+    if (!cache.maxAge().has_value() || *cache.maxAge() != 60) {
         return 2;
     }
 
     // The outbound client is http-owned (framework-free): its public surface must
     // be usable from a ruvia::http-only consumer.
-    const auto origin = ruvia::HttpOriginView::https("example.test");
+    const auto origin = ruvia::HttpOriginView::https({.host = "example.test"});
     ruvia::HttpClientRequestView outboundRequest;
     std::array<char, 256> requestHead;
     const auto requestPlan = ruvia::Http1ClientRequestWriter().prepare(origin, outboundRequest, requestHead);

@@ -41,65 +41,65 @@ namespace detail {
 // endpoint: RFC 9110 15.5.16 assigns that 415, distinct from the 400 a
 // malformed body of the RIGHT type earns below.
 [[noreturn]] void throwInvalidJsonContentType() {
-    throw HttpError(http_status::kUnsupportedMediaType, "unsupported_media_type", "request body must be application/json");
+    throw HttpError({.status = http_status::kUnsupportedMediaType, .code = "unsupported_media_type", .message = "request body must be application/json"});
 }
 
 [[noreturn]] void throwInvalidJsonBody() {
-    throw HttpError(http_status::kBadRequest, {}, "invalid json body");
+    throw HttpError({.status = http_status::kBadRequest, .message = "invalid json body"});
 }
 
 [[noreturn]] void throwInvalidFormContentType() {
-    throw HttpError(http_status::kUnsupportedMediaType, "unsupported_media_type", "request body must be application/x-www-form-urlencoded");
+    throw HttpError({.status = http_status::kUnsupportedMediaType, .code = "unsupported_media_type", .message = "request body must be application/x-www-form-urlencoded"});
 }
 
 [[noreturn]] void throwInvalidFormBody() {
-    throw HttpError(http_status::kBadRequest, {}, "invalid form body");
+    throw HttpError({.status = http_status::kBadRequest, .message = "invalid form body"});
 }
 
 [[noreturn]] void throwTooManyFormFields() {
-    throw HttpError(http_status::kContentTooLarge, "too_many_form_fields", "request form has too many fields");
+    throw HttpError({.status = http_status::kContentTooLarge, .code = "too_many_form_fields", .message = "request form has too many fields"});
 }
 
 [[noreturn]] void throwInvalidQuery() {
-    throw HttpError(http_status::kBadRequest, {}, "invalid query");
+    throw HttpError({.status = http_status::kBadRequest, .message = "invalid query"});
 }
 
 [[noreturn]] void throwInvalidParam() {
-    throw HttpError(http_status::kBadRequest, {}, "invalid route parameter");
+    throw HttpError({.status = http_status::kBadRequest, .message = "invalid route parameter"});
 }
 
 [[noreturn]] void throwInvalidHeader() {
-    throw HttpError(http_status::kBadRequest, {}, "invalid request header");
+    throw HttpError({.status = http_status::kBadRequest, .message = "invalid request header"});
 }
 
 [[noreturn]] void throwInvalidCookie() {
-    throw HttpError(http_status::kBadRequest, {}, "invalid cookie");
+    throw HttpError({.status = http_status::kBadRequest, .message = "invalid cookie"});
 }
 
 }  // namespace detail
 
-Task<JsonValue> ContextRequest::jsonTask(const Context* context) {
+Task<JsonValue> ContextRequest::jsonValueTask(const Context* context) {
     if (!contextContentTypeMatches(context, "application/json")) {
         detail::throwInvalidJsonContentType();
     }
     const auto requestBody = co_await contextTextTask(context);
-    auto parsed = JsonValue::parse(requestBody, contextResource(context));
+    auto parsed = JsonValue::parse(requestBody, {.resource = contextResource(context)});
     if (!parsed) {
         detail::throwInvalidJsonBody();
     }
     co_return std::move(*parsed);
 }
 
-ScopedOperation<JsonValue> ContextRequest::json() const {
-    return detail::makeScopedOperation(context_->operationScope_, jsonTask(context_));
+ScopedOperation<JsonValue> ContextRequest::jsonValue() const {
+    return detail::makeScopedOperation(context_->operationScope_, jsonValueTask(context_));
 }
 
-Task<std::optional<JsonValue>> ContextRequest::jsonIfTask(const Context* context) {
+Task<std::optional<JsonValue>> ContextRequest::jsonValueIfTask(const Context* context) {
     if (!contextContentTypeMatches(context, "application/json")) {
         co_return std::nullopt;
     }
     const auto requestBody = co_await contextTextTask(context);
-    auto parsed = JsonValue::parse(requestBody, contextResource(context));
+    auto parsed = JsonValue::parse(requestBody, {.resource = contextResource(context)});
     if (!parsed) {
         // The media type selected JSON, so a malformed body is a client error,
         // not an absent optional format. Treating it as nullopt lets a handler
@@ -109,8 +109,8 @@ Task<std::optional<JsonValue>> ContextRequest::jsonIfTask(const Context* context
     co_return std::move(*parsed);
 }
 
-ScopedOperation<std::optional<JsonValue>> ContextRequest::jsonIf() const {
-    return detail::makeScopedOperation(context_->operationScope_, jsonIfTask(context_));
+ScopedOperation<std::optional<JsonValue>> ContextRequest::jsonValueIf() const {
+    return detail::makeScopedOperation(context_->operationScope_, jsonValueIfTask(context_));
 }
 
 const RequestNameValueList& Context::requestHeaders() const {
@@ -303,7 +303,7 @@ void Context::ensureRouteParams() const {
     for (std::size_t i = 0; i < paramCount_; ++i) {
         auto value = paramValues_[i];
         if (detail::hasUrlEncoding(value, detail::UrlDecodeMode::kPercent)) {
-            auto decoded = detail::decodeUrlComponent(value, detail::UrlDecodeMode::kPercent, resource());
+            auto decoded = detail::decodeUrlComponent(value, {.mode = detail::UrlDecodeMode::kPercent, .resource = resource()});
             if (!decoded) {
                 requestStorage_->routeParamsInvalid = true;
                 detail::throwInvalidParam();
@@ -452,7 +452,7 @@ Task<std::string_view> Context::requestBody() const {
     if (coding == HttpContentCoding::kIdentity) {
         co_return raw;
     }
-    auto decodeResult = detail::decodeHttpRequestContent(coding, raw, maxDecodedBodyBytes_, resource());
+    auto decodeResult = detail::decodeHttpRequestContent(coding, raw, {.maxDecodedBytes = maxDecodedBodyBytes_, .resource = resource()});
     auto* decodedContent = decodeResult.decoded();
     if (decodedContent == nullptr) {
         if (const auto* failure = decodeResult.protocolFailure()) {
@@ -469,7 +469,9 @@ Task<std::string_view> Context::requestBody() const {
     co_return std::string_view(decoded);
 }
 
-std::optional<std::string_view> ContextRequest::signedCookie(std::string_view name, std::string_view secret) const {
+std::optional<std::string_view> ContextRequest::signedCookie(SignedCookieLookupOptions options) const {
+    const auto name = options.name.view();
+    const auto secret = options.secret.view();
     const auto stored = cookie(name);
     if (!stored.has_value() || stored->size() <= detail::kCookieSignatureSize) {
         return std::nullopt;
@@ -523,7 +525,7 @@ BodyReader& Context::requestBodyReader() const {
 }
 
 MultipartReader Context::requestMultipartReader() const {
-    return MultipartReader(requestBodyReader(), multipartBoundary(), resource());
+    return MultipartReader(requestBodyReader(), {.boundary = multipartBoundary(), .resource = resource()});
 }
 
 MultipartBoundary Context::multipartBoundary() const {
@@ -532,7 +534,7 @@ MultipartBoundary Context::multipartBoundary() const {
         return *parsed;
     }
     if (boundary.notApplicable() != nullptr) {
-        throw HttpError(http_status::kUnsupportedMediaType, "unsupported_media_type", "request body must be multipart/form-data");
+        throw HttpError({.status = http_status::kUnsupportedMediaType, .code = "unsupported_media_type", .message = "request body must be multipart/form-data"});
     }
     if (const auto* failure = boundary.failure()) {
         throw failure->protocolError();

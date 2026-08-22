@@ -77,6 +77,39 @@ class RequestDeadline;
 struct SessionAccess;
 }  // namespace detail
 
+struct RedirectResponseOptions final {
+    BorrowedText location;
+    HttpStatusCode status{http_status::kFound};
+};
+
+struct SetCookieOptions final {
+    BorrowedText name;
+    BorrowedText value;
+    CookieOptions attributes{};
+};
+
+struct SetSignedCookieOptions final {
+    BorrowedText name;
+    BorrowedText value;
+    BorrowedText secret;
+    CookieOptions attributes{};
+};
+
+struct DeleteCookieOptions final {
+    BorrowedText name;
+    CookieOptions attributes{};
+};
+
+struct StaticFileResponseOptions final {
+    BorrowedText relativePath;
+    BorrowedText contentType;
+};
+
+struct FileResponseOptions final {
+    std::filesystem::path path;
+    BorrowedText contentType;
+};
+
 class Context final : public detail::BlockingCapability<Context>, public detail::WorkerStateCapability<Context> {
 private:
     friend class ContextRequest;
@@ -92,7 +125,7 @@ private:
 
     Context(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, const std::string_view* paramNames, const std::string_view* paramValues, std::size_t paramCount, std::uintptr_t routeRateLimitScope, detail::ContextServices services) noexcept;
 
-    [[nodiscard]] HttpResponse staticFile(const StaticRoot& root, std::string_view relativePath, std::string_view contentType, detail::StaticFileSelectionMode mode) const;
+    [[nodiscard]] HttpResponse staticFile(const StaticRoot& root, StaticFileResponseOptions options, detail::StaticFileSelectionMode mode) const;
 
 public:
     using HeaderOptions = HttpResponse::HeaderOptions;
@@ -264,9 +297,9 @@ public:
     // hidden sentinel; removal now has its own named entry point.
     void removeHeader(std::string_view name);
 
-    void setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
-    void setSignedCookie(std::string_view name, std::string_view value, std::string_view secret, const CookieOptions& options = {});
-    void deleteCookie(std::string_view name, CookieOptions options = {});
+    void setCookie(SetCookieOptions options);
+    void setSignedCookie(SetSignedCookieOptions options);
+    void deleteCookie(DeleteCookieOptions options);
 
     // Observe the final response produced by downstream middleware or a terminal
     // handler. Internal provisional response storage is never exposed here.
@@ -311,13 +344,13 @@ public:
     template <std::size_t N>
     [[nodiscard]] HttpResponse html(const char (&body)[N]) const;
 
-    [[nodiscard]] HttpResponse redirect(std::string_view location, HttpStatusCode statusCode = http_status::kFound) const;
+    [[nodiscard]] HttpResponse redirect(RedirectResponseOptions options) const;
 
-    [[nodiscard]] HttpResponse file(const std::filesystem::path& path, std::string_view contentType = {}) const;
+    [[nodiscard]] HttpResponse file(FileResponseOptions options) const;
 
-    [[nodiscard]] HttpResponse staticFile(const StaticRoot& root, std::string_view relativePath, std::string_view contentType = {}) const;
+    [[nodiscard]] HttpResponse staticFile(const StaticRoot& root, StaticFileResponseOptions options) const;
 
-    [[nodiscard]] HttpResponse error(HttpStatusCode statusCode, std::string_view code, std::string_view message, std::string_view statusText = {}) const;
+    [[nodiscard]] HttpResponse error(HttpErrorInfoOptions options) const;
 
     [[nodiscard]] ScopedOperation<HttpResponse> notFound();
 

@@ -57,9 +57,9 @@ namespace {
         }
     }
 
-    result.enableRanges = source.enableRanges;
-    result.enableValidators = source.enableValidators;
-    result.serveDotfiles = source.serveDotfiles;
+    result.rangeRequests = source.rangeRequests;
+    result.responseValidators = source.responseValidators;
+    result.dotfiles = source.dotfiles;
     return result;
 }
 
@@ -353,7 +353,7 @@ void App::run() {
     std::thread signalThread;
 
     try {
-        if (state.signalShutdown) {
+        if (state.processSignalHandlers == ProcessSignalHandlerPolicy::kInstall) {
             addShutdownSignals(signals);
             signals.async_wait([this](const std::error_code& ec, int) {
                 if (!ec) {

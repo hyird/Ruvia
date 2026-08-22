@@ -22,7 +22,7 @@ class JsonValue final {
 public:
     enum class Kind : unsigned char { kObject, kArray, kString, kNumber, kBoolean, kNull };
 
-    [[nodiscard]] static std::optional<JsonValue> parse(std::string_view body, std::pmr::memory_resource* resource = nullptr) noexcept {
+    [[nodiscard]] static std::optional<JsonValue> parse(std::string_view body, ModelParseOptions options = {}) noexcept {
         auto input = body;
         if (!detail::skipJsonValue(input)) {
             return std::nullopt;
@@ -31,14 +31,14 @@ public:
         if (!input.empty()) {
             return std::nullopt;
         }
-        return JsonValue(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource));
+        return JsonValue(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(options.resource));
     }
 
     template <typename Traits, typename Allocator>
-    static std::optional<JsonValue> parse(std::basic_string<char, Traits, Allocator>&&, std::pmr::memory_resource* = nullptr) = delete;
+    static std::optional<JsonValue> parse(std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
 
     template <typename Traits, typename Allocator>
-    static std::optional<JsonValue> parse(const std::basic_string<char, Traits, Allocator>&&, std::pmr::memory_resource* = nullptr) = delete;
+    static std::optional<JsonValue> parse(const std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
 
     [[nodiscard]] std::string_view view() const noexcept {
         return body_;
@@ -107,7 +107,7 @@ private:
 
 class JsonObject final {
 public:
-    [[nodiscard]] static std::optional<JsonObject> parse(std::string_view body, std::pmr::memory_resource* resource = nullptr) noexcept {
+    [[nodiscard]] static std::optional<JsonObject> parse(std::string_view body, ModelParseOptions options = {}) noexcept {
         detail::JsonScanner scanner(body);
         if (!scanner.consumeObject()) {
             return std::nullopt;
@@ -116,14 +116,14 @@ public:
         if (!scanner.empty()) {
             return std::nullopt;
         }
-        return JsonObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource));
+        return JsonObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(options.resource));
     }
 
     template <typename Traits, typename Allocator>
-    static std::optional<JsonObject> parse(std::basic_string<char, Traits, Allocator>&&, std::pmr::memory_resource* = nullptr) = delete;
+    static std::optional<JsonObject> parse(std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
 
     template <typename Traits, typename Allocator>
-    static std::optional<JsonObject> parse(const std::basic_string<char, Traits, Allocator>&&, std::pmr::memory_resource* = nullptr) = delete;
+    static std::optional<JsonObject> parse(const std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
 
     [[nodiscard]] std::string_view view() const noexcept {
         return body_;
@@ -181,18 +181,18 @@ template <typename T>
 
 class FormObject final {
 public:
-    [[nodiscard]] static std::optional<FormObject> parse(std::string_view body, std::pmr::memory_resource* resource = nullptr) noexcept {
+    [[nodiscard]] static std::optional<FormObject> parse(std::string_view body, ModelParseOptions options = {}) noexcept {
         if (!detail::validateFormEncoding(body)) {
             return std::nullopt;
         }
-        return FormObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource));
+        return FormObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(options.resource));
     }
 
     template <typename Traits, typename Allocator>
-    static std::optional<FormObject> parse(std::basic_string<char, Traits, Allocator>&&, std::pmr::memory_resource* = nullptr) = delete;
+    static std::optional<FormObject> parse(std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
 
     template <typename Traits, typename Allocator>
-    static std::optional<FormObject> parse(const std::basic_string<char, Traits, Allocator>&&, std::pmr::memory_resource* = nullptr) = delete;
+    static std::optional<FormObject> parse(const std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
 
     [[nodiscard]] std::string_view view() const noexcept {
         return body_;

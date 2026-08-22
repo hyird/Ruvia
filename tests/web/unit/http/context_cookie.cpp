@@ -17,16 +17,17 @@ RUVIA_TEST(context_set_cookie_serializes_all_attributes) {
     // under-allocation, or a dropped attribute in one pass only) surfaces as a
     // wrong output string. Case A: __Host- prefix with all string/flag attributes
     // and a Max-Age (no Domain/Expires -- __Host- forbids Domain).
-    ruvia::CookieOptions host;
-    host.prefix = ruvia::CookiePrefix::kHost;
-    host.secure = true;
-    host.path = "/";
-    host.httpOnly = true;
-    host.sameSite = ruvia::CookieSameSite::kStrict;
-    host.maxAge = std::chrono::seconds(3600);
-    host.priority = ruvia::CookiePriority::kHigh;
-    host.partitioned = true;
-    context.setCookie("id", "abc", host);
+    const ruvia::CookieOptions host{
+        .path = "/",
+        .sameSite = ruvia::CookieSameSite::kStrict,
+        .priority = ruvia::CookiePriority::kHigh,
+        .maxAge = std::chrono::seconds(3600),
+        .prefix = ruvia::CookiePrefix::kHost,
+        .httpOnly = ruvia::CookieAttributePolicy::kEmit,
+        .secure = ruvia::CookieAttributePolicy::kEmit,
+        .partitioned = ruvia::CookieAttributePolicy::kEmit,
+    };
+    context.setCookie({.name = "id", .value = "abc", .attributes = host});
     const auto hostResponse = context.text("ok");
     RUVIA_CHECK_EQ(hostResponse.header("Set-Cookie"), std::string_view("__Host-id=abc; Path=/; Max-Age=3600; HttpOnly; Secure; "
                                                                        "SameSite=Strict; Priority=High; Partitioned"));
@@ -35,19 +36,20 @@ RUVIA_TEST(context_set_cookie_serializes_all_attributes) {
     // instant 1234567890 = Fri 13 Feb 2009 23:31:30 UTC, formatted as a
     // locale-independent IMF-fixdate) plus SameSite=None. Covers the Domain and
     // Expires branches Case A omits.
-    ruvia::CookieOptions secure;
-    secure.prefix = ruvia::CookiePrefix::kSecure;
-    secure.secure = true;
-    secure.path = "/app";
-    secure.domain = "example.com";
-    secure.sameSite = ruvia::CookieSameSite::kNone;
-    secure.expires = std::chrono::system_clock::time_point(std::chrono::seconds(1234567890));
+    const ruvia::CookieOptions secure{
+        .path = "/app",
+        .domain = "example.com",
+        .sameSite = ruvia::CookieSameSite::kNone,
+        .expires = std::chrono::system_clock::time_point(std::chrono::seconds(1234567890)),
+        .prefix = ruvia::CookiePrefix::kSecure,
+        .secure = ruvia::CookieAttributePolicy::kEmit,
+    };
     HttpRequest secureRequest = HttpRequestAccess::make();
     HttpRequestAccess::reset(secureRequest);
     RequestMemory secureMemory(worker);
     HttpRequestAccess::setResource(secureRequest, secureMemory.resource());
     auto secureContext = ContextAccess::make(secureMemory, secureRequest);
-    secureContext.setCookie("sess", "xyz", secure);
+    secureContext.setCookie({.name = "sess", .value = "xyz", .attributes = secure});
     const auto secureResponse = secureContext.text("ok");
     RUVIA_CHECK_EQ(secureResponse.header("Set-Cookie"), std::string_view("__Secure-sess=xyz; Path=/app; Domain=example.com; "
                                                                          "Expires=Fri, 13 Feb 2009 23:31:30 GMT; Secure; SameSite=None"));
@@ -65,9 +67,9 @@ RUVIA_TEST(context_set_cookie_preserves_same_name_different_path) {
     root.path = "/";
     ruvia::CookieOptions admin;
     admin.path = "/admin";
-    context.setCookie("session", "root-old", root);
-    context.setCookie("session", "admin", admin);
-    context.setCookie("session", "root-new", root);
+    context.setCookie({.name = "session", .value = "root-old", .attributes = root});
+    context.setCookie({.name = "session", .value = "admin", .attributes = admin});
+    context.setCookie({.name = "session", .value = "root-new", .attributes = root});
     const auto response = context.text("ok");
 
     std::size_t count = 0;
@@ -97,11 +99,12 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     HttpRequestAccess::setResource(writeRequest, writeMemory.resource());
     auto writeContext = ContextAccess::make(writeMemory, writeRequest);
 
-    ruvia::CookieOptions options;
-    options.prefix = ruvia::CookiePrefix::kHost;
-    options.secure = true;
-    options.path = "/";
-    writeContext.setSignedCookie("session", "user-1", "secret", options);
+    const ruvia::CookieOptions options{
+        .path = "/",
+        .prefix = ruvia::CookiePrefix::kHost,
+        .secure = ruvia::CookieAttributePolicy::kEmit,
+    };
+    writeContext.setSignedCookie({.name = "session", .value = "user-1", .secret = "secret", .attributes = options});
     const auto writeResponse = writeContext.text("ok");
     const std::string setCookie(writeResponse.header("Set-Cookie").value_or(std::string_view{}));
     const std::string_view line(setCookie);
@@ -117,7 +120,7 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     HttpRequestAccess::setResource(readRequest, readMemory.resource());
     auto readContext = ContextAccess::make(readMemory, readRequest);
 
-    const auto verified = readContext.req().signedCookie("__Host-session", "secret");
+    const auto verified = readContext.req().signedCookie({.name = "__Host-session", .secret = "secret"});
     RUVIA_CHECK(verified.has_value());
     RUVIA_CHECK_EQ(*verified, std::string_view("user-1"));
 
@@ -127,7 +130,7 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     RequestMemory bareWriteMemory(worker);
     HttpRequestAccess::setResource(bareWriteRequest, bareWriteMemory.resource());
     auto bareWriteContext = ContextAccess::make(bareWriteMemory, bareWriteRequest);
-    bareWriteContext.setSignedCookie("plain", "user-2", "secret");
+    bareWriteContext.setSignedCookie({.name = "plain", .value = "user-2", .secret = "secret"});
     const auto bareWriteResponse = bareWriteContext.text("ok");
     const std::string bare(bareWriteResponse.header("Set-Cookie").value_or(std::string_view{}));
     const std::string_view bareLine(bare);
@@ -138,7 +141,7 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     RequestMemory bareMemory(worker);
     HttpRequestAccess::setResource(bareRequest, bareMemory.resource());
     auto bareContext = ContextAccess::make(bareMemory, bareRequest);
-    const auto bareVerified = bareContext.req().signedCookie("plain", "secret");
+    const auto bareVerified = bareContext.req().signedCookie({.name = "plain", .secret = "secret"});
     RUVIA_CHECK(bareVerified.has_value());
     RUVIA_CHECK_EQ(*bareVerified, std::string_view("user-2"));
 }
@@ -152,14 +155,15 @@ RUVIA_TEST(context_delete_cookie_with_prefix_is_response_only) {
     HttpRequestAccess::setResource(request, requestMemory.resource());
     auto context = ContextAccess::make(requestMemory, request);
 
-    ruvia::CookieOptions options;
-    options.prefix = ruvia::CookiePrefix::kHost;
-    options.secure = true;
-    options.path = "/";
+    const ruvia::CookieOptions options{
+        .path = "/",
+        .prefix = ruvia::CookiePrefix::kHost,
+        .secure = ruvia::CookieAttributePolicy::kEmit,
+    };
     const auto previous = context.req().cookie("__Host-session");
     RUVIA_CHECK(previous.has_value());
     RUVIA_CHECK_EQ(*previous, std::string_view("user-1"));
-    context.deleteCookie("session", options);
+    context.deleteCookie({.name = "session", .attributes = options});
     const auto response = context.text("deleted");
     const auto setCookie = response.header("Set-Cookie");
     RUVIA_CHECK(setCookie.has_value());

@@ -190,13 +190,13 @@ private:
     // schema; JSON output never bypasses the model boundary.
     ruvia::Task<ruvia::HttpResponse> report(ruvia::Context& c) {
         const std::string_view tags[] = {"a\"quoted", "b"};
-        TestingFacadeReport report(c.resource());
+        TestingFacadeReport report({.resource = c.resource()});
         report.set<"path">(c.req().path());
         report.set<"count">(static_cast<std::uint64_t>(std::size(tags)));
         auto& reportTags = report.ensure<"tags">();
         reportTags.reserve(std::size(tags));
         for (const auto tag : tags) {
-            reportTags.emplace_back(tag, c.resource());
+            reportTags.emplace_back(tag, ruvia::ModelOptions{.resource = c.resource()});
         }
         co_return c.json(report);
     }
@@ -308,7 +308,7 @@ RUVIA_TEST(testing_facade_runs_model_bodies_with_media_type_split) {
 
 RUVIA_TEST(testing_facade_applies_app_level_configuration) {
     ruvia::TestApp app;
-    app.use<TestingFacadeStamp>().onNotFound(&facadeNotFound).onNotFound("/api", &apiScopedMiss);
+    app.use<TestingFacadeStamp>().onNotFound(&facadeNotFound).onNotFound({.prefix = "/api", .handler = &apiScopedMiss});
     app.useWorkerState<TestingFacadeCounter>();
 
     // Global middleware wraps every matched route.
@@ -400,22 +400,22 @@ RUVIA_TEST(testing_facade_runs_fallback_handlers_that_carry_state) {
 
 RUVIA_TEST(testing_facade_rejects_duplicate_normalized_fallback_prefixes) {
     ruvia::TestApp notFoundApp;
-    notFoundApp.onNotFound("/api", &apiScopedMiss);
+    notFoundApp.onNotFound({.prefix = "/api", .handler = &apiScopedMiss});
 
     bool notFoundRejected = false;
     try {
-        notFoundApp.onNotFound("/api///", &apiScopedMiss);
+        notFoundApp.onNotFound({.prefix = "/api///", .handler = &apiScopedMiss});
     } catch (const std::invalid_argument& error) {
         notFoundRejected = std::string_view(error.what()) == "duplicate fallback prefix";
     }
     RUVIA_CHECK(notFoundRejected);
 
     ruvia::TestApp errorApp;
-    errorApp.onError("/api/", &facadeError);
+    errorApp.onError({.prefix = "/api/", .handler = &facadeError});
 
     bool errorRejected = false;
     try {
-        errorApp.onError("/api", &facadeError);
+        errorApp.onError({.prefix = "/api", .handler = &facadeError});
     } catch (const std::invalid_argument& error) {
         errorRejected = std::string_view(error.what()) == "duplicate fallback prefix";
     }
@@ -423,7 +423,7 @@ RUVIA_TEST(testing_facade_rejects_duplicate_normalized_fallback_prefixes) {
 
     bool malformedRejected = false;
     try {
-        errorApp.onNotFound("api", &apiScopedMiss);
+        errorApp.onNotFound({.prefix = "api", .handler = &apiScopedMiss});
     } catch (const std::invalid_argument& error) {
         malformedRejected = std::string_view(error.what()) == "fallback prefix must start with '/'";
     }
@@ -432,7 +432,7 @@ RUVIA_TEST(testing_facade_rejects_duplicate_normalized_fallback_prefixes) {
     const auto rejectsMalformedPrefixedScope = [](std::string_view prefix) {
         ruvia::TestApp app;
         try {
-            app.onNotFound(prefix, &apiScopedMiss);
+            app.onNotFound({.prefix = prefix, .handler = &apiScopedMiss});
         } catch (const std::invalid_argument& error) {
             return std::string_view(error.what()) == "fallback prefix must be an origin-form path without query";
         }
@@ -488,7 +488,7 @@ RUVIA_TEST(testing_facade_builds_a_runtime_sized_response_model) {
 
 RUVIA_TEST(testing_facade_path_scoped_middleware_runs_only_under_its_prefix) {
     ruvia::TestApp app;
-    app.useAt<TestingFacadeScoped>("/t/users", "users");
+    app.useAt<TestingFacadeScoped>({.prefix = "/t/users"}, "users");
 
     // Under the scope, on both the exact prefix path shape and a deeper one.
     const auto scoped = app.request(ruvia::TestRequest::get("/t/users/42"));
@@ -507,7 +507,7 @@ RUVIA_TEST(testing_facade_path_scope_matches_whole_segments_only) {
     ruvia::TestApp app;
     // "/t/user" must not scope "/t/users/:id" -- that is a different segment,
     // not a deeper path.
-    app.useAt<TestingFacadeScoped>("/t/user", "prefix-only");
+    app.useAt<TestingFacadeScoped>({.prefix = "/t/user"}, "prefix-only");
 
     const auto response = app.request(ruvia::TestRequest::get("/t/users/42"));
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
@@ -516,7 +516,7 @@ RUVIA_TEST(testing_facade_path_scope_matches_whole_segments_only) {
 
 RUVIA_TEST(testing_facade_path_scope_normalizes_a_trailing_slash) {
     ruvia::TestApp app;
-    app.useAt<TestingFacadeScoped>("/t/users/", "trailing");
+    app.useAt<TestingFacadeScoped>({.prefix = "/t/users/"}, "trailing");
 
     const auto response = app.request(ruvia::TestRequest::get("/t/users/42"));
     const auto header = response.header("X-Test-Scope");

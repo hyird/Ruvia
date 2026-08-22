@@ -129,20 +129,20 @@ RUVIA_TEST(http_client_response_parser_failure_is_typed_and_allocation_free) {
     ruvia::HttpClientRequestView request;
     request.method = "GET";
     std::array<char, 512> requestHead;
-    const auto preparedResult = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https("example.test"), request, requestHead);
+    const auto preparedResult = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https({.host = "example.test"}), request, requestHead);
     const auto* prepared = preparedResult.prepared();
     RUVIA_CHECK(prepared != nullptr);
     if (prepared == nullptr) {
         return;
     }
 
-    auto failureParser = Http1ClientResponseParser(prepared->exchangeState(), &counting);
+    auto failureParser = Http1ClientResponseParser(prepared->exchangeState(), {.resource = &counting});
     const auto failure = failureParser.parse("HTTP/2 200 OK\r\n\r\n");
     RUVIA_CHECK(failure.failure() != nullptr);
     RUVIA_CHECK(failure.failure()->error() == Http1ClientResponseParseError::kUnsupportedHttpVersion);
     RUVIA_CHECK_EQ(counting.allocationCount(), std::size_t{0});
 
-    auto successParser = Http1ClientResponseParser(prepared->exchangeState(), &counting);
+    auto successParser = Http1ClientResponseParser(prepared->exchangeState(), {.resource = &counting});
     const auto success = successParser.parse(
         "HTTP/1.1 200 OK\r\n"
         "X-Requires-Ownership: a-long-enough-value-to-require-storage\r\n"

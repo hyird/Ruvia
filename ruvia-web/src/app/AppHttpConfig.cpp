@@ -34,9 +34,9 @@ namespace {
             result.fileTypeExtensions.push_back(std::pmr::string(extension, resource));
         }
     }
-    result.enableRanges = source.enableRanges;
-    result.enableValidators = source.enableValidators;
-    result.serveDotfiles = source.serveDotfiles;
+    result.rangeRequests = source.rangeRequests;
+    result.responseValidators = source.responseValidators;
+    result.dotfiles = source.dotfiles;
     return result;
 }
 
@@ -128,12 +128,12 @@ void appendPrefixHandler(Handlers& handlers, std::string_view prefix, Handler ha
 
 }  // namespace
 
-App& App::onError(std::string_view prefix, HttpErrorHandler handler) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [prefix, handler = std::move(handler)](detail::AppState& state) mutable { appendPrefixHandler(state.prefixErrorHandlers, prefix, std::move(handler)); });
+App& App::onError(ScopedErrorHandlerOptions options) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [options = std::move(options)](detail::AppState& state) mutable { appendPrefixHandler(state.prefixErrorHandlers, options.prefix.view(), std::move(options.handler)); });
 }
 
-App& App::onNotFound(std::string_view prefix, HttpNotFoundHandler handler) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [prefix, handler = std::move(handler)](detail::AppState& state) mutable { appendPrefixHandler(state.prefixNotFoundHandlers, prefix, std::move(handler)); });
+App& App::onNotFound(ScopedNotFoundHandlerOptions options) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [options = std::move(options)](detail::AppState& state) mutable { appendPrefixHandler(state.prefixNotFoundHandlers, options.prefix.view(), std::move(options.handler)); });
 }
 
 }  // namespace ruvia

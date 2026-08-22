@@ -17,13 +17,36 @@ namespace {
     return response.header(name).has_value();
 }
 
+[[nodiscard]] bool emitsDefaultSecurityHeader(DefaultSecurityHeaderPolicy policy) {
+    switch (policy) {
+        case DefaultSecurityHeaderPolicy::kEmitDefault:
+            return true;
+        case DefaultSecurityHeaderPolicy::kOmit:
+            return false;
+        default:
+            throw std::invalid_argument("default security header policy is invalid");
+    }
+}
+
+[[nodiscard]] bool replacesExistingSecurityHeader(SecurityHeaderConflictPolicy policy) {
+    switch (policy) {
+        case SecurityHeaderConflictPolicy::kPreserveExisting:
+            return false;
+        case SecurityHeaderConflictPolicy::kReplaceExisting:
+            return true;
+        default:
+            throw std::invalid_argument("security header conflict policy is invalid");
+    }
+}
+
 template <typename Target>
 void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& options, bool secureTransport) {
-    const auto setHeader = [&target, &options](std::string_view name, std::string_view value, bool skipEmpty) {
+    const auto replaceExisting = replacesExistingSecurityHeader(options.existingHeaders);
+    const auto setHeader = [&target, replaceExisting](std::string_view name, std::string_view value, bool skipEmpty) {
         if (skipEmpty && value.empty()) {
             return;
         }
-        if (!options.overwriteExisting && hasSecurityHeader(target, name)) {
+        if (!replaceExisting && hasSecurityHeader(target, name)) {
             return;
         }
         target.header(name, value);
@@ -36,25 +59,25 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& option
         setHeader(name, value, skipEmpty);
     };
 
-    if (options.contentTypeOptions) {
+    if (emitsDefaultSecurityHeader(options.contentTypeOptionsHeader)) {
         setHeader("X-Content-Type-Options", "nosniff", true);
     }
-    if (options.frameOptions) {
+    if (emitsDefaultSecurityHeader(options.frameOptionsHeader)) {
         setHeader("X-Frame-Options", "DENY", true);
     }
     // RFC 6797 section 7.2: an HSTS host MUST NOT send STS over a
     // non-secure transport. This decision requires Context connection metadata.
-    if (options.strictTransportSecurity && secureTransport) {
+    if (emitsDefaultSecurityHeader(options.strictTransportSecurityHeader) && secureTransport) {
         setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains", true);
     }
-    switch (options.legacyXssFilter) {
-        case LegacyXssFilterPolicy::kDisable:
+    switch (options.xssProtectionHeader) {
+        case XssProtectionHeaderPolicy::kEmitDisabled:
             setHeader("X-XSS-Protection", "0", true);
             break;
-        case LegacyXssFilterPolicy::kOmitHeader:
+        case XssProtectionHeaderPolicy::kOmit:
             break;
         default:
-            throw std::invalid_argument("legacy XSS filter policy is invalid");
+            throw std::invalid_argument("X-XSS-Protection header policy is invalid");
     }
 
     setHeader("Content-Security-Policy", options.contentSecurityPolicy, true);

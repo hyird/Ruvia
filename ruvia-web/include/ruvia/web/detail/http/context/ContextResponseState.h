@@ -11,7 +11,7 @@ namespace ruvia::detail {
 class ContextPendingResponse final {
 public:
     explicit ContextPendingResponse(std::pmr::memory_resource* resource)
-        : response_(resource) {}
+        : response_({.resource = resource}) {}
 
     [[nodiscard]] HttpResponse& response() noexcept {
         return response_;
@@ -108,7 +108,7 @@ public:
 
     [[nodiscard]] HttpResponse take() {
         if (pending() != nullptr) {
-            return HttpResponse(resource_);
+            return HttpResponse({.resource = resource_});
         }
         auto response = std::move(activeResponse());
         value_.template emplace<ContextPendingResponse>(resource_);

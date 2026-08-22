@@ -135,7 +135,7 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     if (!analyzeHeaders(headers, headerFacts, error)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(error);
     }
-    const bool expectContinue = policy.expectation() == HttpClientRequestExpectation::kContinue;
+    const bool expectContinue = policy.expectation == HttpClientRequestExpectation::kContinue;
     const auto contentIndication = explicitContent && !contentBytes->value().empty() ? HttpRequestContentIndication::kWillFollow : HttpRequestContentIndication::kNoContent;
     if (!httpClientExpectationIsValid(expectContinue, contentIndication)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kExpectationWithoutContent);
@@ -150,7 +150,7 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
         }
     }
 
-    const bool generateConnectionClose = policy.closePolicy() == Http1ClosePolicy::kCloseAfterResponse && !headerFacts.connectionOptions.close();
+    const bool generateConnectionClose = policy.closePolicy == Http1ClosePolicy::kCloseAfterResponse && !headerFacts.connectionOptions.close();
     const auto effectiveClosePolicy = headerFacts.connectionOptions.close() || generateConnectionClose ? Http1ClosePolicy::kCloseAfterResponse : Http1ClosePolicy::kAllowReuse;
     const std::size_t generatedFields = 1 + (explicitContent ? 1 : 0) + (expectContinue ? 1 : 0) + (generateConnectionClose ? 1 : 0);
     if (headers.size() > kMaxHttpHeaderFields - generatedFields) {
@@ -269,13 +269,13 @@ std::string_view http1ClientRequestPrepareErrorMessage(Http1ClientRequestPrepare
     return "invalid HTTP/1 client request";
 }
 
-Http1ClientRequestWriter::Http1ClientRequestWriter(std::pmr::memory_resource* resource) noexcept
-    : resource_(detail::httpPmrResourceOrDefault(resource)) {}
+Http1ClientRequestWriter::Http1ClientRequestWriter(Options options) noexcept
+    : resource_(detail::httpPmrResourceOrDefault(options.resource)) {}
 
 Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOriginView& origin,
     const HttpClientRequestView& request, std::span<char> headBuffer,
     Http1ClientRequestWirePolicy policy) const {
-    if (!isValidHttp1ClosePolicy(policy.closePolicy())) {
+    if (!isValidHttp1ClosePolicy(policy.closePolicy)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidClosePolicy);
     }
     if (!isValidHttpMethodToken(request.method)) {
@@ -295,7 +295,7 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOrig
 Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(const HttpOriginView& tunnelOrigin,
     std::span<const HttpHeaderView> headers, std::span<char> headBuffer,
     Http1ClientRequestWirePolicy policy) const {
-    if (!isValidHttp1ClosePolicy(policy.closePolicy())) {
+    if (!isValidHttp1ClosePolicy(policy.closePolicy)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidClosePolicy);
     }
     if (tunnelOrigin.port() == 0) {

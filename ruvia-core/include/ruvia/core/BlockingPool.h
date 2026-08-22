@@ -325,7 +325,7 @@ template <typename Fn>
     // the caller did not ask for.
     std::optional<std::pair<OneShotCompletion<Payload>, OneShotReceiver<Payload>>> channel;
     try {
-        channel.emplace(makeOneShot<Payload>(std::move(worker), processResource()));
+        channel.emplace(makeOneShot<Payload>(std::move(worker), {.resource = processResource()}));
     } catch (const std::runtime_error&) {
         co_return BlockingResultAccess::rejected<Result>(BlockingStatus::kWorkerStopping);
     }

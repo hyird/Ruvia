@@ -180,8 +180,8 @@ public:
     // duplicate normalized registrations throw std::invalid_argument rather
     // than allowing production and in-memory tests to choose different
     // handlers by call order.
-    TestApp& onError(std::string_view prefix, HttpErrorHandler handler);
-    TestApp& onNotFound(std::string_view prefix, HttpNotFoundHandler handler);
+    TestApp& onError(ScopedErrorHandlerOptions options);
+    TestApp& onNotFound(ScopedNotFoundHandlerOptions options);
 
     // Dispatches one request through the production route table and returns
     // the copied-out response. Request-level failures become the same error

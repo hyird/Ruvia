@@ -181,7 +181,7 @@ template <ValidationTarget Target, typename BodyT>
 template <ValidationTarget Target, typename BodyT, typename ValidatorT>
 Task<void> invokeModelValidator(const ValidatorT& validatorMiddleware, Context& c, Next& next) {
     BodyT body = co_await parseValidatedBody<Target, BodyT>(c);
-    Validator validator(c.resource());
+    Validator validator({.resource = c.resource()});
     validatorMiddleware.validate(body, validator);
     std::move(validator).throwIfInvalid();
     if constexpr (Target == ValidationTarget::kJson) {

@@ -39,9 +39,15 @@ struct ConnectionFailureRecordAccess;
 struct ConnectionFailureSink;
 }  // namespace detail
 
+struct TlsIdentityFileOptions final {
+    std::filesystem::path certificateChainFile;
+    std::filesystem::path privateKeyFile;
+    std::string privateKeyPassword;
+};
+
 class TlsIdentity final {
 public:
-    [[nodiscard]] static TlsIdentity fromFiles(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::string_view privateKeyPassword = {});
+    [[nodiscard]] static TlsIdentity fromFiles(TlsIdentityFileOptions options);
 
     [[nodiscard]] const std::filesystem::path& certificateChainFile() const& noexcept {
         return certificateChainFile_;
@@ -121,13 +127,18 @@ private:
     TlsIdentity identity_;
 };
 
+struct TlsSniIdentityOptions final {
+    std::string host;
+    TlsIdentity identity;
+};
+
 class TlsConfig final {
 public:
     explicit TlsConfig(TlsIdentity identity) noexcept
         : identity_(std::move(identity)) {}
 
     TlsConfig& setClientCertificatePolicy(TlsClientCertificatePolicy policy);
-    TlsConfig& addSniIdentity(std::string_view host, TlsIdentity identity);
+    TlsConfig& addSniIdentity(TlsSniIdentityOptions options);
 
     [[nodiscard]] const TlsIdentity& identity() const& noexcept {
         return identity_;
@@ -150,14 +161,31 @@ private:
     std::vector<TlsSniIdentity> sniIdentities_;
 };
 
+struct HttpListenerOptions final {
+    std::string address{"0.0.0.0"};
+    std::uint16_t port{8080};
+};
+
+struct HttpsListenerOptions final {
+    std::string address{"0.0.0.0"};
+    std::uint16_t port{443};
+    TlsConfig tls;
+};
+
+struct RedirectHttpToHttpsListenerOptions final {
+    std::string address{"0.0.0.0"};
+    std::uint16_t port{8080};
+    std::uint16_t targetHttpsPort{443};
+};
+
 // One independently replicated listener. App validates the complete listener
 // list atomically, including unique ports and redirect targets, before storing
 // it. This scales beyond the old fixed one/two-listener combinations.
 class ListenerConfig final {
 public:
-    [[nodiscard]] static ListenerConfig http(std::string_view address = "0.0.0.0", std::uint16_t port = 8080);
-    [[nodiscard]] static ListenerConfig https(std::string_view address, std::uint16_t port, TlsConfig tls);
-    [[nodiscard]] static ListenerConfig redirectHttpToHttps(std::string_view address, std::uint16_t port, std::uint16_t targetHttpsPort);
+    [[nodiscard]] static ListenerConfig http(HttpListenerOptions options = {});
+    [[nodiscard]] static ListenerConfig https(HttpsListenerOptions options);
+    [[nodiscard]] static ListenerConfig redirectHttpToHttps(RedirectHttpToHttpsListenerOptions options);
 
 private:
     friend class App;

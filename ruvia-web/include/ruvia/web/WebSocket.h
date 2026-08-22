@@ -17,17 +17,19 @@
 
 namespace ruvia {
 
+struct WebSocketHeartbeatOptions final {
+    std::chrono::milliseconds pingInterval{0};
+    std::optional<std::chrono::milliseconds> pongTimeout;
+};
+
 class WebSocketHeartbeatPolicy final {
 public:
-    [[nodiscard]] static WebSocketHeartbeatPolicy periodic(std::chrono::milliseconds pingInterval, std::chrono::milliseconds pongTimeout) {
-        if (pingInterval.count() <= 0 || pongTimeout.count() <= 0) {
+    [[nodiscard]] static WebSocketHeartbeatPolicy periodic(WebSocketHeartbeatOptions options) {
+        const auto pongTimeout = options.pongTimeout.value_or(options.pingInterval);
+        if (options.pingInterval.count() <= 0 || pongTimeout.count() <= 0) {
             throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
         }
-        return WebSocketHeartbeatPolicy(pingInterval, pongTimeout);
-    }
-
-    [[nodiscard]] static WebSocketHeartbeatPolicy periodic(std::chrono::milliseconds interval) {
-        return periodic(interval, interval);
+        return WebSocketHeartbeatPolicy(options.pingInterval, pongTimeout);
     }
 
     [[nodiscard]] std::chrono::milliseconds pingInterval() const noexcept {
@@ -63,6 +65,11 @@ struct WebSocketRouteOptions final {
     // leave it with an already-dangling view.
     ::ruvia::BorrowedText subprotocols;
     WebSocketLifecycleOptions lifecycle{};
+};
+
+struct WebSocketCloseOptions final {
+    std::uint16_t code{1000};
+    ::ruvia::BorrowedText reason;
 };
 
 namespace detail {
@@ -128,7 +135,7 @@ public:
     /// Zero-copy ping frame.
     ScopedOperation<void> ping(std::pmr::string&& payload);
 
-    ScopedOperation<void> close(std::uint16_t code = 1000, std::string_view reason = {});
+    ScopedOperation<void> close(WebSocketCloseOptions options = {});
     void abort() noexcept;
 
 private:
@@ -136,7 +143,7 @@ private:
 
     using Read = Task<std::optional<WebSocketMessage>> (*)(void*);
     using Write = Task<void> (*)(void*, WebSocketOpcode, std::string_view);
-    using Close = Task<void> (*)(void*, std::uint16_t, std::string_view);
+    using Close = Task<void> (*)(void*, WebSocketCloseOptions);
     using Abort = void (*)(void*) noexcept;
 
     WebSocket(void* target, Read read, Write write, Close close, Abort abort) noexcept

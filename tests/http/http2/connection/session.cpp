@@ -907,14 +907,14 @@ RUVIA_TEST(http2_connection_rejects_upgrade_required_final_heads_transactionally
     handshake(conn);
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse buffered(&resource);
+    ruvia::HttpResponse buffered({.resource = &resource});
     buffered.status(ruvia::http_status::kUpgradeRequired);
     buffered.header("Upgrade", "websocket");
     const auto bufferedResult = submitBufferedResponseHead(conn, 1, buffered);
     RUVIA_CHECK(responseHeadSubmitFailureMessage(bufferedResult) == "invalid HTTP/2 response head message");
     RUVIA_CHECK(conn.pendingOutput().empty());
 
-    ruvia::HttpResponse streaming(&resource);
+    ruvia::HttpResponse streaming({.resource = &resource});
     streaming.status(ruvia::http_status::kUpgradeRequired);
     streaming.header("Upgrade", "websocket");
     const auto streamingResult = conn.submitStreamingResponseHead(1, std::move(streaming), ruvia::detail::ResponseStreamKind::kGeneric, ruvia::detail::ResponseTrailerIntent::kNone);
@@ -923,7 +923,7 @@ RUVIA_TEST(http2_connection_rejects_upgrade_required_final_heads_transactionally
 
     // Both failures occur before HPACK/stream mutation, so a conformant final
     // response can still be submitted on the same stream.
-    ruvia::HttpResponse fallback(&resource);
+    ruvia::HttpResponse fallback({.resource = &resource});
     fallback.status(ruvia::http_status::kBadRequest);
     RUVIA_CHECK(responseHeadSubmitted(submitBufferedResponseHead(conn, 1, fallback)));
     RUVIA_CHECK(!conn.pendingOutput().empty());
@@ -944,7 +944,7 @@ RUVIA_TEST(http2_connection_rejects_connection_specific_final_heads_transactiona
         {"Upgrade", "websocket"},
     };
     for (const auto& [name, value] : fields) {
-        ruvia::HttpResponse buffered(&resource);
+        ruvia::HttpResponse buffered({.resource = &resource});
         if (name == "TE") {
             addUncheckedHeader(buffered, name, value);
         } else {
@@ -954,7 +954,7 @@ RUVIA_TEST(http2_connection_rejects_connection_specific_final_heads_transactiona
         RUVIA_CHECK(responseHeadSubmitFailureMessage(bufferedResult) == "invalid HTTP/2 response head message");
         RUVIA_CHECK(conn.pendingOutput().empty());
 
-        ruvia::HttpResponse streaming(&resource);
+        ruvia::HttpResponse streaming({.resource = &resource});
         if (name == "TE") {
             addUncheckedHeader(streaming, name, value);
         } else {
@@ -967,7 +967,7 @@ RUVIA_TEST(http2_connection_rejects_connection_specific_final_heads_transactiona
 
     // Every rejection happened before HPACK and stream mutation, so the same
     // stream can still accept one conformant final response.
-    ruvia::HttpResponse fallback(&resource);
+    ruvia::HttpResponse fallback({.resource = &resource});
     fallback.status(ruvia::http_status::kInternalServerError);
     RUVIA_CHECK(responseHeadSubmitted(submitBufferedResponseHead(conn, 1, fallback)));
     RUVIA_CHECK(!conn.pendingOutput().empty());
@@ -979,7 +979,7 @@ RUVIA_TEST(http2_connection_streaming_zero_content_length_stays_open_for_finish)
     handshake(conn);
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "0");
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
@@ -1015,7 +1015,7 @@ RUVIA_TEST(http2_connection_client_role_get_round_trip) {
     const auto onServerEvent = [&](const Http2Event& event) {
         if (const auto* messageEnd = event.messageEnd()) {
             const auto streamId = messageEnd->streamId();
-            ruvia::HttpResponse response(&resource);
+            ruvia::HttpResponse response({.resource = &resource});
             response.status(ruvia::http_status::kOk);
             response.body("pong");
             RUVIA_CHECK(responseHeadSubmitted(submitBufferedResponseHead(server, streamId, response)));
@@ -1085,7 +1085,7 @@ RUVIA_TEST(http2_connection_client_role_post_round_trip) {
             serverBody.append(bodyChunk->bytes().data(), bodyChunk->bytes().size());
         } else if (const auto* messageEnd = event.messageEnd()) {
             const auto streamId = messageEnd->streamId();
-            ruvia::HttpResponse response(&resource);
+            ruvia::HttpResponse response({.resource = &resource});
             response.status(ruvia::http_status::kOk);
             response.body(serverBody);
             RUVIA_CHECK(responseHeadSubmitted(submitBufferedResponseHead(server, streamId, response)));

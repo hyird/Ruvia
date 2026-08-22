@@ -56,7 +56,7 @@ int main() {
     const auto port = acceptor.local_endpoint().port();
 
     static constexpr std::array migrations{
-        ruvia::DbMigration{"001_never_runs", "CREATE TABLE IF NOT EXISTS ruvia_timeout_probe (id INT PRIMARY KEY)"}};
+        ruvia::DbMigration{{.id = "001_never_runs", .sql = "CREATE TABLE IF NOT EXISTS ruvia_timeout_probe (id INT PRIMARY KEY)"}}};
 
     const auto start = std::chrono::steady_clock::now();
     bool threw = false;

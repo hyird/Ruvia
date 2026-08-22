@@ -105,7 +105,7 @@ std::pmr::string serverRequestWire(std::pmr::memory_resource* resource,
 }
 
 ruvia::Http2Connection preparedClient(std::pmr::memory_resource* resource) {
-    auto client = ruvia::Http2Connection::client(resource);
+    auto client = ruvia::Http2Connection::client({.resource = resource});
     (void)client.consumeOutput(client.pendingOutput().size());
     const auto submitted = client.submitRequestHead(ruvia::Http2RegularRequestHeadView{
         .method = "GET", .scheme = "https", .authority = "example.test", .target = "/"});
@@ -277,7 +277,7 @@ RUVIA_TEST(http2_public_dropped_credit_retries_failed_window_update_once) {
 
 RUVIA_TEST(http2_public_server_release_preserves_outstanding_data_credit) {
     std::pmr::monotonic_buffer_resource resource;
-    auto server = ruvia::Http2Connection::server(&resource);
+    auto server = ruvia::Http2Connection::server({.resource = &resource});
     (void)server.consumeOutput(server.pendingOutput().size());
     const auto wire = serverRequestWire(&resource, "x");
     RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);
@@ -292,7 +292,7 @@ RUVIA_TEST(http2_public_server_release_preserves_outstanding_data_credit) {
     RUVIA_CHECK(end && end->messageEnd() != nullptr);
     auto credit = body->takeCredit();
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     RUVIA_CHECK(server.submitBufferedResponse(1, response) == ruvia::Http2SubmitStatus::kAccepted);
     RUVIA_CHECK(server.release(std::move(*requestHead)) ==
         ruvia::Http2ServerRequestReleaseStatus::kReleased);
@@ -302,7 +302,7 @@ RUVIA_TEST(http2_public_server_release_preserves_outstanding_data_credit) {
 
 RUVIA_TEST(http2_public_dropped_request_preserves_outstanding_data_credit) {
     std::pmr::monotonic_buffer_resource resource;
-    auto server = ruvia::Http2Connection::server(&resource);
+    auto server = ruvia::Http2Connection::server({.resource = &resource});
     (void)server.consumeOutput(server.pendingOutput().size());
     const auto wire = serverRequestWire(&resource, "x");
     RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);
@@ -321,7 +321,7 @@ RUVIA_TEST(http2_public_dropped_request_preserves_outstanding_data_credit) {
 
 RUVIA_TEST(http2_public_dropped_request_event_abandons_its_stream) {
     std::pmr::monotonic_buffer_resource resource;
-    auto server = ruvia::Http2Connection::server(&resource);
+    auto server = ruvia::Http2Connection::server({.resource = &resource});
     (void)server.consumeOutput(server.pendingOutput().size());
     const auto wire = serverRequestWire(&resource, {});
     RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);
@@ -341,7 +341,7 @@ RUVIA_TEST(http2_public_dropped_request_event_abandons_its_stream) {
 
 RUVIA_TEST(http2_public_dropped_request_retries_failed_abandonment) {
     ToggleAllocationResource resource;
-    auto server = ruvia::Http2Connection::server(&resource);
+    auto server = ruvia::Http2Connection::server({.resource = &resource});
     std::pmr::string initialOutput(&resource);
     server.takeOutput(initialOutput);
     const auto wire = serverRequestWire(&resource, {});
@@ -366,7 +366,7 @@ RUVIA_TEST(http2_public_dropped_request_retries_failed_abandonment) {
 RUVIA_TEST(http2_public_request_endpoint_survives_connection_destruction_without_aba) {
     std::pmr::monotonic_buffer_resource resource;
     auto escaped = [&]() {
-        auto server = ruvia::Http2Connection::server(&resource);
+        auto server = ruvia::Http2Connection::server({.resource = &resource});
         (void)server.consumeOutput(server.pendingOutput().size());
         const auto wire = serverRequestWire(&resource, {});
         (void)server.feed(wire);
@@ -374,7 +374,7 @@ RUVIA_TEST(http2_public_request_endpoint_survives_connection_destruction_without
     }();
     RUVIA_CHECK(escaped && escaped->requestHead() != nullptr);
 
-    auto other = ruvia::Http2Connection::server(&resource);
+    auto other = ruvia::Http2Connection::server({.resource = &resource});
     RUVIA_CHECK(other.release(std::move(*escaped->requestHead())) ==
         ruvia::Http2ServerRequestReleaseStatus::kInvalidLease);
     escaped.reset();
@@ -422,7 +422,7 @@ RUVIA_TEST(http2_public_response_materialization_failure_keeps_event_retryable) 
 
 RUVIA_TEST(http2_public_request_materialization_failure_keeps_event_retryable) {
     ToggleAllocationResource resource;
-    auto server = ruvia::Http2Connection::server(&resource);
+    auto server = ruvia::Http2Connection::server({.resource = &resource});
     (void)server.consumeOutput(server.pendingOutput().size());
     const auto wire = serverRequestWire(&resource, {});
     RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);

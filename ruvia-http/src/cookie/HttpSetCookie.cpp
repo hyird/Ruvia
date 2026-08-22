@@ -180,17 +180,7 @@ std::optional<HttpSetCookieView> parseSetCookie(std::string_view value) noexcept
         return std::nullopt;
     }
 
-    HttpSetCookieView result{
-        .name = name,
-        .value = cookieValue,
-        .path = {},
-        .domain = {},
-        .expires = std::nullopt,
-        .maxAgeSeconds = std::nullopt,
-        .secure = false,
-        .hasPathAttribute = false,
-        .sameSiteNone = false,
-    };
+    HttpSetCookieView result(name, cookieValue);
     std::size_t offset = firstEnd == std::string_view::npos ? value.size() : firstEnd + 1;
     while (offset < value.size()) {
         const auto end = value.find(';', offset);
@@ -199,25 +189,29 @@ std::optional<HttpSetCookieView> parseSetCookie(std::string_view value) noexcept
             // Ignore this cookie-av and continue with later attributes.
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "Path")) {
             if (!detail::isValidCookieAttribute(argument)) return std::nullopt;
-            result.path = argument;
-            result.hasPathAttribute = true;
+            result.path_ = argument;
+            result.set(HttpSetCookieAttribute::kPath);
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "Domain")) {
             auto domain = argument;
             if (!domain.empty() && domain.front() == '.') domain.remove_prefix(1);
             if (!domain.empty() && !detail::isValidCookieDomain(domain)) return std::nullopt;
-            result.domain = domain;
+            result.domain_ = domain;
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "Expires")) {
             if (const auto expires = parseCookieDate(argument)) {
-                result.expires = expires;
+                result.expires_ = expires;
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "Max-Age")) {
             if (const auto seconds = parseMaxAgeSeconds(argument)) {
-                result.maxAgeSeconds = seconds;
+                result.maxAgeSeconds_ = seconds;
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "SameSite")) {
-            result.sameSiteNone = detail::httpAsciiEqualsIgnoreCase(argument, "None");
+            if (detail::httpAsciiEqualsIgnoreCase(argument, "None")) {
+                result.set(HttpSetCookieAttribute::kSameSiteNone);
+            } else {
+                result.clear(HttpSetCookieAttribute::kSameSiteNone);
+            }
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "Secure")) {
-            result.secure = true;
+            result.set(HttpSetCookieAttribute::kSecure);
         }
         if (end == std::string_view::npos) break;
         offset = end + 1;

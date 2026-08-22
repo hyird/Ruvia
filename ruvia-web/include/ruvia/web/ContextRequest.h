@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/MultipartReader.h"
@@ -56,6 +57,11 @@ RequestBindingHandle<std::remove_cvref_t<T>> bindValidatedModel(Context&, T&&) =
 [[noreturn]] void throwInvalidHeader();
 [[noreturn]] void throwInvalidCookie();
 }  // namespace detail
+
+struct SignedCookieLookupOptions final {
+    BorrowedText name;
+    BorrowedText secret;
+};
 
 class ContextRequest final {
 public:
@@ -153,7 +159,7 @@ public:
             return file_;
         }
 
-        [[nodiscard]] bool isArray() const noexcept {
+        [[nodiscard]] bool hasArrayName() const noexcept {
             return array_;
         }
 
@@ -187,12 +193,14 @@ public:
     public:
         class Object;
 
-        class Entry final {
+        // Same-name form field group; field() selects the last retained field,
+        // while fields() exposes every retained member.
+        class Group final {
         public:
-            Entry(const Entry&) = delete;
-            Entry& operator=(const Entry&) = delete;
-            Entry(Entry&&) noexcept = default;
-            Entry& operator=(Entry&&) = delete;
+            Group(const Group&) = delete;
+            Group& operator=(const Group&) = delete;
+            Group(Group&&) noexcept = default;
+            Group& operator=(Group&&) = delete;
 
             [[nodiscard]] std::string_view name() const noexcept {
                 return name_;
@@ -218,8 +226,8 @@ public:
                 return size() == 0;
             }
 
-            [[nodiscard]] bool isArray() const noexcept {
-                return array_ || multiple();
+            [[nodiscard]] bool hasArrayName() const noexcept {
+                return array_;
             }
 
             [[nodiscard]] bool multiple() const noexcept {
@@ -238,18 +246,18 @@ public:
             friend class RequestFormData;
             friend class Object;
 
-            [[nodiscard]] static Entry make(std::pmr::memory_resource* resource, std::string_view name, bool array) {
-                return Entry(resource, name, array);
+            [[nodiscard]] static Group make(std::pmr::memory_resource* resource, std::string_view name, bool array) {
+                return Group(resource, name, array);
             }
 
-            Entry(std::pmr::memory_resource* resource, std::string_view name, bool array)
+            Group(std::pmr::memory_resource* resource, std::string_view name, bool array)
                 : name_(name),
                   fields_(resource),
                   array_(array) {}
 
             void add(const RequestFormField& field) {
                 fields_.push_back(&field);
-                array_ = array_ || field.isArray();
+                array_ = array_ || field.hasArrayName();
             }
 
             std::string_view name_;
@@ -264,15 +272,15 @@ public:
             }
 
             [[nodiscard]] const RequestFormField* field() const noexcept {
-                return entry_ == nullptr ? nullptr : entry_->field();
+                return group_ == nullptr ? nullptr : group_->field();
             }
 
             [[nodiscard]] std::span<const RequestFormField* const> fields() const noexcept {
-                return entry_ == nullptr ? std::span<const RequestFormField* const>{} : entry_->fields();
+                return group_ == nullptr ? std::span<const RequestFormField* const>{} : group_->fields();
             }
 
             [[nodiscard]] std::size_t size() const noexcept {
-                return entry_ == nullptr ? 0 : entry_->size();
+                return group_ == nullptr ? 0 : group_->size();
             }
 
             [[nodiscard]] bool empty() const noexcept {
@@ -280,15 +288,15 @@ public:
             }
 
             [[nodiscard]] bool multiple() const noexcept {
-                return entry_ != nullptr && entry_->multiple();
+                return group_ != nullptr && group_->multiple();
             }
 
-            [[nodiscard]] bool isArray() const noexcept {
-                return entry_ != nullptr && entry_->isArray();
+            [[nodiscard]] bool hasArrayName() const noexcept {
+                return group_ != nullptr && group_->hasArrayName();
             }
 
             [[nodiscard]] std::optional<std::string_view> value() const noexcept {
-                return entry_ == nullptr ? std::nullopt : entry_->value();
+                return group_ == nullptr ? std::nullopt : group_->value();
             }
 
             [[nodiscard]] std::optional<RequestBlob> blob() const noexcept {
@@ -303,10 +311,10 @@ public:
             friend class RequestFormData;
             friend class Object;
 
-            explicit Value(const Entry* entry) noexcept
-                : entry_(entry) {}
+            explicit Value(const Group* group) noexcept
+                : group_(group) {}
 
-            const Entry* entry_{nullptr};
+            const Group* group_{nullptr};
         };
 
         class Object final {
@@ -328,10 +336,10 @@ public:
                 return formEntry == nullptr ? 0 : formEntry->size();
             }
 
-            [[nodiscard]] std::span<const Entry> groups() const& noexcept {
+            [[nodiscard]] std::span<const Group> groups() const& noexcept {
                 return entries_;
             }
-            [[nodiscard]] std::span<const Entry> groups() const&& = delete;
+            [[nodiscard]] std::span<const Group> groups() const&& = delete;
 
             [[nodiscard]] Object object(std::string_view name) const;
 
@@ -356,7 +364,7 @@ public:
                 return name.find('.') != std::string_view::npos;
             }
 
-            [[nodiscard]] const Entry* findEntry(std::string_view name) const noexcept {
+            [[nodiscard]] const Group* findEntry(std::string_view name) const noexcept {
                 for (const auto& formEntry : entries_) {
                     if (formEntry.name() == name) {
                         return &formEntry;
@@ -371,7 +379,7 @@ public:
 
             const RequestFormData* form_{nullptr};
             std::pmr::string dotPath_;
-            std::pmr::vector<Entry> entries_;
+            std::pmr::vector<Group> entries_;
         };
 
         RequestFormData(const RequestFormData&) = delete;
@@ -384,10 +392,10 @@ public:
         }
         [[nodiscard]] std::span<const RequestFormField> fields() const&& = delete;
 
-        [[nodiscard]] std::span<const Entry> groups() const& noexcept {
+        [[nodiscard]] std::span<const Group> groups() const& noexcept {
             return entries_;
         }
-        [[nodiscard]] std::span<const Entry> groups() const&& = delete;
+        [[nodiscard]] std::span<const Group> groups() const&& = delete;
 
         [[nodiscard]] Value get(std::string_view name) const& noexcept {
             return Value(findEntry(name));
@@ -414,7 +422,7 @@ public:
 
         explicit RequestFormData(std::pmr::vector<RequestFormField>&& fields);
 
-        [[nodiscard]] const Entry* findEntry(std::string_view name) const noexcept {
+        [[nodiscard]] const Group* findEntry(std::string_view name) const noexcept {
             if (isPathName(name)) {
                 if (const auto* formEntry = pathEntry(name)) {
                     return formEntry;
@@ -454,7 +462,7 @@ public:
             return consumePath(field, index, dotPath) && consumePath(field, index, name) && index == path.size();
         }
 
-        [[nodiscard]] const Entry* pathEntry(std::string_view dotPath) const noexcept {
+        [[nodiscard]] const Group* pathEntry(std::string_view dotPath) const noexcept {
             if (dotPath.empty()) {
                 return nullptr;
             }
@@ -466,7 +474,7 @@ public:
             return nullptr;
         }
 
-        [[nodiscard]] const Entry* pathEntryChild(std::string_view dotPath, std::string_view name) const noexcept {
+        [[nodiscard]] const Group* pathEntryChild(std::string_view dotPath, std::string_view name) const noexcept {
             if (name.empty()) {
                 return nullptr;
             }
@@ -511,8 +519,8 @@ public:
         }
 
         std::pmr::vector<RequestFormField> fields_;
-        std::pmr::vector<Entry> entries_;
-        std::pmr::vector<Entry> pathEntries_;
+        std::pmr::vector<Group> entries_;
+        std::pmr::vector<Group> pathEntries_;
     };
 
     [[nodiscard]] std::string_view method() const noexcept;
@@ -591,13 +599,13 @@ public:
     [[nodiscard]] const RequestNameValueList& paramFields() const;
     // Verifies the "value.signature" format written by setSignedCookie; returns
     // the value view on a valid signature, nullopt when missing or tampered.
-    [[nodiscard]] std::optional<std::string_view> signedCookie(std::string_view name, std::string_view secret) const;
+    [[nodiscard]] std::optional<std::string_view> signedCookie(SignedCookieLookupOptions options) const;
     [[nodiscard]] ScopedOperation<std::string_view> text() const;
     [[nodiscard]] ScopedOperation<std::span<const std::byte>> bytes() const;
     [[nodiscard]] ScopedOperation<RequestBlob> blob() const;
     ScopedOperation<void> discardBody() const;
 
-    [[nodiscard]] ScopedOperation<JsonValue> json() const;
+    [[nodiscard]] ScopedOperation<JsonValue> jsonValue() const;
 
     template <typename T>
     [[nodiscard]] ScopedOperation<T> json() const;
@@ -607,11 +615,12 @@ public:
 
     // Optional format probes for endpoints that want to fall back when the
     // Content-Type is not the consumed media type. Once the media type selects
-    // JSON or form, a malformed body still throws the same 400 as json()/form();
-    // nullopt never means "the selected format was invalid". Transport and
+    // JSON or form, a malformed body still throws the same 400 as json<T>(),
+    // jsonValue(), or form<T>(); nullopt never means "the selected format was
+    // invalid". Transport and
     // protocol failures (unreadable body, unsupported Content-Encoding, decoded
     // size over the limit) also throw because they describe the request stream.
-    [[nodiscard]] ScopedOperation<std::optional<JsonValue>> jsonIf() const;
+    [[nodiscard]] ScopedOperation<std::optional<JsonValue>> jsonValueIf() const;
 
     template <typename T>
     [[nodiscard]] ScopedOperation<std::optional<T>> jsonIf() const;
@@ -653,8 +662,8 @@ private:
 
     [[nodiscard]] static Task<std::span<const std::byte>> bytesTask(const Context* context);
     [[nodiscard]] static Task<RequestBlob> blobTask(const Context* context);
-    [[nodiscard]] static Task<JsonValue> jsonTask(const Context* context);
-    [[nodiscard]] static Task<std::optional<JsonValue>> jsonIfTask(const Context* context);
+    [[nodiscard]] static Task<JsonValue> jsonValueTask(const Context* context);
+    [[nodiscard]] static Task<std::optional<JsonValue>> jsonValueIfTask(const Context* context);
     template <typename T>
     [[nodiscard]] static Task<T> jsonModelTask(const Context* context);
     template <typename T>

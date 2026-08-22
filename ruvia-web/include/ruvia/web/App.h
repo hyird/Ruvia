@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -41,6 +42,25 @@ struct AppState;
 
 }  // namespace detail
 
+enum class ProcessSignalHandlerPolicy : std::uint8_t {
+    kExternalOwner,
+    kInstall,
+};
+
+#ifdef RUVIA_ENABLE_DATABASE
+struct DbRegistrationOptions final {
+    std::string alias{"default"};
+    DbConfig config;
+};
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+struct RedisRegistrationOptions final {
+    std::string alias{"default"};
+    RedisConfig config;
+};
+#endif
+
 class App final : public detail::AppConfiguration<App> {
 public:
     ~App();
@@ -50,7 +70,7 @@ public:
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
     App& setListeners(std::vector<ListenerConfig> listeners);
     App& setWorkersPerListener(std::size_t workersPerListener);
-    App& setSignalShutdown(bool enabled);
+    App& setProcessSignalHandlers(ProcessSignalHandlerPolicy policy);
     App& setWorkerMailboxCapacity(std::size_t capacity);
     App& setIdleTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setConnectionScanInterval(std::chrono::milliseconds interval);
@@ -98,8 +118,8 @@ public:
     // prefix-less onError/notFound remain the app-wide fallback. A trailing
     // slash is ignored; registering the same normalized prefix twice throws
     // std::invalid_argument instead of silently choosing by call order.
-    App& onError(std::string_view prefix, HttpErrorHandler handler);
-    App& onNotFound(std::string_view prefix, HttpNotFoundHandler handler);
+    App& onError(ScopedErrorHandlerOptions options);
+    App& onNotFound(ScopedNotFoundHandlerOptions options);
     // Peers whose forwarding headers name the real client. Accepts addresses
     // and CIDR blocks ("10.0.0.0/8", "2001:db8::/32", "127.0.0.1"); a malformed
     // entry throws std::invalid_argument at configuration time rather than
@@ -124,10 +144,11 @@ public:
     // Worker-local: each worker counts independently, so a deployment with N
     // workers admits up to N times this rule. Size it accordingly.
     App& setRateLimit(std::optional<RateLimitRule> rule);
-    // Startup capacity of that worker-local table, not a policy. Workers with
-    // neither an app-wide nor a route-specific rule allocate no table at all.
-    App& setRateLimitSlotsPerWorker(std::size_t slotsPerWorker);
-    App& setMaxHttpClientOriginsPerWorker(std::size_t originsPerWorker);
+    // Startup key capacity of that worker-local table, not a policy. Workers
+    // with neither an app-wide nor a route-specific rule allocate no table at
+    // all.
+    App& setRateLimitCapacityPerWorker(std::size_t capacityPerWorker);
+    App& setHttpClientOriginCacheCapacityPerWorker(std::size_t capacityPerWorker);
     App& onAccess(AccessLogCallback callback);
     // Observes connections lost to an exception that escaped their session --
     // the failures onError cannot answer because the response is already
@@ -137,12 +158,10 @@ public:
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
 #ifdef RUVIA_ENABLE_DATABASE
-    App& useDb(DbConfig config);
-    App& useDb(std::string_view alias, DbConfig config);
+    App& useDb(DbRegistrationOptions options);
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-    App& useRedis(RedisConfig config);
-    App& useRedis(std::string_view alias, RedisConfig config);
+    App& useRedis(RedisRegistrationOptions options);
 #endif
     void run();
     void stop();

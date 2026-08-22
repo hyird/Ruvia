@@ -339,7 +339,7 @@ RUVIA_TEST(http2_connection_terminal_large_head_sets_end_stream_only_on_headers)
     handshake(conn);
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kNoContent);
     const std::string largeValue(20 * 1024, 'a');
     response.header("X-Large", largeValue);
@@ -379,7 +379,7 @@ RUVIA_TEST(http2_connection_streaming_content_length_finish_and_trailers_are_exa
     handshake(conn);
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "5");
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
@@ -425,7 +425,7 @@ RUVIA_TEST(http2_connection_head_streaming_response_ends_on_headers) {
     handshake(conn);
     driveRequest(conn, &resource, "HEAD");
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "10");
     const auto headResult = conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
@@ -452,7 +452,7 @@ RUVIA_TEST(http2_connection_head_response_can_end_with_trailers_only) {
     handshake(conn);
     driveRequest(conn, &resource, "HEAD");
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "10");
     const auto headResult = conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kPresent);
@@ -498,7 +498,7 @@ RUVIA_TEST(http2_response_finish_owns_trailer_section_atomically) {
     const std::array<ruvia::HttpHeaderView, 1> validTrailers{ruvia::HttpHeaderView{"X-Checksum", "ok"}};
     RUVIA_CHECK(conn.finishResponse(1, validatedTrailers(validTrailers)) == Http2FinishSubmitStatus::kInvalidState);
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
     conn.consumeOutput(conn.pendingOutput().size());
@@ -523,7 +523,7 @@ RUVIA_TEST(http2_connection_reset_content_streaming_ends_on_headers) {
     handshake(conn);
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kResetContent);
     response.header("Content-Length", "9");
     const auto headResult = conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
@@ -549,7 +549,7 @@ RUVIA_TEST(http2_connection_peer_reset_discards_queued_data_and_trailers) {
     handshakeWithWindow(conn, 0);
     driveGetRequest(conn, &resource);
 
-    ruvia::HttpResponse response(&resource);
+    ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
     conn.consumeOutput(conn.pendingOutput().size());
@@ -802,7 +802,7 @@ RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
 
     // Streaming response head declares an exact 8-byte content length. Only 4 DATA
     // bytes fit the window, so the other 4 are core-owned and deferred -> kQueued.
-    ruvia::HttpResponse head(&resource);
+    ruvia::HttpResponse head({.resource = &resource});
     head.status(ruvia::http_status::kOk);
     head.header("Content-Length", "8");
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(head), ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));

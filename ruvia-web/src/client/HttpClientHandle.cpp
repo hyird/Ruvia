@@ -233,7 +233,7 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
         response.state_->buffered.append(response.state_->pending);
         response.state_->pending.clear();
     }
-    auto decoded = decodeHttpContent(*coding, response.state_->buffered, maxDecodedBytes, resource);
+    auto decoded = decodeHttpContent(*coding, response.state_->buffered, {.maxDecodedBytes = maxDecodedBytes, .resource = resource});
     if (auto* content = decoded.decoded()) {
         auto bytes = std::move(*content).takeBytes();
         response.state_->buffered.swap(bytes);

@@ -126,7 +126,7 @@ const std::string kFileBody(4096, 'a');
 }
 
 ruvia::Task<ruvia::HttpResponse> staticFileRoute(void* target, ruvia::Context& context) {
-    co_return context.staticFile(*static_cast<ruvia::StaticRoot*>(target), "dynamic.txt", "text/plain");
+    co_return context.staticFile(*static_cast<ruvia::StaticRoot*>(target), {.relativePath = "dynamic.txt", .contentType = "text/plain"});
 }
 
 }  // namespace

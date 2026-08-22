@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -60,10 +61,28 @@ template <typename T>
 concept CanFromJson = requires { ruvia::fromJson<T>("{}"); };
 
 template <typename T>
+concept CanFromJsonWithOptions = requires(std::pmr::memory_resource* resource) { ruvia::fromJson<T>("{}", ruvia::ModelParseOptions{.resource = resource}); };
+
+template <typename T>
+concept CanFromJsonWithPositionalResource = requires(std::pmr::memory_resource* resource) { ruvia::fromJson<T>("{}", resource); };
+
+template <typename T>
 concept CanFromForm = requires { ruvia::fromForm<T>(""); };
 
 template <typename T>
+concept CanFromFormWithOptions = requires(std::pmr::memory_resource* resource) { ruvia::fromForm<T>("", ruvia::ModelParseOptions{.resource = resource}); };
+
+template <typename T>
+concept CanFromFormWithPositionalResource = requires(std::pmr::memory_resource* resource) { ruvia::fromForm<T>("", resource); };
+
+template <typename T>
 concept CanToJson = requires(const T& value) { ruvia::toJson(value); };
+
+template <typename T>
+concept CanToJsonWithOptions = requires(const T& value, std::pmr::memory_resource* resource) { ruvia::toJson(value, ruvia::ModelSerializeOptions{.resource = resource}); };
+
+template <typename T>
+concept CanToJsonWithPositionalResource = requires(const T& value, std::pmr::memory_resource* resource) { ruvia::toJson(value, resource); };
 
 template <typename T>
 concept HasPublicParseHook = requires {
@@ -82,12 +101,65 @@ concept HasPublicFieldStateHook = requires(const T& model) {
     model.template ruviaFieldState<"message">();
 };
 
+template <typename String>
+concept AcceptsTemporaryRuleMessage = requires(String&& value) {
+    ruvia::detail::model::Required{std::forward<String>(value)};
+};
+
+template <typename T>
+concept HasModelOptionsConstructor = requires(std::pmr::memory_resource* resource) {
+    T(ruvia::ModelOptions{.resource = resource});
+};
+
+template <typename T>
+concept HasPositionalModelResourceConstructor = requires(std::pmr::memory_resource* resource) {
+    T(resource);
+};
+
+template <typename T>
+concept HasPositionalStringValueResourceConstructor = requires(std::pmr::memory_resource* resource) {
+    T(std::string_view{}, resource);
+};
+
+template <typename T>
+concept HasModelStringOptionsConstructor = requires(std::pmr::memory_resource* resource) {
+    T(std::string_view{}, ruvia::ModelOptions{.resource = resource});
+};
+
+template <typename Parser>
+concept HasPositionalModelObjectParseResource = requires(std::pmr::memory_resource* resource) {
+    Parser::parse(std::string_view{}, resource);
+};
+
+template <typename Parser>
+concept HasModelObjectParseOptions = requires(std::pmr::memory_resource* resource) {
+    Parser::parse(std::string_view{}, ruvia::ModelParseOptions{.resource = resource});
+};
+
+static_assert(std::is_aggregate_v<ruvia::ModelOptions>);
+static_assert(std::same_as<decltype(ruvia::ModelOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(std::is_aggregate_v<ruvia::ModelParseOptions>);
+static_assert(std::same_as<decltype(ruvia::ModelParseOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(std::is_aggregate_v<ruvia::ModelSerializeOptions>);
+static_assert(std::same_as<decltype(ruvia::ModelSerializeOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(std::is_same_v<decltype(ruvia::detail::model::Required{}.message), ruvia::BorrowedText>);
+static_assert(std::is_same_v<decltype(ruvia::detail::model::Min{}.message), ruvia::BorrowedText>);
+static_assert(std::is_same_v<decltype(ruvia::detail::model::Max{}.message), ruvia::BorrowedText>);
+static_assert(std::is_same_v<decltype(ruvia::detail::model::Email{}.message), ruvia::BorrowedText>);
+static_assert(std::is_same_v<decltype(ruvia::detail::model::RegexRule<"x">{}.message), ruvia::BorrowedText>);
+static_assert(!AcceptsTemporaryRuleMessage<std::string>);
+static_assert(!AcceptsTemporaryRuleMessage<const std::string>);
+
 static_assert(ruvia::JsonBody<ClonePayload>::value);
 static_assert(ruvia::FormBody<ClonePayload>::value);
 static_assert(ruvia::detail::isRequestModel<ClonePayload>);
 static_assert(!ruvia::detail::isResponseModel<ClonePayload>);
 static_assert(CanFromJson<ClonePayload>);
+static_assert(CanFromJsonWithOptions<ClonePayload>);
+static_assert(!CanFromJsonWithPositionalResource<ClonePayload>);
 static_assert(CanFromForm<ClonePayload>);
+static_assert(CanFromFormWithOptions<ClonePayload>);
+static_assert(!CanFromFormWithPositionalResource<ClonePayload>);
 static_assert(!CanToJson<ClonePayload>);
 
 static_assert(!ruvia::JsonBody<SurfaceJsonResponse>::value);
@@ -97,6 +169,8 @@ static_assert(ruvia::detail::isResponseModel<SurfaceJsonResponse>);
 static_assert(!CanFromJson<SurfaceJsonResponse>);
 static_assert(!CanFromForm<SurfaceJsonResponse>);
 static_assert(CanToJson<SurfaceJsonResponse>);
+static_assert(CanToJsonWithOptions<SurfaceJsonResponse>);
+static_assert(!CanToJsonWithPositionalResource<SurfaceJsonResponse>);
 static_assert(!CanToJson<std::uint32_t>);
 static_assert(!CanToJson<ruvia::String>);
 static_assert(!CanToJson<ruvia::Array<ruvia::String>>);
@@ -105,6 +179,22 @@ static_assert(ruvia::detail::isRequestModel<DirectRequestModel>);
 static_assert(!ruvia::detail::isResponseModel<DirectRequestModel>);
 static_assert(!ruvia::detail::isRequestModel<DirectResponseModel>);
 static_assert(ruvia::detail::isResponseModel<DirectResponseModel>);
+static_assert(HasModelOptionsConstructor<ClonePayload>);
+static_assert(HasModelOptionsConstructor<SurfaceJsonResponse>);
+static_assert(HasModelOptionsConstructor<ruvia::String>);
+static_assert(HasModelStringOptionsConstructor<ruvia::String>);
+static_assert(HasModelOptionsConstructor<ruvia::BoxedArray<ruvia::String>>);
+static_assert(!HasPositionalModelResourceConstructor<ClonePayload>);
+static_assert(!HasPositionalModelResourceConstructor<SurfaceJsonResponse>);
+static_assert(!HasPositionalModelResourceConstructor<ruvia::String>);
+static_assert(!HasPositionalStringValueResourceConstructor<ruvia::String>);
+static_assert(!HasPositionalModelResourceConstructor<ruvia::BoxedArray<ruvia::String>>);
+static_assert(HasModelObjectParseOptions<ruvia::JsonValue>);
+static_assert(HasModelObjectParseOptions<ruvia::JsonObject>);
+static_assert(HasModelObjectParseOptions<ruvia::FormObject>);
+static_assert(!HasPositionalModelObjectParseResource<ruvia::JsonValue>);
+static_assert(!HasPositionalModelObjectParseResource<ruvia::JsonObject>);
+static_assert(!HasPositionalModelObjectParseResource<ruvia::FormObject>);
 
 static_assert(!HasLegacyMessageAccessor<ClonePayload>);
 static_assert(!HasLegacyMessageAccessor<SurfaceJsonResponse>);

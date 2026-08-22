@@ -105,7 +105,7 @@ public:
     ruvia::Task<ruvia::HttpResponse> getValue(ruvia::Context& c) {
         auto value = co_await c.redis().get(c.req().param("key").value_or(""));
         if (!value) {
-            co_return c.error(ruvia::http_status::kNotFound, "not_found", "redis key not found");
+            co_return c.error({.status = ruvia::http_status::kNotFound, .code = "not_found", .message = "redis key not found"});
         }
         co_return c.text(std::move(*value));
     }
@@ -155,7 +155,7 @@ public:
         const auto value = co_await c.req().text();
         (void)(co_await c.redis().set(key, value));
         ruvia::RedisSetOptions setOptions;
-        setOptions.returnPrevious = true;
+        setOptions.previousValue = ruvia::RedisSetPreviousValuePolicy::kReturn;
         auto previous = co_await c.redis().set(key, "fresh", setOptions);
         ruvia::RedisSetOptions ttlOptions;
         ttlOptions.expiration = ruvia::RedisSetExpiration::expiresAfter(std::chrono::seconds(60));
@@ -164,7 +164,7 @@ public:
         insertOptions.condition = ruvia::RedisSetCondition::kIfAbsent;
         const auto inserted = co_await c.redis().set("ruvia:example:nx", "first", insertOptions);
         ruvia::RedisSetOptions replaceOptions;
-        replaceOptions.returnPrevious = true;
+        replaceOptions.previousValue = ruvia::RedisSetPreviousValuePolicy::kReturn;
         auto replaced = co_await c.redis().set(key, "replaced", replaceOptions);
         const auto appended = co_await c.redis().append(key, "+tail");
         const auto length = co_await c.redis().strlen(key);
@@ -442,5 +442,10 @@ int main() {
     auto& app = ruvia::app();
     app.loadDotenv();
     auto config = redisConfig(app.env());
-    app.useRedis(config).useRedis("cache", config).setListeners({ruvia::ListenerConfig::http("0.0.0.0", app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))}).setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setSignalShutdown(true).run();
+    app.useRedis({.config = config})
+        .useRedis({.alias = "cache", .config = config})
+        .setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090)})})
+        .setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2))
+        .setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall)
+        .run();
 }

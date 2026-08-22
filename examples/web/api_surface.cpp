@@ -112,7 +112,7 @@ public:
             co_return;
         }
         c.header("X-Surface-Finalized", c.response() != nullptr ? "true" : "false");
-        c.header("X-Surface-Middleware", "after-next", {.append = true});
+        c.header("X-Surface-Middleware", "after-next", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
     }
 };
 
@@ -240,18 +240,18 @@ private:
     ruvia::Task<ruvia::HttpResponse> rawBody(ruvia::Context& c) {
         c.status(ruvia::http_status::kAccepted);
         c.header("X-Raw", "first");
-        c.header("X-Raw", "second", {.append = true});
+        c.header("X-Raw", "second", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
         c.header("X-Raw-Init", "true");
         co_return c.body("raw body\n");
     }
 
     ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {
         c.header("X-Response-Prepared", "true");
-        ruvia::HttpResponse response(c.resource());
+        ruvia::HttpResponse response({.resource = c.resource()});
         response.status(ruvia::http_status::kNonAuthoritativeInformation);
         response.header("X-Response-Remove", "drop");
         response.body("response slot\n");
-        response.header("X-Response-Slot", "true", {.append = true});
+        response.header("X-Response-Slot", "true", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
         response.removeHeader("X-Response-Remove");
         co_return response;
     }
@@ -294,17 +294,17 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> redirectUnicode(ruvia::Context& c) {
-        co_return c.redirect("/目标?x=值", ruvia::http_status::kSeeOther);
+        co_return c.redirect({.location = "/目标?x=值", .status = ruvia::http_status::kSeeOther});
     }
 
     ruvia::Task<ruvia::HttpResponse> redirectPreparedLocation(ruvia::Context& c) {
         c.header("Location", "/surface/wrong");
-        co_return c.redirect("/surface/right", ruvia::http_status::kFound);
+        co_return c.redirect({.location = "/surface/right"});
     }
 
     ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {
         c.header("X-Error-Prepared", "true");
-        co_return c.error(ruvia::http_status::kBadRequest, "example_error", "the example request was rejected");
+        co_return c.error({.status = ruvia::http_status::kBadRequest, .code = "example_error", .message = "the example request was rejected"});
     }
 
     ruvia::Task<ruvia::HttpResponse> throwError(ruvia::Context&) {
@@ -342,7 +342,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> assignedPreparedResponse(ruvia::Context& c) {
         c.header("X-Surface-Prepared-Assigned", "true");
-        ruvia::HttpResponse response(c.resource());
+        ruvia::HttpResponse response({.resource = c.resource()});
         response.header("Content-Type", "text/plain; charset=UTF-8");
         response.body("assigned prepared response\n");
         co_return response;
@@ -410,10 +410,10 @@ private:
         appendUnsigned(body, form.count("tag[]"));
         body.append("\ntag-array-values=");
         appendUnsigned(body, form.get("tag[]").size());
-        body.append("\ntag-array=");
-        body.append(form.get("tag[]").isArray() ? "true" : "false");
-        body.append("\ntag-is-array=");
-        body.append(form.get("tag").isArray() ? "true" : "false");
+        body.append("\ntag-array-name=");
+        body.append(form.get("tag[]").hasArrayName() ? "true" : "false");
+        body.append("\ntag-has-array-name=");
+        body.append(form.get("tag").hasArrayName() ? "true" : "false");
         const auto nestedObject = form.object("obj");
         const auto nested = nestedObject.get("key1");
         if (auto nestedText = nested.value()) {
@@ -431,14 +431,14 @@ private:
         }
         body.append("\nobj.key1-exact-all=");
         appendUnsigned(body, exactNested.size());
-        body.append("\nobj.key1-exact-array=");
-        body.append(exactNested.isArray() ? "true" : "false");
+        body.append("\nobj.key1-exact-array-name=");
+        body.append(exactNested.hasArrayName() ? "true" : "false");
         body.append("\nobj.key1-all=");
         appendUnsigned(body, nestedObject.count("key1"));
         body.append("\nobj.key1-values=");
         appendUnsigned(body, nestedObject.count("key1"));
-        body.append("\nobj.key1-array=");
-        body.append(nestedObject.get("key1").isArray() ? "true" : "false");
+        body.append("\nobj.key1-array-name=");
+        body.append(nestedObject.get("key1").hasArrayName() ? "true" : "false");
         body.append("\nobj.key-count=");
         appendUnsigned(body, nestedObject.count("key1"));
         body.append("\nobj.entries=");
@@ -480,8 +480,8 @@ private:
             body.append(group.name());
             body.append(";values=");
             appendUnsigned(body, group.size());
-            body.append(";array=");
-            body.append(group.isArray() ? "true" : "false");
+            body.append(";array-name=");
+            body.append(group.hasArrayName() ? "true" : "false");
         }
         body.push_back('\n');
         co_return c.text(std::move(body));
@@ -514,7 +514,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> jsonValueBody(ruvia::Context& c) {
-        const auto json = co_await c.req().json();
+        const auto json = co_await c.req().jsonValue();
         std::pmr::string body(c.allocator<char>());
         body.append("json-value kind=");
         body.append(jsonKindName(json.kind()));
@@ -565,23 +565,31 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> cookies(ruvia::Context& c) {
-        ruvia::CookieOptions options;
-        options.httpOnly = true;
-        options.sameSite = ruvia::CookieSameSite::kLax;
-        options.maxAge = std::chrono::seconds(3600);
-        c.setCookie("session", "example", options);
-        c.setCookie("theme", "light");
-        ruvia::CookieOptions hostOptions;
-        hostOptions.secure = true;
-        hostOptions.httpOnly = true;
-        hostOptions.sameSite = ruvia::CookieSameSite::kNone;
-        hostOptions.priority = ruvia::CookiePriority::kHigh;
-        hostOptions.partitioned = true;
-        hostOptions.prefix = ruvia::CookiePrefix::kHost;
-        hostOptions.expires = std::chrono::system_clock::now() + std::chrono::hours(1);
-        c.setCookie("chip", "value", hostOptions);
+        c.setCookie({
+            .name = "session",
+            .value = "example",
+            .attributes = ruvia::CookieOptions{
+                .sameSite = ruvia::CookieSameSite::kLax,
+                .maxAge = std::chrono::seconds(3600),
+                .httpOnly = ruvia::CookieAttributePolicy::kEmit,
+            },
+        });
+        c.setCookie({.name = "theme", .value = "light"});
+        c.setCookie({
+            .name = "chip",
+            .value = "value",
+            .attributes = ruvia::CookieOptions{
+                .sameSite = ruvia::CookieSameSite::kNone,
+                .priority = ruvia::CookiePriority::kHigh,
+                .expires = std::chrono::system_clock::now() + std::chrono::hours(1),
+                .prefix = ruvia::CookiePrefix::kHost,
+                .httpOnly = ruvia::CookieAttributePolicy::kEmit,
+                .secure = ruvia::CookieAttributePolicy::kEmit,
+                .partitioned = ruvia::CookieAttributePolicy::kEmit,
+            },
+        });
         const auto deleted = c.req().cookie("legacy-session");
-        c.deleteCookie("legacy-session");
+        c.deleteCookie({.name = "legacy-session"});
         std::pmr::string body(c.allocator<char>());
         body.append("cookies set\nlegacy-session=");
         body.append(deleted.value_or(""));
@@ -609,9 +617,9 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> signedCookies(ruvia::Context& c) {
         static constexpr std::string_view kSecret = "surface-signing-secret";
-        c.setSignedCookie("signed-session", "signed-value", kSecret);
-        const auto verified = c.req().signedCookie("signed-session", kSecret);
-        const auto absent = c.req().signedCookie("absent", kSecret);
+        c.setSignedCookie({.name = "signed-session", .value = "signed-value", .secret = kSecret});
+        const auto verified = c.req().signedCookie({.name = "signed-session", .secret = kSecret});
+        const auto absent = c.req().signedCookie({.name = "absent", .secret = kSecret});
         std::pmr::string body(c.allocator<char>());
         body.append("signed=");
         body.append(verified.value_or("missing"));
@@ -622,7 +630,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> manualBody(ruvia::Context& c) {
-        ruvia::HttpResponse response(c.resource());
+        ruvia::HttpResponse response({.resource = c.resource()});
         response.status(ruvia::http_status::kAccepted);
         response.header("Content-Type", "text/plain; charset=UTF-8");
         response.header("X-Manual-Body", "owned");
@@ -657,5 +665,5 @@ private:
 };
 
 int main() {
-    ruvia::app().setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8088)}).setWorkersPerListener(2).setSignalShutdown(true).onNotFound(&surfaceNotFound).run();
+    ruvia::app().setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8088})}).setWorkersPerListener(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).onNotFound(&surfaceNotFound).run();
 }

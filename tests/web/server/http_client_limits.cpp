@@ -193,7 +193,7 @@ void writeResponse(asio::ip::tcp::socket& socket, std::string_view body, std::st
 std::string gzipContent(std::string_view body) {
     auto encoded = ruvia::encodeHttpContent(
         ruvia::HttpContentCoding::kGzip, body,
-        body.size() + 1024, std::pmr::get_default_resource());
+        {.maxEncodedBytes = body.size() + 1024, .resource = std::pmr::get_default_resource()});
     if (!encoded.encoded()) throw std::runtime_error("failed to encode test gzip body");
     const auto bytes = encoded.encoded()->bytes();
     return {bytes.data(), bytes.size()};
@@ -477,7 +477,7 @@ int testNegotiatedHttp1AcquireTimeout() {
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle& worker, CountingResource* resource) -> ruvia::Task<int> {
             int slow = 0;
             int queued = 0;
-            ruvia::TaskScope requests(worker, resource);
+            ruvia::TaskScope requests(worker, {.resource = resource});
             requests.spawn(completeSlowRequest(client, slow));
             (void)co_await ruvia::sleepFor(worker, 10ms);
             requests.spawn(timeOutQueuedRequest(client, queued));
@@ -505,7 +505,7 @@ int testStopTokenCancellation() {
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle& worker, CountingResource* resource) -> ruvia::Task<int> {
             ruvia::StopSource source;
-            ruvia::TaskScope cancellation(worker, resource);
+            ruvia::TaskScope cancellation(worker, {.resource = resource});
             cancellation.spawn(requestStopSoon(worker, source));
             int result = 1;
             try {
@@ -526,14 +526,14 @@ int testConnectStopTokenCancellation() {
     auto config = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"};
     config.port = server.port();
     config.protocol = ruvia::HttpClientProtocol::kHttp1Only;
-    config.verifyCertificate = false;
+    config.tlsPeerVerification = ruvia::HttpClientTlsPeerVerificationPolicy::kSkipVerification;
     config.connectTimeout = 2s;
     config.requestTimeout = 2s;
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle& worker, CountingResource* resource) -> ruvia::Task<int> {
             ruvia::StopSource source;
-            ruvia::TaskScope cancellation(worker, resource);
+            ruvia::TaskScope cancellation(worker, {.resource = resource});
             cancellation.spawn(requestStopSoon(worker, source));
             int result = 1;
             try {
@@ -574,6 +574,46 @@ int testUserAgentConfigRejectsInvalidHeaderValue() {
         return 0;
     }
     return 1;
+}
+
+int testTlsPeerVerificationConfigRejectsInvalidPolicy() {
+    auto config = plainConfig(1);
+    config.tlsPeerVerification = static_cast<ruvia::HttpClientTlsPeerVerificationPolicy>(0xFF);
+    try {
+        ruvia::detail::validateHttpClientConfig(config);
+    } catch (const std::invalid_argument&) {
+        return 0;
+    }
+    return 1;
+}
+
+int testReceivedCookieConfigRejectsInvalidPolicy() {
+    auto config = plainConfig(1);
+    config.receivedCookies = static_cast<ruvia::HttpClientReceivedCookiePolicy>(0xFF);
+    try {
+        ruvia::detail::validateHttpClientConfig(config);
+    } catch (const std::invalid_argument&) {
+        return 0;
+    }
+    return 1;
+}
+
+int testTcpSocketConfigRejectsInvalidPolicies() {
+    auto config = plainConfig(1);
+    config.tcpNoDelay = static_cast<ruvia::TcpNoDelayPolicy>(0xFF);
+    try {
+        ruvia::detail::validateHttpClientConfig(config);
+        return 1;
+    } catch (const std::invalid_argument&) {
+    }
+    config.tcpNoDelay = ruvia::TcpNoDelayPolicy::kEnable;
+    config.tcpKeepAlive = static_cast<ruvia::TcpKeepAlivePolicy>(0xFF);
+    try {
+        ruvia::detail::validateHttpClientConfig(config);
+        return 2;
+    } catch (const std::invalid_argument&) {
+    }
+    return 0;
 }
 
 int testOperationOptionsRejectNonpositiveTimeout() {
@@ -617,7 +657,7 @@ int testAutomaticCookieCapacity() {
         writeResponse(socket, retainedFirst && !retainedSecond ? "bounded" : "leaked");
     });
     auto config = plainConfig(server.port());
-    config.cookiesEnabled = true;
+    config.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     config.maxCookiesPerWorker = 1;
     config.maxCookieBytesPerWorker = 64;
     CountingResource operationResource;
@@ -652,7 +692,7 @@ int testAutomaticCookieInsertionFailureDoesNotRetainPartialCookie() {
     FailSelectedLargeAllocationResource poolResource;
     CountingResource operationResource;
     auto config = plainConfig(server.port());
-    config.cookiesEnabled = true;
+    config.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     config.maxCookieBytesPerWorker = 64 * 1024;
     config.userAgent.clear();
 
@@ -717,7 +757,7 @@ int testCookieHostOnlyIdentity() {
     auto config = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "localhost"};
     config.port = server.port();
     config.protocol = ruvia::HttpClientProtocol::kHttp1Only;
-    config.cookiesEnabled = true;
+    config.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
@@ -749,7 +789,7 @@ int testCookiePathOrdering() {
                 : "misordered");
     });
     auto config = plainConfig(server.port());
-    config.cookiesEnabled = true;
+    config.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
@@ -776,7 +816,7 @@ int testLargeCookieMaxAge() {
             head.find("cookie: long_lived=yes") != std::string::npos ? "retained" : "expired");
     });
     auto config = plainConfig(server.port());
-    config.cookiesEnabled = true;
+    config.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
@@ -804,7 +844,7 @@ int testNamelessResponseCookie() {
                 : "missing");
     });
     auto config = plainConfig(server.port());
-    config.cookiesEnabled = true;
+    config.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
@@ -840,7 +880,7 @@ int testAutomaticCookieJarRejectsPairsThatCannotBeSerialized() {
             keptSerializable && droppedUnserializable ? "filtered" : "leaked");
     });
     auto config = plainConfig(server.port());
-    config.cookiesEnabled = true;
+    config.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
@@ -869,7 +909,7 @@ int testFarFutureCookieExpires() {
                 : "expired");
     });
     auto config = plainConfig(server.port());
-    config.cookiesEnabled = true;
+    config.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
@@ -901,7 +941,7 @@ int testCookieStorageSecurityConstraints() {
         writeResponse(socket, rejected ? "rejected" : "accepted");
     });
     auto config = plainConfig(server.port());
-    config.cookiesEnabled = true;
+    config.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
@@ -930,7 +970,7 @@ int testIpCookieDomainSuffixRejection() {
         writeResponse(socket, correct ? "restricted" : "leaked");
     });
     auto config = plainConfig(server.port());
-    config.cookiesEnabled = true;
+    config.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
@@ -1016,7 +1056,7 @@ int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 25> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 28> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testClosingInformationalResponse, "closing informational response"},
@@ -1029,6 +1069,9 @@ int main() {
             {&testConnectStopTokenCancellation, "connect stop-token cancellation"},
             {&testCookieCapacity, "cookie capacity"},
             {&testUserAgentConfigRejectsInvalidHeaderValue, "user-agent configuration validation"},
+            {&testTlsPeerVerificationConfigRejectsInvalidPolicy, "TLS peer verification policy validation"},
+            {&testReceivedCookieConfigRejectsInvalidPolicy, "received cookie policy validation"},
+            {&testTcpSocketConfigRejectsInvalidPolicies, "TCP socket policy validation"},
             {&testOperationOptionsRejectNonpositiveTimeout, "operation timeout validation"},
             {&testAutomaticCookieCapacity, "automatic cookie capacity"},
             {&testAutomaticCookieInsertionFailureDoesNotRetainPartialCookie, "automatic cookie insertion failure rollback"},

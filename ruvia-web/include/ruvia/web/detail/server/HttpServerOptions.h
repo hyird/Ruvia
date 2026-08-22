@@ -190,7 +190,7 @@ struct HttpServerOptions final {
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
     // Capacity of the explicit cross-thread queue for this Web worker.
     std::size_t workerMailboxCapacity{1024};
-    std::size_t maxHttpClientOriginsPerWorker{64};
+    std::size_t httpClientOriginCacheCapacityPerWorker{64};
     MemoryPoolConfig memoryConfig{};
     std::optional<std::chrono::milliseconds> requestHeaderTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> requestBodyTimeout{std::chrono::seconds(60)};
@@ -228,7 +228,7 @@ struct HttpServerOptions final {
     WorkerFailureSink workerFailure;
     ConnectionFailureSink connectionFailure;
     std::optional<RateLimitRule> defaultRateLimitPerWorker;
-    std::size_t rateLimitSlotsPerWorker{kDefaultRateLimitSlotsPerWorker};
+    std::size_t rateLimitCapacityPerWorker{kDefaultRateLimitCapacityPerWorker};
 
     [[nodiscard]] const Tls* tls() const& noexcept {
         return std::get_if<Tls>(&transport);

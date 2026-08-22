@@ -237,7 +237,6 @@ private:
     std::size_t bytesReceived_{0};
     std::size_t cookieBytes_{0};
     std::uint64_t nextCancellationId_{0};
-    bool cookiesEnabled_{false};
     bool backgroundJoined_{false};
 };
 

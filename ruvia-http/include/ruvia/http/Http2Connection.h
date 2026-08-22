@@ -36,6 +36,10 @@ enum class Http2RequestContentReleaseStatus : std::uint8_t { kReleased, kNotPend
 enum class Http2ServerRequestReleaseStatus : std::uint8_t { kReleased, kClosed, kInvalidLease };
 enum class Http2StreamCloseSource : std::uint8_t { kLocal, kPeer, kPeerGoaway };
 
+struct Http2ConnectionOptions final {
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 class Http2RequestContent;
 
 class Http2RequestWithoutContent final {
@@ -351,8 +355,8 @@ private:
 // string temporaries are rejected at compile time.
 class Http2Connection final {
 public:
-    [[nodiscard]] static Http2Connection server(std::pmr::memory_resource* resource = nullptr);
-    [[nodiscard]] static Http2Connection client(std::pmr::memory_resource* resource = nullptr);
+    [[nodiscard]] static Http2Connection server(Http2ConnectionOptions options = {});
+    [[nodiscard]] static Http2Connection client(Http2ConnectionOptions options = {});
     ~Http2Connection();
     Http2Connection(const Http2Connection&) = delete;
     Http2Connection& operator=(const Http2Connection&) = delete;

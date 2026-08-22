@@ -7,13 +7,19 @@
 
 namespace ruvia {
 
-// Each worker preallocates this many fixed-window key slots when either the
+// Each worker preallocates this many fixed-window key entries when either the
 // app-wide default rule or a route-specific rate-limit middleware is present.
-inline constexpr std::size_t kDefaultRateLimitSlotsPerWorker = 8192;
+inline constexpr std::size_t kDefaultRateLimitCapacityPerWorker = 8192;
 
 enum class RateLimitOverflowPolicy : std::uint8_t {
     kDeny,
     kAllow,
+};
+
+struct RateLimitFixedWindowOptions final {
+    std::size_t maxRequests{0};
+    std::chrono::milliseconds window{0};
+    RateLimitOverflowPolicy overflowPolicy{RateLimitOverflowPolicy::kDeny};
 };
 
 // Per-worker, per-address fixed-window rule. Every worker owns an independent
@@ -23,17 +29,17 @@ enum class RateLimitOverflowPolicy : std::uint8_t {
 // cannot represent or allocate a key in its fixed table.
 class RateLimitRule final {
 public:
-    [[nodiscard]] static constexpr RateLimitRule fixedWindow(std::size_t maxRequests, std::chrono::milliseconds window, RateLimitOverflowPolicy overflowPolicy = RateLimitOverflowPolicy::kDeny) {
-        if (maxRequests == 0) {
+    [[nodiscard]] static constexpr RateLimitRule fixedWindow(RateLimitFixedWindowOptions options) {
+        if (options.maxRequests == 0) {
             throw std::invalid_argument("rate limit max requests must be greater than zero");
         }
-        if (window.count() <= 0) {
+        if (options.window.count() <= 0) {
             throw std::invalid_argument("rate limit window must be greater than zero");
         }
-        if (overflowPolicy != RateLimitOverflowPolicy::kDeny && overflowPolicy != RateLimitOverflowPolicy::kAllow) {
+        if (options.overflowPolicy != RateLimitOverflowPolicy::kDeny && options.overflowPolicy != RateLimitOverflowPolicy::kAllow) {
             throw std::invalid_argument("rate limit overflow policy is invalid");
         }
-        return RateLimitRule(maxRequests, window, overflowPolicy);
+        return RateLimitRule(options.maxRequests, options.window, options.overflowPolicy);
     }
 
     [[nodiscard]] constexpr std::size_t maxRequests() const noexcept {

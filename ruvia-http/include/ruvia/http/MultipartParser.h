@@ -121,6 +121,11 @@ private:
     std::uint8_t size_{0};
 };
 
+struct MultipartParseOptions final {
+    MultipartBoundary boundary;
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 class MultipartBoundaryNotApplicable final {
 private:
     friend class MultipartBoundaryParseResult;
@@ -402,7 +407,7 @@ public:
     const MultipartBodyParseFailure* failure() const&& = delete;
 
 private:
-    friend MultipartBodyParseResult parseMultipartBody(std::string_view, MultipartBoundary, std::pmr::memory_resource*);
+    friend MultipartBodyParseResult parseMultipartBody(std::string_view, MultipartParseOptions);
 
     using Value = std::variant<MultipartBody, MultipartBodyParseFailure>;
 
@@ -473,7 +478,7 @@ private:
 
 class MultipartParser final {
 public:
-    MultipartParser(MultipartBoundary boundary, std::pmr::memory_resource* resource);
+    explicit MultipartParser(MultipartParseOptions options);
 
     MultipartParser(const MultipartParser&) = delete;
     MultipartParser& operator=(const MultipartParser&) = delete;
@@ -493,9 +498,9 @@ public:
 private:
     struct CompleteInputTag final {};
 
-    friend MultipartBodyParseResult parseMultipartBody(std::string_view, MultipartBoundary, std::pmr::memory_resource*);
+    friend MultipartBodyParseResult parseMultipartBody(std::string_view, MultipartParseOptions);
 
-    MultipartParser(std::string_view completeBody, MultipartBoundary boundary, std::pmr::memory_resource* resource, CompleteInputTag);
+    MultipartParser(std::string_view completeBody, MultipartParseOptions options, CompleteInputTag);
 
     enum class ProgressState : std::uint8_t { kBoundary, kHeaders, kBody, kDone };
 
@@ -534,9 +539,9 @@ private:
 
 // Parses a complete multipart/form-data body without I/O. Returned part bodies
 // and content types borrow `body`; decoded name/filename values own PMR storage.
-[[nodiscard]] MultipartBodyParseResult parseMultipartBody(std::string_view body, MultipartBoundary boundary, std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] MultipartBodyParseResult parseMultipartBody(std::string_view body, MultipartParseOptions options);
 
 template <detail::HttpTemporaryOwningCharString Body>
-MultipartBodyParseResult parseMultipartBody(Body&&, MultipartBoundary, std::pmr::memory_resource* = nullptr) = delete;
+MultipartBodyParseResult parseMultipartBody(Body&&, MultipartParseOptions) = delete;
 
 }  // namespace ruvia

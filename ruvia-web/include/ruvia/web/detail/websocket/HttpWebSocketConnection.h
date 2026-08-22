@@ -62,7 +62,7 @@ public:
 
     [[nodiscard]] Task<std::optional<WebSocketMessage>> read();
     Task<void> write(WebSocketOpcode opcode, std::string_view payload);
-    Task<void> close(std::uint16_t code, std::string_view reason);
+    Task<void> close(::ruvia::WebSocketCloseOptions options = {});
     void abort() noexcept {
         abortTransport();
     }

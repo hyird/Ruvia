@@ -189,7 +189,7 @@ int main() {
             if (!co_await requestHeaders("HEAD", 3)) co_return;
             if (!co_await requestHeaders("GET", 5, "gzip, identity;q=0")) co_return;
 
-            HpackDecoder decoder(std::pmr::get_default_resource());
+            HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             while (!getStream.ended || !headStream.ended || !sidecarStream.ended) {
                 char headerBytes[kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;

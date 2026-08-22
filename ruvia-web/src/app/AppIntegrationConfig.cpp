@@ -1,12 +1,13 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
-#include "ruvia/web/detail/integration/DataAccessDefinitions.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/detail/db/DbConfigValidation.h"
+#include "ruvia/web/detail/db/DbConfigStorage.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/detail/redis/RedisConfigValidation.h"
+#include "ruvia/web/detail/redis/RedisConfigStorage.h"
 #endif
 
 #include <memory_resource>
@@ -31,19 +32,15 @@ void upsertDefinition(std::pmr::vector<Definition>& definitions, std::string_vie
 }  // namespace
 
 #ifdef RUVIA_ENABLE_DATABASE
-App& App::useDb(DbConfig config) {
-    return useDb("default", std::move(config));
-}
-
-App& App::useDb(std::string_view alias, DbConfig config) {
+App& App::useDb(DbRegistrationOptions options) {
     return detail::mutateStoppedApp(*this, *state_, "cannot configure database while app is running", [&](detail::AppState& state) {
-        if (alias.empty()) {
+        if (options.alias.empty()) {
             throw std::invalid_argument("database alias must not be empty");
         }
-        detail::validateDbConfig(config);
+        detail::validateDbConfig(options.config);
 
-        auto storedConfig = detail::cloneDbConfig(config, detail::appResource());
-        upsertDefinition(state.databases, alias, storedConfig, [](std::string_view storedAlias, detail::DbConfigStorage&& definitionConfig) {
+        auto storedConfig = detail::DbConfigStorage(options.config, detail::appResource());
+        upsertDefinition(state.databases, options.alias, storedConfig, [](std::string_view storedAlias, detail::DbConfigStorage&& definitionConfig) {
             auto* resource = detail::appResource();
             return detail::DbDefinition{std::pmr::string(storedAlias, resource), std::move(definitionConfig)};
         });
@@ -52,19 +49,15 @@ App& App::useDb(std::string_view alias, DbConfig config) {
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-App& App::useRedis(RedisConfig config) {
-    return useRedis("default", std::move(config));
-}
-
-App& App::useRedis(std::string_view alias, RedisConfig config) {
+App& App::useRedis(RedisRegistrationOptions options) {
     return detail::mutateStoppedApp(*this, *state_, "cannot configure redis while app is running", [&](detail::AppState& state) {
-        if (alias.empty()) {
+        if (options.alias.empty()) {
             throw std::invalid_argument("redis alias must not be empty");
         }
-        detail::validateRedisConfig(config);
+        detail::validateRedisConfig(options.config);
 
-        auto storedConfig = detail::cloneRedisConfig(config, detail::appResource());
-        upsertDefinition(state.redis, alias, storedConfig, [](std::string_view storedAlias, detail::RedisConfigStorage&& definitionConfig) {
+        auto storedConfig = detail::RedisConfigStorage(options.config, detail::appResource());
+        upsertDefinition(state.redis, options.alias, storedConfig, [](std::string_view storedAlias, detail::RedisConfigStorage&& definitionConfig) {
             auto* resource = detail::appResource();
             return detail::RedisDefinition{std::pmr::string(storedAlias, resource), std::move(definitionConfig)};
         });

@@ -36,12 +36,16 @@ private:
     std::optional<HpackDecodeError> error_;
 };
 
+struct HpackDecoderOptions final {
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 // Stateful RFC 7541 decoder. One decode() call is one dynamic-table
 // transaction; protocol failures roll back table changes while callback
 // rejection still consumes the complete block to keep peer state synchronized.
 class HpackDecoder final {
 public:
-    explicit HpackDecoder(std::pmr::memory_resource* resource = nullptr);
+    explicit HpackDecoder(HpackDecoderOptions options = {});
     ~HpackDecoder();
     HpackDecoder(const HpackDecoder&) = delete;
     HpackDecoder& operator=(const HpackDecoder&) = delete;
@@ -99,12 +103,16 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+struct HpackHeaderWithNameIndexOptions final {
+    bool neverIndexed{false};
+};
+
 class HpackEncoder final {
 public:
     static void encodeIndexed(std::pmr::string& output, std::uint32_t index);
     static void encodeDynamicTableSizeUpdate(std::pmr::string& output, std::uint32_t maximum);
     static void encodeHeader(std::pmr::string& output, std::string_view name, std::string_view value);
-    static void encodeHeaderWithNameIndex(std::pmr::string& output, std::uint32_t nameIndex, std::string_view value, bool neverIndexed = false);
+    static void encodeHeaderWithNameIndex(std::pmr::string& output, std::uint32_t nameIndex, std::string_view value, HpackHeaderWithNameIndexOptions options = {});
     static void encodeStatus(std::pmr::string& output, HttpStatusCode status);
 };
 

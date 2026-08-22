@@ -38,7 +38,7 @@ Task<void> CsrfProtection::handle(Context& c, Next& next) {
     if (!safe) {
         const auto header = c.req().header(headerName_.view());
         if (!cookie || cookie->empty() || !header || header->empty() || !detail::csrfTokensEqual(*cookie, *header)) {
-            c.respond(c.error(ruvia::http_status::kForbidden, "csrf_token_mismatch", "CSRF token missing or invalid"));
+            c.respond(c.error({.status = ruvia::http_status::kForbidden, .code = "csrf_token_mismatch", .message = "CSRF token missing or invalid"}));
             co_return;
         }
     } else if (!cookie || cookie->empty()) {
@@ -53,15 +53,16 @@ Task<void> CsrfProtection::handle(Context& c, Next& next) {
         const auto tokenResult = detail::generateSecureToken(buffer);
         const auto* token = tokenResult.ready();
         if (token == nullptr) {
-            c.respond(c.error(ruvia::http_status::kInternalServerError, "secure_random_failed", "secure token generation failed"));
+            c.respond(c.error({.status = ruvia::http_status::kInternalServerError, .code = "secure_random_failed", .message = "secure token generation failed"}));
             co_return;
         }
-        CookieOptions options;
-        options.path = "/";
-        options.sameSite = CookieSameSite::kLax;
         const auto connection = getConnInfo(c);
-        options.secure = connection.tls() != nullptr;
-        c.setCookie(cookieName_.view(), token->value(), options);
+        const CookieOptions options{
+            .path = "/",
+            .sameSite = CookieSameSite::kLax,
+            .secure = connection.tls() != nullptr ? CookieAttributePolicy::kEmit : CookieAttributePolicy::kOmit,
+        };
+        c.setCookie({.name = cookieName_.view(), .value = token->value(), .attributes = options});
     }
     co_await next();
 }

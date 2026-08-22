@@ -56,16 +56,16 @@ static_assert(!CanMutateHttpClientResponseHeadStatus<ruvia::detail::HttpClientRe
 
 inline Http1ClientResponseParseResult parseWire(std::string_view method, std::string_view wire, Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse, std::span<const ruvia::HttpHeaderView> requestHeaders = {}, std::pmr::memory_resource* resource = nullptr) {
     std::array<char, 2048> requestHead;
-    const auto origin = ruvia::HttpOriginView::https("example.test");
+    const auto origin = ruvia::HttpOriginView::https({.host = "example.test"});
     ruvia::HttpClientRequestView request;
     request.method = method;
     request.headers = requestHeaders;
-    const auto preparedResult = method == "CONNECT" ? ruvia::Http1ClientRequestWriter().prepareConnect(origin, requestHeaders, requestHead, Http1ClientRequestWirePolicy(closePolicy)) : ruvia::Http1ClientRequestWriter().prepare(origin, request, requestHead, Http1ClientRequestWirePolicy(closePolicy));
+    const auto preparedResult = method == "CONNECT" ? ruvia::Http1ClientRequestWriter().prepareConnect(origin, requestHeaders, requestHead, Http1ClientRequestWirePolicy{.closePolicy = closePolicy}) : ruvia::Http1ClientRequestWriter().prepare(origin, request, requestHead, Http1ClientRequestWirePolicy{.closePolicy = closePolicy});
     const auto* prepared = preparedResult.prepared();
     if (prepared == nullptr) {
         throw std::runtime_error("test request could not be prepared");
     }
-    auto parser = Http1ClientResponseParser(prepared->exchangeState(), resource);
+    auto parser = Http1ClientResponseParser(prepared->exchangeState(), {.resource = resource});
     return parser.parse(wire);
 }
 

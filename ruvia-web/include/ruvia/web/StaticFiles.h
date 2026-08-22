@@ -51,19 +51,34 @@ private:
     std::vector<std::string> extensions_;
 };
 
+enum class StaticRangeRequestPolicy : std::uint8_t {
+    kIgnore,
+    kHonor,
+};
+
+enum class StaticResponseValidatorPolicy : std::uint8_t {
+    kOmit,
+    kEmit,
+};
+
+enum class StaticDotfilePolicy : std::uint8_t {
+    kDeny,
+    kServe,
+};
+
 struct StaticRootOptions final {
     std::string cacheControl;
     std::string indexFile;
     std::string defaultContentType{"application/octet-stream"};
     std::vector<StaticMimeType> mimeTypes;
     StaticFileTypePolicy fileTypes{StaticFileTypePolicy::defaults()};
-    bool enableRanges{true};
-    bool enableValidators{true};
+    StaticRangeRequestPolicy rangeRequests{StaticRangeRequestPolicy::kHonor};
+    StaticResponseValidatorPolicy responseValidators{StaticResponseValidatorPolicy::kEmit};
     // Serve files and directories whose name begins with '.' (dotfiles). Off by
     // default so a .env, .git/config, or .htpasswd sitting under the document
     // root is never exposed. Enable it only for a root that intentionally
     // publishes hidden paths (for example .well-known/ for ACME).
-    bool serveDotfiles{false};
+    StaticDotfilePolicy dotfiles{StaticDotfilePolicy::kDeny};
 };
 
 namespace detail {

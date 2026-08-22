@@ -67,8 +67,8 @@ struct ContextAccess final {
         return Context(memory, request, routePath, paramNames, paramValues, paramCount, routeRateLimitScope, services);
     }
 
-    [[nodiscard]] static HttpResponse staticFileWithPrecompressedVariants(Context& context, const StaticRoot& root, std::string_view relativePath, std::string_view contentType = {}) {
-        return context.staticFile(root, relativePath, contentType, StaticFileSelectionMode::kPrecompressed);
+    [[nodiscard]] static HttpResponse staticFileWithPrecompressedVariants(Context& context, const StaticRoot& root, StaticFileResponseOptions options) {
+        return context.staticFile(root, options, StaticFileSelectionMode::kPrecompressed);
     }
 
     [[nodiscard]] static const HttpRequest& request(const Context& context) noexcept {

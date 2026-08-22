@@ -126,7 +126,7 @@ RUVIA_TEST(redis_set_options_build_one_valid_command_shape) {
     ruvia::RedisSetOptions expiring;
     expiring.condition = ruvia::RedisSetCondition::kIfAbsent;
     expiring.expiration = ruvia::RedisSetExpiration::expiresAfter(std::chrono::milliseconds(1500));
-    expiring.returnPrevious = true;
+    expiring.previousValue = ruvia::RedisSetPreviousValuePolicy::kReturn;
     const auto expiringArgs = ruvia::detail::redisSetArgs("key", "value", expiring, resource);
     constexpr std::array<std::string_view, 7> expectedExpiring{"SET", "key", "value", "PX", "1500", "NX", "GET"};
     RUVIA_CHECK_EQ(expiringArgs.size(), std::size_t{7});
@@ -148,6 +148,12 @@ RUVIA_TEST(redis_set_options_build_one_valid_command_shape) {
 RUVIA_TEST(redis_set_options_reject_invalid_condition) {
     ruvia::RedisSetOptions options;
     options.condition = static_cast<ruvia::RedisSetCondition>(42);
+    RUVIA_CHECK(throwsOn([&] { (void)ruvia::detail::redisSetArgs("key", "value", options, std::pmr::get_default_resource()); }));
+}
+
+RUVIA_TEST(redis_set_options_reject_invalid_previous_value_policy) {
+    ruvia::RedisSetOptions options;
+    options.previousValue = static_cast<ruvia::RedisSetPreviousValuePolicy>(42);
     RUVIA_CHECK(throwsOn([&] { (void)ruvia::detail::redisSetArgs("key", "value", options, std::pmr::get_default_resource()); }));
 }
 
@@ -522,7 +528,7 @@ RUVIA_TEST(redis_xreadgroup_builds_group_block_and_parallel_stream_arguments) {
     ruvia::RedisXReadGroupOptions options;
     options.count = 25;
     options.block = ruvia::RedisBlockWait::forDuration(std::chrono::milliseconds(1500));
-    options.noAck = true;
+    options.acknowledgement = ruvia::RedisXReadGroupAcknowledgementPolicy::kNoAck;
     const auto args = ruvia::detail::redisXReadGroupArgs("workers", "consumer-1", streams, options, resource);
     constexpr std::array<std::string_view, 14> expected{
         "XREADGROUP", "GROUP", "workers", "consumer-1", "COUNT", "25", "BLOCK", "1500", "NOACK", "STREAMS", "orders", "retries", ">", "0",
@@ -535,6 +541,14 @@ RUVIA_TEST(redis_xreadgroup_builds_group_block_and_parallel_stream_arguments) {
     options.block = ruvia::RedisBlockWait::indefinitely();
     const auto infinite = ruvia::detail::redisXReadGroupArgs("workers", "consumer-1", streams, options, resource);
     RUVIA_CHECK_EQ(std::string_view(infinite[7]), std::string_view("0"));
+}
+
+RUVIA_TEST(redis_xreadgroup_rejects_invalid_acknowledgement_policy) {
+    auto* resource = std::pmr::get_default_resource();
+    const std::array streams{ruvia::RedisStreamReadView{.stream = "orders", .id = ">"}};
+    ruvia::RedisXReadGroupOptions options;
+    options.acknowledgement = static_cast<ruvia::RedisXReadGroupAcknowledgementPolicy>(42);
+    RUVIA_CHECK(throwsOn([&] { (void)ruvia::detail::redisXReadGroupArgs("workers", "consumer-1", streams, options, resource); }));
 }
 
 RUVIA_TEST(redis_raw_xreadgroup_block_detection_skips_group_and_consumer_names) {

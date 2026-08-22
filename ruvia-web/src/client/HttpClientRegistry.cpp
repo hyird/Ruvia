@@ -23,8 +23,8 @@ bool HttpClientPool::matches(const HttpClientConfig& value) const noexcept {
         config_.connectTimeout != value.connectTimeout || config_.writeTimeout != value.writeTimeout ||
         config_.requestTimeout != value.requestTimeout || config_.acquireTimeout != value.acquireTimeout ||
         config_.maxResponseBytes != value.maxResponseBytes || config_.protocol != value.protocol ||
-        config_.verifyCertificate != value.verifyCertificate || config_.tcpNoDelay != value.tcpNoDelay ||
-        config_.keepAlive != value.keepAlive || config_.cookiesEnabled != value.cookiesEnabled ||
+        config_.tlsPeerVerification != value.tlsPeerVerification || config_.tcpNoDelay != value.tcpNoDelay ||
+        config_.tcpKeepAlive != value.tcpKeepAlive || config_.receivedCookies != value.receivedCookies ||
         !textEquals(config_.caFile, value.caFile) || !textEquals(config_.certificateChainFile, value.certificateChainFile) ||
         !textEquals(config_.privateKeyFile, value.privateKeyFile) || !textEquals(config_.privateKeyPassword, value.privateKeyPassword) ||
         !textEquals(config_.userAgent, value.userAgent) || config_.cookies.size() != value.cookies.size()) {

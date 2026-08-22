@@ -16,8 +16,8 @@
 
 namespace ruvia {
 
-HttpResponse::HttpResponse(std::pmr::memory_resource* resource)
-    : HttpResponse(detail::HttpResolvedPmrResourceTag{}, detail::httpPmrResourceOrDefault(resource)) {}
+HttpResponse::HttpResponse(Options options)
+    : HttpResponse(detail::HttpResolvedPmrResourceTag{}, detail::httpPmrResourceOrDefault(options.resource)) {}
 
 HttpResponse::HttpResponse(detail::HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource)
     : headers_(detail::HttpResolvedPmrResourceTag{}, resource) {}

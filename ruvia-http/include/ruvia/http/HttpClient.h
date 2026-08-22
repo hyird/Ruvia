@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -52,27 +53,20 @@ enum class HttpClientRequestContentSignal : std::uint8_t {
     kExchangeComplete,
 };
 
+struct HttpOriginOptions final {
+    BorrowedText host;
+    std::optional<std::uint16_t> port;
+};
+
 class HttpOriginView final {
 public:
     // `host` is a borrowed RFC 3986 uri-host; its storage must outlive this
     // value and its bytes must remain unchanged. IP literals therefore include
     // brackets (for example, "[::1]"). Factories reject an empty or malformed
     // host before an origin can be observed.
-    [[nodiscard]] static HttpOriginView http(std::string_view host, std::uint16_t port = 80);
+    [[nodiscard]] static HttpOriginView http(HttpOriginOptions options);
 
-    template <typename Traits, typename Allocator>
-    static HttpOriginView http(std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 80) = delete;
-
-    template <typename Traits, typename Allocator>
-    static HttpOriginView http(const std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 80) = delete;
-
-    [[nodiscard]] static HttpOriginView https(std::string_view host, std::uint16_t port = 443);
-
-    template <typename Traits, typename Allocator>
-    static HttpOriginView https(std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 443) = delete;
-
-    template <typename Traits, typename Allocator>
-    static HttpOriginView https(const std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 443) = delete;
+    [[nodiscard]] static HttpOriginView https(HttpOriginOptions options);
 
     [[nodiscard]] constexpr HttpScheme scheme() const noexcept {
         return scheme_;

@@ -271,7 +271,7 @@ RUVIA_TEST(response_stream_dispatch_preserves_committed_failure_status) {
 }
 
 RUVIA_TEST(response_stream_dispatch_types_precommit_failure_response) {
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kBadGateway);
     auto result = ResponseStreamDispatchResult::makeRecoveredFailure(std::move(response));
 

@@ -88,7 +88,7 @@ private:
 std::string gzipContent(std::string_view body) {
     auto encoded = ruvia::encodeHttpContent(
         ruvia::HttpContentCoding::kGzip, body,
-        body.size() + 1024, std::pmr::get_default_resource());
+        {.maxEncodedBytes = body.size() + 1024, .resource = std::pmr::get_default_resource()});
     if (!encoded.encoded()) throw std::runtime_error("failed to encode test gzip body");
     const auto bytes = encoded.encoded()->bytes();
     return {bytes.data(), bytes.size()};
@@ -125,7 +125,7 @@ ruvia::Task<void> sendSlowWithCancellation(
     std::pmr::memory_resource* resource,
     bool& cancelled) {
     ruvia::StopSource source;
-    ruvia::TaskScope cancellation(worker, resource);
+    ruvia::TaskScope cancellation(worker, {.resource = resource});
     cancellation.spawn(requestStopAfterDelay(worker, source));
     try {
         auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/slow"};
@@ -337,7 +337,7 @@ int runTlsTruncationCheck(
     auto publicConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"};
     publicConfig.port = server.port();
     publicConfig.protocol = ruvia::HttpClientProtocol::kHttp1Only;
-    publicConfig.verifyCertificate = false;
+    publicConfig.tlsPeerVerification = ruvia::HttpClientTlsPeerVerificationPolicy::kSkipVerification;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
     ruvia::detail::HttpClientDefinition definition{
         std::pmr::string("default", memory.resource()), std::move(config)};
@@ -379,7 +379,7 @@ int runHttp2TlsTruncationCheck(
     auto publicConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"};
     publicConfig.port = server.port();
     publicConfig.protocol = ruvia::HttpClientProtocol::kHttp2Only;
-    publicConfig.verifyCertificate = false;
+    publicConfig.tlsPeerVerification = ruvia::HttpClientTlsPeerVerificationPolicy::kSkipVerification;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
     ruvia::detail::HttpClientDefinition definition{
         std::pmr::string("default", memory.resource()), std::move(config)};
@@ -491,7 +491,9 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
         : ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
     publicConfig.port = port;
     publicConfig.protocol = protocol;
-    publicConfig.verifyCertificate = false;
+    if (scheme == ruvia::HttpScheme::kHttps) {
+        publicConfig.tlsPeerVerification = ruvia::HttpClientTlsPeerVerificationPolicy::kSkipVerification;
+    }
     publicConfig.connectionsPerWorker = 1;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
     ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
@@ -528,7 +530,7 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
             if (result == 0 && protocol == ruvia::HttpClientProtocol::kHttp2Only) {
                 reportStage("run-client.h2.multiplex");
                 std::array<int, 16> results{};
-                ruvia::TaskScope batch(worker, memory.resource());
+                ruvia::TaskScope batch(worker, {.resource = memory.resource()});
                 const auto started = std::chrono::steady_clock::now();
                 for (std::size_t i = 0; i < results.size(); ++i) {
                     batch.spawn(sendMultiplexed(client, results, i));
@@ -542,7 +544,7 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
                 bool slowTimedOut = false;
                 bool slowCancelled = false;
                 bool fastCompleted = false;
-                ruvia::TaskScope mixed(worker, memory.resource());
+                ruvia::TaskScope mixed(worker, {.resource = memory.resource()});
                 mixed.spawn(sendSlowWithTimeout(client, slowTimedOut));
                 mixed.spawn(sendSlowWithCancellation(client, worker, memory.resource(), slowCancelled));
                 mixed.spawn(sendFastAlongsideCancelled(client, fastCompleted));
@@ -708,7 +710,7 @@ int runCookies(std::uint16_t port) {
     auto publicConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
     publicConfig.port = port;
     publicConfig.protocol = ruvia::HttpClientProtocol::kHttp1Only;
-    publicConfig.cookiesEnabled = true;
+    publicConfig.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
     ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
     ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
@@ -760,8 +762,8 @@ int runHostPrefixedCookies(std::uint16_t port) {
     auto publicConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"};
     publicConfig.port = port;
     publicConfig.protocol = ruvia::HttpClientProtocol::kHttp2Only;
-    publicConfig.verifyCertificate = false;
-    publicConfig.cookiesEnabled = true;
+    publicConfig.tlsPeerVerification = ruvia::HttpClientTlsPeerVerificationPolicy::kSkipVerification;
+    publicConfig.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
     ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
     ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
@@ -906,7 +908,7 @@ int runHttp2GoawayRetry() {
                 socket.close(ec);
                 continue;
             }
-            ruvia::HttpResponse response(&resource);
+            ruvia::HttpResponse response({.resource = &resource});
             const auto encodedBody = gzipContent("retried");
             response.header("Content-Encoding", "gzip");
             const auto* stream = connection.stream(streamId);
@@ -970,7 +972,7 @@ int main() {
     auto cookie = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
         const auto value = context.req().header("cookie");
         if (!value) {
-            context.setCookie("sid", "abc");
+            context.setCookie({.name = "sid", .value = "abc"});
             co_return context.text("new");
         }
         co_return context.text(*value);
@@ -979,8 +981,8 @@ int main() {
         const auto value = context.req().header("cookie");
         if (value) co_return context.text(*value);
         auto response = context.text("new");
-        response.header("Set-Cookie", "__Host-bad=bad; Secure; Path=relative", ruvia::HttpResponse::HeaderOptions{.append = true});
-        response.header("Set-Cookie", "__Host-good=good; Secure; Path=/", ruvia::HttpResponse::HeaderOptions{.append = true});
+        response.header("Set-Cookie", "__Host-bad=bad; Secure; Path=relative", ruvia::HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
+        response.header("Set-Cookie", "__Host-good=good; Secure; Path=/", ruvia::HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
         co_return response;
     };
     auto slow = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {

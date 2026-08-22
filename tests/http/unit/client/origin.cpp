@@ -28,7 +28,7 @@ bool throwsOn(Fn&& fn) {
 }
 
 HttpOriginView originFor(std::string_view host, std::uint16_t port, HttpScheme scheme = HttpScheme::kHttp) {
-    return scheme == HttpScheme::kHttps ? HttpOriginView::https(host, port) : HttpOriginView::http(host, port);
+    return scheme == HttpScheme::kHttps ? HttpOriginView::https({.host = host, .port = port}) : HttpOriginView::http({.host = host, .port = port});
 }
 
 std::string authorityFor(const HttpOriginView& origin) {
@@ -107,8 +107,8 @@ RUVIA_TEST(http_serialized_origin_matches_fetch_wire_grammar) {
 
 RUVIA_TEST(http_origin_authority_brackets_ipv6_and_omits_default_port) {
     // The default port for the scheme is omitted: 80 for http, 443 for https.
-    RUVIA_CHECK_EQ(authorityFor(HttpOriginView::http("example.com")), std::string("example.com"));
-    RUVIA_CHECK_EQ(authorityFor(HttpOriginView::https("example.com")), std::string("example.com"));
+    RUVIA_CHECK_EQ(authorityFor(HttpOriginView::http({.host = "example.com"})), std::string("example.com"));
+    RUVIA_CHECK_EQ(authorityFor(HttpOriginView::https({.host = "example.com"})), std::string("example.com"));
 
     // A non-default port is appended.
     RUVIA_CHECK_EQ(authorityFor(originFor("example.com", 8080)), std::string("example.com:8080"));

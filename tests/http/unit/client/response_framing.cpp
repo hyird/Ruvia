@@ -165,7 +165,7 @@ RUVIA_TEST(http_client_final_after_continue_does_not_cancel_released_content) {
     request.method = "POST";
     request.content = ruvia::HttpClientRequestContentView::bytes("payload");
     std::array<char, 512> requestHead;
-    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https("example.test"), request, requestHead, Http1ClientRequestWirePolicy(Http1ClosePolicy::kAllowReuse, ruvia::HttpClientRequestExpectation::kContinue));
+    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https({.host = "example.test"}), request, requestHead, Http1ClientRequestWirePolicy{.expectation = ruvia::HttpClientRequestExpectation::kContinue});
     RUVIA_CHECK(prepared.prepared() != nullptr);
     if (prepared.prepared() == nullptr) {
         return;
@@ -191,7 +191,7 @@ RUVIA_TEST(http_client_closing_final_stops_unfinished_request_content) {
     request.method = "POST";
     request.content = ruvia::HttpClientRequestContentView::bytes("payload");
     std::array<char, 512> requestHead;
-    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https("example.test"), request, requestHead, Http1ClientRequestWirePolicy(Http1ClosePolicy::kAllowReuse, ruvia::HttpClientRequestExpectation::kContinue));
+    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(ruvia::HttpOriginView::https({.host = "example.test"}), request, requestHead, Http1ClientRequestWirePolicy{.expectation = ruvia::HttpClientRequestExpectation::kContinue});
     RUVIA_CHECK(prepared.prepared() != nullptr);
     if (prepared.prepared() == nullptr) {
         return;

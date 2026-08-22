@@ -223,7 +223,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         co_return;
     }
 
-    HttpResponse response(requestMemory.resource());
+    HttpResponse response({.resource = requestMemory.resource()});
     // Request negotiation must retain precompressed static sidecars even when
     // this worker cannot create a runtime encoder. The capability is enforced
     // later by the selected response representation.
@@ -302,10 +302,11 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
             response = co_await routes_->handleError(
                 request,
                 requestMemory,
-                HttpErrorInfo(
-                    ruvia::http_status::kNotAcceptable,
-                    "not_acceptable",
-                    "no acceptable response content coding"),
+                HttpErrorInfo({
+                    .status = ruvia::http_status::kNotAcceptable,
+                    .code = "not_acceptable",
+                    .message = "no acceptable response content coding",
+                }),
                 requestServices);
             break;
         }
@@ -324,8 +325,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 auto upgradeAndRun = [&](Context& context) -> Task<void> {
                     auto negotiation = makeWebSocketServerNegotiation(
                         request,
-                        webSocketEndpoint->subprotocols(),
-                        requestMemory.resource());
+                        {.supportedSubprotocols = webSocketEndpoint->subprotocols(), .resource = requestMemory.resource()});
                     const auto handshakeResult = connection_.submitWebSocketHandshake(
                         streamId, std::move(negotiation));
                     const auto* submittedHandshake = handshakeResult.submitted();

@@ -2,7 +2,6 @@
 
 #include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
-#include "ruvia/web/detail/integration/DataAccessDefinitions.h"
 #include <algorithm>
 #include <optional>
 #include <ranges>
@@ -24,8 +23,8 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
         if (std::ranges::any_of(pools_, [&definition](const Entry& entry) { return std::string_view(entry.alias) == std::string_view(definition.alias); })) {
             throw std::invalid_argument("duplicate redis alias");
         }
-        auto generalConfig = cloneRedisConfig(definition.config, resource_);
-        auto blockingConfig = cloneRedisConfig(definition.config, resource_);
+        auto generalConfig = RedisConfigStorage(definition.config, resource_);
+        auto blockingConfig = RedisConfigStorage(definition.config, resource_);
         validateRedisConfig(generalConfig);
         const auto generalSize = generalConfig.poolSizePerWorker;
         const auto blockingSize = generalConfig.blockingPoolSizePerWorker;

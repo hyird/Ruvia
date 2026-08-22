@@ -80,15 +80,15 @@ namespace {
 
 class WebSocketServerConnection::Impl final {
 public:
-    Impl(std::pmr::memory_resource* requested, WebSocketServerOptions options)
-        : input(detail::httpPmrResourceOrDefault(requested)),
+    explicit Impl(WebSocketServerConnectionOptions options)
+        : input(detail::httpPmrResourceOrDefault(options.resource)),
           connection(input, options.messageLimit, validateCompression(options.compression)) {}
     std::pmr::string input;
     detail::WsConnection connection;
 };
 
-WebSocketServerConnection::WebSocketServerConnection(std::pmr::memory_resource* resource, WebSocketServerOptions options)
-    : impl_(std::make_unique<Impl>(resource, options)) {}
+WebSocketServerConnection::WebSocketServerConnection(WebSocketServerConnectionOptions options)
+    : impl_(std::make_unique<Impl>(options)) {}
 
 WebSocketServerConnection::~WebSocketServerConnection() = default;
 WebSocketServerConnection::WebSocketServerConnection(WebSocketServerConnection&&) noexcept = default;

@@ -51,9 +51,9 @@ struct AppStaticRootOptions final {
     std::pmr::vector<AppStaticMimeType> mimeTypes;
     StaticFileTypePolicy::Kind fileTypeKind{StaticFileTypePolicy::Kind::kDefaults};
     std::pmr::vector<std::pmr::string> fileTypeExtensions;
-    bool enableRanges{true};
-    bool enableValidators{true};
-    bool serveDotfiles{false};
+    StaticRangeRequestPolicy rangeRequests{StaticRangeRequestPolicy::kHonor};
+    StaticResponseValidatorPolicy responseValidators{StaticResponseValidatorPolicy::kEmit};
+    StaticDotfilePolicy dotfiles{StaticDotfilePolicy::kDeny};
 };
 
 // App::stop() may cross an arbitrary user hook while borrowing raw worker
@@ -124,7 +124,7 @@ struct AppState final {
 
     std::pmr::vector<AppListenerConfig> listeners{appResource()};
     std::size_t workersPerListener;
-    bool signalShutdown{false};
+    ProcessSignalHandlerPolicy processSignalHandlers{ProcessSignalHandlerPolicy::kExternalOwner};
     AccessLogCallback accessLogCallback;
     ConnectionFailureCallback connectionFailureCallback;
     HttpServerOptions options{};

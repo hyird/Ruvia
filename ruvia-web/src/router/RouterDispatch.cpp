@@ -22,7 +22,7 @@ void setAllowHeader(HttpResponse& response, std::uint32_t methodMask, std::span<
 }
 
 HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t methodMask, std::span<const std::string_view> extensionMethods = {}) {
-    HttpResponse response(memory.resource());
+    HttpResponse response({.resource = memory.resource()});
     response.status(ruvia::http_status::kNoContent);
     setAllowHeader(response, methodMask, extensionMethods);
     return response;
@@ -42,9 +42,9 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
     auto context = detail::ContextAccess::make(memory, request);
     try {
         if (staticFileMode == detail::StaticFileSelectionMode::kPrecompressed) {
-            return detail::ContextAccess::staticFileWithPrecompressedVariants(context, *root, relative);
+            return detail::ContextAccess::staticFileWithPrecompressedVariants(context, *root, {.relativePath = relative});
         }
-        return context.staticFile(*root, relative);
+        return context.staticFile(*root, {.relativePath = relative});
     } catch (const HttpError& error) {
         // A document-root miss is allowed to fall through to the router's
         // normal not-found path. A real response error (for example 406 when
@@ -108,10 +108,10 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& reques
                 // RFC 9110 15.5.6/15.6.2: 405 says the method is known here but
                 // unsupported by this resource; a token no route registered is
                 // not known here at all, so it stays 501 whatever the path holds.
-                error = HttpErrorInfo(ruvia::http_status::kNotImplemented, {}, "method not implemented");
+                error = HttpErrorInfo({.status = ruvia::http_status::kNotImplemented, .message = "method not implemented"});
             } else if (request.knownMethod() == HttpKnownMethod::kUnknown) {
                 if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
-                    error = HttpErrorInfo(ruvia::http_status::kMethodNotAllowed, {}, "method not allowed");
+                    error = HttpErrorInfo({.status = ruvia::http_status::kMethodNotAllowed, .message = "method not allowed"});
                     allowedMethods = methodNotAllowed->allowedMethods();
                     extensionMethods = extensionMethodsFor(request.path(), extensionMethodBuffer);
                 }
@@ -124,7 +124,7 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& reques
                 if (request.knownMethod() == HttpKnownMethod::kOptions) {
                     co_return makeAllowNoContentResponse(memory, methodNotAllowed->allowedMethods(), extensionMethods);
                 }
-                error = HttpErrorInfo(ruvia::http_status::kMethodNotAllowed, {}, "method not allowed");
+                error = HttpErrorInfo({.status = ruvia::http_status::kMethodNotAllowed, .message = "method not allowed"});
                 allowedMethods = methodNotAllowed->allowedMethods();
             }
 

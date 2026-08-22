@@ -25,7 +25,7 @@ private:
             .host = "api.example.com",
             .connectionsPerWorker = 4,
             .protocol = ruvia::HttpClientProtocol::kNegotiate,
-            .cookiesEnabled = true,
+            .receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend,
         });
 
         try {
@@ -56,7 +56,7 @@ private:
             const auto status = error.code() == ruvia::HttpClientError::Code::kTimeout
                 ? ruvia::http_status::kGatewayTimeout
                 : ruvia::http_status::kBadGateway;
-            co_return c.error(status, "upstream_error", error.what());
+            co_return c.error({.status = status, .code = "upstream_error", .message = error.what()});
         }
     }
 
@@ -94,6 +94,6 @@ private:
 
 int main() {
     ruvia::app()
-        .setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8080)})
+        .setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8080})})
         .run();
 }

@@ -88,5 +88,5 @@ private:
 };
 
 int main() {
-    ruvia::app().setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8082)}).setWorkersPerListener(2).setSignalShutdown(true).setBodyLimit(16 * 1024 * 1024).setStreamBodyLimit(std::nullopt).run();
+    ruvia::app().setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8082})}).setWorkersPerListener(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).setBodyLimit(16 * 1024 * 1024).setStreamBodyLimit(std::nullopt).run();
 }

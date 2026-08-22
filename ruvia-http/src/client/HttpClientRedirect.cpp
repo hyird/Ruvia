@@ -171,14 +171,14 @@ HttpClientRedirectRequestPlan::HttpClientRedirectRequestPlan(std::string_view me
     : method_(method, detail::httpPmrResourceOrDefault(resource)),
       contentDisposition_(contentDisposition) {}
 
-HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequestView& request, HttpStatusCode status, std::pmr::memory_resource* resource) {
-    if (status == http_status::kSeeOther) {
-        return HttpClientRedirectRequestPlan(request.method == "HEAD" ? request.method.view() : std::string_view("GET"), HttpClientRedirectContentDisposition::kDrop, resource);
+HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequestView& request, HttpClientRedirectRequestPlanOptions options) {
+    if (options.status == http_status::kSeeOther) {
+        return HttpClientRedirectRequestPlan(request.method == "HEAD" ? request.method.view() : std::string_view("GET"), HttpClientRedirectContentDisposition::kDrop, options.resource);
     }
-    if ((status == http_status::kMovedPermanently || status == http_status::kFound) && request.method == "POST") {
-        return HttpClientRedirectRequestPlan("GET", HttpClientRedirectContentDisposition::kDrop, resource);
+    if ((options.status == http_status::kMovedPermanently || options.status == http_status::kFound) && request.method == "POST") {
+        return HttpClientRedirectRequestPlan("GET", HttpClientRedirectContentDisposition::kDrop, options.resource);
     }
-    return HttpClientRedirectRequestPlan(request.method.view(), HttpClientRedirectContentDisposition::kPreserve, resource);
+    return HttpClientRedirectRequestPlan(request.method.view(), HttpClientRedirectContentDisposition::kPreserve, options.resource);
 }
 
 HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(const HttpOriginView& origin, std::string_view authority) noexcept {
@@ -194,10 +194,12 @@ HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(const HttpOrig
 
 
 HttpOriginView HttpClientResolvedRedirect::origin() const& {
-    return scheme_ == HttpScheme::kHttps ? HttpOriginView::https(host(), port_) : HttpOriginView::http(host(), port_);
+    return scheme_ == HttpScheme::kHttps ? HttpOriginView::https({.host = host(), .port = port_}) : HttpOriginView::http({.host = host(), .port = port_});
 }
 
-HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOriginView& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource) {
+HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOriginView& origin, HttpClientRedirectTargetOptions options) {
+    const auto currentTarget = options.currentTarget;
+    auto location = options.location;
     if (currentTarget.empty() || currentTarget.front() != '/' || !isValidHttpClientOriginTarget(currentTarget)) {
         return HttpClientRedirectResolutionResult::makeFailure(HttpClientRedirectResolutionError::kInvalidCurrentTarget);
     }
@@ -236,7 +238,7 @@ HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOri
         hasAuthority = true;
     }
 
-    auto* const targetResource = detail::httpPmrResourceOrDefault(resource);
+    auto* const targetResource = detail::httpPmrResourceOrDefault(options.resource);
     std::pmr::string host(targetResource);
     auto port = origin.port();
     bool crossOrigin = targetScheme != origin.scheme();

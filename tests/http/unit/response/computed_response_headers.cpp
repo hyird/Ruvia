@@ -24,7 +24,7 @@ constexpr std::uint32_t methodBit(HttpKnownMethod method) {
 }
 
 HttpResponse makeResponse() {
-    return HttpResponse(std::pmr::new_delete_resource());
+    return HttpResponse({.resource = std::pmr::new_delete_resource()});
 }
 
 }  // namespace

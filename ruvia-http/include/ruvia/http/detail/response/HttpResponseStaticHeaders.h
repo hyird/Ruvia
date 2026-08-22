@@ -19,9 +19,9 @@ template <std::size_t N>
     static constexpr char kTextContentType[] = "Content-Typetext/plain; charset=UTF-8";
     static constexpr char kJsonContentType[] = "Content-Typeapplication/json";
     static constexpr char kHtmlContentType[] = "Content-Typetext/html; charset=UTF-8";
-    static constexpr char kLegacyTextContentType[] = "Content-Typetext/plain; charset=utf-8";
-    static constexpr char kLegacyJsonContentType[] = "Content-Typeapplication/json; charset=utf-8";
-    static constexpr char kLegacyHtmlContentType[] = "Content-Typetext/html; charset=utf-8";
+    static constexpr char kLowercaseUtf8TextContentType[] = "Content-Typetext/plain; charset=utf-8";
+    static constexpr char kLowercaseUtf8JsonContentType[] = "Content-Typeapplication/json; charset=utf-8";
+    static constexpr char kLowercaseUtf8HtmlContentType[] = "Content-Typetext/html; charset=utf-8";
     static constexpr char kCssContentType[] = "Content-Typetext/css; charset=utf-8";
     static constexpr char kJsContentType[] = "Content-Typetext/javascript; charset=utf-8";
     static constexpr char kEventStreamContentType[] = "Content-Typetext/event-stream";
@@ -54,13 +54,13 @@ template <std::size_t N>
                 return staticResponseHeader(kHtmlContentType, 12, knownBit);
             }
             if (value == "text/plain; charset=utf-8") {
-                return staticResponseHeader(kLegacyTextContentType, 12, knownBit);
+                return staticResponseHeader(kLowercaseUtf8TextContentType, 12, knownBit);
             }
             if (value == "application/json; charset=utf-8") {
-                return staticResponseHeader(kLegacyJsonContentType, 12, knownBit);
+                return staticResponseHeader(kLowercaseUtf8JsonContentType, 12, knownBit);
             }
             if (value == "text/html; charset=utf-8") {
-                return staticResponseHeader(kLegacyHtmlContentType, 12, knownBit);
+                return staticResponseHeader(kLowercaseUtf8HtmlContentType, 12, knownBit);
             }
             if (value == "text/css; charset=utf-8") {
                 return staticResponseHeader(kCssContentType, 12, knownBit);

@@ -25,8 +25,8 @@ Task<void> webSocketWriteThunk(void* target, WebSocketOpcode opcode, std::string
 }
 
 template <typename Connection>
-Task<void> webSocketCloseThunk(void* target, std::uint16_t code, std::string_view reason) {
-    return static_cast<Connection*>(target)->close(code, reason);
+Task<void> webSocketCloseThunk(void* target, ::ruvia::WebSocketCloseOptions options) {
+    return static_cast<Connection*>(target)->close(options);
 }
 
 template <typename Connection>
@@ -67,9 +67,9 @@ Task<void> finishWebSocketSession(WebSocketConnection<Transport>& connection, st
     connectionFailure.invoke(remoteAddress, exception);
     try {
         if (exception != nullptr) {
-            co_await connection.close(1011, "internal server error");
+            co_await connection.close({.code = 1011, .reason = "internal server error"});
         } else {
-            co_await connection.close(1000, {});
+            co_await connection.close();
         }
     } catch (...) {
         connectionFailure.invoke(remoteAddress, std::current_exception());

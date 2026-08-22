@@ -109,7 +109,7 @@ void compactParsedBodyFields(std::pmr::vector<ContextRequest::RequestFormField>&
             // non-"[]" name, and collapsing them as repeated scalars would
             // silently drop all but the last upload. Only true repeated scalars
             // (text fields) collapse to their last value.
-            if (fields[index].isArray() || fields[index].isFile()) {
+            if (fields[index].hasArrayName() || fields[index].isFile()) {
                 keep[index] = 1;
             } else {
                 lastScalar = index;
@@ -142,8 +142,8 @@ void compactParsedBodyFields(std::pmr::vector<ContextRequest::RequestFormField>&
     fields.reserve(boundedFieldReserve(delimitedFieldCount(requestBody, '&')));
     bool valid = true;
     const bool ok = detail::visitUrlEncodedPairs(requestBody, [resource, &fields, &valid, options](std::string_view key, std::string_view value) {
-        auto decodedName = detail::decodeUrlComponent(key, detail::UrlDecodeMode::kForm, resource);
-        auto decodedValue = detail::decodeUrlComponent(value, detail::UrlDecodeMode::kForm, resource);
+        auto decodedName = detail::decodeUrlComponent(key, {.mode = detail::UrlDecodeMode::kForm, .resource = resource});
+        auto decodedValue = detail::decodeUrlComponent(value, {.mode = detail::UrlDecodeMode::kForm, .resource = resource});
         if (!decodedName || !decodedValue) {
             valid = false;
             return false;
@@ -214,7 +214,7 @@ void enforceMultipartFieldCap(std::string_view requestBody, const MultipartBound
 }  // namespace
 
 [[nodiscard]] std::pmr::vector<MultipartPart> parseCompleteMultipartBody(std::string_view requestBody, MultipartBoundary boundary, std::pmr::memory_resource* resource) {
-    auto parsed = parseMultipartBody(requestBody, std::move(boundary), resource);
+    auto parsed = parseMultipartBody(requestBody, {.boundary = std::move(boundary), .resource = resource});
     if (const auto* failure = parsed.failure()) {
         throw failure->protocolError();
     }

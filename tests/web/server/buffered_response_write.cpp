@@ -206,7 +206,7 @@ enum class WriteScenario { kCompleted, kFailedBeforeCommit, kFailedAfterCommit }
 
 [[nodiscard]] Http1BufferedResponseWriteResult runBufferedWrite(WriteScenario scenario, std::size_t bodyBytes = 7) {
     WorkerMemory memory;
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kMultiStatus);
     const std::string body(bodyBytes, 'x');
     ruvia::detail::setResponseBodyBorrowedView(response, body);
@@ -243,7 +243,7 @@ enum class WriteScenario { kCompleted, kFailedBeforeCommit, kFailedAfterCommit }
 
 [[nodiscard]] Http1BufferedResponseWriteResult runBufferedFileWrite(const std::filesystem::path& path, std::uint64_t size) {
     WorkerMemory memory;
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kMultiStatus);
     setResponseFileBody(response, path, size);
     const auto responsePlan = http1BufferedResponsePlan(httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response), Http1ServerConnectionPlan::http11Close());
@@ -301,7 +301,7 @@ RUVIA_TEST(http1_buffered_scatter_write_keeps_committed_status) {
 }
 
 RUVIA_TEST(http1_buffered_write_cannot_complete_without_a_full_head) {
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kMultiStatus);
     const auto responsePlan = http1BufferedResponsePlan(httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response), Http1ServerConnectionPlan::http11Close());
     const auto result = classifyHttp1BufferedResponseWrite(responsePlan, 64, {}, 63);
@@ -313,7 +313,7 @@ RUVIA_TEST(http1_buffered_write_cannot_complete_without_a_full_head) {
 
 RUVIA_TEST(http_response_file_writer_hides_native_capability) {
     const ScopedTestFile file("ruvia_http_response_file_write.bin", "");
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     setResponseFileBody(response, file.path(), 0);
     const auto fileBody = responseBody(response).file();
     RUVIA_CHECK(fileBody.has_value());
@@ -328,7 +328,7 @@ RUVIA_TEST(http_response_file_writer_preserves_open_failure) {
     const auto path = makeTestFilePath("ruvia_http_response_file_write_missing.bin");
     std::error_code ignored;
     std::filesystem::remove(path, ignored);
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     setResponseFileBody(response, path, 1);
     const auto fileBody = responseBody(response).file();
     RUVIA_CHECK(fileBody.has_value());
@@ -358,7 +358,7 @@ RUVIA_TEST(http_response_file_native_open_rejects_same_size_replacement) {
     std::filesystem::rename(replacement.path(), original.path(), error);
     RUVIA_CHECK(!error);
 
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     setResponseFileBody(response, original.path(), snapshot.size, 0, snapshot.size, snapshot.identity);
     const auto fileBody = responseBody(response).file();
     RUVIA_CHECK(fileBody.has_value());

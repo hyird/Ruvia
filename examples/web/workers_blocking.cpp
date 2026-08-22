@@ -79,7 +79,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> offloadOrShed(ruvia::Context& c) {
         auto result = co_await c.tryRunBlocking(std::chrono::seconds(2), [input = std::string("expensive input")] { return slowChecksum(input); });
         if (!result.completed()) {
-            co_return c.error(ruvia::http_status::kServiceUnavailable, "busy", ruvia::describeBlockingStatus(result.status()));
+            co_return c.error({.status = ruvia::http_status::kServiceUnavailable, .code = "busy", .message = ruvia::describeBlockingStatus(result.status())});
         }
         std::pmr::string body(c.resource());
         body.append("checksum=");
@@ -112,9 +112,9 @@ private:
 
 int main() {
     ruvia::app()
-        .setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8090)})
+        .setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8090})})
         .setWorkersPerListener(2)
-        .setSignalShutdown(true)
+        .setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall)
         // Each worker builds its own WorkerStats before serving; the factory
         // form (useWorkerState<T>(fn)) covers non-default-constructible types.
         .useWorkerState<WorkerStats>()

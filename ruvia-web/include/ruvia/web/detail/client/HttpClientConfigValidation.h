@@ -7,6 +7,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
+#include "ruvia/web/detail/TcpSocketOptions.h"
 #include "ruvia/http/detail/cookie/CookieValidation.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
@@ -37,6 +38,16 @@ void validateHttpClientConfig(const Config& config) {
         config.protocol != HttpClientProtocol::kHttp2Only) {
         throw std::invalid_argument("http client protocol is invalid");
     }
+    if (config.tlsPeerVerification != HttpClientTlsPeerVerificationPolicy::kVerify &&
+        config.tlsPeerVerification != HttpClientTlsPeerVerificationPolicy::kSkipVerification) {
+        throw std::invalid_argument("http client TLS peer verification policy is invalid");
+    }
+    if (config.receivedCookies != HttpClientReceivedCookiePolicy::kIgnore &&
+        config.receivedCookies != HttpClientReceivedCookiePolicy::kRetainAndSend) {
+        throw std::invalid_argument("http client received cookie policy is invalid");
+    }
+    validateTcpNoDelayPolicy(config.tcpNoDelay);
+    validateTcpKeepAlivePolicy(config.tcpKeepAlive);
     ensureConfigHost(host, "http client host must not be empty", "http client host is invalid", kSeparatedPortHostRules);
     if (port == 0) {
         throw std::invalid_argument("http client port must be greater than zero");

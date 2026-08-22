@@ -36,7 +36,7 @@ private:
 #if !defined(_MSC_VER)
 RUVIA_TEST(hpack_public_callback_exception_precedes_continuation_allocation_failure) {
     ToggleAllocationResource resource;
-    ruvia::HpackDecoder decoder(&resource);
+    ruvia::HpackDecoder decoder({.resource = &resource});
 
     std::string block;
     block.push_back(static_cast<char>(0x82));  // indexed :method: GET

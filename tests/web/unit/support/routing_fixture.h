@@ -116,7 +116,7 @@ inline ruvia::Task<ruvia::HttpResponse> scopedValidationHandler(void*, ruvia::Co
 
 // Never invoked — resolve() only needs a registered route with a valid handler.
 inline ruvia::Task<ruvia::HttpResponse> dummyHandler(void*, ruvia::Context&) {
-    co_return ruvia::HttpResponse(std::pmr::get_default_resource());
+    co_return ruvia::HttpResponse({.resource = std::pmr::get_default_resource()});
 }
 
 inline ruvia::Task<void> dummyStreamHandler(void*, ruvia::Context&) {
@@ -277,7 +277,7 @@ public:
 class ChainMwThrows final : public ruvia::Middleware<ChainMwThrows> {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next&) {
-        throw ruvia::HttpError(ruvia::http_status::kUnauthorized, "mw_rejected", "middleware rejected the request");
+        throw ruvia::HttpError({.status = ruvia::http_status::kUnauthorized, .code = "mw_rejected", .message = "middleware rejected the request"});
         co_return;  // unreachable
     }
 };
@@ -552,23 +552,23 @@ inline HeadOnlyDispatchObservation dispatchHeadOnlyStream(std::span<const Contro
 namespace routing_test {
 
 inline ruvia::Task<ruvia::HttpResponse> throwsHttpErrorHandler(void*, ruvia::Context&) {
-    throw ruvia::HttpError(ruvia::http_status::kForbidden, "forbidden", "nope");
-    co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
+    throw ruvia::HttpError({.status = ruvia::http_status::kForbidden, .code = "forbidden", .message = "nope"});
+    co_return ruvia::HttpResponse({.resource = std::pmr::get_default_resource()});  // unreachable
 }
 
 inline ruvia::Task<ruvia::HttpResponse> throwsGenericHandler(void*, ruvia::Context&) {
     throw std::runtime_error("boom");
-    co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
+    co_return ruvia::HttpResponse({.resource = std::pmr::get_default_resource()});  // unreachable
 }
 
 inline ruvia::Task<ruvia::HttpResponse> throwsInvalidArgumentHandler(void*, ruvia::Context&) {
     throw std::invalid_argument("application bug");
-    co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
+    co_return ruvia::HttpResponse({.resource = std::pmr::get_default_resource()});  // unreachable
 }
 
 inline ruvia::Task<ruvia::HttpResponse> throwsProtocolErrorHandler(void*, ruvia::Context&) {
     throw ruvia::HttpProtocolError(ruvia::http_status::kContentTooLarge, "request body is too large");
-    co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
+    co_return ruvia::HttpResponse({.resource = std::pmr::get_default_resource()});  // unreachable
 }
 
 inline ruvia::Task<ruvia::HttpResponse> okHandler(void*, ruvia::Context& context) {
@@ -754,7 +754,7 @@ inline ruvia::Task<ruvia::HttpResponse> formIfEchoHandler(void*, ruvia::Context&
 }
 
 inline ruvia::Task<ruvia::HttpResponse> jsonValueIfEchoHandler(void*, ruvia::Context& context) {
-    const auto body = co_await context.req().jsonIf();
+    const auto body = co_await context.req().jsonValueIf();
     co_return context.body(std::string_view(body.has_value() ? "json" : "no-json"));
 }
 

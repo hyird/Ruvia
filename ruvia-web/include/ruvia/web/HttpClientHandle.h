@@ -16,6 +16,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/OperationOptions.h"
 #include "ruvia/web/ScopedOperation.h"
+#include "ruvia/web/TcpSocketOptions.h"
 
 namespace ruvia {
 
@@ -38,6 +39,16 @@ enum class HttpClientProtocol : std::uint8_t {
     kHttp2Only,
 };
 
+enum class HttpClientTlsPeerVerificationPolicy : std::uint8_t {
+    kVerify,
+    kSkipVerification,
+};
+
+enum class HttpClientReceivedCookiePolicy : std::uint8_t {
+    kIgnore,
+    kRetainAndSend,
+};
+
 struct HttpClientConfig final {
     HttpScheme scheme{HttpScheme::kHttps};
     std::string host;
@@ -53,10 +64,10 @@ struct HttpClientConfig final {
     std::optional<std::chrono::milliseconds> acquireTimeout{5000};
     std::size_t maxResponseBytes{16 * 1024 * 1024};
     HttpClientProtocol protocol{HttpClientProtocol::kNegotiate};
-    bool verifyCertificate{true};
-    bool tcpNoDelay{true};
-    bool keepAlive{true};
-    bool cookiesEnabled{false};
+    HttpClientTlsPeerVerificationPolicy tlsPeerVerification{HttpClientTlsPeerVerificationPolicy::kVerify};
+    TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
+    TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kEnable};
+    HttpClientReceivedCookiePolicy receivedCookies{HttpClientReceivedCookiePolicy::kIgnore};
     std::string caFile;
     std::string certificateChainFile;
     std::string privateKeyFile;

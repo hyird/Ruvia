@@ -121,8 +121,8 @@ HttpClientPool::Connection::Connection(Connection&&) noexcept = default;
 HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& worker, HttpClientConfigStorage config, std::pmr::memory_resource* resource)
     : ioContext_(ioContext), worker_(worker), resource_(httpPmrResourceOrDefault(resource)), config_(std::move(config)),
       tlsContext_(asio::ssl::context::tls_client), connections_(resource_), scheduler_(httpClientSchedulerSlots(config_), resource_),
-      backgroundTasks_(worker_, resource_),
-      cookies_(resource_), cookiesEnabled_(config_.cookiesEnabled) {
+      backgroundTasks_(worker_, {.resource = resource_}),
+      cookies_(resource_) {
     validateHttpClientConfig(config_);
     for (const auto& [name, value] : config_.cookies) addCookie(name, value);
     configureTls();
@@ -134,7 +134,7 @@ HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& 
 HttpClientPool::~HttpClientPool() { closeNow(); }
 
 void HttpClientPool::configureTls() {
-    if (config_.verifyCertificate) {
+    if (config_.tlsPeerVerification == HttpClientTlsPeerVerificationPolicy::kVerify) {
         tlsContext_.set_verify_mode(asio::ssl::verify_peer);
         if (config_.caFile.empty()) tlsContext_.set_default_verify_paths();
         else tlsContext_.load_verify_file(std::string(config_.caFile));
@@ -286,7 +286,7 @@ void HttpClientPool::appendAutomaticHeaders(const HttpClientRequestStorage& requ
     }
     const auto path = requestPathOnly(request.target());
     for (const auto& cookie : cookies_) {
-        if (!cookie.persistent && !cookiesEnabled_) continue;
+        if (!cookie.persistent && config_.receivedCookies == HttpClientReceivedCookiePolicy::kIgnore) continue;
         if (cookie.secure && config_.scheme != HttpScheme::kHttps) continue;
         if (!cookieDomainMatches(config_.host, cookie.domain) || !cookiePathMatches(path, cookie.path)) continue;
         if (!cookieHeader.empty()) cookieHeader.append("; ");
@@ -300,48 +300,58 @@ void HttpClientPool::appendAutomaticHeaders(const HttpClientRequestStorage& requ
 }
 
 void HttpClientPool::retainResponseCookies(const HttpClientRequestStorage& request, const HttpClientResponse& response) {
-    if (!cookiesEnabled_) return;
+    if (config_.receivedCookies == HttpClientReceivedCookiePolicy::kIgnore) return;
     const auto now = std::chrono::system_clock::now();
     for (const auto& header : response.headers()) {
         if (!headerNameEquals(header.name(), "set-cookie")) continue;
         const auto parsed = parseSetCookie(header.value());
-        if (!parsed || (parsed->secure && config_.scheme != HttpScheme::kHttps) ||
-            !cookieDomainMatches(config_.host, parsed->domain) ||
-            !canSerializeReceivedCookie(parsed->name, parsed->value)) continue;
+        if (!parsed) continue;
+        const auto parsedName = parsed->name();
+        const auto parsedValue = parsed->value();
+        const auto parsedPath = parsed->path();
+        const auto parsedDomain = parsed->domain();
+        const bool parsedSecure = parsed->has(HttpSetCookieAttribute::kSecure);
+        const bool parsedHasPath = parsed->has(HttpSetCookieAttribute::kPath);
+        const bool parsedSameSiteNone = parsed->has(HttpSetCookieAttribute::kSameSiteNone);
+        if ((parsedSecure && config_.scheme != HttpScheme::kHttps) ||
+            !cookieDomainMatches(config_.host, parsedDomain) ||
+            !canSerializeReceivedCookie(parsedName, parsedValue)) continue;
 
-        const auto path = parsed->path.empty() || parsed->path.front() != '/' ? defaultCookiePath(request.target()) : parsed->path;
-        const bool securePrefixed = cookieNameStartsWithIgnoreCase(parsed->name, "__Secure-");
-        const bool hostPrefixed = cookieNameStartsWithIgnoreCase(parsed->name, "__Host-");
-        const bool namelessPrefix = parsed->name.empty() &&
-            (cookieNameStartsWithIgnoreCase(parsed->value, "__Secure-") ||
-                cookieNameStartsWithIgnoreCase(parsed->value, "__Host-"));
-        if (namelessPrefix || (parsed->sameSiteNone && !parsed->secure) ||
-            (securePrefixed && (!parsed->secure || config_.scheme != HttpScheme::kHttps)) ||
-            (hostPrefixed && (!parsed->secure || config_.scheme != HttpScheme::kHttps ||
-                !parsed->hasPathAttribute || parsed->path != "/" || !parsed->domain.empty()))) continue;
+        const auto path = parsedPath.empty() || parsedPath.front() != '/' ? defaultCookiePath(request.target()) : parsedPath;
+        const bool securePrefixed = cookieNameStartsWithIgnoreCase(parsedName, "__Secure-");
+        const bool hostPrefixed = cookieNameStartsWithIgnoreCase(parsedName, "__Host-");
+        const bool namelessPrefix = parsedName.empty() &&
+            (cookieNameStartsWithIgnoreCase(parsedValue, "__Secure-") ||
+                cookieNameStartsWithIgnoreCase(parsedValue, "__Host-"));
+        if (namelessPrefix || (parsedSameSiteNone && !parsedSecure) ||
+            (securePrefixed && (!parsedSecure || config_.scheme != HttpScheme::kHttps)) ||
+            (hostPrefixed && (!parsedSecure || config_.scheme != HttpScheme::kHttps ||
+                !parsedHasPath || parsedPath != "/" || !parsedDomain.empty()))) continue;
         std::optional<std::chrono::system_clock::time_point> expires;
         bool remove = false;
-        if (parsed->maxAgeSeconds) {
-            remove = *parsed->maxAgeSeconds <= 0;
-            if (!remove) expires = cookieExpiration(now, *parsed->maxAgeSeconds);
-        } else if (parsed->expires) {
-            remove = *parsed->expires <= std::chrono::system_clock::to_time_t(now);
+        const auto maxAgeSeconds = parsed->maxAgeSeconds();
+        const auto expiresAt = parsed->expires();
+        if (maxAgeSeconds) {
+            remove = *maxAgeSeconds <= 0;
+            if (!remove) expires = cookieExpiration(now, *maxAgeSeconds);
+        } else if (expiresAt) {
+            remove = *expiresAt <= std::chrono::system_clock::to_time_t(now);
             if (!remove) {
                 const auto expirationLimit = std::chrono::system_clock::to_time_t(
                     cookieExpiration(now, detail::kMaxCookieAgeSeconds));
                 expires = std::chrono::system_clock::from_time_t(
-                    std::min(*parsed->expires, expirationLimit));
+                    std::min(*expiresAt, expirationLimit));
             }
         }
-        const auto parsedIdentityDomain = parsed->domain.empty()
+        const auto parsedIdentityDomain = parsedDomain.empty()
             ? std::string_view(config_.host)
-            : parsed->domain;
-        const bool parsedHostOnly = parsed->domain.empty();
+            : parsedDomain;
+        const bool parsedHostOnly = parsedDomain.empty();
         const auto match = std::ranges::find_if(cookies_, [&](const StoredCookie& cookie) {
             const auto cookieIdentityDomain = cookie.domain.empty()
                 ? std::string_view(config_.host)
                 : std::string_view(cookie.domain);
-            return !cookie.persistent && cookie.name == parsed->name &&
+            return !cookie.persistent && cookie.name == parsedName &&
                 cookie.hostOnly == parsedHostOnly && cookie.path == path &&
                 httpAsciiEqualsIgnoreCase(cookieIdentityDomain, parsedIdentityDomain);
         });
@@ -352,17 +362,17 @@ void HttpClientPool::retainResponseCookies(const HttpClientRequestStorage& reque
             }
             continue;
         }
-        const auto replacementBytes = cookieStorageBytes(parsed->name, parsed->value, path, parsed->domain);
+        const auto replacementBytes = cookieStorageBytes(parsedName, parsedValue, path, parsedDomain);
         const auto replacedBytes = match == cookies_.end()
             ? 0
             : cookieStorageBytes(match->name, match->value, match->path, match->domain);
         if (!cookieCapacityAvailable(replacedBytes, replacementBytes, match == cookies_.end())) continue;
         auto makeStoredCookie = [&]() {
-            StoredCookie cookie(parsed->name, parsed->value, resource_);
+            StoredCookie cookie(parsedName, parsedValue, resource_);
             cookie.path.assign(path);
-            cookie.domain.assign(parsed->domain);
+            cookie.domain.assign(parsedDomain);
             cookie.expires = expires;
-            cookie.secure = parsed->secure;
+            cookie.secure = parsedSecure;
             cookie.hostOnly = parsedHostOnly;
             cookie.persistent = false;
             return cookie;
@@ -615,8 +625,8 @@ Task<void> HttpClientPool::ensureConnected(
     if (connectTimedOut) throw HttpClientError(HttpClientError::Code::kTimeout, "http client connect timed out");
     if (connected.errorCode()) throw HttpClientError(HttpClientError::Code::kConnectFailed, connected.errorCode().message());
     std::error_code ignored;
-    if (config_.tcpNoDelay) connection.stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), ignored);
-    if (config_.keepAlive) connection.stream.lowest_layer().set_option(asio::socket_base::keep_alive(true), ignored);
+    if (tcpNoDelayEnabled(config_.tcpNoDelay)) connection.stream.lowest_layer().set_option(asio::ip::tcp::no_delay(true), ignored);
+    if (tcpKeepAliveEnabled(config_.tcpKeepAlive)) connection.stream.lowest_layer().set_option(asio::socket_base::keep_alive(true), ignored);
 
     if (config_.scheme == HttpScheme::kHttps) {
         SSL_clear(connection.stream.native_handle());
@@ -627,7 +637,9 @@ Task<void> HttpClientPool::ensureConnected(
             SSL_set_tlsext_host_name(connection.stream.native_handle(), config_.host.c_str()) != 1) {
             throw HttpClientError(HttpClientError::Code::kTlsFailed, "failed to set TLS SNI host");
         }
-        if (config_.verifyCertificate) connection.stream.set_verify_callback(asio::ssl::host_name_verification(std::string(config_.host)));
+        if (config_.tlsPeerVerification == HttpClientTlsPeerVerificationPolicy::kVerify) {
+            connection.stream.set_verify_callback(asio::ssl::host_name_verification(std::string(config_.host)));
+        }
         static constexpr unsigned char both[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
         static constexpr unsigned char h1[] = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
         static constexpr unsigned char h2[] = {2, 'h', '2'};

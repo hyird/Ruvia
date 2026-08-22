@@ -307,7 +307,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
 }
 
 RUVIA_TEST(response_stream_head_rejects_a_mismatched_status_plan) {
-    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kCreated);
     auto plan = ruvia::detail::httpResponseStreamCommitPlan(ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet, ruvia::http_status::kAccepted, ruvia::detail::ResponseTrailerIntent::kNone);
     bool rejected = false;

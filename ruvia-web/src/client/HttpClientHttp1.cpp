@@ -23,16 +23,16 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection, const HttpClient
     connection.writeBuffer.resize(kMaxHttpHeaderBytes + 1024);
     const auto wireHost = httpClientWireHost(config_, resource_);
     const auto origin = config_.scheme == HttpScheme::kHttps
-        ? HttpOriginView::https(wireHost, httpClientPort(config_))
-        : HttpOriginView::http(wireHost, httpClientPort(config_));
-    auto preparedResult = Http1ClientRequestWriter(responseResource).prepare(origin, source,
+        ? HttpOriginView::https({.host = wireHost, .port = httpClientPort(config_)})
+        : HttpOriginView::http({.host = wireHost, .port = httpClientPort(config_)});
+    auto preparedResult = Http1ClientRequestWriter({.resource = responseResource}).prepare(origin, source,
         std::span<char>(connection.writeBuffer.data(), connection.writeBuffer.size()));
     const auto* prepared = preparedResult.prepared();
     if (!prepared) {
         throw HttpClientError(HttpClientError::Code::kInvalidRequest,
             preparedResult.failure() ? std::string(http1ClientRequestPrepareErrorMessage(preparedResult.failure()->error())) : "HTTP request head is too large");
     }
-    Http1ClientResponseParser parser(prepared->exchangeState(), responseResource);
+    Http1ClientResponseParser parser(prepared->exchangeState(), {.resource = responseResource});
     co_await write(connection, prepared->head(), timeout);
     if (const auto* content = prepared->contentPlan().immediate()) {
         co_await write(connection, content->bytes(), timeout);

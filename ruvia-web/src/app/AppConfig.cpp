@@ -78,8 +78,12 @@ App& App::setWorkersPerListener(std::size_t workersPerListener) {
     });
 }
 
-App& App::setSignalShutdown(bool enabled) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change signal shutdown while app is running", [enabled](detail::AppState& state) { state.signalShutdown = enabled; });
+App& App::setProcessSignalHandlers(ProcessSignalHandlerPolicy policy) {
+    if (policy != ProcessSignalHandlerPolicy::kExternalOwner &&
+        policy != ProcessSignalHandlerPolicy::kInstall) {
+        throw std::invalid_argument("process signal handler policy is invalid");
+    }
+    return detail::mutateStoppedApp(*this, *state_, "cannot change process signal handlers while app is running", [policy](detail::AppState& state) { state.processSignalHandlers = policy; });
 }
 
 App& App::setWorkerMailboxCapacity(std::size_t capacity) {
@@ -91,10 +95,12 @@ App& App::setWorkerMailboxCapacity(std::size_t capacity) {
     });
 }
 
-App& App::setMaxHttpClientOriginsPerWorker(std::size_t originsPerWorker) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change HTTP client origin capacity while app is running", [originsPerWorker](detail::AppState& state) {
-        if (originsPerWorker == 0) throw std::invalid_argument("HTTP client origin capacity must be greater than 0");
-        state.options.maxHttpClientOriginsPerWorker = originsPerWorker;
+App& App::setHttpClientOriginCacheCapacityPerWorker(std::size_t capacityPerWorker) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change HTTP client origin cache capacity while app is running", [capacityPerWorker](detail::AppState& state) {
+        if (capacityPerWorker == 0) {
+            throw std::invalid_argument("HTTP client origin cache capacity must be greater than 0");
+        }
+        state.options.httpClientOriginCacheCapacityPerWorker = capacityPerWorker;
     });
 }
 
@@ -213,12 +219,12 @@ App& App::setTrustedProxies(std::span<const std::string_view> cidrs) {
     });
 }
 
-App& App::setRateLimitSlotsPerWorker(std::size_t slotsPerWorker) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change rate-limit slots per worker while app is running", [slotsPerWorker](detail::AppState& state) {
-        if (!std::has_single_bit(slotsPerWorker)) {
-            throw std::invalid_argument("rate-limit slots per worker must be a power of two");
+App& App::setRateLimitCapacityPerWorker(std::size_t capacityPerWorker) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change rate-limit capacity per worker while app is running", [capacityPerWorker](detail::AppState& state) {
+        if (!std::has_single_bit(capacityPerWorker)) {
+            throw std::invalid_argument("rate-limit capacity per worker must be a power of two");
         }
-        state.options.rateLimitSlotsPerWorker = slotsPerWorker;
+        state.options.rateLimitCapacityPerWorker = capacityPerWorker;
     });
 }
 

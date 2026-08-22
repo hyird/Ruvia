@@ -12,8 +12,8 @@ struct HttpClientConfigStorage final {
           scheme(source.scheme), port(source.port.value_or(source.scheme == HttpScheme::kHttps ? 443 : 80)), connectionsPerWorker(source.connectionsPerWorker), maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection), maxBufferedRequestsPerWorker(source.maxBufferedRequestsPerWorker),
           maxCookiesPerWorker(source.maxCookiesPerWorker), maxCookieBytesPerWorker(source.maxCookieBytesPerWorker),
           connectTimeout(source.connectTimeout), writeTimeout(source.writeTimeout), requestTimeout(source.requestTimeout), acquireTimeout(source.acquireTimeout),
-          maxResponseBytes(source.maxResponseBytes), protocol(source.protocol), verifyCertificate(source.verifyCertificate),
-          tcpNoDelay(source.tcpNoDelay), keepAlive(source.keepAlive), cookiesEnabled(source.cookiesEnabled), caFile(source.caFile, resource),
+          maxResponseBytes(source.maxResponseBytes), protocol(source.protocol), tlsPeerVerification(source.tlsPeerVerification),
+          tcpNoDelay(source.tcpNoDelay), tcpKeepAlive(source.tcpKeepAlive), receivedCookies(source.receivedCookies), caFile(source.caFile, resource),
           certificateChainFile(source.certificateChainFile, resource), privateKeyFile(source.privateKeyFile, resource),
           privateKeyPassword(source.privateKeyPassword, resource), userAgent(source.userAgent, resource), cookies(resource) {
         cookies.reserve(source.cookies.size());
@@ -24,8 +24,8 @@ struct HttpClientConfigStorage final {
         : host(source.host, resource), scheme(source.scheme), port(source.port), connectionsPerWorker(source.connectionsPerWorker), maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection), maxBufferedRequestsPerWorker(source.maxBufferedRequestsPerWorker),
           maxCookiesPerWorker(source.maxCookiesPerWorker), maxCookieBytesPerWorker(source.maxCookieBytesPerWorker),
           connectTimeout(source.connectTimeout), writeTimeout(source.writeTimeout), requestTimeout(source.requestTimeout), acquireTimeout(source.acquireTimeout),
-          maxResponseBytes(source.maxResponseBytes), protocol(source.protocol), verifyCertificate(source.verifyCertificate),
-          tcpNoDelay(source.tcpNoDelay), keepAlive(source.keepAlive), cookiesEnabled(source.cookiesEnabled), caFile(source.caFile, resource),
+          maxResponseBytes(source.maxResponseBytes), protocol(source.protocol), tlsPeerVerification(source.tlsPeerVerification),
+          tcpNoDelay(source.tcpNoDelay), tcpKeepAlive(source.tcpKeepAlive), receivedCookies(source.receivedCookies), caFile(source.caFile, resource),
           certificateChainFile(source.certificateChainFile, resource), privateKeyFile(source.privateKeyFile, resource),
           privateKeyPassword(source.privateKeyPassword, resource), userAgent(source.userAgent, resource), cookies(resource) {
         cookies.reserve(source.cookies.size());
@@ -46,10 +46,10 @@ struct HttpClientConfigStorage final {
     std::optional<std::chrono::milliseconds> acquireTimeout;
     std::size_t maxResponseBytes;
     HttpClientProtocol protocol;
-    bool verifyCertificate;
-    bool tcpNoDelay;
-    bool keepAlive;
-    bool cookiesEnabled;
+    HttpClientTlsPeerVerificationPolicy tlsPeerVerification;
+    TcpNoDelayPolicy tcpNoDelay;
+    TcpKeepAlivePolicy tcpKeepAlive;
+    HttpClientReceivedCookiePolicy receivedCookies;
     std::pmr::string caFile;
     std::pmr::string certificateChainFile;
     std::pmr::string privateKeyFile;

@@ -164,7 +164,7 @@ inline bool aborted(void*) noexcept {
 }
 
 inline ruvia::HttpResponse unusedStreamingHead(ruvia::Context&) {
-    return ruvia::HttpResponse(std::pmr::get_default_resource());
+    return ruvia::HttpResponse({.resource = std::pmr::get_default_resource()});
 }
 
 inline ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
@@ -209,7 +209,7 @@ inline ruvia::Task<void> writeSocket(void* target, ruvia::WebSocketOpcode, std::
     co_return;
 }
 
-inline ruvia::Task<void> closeSocket(void*, std::uint16_t, std::string_view) {
+inline ruvia::Task<void> closeSocket(void*, ruvia::WebSocketCloseOptions) {
     co_return;
 }
 

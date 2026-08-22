@@ -2,6 +2,7 @@
 // routes. Built only with RUVIA_ENABLE_JWT=ON.
 
 #include <chrono>
+#include <memory_resource>
 #include <optional>
 #include <string_view>
 
@@ -19,16 +20,19 @@ ruvia::JwtSignOptions signOptions(ruvia::Context& c) {
     options.issuer.assign("ruvia-example");
     options.audience.assign("ruvia-api");
     options.expiresIn = std::chrono::minutes(30);
-    options.claims.emplace_back("scope", "example");
+    options.claims.emplace_back(ruvia::JwtClaimOptions{.name = "scope", .value = "example"});
+    options.resource = c.resource();
     return options;
 }
 
-ruvia::JwtVerifyOptions verifyOptions() {
+ruvia::JwtVerifyOptions verifyOptions(std::string_view token, std::pmr::memory_resource* resource) {
     ruvia::JwtVerifyOptions options;
+    options.token = token;
     options.secret.assign(kJwtSecret.data(), kJwtSecret.size());
     options.issuer.assign("ruvia-example");
     options.audience.assign("ruvia-api");
     options.leeway = std::chrono::seconds(30);
+    options.resource = resource;
     return options;
 }
 
@@ -44,7 +48,7 @@ public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         const auto token = ruvia::jwtBearerToken(c.req().header("Authorization").value_or(""));
         if (!token) {
-            c.respond(c.error(ruvia::http_status::kUnauthorized, "missing_token", "missing bearer token"));
+            c.respond(c.error({.status = ruvia::http_status::kUnauthorized, .code = "missing_token", .message = "missing bearer token"}));
             co_return;
         }
 
@@ -53,9 +57,9 @@ public:
         // instead of reaching onError.
         std::optional<ruvia::JwtPayload> payload;
         try {
-            payload.emplace(ruvia::jwtVerify(*token, verifyOptions(), c.resource()));
+            payload.emplace(ruvia::jwtVerify(verifyOptions(*token, c.resource())));
         } catch (...) {
-            c.respond(c.error(ruvia::http_status::kUnauthorized, "invalid_token", "invalid bearer token"));
+            c.respond(c.error({.status = ruvia::http_status::kUnauthorized, .code = "invalid_token", .message = "invalid bearer token"}));
             co_return;
         }
 
@@ -81,7 +85,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> token(ruvia::Context& c) {
         auto options = signOptions(c);
         options.subject.assign(c.req().query("sub").value_or("example-user"));
-        auto jwt = ruvia::jwtSign(options, c.resource());
+        auto jwt = ruvia::jwtSign(options);
         co_return c.text(std::move(jwt));
     }
 
@@ -98,5 +102,5 @@ private:
 };
 
 int main() {
-    ruvia::app().setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8085)}).setWorkersPerListener(2).setSignalShutdown(true).run();
+    ruvia::app().setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8085})}).setWorkersPerListener(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).run();
 }

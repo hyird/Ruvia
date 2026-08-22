@@ -48,6 +48,16 @@ void validateConnectionControlField(std::string_view name, std::string_view valu
     }
 }
 
+[[nodiscard]] bool responseHeaderModeAppends(HttpResponseHeaderMode mode) {
+    switch (mode) {
+        case HttpResponseHeaderMode::kReplace:
+            return false;
+        case HttpResponseHeaderMode::kAppend:
+            return true;
+    }
+    throw std::invalid_argument("invalid HTTP response header mode");
+}
+
 }  // namespace
 
 void HttpResponse::recordKnownHeaderIndex(std::uint32_t knownBit, std::size_t index) noexcept {
@@ -131,7 +141,7 @@ void HttpResponse::header(std::string_view key, std::string_view value, HeaderOp
     if (detail::httpAsciiEqualsIgnoreCase(key, "Trailer") && !detail::isValidHttpResponseTrailerFieldValue(value, detail::HttpFieldListRole::kSender)) {
         throw std::invalid_argument("invalid HTTP Trailer header");
     }
-    if (options.append) {
+    if (responseHeaderModeAppends(options.mode)) {
         if (detail::responseHeaderAppendForbidden(knownBit)) {
             throw std::invalid_argument("HTTP response header cannot be appended");
         }

@@ -11,7 +11,7 @@ namespace ruvia {
 template <typename T>
     requires detail::isResponseModel<T>
 inline HttpResponse Context::json(const T& value) const {
-    auto body = toJson(value, resource());
+    auto body = toJson(value, {.resource = resource()});
     return jsonSerialized(body);
 }
 

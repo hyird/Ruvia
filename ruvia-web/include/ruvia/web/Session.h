@@ -24,12 +24,14 @@ namespace ruvia {
 // persists (SETEX, 1-day TTL) or deletes it if the handler changed the session
 // via c.setSession()/c.clearSession(). A new session mints a random id (HttpOnly
 // cookie). The blob format is the application's; pair it with JSON if desired.
-// The Redis connection alias defaults to "default"; pass another alias to a
-// session-dedicated connection: SessionMiddleware("sessions").
+struct SessionMiddlewareOptions final {
+    ::ruvia::BorrowedText redisAlias{"default"};
+};
+
 class SessionMiddleware final : public Middleware<SessionMiddleware> {
 public:
-    explicit SessionMiddleware(::ruvia::BorrowedText redisAlias = "default") noexcept
-        : redisAlias_(redisAlias) {}
+    explicit SessionMiddleware(SessionMiddlewareOptions options = {}) noexcept
+        : redisAlias_(options.redisAlias) {}
 
     Task<void> handle(Context& c, Next& next);
 

@@ -10,6 +10,11 @@
 
 namespace ruvia::detail {
 
+struct WebSocketServerNegotiationOptions final {
+    std::string_view supportedSubprotocols{};
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 // HTTP-version-independent result of one server-side WebSocket negotiation. HTTP/1
 // and RFC 8441 consume this same immutable value for their response head, and the
 // subsequent WsConnection consumes its exact deflate alternative. This prevents
@@ -37,7 +42,7 @@ public:
     }
 
 private:
-    friend WebSocketServerNegotiation makeWebSocketServerNegotiation(const HttpRequest&, std::string_view, std::pmr::memory_resource*);
+    friend WebSocketServerNegotiation makeWebSocketServerNegotiation(const HttpRequest&, WebSocketServerNegotiationOptions);
 
     WebSocketServerNegotiation(std::string_view subprotocol, WebSocketCompression compression, std::pmr::memory_resource* resource);
 
@@ -45,6 +50,6 @@ private:
     WebSocketCompression compression_;
 };
 
-[[nodiscard]] WebSocketServerNegotiation makeWebSocketServerNegotiation(const HttpRequest& request, std::string_view supportedSubprotocols, std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] WebSocketServerNegotiation makeWebSocketServerNegotiation(const HttpRequest& request, WebSocketServerNegotiationOptions options = {});
 
 }  // namespace ruvia::detail

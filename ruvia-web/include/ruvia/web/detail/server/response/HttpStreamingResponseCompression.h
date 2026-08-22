@@ -44,7 +44,7 @@ public:
             // Content-Encoding is still a separate representation claim. Do
             // not let this early identity path bypass its acceptability check.
             if (httpResponseCodingFallbackForbidden(selection_, requestMethod, response)) {
-                throw HttpError(ruvia::http_status::kNotAcceptable, "not_acceptable", "no acceptable response content coding");
+                throw HttpError({.status = ruvia::http_status::kNotAcceptable, .code = "not_acceptable", .message = "no acceptable response content coding"});
             }
             state_.emplace<Identity>();
             return;
@@ -57,7 +57,7 @@ public:
         // into an identity fallback or 406.
         if (availability_ == HttpResponseCodingAvailability::kIdentityOnly) {
             if (httpResponseCodingFallbackForbidden(selection_, requestMethod, response)) {
-                throw HttpError(ruvia::http_status::kNotAcceptable, "not_acceptable", "no acceptable response content coding");
+                throw HttpError({.status = ruvia::http_status::kNotAcceptable, .code = "not_acceptable", .message = "no acceptable response content coding"});
             }
             state_.emplace<Identity>();
             return;
@@ -65,7 +65,7 @@ public:
 
         if (!prepareStreamingResponseCompression(selection_, requestMethod, response, kind)) {
             if (httpResponseCodingFallbackForbidden(selection_, requestMethod, response)) {
-                throw HttpError(ruvia::http_status::kNotAcceptable, "not_acceptable", "no acceptable response content coding");
+                throw HttpError({.status = ruvia::http_status::kNotAcceptable, .code = "not_acceptable", .message = "no acceptable response content coding"});
             }
             state_.emplace<Identity>();
             return;

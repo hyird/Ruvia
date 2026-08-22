@@ -139,7 +139,7 @@ void Context::removeHeader(std::string_view name) {
 }
 
 void Context::header(std::string_view name, std::string_view value, HeaderOptions options) {
-    responseState_.activeResponse().header(name, value, HttpResponse::HeaderOptions{.append = options.append});
+    responseState_.activeResponse().header(name, value, HttpResponse::HeaderOptions{.mode = options.mode});
 }
 
 void Context::storeResponse(HttpResponse&& response) {
@@ -178,41 +178,41 @@ void Context::storeAssignedResponse(HttpResponse&& response) {
 }
 
 HttpResponse Context::body(std::string_view body) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     response.body(body);
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::body(std::nullptr_t) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::body(std::pmr::string&& body) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::body(std::span<const std::byte> body) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     response.body(byteBodyView(body));
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::bodyStaticView(std::string_view body) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     detail::setResponseBodyStaticView(response, body);
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::text(std::string_view body) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     response.body(body);
     applyResponseState(response, std::nullopt);
@@ -220,7 +220,7 @@ HttpResponse Context::text(std::string_view body) const {
 }
 
 HttpResponse Context::text(std::pmr::string&& body) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, std::nullopt);
@@ -228,7 +228,7 @@ HttpResponse Context::text(std::pmr::string&& body) const {
 }
 
 HttpResponse Context::textStaticView(std::string_view body) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     detail::setResponseBodyStaticView(response, body);
     applyResponseState(response, std::nullopt);
@@ -236,7 +236,7 @@ HttpResponse Context::textStaticView(std::string_view body) const {
 }
 
 HttpResponse Context::jsonSerialized(std::pmr::string& body) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     detail::setResponseHeaderStableView(response, "Content-Type", "application/json");
     detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, std::nullopt);
@@ -244,7 +244,7 @@ HttpResponse Context::jsonSerialized(std::pmr::string& body) const {
 }
 
 HttpResponse Context::html(std::string_view body) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     response.body(body);
     applyResponseState(response, std::nullopt);
@@ -252,7 +252,7 @@ HttpResponse Context::html(std::string_view body) const {
 }
 
 HttpResponse Context::html(std::pmr::string&& body) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, std::nullopt);
@@ -260,15 +260,15 @@ HttpResponse Context::html(std::pmr::string&& body) const {
 }
 
 HttpResponse Context::htmlStaticView(std::string_view body) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     detail::setResponseBodyStaticView(response, body);
     applyResponseState(response, std::nullopt);
     return response;
 }
 
-HttpResponse Context::error(HttpStatusCode statusCode, std::string_view code, std::string_view message, std::string_view statusText) const {
-    auto response = detail::makeDefaultErrorResponse(resource(), HttpErrorInfo(statusCode, code, message, statusText));
+HttpResponse Context::error(HttpErrorInfoOptions options) const {
+    auto response = detail::makeDefaultErrorResponse(resource(), HttpErrorInfo(options));
     applyResponseState(response, response.status());
     return response;
 }
@@ -282,13 +282,13 @@ Task<HttpResponse> Context::notFoundTask() {
         co_return co_await notFoundHandler_(*this);
     }
 
-    auto response = detail::makeDefaultErrorResponse(resource(), HttpErrorInfo(http_status::kNotFound, {}, "route not found"));
+    auto response = detail::makeDefaultErrorResponse(resource(), HttpErrorInfo({.status = http_status::kNotFound, .message = "route not found"}));
     applyResponseState(response, http_status::kNotFound);
     co_return response;
 }
 
 HttpResponse Context::streamingHead(std::string_view contentType) const {
-    HttpResponse response(resource());
+    HttpResponse response({.resource = resource()});
     if (!contentType.empty()) {
         response.header("Content-Type", contentType);
     }

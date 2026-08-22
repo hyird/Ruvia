@@ -1,5 +1,5 @@
 // Static files: c.file(...), c.staticFile(...), StaticRoot, a document root,
-// validators/ranges and gzip configuration.
+// response-validator/range-request policies and gzip configuration.
 //
 // A standalone StaticRoot is immutable. App document roots refresh every
 // second; see the commented interval configuration below.
@@ -32,11 +32,11 @@ public:
 
 private:
     ruvia::Task<ruvia::HttpResponse> download(ruvia::Context& c) {
-        co_return c.file(examplesRoot() / "public" / "hello.txt", "text/plain; charset=utf-8");
+        co_return c.file({.path = examplesRoot() / "public" / "hello.txt", .contentType = "text/plain; charset=utf-8"});
     }
 
     ruvia::Task<ruvia::HttpResponse> asset(ruvia::Context& c) {
-        co_return c.staticFile(*gAssets, c.req().param("*").value_or("index.html"));
+        co_return c.staticFile(*gAssets, {.relativePath = c.req().param("*").value_or("index.html")});
     }
 };
 
@@ -46,8 +46,8 @@ int main() {
         ruvia::StaticRootOptions{
             .cacheControl = "public, max-age=3600",
             .indexFile = "index.html",
-            .enableRanges = true,
-            .enableValidators = true,
+            .rangeRequests = ruvia::StaticRangeRequestPolicy::kHonor,
+            .responseValidators = ruvia::StaticResponseValidatorPolicy::kEmit,
         });
 
     auto documentRoot = ruvia::DocumentRootConfig{
@@ -63,5 +63,5 @@ int main() {
     // },
     // The application blocking pool is enabled by default.
 
-    ruvia::app().setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8083)}).setWorkersPerListener(2).setSignalShutdown(true).setCompression(ruvia::CompressionConfig{}).setDocumentRoot(std::move(documentRoot)).run();
+    ruvia::app().setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8083})}).setWorkersPerListener(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).setCompression(ruvia::CompressionConfig{}).setDocumentRoot(std::move(documentRoot)).run();
 }

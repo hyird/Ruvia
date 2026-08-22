@@ -18,6 +18,11 @@ struct HttpContentDecodeResultAccess;
 
 enum class HttpContentEncodeError : std::uint8_t { kEncodedSizeExceeded, kEncoderFailure };
 
+struct HttpContentEncodeOptions final {
+    std::size_t maxEncodedBytes{};
+    std::pmr::memory_resource* resource{nullptr};
+};
+
 class HttpEncodedContent final {
 public:
     HttpEncodedContent(const HttpEncodedContent&) = delete;
@@ -83,7 +88,7 @@ public:
     const HttpContentEncodeFailure* failure() const&& = delete;
 
 private:
-    friend HttpContentEncodeResult encodeHttpContent(HttpContentCoding, std::string_view, std::size_t, std::pmr::memory_resource*);
+    friend HttpContentEncodeResult encodeHttpContent(HttpContentCoding, std::string_view, HttpContentEncodeOptions);
 
     using Value = std::variant<HttpEncodedContent, HttpContentEncodeFailure>;
 
@@ -109,10 +114,14 @@ private:
 [[nodiscard]] HttpContentEncodeResult encodeHttpContent(
     HttpContentCoding coding,
     std::string_view input,
-    std::size_t maxEncodedBytes,
-    std::pmr::memory_resource* resource = nullptr);
+    HttpContentEncodeOptions options);
 
 enum class HttpContentDecodeError : std::uint8_t { kUnsupportedCoding, kInvalidContent, kDecodedSizeExceeded, kDecoderFailure };
+
+struct HttpContentDecodeOptions final {
+    std::size_t maxDecodedBytes{};
+    std::pmr::memory_resource* resource{nullptr};
+};
 
 class HttpDecodedContent final {
 public:
@@ -180,7 +189,7 @@ public:
 
 private:
     friend struct detail::HttpContentDecodeResultAccess;
-    friend HttpContentDecodeResult decodeHttpContent(HttpContentCoding, std::string_view, std::size_t, std::pmr::memory_resource*);
+    friend HttpContentDecodeResult decodeHttpContent(HttpContentCoding, std::string_view, HttpContentDecodeOptions);
 
     using Value = std::variant<HttpDecodedContent, HttpContentDecodeFailure>;
 
@@ -207,7 +216,6 @@ private:
 [[nodiscard]] HttpContentDecodeResult decodeHttpContent(
     HttpContentCoding coding,
     std::string_view input,
-    std::size_t maxDecodedBytes,
-    std::pmr::memory_resource* resource = nullptr);
+    HttpContentDecodeOptions options);
 
 }  // namespace ruvia

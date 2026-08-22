@@ -4,6 +4,7 @@
 
 #include "ruvia/web/redis/RedisTypes.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
+#include "ruvia/web/detail/TcpSocketOptions.h"
 
 namespace ruvia::detail {
 
@@ -16,6 +17,8 @@ inline void validateRedisConfig(const Config& config) {
     ensurePositiveOptionalDurations("configured redis timeouts must be greater than zero", config.connectTimeout, config.commandTimeout, config.acquireTimeout);
     ensurePositiveSize(config.maxArrayDepth, "redis max array depth must be greater than zero");
     ensurePositiveOptionalSize(config.maxReplyBytes, "configured redis reply byte limit must be greater than zero");
+    validateTcpNoDelayPolicy(config.tcpNoDelay);
+    validateTcpKeepAlivePolicy(config.tcpKeepAlive);
 }
 
 }  // namespace ruvia::detail

@@ -43,7 +43,7 @@ struct FileErrorHandler final {
 
     ruvia::Task<ruvia::HttpResponse> operator()(ruvia::Context& context, ruvia::HttpErrorInfo info) const {
         context.status(info.status());
-        co_return context.staticFile(*root, "error.txt", "text/plain");
+        co_return context.staticFile(*root, {.relativePath = "error.txt", .contentType = "text/plain"});
     }
 };
 

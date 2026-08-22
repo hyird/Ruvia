@@ -88,7 +88,7 @@ bool decodeResponseHeaders(const HttpResponse& response, Collector& out, Respons
         }
     }
 
-    HpackDecoder decoder(std::pmr::get_default_resource());
+    HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     const auto result = decoder.decode(stream.localHeaderBlock(), &out, &collect);
     return result.decoded() != nullptr;
 }
@@ -99,7 +99,7 @@ bool decodeInterimResponseHeaders(const HttpInterimResponseHead& response, Colle
         return false;
     }
 
-    HpackDecoder decoder(std::pmr::get_default_resource());
+    HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     const auto result = decoder.decode(stream.localHeaderBlock(), &out, &collect);
     return result.decoded() != nullptr;
 }
@@ -125,7 +125,7 @@ bool hasHeaderName(const Collector& headers, std::string_view name) {
 }  // namespace
 
 RUVIA_TEST(http2_response_head_content_length_plan_drives_execution) {
-    HttpResponse buffered(std::pmr::get_default_resource());
+    HttpResponse buffered({.resource = std::pmr::get_default_resource()});
     buffered.body("hello");
     const auto bufferedPlanResult = ruvia::detail::http2BufferedResponseHeadPlan(ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, buffered), buffered);
     const auto* bufferedPlan = bufferedPlanResult.plan();
@@ -136,7 +136,7 @@ RUVIA_TEST(http2_response_head_content_length_plan_drives_execution) {
     RUVIA_CHECK_EQ(bufferedPlan->contentLength(), std::optional<std::uint64_t>{5});
     RUVIA_CHECK(!bufferedPlan->streamingContentLength().has_value());
 
-    HttpResponse streaming(std::pmr::get_default_resource());
+    HttpResponse streaming({.resource = std::pmr::get_default_resource()});
     const auto streamingBodyPlan = ruvia::detail::httpResponseBodyPlan(ruvia::HttpKnownMethod::kGet, streaming.status());
     const auto streamingPlanResult = ruvia::detail::http2StreamingResponseHeadPlan(streamingBodyPlan, streaming);
     const auto* streamingPlan = streamingPlanResult.plan();
@@ -157,7 +157,7 @@ RUVIA_TEST(http2_response_head_content_length_plan_drives_execution) {
     RUVIA_CHECK_EQ(explicitPlan->contentLength(), std::optional<std::uint64_t>{5});
     RUVIA_CHECK_EQ(explicitPlan->streamingContentLength(), std::optional<std::uint64_t>{5});
 
-    HttpResponse noContent(std::pmr::get_default_resource());
+    HttpResponse noContent({.resource = std::pmr::get_default_resource()});
     noContent.status(ruvia::http_status::kNoContent);
     noContent.header("Content-Length", "12");
     const auto forbiddenPlanResult = ruvia::detail::http2StreamingResponseHeadPlan(ruvia::detail::httpResponseBodyPlan(ruvia::HttpKnownMethod::kGet, noContent.status()), noContent);
@@ -186,7 +186,7 @@ RUVIA_TEST(http2_response_head_content_length_plan_drives_execution) {
 }
 
 RUVIA_TEST(http2_response_head_rejects_status_plan_mismatch) {
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kMultiStatus);
     response.body("planned");
     const auto bufferedWritePlan = ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
@@ -205,7 +205,7 @@ RUVIA_TEST(http2_response_head_rejects_status_plan_mismatch) {
 }
 
 RUVIA_TEST(http2_response_head_rejects_representation_plan_mismatch) {
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kMultiStatus);
     response.body("old");
     const auto writePlan = ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
@@ -307,7 +307,7 @@ RUVIA_TEST(http2_interim_response_header_rejection_is_transactional) {
 }
 
 RUVIA_TEST(http2_response_headers_keep_server_product_policy_explicit) {
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
 
     Collector defaults;
     RUVIA_CHECK(decodeResponseHeaders(response, defaults));
@@ -322,7 +322,7 @@ RUVIA_TEST(http2_response_headers_keep_server_product_policy_explicit) {
 }
 
 RUVIA_TEST(http2_response_headers_omit_content_length_for_204) {
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kNoContent);
     response.header("Content-Length", "12");
 
@@ -333,7 +333,7 @@ RUVIA_TEST(http2_response_headers_omit_content_length_for_204) {
 }
 
 RUVIA_TEST(http2_response_headers_keep_explicit_content_length_for_304) {
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kNotModified);
     response.header("Content-Length", "12");
 
@@ -344,7 +344,7 @@ RUVIA_TEST(http2_response_headers_keep_explicit_content_length_for_304) {
 }
 
 RUVIA_TEST(http2_response_headers_do_not_auto_content_length_for_304) {
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kNotModified);
 
     Collector headers;
@@ -354,7 +354,7 @@ RUVIA_TEST(http2_response_headers_do_not_auto_content_length_for_304) {
 }
 
 RUVIA_TEST(http2_response_headers_canonicalize_valid_explicit_content_length_once) {
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.header("Content-Length", "0005");
 
     Collector headers;
@@ -364,7 +364,7 @@ RUVIA_TEST(http2_response_headers_canonicalize_valid_explicit_content_length_onc
 }
 
 RUVIA_TEST(http2_response_headers_canonicalize_205_to_zero_length) {
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kResetContent);
     response.header("Content-Length", "12");
 
@@ -384,7 +384,7 @@ RUVIA_TEST(http2_response_headers_override_wrong_content_length_for_200) {
     // writer owns the length, so a handler's wrong Content-Length must be dropped
     // and replaced with the real body size -- matching the HTTP/1.1 path -- rather
     // than HPACK-encoded verbatim.
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "1000");  // wrong: the real body is 5 bytes
     response.body("hello");
@@ -397,7 +397,7 @@ RUVIA_TEST(http2_response_headers_override_wrong_content_length_for_200) {
 }
 
 RUVIA_TEST(http2_response_headers_reject_only_preserved_invalid_content_length) {
-    HttpResponse streaming(std::pmr::get_default_resource());
+    HttpResponse streaming({.resource = std::pmr::get_default_resource()});
     streaming.status(ruvia::http_status::kOk);
     streaming.header("Content-Length", "not-a-number");
     streaming.body("hello");
@@ -415,7 +415,7 @@ RUVIA_TEST(http2_response_headers_reject_only_preserved_invalid_content_length) 
     RUVIA_CHECK(decodeResponseHeaders(streaming, bufferedHeaders));
     RUVIA_CHECK(hasHeader(bufferedHeaders, "content-length", "5"));
 
-    HttpResponse notModified(std::pmr::get_default_resource());
+    HttpResponse notModified({.resource = std::pmr::get_default_resource()});
     notModified.status(ruvia::http_status::kNotModified);
     notModified.header("Content-Length", "5, 5");
     const auto notModifiedPlan = ruvia::detail::http2BufferedResponseHeadPlan(ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, notModified), notModified);
@@ -428,7 +428,7 @@ RUVIA_TEST(http2_response_headers_set_cookie_uses_never_indexed_literal) {
     // RFC 7541 §7.1.3: Set-Cookie carries session credentials and must be emitted
     // as a never-indexed literal (0x10 prefix) so an intermediary never places it
     // in a shared HPACK dynamic table.
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
     response.header("Set-Cookie", "sid=secret; HttpOnly");
 
@@ -452,7 +452,7 @@ RUVIA_TEST(http2_response_headers_non_sensitive_uses_without_indexing) {
     // A non-credential field (content-type) must stay a plain without-indexing
     // literal (0x00 nibble) -- confirms the never-indexed choice discriminates by
     // header name rather than marking everything.
-    HttpResponse response(std::pmr::get_default_resource());
+    HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
     response.header("Content-Type", "text/plain");
 
@@ -475,7 +475,7 @@ RUVIA_TEST(http2_response_headers_reject_connection_specific_fields_before_hpack
         {"Upgrade", "websocket"},
     };
     for (const auto& [name, value] : fields) {
-        HttpResponse response(std::pmr::get_default_resource());
+        HttpResponse response({.resource = std::pmr::get_default_resource()});
         if (name == "TE") {
             addUncheckedHeader(response, name, value);
         } else {
@@ -489,7 +489,7 @@ RUVIA_TEST(http2_response_headers_reject_connection_specific_fields_before_hpack
 
 RUVIA_TEST(http2_response_headers_reject_leading_and_trailing_value_whitespace_before_hpack) {
     for (const auto value : {" value", "value ", "\tvalue", "value\t"}) {
-        HttpResponse response(std::pmr::get_default_resource());
+        HttpResponse response({.resource = std::pmr::get_default_resource()});
         ruvia::detail::setResponseHeaderStableView(response, "X-Test", value);
 
         Collector headers;
@@ -505,7 +505,7 @@ RUVIA_TEST(http2_response_headers_reject_malformed_name_and_value_before_hpack) 
     };
 
     for (const auto& [name, value] : fields) {
-        HttpResponse response(std::pmr::get_default_resource());
+        HttpResponse response({.resource = std::pmr::get_default_resource()});
         ruvia::detail::setResponseHeaderStableView(response, name, value);
 
         Collector headers;

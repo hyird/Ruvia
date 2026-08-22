@@ -5,6 +5,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/web/Middleware.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"
@@ -37,7 +38,7 @@ public:
 
     // The same registration, scoped to a path prefix: the middleware runs only
     // on routes under it. Prefixes use the same whole-segment rule and trailing
-    // slash normalization as onError(prefix, ...) -- "/api" scopes "/api" and
+    // slash normalization as onError({.prefix = ...}) -- "/api" scopes "/api" and
     // "/api/x", never "/apix".
     //
     // Scoping is resolved when the route table is built, so a scoped middleware
@@ -49,13 +50,13 @@ public:
     // registration silently changing meaning based on its first argument's type
     // is not a mistake worth allowing.
     template <typename MiddlewareT, typename... Args>
-    Derived& useAt(std::string_view prefix, Args&&... args) {
+    Derived& useAt(MiddlewareScopeOptions options, Args&&... args) {
         // The unmatched-request chain is one contiguous block shared by every
         // 404/405/501, so it cannot carry per-prefix membership. Rejecting the
         // combination is better than silently dropping either half of it.
         static_assert(!middlewareRunsOnUnmatchedRequests<MiddlewareT>(),
             "a middleware declaring ruviaRunsOnUnmatchedRequests cannot be path-scoped with useAt(); register it app-wide with use<T>()");
-        const auto normalized = normalizeFallbackPrefix(prefix);
+        const auto normalized = normalizeFallbackPrefix(options.prefix.view());
         return self().useMiddleware(makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...).scopedTo(retainRegistrationText(normalized)));
     }
 

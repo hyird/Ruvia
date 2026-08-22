@@ -23,6 +23,11 @@ class HttpResponse;
 class HttpResponseHeaders;
 struct HttpResponseHeader;
 
+enum class HttpResponseHeaderMode : std::uint8_t {
+    kReplace,
+    kAppend,
+};
+
 namespace detail {
 
 struct HttpResponseBodyAccess;
@@ -154,10 +159,14 @@ private:
 class HttpResponse final {
 public:
     struct HeaderOptions {
-        bool append{false};
+        HttpResponseHeaderMode mode{HttpResponseHeaderMode::kReplace};
     };
 
-    explicit HttpResponse(std::pmr::memory_resource* resource = nullptr);
+    struct Options final {
+        std::pmr::memory_resource* resource{nullptr};
+    };
+
+    explicit HttpResponse(Options options = {});
 
     HttpResponse(const HttpResponse&) = delete;
     HttpResponse& operator=(const HttpResponse&) = delete;

@@ -68,14 +68,14 @@ public:
 
 int main() {
     ruvia::app()
-        .setListeners({ruvia::ListenerConfig::http("0.0.0.0", 8080)})
-        .setSignalShutdown(true)
+        .setListeners({ruvia::ListenerConfig::http({.address = "0.0.0.0", .port = 8080})})
+        .setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall)
         .run();
 }
 ```
 
 `App` does not install process signal handlers by default. Standalone servers
-can opt in with `setSignalShutdown(true)` as above; embedded runtimes retain
+can opt in with `setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall)` as above; embedded runtimes retain
 ownership of SIGINT/SIGTERM and call `App::stop()` themselves.
 
 The same route is part of the compiled
@@ -95,7 +95,7 @@ responses through `Context`. Set response metadata through `c.status()`,
 HTTP status APIs use `ruvia::HttpStatusCode`: prefer named values such as
 `ruvia::http_status::kCreated`, and use `HttpStatusCode::fromValue()` only for
 validated extension codes.
-`setListeners()` atomically installs any number of `ListenerConfig::http(...)`, `https(...)`, and `redirectHttpToHttps(...)` listeners. Redirect targets must name an HTTPS listener in the same list, ports must be unique, and total workers equal the listener count multiplied by `setWorkersPerListener()`.
+`setListeners()` atomically installs any number of `ListenerConfig::http({...})`, `https({...})`, and `redirectHttpToHttps({...})` listeners. Redirect targets must name an HTTPS listener in the same list, ports must be unique, and total workers equal the listener count multiplied by `setWorkersPerListener()`.
 Public startup configuration uses ordinary C++ values (`std::string`,
 `std::vector`, paths, durations, and spans); callers never choose a PMR
 resource. Ruvia copies retained configuration into process-owned storage before
@@ -116,8 +116,18 @@ Entries in that list are types, so one that takes no configuration is named
 bare and one that takes some is named with it -- there is no second syntax for
 "configured" middleware. Rate limiting is worker-local: each worker counts
 independently, so N workers admit up to N times the rule.
-`setRateLimitSlotsPerWorker()` selects its power-of-two startup capacity
-(`kDefaultRateLimitSlotsPerWorker` by default), and workers with neither an
+App-wide fixed-window rules use an options object rather than positional
+arguments:
+
+```cpp
+ruvia::app().setRateLimit(ruvia::RateLimitRule::fixedWindow({
+    .maxRequests = 100,
+    .window = std::chrono::seconds(60),
+}));
+```
+
+`setRateLimitCapacityPerWorker()` selects its power-of-two startup key capacity
+(`kDefaultRateLimitCapacityPerWorker` by default), and workers with neither an
 app-wide nor a route-specific rule allocate no table.
 
 Connection metadata is deliberately separate from the HTTP request model:
@@ -239,17 +249,25 @@ Pool configuration is immutable after that origin is first used. A handle automa
 observes its request or worker stop token; an explicit operation token is
 combined with that ambient token rather than replacing it.
 
-Automatic cookies are disabled by default. Set `cookiesEnabled = true` in the
-origin configuration to retain matching `Set-Cookie` response fields and send
-them on later requests. A per-request cookie is an ordinary `cookie` header in
-the supplied `HttpClientRequestView`; `HttpClientConfig::cookies` seeds every
-worker-local jar when the origin is first used.
+HTTPS origins verify both the peer certificate and host name by default. Test
+or private self-signed origins must opt out explicitly with
+`tlsPeerVerification = ruvia::HttpClientTlsPeerVerificationPolicy::kSkipVerification`.
+TCP socket options use explicit policies: HTTP clients enable `tcpNoDelay` and
+`tcpKeepAlive` by default, while `Tcp*Policy::kSystemDefault` leaves the socket
+option untouched.
+
+Received cookies are ignored by default. Set
+`receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend` in
+the origin configuration to retain matching `Set-Cookie` response fields and
+send them on later requests. A per-request cookie is an ordinary `cookie`
+header in the supplied `HttpClientRequestView`; `HttpClientConfig::cookies`
+seeds every worker-local jar when the origin is first used.
 `maxCookiesPerWorker` and
-`maxCookieBytesPerWorker` bound each worker-local jar; automatic cookies beyond
+`maxCookieBytesPerWorker` bound each worker-local jar; received cookies beyond
 either bound are ignored, while invalid configuration is rejected before the
 handle is returned. The worker-local origin cache defaults to 64 entries and
-can be bounded explicitly with
-`ruvia::app().setMaxHttpClientOriginsPerWorker(...)`.
+can be sized explicitly with
+`ruvia::app().setHttpClientOriginCacheCapacityPerWorker(...)`.
 
 ## Core Runtime
 
@@ -349,15 +367,49 @@ their `ioContext()`/`executor()` access throws `std::logic_error`. A second
 attachment is rejected until the first attachment's terminal cleanup has
 completed.
 
-Database and Redis integrations remain in `ruvia::web`, but they do not require
-an HTTP `App`, `Context`, or server worker. `DataAccessService` does not create
-a thread or `io_context`; it attaches connection pools and coroutine-job
-lifetime tracking to an existing application-owned core event loop:
+Outbound HTTP clients are first-class event-loop objects too. A client owns one
+origin's worker-local DNS, TCP/TLS, connection pool, HTTP/1.1 and HTTP/2 state;
+it can be bound directly to a pooled or attached loop without an HTTP `App` or
+special worker context:
+
+```cpp
+#include <ruvia/web/HttpClient.h>
+
+ruvia::Task<void> callUpstream(ruvia::HttpClient& client) {
+    auto response = co_await client.send({.target = "/health"});
+    auto body = co_await response.body().readAll();
+}
+
+ruvia::HttpClient client(loop, {
+    .scheme = ruvia::HttpScheme::kHttps,
+    .host = "api.example.com",
+});
+```
+
+Construction creates no thread and opens no connection. The first `send()`
+connects lazily on the bound loop; retries, cancellation, timeouts and protocol
+selection use the same runtime as `Context::httpClient()`. Operations must be
+created and awaited on that loop. `close()` is idempotent and may be called from
+any thread; draining the event loop is the shutdown barrier.
+
+Database clients are first-class event-loop objects. They do not require an HTTP
+`App`, request `Context`, server worker, or an aggregate worker service. Bind
+each client directly to any `EventLoop` created by `EventLoopPool` or
+`attachEventLoop()`; construction does not create another thread or move
+connections between workers:
 
 ```cpp
 #include <future>
+#include <asio/co_spawn.hpp>
+#include <asio/use_future.hpp>
 #include <ruvia/core/EventLoopPool.h>
-#include <ruvia/web/DataAccess.h>
+#include <ruvia/core/AsioTask.h>
+#include <ruvia/web/db/DbClient.h>
+
+ruvia::Task<void> runWorkerJob(ruvia::DbClient& db) {
+    auto rows = co_await db.query("SELECT id FROM jobs WHERE ready = $1", true);
+    // Use rows on this same worker.
+}
 
 ruvia::EventLoopPool loops({.loopCount = 1});
 auto loop = loops.loop(0);
@@ -365,54 +417,30 @@ auto loop = loops.loop(0);
 auto pg = ruvia::DbConfig::postgreSql();
 pg.host = "127.0.0.1";
 pg.database = "app";
+ruvia::DbClient db(loop, std::move(pg));
 
-ruvia::DataAccessOptions options;
-options.databases.push_back({"default", std::move(pg)});
-options.redis.push_back({"default", ruvia::RedisConfig{}});
-ruvia::DataAccessService service(loop, std::move(options));
-
-auto ready = service.connect();
+auto ready = db.connect();
 loops.start();
-std::promise<std::exception_ptr> completed;
-auto done = completed.get_future();
 ready.get();
-auto posted = service.post([&completed](
-    ruvia::DataAccessContext& context) -> ruvia::Task<void> {
-    try {
-        co_await runWorkerJob(context.db(), context.redis());
-        completed.set_value(nullptr);
-    } catch (...) {
-        completed.set_value(std::current_exception());
-    }
-});
-if (!posted.accepted()) {
-    throw std::runtime_error("worker queue is full or stopping");
-}
+auto done = asio::co_spawn(
+    loop.executor(),
+    ruvia::asAwaitable(runWorkerJob(db)),
+    asio::use_future);
+done.get();
 
-// Join application-owned jobs before stopping their worker resources.
-auto failure = done.get();
+db.close();
 loops.stop();
 loops.join();
-if (failure != nullptr) {
-    std::rethrow_exception(failure);
-}
 ```
 
-`connect()` schedules startup and reports it through a future; `post()` is the
-only public operation-scope entry point, and `close()` is worker-affine. A
-`DataAccessContext` is a short-lived operation scope and must not escape its posted
-coroutine. Its handles are job-scoped, while DB/Redis result values allocate
-from that worker's unsynchronized resource; neither may escape the posted
-coroutine or be destroyed from another thread. Database and Redis hostname
-lookup runs asynchronously on the bound event loop, is subject to
-`connectTimeout`, and is canceled during shutdown. Event-loop shutdown requests
-stop and cancels pool I/O so accepted jobs can finish before loop teardown. An
-optional `failureHandler` handles
-uncaught job exceptions on the worker; without one the exception fails the loop
-and is rethrown by `EventLoopPool::join()`. Enable the corresponding
-`RUVIA_ENABLE_POSTGRESQL`, `RUVIA_ENABLE_MARIADB`, and `RUVIA_ENABLE_REDIS`
-features and link `ruvia::web`; `ruvia::core` itself keeps no database or Redis
-dependency.
+`DbClient::connect()` schedules startup on its bound loop and reports completion
+through a future. Its result, stream, and transaction values remain
+worker-affine and must finish before the owning client and event loop are
+destroyed. `close()` is idempotent; `EventLoopPool::join()` (or the attached
+context owner's equivalent drain) is the shutdown barrier. App handlers use
+`Context::httpClient()` and `Context::db()` as worker-local convenience views.
+Enable `RUVIA_ENABLE_POSTGRESQL` or `RUVIA_ENABLE_MARIADB` for `DbClient` and
+link `ruvia::web`; `ruvia::core` keeps no HTTP-client or database dependency.
 
 Web handlers obtain their current core worker with `Context::worker()`; its reference is
 borrowed for the request, so use `auto worker = c.worker()` before capturing it. Background
@@ -455,7 +483,7 @@ Web job contract:
 provided by `ruvia::core`; their deadlines share the worker's single timer
 queue. Standalone operations can create a `StopSource`, pass its `token()` to
 channel, one-shot, timer, or blocking waits, and call `requestStop()` from any
-thread. `App::onStop()` hooks run once for explicitly enabled signal shutdown,
+thread. `App::onStop()` hooks run once for explicitly enabled process signal handlers,
 direct `App::stop()`, and worker failure before the worker-local Web resources
 are closed.
 
@@ -560,6 +588,10 @@ ruvia::app()
     .run();
 ```
 
+Static roots deny dotfiles by default, including files below hidden directories.
+Use `StaticRootOptions::dotfiles = StaticDotfilePolicy::kServe` only for a root
+that intentionally publishes hidden paths such as `.well-known/`.
+
 When compression is enabled, static files may select checked-in `.br`, `.gz`,
 or `.zst` sidecars whose mtime is at least as new as the identity file; an older
 sidecar is ignored so an update cannot serve stale decoded bytes. Static files
@@ -658,7 +690,7 @@ auto config = ruvia::DbConfig::postgreSql(); // port 5432
 config.username = "app";
 config.password = "secret";
 config.database = "app";
-app.useDb(std::move(config));
+app.useDb({.config = std::move(config)});
 ```
 
 The matching factory exists only when its CMake feature is enabled. PostgreSQL parameters use `$1`, `$2`,
@@ -700,17 +732,19 @@ it belongs in startup code rather than on a worker:
 
 ```cpp
 static constexpr std::array migrations{
-    ruvia::DbMigration{"001_create_users",
-        "CREATE TABLE IF NOT EXISTS users ("
-        "id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,"
-        "name VARCHAR(120) NOT NULL)"},
+    ruvia::DbMigration{{.id = "001_create_users",
+        .sql = "CREATE TABLE IF NOT EXISTS users ("
+               "id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,"
+               "name VARCHAR(120) NOT NULL)"}},
 };
 const auto report = ruvia::DbMigrator::migrate(config, migrations);
 ```
 
 Each `DbMigration` is exactly one statement -- neither backend accepts more
 than one per call -- and its id is recorded in a migrations table so later runs
-skip it. Ids that differ only in letter case are rejected, because a
+skip it. The default table is `ruvia_schema_migrations`; use
+`DbMigratorOptions{.table = "..."}` only when deliberately adopting another
+table. Ids that differ only in letter case are rejected, because a
 case-insensitive collation would treat them as the same migration. The text is
 recorded as a digest alongside the id, so editing a migration that has already
 run is reported rather than silently skipped.
@@ -720,9 +754,9 @@ interruption cannot leave the schema changed and unrecorded. A statement the
 backend refuses inside a transaction block names the exception, per migration:
 
 ```cpp
-ruvia::DbMigration{"002_index",
-    "CREATE INDEX CONCURRENTLY items_value_idx ON items (value)",
-    ruvia::DbMigrationAtomicity::kUnwrapped},
+ruvia::DbMigration{{.id = "002_index",
+    .sql = "CREATE INDEX CONCURRENTLY items_value_idx ON items (value)",
+    .atomicity = ruvia::DbMigrationAtomicity::kUnwrapped}},
 ```
 
 MariaDB commits DDL implicitly, so there the two statements are always separate
@@ -857,7 +891,9 @@ timeout and `StopToken` to typed commands and is inherited by pipelines and
 transactions. Commands and batch execution do not accept a second per-call
 operation policy. Redis defaults bound connect,
 pool acquisition, and command execution, while `std::nullopt` explicitly disables
-an individual default. Deadlines use worker timers rather than maintenance-scan
+an individual default. Redis enables TCP no-delay by default and leaves TCP
+keepalive at the system default unless `tcpKeepAlive` is set explicitly.
+Deadlines use worker timers rather than maintenance-scan
 granularity. Cancelling active I/O closes and discards only its socket, and that
 pool slot reconnects before its next command. An infinite block therefore
 requires either a stoppable token or a finite command timeout. A request handler
@@ -865,11 +901,13 @@ can pass `c.stopToken()` to stop work when its server worker shuts down.
 
 All SET modes use `set(key, value, RedisSetOptions)` and return
 `RedisSetResult`: `applied()` reports whether the write happened and
-`previous()` carries the old value when `returnPrevious` is requested. Expiry,
-NX/XX, and GET behavior are options rather than separate `setEx()`, `setNx()`,
-or `getSet()` commands. `blpop()` and `brpop()` take `RedisBlockWait`, using
-`forDuration()` for a finite Redis wait or `indefinitely()` for an explicit
-unbounded wait.
+`previous()` carries the old value when `previousValue` is
+`RedisSetPreviousValuePolicy::kReturn`. Expiry, NX/XX, and GET behavior are
+options rather than separate `setEx()`, `setNx()`, or `getSet()` commands.
+`xreadGroup()` uses `RedisXReadGroupAcknowledgementPolicy` for pending-entry
+tracking versus Redis `NOACK`. `blpop()` and `brpop()` take `RedisBlockWait`,
+using `forDuration()` for a finite Redis wait or `indefinitely()` for an
+explicit unbounded wait.
 
 Request and response models have separate roles and a compact declaration:
 
@@ -893,8 +931,10 @@ RUVIA_RESPONSE_MODEL(UserResponse,
 and validation. Every JSON response is first represented by a
 `RUVIA_RESPONSE_MODEL`; `toJson()` and `c.json()` accept response models only,
 and there is no dynamic object/array writer API. Runtime-sized collections are
-declared as `ruvia::Array<T>` fields. A request model may only nest request
-models, and a response model may only nest response models. Both roles support
+declared as `ruvia::Array<T>` fields. Request handlers parse typed JSON with
+`c.req().json<T>()`; handlers that explicitly need a dynamic borrowed JSON view
+use `c.req().jsonValue()`. A request model may only nest request models, and a
+response model may only nest response models. Both roles support
 `ruvia::Array<T>` and recursive `ruvia::BoxedArray<T>` fields. Form, query,
 param, header, and cookie binding remain flat scalar inputs.
 
@@ -924,7 +964,15 @@ limits. It throws `std::logic_error` before dispatching a route with a
 `Deadline`, because its synchronous no-worker execution cannot simulate that
 timer without silently weakening production policy.
 
-`SecurityHeadersOptions` defaults to `LegacyXssFilterPolicy::kDisable`, emitting `X-XSS-Protection: 0` because obsolete browser filters can create security issues; `kOmitHeader` omits that header, while Content Security Policy remains the modern content control.
+`SecurityHeadersOptions` uses `DefaultSecurityHeaderPolicy::kEmitDefault` for
+the built-in `nosniff`, `DENY`, and TLS-only HSTS defaults; use `kOmit` for any
+of those headers you want to supply yourself. It also defaults to
+`XssProtectionHeaderPolicy::kEmitDisabled`, emitting `X-XSS-Protection: 0`
+because obsolete browser filters can create security issues; `kOmit` omits that
+header, while Content Security Policy remains the modern content control. The
+default `SecurityHeaderConflictPolicy::kPreserveExisting` leaves handler-supplied
+headers in place; use `kReplaceExisting` when security defaults should override
+them.
 
 ## HTTP Protocol Library
 
