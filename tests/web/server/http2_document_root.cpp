@@ -137,7 +137,7 @@ int main() {
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
             ruvia::test::Http2SansIoSessionFixture fixture;
-            fixture.options.documentRoot.root = &root;
+            fixture.options.documentRoot = ruvia::detail::HttpServerOptions::DocumentRoot::standalone(root);
             fixture.options.compression.emplace();
             auto dispatcher = std::make_shared<WorkerDispatcher>(io, 64);
             const auto workerHandle = WorkerHandleAccess::make(dispatcher);

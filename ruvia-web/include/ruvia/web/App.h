@@ -127,6 +127,7 @@ public:
     // Startup capacity of that worker-local table, not a policy. Workers with
     // neither an app-wide nor a route-specific rule allocate no table at all.
     App& setRateLimitSlotsPerWorker(std::size_t slotsPerWorker);
+    App& setMaxHttpClientOriginsPerWorker(std::size_t originsPerWorker);
     App& onAccess(AccessLogCallback callback);
     // Observes connections lost to an exception that escaped their session --
     // the failures onError cannot answer because the response is already
@@ -135,7 +136,6 @@ public:
     App& onConnectionFailure(ConnectionFailureCallback callback);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
-    App& useHttpClient(HttpClientConfig config);
 #ifdef RUVIA_ENABLE_DATABASE
     App& useDb(DbConfig config);
     App& useDb(std::string_view alias, DbConfig config);

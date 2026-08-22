@@ -26,7 +26,7 @@ namespace ruvia {
 // bound to that token returns at once. The handler then unwinds normally and onError
 // turns it into whatever that failure should be.
 //
-// What it bounds, precisely: db(), redis(), httpClient().send(), and
+// What it bounds, precisely: db(), redis(), httpClient({...}).send(), and
 // runBlocking() automatically observe the request token. Explicit operation
 // tokens are combined with it instead of replacing it. That covers the ordinary
 // cause of a stuck handler, which is a slow dependency.

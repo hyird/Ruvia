@@ -91,6 +91,13 @@ App& App::setWorkerMailboxCapacity(std::size_t capacity) {
     });
 }
 
+App& App::setMaxHttpClientOriginsPerWorker(std::size_t originsPerWorker) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change HTTP client origin capacity while app is running", [originsPerWorker](detail::AppState& state) {
+        if (originsPerWorker == 0) throw std::invalid_argument("HTTP client origin capacity must be greater than 0");
+        state.options.maxHttpClientOriginsPerWorker = originsPerWorker;
+    });
+}
+
 App& App::setIdleTimeout(std::optional<std::chrono::milliseconds> timeout) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change idle timeout while app is running", [timeout](detail::AppState& state) {
         detail::ensurePositiveOptionalDuration(timeout, "configured idle timeout must be greater than zero");

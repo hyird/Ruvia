@@ -1,8 +1,8 @@
 // Static files: c.file(...), c.staticFile(...), StaticRoot, a document root,
 // validators/ranges and gzip configuration.
 //
-// A standalone StaticRoot is an immutable index by default. App document roots
-// can opt into development polling; see the commented configuration below.
+// A standalone StaticRoot is immutable. App document roots refresh every
+// second; see the commented interval configuration below.
 
 #include <filesystem>
 #include <memory>
@@ -57,12 +57,9 @@ int main() {
             .indexFile = "index.html",
         },
     };
-    // Development-only document-root refresh and browser reload:
-    // For development, initialize runtimeOptions in the aggregate above:
+    // Document roots refresh every second by default. To tune the interval:
     // .runtimeOptions = {
-    //     .refreshMode = ruvia::DocumentRootRefreshMode::kPolling,
     //     .refreshInterval = std::chrono::milliseconds(500),
-    //     .enableLiveReload = true,
     // },
     // The application blocking pool is enabled by default.
 

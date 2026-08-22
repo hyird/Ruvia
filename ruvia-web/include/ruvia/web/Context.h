@@ -129,7 +129,7 @@ public:
 
     // Stopped when this request should stop doing work: its handler deadline
     // elapsed (see ruvia::Deadline), or the owning worker began stopping.
-    // db(), redis(), httpClient().send(), and runBlocking() bind this
+    // db(), redis(), httpClient({...}).send(), and runBlocking() bind this
     // token automatically, which is how a deadline reaches a handler that
     // never mentions one. An explicit operation token is combined with it.
     //
@@ -235,8 +235,7 @@ public:
     [[nodiscard]] RedisHandle redis() const;
     [[nodiscard]] RedisHandle redis(std::string_view alias) const;
 #endif
-    [[nodiscard]] HttpClientHandle httpClient() const;
-    [[nodiscard]] HttpClientHandle httpClient(std::string_view alias) const;
+    [[nodiscard]] HttpClientHandle httpClient(HttpClientConfig config) const;
     [[nodiscard]] WebSocket& webSocket() const;
 
     [[nodiscard]] ResponseStreamWriter& stream();

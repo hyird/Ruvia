@@ -12,6 +12,7 @@
 #include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/integration/WorkerCancellationPost.h"
+#include "client/HttpClientResponseState.h"
 
 namespace ruvia::detail {
 namespace {
@@ -112,36 +113,46 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
             if (!stream->responseStatus()) continue;  // Validated informational response.
             const auto responseHeaderCount = stream->remoteInitialHeaderCount().value_or(stream->remoteHeaderCount());
             try {
-                pending->response.status_ = *stream->responseStatus();
-                pending->response.protocolVersion_ = HttpProtocolVersion::kHttp2;
-                pending->response.headers_.clear();
-                pending->response.headers_.reserve(responseHeaderCount);
+                pending->response->state_->status = *stream->responseStatus();
+                pending->response->state_->protocolVersion = HttpProtocolVersion::kHttp2;
+                pending->response->state_->headers.clear();
+                pending->response->state_->headers.reserve(responseHeaderCount);
                 for (std::size_t i = 0; i < responseHeaderCount; ++i) {
                     const auto header = stream->remoteHeaderAt(i);
-                    pending->response.headers_.push_back(HttpClientResponseHeaderAccess::make(
-                        header.name, header.value, pending->response.headers_.get_allocator().resource()));
+                    pending->response->state_->headers.push_back(HttpClientResponseHeaderAccess::make(
+                        header.name, header.value, pending->response->state_->resource));
                 }
                 pending->responseHeaderCount = responseHeaderCount;
+                pending->response->state_->headReady = true;
+                pending->response->state_->headSignal.notify();
             } catch (...) {
                 failPending(*pending, head->streamId(), std::current_exception(), true);
             }
         } else if (const auto* chunk = event->messageBodyChunk()) {
             auto* pending = findPending(chunk->streamId());
             if (pending != nullptr && !pending->complete && !pending->failed()) {
-                if (chunk->bytes().size() > config_.maxResponseBytes - std::min(pending->response.body_.size(), config_.maxResponseBytes)) {
+                const auto retained = pending->response->state_->collectAll
+                    ? pending->response->state_->buffered.size() - pending->response->state_->offset + pending->response->state_->pending.size()
+                    : pending->response->state_->pending.size();
+                if (chunk->bytes().size() > config_.maxResponseBytes - std::min(retained, config_.maxResponseBytes)) {
                     pending->error = HttpClientError::Code::kResponseTooLarge;
                     submitHttp2Reset(connection, chunk->streamId());
                     pending->signal.notify();
                 } else {
                     try {
-                        pending->response.body_.append(chunk->bytes());
+                        pending->response->state_->pending.append(chunk->bytes());
+                        pending->response->state_->dataSignal.notify();
                     } catch (...) {
                         failPending(*pending, chunk->streamId(), std::current_exception(), true);
                     }
                 }
             }
-            connection.http2->releaseAllReceivedData(chunk->streamId());
-            releasedData = true;
+            if (pending != nullptr && pending->response->state_->collectAll) {
+                connection.http2->releaseAllReceivedData(chunk->streamId());
+                releasedData = true;
+            } else if (pending != nullptr) {
+                pending->response->state_->http2DataPending = true;
+            }
         } else if (const auto* end = event->messageEnd()) {
             if (auto* pending = findPending(end->streamId()); pending != nullptr && !pending->failed()) {
                 try {
@@ -149,15 +160,15 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                     if (auto* stream = connection.http2->stream(end->streamId())) {
                         contentSemanticsPresent = stream->remoteContent().metadataOnlyWithoutLength() == nullptr &&
                             stream->remoteContent().metadataOnlyKnownLength() == nullptr;
-                        pending->response.trailers_.clear();
-                        pending->response.trailers_.reserve(stream->remoteHeaderCount() - std::min(stream->remoteHeaderCount(), pending->responseHeaderCount));
+                        pending->response->state_->trailers.clear();
+                        pending->response->state_->trailers.reserve(stream->remoteHeaderCount() - std::min(stream->remoteHeaderCount(), pending->responseHeaderCount));
                         for (std::size_t i = pending->responseHeaderCount; i < stream->remoteHeaderCount(); ++i) {
                             const auto trailer = stream->remoteHeaderAt(i);
-                            pending->response.trailers_.push_back(HttpClientResponseHeaderAccess::make(
-                                trailer.name, trailer.value, pending->response.trailers_.get_allocator().resource()));
+                            pending->response->state_->trailers.push_back(HttpClientResponseHeaderAccess::make(
+                                trailer.name, trailer.value, pending->response->state_->resource));
                         }
                     }
-                    decodeResponseContentEncoding(pending->response, contentSemanticsPresent, config_.maxResponseBytes, pending->response.body_.get_allocator().resource());
+                    decodeResponseContentEncoding(*pending->response, contentSemanticsPresent, config_.maxResponseBytes, pending->response->state_->resource);
                     pending->complete = true;
                 } catch (...) {
                     failPending(*pending, end->streamId(), std::current_exception(), false);
@@ -438,7 +449,7 @@ Task<void> HttpClientPool::waitForHttp2SessionStop(
     }
 }
 
-Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, const HttpClientRequestStorage& request, const OperationTimeout& timeout, StopToken stopToken, std::pmr::memory_resource* responseResource) {
+Task<void> HttpClientPool::executeHttp2(Connection& connection, const HttpClientRequestStorage& request, const OperationTimeout& timeout, StopToken stopToken, HttpClientResponse& response) {
     std::pmr::vector<HttpHeaderView> headers(resource_);
     auto source = HttpClientRequestStorageAccess::view(request, headers);
     std::pmr::string cookieHeader(resource_);
@@ -465,9 +476,12 @@ Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, co
             }
         }
 
-        Http2PendingStream pending(worker_, responseResource);
+        Http2PendingStream pending(worker_, response);
         pending.requestId = ++runtime.nextRequestId;
         if (pending.requestId == 0) pending.requestId = ++runtime.nextRequestId;
+        response.state_->http2 = true;
+        response.state_->connectionIndex = static_cast<std::size_t>(&connection - connections_.data());
+        response.state_->requestId = pending.requestId;
         runtime.pending.push_back(&pending);
         Http2PendingRegistration pendingRegistration(*this, connection, pending);
         WorkerTimerRegistration deadlineTimer;
@@ -482,6 +496,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, co
         if (stopToken.stoppable()) {
             cancellationId = nextCancellationId();
             pending.cancellationId = cancellationId;
+            response.state_->cancellationId = cancellationId;
             stopToken.registerCallback(
                 stopRegistration,
                 WorkerCancellationPost<HttpClientOperationCancellationMailbox>(cancellationMailbox_, cancellationId));
@@ -510,6 +525,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, co
                 config_.scheme == HttpScheme::kHttps ? "https" : "http", authority, std::string_view(source.target), headers, content);
             if (const auto* accepted = submitted.submitted()) {
                 pending.streamId = accepted->streamId();
+                response.state_->streamId = pending.streamId;
                 connection.http2->pinStream(pending.streamId);
                 if (body && !body->value().empty()) {
                     const auto status = connection.http2->submitData(pending.streamId, body->value(), Http2EndStream::kEndStream);
@@ -539,6 +555,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, co
         const bool retryable = pending.retryable;
         const auto error = pending.error;
         const auto failure = pending.failure;
+        if (pending.complete && response.state_->http2DataPending) releaseResponseData(*response.state_);
         pendingRegistration.reset();
         if (retryable && attempt == 0 && !timeout.expired()) continue;
         if (retryable) throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP/2 request was not processed after GOAWAY");
@@ -555,7 +572,7 @@ Task<HttpClientResponse> HttpClientPool::executeHttp2(Connection& connection, co
                 default: throw HttpClientError(*error, "HTTP/2 stream failed");
             }
         }
-        co_return std::move(pending.response);
+        co_return;
     }
     throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP/2 request retry exhausted");
 }

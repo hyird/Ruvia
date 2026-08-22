@@ -1,4 +1,4 @@
-// Development polling must publish a newly indexed document-root file without
+// Document-root refresh must publish a newly indexed file without
 // moving directory scans or file reads onto the HTTP worker.
 
 #include <algorithm>
@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -96,21 +97,19 @@ int main() {
         std::ofstream output(dir / "initial.txt", std::ios::binary);
         output << initialBody;
     }
-
     ruvia::StaticRootOptions rootOptions;
     rootOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
     ruvia::StaticRoot root(dir, std::move(rootOptions));
 
     ruvia::DocumentRootRuntimeOptions documentRootRuntime;
-    documentRootRuntime.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
     documentRootRuntime.refreshInterval = std::chrono::milliseconds(20);
 
     std::pmr::memory_resource* resource = std::pmr::get_default_resource();
     ruvia::detail::RouteTable routes(resource);
     ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1});
     ruvia::detail::HttpServerOptions options;
-    options.documentRoot.root = &root;
-    options.documentRoot.runtimeOptions = documentRootRuntime;
+    options.documentRoot = ruvia::detail::HttpServerOptions::DocumentRoot::refreshing(
+        root, documentRootRuntime);
     options.blockingPool = &pool;
 
     ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
@@ -125,29 +124,33 @@ int main() {
     };
 
     asio::io_context context;
-    const auto fetchBody = [&](std::string_view path, std::string_view expected) {
+    const auto fetchBody = [&](std::string_view path) -> std::optional<std::string> {
         asio::ip::tcp::socket socket(context);
         std::error_code ec;
         socket.connect(endpoint, ec);
         if (ec) {
-            return false;
+            return std::nullopt;
         }
         const std::string request = "GET " + std::string(path) + " HTTP/1.1\r\nHost: localhost\r\n\r\n";
         asio::write(socket, asio::buffer(request), ec);
         if (ec) {
-            return false;
+            return std::nullopt;
         }
         asio::streambuf buffer;
         const auto head = readHead(socket, buffer, ec);
         const auto length = contentLength(head);
         if (ec || length == std::string_view::npos) {
-            return false;
+            return std::nullopt;
         }
         const auto body = readBody(socket, buffer, length, ec);
-        return !ec && head.starts_with("HTTP/1.1 200") && body == expected;
+        if (ec || !head.starts_with("HTTP/1.1 200")) {
+            return std::nullopt;
+        }
+        return body;
     };
 
-    if (!fetchBody("/initial.txt", initialBody)) {
+    const auto initial = fetchBody("/initial.txt");
+    if (!initial.has_value() || *initial != initialBody) {
         fail(1, "initial document-root file was not served");
     }
 
@@ -159,13 +162,14 @@ int main() {
 
     bool refreshed = false;
     for (int attempt = 0; attempt != 60 && !refreshed; ++attempt) {
-        refreshed = fetchBody("/new.txt", refreshedBody);
+        const auto body = fetchBody("/new.txt");
+        refreshed = body.has_value() && *body == refreshedBody;
         if (!refreshed) {
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
     }
     if (!refreshed) {
-        fail(2, "new document-root file was not published by polling");
+        fail(2, "new document-root file was not published by refresh");
     }
 
     // A failed rebuild must retain the last complete snapshot and become

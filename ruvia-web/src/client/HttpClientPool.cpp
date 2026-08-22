@@ -23,8 +23,10 @@
 #include "ruvia/http/detail/cookie/CookieValidation.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+#include "ruvia/http/detail/client/HttpClientContentEncoding.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/integration/WorkerCancellationPost.h"
+#include "client/HttpClientResponseState.h"
 
 namespace ruvia::detail {
 namespace {
@@ -650,8 +652,53 @@ Task<void> HttpClientPool::ensureConnected(
     if (connection.protocol == WireProtocol::kHttp2) co_await initializeHttp2(connection, timeout);
 }
 
-Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequestStorage request, OperationOptions options, std::pmr::memory_resource* responseResource) {
-    responseResource = httpPmrResourceOrDefault(responseResource);
+Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequestStorage request, OperationOptions options, std::pmr::memory_resource*) {
+    // The public request is copied from request-local borrowed storage. Once
+    // the response head is returned, transport work may continue beyond the
+    // handler frame, so move it onto the worker-owned resource before spawning.
+    std::pmr::vector<HttpHeaderView> requestHeaders(resource_);
+    const auto requestView = HttpClientRequestStorageAccess::view(request, requestHeaders);
+    HttpClientRequestStorage ownedRequest(requestView.method.view(), requestView.target.view(), resource_);
+    for (const auto& header : requestView.headers) ownedRequest.appendHeader(header.name(), header.value());
+    if (const auto* bytes = requestView.content.borrowedBytes()) ownedRequest.setBody(bytes->value());
+    HttpClientResponse response(resource_, worker_, *this);
+    auto* state = response.state_;
+    state->bufferedLimit = config_.maxResponseBytes;
+    backgroundTasks_.spawn(executeInto(std::move(ownedRequest), std::move(options), state));
+    while (!state->headReady && !state->failure && !state->errorCode) co_await state->headSignal.wait();
+    if (state->failure) std::rethrow_exception(state->failure);
+    if (state->errorCode) {
+        const auto code = static_cast<HttpClientError::Code>(*state->errorCode);
+        throw HttpClientError(code, "HTTP client request failed before the response head");
+    }
+    const auto contentCoding = httpClientContentCodingOf(state->headers);
+    if (contentCoding.coding() == nullptr || *contentCoding.coding() != HttpContentCoding::kIdentity) {
+        state->collectAll = true;
+        if (state->http2DataPending) releaseResponseData(*state);
+        state->spaceSignal.notify();
+        while (!state->complete) co_await state->dataSignal.wait();
+        if (state->failure) std::rethrow_exception(state->failure);
+        if (state->errorCode) throw HttpClientError(static_cast<HttpClientError::Code>(*state->errorCode), "HTTP client encoded response failed");
+    }
+    co_return response;
+}
+
+Task<void> HttpClientPool::executeInto(HttpClientRequestStorage request, OperationOptions options, HttpClientResponseState* state) {
+    HttpClientResponse keepAlive(state, true);
+    try {
+        co_await executeRequestInto(std::move(request), std::move(options), state);
+    } catch (const HttpClientError&) {
+        state->failure = std::current_exception();
+    } catch (...) {
+        state->failure = std::current_exception();
+    }
+    state->complete = true;
+    state->headSignal.notify();
+    state->dataSignal.notify();
+}
+
+Task<void> HttpClientPool::executeRequestInto(HttpClientRequestStorage request, OperationOptions options, HttpClientResponseState* state) {
+    HttpClientResponse response(state, true);
     const OperationTimeout timeout(options.timeout.has_value() ? options.timeout : config_.requestTimeout);
     const auto acquireTimeout = timeout.constrainedBy(config_.acquireTimeout);
     if (requestsBuffered_ >= config_.maxBufferedRequestsPerWorker) {
@@ -671,6 +718,7 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequestStorage reques
     ++requestsInFlight_;
     Lease lease(*this, index);
     auto& connection = lease.connection();
+    state->connectionIndex = index % connections_.size();
     bool discardConnection = true;
     try {
         co_await ensureConnected(connection, timeout, acquireTimeout, options.stopToken);
@@ -680,9 +728,8 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequestStorage reques
             // not discard that shared connection.
             discardConnection = false;
         }
-        HttpClientResponse response(responseResource);
         if (connection.protocol == WireProtocol::kHttp2) {
-            response = co_await executeHttp2(connection, request, timeout, options.stopToken, responseResource);
+            co_await executeHttp2(connection, request, timeout, options.stopToken, response);
         } else {
             // A negotiated HTTP/1 connection can have several operations that
             // already hold outer HTTP/2-capacity slots. Waiting for this
@@ -743,6 +790,7 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequestStorage reques
             if (options.stopToken.stoppable()) {
                 cancellationId = nextCancellationId();
                 connection.cancellationId = cancellationId;
+                state->cancellationId = cancellationId;
                 options.stopToken.registerCallback(
                     stopRegistration,
                     WorkerCancellationPost<HttpClientOperationCancellationMailbox>(cancellationMailbox_, cancellationId));
@@ -760,18 +808,41 @@ Task<HttpClientResponse> HttpClientPool::execute(HttpClientRequestStorage reques
                 }
             } cancellationRegistrationGuard{connection, cancellationId, stopRegistration};
             if (options.stopToken.stopRequested()) cancelOperationById(cancellationId);
-            response = co_await executeHttp1(connection, request, timeout, responseResource);
+            co_await executeHttp1(connection, request, timeout, response);
         }
         retainResponseCookies(request, response);
         --requestsInFlight_;
         ++completedRequests_;
-        co_return response;
+        co_return;
     } catch (...) {
         --requestsInFlight_;
         ++failedRequests_;
         if (discardConnection) lease.discard();
         throw;
     }
+}
+
+void HttpClientPool::abandonResponse(HttpClientResponseState& state) noexcept {
+    if (state.abandoned) return;
+    state.abandoned = true;
+    if (state.http2) {
+        if (state.connectionIndex < connections_.size() && state.requestId != 0) {
+            cancelHttp2Stream(connections_[state.connectionIndex], state.requestId, AbortReason::kCancelled);
+        }
+    } else if (state.cancellationId != 0) {
+        cancelOperationById(state.cancellationId);
+    }
+    state.spaceSignal.notify();
+}
+
+void HttpClientPool::releaseResponseData(HttpClientResponseState& state) noexcept {
+    if (!state.http2DataPending || state.connectionIndex >= connections_.size() || state.streamId == 0) return;
+    auto& connection = connections_[state.connectionIndex];
+    if (connection.http2) {
+        connection.http2->releaseAllReceivedData(state.streamId);
+        connection.http2Runtime->writeSignal.notify();
+    }
+    state.http2DataPending = false;
 }
 
 }  // namespace ruvia::detail

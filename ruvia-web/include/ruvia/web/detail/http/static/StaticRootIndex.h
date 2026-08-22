@@ -58,14 +58,13 @@ struct StaticRootState final {
     bool enableRanges{true};
     bool enableValidators{true};
     bool serveDotfiles{false};
-    // Polling request leases are charged to this worker-owned snapshot, not to
+    // Refresh request leases are charged to this worker-owned snapshot, not to
     // the server globally. The refresh loop can therefore reclaim unrelated
     // retired snapshots while a long request still holds an older one.
     // Application-owned immutable roots outlive all workers and never touch
     // this counter from their concurrent request paths.
     std::size_t activeBindings{0};
     std::uint64_t fingerprint{0};
-    std::uint64_t revision{0};
 
     explicit StaticRootState(std::pmr::memory_resource* resource)
         : root(resource),
@@ -164,7 +163,6 @@ public:
     [[nodiscard]] static bool isIndexedDirectory(const StaticRoot& root, std::string_view relativePath) noexcept;
     [[nodiscard]] static StaticRootOptions options(const StaticRoot& root);
     [[nodiscard]] static std::uint64_t fingerprint(const StaticRoot& root) noexcept;
-    [[nodiscard]] static std::uint64_t revision(const StaticRoot& root) noexcept;
     [[nodiscard]] static bool sameSnapshot(const StaticRoot& left, const StaticRoot& right) noexcept;
     static void acquireBinding(const StaticRoot& root) noexcept;
     static void releaseBinding(const StaticRoot& root) noexcept;

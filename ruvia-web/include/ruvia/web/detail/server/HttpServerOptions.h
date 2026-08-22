@@ -126,18 +126,62 @@ struct HttpServerOptions final {
 
     using ListenerTransport = std::variant<PlainHttp, Tls, RedirectHttpToHttps>;
 
-    struct DocumentRoot final {
-        const StaticRoot* root{nullptr};
-        DocumentRootRuntimeOptions runtimeOptions;
+    class DocumentRoot final {
+        struct Standalone final {
+            const StaticRoot* root;
+        };
+        struct Refreshing final {
+            const StaticRoot* root;
+            DocumentRootRuntimeOptions options;
+        };
 
-        // Keep the root and its runtime policy coupled at the dispatch
-        // boundary; a null root produces the explicit no-root state.
-        [[nodiscard]] DocumentRootBinding binding() const noexcept {
-            if (root == nullptr) {
-                return DocumentRootBinding::none();
-            }
-            return DocumentRootBinding::configured(*root, runtimeOptions);
+    public:
+        DocumentRoot() noexcept = default;
+
+        [[nodiscard]] static DocumentRoot standalone(const StaticRoot& root) noexcept {
+            return DocumentRoot(Standalone{&root});
         }
+
+        [[nodiscard]] static DocumentRoot refreshing(
+            const StaticRoot& root,
+            DocumentRootRuntimeOptions options = {}) noexcept {
+            return DocumentRoot(Refreshing{&root, options});
+        }
+
+        [[nodiscard]] const StaticRoot* root() const noexcept {
+            if (const auto* standalone = std::get_if<Standalone>(&state_)) return standalone->root;
+            if (const auto* refreshing = std::get_if<Refreshing>(&state_)) return refreshing->root;
+            return nullptr;
+        }
+
+        [[nodiscard]] const DocumentRootRuntimeOptions* refreshOptions() const noexcept {
+            const auto* refreshing = std::get_if<Refreshing>(&state_);
+            return refreshing == nullptr ? nullptr : &refreshing->options;
+        }
+
+        // Publishes the next immutable snapshot without changing the ownership
+        // state. Calling this on a non-refreshing root is an invariant breach.
+        void publish(const StaticRoot& root) noexcept {
+            auto* refreshing = std::get_if<Refreshing>(&state_);
+            if (refreshing == nullptr) std::terminate();
+            refreshing->root = &root;
+        }
+
+        [[nodiscard]] DocumentRootBinding binding() const noexcept {
+            if (const auto* standalone = std::get_if<Standalone>(&state_)) {
+                return DocumentRootBinding::standalone(*standalone->root);
+            }
+            if (const auto* refreshing = std::get_if<Refreshing>(&state_)) {
+                return DocumentRootBinding::configured(*refreshing->root);
+            }
+            return DocumentRootBinding::none();
+        }
+
+    private:
+        explicit DocumentRoot(Standalone state) noexcept : state_(state) {}
+        explicit DocumentRoot(Refreshing state) noexcept : state_(state) {}
+
+        std::variant<std::monostate, Standalone, Refreshing> state_;
     };
 
     // nginx-aligned inactivity timeouts. Absence disables a phase timeout;
@@ -146,6 +190,7 @@ struct HttpServerOptions final {
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
     // Capacity of the explicit cross-thread queue for this Web worker.
     std::size_t workerMailboxCapacity{1024};
+    std::size_t maxHttpClientOriginsPerWorker{64};
     MemoryPoolConfig memoryConfig{};
     std::optional<std::chrono::milliseconds> requestHeaderTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> requestBodyTimeout{std::chrono::seconds(60)};

@@ -11,7 +11,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <initializer_list>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -198,84 +197,12 @@ struct HttpClientRequestView {
     // request/response transaction. String literals, string_view values, and
     // owning-string lvalues remain valid inputs; owning-string temporaries are
     // rejected before they can leave a dangling view in the request.
-    class HeaderInit final {
-    public:
-        constexpr HeaderInit() noexcept = default;
-
-        constexpr HeaderInit(std::span<const HttpHeaderView> headers) noexcept
-            : headers_(headers) {}
-
-        template <std::size_t N>
-        constexpr HeaderInit(const HttpHeaderView (&headers)[N]) noexcept
-            : headers_(headers, N) {}
-
-        template <std::size_t N>
-        constexpr HeaderInit(const std::array<HttpHeaderView, N>& headers) noexcept
-            : headers_(headers) {}
-
-        template <std::size_t N>
-        HeaderInit(std::array<HttpHeaderView, N>&&) = delete;
-
-        template <typename Allocator>
-        HeaderInit(const std::vector<HttpHeaderView, Allocator>&) = delete;
-
-        constexpr HeaderInit(std::initializer_list<HttpHeaderView>) = delete;
-
-        constexpr HeaderInit& operator=(std::span<const HttpHeaderView> headers) noexcept {
-            headers_ = headers;
-            return *this;
-        }
-
-        template <std::size_t N>
-        constexpr HeaderInit& operator=(const HttpHeaderView (&headers)[N]) noexcept {
-            headers_ = std::span<const HttpHeaderView>(headers, N);
-            return *this;
-        }
-
-        template <std::size_t N>
-        constexpr HeaderInit& operator=(const std::array<HttpHeaderView, N>& headers) noexcept {
-            headers_ = std::span<const HttpHeaderView>(headers);
-            return *this;
-        }
-
-        template <std::size_t N>
-        HeaderInit& operator=(std::array<HttpHeaderView, N>&&) = delete;
-
-        template <typename Allocator>
-        HeaderInit& operator=(const std::vector<HttpHeaderView, Allocator>&) = delete;
-
-        HeaderInit& operator=(std::initializer_list<HttpHeaderView>) = delete;
-
-        [[nodiscard]] constexpr operator std::span<const HttpHeaderView>() const noexcept {
-            return headers_;
-        }
-
-        [[nodiscard]] constexpr auto begin() const noexcept {
-            return headers_.begin();
-        }
-
-        [[nodiscard]] constexpr auto end() const noexcept {
-            return headers_.end();
-        }
-
-        [[nodiscard]] constexpr std::size_t size() const noexcept {
-            return headers_.size();
-        }
-
-        [[nodiscard]] constexpr bool empty() const noexcept {
-            return headers_.empty();
-        }
-
-    private:
-        std::span<const HttpHeaderView> headers_{};
-    };
-
     ::ruvia::BorrowedText method{"GET"};
     ::ruvia::BorrowedText target{"/"};
     // Borrowed header table; its elements and strings must remain alive and
     // unchanged through the synchronous prepare/submit call. HTTP/1 preparation
     // owns the small set of facts needed by the later response exchange.
-    HeaderInit headers{};
+    std::span<const HttpHeaderView> headers{};
     HttpClientRequestContentView content{HttpClientRequestContentView::none()};
 };
 

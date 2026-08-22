@@ -367,21 +367,11 @@ struct DeadlineConfig final {
     std::optional<std::chrono::milliseconds> handler;
 };
 
-enum class DocumentRootRefreshMode : std::uint8_t {
-    kImmutable,
-    kPolling,
-};
-
 // Runtime behavior belongs to the server's document-root binding, not to the
-// immutable StaticRoot index. A standalone StaticRoot therefore cannot
-// accidentally advertise a refresh or compression policy that nobody runs.
+// immutable StaticRoot index. App document roots are always refreshed; a
+// standalone StaticRoot remains immutable because it has no server runtime.
 struct DocumentRootRuntimeOptions final {
-    DocumentRootRefreshMode refreshMode{DocumentRootRefreshMode::kImmutable};
     std::chrono::milliseconds refreshInterval{std::chrono::seconds(1)};
-    // Development-only browser refresh support. The Web runtime exposes a
-    // small version endpoint and a polling script; applications opt in by
-    // including the script in their HTML.
-    bool enableLiveReload{false};
 };
 
 struct DocumentRootConfig final {

@@ -68,15 +68,9 @@ DbHandle WebWorkerContext::db(std::string_view alias) const {
 }
 #endif
 
-HttpClientHandle WebWorkerContext::httpClient() const {
+HttpClientHandle WebWorkerContext::httpClient(HttpClientConfig config) const {
     if (httpClients_ == nullptr) throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
-    return httpClients_->get(resource_, operationScope_).withOptions(
-        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
-}
-
-HttpClientHandle WebWorkerContext::httpClient(std::string_view alias) const {
-    if (httpClients_ == nullptr) throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
-    return httpClients_->get(alias, resource_, operationScope_).withOptions(
+    return httpClients_->get(std::move(config), resource_, operationScope_).withOptions(
         OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 

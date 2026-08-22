@@ -30,20 +30,6 @@ void upsertDefinition(std::pmr::vector<Definition>& definitions, std::string_vie
 
 }  // namespace
 
-App& App::useHttpClient(HttpClientConfig config) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot configure http client while app is running", [&](detail::AppState& state) {
-        if (config.alias.empty()) {
-            throw std::invalid_argument("http client alias must not be empty");
-        }
-        detail::validateHttpClientConfig(config);
-        detail::HttpClientConfigStorage storedConfig(config, detail::appResource());
-        upsertDefinition(state.httpClients, config.alias, storedConfig, [](std::string_view storedAlias, detail::HttpClientConfigStorage&& definitionConfig) {
-            auto* resource = detail::appResource();
-            return detail::HttpClientDefinition{std::pmr::string(storedAlias, resource), std::move(definitionConfig)};
-        });
-    });
-}
-
 #ifdef RUVIA_ENABLE_DATABASE
 App& App::useDb(DbConfig config) {
     return useDb("default", std::move(config));

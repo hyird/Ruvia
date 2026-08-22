@@ -161,16 +161,17 @@ HttpServer::HttpServer(ValidatedOptionsTag, TcpEndpoint endpoint, const RouteTab
       options_(std::move(validatedOptions)),
       connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
       dataAccess_(ioContext_, workerHandle_, memory_.resource(), databases, redis, connectionScanner_),
-      httpClients_(ioContext_, workerHandle_, memory_.resource(), httpClients),
+      httpClients_(ioContext_, workerHandle_, memory_.resource(), httpClients, options_.maxHttpClientOriginsPerWorker),
       workerStates_(memory_.resource(), workerStates),
       webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(), workerHandle_, memory_.resource(), dataAccess_.databases(), dataAccess_.redis(), httpClients_, workerStates_, options_.blockingPool, [this](std::exception_ptr failure) { failWorker(std::move(failure)); })),
       rateLimiter_(options_.defaultRateLimitPerWorker, routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent : RouteRateLimitPresence::kAbsent, options_.rateLimitSlotsPerWorker, memory_.resource()),
       workSetPool_(memory_) {
-    if (options_.documentRoot.root != nullptr && options_.documentRoot.runtimeOptions.refreshMode == DocumentRootRefreshMode::kPolling) {
-        const auto* configuredRoot = options_.documentRoot.root;
+    if (options_.documentRoot.refreshOptions() != nullptr) {
+        const auto* configuredRoot = options_.documentRoot.root();
+        if (configuredRoot == nullptr) std::terminate();
         auto rootOptions = StaticRootAccess::options(*configuredRoot);
         ownedDocumentRoot_ = makePmrObject<StaticRoot>(processResource(), configuredRoot->path(), std::move(rootOptions));
-        options_.documentRoot.root = ownedDocumentRoot_.get();
+        options_.documentRoot.publish(*ownedDocumentRoot_);
     }
     // Claim the failure sink's counter. Every reporting site shares this one
     // options_ instance, so the count cannot drift from what the callback saw.
@@ -421,7 +422,7 @@ Task<void> HttpServer::runWorker() {
         connectionScanner_.start();
         co_await dataAccess_.connect();
         (void)workerCompletion_.markStartupReady();
-        if (options_.documentRoot.root != nullptr && options_.documentRoot.runtimeOptions.refreshMode == DocumentRootRefreshMode::kPolling) {
+        if (options_.documentRoot.refreshOptions() != nullptr) {
             backgroundTasks_.spawn(staticRootRefreshLoop());
             refreshStarted = true;
         }
@@ -451,7 +452,9 @@ Task<void> HttpServer::runWorker() {
 }
 
 Task<void> HttpServer::staticRootRefreshLoop() {
-    const auto interval = options_.documentRoot.runtimeOptions.refreshInterval;
+    const auto* refreshOptions = options_.documentRoot.refreshOptions();
+    if (refreshOptions == nullptr) std::terminate();
+    const auto interval = refreshOptions->refreshInterval;
     const auto reclaimRetiredRoots = [this]() noexcept {
         std::erase_if(retiredDocumentRoots_, [](const DocumentRootPtr& root) {
             return root == nullptr || !StaticRootAccess::hasActiveBindings(*root);
@@ -473,9 +476,9 @@ Task<void> HttpServer::staticRootRefreshLoop() {
         // must not pin every newer generation published by polling.
         reclaimRetiredRoots();
 
-        const auto* currentRoot = options_.documentRoot.root;
+        const auto* currentRoot = options_.documentRoot.root();
         if (currentRoot == nullptr) {
-            // The validated polling configuration owns this invariant. Keep
+            // The validated document-root configuration owns this invariant. Keep
             // the loop defensive anyway: a broken runtime binding must not
             // turn a background task into a null dereference on the worker.
             documentRootRefreshFailures_.fetch_add(1, std::memory_order_relaxed);
@@ -553,7 +556,7 @@ Task<void> HttpServer::staticRootRefreshLoop() {
             continue;
         }
         ownedDocumentRoot_ = std::move(candidate);
-        options_.documentRoot.root = ownedDocumentRoot_.get();
+        options_.documentRoot.publish(*ownedDocumentRoot_);
     }
 }
 

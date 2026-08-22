@@ -1492,8 +1492,7 @@ static_assert(!HasHttpClientRequestContentViewValue<ruvia::HttpClientRequestCont
 static_assert(HasHttpClientRequestContentViewValue<ruvia::HttpClientRequestBytesView>);
 static_assert(!HasHttpClientRequestContentViewValue<ruvia::HttpClientRequestWithoutContent>);
 static_assert(!std::default_initializable<ruvia::HttpClientRequestContentView>);
-static_assert(!std::is_constructible_v<ruvia::HttpClientRequestView::HeaderInit, std::array<ruvia::HttpHeaderView, 1>&&>);
-static_assert(!std::is_assignable_v<ruvia::HttpClientRequestView::HeaderInit&, std::array<ruvia::HttpHeaderView, 1>&&>);
+static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientRequestView&>().headers), std::span<const ruvia::HttpHeaderView>>);
 static_assert(!std::default_initializable<ruvia::HttpClientRequestWithoutContent>);
 static_assert(!std::default_initializable<ruvia::HttpClientRequestBytesView>);
 

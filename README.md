@@ -152,26 +152,13 @@ reverse-proxy product API.
 
 ## Outbound HTTP Client
 
-Register each origin before `App::run()`. Every Web worker creates one bounded
-pool for each registered alias; no client socket, cookie jar, or protocol state
-crosses worker threads. `Context::httpClient()` returns a request-scoped
+Pass the origin configuration where the request is made. Each Web worker keeps
+a bounded cache of origin pools; no client socket, cookie jar, or protocol state
+crosses worker threads. `Context::httpClient({...})` returns a request-scoped
 `HttpClientHandle`, so it cannot escape dispatch or be mistaken for a globally
 shared client. HTTPS negotiates HTTP/2 with ALPN and falls back to HTTP/1.1 by
 default. Cleartext uses HTTP/1.1 unless `kHttp2Only` explicitly requests h2
 prior knowledge.
-
-```cpp
-ruvia::app().useHttpClient({
-    .alias = "upstream",
-    .scheme = ruvia::HttpScheme::kHttps,
-    .host = "api.example.com",
-    .connectionsPerWorker = 2,
-    .maxConcurrentHttp2StreamsPerConnection = 100,
-    .maxBufferedRequestsPerWorker = 1024,
-    .writeTimeout = std::chrono::seconds(30),
-    .requestTimeout = std::chrono::seconds(10),
-});
-```
 
 Handlers use an origin-bound handle and the protocol target's existing borrowed
 `HttpClientRequestView`. The handle copies that view into request PMR memory
@@ -180,7 +167,12 @@ synchronous `send()` call:
 
 ```cpp
 ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
-    auto client = c.httpClient("upstream");
+    auto client = c.httpClient({
+        .scheme = ruvia::HttpScheme::kHttps,
+        .host = "api.example.com",
+        .connectionsPerWorker = 2,
+        .requestTimeout = std::chrono::seconds(10),
+    });
     auto operation = client.send({
         .target = "/v1/data",
     }, {
@@ -188,14 +180,18 @@ ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
     });
     auto response = co_await std::move(operation);
     c.status(response.status());
-    co_return c.body(response.body());
+    co_return c.body(co_await response.body().readAll());
 }
 ```
 
-`HttpClientResponse` owns status, protocol version, headers, trailers, and
-buffered body in stable PMR storage; it does not borrow from the request builder
-or caller stack. `maxResponseBytes` bounds that body; use `trailers()` or
-`trailer()` after completion to inspect HTTP/2 trailing fields. On HTTP/1, a
+`HttpClientResponse` owns status, protocol version, headers, trailers, and an
+address-stable linear body state; it does not borrow from the request builder
+or caller stack. `send()` completes when the final response head is available.
+`maxResponseBytes` bounds `readAll()` and the HTTP/1 queued body window, not the
+total number of bytes that may pass through `read()` or `pipeTo()`. Responses
+with a non-identity `Content-Encoding` are decoded before `send()` completes
+because the current content decoders are whole-representation decoders. Use
+`trailers()` or `trailer()` after body completion to inspect trailing fields. On HTTP/1, a
 request timeout or explicit `StopToken`
 cancellation closes and discards that socket. On HTTP/2 it submits
 `RST_STREAM(CANCEL)` for only the affected stream, so unrelated multiplexed
@@ -215,13 +211,12 @@ requests are never retried automatically.
 Use `HttpClientProtocol::kHttp1Only` or `kHttp2Only` when negotiation fallback
 is not acceptable. Client certificates, a custom CA file, certificate
 verification policy, connect/acquire/request/write timeouts, TCP keepalive, and
-per-worker connection capacity are startup configuration.
+per-worker connection capacity are supplied in the same `{}` configuration.
+Repeated calls for an origin must use the same configuration.
 Additional operations wait in the bounded per-worker queue and fail with
 `kQueueFull` when it is full or `kTimeout` when `acquireTimeout` expires.
 
-The current response API is deliberately buffered, matching Drogon's regular
-`send` model; it is not a streaming download API. Cleartext HTTP/2 uses
-RFC 9113 prior knowledge when `kHttp2Only` is selected. HTTP/1.1
+Cleartext HTTP/2 uses RFC 9113 prior knowledge when `kHttp2Only` is selected. HTTP/1.1
 `Upgrade: h2c` is not performed implicitly, so a server that only accepts the
 Upgrade transition must be configured for HTTP/1 or exposed through TLS/ALPN.
 
@@ -229,19 +224,32 @@ The Controller-facing surface provides one `send(HttpClientRequestView,
 OperationOptions)` operation, origin inspection, and a single `stats()`
 snapshot. Requests are awaited as scoped
 coroutine operations; there are no blocking overloads or callback ownership model.
-All pool configuration is immutable after startup. A handle automatically
+
+Every response has one linear body reader. `read()` consumes one borrowed
+chunk, `readAll()` collects that same stream with a byte bound, and `pipeTo()`
+forwards it to a controller response stream with backpressure. There is no
+separate buffered request or streaming request entry point:
+
+```cpp
+auto response = co_await client.send({.target = "/v1/events"});
+c.status(response.status());
+co_await response.body().pipeTo(c.stream());
+```
+Pool configuration is immutable after that origin is first used. A handle automatically
 observes its request or worker stop token; an explicit operation token is
 combined with that ambient token rather than replacing it.
 
 Automatic cookies are disabled by default. Set `cookiesEnabled = true` in the
-startup configuration to retain matching `Set-Cookie` response fields and send
+origin configuration to retain matching `Set-Cookie` response fields and send
 them on later requests. A per-request cookie is an ordinary `cookie` header in
 the supplied `HttpClientRequestView`; `HttpClientConfig::cookies` seeds every
-worker-local jar at startup.
+worker-local jar when the origin is first used.
 `maxCookiesPerWorker` and
 `maxCookieBytesPerWorker` bound each worker-local jar; automatic cookies beyond
-either bound are ignored, while invalid or over-capacity startup configuration
-is rejected before workers start.
+either bound are ignored, while invalid configuration is rejected before the
+handle is returned. The worker-local origin cache defaults to 64 entries and
+can be bounded explicitly with
+`ruvia::app().setMaxHttpClientOriginsPerWorker(...)`.
 
 ## Core Runtime
 
@@ -528,22 +536,21 @@ synchronously instead. Rejection by an enabled pool falls back to identity.
 Whenever a policy fallback would use identity but the client forbids it, the
 result is `406 Not Acceptable`.
 
-`DocumentRootConfig` builds a static-root index at startup. The default
-`DocumentRootRefreshMode::kImmutable` keeps requests on the index and does not
-rescan directories. For development, opt into polling; each refresh rebuilds
-the complete index on the blocking pool and publishes it between requests. A
-filesystem error rejects that candidate as a whole, so polling keeps the
-previous complete index instead of exposing a partial directory. Each failed
-poll increments `App::httpStats().documentRootRefreshFailures` without stopping
-the worker:
+`DocumentRootConfig` builds a static-root index at startup and always refreshes
+it, once per second by default. The refresh cannot be disabled; a positive
+`refreshInterval` may tune its cadence. Each refresh rebuilds the complete index
+on the blocking pool and publishes it between requests. A filesystem error
+rejects that candidate as a whole, so the server keeps the previous complete
+index instead of exposing a partial directory. Each failed refresh increments
+`App::httpStats().documentRootRefreshFailures` without stopping the worker.
+Because directory scans never run on an event loop, configuring a document root
+while explicitly disabling the blocking pool is rejected at startup:
 
 ```cpp
 auto documentRoot = ruvia::DocumentRootConfig{
     .root = "public",
     .runtimeOptions = {
-        .refreshMode = ruvia::DocumentRootRefreshMode::kPolling,
         .refreshInterval = std::chrono::milliseconds(500),
-        .enableLiveReload = true,
     },
 };
 
@@ -552,14 +559,6 @@ ruvia::app()
     .setDocumentRoot(std::move(documentRoot))
     .run();
 ```
-
-Live reload is deliberately development-only. Include
-`/__ruvia/live-reload.js` in the development HTML; the script polls the
-version endpoint and reloads the page when the published index changes. The
-endpoint uses a monotonic snapshot revision, so a filesystem change cannot be
-hidden by a hash collision.
-It is only valid with `DocumentRootRefreshMode::kPolling`; enabling it with
-the immutable refresh mode is rejected during server-option validation.
 
 When compression is enabled, static files may select checked-in `.br`, `.gz`,
 or `.zst` sidecars whose mtime is at least as new as the identity file; an older

@@ -163,7 +163,7 @@ int main() {
         {});
     routerImpl.finalize();
     ruvia::detail::HttpServerOptions options;
-    options.documentRoot.root = &root;
+    options.documentRoot = ruvia::detail::HttpServerOptions::DocumentRoot::standalone(root);
     options.compression.emplace();
 
     ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);

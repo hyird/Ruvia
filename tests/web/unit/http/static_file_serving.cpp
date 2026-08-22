@@ -271,80 +271,32 @@ RUVIA_TEST(static_file_without_sidecar_stays_identity_when_precompressed_variant
     fs::remove_all(dir);
 }
 
-RUVIA_TEST(document_root_runtime_options_control_live_reload_assets) {
+RUVIA_TEST(document_root_snapshot_metadata_tracks_refresh) {
     namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() / "ruvia_static_live_reload";
+    const auto dir = fs::temp_directory_path() / "ruvia_static_refresh_metadata";
     fs::remove_all(dir);
     fs::create_directories(dir);
     std::ofstream(dir / "index.html") << "<html></html>";
 
     ruvia::StaticRootOptions options;
     options.fileTypes = ruvia::StaticFileTypePolicy::all();
-    ruvia::DocumentRootRuntimeOptions runtimeOptions;
-    runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
-    runtimeOptions.refreshInterval = std::chrono::milliseconds(37);
-    runtimeOptions.enableLiveReload = true;
     ruvia::StaticRoot root(dir, std::move(options));
 
     auto equivalentOptions = ruvia::detail::StaticRootAccess::options(root);
     ruvia::StaticRoot equivalentRoot(dir, std::move(equivalentOptions));
     RUVIA_CHECK(ruvia::detail::StaticRootAccess::sameSnapshot(root, equivalentRoot));
-    RUVIA_CHECK(ruvia::detail::StaticRootAccess::revision(root) != ruvia::detail::StaticRootAccess::revision(equivalentRoot));
 
     auto clonedOptions = ruvia::detail::StaticRootAccess::options(root);
     RUVIA_CHECK(clonedOptions.fileTypes.kind() == ruvia::StaticFileTypePolicy::Kind::kAll);
 
-    std::ofstream(dir / "new-file.txt") << "published on the next poll";
+    std::ofstream(dir / "new-file.txt") << "published on the next refresh";
     ruvia::StaticRoot refreshed(dir, std::move(clonedOptions));
     RUVIA_CHECK(ruvia::detail::StaticRootAccess::fingerprint(root) != ruvia::detail::StaticRootAccess::fingerprint(refreshed));
-
-    struct AssetResult final {
-        ruvia::HttpStatusCode status;
-        std::string contentType;
-        std::string cacheControl;
-        std::string body;
-    };
-    const auto fetch = [&root](std::string_view path, const ruvia::DocumentRootRuntimeOptions* runtime) {
-        ruvia::WorkerMemory worker;
-        ruvia::RequestMemory memory(worker);
-        auto request = ruvia::detail::HttpRequestAccess::make();
-        ruvia::detail::HttpRequestAccess::reset(request);
-        ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
-        ruvia::detail::HttpRequestAccess::setTarget(request, path);
-        ruvia::detail::HttpRequestAccess::setPath(request, path);
-        ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
-        ruvia::detail::RouteTable routes(memory.resource());
-        auto resolution = routes.resolve(request);
-        asio::io_context io;
-        auto binding = runtime == nullptr ? ruvia::detail::DocumentRootBinding::standalone(root) : ruvia::detail::DocumentRootBinding::configured(root, *runtime);
-        auto response = runStaticCompressionTask(io, routes.dispatchBufferedResponse(request, resolution, memory, std::move(binding)));
-        return AssetResult{
-            response.status(),
-            std::string(response.header("Content-Type").value_or("")),
-            std::string(response.header("Cache-Control").value_or("")),
-            std::string(ruvia::detail::responseBody(response).bytes()),
-        };
-    };
-
-    const auto standaloneScript = fetch("/__ruvia/live-reload.js", nullptr);
-    RUVIA_CHECK_EQ(standaloneScript.status, ruvia::http_status::kNotFound);
-
-    const auto script = fetch("/__ruvia/live-reload.js", &runtimeOptions);
-    RUVIA_CHECK_EQ(script.status, ruvia::http_status::kOk);
-    RUVIA_CHECK_EQ(script.contentType, std::string("application/javascript; charset=UTF-8"));
-    RUVIA_CHECK_EQ(script.cacheControl, std::string("no-store"));
-    RUVIA_CHECK(script.body.find("/__ruvia/live-reload-version") != std::string::npos);
-
-    const auto version = fetch("/__ruvia/live-reload-version", &runtimeOptions);
-    RUVIA_CHECK_EQ(version.status, ruvia::http_status::kOk);
-    RUVIA_CHECK_EQ(version.contentType, std::string("text/plain; charset=UTF-8"));
-    RUVIA_CHECK_EQ(version.cacheControl, std::string("no-store"));
-    RUVIA_CHECK_EQ(version.body, std::to_string(ruvia::detail::StaticRootAccess::revision(root)));
 
     fs::remove_all(dir);
 }
 
-RUVIA_TEST(polling_document_root_binding_is_a_move_only_request_snapshot_lease) {
+RUVIA_TEST(configured_document_root_binding_is_a_move_only_request_snapshot_lease) {
     namespace fs = std::filesystem;
     const auto dir = fs::temp_directory_path() / "ruvia_static_binding_lease";
     fs::remove_all(dir);
@@ -354,8 +306,6 @@ RUVIA_TEST(polling_document_root_binding_is_a_move_only_request_snapshot_lease) 
     ruvia::StaticRootOptions options;
     options.fileTypes = ruvia::StaticFileTypePolicy::all();
     ruvia::StaticRoot root(dir, std::move(options));
-    ruvia::DocumentRootRuntimeOptions runtimeOptions;
-    runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
     auto request = ruvia::detail::HttpRequestAccess::make();
@@ -367,7 +317,7 @@ RUVIA_TEST(polling_document_root_binding_is_a_move_only_request_snapshot_lease) 
 
     ruvia::detail::RouteTable routes(memory.resource());
     const auto resolution = routes.resolve(request);
-    auto binding = ruvia::detail::DocumentRootBinding::configured(root, runtimeOptions);
+    auto binding = ruvia::detail::DocumentRootBinding::configured(root);
     auto task = routes.dispatchBufferedResponse(request, resolution, memory, std::move(binding));
     RUVIA_CHECK(ruvia::detail::StaticRootAccess::hasActiveBindings(root));
     asio::io_context io;
@@ -378,7 +328,7 @@ RUVIA_TEST(polling_document_root_binding_is_a_move_only_request_snapshot_lease) 
     fs::remove_all(dir);
 }
 
-RUVIA_TEST(polling_document_root_binding_counts_belong_to_the_bound_snapshot) {
+RUVIA_TEST(configured_document_root_binding_counts_belong_to_the_bound_snapshot) {
     namespace fs = std::filesystem;
     const auto firstDir = fs::temp_directory_path() / "ruvia_static_binding_first";
     const auto secondDir = fs::temp_directory_path() / "ruvia_static_binding_second";
@@ -395,15 +345,13 @@ RUVIA_TEST(polling_document_root_binding_counts_belong_to_the_bound_snapshot) {
     ruvia::StaticRootOptions secondOptions;
     secondOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
     ruvia::StaticRoot second(secondDir, std::move(secondOptions));
-    ruvia::DocumentRootRuntimeOptions runtimeOptions;
-    runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
 
     {
-        auto firstBinding = ruvia::detail::DocumentRootBinding::configured(first, runtimeOptions);
+        auto firstBinding = ruvia::detail::DocumentRootBinding::configured(first);
         RUVIA_CHECK(ruvia::detail::StaticRootAccess::hasActiveBindings(first));
         RUVIA_CHECK(!ruvia::detail::StaticRootAccess::hasActiveBindings(second));
         {
-            auto secondBinding = ruvia::detail::DocumentRootBinding::configured(second, runtimeOptions);
+            auto secondBinding = ruvia::detail::DocumentRootBinding::configured(second);
             RUVIA_CHECK(ruvia::detail::StaticRootAccess::hasActiveBindings(first));
             RUVIA_CHECK(ruvia::detail::StaticRootAccess::hasActiveBindings(second));
         }
@@ -417,7 +365,7 @@ RUVIA_TEST(polling_document_root_binding_counts_belong_to_the_bound_snapshot) {
     fs::remove_all(secondDir);
 }
 
-RUVIA_TEST(immutable_document_root_bindings_do_not_share_request_lease_state) {
+RUVIA_TEST(standalone_static_root_bindings_do_not_share_request_lease_state) {
     namespace fs = std::filesystem;
     const auto dir = fs::temp_directory_path() / "ruvia_static_immutable_bindings";
     fs::remove_all(dir);
@@ -427,12 +375,9 @@ RUVIA_TEST(immutable_document_root_bindings_do_not_share_request_lease_state) {
     ruvia::StaticRootOptions options;
     options.fileTypes = ruvia::StaticFileTypePolicy::all();
     ruvia::StaticRoot root(dir, std::move(options));
-    ruvia::DocumentRootRuntimeOptions runtimeOptions;
-
     {
-        auto binding = ruvia::detail::DocumentRootBinding::configured(root, runtimeOptions);
+        auto binding = ruvia::detail::DocumentRootBinding::standalone(root);
         RUVIA_CHECK_EQ(binding.root(), &root);
-        RUVIA_CHECK_EQ(binding.runtimeOptions(), &runtimeOptions);
         RUVIA_CHECK(!ruvia::detail::StaticRootAccess::hasActiveBindings(root));
     }
 
@@ -440,9 +385,9 @@ RUVIA_TEST(immutable_document_root_bindings_do_not_share_request_lease_state) {
     constexpr std::size_t kBindingsPerWorker = 10'000;
     std::array<std::thread, kWorkerCount> workers;
     for (auto& worker : workers) {
-        worker = std::thread([&root, &runtimeOptions]() {
+        worker = std::thread([&root]() {
             for (std::size_t index = 0; index < kBindingsPerWorker; ++index) {
-                auto binding = ruvia::detail::DocumentRootBinding::configured(root, runtimeOptions);
+                auto binding = ruvia::detail::DocumentRootBinding::standalone(root);
             }
         });
     }

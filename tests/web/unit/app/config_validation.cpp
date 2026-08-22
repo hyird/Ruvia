@@ -114,6 +114,14 @@ RUVIA_TEST(app_document_root_rejects_invalid_static_options_at_configuration) {
     RUVIA_CHECK(throwsInvalid([&config] { ruvia::app().setDocumentRoot(std::move(config)); }));
 }
 
+RUVIA_TEST(app_document_root_rejects_disabled_refresh) {
+    ruvia::DocumentRootConfig disabledRefresh;
+    disabledRefresh.root = "public";
+    disabledRefresh.runtimeOptions.refreshInterval = std::chrono::milliseconds::zero();
+    RUVIA_CHECK(throwsInvalid([&disabledRefresh] { ruvia::app().setDocumentRoot(std::move(disabledRefresh)); }));
+
+}
+
 RUVIA_TEST(data_access_config_clones_public_strings_into_internal_pmr_storage) {
     std::pmr::unsynchronized_pool_resource targetResource;
 #if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)

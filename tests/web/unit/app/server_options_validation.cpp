@@ -3,6 +3,7 @@
 #include <chrono>
 #include <concepts>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -13,6 +14,7 @@
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/detail/app/AppState.h"
 #include "ruvia/web/App.h"
+#include "ruvia/web/StaticFiles.h"
 
 namespace {
 
@@ -106,23 +108,35 @@ RUVIA_TEST(validate_server_options_rejects_invalid_compression_thresholds) {
 }
 
 RUVIA_TEST(validate_server_options_owns_document_root_runtime_policy) {
+    namespace fs = std::filesystem;
     HttpServerOptions options;
-    options.documentRoot.runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kPolling;
-    options.documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds::zero();
-    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
-
-    options.documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds(1);
-    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
-
-    options.documentRoot.runtimeOptions.refreshMode = ruvia::DocumentRootRefreshMode::kImmutable;
-    options.documentRoot.runtimeOptions.refreshInterval = std::chrono::milliseconds::zero();
+    RUVIA_CHECK(options.documentRoot.root() == nullptr);
+    RUVIA_CHECK(options.documentRoot.refreshOptions() == nullptr);
     RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerOptions(options); }));
 
-    // Browser reload assets need a changing root revision. Exposing them
-    // while the root is immutable would silently promise live reload that can
-    // never observe a filesystem change.
-    options.documentRoot.runtimeOptions.enableLiveReload = true;
+    const auto dir = fs::temp_directory_path() / "ruvia_server_options_document_root";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    ruvia::StaticRoot root(dir);
+    options.documentRoot = HttpServerOptions::DocumentRoot::standalone(root);
+    RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    options.documentRoot = HttpServerOptions::DocumentRoot::refreshing(
+        root, {.refreshInterval = std::chrono::milliseconds(1)});
+    // An App-managed refreshing root needs the blocking pool that performs
+    // directory scans off the event loop.
     RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1});
+    options.blockingPool = &pool;
+    options.documentRoot = HttpServerOptions::DocumentRoot::refreshing(
+        root, {.refreshInterval = std::chrono::milliseconds::zero()});
+    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    options.documentRoot = HttpServerOptions::DocumentRoot::refreshing(
+        root, {.refreshInterval = std::chrono::milliseconds(1)});
+    RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerOptions(options); }));
+    fs::remove_all(dir);
 }
 
 RUVIA_TEST(validate_server_options_rejects_configured_nonpositive_timeout) {

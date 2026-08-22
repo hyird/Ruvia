@@ -1,5 +1,6 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/app/AppConfigMutation.h"
+#include "ruvia/web/detail/app/ConfigValidation.h"
 #include "ruvia/web/detail/http/static/StaticFileTypes.h"
 #include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"
@@ -60,6 +61,7 @@ App& App::setDocumentRoot(DocumentRootConfig config) {
         if (config.root.empty()) {
             throw std::invalid_argument("document root must not be empty");
         }
+        detail::ensurePositiveDuration(config.runtimeOptions.refreshInterval, "document root refresh interval must be greater than zero");
         if (config.staticOptions.indexFile.empty()) {
             config.staticOptions.indexFile = "index.html";
         }

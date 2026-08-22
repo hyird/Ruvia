@@ -6,11 +6,7 @@
 #include <utility>
 
 #include "ruvia/web/StaticFiles.h"
-#include "ruvia/web/ServerConfig.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
 
 // Choosing what answers a request: the matched route, a 405 with Allow, the
@@ -32,57 +28,10 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
     return response;
 }
 
-[[nodiscard]] std::optional<HttpResponse> selectLiveReloadAsset(const detail::DocumentRootBinding& documentRoot, const HttpRequest& request, RequestMemory& memory) {
-    const auto* const root = documentRoot.root();
-    const auto* const runtime = documentRoot.runtimeOptions();
-    if (root == nullptr || runtime == nullptr || !runtime->enableLiveReload || (request.knownMethod() != HttpKnownMethod::kGet && request.knownMethod() != HttpKnownMethod::kHead)) {
-        return std::nullopt;
-    }
-
-    constexpr std::string_view kScriptPath = "/__ruvia/live-reload.js";
-    constexpr std::string_view kVersionPath = "/__ruvia/live-reload-version";
-    if (request.path() != kScriptPath && request.path() != kVersionPath) {
-        return std::nullopt;
-    }
-
-    HttpResponse response(memory.resource());
-    response.header("Cache-Control", "no-store");
-    if (request.path() == kScriptPath) {
-        constexpr std::string_view kScript = R"JS((() => {
-  let previous = null;
-  const poll = () => fetch('/__ruvia/live-reload-version', {cache: 'no-store'})
-    .then((response) => response.text())
-    .then((version) => {
-      if (previous !== null && version !== previous) {
-        window.location.reload();
-        return;
-      }
-      previous = version;
-    })
-    .catch(() => {})
-    .finally(() => window.setTimeout(poll, 500));
-  poll();
-})();
-)JS";
-        response.header("Content-Type", "application/javascript; charset=UTF-8");
-        detail::setResponseBodyStaticView(response, kScript);
-    } else {
-        std::pmr::string version(memory.resource());
-        detail::appendHttpFormattedNumber(version, detail::StaticRootAccess::revision(*root), "failed to format live reload version");
-        response.header("Content-Type", "text/plain; charset=UTF-8");
-        detail::setResponseBodyOwned(response, std::move(version));
-    }
-    return response;
-}
-
 [[nodiscard]] std::optional<HttpResponse> selectDocumentRootFallback(const detail::DocumentRootBinding& documentRoot, const HttpRequest& request, RequestMemory& memory, detail::StaticFileSelectionMode staticFileMode) {
     const auto* const root = documentRoot.root();
     if (root == nullptr || (request.knownMethod() != HttpKnownMethod::kGet && request.knownMethod() != HttpKnownMethod::kHead)) {
         return std::nullopt;
-    }
-
-    if (auto liveReloadAsset = selectLiveReloadAsset(documentRoot, request, memory)) {
-        return liveReloadAsset;
     }
 
     auto relative = request.path();

@@ -1,7 +1,6 @@
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -107,16 +106,6 @@ void hashValue(std::uint64_t& hash, const T& value) noexcept {
     return hash;
 }
 
-[[nodiscard]] std::uint64_t nextStaticRootRevision() noexcept {
-    static std::atomic<std::uint64_t> next{1};
-    for (;;) {
-        const auto revision = next.fetch_add(1, std::memory_order_relaxed);
-        if (revision != 0) {
-            return revision;
-        }
-    }
-}
-
 [[nodiscard]] bool sameStaticRootEntry(const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) noexcept {
     return left.relativePath == right.relativePath &&
            left.filePath == right.filePath &&
@@ -208,10 +197,6 @@ StaticRootOptions detail::StaticRootAccess::options(const StaticRoot& root) {
 
 std::uint64_t detail::StaticRootAccess::fingerprint(const StaticRoot& root) noexcept {
     return root.state_->fingerprint;
-}
-
-std::uint64_t detail::StaticRootAccess::revision(const StaticRoot& root) noexcept {
-    return root.state_->revision;
 }
 
 void detail::StaticRootAccess::acquireBinding(const StaticRoot& root) noexcept {
@@ -375,7 +360,6 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
     std::ranges::sort(state.directories);
     state.directories.erase(std::ranges::unique(state.directories).begin(), state.directories.end());
     state.fingerprint = staticRootFingerprint(state);
-    state.revision = nextStaticRootRevision();
 }
 
 StaticRoot::~StaticRoot() = default;

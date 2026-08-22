@@ -85,14 +85,14 @@ struct Http2RegularRequestHeadView final {
     BorrowedText scheme{"https"};
     std::optional<BorrowedText> authority;
     BorrowedText target{"/"};
-    HttpClientRequestView::HeaderInit headers{};
+    std::span<const HttpHeaderView> headers{};
     Http2RequestContent content{Http2RequestContent::none()};
     HttpClientRequestExpectation expectation{HttpClientRequestExpectation::kNone};
 };
 
 struct Http2ConnectRequestHeadView final {
     BorrowedText authority;
-    HttpClientRequestView::HeaderInit headers{};
+    std::span<const HttpHeaderView> headers{};
 };
 
 struct Http2ExtendedConnectRequestHeadView final {
@@ -100,7 +100,7 @@ struct Http2ExtendedConnectRequestHeadView final {
     BorrowedText scheme{"https"};
     BorrowedText authority;
     BorrowedText target{"/"};
-    HttpClientRequestView::HeaderInit headers{};
+    std::span<const HttpHeaderView> headers{};
 };
 
 enum class Http2RequestHeadSubmitError : std::uint8_t { kInvalidState, kConnectionUnavailable, kPeerStreamLimitReached, kLocalStreamCapacityReached, kPeerCapabilityUnavailable, kInvalidMessage };
