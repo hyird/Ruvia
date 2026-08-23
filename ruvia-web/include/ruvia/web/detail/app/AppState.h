@@ -68,16 +68,15 @@ struct AppDocumentRootConfig final {
 };
 
 struct AppListenerConfig final {
-    AppListenerConfig(ListenerId configuredId, std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerListenerDefinition::PlainHttp)
-        : id(configuredId), address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerListenerDefinition::PlainHttp>) {}
+    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerListenerDefinition::PlainHttp)
+        : address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerListenerDefinition::PlainHttp>) {}
 
-    AppListenerConfig(ListenerId configuredId, std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerListenerDefinition::Tls configuredTransport)
-        : id(configuredId), address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerListenerDefinition::Tls>, std::move(configuredTransport)) {}
+    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerListenerDefinition::Tls configuredTransport)
+        : address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerListenerDefinition::Tls>, std::move(configuredTransport)) {}
 
-    AppListenerConfig(ListenerId configuredId, std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerListenerDefinition::RedirectHttpToHttps configuredTransport)
-        : id(configuredId), address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerListenerDefinition::RedirectHttpToHttps>, configuredTransport) {}
+    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerListenerDefinition::RedirectHttpToHttps configuredTransport)
+        : address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerListenerDefinition::RedirectHttpToHttps>, configuredTransport) {}
 
-    ListenerId id;
     std::pmr::string address;
     std::uint16_t port;
     HttpServerListenerDefinition::Transport transport;

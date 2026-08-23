@@ -58,7 +58,7 @@ public:
     // Lifecycle owners join from outside the server worker. Reject self-join
     // before touching std::thread so behavior is deterministic across platforms.
     void join();
-    [[nodiscard]] asio::ip::tcp::endpoint localEndpoint(ListenerId listener) const;
+    [[nodiscard]] asio::ip::tcp::endpoint localEndpoint(std::size_t listenerIndex = 0) const;
     // Safe from any thread, at any point in the lifecycle.
     [[nodiscard]] HttpServerStats stats() const noexcept;
     [[nodiscard]] const WorkerHandle& worker() const& noexcept {

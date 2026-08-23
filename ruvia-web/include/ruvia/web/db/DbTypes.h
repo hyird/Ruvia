@@ -25,32 +25,17 @@ class RequestMemory;
 class DbValue;
 
 enum class DbDriver : std::uint8_t {
+    kUnspecified,
     kMariaDb,
     kPostgreSql,
 };
 
-class DbConfig final {
-public:
-#ifdef RUVIA_ENABLE_MARIADB
-    [[nodiscard]] static DbConfig mariaDb() {
-        return DbConfig(DbDriver::kMariaDb, 3306);
-    }
-#endif
-
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    [[nodiscard]] static DbConfig postgreSql() {
-        return DbConfig(DbDriver::kPostgreSql, 5432);
-    }
-#endif
-
-    [[nodiscard]] DbDriver driver() const noexcept {
-        return driver_;
-    }
-
+struct DbConfig final {
+    DbDriver driver{DbDriver::kUnspecified};
     // Host name or unbracketed address only; keep the port in port.
     std::string host{"127.0.0.1"};
-    // Must be non-zero.
-    std::uint16_t port;
+    // Absence selects the driver's standard port: 3306 or 5432.
+    std::optional<std::uint16_t> port;
     std::string username;
     std::string password;
     std::string database;
@@ -60,12 +45,6 @@ public:
     std::optional<std::chrono::milliseconds> writeTimeout;
     std::optional<std::chrono::milliseconds> queryTimeout{std::chrono::seconds(30)};
     std::optional<std::chrono::milliseconds> acquireTimeout{std::chrono::seconds(5)};
-
-private:
-    DbConfig(DbDriver driver, std::uint16_t defaultPort) noexcept
-        : port(defaultPort), driver_(driver) {}
-
-    DbDriver driver_;
 };
 
 class DbError final : public std::runtime_error {

@@ -169,10 +169,10 @@ StaticRootOptions detail::StaticRootAccess::options(const StaticRoot& root) {
     }
     switch (state.fileTypeKind) {
         case StaticFileTypePolicy::Kind::kDefaults:
-            result.fileTypes = StaticFileTypePolicy::defaults();
+            result.fileTypes = {.kind = StaticFileTypePolicy::Kind::kDefaults};
             break;
         case StaticFileTypePolicy::Kind::kAll:
-            result.fileTypes = StaticFileTypePolicy::all();
+            result.fileTypes = {.kind = StaticFileTypePolicy::Kind::kAll};
             break;
         case StaticFileTypePolicy::Kind::kOnly: {
             std::vector<std::string> extensions;
@@ -180,12 +180,10 @@ StaticRootOptions detail::StaticRootAccess::options(const StaticRoot& root) {
             for (const auto& extension : state.fileTypeExtensions) {
                 extensions.emplace_back(extension);
             }
-            std::vector<std::string_view> views;
-            views.reserve(extensions.size());
-            for (const auto& extension : extensions) {
-                views.push_back(extension);
-            }
-            result.fileTypes = StaticFileTypePolicy::only(views);
+            result.fileTypes = {
+                .kind = StaticFileTypePolicy::Kind::kOnly,
+                .extensions = std::move(extensions),
+            };
             break;
         }
     }
@@ -247,6 +245,7 @@ bool detail::StaticRootAccess::sameSnapshot(const StaticRoot& left, const Static
 StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions options)
     : state_(makeStaticRootState()) {
     detail::normalizeMimeTypes(options.mimeTypes);
+    detail::normalizeFileTypes(options.fileTypes.extensions);
     detail::validateStaticRootOptions(options);
 
     std::error_code ec;
@@ -269,10 +268,10 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         stored.extension = mime.extension;
         stored.contentType = mime.contentType;
     }
-    state.fileTypeKind = options.fileTypes.kind();
+    state.fileTypeKind = options.fileTypes.kind;
     if (state.fileTypeKind == StaticFileTypePolicy::Kind::kOnly) {
-        state.fileTypeExtensions.reserve(options.fileTypes.extensions().size());
-        for (const auto& extension : options.fileTypes.extensions()) {
+        state.fileTypeExtensions.reserve(options.fileTypes.extensions.size());
+        for (const auto& extension : options.fileTypes.extensions) {
             state.fileTypeExtensions.emplace_back(extension);
         }
     }

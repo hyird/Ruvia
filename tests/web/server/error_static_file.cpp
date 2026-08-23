@@ -83,7 +83,7 @@ int main() {
     asio::io_context context;
     asio::ip::tcp::socket socket(context);
     std::error_code ec;
-    socket.connect(server.localEndpoint(ruvia::ListenerId{1}), ec);
+    socket.connect(server.localEndpoint(), ec);
     if (ec) {
         fail(1, "client failed to connect");
     }

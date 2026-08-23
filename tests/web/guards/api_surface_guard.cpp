@@ -397,10 +397,12 @@ template <typename T>
 concept HasConnInfoCanonicalReadAccessors = requires(const T& info) {
     { info.remote().address() } -> std::same_as<std::string_view>;
     { info.scheme() } -> std::same_as<ruvia::HttpScheme>;
-    { info.listener() } -> std::same_as<std::optional<ruvia::ListenerId>>;
     { info.plain() } -> std::same_as<const ruvia::PlainConnectionTransport*>;
     { info.tls() } -> std::same_as<const ruvia::TlsConnectionTransport*>;
 };
+
+template <typename T>
+concept HasConnInfoListenerId = requires(const T& info) { info.listener(); };
 
 template <typename T>
 concept HasLegacyConnInfoScalarAccessors = requires(const T& info) { info.secure(); } ||
@@ -1657,7 +1659,7 @@ concept HasRedisZScanResultCanonicalReadAccessors = requires(const T& result) {
 
 template <typename T>
 concept HasAppDefaultRateLimitPerWorkerRuleSetter = requires(T& app) {
-    { app.setRateLimit(ruvia::RateLimitRule::fixedWindow({.maxRequests = std::size_t{1}, .window = std::chrono::seconds(1)})) } -> std::same_as<ruvia::App&>;
+    { app.setRateLimit({.maxRequests = std::size_t{1}, .window = std::chrono::seconds(1)}) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
@@ -1667,7 +1669,7 @@ concept HasAppDefaultRateLimitPerWorkerTupleSetter = requires(T& app) {
 
 template <typename T>
 concept HasAppDefaultRateLimitPerWorkerDisable = requires(T& app) {
-    { app.setRateLimit(std::nullopt) } -> std::same_as<ruvia::App&>;
+    { app.setRateLimit(nullptr) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
@@ -1709,6 +1711,23 @@ concept HasLegacyAppGlobalRateLimitSetter = requires(T& app) { app.setGlobalRate
 template <typename T>
 concept HasAppDocumentRootConfigSetter = requires(T& app) {
     { app.setDocumentRoot(ruvia::DocumentRootConfig{}) } -> std::same_as<ruvia::App&>;
+};
+
+template <typename T>
+concept HasCanonicalOptionalAppConfigDisable = requires(T& app) {
+    { app.setIdleTimeout(nullptr) } -> std::same_as<ruvia::App&>;
+    { app.setRequestHeaderTimeout(nullptr) } -> std::same_as<ruvia::App&>;
+    { app.setRequestBodyTimeout(nullptr) } -> std::same_as<ruvia::App&>;
+    { app.setWriteTimeout(nullptr) } -> std::same_as<ruvia::App&>;
+    { app.setMaxConnectionsPerWorker(nullptr) } -> std::same_as<ruvia::App&>;
+    { app.setMaxRequestsPerConnection(nullptr) } -> std::same_as<ruvia::App&>;
+    { app.setDeadline(nullptr) } -> std::same_as<ruvia::App&>;
+    { app.setStreamBodyLimit(nullptr) } -> std::same_as<ruvia::App&>;
+    { app.setCompression(nullptr) } -> std::same_as<ruvia::App&>;
+    { app.setCors(nullptr) } -> std::same_as<ruvia::App&>;
+    { app.setDocumentRoot(nullptr) } -> std::same_as<ruvia::App&>;
+    { app.setBlockingPool(nullptr) } -> std::same_as<ruvia::App&>;
+    { app.setRateLimit(nullptr) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
@@ -1848,33 +1867,7 @@ concept HasAppListenAddressPortSetter = requires(T& app) {
 
 template <typename T>
 concept HasAppListenerSetter = requires(T& app) {
-    { app.setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = 8080})}) } -> std::same_as<ruvia::App&>;
-};
-
-template <typename T>
-concept HasPositionalListenerFactories = requires {
-    T::http(std::string_view{}, std::uint16_t{8080});
-} || requires {
-    T::https(std::string_view{}, std::uint16_t{443}, ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles({.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"})));
-} || requires {
-    T::redirectHttpToHttps(std::string_view{}, std::uint16_t{8080}, std::uint16_t{443});
-};
-
-template <typename T>
-concept HasPositionalTlsIdentityFromFiles = requires {
-    T::fromFiles(std::filesystem::path{}, std::filesystem::path{});
-} || requires {
-    T::fromFiles(std::filesystem::path{}, std::filesystem::path{}, std::string_view{});
-};
-
-template <typename T>
-concept HasPositionalTlsSniIdentity = requires(T& tls) {
-    tls.addSniIdentity(std::string_view{}, ruvia::TlsIdentity::fromFiles({.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"}));
-};
-
-template <typename T>
-concept HasTlsSniIdentityOptions = requires(T& tls) {
-    { tls.addSniIdentity(ruvia::TlsSniIdentityOptions{.host = "example.com", .identity = ruvia::TlsIdentity::fromFiles({.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"})}) } -> std::same_as<T&>;
+    { app.listen({.address = "127.0.0.1", .http = 8080}) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
@@ -2343,6 +2336,7 @@ static_assert(!HasRequestRemoteAddressAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestClientCertificateAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestIsSecureAlias<ruvia::ContextRequest>);
 static_assert(HasConnInfoCanonicalReadAccessors<ruvia::ConnInfo>);
+static_assert(!HasConnInfoListenerId<ruvia::ConnInfo>);
 static_assert(!HasLegacyConnInfoScalarAccessors<ruvia::ConnInfo>);
 static_assert(!HasRvalueConnInfoTransportAccess<ruvia::ConnInfo>);
 static_assert(HasGetConnInfo<ruvia::Context>);
@@ -2594,14 +2588,10 @@ static_assert(std::same_as<decltype(ruvia::WebSocketCloseOptions{}.code), std::u
 static_assert(std::same_as<decltype(ruvia::WebSocketCloseOptions{}.reason), ruvia::BorrowedText>);
 static_assert(HasWebSocketCloseOptions<ruvia::WebSocket>);
 static_assert(!HasPositionalWebSocketClose<ruvia::WebSocket>);
-static_assert(std::is_aggregate_v<ruvia::WebSocketHeartbeatOptions>);
+static_assert(std::is_aggregate_v<ruvia::WebSocketHeartbeatConfig>);
 static_assert(std::same_as<
-              decltype(ruvia::WebSocketHeartbeatOptions{.pingInterval = std::chrono::milliseconds{1}, .pongTimeout = std::chrono::milliseconds{2}}),
-              ruvia::WebSocketHeartbeatOptions>);
-static_assert(!HasPositionalWebSocketHeartbeatFactory<ruvia::WebSocketHeartbeatPolicy>);
-static_assert(std::same_as<
-              decltype(ruvia::WebSocketHeartbeatPolicy::periodic({.pingInterval = std::chrono::milliseconds{1}})),
-              ruvia::WebSocketHeartbeatPolicy>);
+              decltype(ruvia::WebSocketHeartbeatConfig{.pingInterval = std::chrono::milliseconds{1}, .pongTimeout = std::chrono::milliseconds{2}}),
+              ruvia::WebSocketHeartbeatConfig>);
 static_assert(HasWebSocketRouteBorrowedText<ruvia::WebSocketRouteOptions>);
 static_assert(!AcceptsTemporaryWebSocketRouteSubprotocols<std::string>);
 static_assert(!AcceptsTemporaryWebSocketRouteSubprotocols<const std::string>);
@@ -2646,14 +2636,10 @@ static_assert(!HasAppErrorHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppNotFoundHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppSetRateLimitAlias<ruvia::App>);
 static_assert(!HasRateLimitSlotCount<ruvia::RateLimitRule>);
-static_assert(!std::default_initializable<ruvia::RateLimitRule>);
-static_assert(std::is_aggregate_v<ruvia::RateLimitFixedWindowOptions>);
+static_assert(std::default_initializable<ruvia::RateLimitRule>);
+static_assert(std::is_aggregate_v<ruvia::RateLimitRule>);
 static_assert(std::same_as<
-              decltype(ruvia::RateLimitFixedWindowOptions{.maxRequests = std::size_t{1}, .window = std::chrono::seconds(1)}),
-              ruvia::RateLimitFixedWindowOptions>);
-static_assert(!HasPositionalFixedWindowRateLimitFactory<ruvia::RateLimitRule>);
-static_assert(std::same_as<
-              decltype(ruvia::RateLimitRule::fixedWindow({.maxRequests = std::size_t{1}, .window = std::chrono::seconds(1)})),
+              decltype(ruvia::RateLimitRule{.maxRequests = std::size_t{1}, .window = std::chrono::seconds(1)}),
               ruvia::RateLimitRule>);
 static_assert(std::is_aggregate_v<ruvia::MiddlewareScopeOptions>);
 static_assert(std::same_as<decltype(ruvia::MiddlewareScopeOptions{}.prefix), ruvia::BorrowedText>);
@@ -2866,6 +2852,10 @@ static_assert(!HasSplitDocumentRootDispatch<ruvia::detail::RouteTable>);
 static_assert(!HasRawDocumentRootDispatch<ruvia::detail::RouteTable>);
 static_assert(HasCanonicalBufferedDispatch<ruvia::detail::RouteTable>);
 static_assert(std::is_aggregate_v<ruvia::CompressionConfig>);
+static_assert(std::is_aggregate_v<ruvia::CorsConfig>);
+static_assert(std::is_aggregate_v<ruvia::CorsOriginConfig>);
+static_assert(std::is_aggregate_v<ruvia::CorsRequestHeadersConfig>);
+static_assert(std::is_aggregate_v<ruvia::DeadlineConfig>);
 static_assert(std::is_aggregate_v<ruvia::DocumentRootConfig>);
 static_assert(std::is_aggregate_v<ruvia::StaticRootOptions>);
 static_assert(!HasRawResponseCompressionCoding<ruvia::HttpContentCoding>);
@@ -2880,38 +2870,17 @@ static_assert(!HasAppDocumentRootPathSetter<ruvia::App>);
 static_assert(!HasAppListenAddressSetter<ruvia::App>);
 static_assert(!HasAppListenAddressPortSetter<ruvia::App>);
 static_assert(HasAppListenerSetter<ruvia::App>);
-static_assert(std::is_aggregate_v<ruvia::HttpListenerOptions>);
-static_assert(std::is_aggregate_v<ruvia::HttpsListenerOptions>);
-static_assert(std::is_aggregate_v<ruvia::RedirectHttpToHttpsListenerOptions>);
-static_assert(std::constructible_from<ruvia::ListenerId, std::uint32_t>);
-static_assert(!std::default_initializable<ruvia::ListenerId>);
-static_assert(std::same_as<decltype(ruvia::ListenerId{1}.value()), std::uint32_t>);
-static_assert(!HasPositionalListenerFactories<ruvia::ListenerConfig>);
+static_assert(HasCanonicalOptionalAppConfigDisable<ruvia::App>);
+static_assert(std::is_aggregate_v<ruvia::ListenConfig>);
 static_assert(std::same_as<
-              decltype(ruvia::ListenerConfig::http(ruvia::ListenerId{1})),
-              ruvia::ListenerConfig>);
+              decltype(ruvia::ListenConfig{.address = "127.0.0.1", .http = 80, .https = 443, .tls = {.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"}, .autoHttpsRedirect = true}),
+              ruvia::ListenConfig>);
+static_assert(std::is_aggregate_v<ruvia::TlsConfig>);
 static_assert(std::same_as<
-              decltype(ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = 8080})),
-              ruvia::ListenerConfig>);
-static_assert(std::same_as<
-              decltype(ruvia::ListenerConfig::https(ruvia::ListenerId{2}, {.address = "127.0.0.1", .port = 443, .tls = ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles({.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"}))})),
-              ruvia::ListenerConfig>);
-static_assert(std::same_as<
-              decltype(ruvia::ListenerConfig::redirectHttpToHttps(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = 80, .target = ruvia::ListenerId{2}})),
-              ruvia::ListenerConfig>);
-static_assert(std::is_aggregate_v<ruvia::TlsIdentityFileOptions>);
-static_assert(std::same_as<
-              decltype(ruvia::TlsIdentityFileOptions{.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem", .privateKeyPassword = std::string{}}),
-              ruvia::TlsIdentityFileOptions>);
-static_assert(!HasPositionalTlsIdentityFromFiles<ruvia::TlsIdentity>);
-static_assert(std::same_as<
-              decltype(ruvia::TlsIdentity::fromFiles({.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"})),
-              ruvia::TlsIdentity>);
-static_assert(std::is_aggregate_v<ruvia::TlsSniIdentityOptions>);
-static_assert(std::same_as<std::remove_cvref_t<decltype(std::declval<ruvia::TlsSniIdentityOptions&>().host)>, std::string>);
-static_assert(std::same_as<std::remove_cvref_t<decltype(std::declval<ruvia::TlsSniIdentityOptions&>().identity)>, ruvia::TlsIdentity>);
-static_assert(HasTlsSniIdentityOptions<ruvia::TlsConfig>);
-static_assert(!HasPositionalTlsSniIdentity<ruvia::TlsConfig>);
+              decltype(ruvia::TlsConfig{.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem", .privateKeyPassword = std::string{}}),
+              ruvia::TlsConfig>);
+static_assert(std::is_aggregate_v<ruvia::TlsClientCertificateConfig>);
+static_assert(std::is_aggregate_v<ruvia::TlsSniConfig>);
 static_assert(HasCanonicalAccessLogCallback<ruvia::App>);
 static_assert(std::same_as<
               decltype(std::declval<ruvia::App&>().onError(static_cast<ruvia::HttpErrorHandler>(nullptr))),

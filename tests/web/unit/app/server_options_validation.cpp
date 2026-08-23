@@ -11,6 +11,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/detail/app/AppState.h"
@@ -55,7 +56,6 @@ using ruvia::detail::validateHttpServerOptions;
 template <typename Transport>
 HttpServerListenerDefinition makeListener(Transport&& transport) {
     return HttpServerListenerDefinition(
-        ruvia::ListenerId{1},
         asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 8080),
         std::forward<Transport>(transport));
 }
@@ -73,12 +73,12 @@ bool throwsInvalid(Fn&& fn) {
     }
 }
 
-ruvia::TlsIdentity tlsIdentity(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::string privateKeyPassword = {}) {
-    return ruvia::TlsIdentity::fromFiles({
+ruvia::TlsConfig tlsConfig(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::string privateKeyPassword = {}) {
+    return {
         .certificateChainFile = std::move(certificateChainFile),
         .privateKeyFile = std::move(privateKeyFile),
         .privateKeyPassword = std::move(privateKeyPassword),
-    });
+    };
 }
 
 }  // namespace
@@ -335,66 +335,67 @@ RUVIA_TEST(validate_server_options_requires_redirect_https_port) {
 }
 
 RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_construction) {
-    static_assert(!std::is_default_constructible_v<ruvia::TlsIdentity>);
-    static_assert(!std::is_default_constructible_v<ruvia::TlsClientCertificatePolicy>);
-    static_assert(!std::is_default_constructible_v<ruvia::TlsConfig>);
-    static_assert(!std::is_default_constructible_v<ruvia::ListenerConfig>);
-    static_assert(!std::is_aggregate_v<ruvia::ListenerConfig>);
+    static_assert(std::is_aggregate_v<ruvia::TlsClientCertificateConfig>);
+    static_assert(std::is_aggregate_v<ruvia::TlsSniConfig>);
+    static_assert(std::is_aggregate_v<ruvia::TlsConfig>);
+    static_assert(std::is_aggregate_v<ruvia::ListenConfig>);
 
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = {}, .http = 8080}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "127.0.0.1", .http = 0}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "127.0.0.1", .http = 8080, .https = 8080}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "127.0.0.1", .http = 8080, .autoHttpsRedirect = true}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "127.0.0.1", .https = 8443}); }));
     RUVIA_CHECK(throwsInvalid([] {
-        (void)ruvia::TlsIdentity::fromFiles({
-            .certificateChainFile = {},
-            .privateKeyFile = "key.pem",
+        ruvia::app().listen({
+            .address = "127.0.0.1",
+            .https = 8443,
+            .tls = {.certificateChainFile = "cert.pem"},
         });
     }));
     RUVIA_CHECK(throwsInvalid([] {
-        (void)ruvia::TlsIdentity::fromFiles({
-            .certificateChainFile = "cert.pem",
-            .privateKeyFile = {},
+        ruvia::app().listen({
+            .address = "127.0.0.1",
+            .http = 8080,
+            .tls = {.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"},
         });
-    }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsClientCertificatePolicy::required({}); }));
-    RUVIA_CHECK(throwsInvalid([] {
-        (void)ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = {}, .port = 8080});
-    }));
-    RUVIA_CHECK(throwsInvalid([] {
-        (void)ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = 0});
-    }));
-    RUVIA_CHECK(throwsInvalid([] {
-        (void)ruvia::ListenerConfig::http(ruvia::ListenerId{0}, {.address = "127.0.0.1", .port = 8080});
-    }));
-    RUVIA_CHECK(throwsInvalid([] {
-        (void)ruvia::ListenerConfig::redirectHttpToHttps(ruvia::ListenerId{1}, {.address = {}, .port = 8080, .target = ruvia::ListenerId{2}});
-    }));
-    RUVIA_CHECK(throwsInvalid([] {
-        (void)ruvia::ListenerConfig::redirectHttpToHttps(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = 8443, .target = ruvia::ListenerId{1}});
     }));
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().setProcessSignalHandlers(static_cast<ruvia::ProcessSignalHandlerPolicy>(0xFF)); }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({}); }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = 8080}), ruvia::ListenerConfig::http(ruvia::ListenerId{2}, {.address = "0.0.0.0", .port = 8080})}); }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = 8080}), ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = 8081})}); }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setListeners({ruvia::ListenerConfig::redirectHttpToHttps(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = 8080, .target = ruvia::ListenerId{2}})}); }));
 }
 
 RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {
-    auto tls = ruvia::TlsConfig(tlsIdentity("cert.pem", "key.pem"));
-    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity({.host = {}, .identity = tlsIdentity("other.pem", "other.key")}); }));
-    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity({.host = "example.com:443", .identity = tlsIdentity("other.pem", "other.key")}); }));
-    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity({.host = "127.0.0.1", .identity = tlsIdentity("other.pem", "other.key")}); }));
-    tls.addSniIdentity({.host = "Example.com", .identity = tlsIdentity("other.pem", "other.key")});
-    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity({.host = "example.COM", .identity = tlsIdentity("third.pem", "third.key")}); }));
+    const auto rejects = [](std::vector<ruvia::TlsSniConfig> sni) {
+        return throwsInvalid([&] {
+            ruvia::app().listen({
+                .address = "127.0.0.1",
+                .https = 8443,
+                .tls = {
+                    .certificateChainFile = "cert.pem",
+                    .privateKeyFile = "key.pem",
+                    .sni = std::move(sni),
+                },
+            });
+        });
+    };
+    RUVIA_CHECK(rejects({{.host = {}, .certificateChainFile = "other.pem", .privateKeyFile = "other.key"}}));
+    RUVIA_CHECK(rejects({{.host = "example.com:443", .certificateChainFile = "other.pem", .privateKeyFile = "other.key"}}));
+    RUVIA_CHECK(rejects({{.host = "127.0.0.1", .certificateChainFile = "other.pem", .privateKeyFile = "other.key"}}));
+    RUVIA_CHECK(rejects({
+        {.host = "Example.com", .certificateChainFile = "other.pem", .privateKeyFile = "other.key"},
+        {.host = "example.COM", .certificateChainFile = "third.pem", .privateKeyFile = "third.key"},
+    }));
 }
 
 RUVIA_TEST(tls_identity_owns_password_independently_of_caller_resource) {
     ReleasableMemoryResource callerResource;
     const std::string expected(80, 's');
-    std::optional<ruvia::TlsIdentity> identity;
+    std::optional<ruvia::TlsConfig> identity;
     {
         const std::pmr::string password(expected, &callerResource);
-        identity.emplace(tlsIdentity("cert.pem", "key.pem", std::string(password.data(), password.size())));
+        identity.emplace(tlsConfig("cert.pem", "key.pem", std::string(password.data(), password.size())));
     }
     callerResource.release();
-    RUVIA_CHECK_EQ(identity->privateKeyPassword(), std::string_view(expected));
+    RUVIA_CHECK_EQ(identity->privateKeyPassword, std::string_view(expected));
     identity.reset();
     RUVIA_CHECK(!callerResource.deallocatedAfterRelease());
 }

@@ -182,5 +182,5 @@ int main() {
     ruvia::MemoryPoolConfig memory;
     memory.requestInitialBufferBytes = 4096;
 
-    ruvia::app().setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "0.0.0.0", .port = 8080})}).setWorkerCount(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).setIdleTimeout(std::chrono::seconds(75)).setRequestHeaderTimeout(std::chrono::seconds(60)).setRequestBodyTimeout(std::chrono::seconds(60)).setWriteTimeout(std::chrono::seconds(60)).setMaxConnectionsPerWorker(10000).setMaxRequestsPerConnection(1000).setMemoryPoolConfig(memory).onError(&exampleErrorHandler).onError({.prefix = "/api", .handler = &apiError}).onNotFound({.prefix = "/api", .handler = &apiNotFound}).run();
+    ruvia::app().listen({.address = "0.0.0.0", .http = 8080}).setWorkerCount(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).setIdleTimeout(std::chrono::seconds(75)).setRequestHeaderTimeout(std::chrono::seconds(60)).setRequestBodyTimeout(std::chrono::seconds(60)).setWriteTimeout(std::chrono::seconds(60)).setMaxConnectionsPerWorker(10000).setMaxRequestsPerConnection(1000).setMemoryPoolConfig(memory).onError(&exampleErrorHandler).onError({.prefix = "/api", .handler = &apiError}).onNotFound({.prefix = "/api", .handler = &apiNotFound}).run();
 }

@@ -36,7 +36,7 @@
 namespace {
 
 [[nodiscard]] ruvia::DbConfig testConfig() {
-    auto config = ruvia::DbConfig::mariaDb();
+    auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
     config.host = ruvia::testing::dbEnvironment("RUVIA_TEST_MYSQL_HOST", "127.0.0.1");
     config.username = ruvia::testing::dbEnvironment("RUVIA_TEST_MYSQL_USER", "ruvia");
     config.password = ruvia::testing::dbEnvironment("RUVIA_TEST_MYSQL_PASSWORD", "ruvia");

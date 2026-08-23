@@ -22,7 +22,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Dotenv.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvPaths.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ServerConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Testing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/WebWorker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/CookieSignature.cpp

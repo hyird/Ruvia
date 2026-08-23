@@ -1022,11 +1022,11 @@ int main() {
     ruvia::detail::WebWorkerRuntime plain(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable());
     plain.start();
     reportStage("main.http1-client");
-    const auto httpResult = runClient(plain.localEndpoint(ruvia::ListenerId{1}).port(), ruvia::HttpScheme::kHttp, ruvia::HttpClientProtocol::kHttp1Only);
+    const auto httpResult = runClient(plain.localEndpoint().port(), ruvia::HttpScheme::kHttp, ruvia::HttpClientProtocol::kHttp1Only);
     reportStage("main.http1-cookies");
-    const auto cookieResult = runCookies(plain.localEndpoint(ruvia::ListenerId{1}).port());
+    const auto cookieResult = runCookies(plain.localEndpoint().port());
     auto gatewayClientConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
-    gatewayClientConfig.port = plain.localEndpoint(ruvia::ListenerId{1}).port();
+    gatewayClientConfig.port = plain.localEndpoint().port();
     gatewayClientConfig.protocol = ruvia::HttpClientProtocol::kHttp1Only;
     ruvia::detail::Router gatewayRouter;
     auto& gatewayRouterImpl = ruvia::detail::RouterImpl::from(gatewayRouter);
@@ -1048,7 +1048,7 @@ int main() {
     asio::ip::tcp::socket gatewaySocket(gatewayClientIo);
     std::error_code gatewayEc;
     reportStage("main.gateway-exchange");
-    gatewaySocket.connect(gateway.localEndpoint(ruvia::ListenerId{1}), gatewayEc);
+    gatewaySocket.connect(gateway.localEndpoint(), gatewayEc);
     asio::write(gatewaySocket, asio::buffer(std::string_view("GET /call HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")), gatewayEc);
     std::string gatewayResponse;
     std::array<char, 1024> gatewayBuffer{};
@@ -1096,19 +1096,18 @@ int main() {
     tls.identity.privateKeyFile = std::pmr::string(keyPath.string(), std::pmr::get_default_resource());
     ruvia::detail::WebWorkerRuntime secure(
         ruvia::detail::HttpServerListenerDefinition(
-            ruvia::ListenerId{1},
             asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
             std::move(tls)),
         routerImpl.routeTable(), {}, std::move(options));
     reportStage("main.secure-start");
     secure.start();
     reportStage("main.http2-client");
-    const auto h2Result = runClient(secure.localEndpoint(ruvia::ListenerId{1}).port(), ruvia::HttpScheme::kHttps, ruvia::HttpClientProtocol::kHttp2Only);
+    const auto h2Result = runClient(secure.localEndpoint().port(), ruvia::HttpScheme::kHttps, ruvia::HttpClientProtocol::kHttp2Only);
     reportStage("main.host-cookie");
-    const auto hostPrefixCookieResult = runHostPrefixedCookies(secure.localEndpoint(ruvia::ListenerId{1}).port());
+    const auto hostPrefixCookieResult = runHostPrefixedCookies(secure.localEndpoint().port());
     reportStage("main.verified-tls");
     const auto verifiedResult = runVerifiedTlsClient(
-        secure.localEndpoint(ruvia::ListenerId{1}).port(), "127.0.0.1", certPath);
+        secure.localEndpoint().port(), "127.0.0.1", certPath);
     reportStage("main.secure-stop");
     secure.stop();
     secure.join();
@@ -1118,7 +1117,6 @@ int main() {
     mismatchTls.identity.privateKeyFile = std::pmr::string(mismatchKeyPath.string(), std::pmr::get_default_resource());
     ruvia::detail::WebWorkerRuntime mismatchSecure(
         ruvia::detail::HttpServerListenerDefinition(
-            ruvia::ListenerId{1},
             asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
             std::move(mismatchTls)),
         routerImpl.routeTable(), {}, std::move(mismatchOptions));
@@ -1126,7 +1124,7 @@ int main() {
     mismatchSecure.start();
     reportStage("main.hostname-mismatch");
     const auto hostnameFailureResult = runVerifiedTlsClient(
-        mismatchSecure.localEndpoint(ruvia::ListenerId{1}).port(), "127.0.0.1", mismatchCertPath, nullptr, nullptr, false);
+        mismatchSecure.localEndpoint().port(), "127.0.0.1", mismatchCertPath, nullptr, nullptr, false);
     mismatchSecure.stop();
     mismatchSecure.join();
     reportStage("main.hostname-mismatch-done");
@@ -1150,7 +1148,6 @@ int main() {
     mtls.clientCertificates->verifyFile = std::pmr::string(certPath.string(), std::pmr::get_default_resource());
     ruvia::detail::WebWorkerRuntime mtlsServer(
         ruvia::detail::HttpServerListenerDefinition(
-            ruvia::ListenerId{1},
             asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
             std::move(mtls)),
         routerImpl.routeTable(), {}, std::move(mtlsOptions));
@@ -1158,10 +1155,10 @@ int main() {
     mtlsServer.start();
     reportStage("main.mtls-missing-cert");
     const auto missingClientCertificate = runVerifiedTlsClient(
-        mtlsServer.localEndpoint(ruvia::ListenerId{1}).port(), "127.0.0.1", certPath, nullptr, nullptr, false, true);
+        mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, nullptr, nullptr, false, true);
     reportStage("main.mtls-client-cert");
     const auto mtlsResult = runVerifiedTlsClient(
-        mtlsServer.localEndpoint(ruvia::ListenerId{1}).port(), "127.0.0.1", certPath, &certPath, &keyPath);
+        mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, &certPath, &keyPath);
     reportStage("main.mtls-stop");
     mtlsServer.stop();
     mtlsServer.join();

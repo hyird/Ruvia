@@ -27,10 +27,10 @@ namespace {
         stored.contentType = mime.contentType;
     }
 
-    result.fileTypeKind = source.fileTypes.kind();
+    result.fileTypeKind = source.fileTypes.kind;
     if (result.fileTypeKind == StaticFileTypePolicy::Kind::kOnly) {
-        result.fileTypeExtensions.reserve(source.fileTypes.extensions().size());
-        for (const auto& extension : source.fileTypes.extensions()) {
+        result.fileTypeExtensions.reserve(source.fileTypes.extensions.size());
+        for (const auto& extension : source.fileTypes.extensions) {
             result.fileTypeExtensions.push_back(std::pmr::string(extension, resource));
         }
     }
@@ -42,18 +42,22 @@ namespace {
 
 }  // namespace
 
-App& App::setCompression(std::optional<CompressionConfig> config) {
+App& App::setCompression(CompressionConfig config) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change compression config while app is running", [&config](detail::AppState& state) { state.options.compression = std::move(config); });
 }
 
-App& App::setCors(std::optional<CorsConfig> config) {
+App& App::setCompression(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change compression config while app is running", [](detail::AppState& state) { state.options.compression.reset(); });
+}
+
+App& App::setCors(CorsConfig config) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change CORS config while app is running", [&config](detail::AppState& state) {
-        if (!config.has_value()) {
-            state.options.cors.reset();
-            return;
-        }
-        state.options.cors = detail::makeCorsOptions(*config, detail::appResource());
+        state.options.cors = detail::makeCorsOptions(config, detail::appResource());
     });
+}
+
+App& App::setCors(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change CORS config while app is running", [](detail::AppState& state) { state.options.cors.reset(); });
 }
 
 App& App::setDocumentRoot(DocumentRootConfig config) {
@@ -66,6 +70,7 @@ App& App::setDocumentRoot(DocumentRootConfig config) {
             config.staticOptions.indexFile = "index.html";
         }
         detail::normalizeMimeTypes(config.staticOptions.mimeTypes);
+        detail::normalizeFileTypes(config.staticOptions.fileTypes.extensions);
         detail::validateStaticRootOptions(config.staticOptions);
 
         detail::AppDocumentRootConfig replacement(detail::appResource());
@@ -75,6 +80,10 @@ App& App::setDocumentRoot(DocumentRootConfig config) {
 
         state.documentRootConfig = std::move(replacement);
     });
+}
+
+App& App::setDocumentRoot(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change document root while app is running", [](detail::AppState& state) { state.documentRootConfig.reset(); });
 }
 
 App& App::useMiddleware(detail::ControllerMiddlewareDescriptor descriptor) {
@@ -90,8 +99,12 @@ App& App::useMiddleware(detail::ControllerMiddlewareDescriptor descriptor) {
     return detail::mutateStoppedApp(*this, *state_, "cannot add app middleware while app is running", [descriptor](detail::AppState& state) { state.globalMiddlewares.push_back(descriptor); });
 }
 
-App& App::setBlockingPool(std::optional<BlockingPoolOptions> options) {
+App& App::setBlockingPool(BlockingPoolOptions options) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change the blocking pool while app is running", [&options](detail::AppState& state) { state.blockingPool = options; });
+}
+
+App& App::setBlockingPool(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change the blocking pool while app is running", [](detail::AppState& state) { state.blockingPool.reset(); });
 }
 
 App& App::useWorkerStateDefinition(detail::WorkerStateDefinition definition) {

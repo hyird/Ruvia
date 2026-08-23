@@ -70,9 +70,9 @@ static_assert(HasVariadicOperations<ruvia::DbClient>);
 
 int main() {
 #ifdef RUVIA_ENABLE_MARIADB
-    auto config = ruvia::DbConfig::mariaDb();
+    auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
 #else
-    auto config = ruvia::DbConfig::postgreSql();
+    auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
 #endif
     try {
         ruvia::DbClient invalid(ruvia::EventLoop{}, std::move(config));

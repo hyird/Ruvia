@@ -131,7 +131,7 @@ void loadVerifyFile(asio::ssl::context& context, const std::pmr::string& filenam
 }  // namespace
 
 WebWorkerRuntime::WebWorkerRuntime(TcpEndpoint endpoint, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
-    : WebWorkerRuntime(HttpServerListenerDefinition(ListenerId{1}, std::move(endpoint)), routes, capabilities, std::move(options)) {}
+    : WebWorkerRuntime(HttpServerListenerDefinition(std::move(endpoint)), routes, capabilities, std::move(options)) {}
 
 WebWorkerRuntime::WebWorkerRuntime(HttpServerListenerDefinition listener, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
     : WebWorkerRuntime(std::span<const HttpServerListenerDefinition>(&listener, 1), routes, capabilities, std::move(options)) {}
@@ -179,11 +179,6 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedOptionsTag, std::span<const HttpServ
     listeners_.reserve(listeners.size());
     for (const auto& listener : listeners) {
         validateHttpServerListener(listener);
-        for (const auto& existing : listeners_) {
-            if (existing->id == listener.id) {
-                throw std::invalid_argument("listener IDs must be unique within a worker");
-            }
-        }
         listeners_.push_back(makePmrObject<HttpServerListener>(memory_.resource(), ioContext_, listener, memory_.resource()));
     }
     if (options_.documentRoot.refreshOptions() != nullptr) {
@@ -312,14 +307,11 @@ void WebWorkerRuntime::join() {
     }
 }
 
-TcpEndpoint WebWorkerRuntime::localEndpoint(ListenerId listener) const {
-    const auto configured = std::ranges::find_if(listeners_, [listener](const ListenerPtr& candidate) {
-        return candidate->id == listener;
-    });
-    if (configured == listeners_.end()) {
-        throw std::out_of_range("listener ID is not configured on this worker");
+TcpEndpoint WebWorkerRuntime::localEndpoint(std::size_t listenerIndex) const {
+    if (listenerIndex >= listeners_.size()) {
+        throw std::out_of_range("listener index is not configured on this worker");
     }
-    return (*configured)->endpoint;
+    return listeners_[listenerIndex]->endpoint;
 }
 
 HttpServerStats WebWorkerRuntime::stats() const noexcept {

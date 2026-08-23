@@ -94,10 +94,7 @@ int main() {
     const auto ports = availablePorts();
     const auto runThread = std::this_thread::get_id();
 
-    app.setListeners({
-            ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = ports[0]}),
-            ruvia::ListenerConfig::http(ruvia::ListenerId{2}, {.address = "127.0.0.1", .port = ports[1]}),
-        })
+    app.listen({.address = "127.0.0.1", .http = ports[0]})
         .setWorkerCount(2)
         .setWorkerMailboxCapacity(8)
         .onStop([&] {

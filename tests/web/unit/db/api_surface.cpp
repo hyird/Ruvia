@@ -47,9 +47,9 @@ concept HasPostgreSqlFactory = requires { T::postgreSql(); };
 
 [[nodiscard]] ruvia::DbConfig testDbConfig() {
 #ifdef RUVIA_ENABLE_MARIADB
-    return ruvia::DbConfig::mariaDb();
+    return ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
 #else
-    return ruvia::DbConfig::postgreSql();
+    return ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
 #endif
 }
 
@@ -748,9 +748,9 @@ RUVIA_TEST(db_query_rows_and_execution_metadata_have_independent_storage) {
 RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
     asio::io_context ioContext;
 #ifdef RUVIA_ENABLE_MARIADB
-    const auto config = ruvia::DbConfig::mariaDb();
+    const auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
 #else
-    const auto config = ruvia::DbConfig::postgreSql();
+    const auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
 #endif
     const std::array<ruvia::detail::DbDefinition, 2> definitions{{
         dbDefinition("analytics", config),
@@ -802,19 +802,12 @@ RUVIA_TEST(db_registry_reports_typed_not_configured_error) {
     RUVIA_CHECK(aliasTyped);
 }
 
-RUVIA_TEST(db_config_driver_is_factory_selected_and_read_only) {
-    static_assert(!std::default_initializable<ruvia::DbConfig>);
-    static_assert(std::same_as<decltype(std::declval<const ruvia::DbConfig&>().driver()), ruvia::DbDriver>);
-#ifdef RUVIA_ENABLE_MARIADB
-    static_assert(HasMariaDbFactory<ruvia::DbConfig>);
-#else
+RUVIA_TEST(db_config_is_direct_aggregate_without_factories) {
+    static_assert(std::default_initializable<ruvia::DbConfig>);
+    static_assert(std::is_aggregate_v<ruvia::DbConfig>);
+    static_assert(std::same_as<decltype(std::declval<const ruvia::DbConfig&>().driver), ruvia::DbDriver>);
     static_assert(!HasMariaDbFactory<ruvia::DbConfig>);
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    static_assert(HasPostgreSqlFactory<ruvia::DbConfig>);
-#else
     static_assert(!HasPostgreSqlFactory<ruvia::DbConfig>);
-#endif
     RUVIA_CHECK(true);
 }
 
@@ -842,9 +835,9 @@ RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
 RUVIA_TEST(db_handle_copy_rejects_after_parent_scope_closes) {
     asio::io_context ioContext;
 #ifdef RUVIA_ENABLE_MARIADB
-    const auto config = ruvia::DbConfig::mariaDb();
+    const auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
 #else
-    const auto config = ruvia::DbConfig::postgreSql();
+    const auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
 #endif
     const std::array definitions{dbDefinition("default", config)};
     ruvia::detail::DbRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
@@ -885,7 +878,7 @@ RUVIA_TEST(db_migrator_validates_before_opening_connection) {
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
 RUVIA_TEST(db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_connecting) {
-    auto config = ruvia::DbConfig::postgreSql();
+    auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
     ruvia::DbMigratorOptions options;
     options.lockTimeout = std::chrono::seconds::max();
 

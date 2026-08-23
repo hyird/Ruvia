@@ -66,47 +66,59 @@ public:
     [[nodiscard]] const Env& env() const noexcept;
     App& loadDotenv(DotenvOptions options = {});
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
-    App& setListeners(std::vector<ListenerConfig> listeners);
+    App& listen(ListenConfig config);
     App& setWorkerCount(std::size_t workerCount);
     App& setProcessSignalHandlers(ProcessSignalHandlerPolicy policy);
     App& setWorkerMailboxCapacity(std::size_t capacity);
-    App& setIdleTimeout(std::optional<std::chrono::milliseconds> timeout);
+    App& setIdleTimeout(std::chrono::milliseconds timeout);
+    App& setIdleTimeout(std::nullptr_t);
     App& setConnectionScanInterval(std::chrono::milliseconds interval);
-    App& setRequestHeaderTimeout(std::optional<std::chrono::milliseconds> timeout);
-    App& setRequestBodyTimeout(std::optional<std::chrono::milliseconds> timeout);
-    App& setWriteTimeout(std::optional<std::chrono::milliseconds> timeout);
-    App& setMaxConnectionsPerWorker(std::optional<std::size_t> maxConnections);
-    App& setMaxRequestsPerConnection(std::optional<std::size_t> maxRequests);
+    App& setRequestHeaderTimeout(std::chrono::milliseconds timeout);
+    App& setRequestHeaderTimeout(std::nullptr_t);
+    App& setRequestBodyTimeout(std::chrono::milliseconds timeout);
+    App& setRequestBodyTimeout(std::nullptr_t);
+    App& setWriteTimeout(std::chrono::milliseconds timeout);
+    App& setWriteTimeout(std::nullptr_t);
+    App& setMaxConnectionsPerWorker(std::size_t maxConnections);
+    App& setMaxConnectionsPerWorker(std::nullptr_t);
+    App& setMaxRequestsPerConnection(std::size_t maxRequests);
+    App& setMaxRequestsPerConnection(std::nullptr_t);
     // The deployment's handler deadline. Absent by
     // default: an app that declares no deadline anywhere behaves exactly as
     // before and arms nothing per request. A route may tighten the handler
     // deadline with ruvia::Deadline<N> but never extend it -- the same rule
     // setBodyLimit() follows.
-    App& setDeadline(std::optional<DeadlineConfig> config);
+    App& setDeadline(DeadlineConfig config);
+    App& setDeadline(std::nullptr_t);
 
     // The deployment's request-body ceiling. A route may declare a smaller one
     // with ruvia::BodyLimit<N>; where both exist the STRICTER wins, and a route
     // can never raise this. That is the single rule for every policy with both
     // an app-wide and a route-level form -- narrower scope may only tighten.
     App& setBodyLimit(std::size_t bytes);
-    // The same ceiling for explicit stream routes, where std::nullopt means
-    // unbounded. A route's ruvia::BodyLimit<N> bounds even that.
-    App& setStreamBodyLimit(std::optional<std::size_t> bytes);
+    // The same ceiling for explicit stream routes. Pass nullptr for no app-wide
+    // stream limit. A route's ruvia::BodyLimit<N> bounds even that.
+    App& setStreamBodyLimit(std::size_t bytes);
+    App& setStreamBodyLimit(std::nullptr_t);
     App& setMaxWebSocketMessageBytes(std::size_t bytes);
-    // Disabled by default. Presence enables response coding and precompressed
-    // static sidecar negotiation; std::nullopt disables both.
-    App& setCompression(std::optional<CompressionConfig> config);
-    App& setCors(std::optional<CorsConfig> config);
+    // Disabled by default. A config enables response coding and precompressed
+    // static sidecar negotiation; nullptr disables both.
+    App& setCompression(CompressionConfig config);
+    App& setCompression(std::nullptr_t);
+    App& setCors(CorsConfig config);
+    App& setCors(std::nullptr_t);
     App& setDocumentRoot(DocumentRootConfig config);
+    App& setDocumentRoot(std::nullptr_t);
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     // Configures the process-wide ordinary-thread pool used by
     // Context::runBlocking() and large buffered-response compression. It is
-    // enabled by default with bounded CPU-based sizing; std::nullopt explicitly
+    // enabled by default with bounded CPU-based sizing; nullptr explicitly
     // disables it, making large buffered-response compression synchronous.
     // run() starts the threads before the first request; after workers stop,
     // running callables are not awaited and may finish on the pool's detached
     // state.
-    App& setBlockingPool(std::optional<BlockingPoolOptions> options);
+    App& setBlockingPool(BlockingPoolOptions options);
+    App& setBlockingPool(std::nullptr_t);
 
     App& onError(HttpErrorHandler handler);
     App& onNotFound(HttpNotFoundHandler handler);
@@ -141,7 +153,8 @@ public:
     //
     // Worker-local: each worker counts independently, so a deployment with N
     // workers admits up to N times this rule. Size it accordingly.
-    App& setRateLimit(std::optional<RateLimitRule> rule);
+    App& setRateLimit(RateLimitRule rule);
+    App& setRateLimit(std::nullptr_t);
     // Startup key capacity of that worker-local table, not a policy. Workers
     // with neither an app-wide nor a route-specific rule allocate no table at
     // all.

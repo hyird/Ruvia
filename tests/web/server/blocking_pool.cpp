@@ -170,7 +170,7 @@ int main() {
         options.blockingPool = &pool;
         ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
         server.start();
-        const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
+        const auto endpoint = server.localEndpoint();
 
         asio::io_context ctx;
         std::error_code ec;
@@ -227,7 +227,7 @@ int main() {
         options.blockingPool = &pool;
         ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
         server.start();
-        const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
+        const auto endpoint = server.localEndpoint();
 
         asio::io_context ctx;
         std::error_code ec;
@@ -291,7 +291,7 @@ int main() {
         ruvia::detail::HttpServerOptions options;
         ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
         server.start();
-        const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
+        const auto endpoint = server.localEndpoint();
 
         asio::io_context ctx;
         std::error_code ec;

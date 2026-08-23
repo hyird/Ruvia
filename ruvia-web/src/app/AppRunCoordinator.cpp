@@ -40,18 +40,21 @@ namespace {
 
     switch (source.fileTypeKind) {
         case StaticFileTypePolicy::Kind::kDefaults:
-            result.fileTypes = StaticFileTypePolicy::defaults();
+            result.fileTypes = {.kind = StaticFileTypePolicy::Kind::kDefaults};
             break;
         case StaticFileTypePolicy::Kind::kAll:
-            result.fileTypes = StaticFileTypePolicy::all();
+            result.fileTypes = {.kind = StaticFileTypePolicy::Kind::kAll};
             break;
         case StaticFileTypePolicy::Kind::kOnly: {
-            std::vector<std::string_view> extensions;
+            std::vector<std::string> extensions;
             extensions.reserve(source.fileTypeExtensions.size());
             for (const auto& extension : source.fileTypeExtensions) {
                 extensions.emplace_back(extension);
             }
-            result.fileTypes = StaticFileTypePolicy::only(extensions);
+            result.fileTypes = {
+                .kind = StaticFileTypePolicy::Kind::kOnly,
+                .extensions = std::move(extensions),
+            };
             break;
         }
     }
@@ -193,7 +196,6 @@ private:
         listeners.reserve(state_.listeners.size());
         for (const auto& listener : state_.listeners) {
             listeners.emplace_back(
-                listener.id,
                 asio::ip::tcp::endpoint(asio::ip::make_address(std::string_view(listener.address)), listener.port),
                 listener.transport);
         }

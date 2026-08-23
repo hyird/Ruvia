@@ -59,60 +59,46 @@ int main() {
     ruvia::MemoryPoolConfig memory;
     memory.requestInitialBufferBytes = 4096;
     const auto httpPort = app.env().get<std::uint16_t>("RUVIA_HTTP_PORT").value_or(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8087));
-    std::optional<ruvia::CompressionConfig> compression;
+    app.setWorkerCount(app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2)).setIdleTimeout(std::chrono::seconds(75)).setConnectionScanInterval(std::chrono::seconds(1)).setRequestHeaderTimeout(std::chrono::seconds(60)).setRequestBodyTimeout(std::chrono::seconds(60)).setWriteTimeout(std::chrono::seconds(60)).setMaxConnectionsPerWorker(10000).setMaxRequestsPerConnection(1000).setBodyLimit(16 * 1024 * 1024).setStreamBodyLimit(nullptr).setMaxWebSocketMessageBytes(16 * 1024 * 1024).setMemoryPoolConfig(memory);
     if (app.env().get<bool>("RUVIA_GZIP").value_or(false)) {
-        compression.emplace();
+        app.setCompression({});
     }
-    std::optional<ruvia::CorsConfig> cors;
     if (app.env().get<bool>("RUVIA_CORS").value_or(false)) {
-        auto& config = cors.emplace();
-        config.origin = ruvia::CorsOriginPolicy::any();
-        config.requestHeaders = ruvia::CorsRequestHeadersPolicy::fixed({"content-type", "authorization"});
-        config.maxAge.emplace(std::chrono::seconds(600));
+        app.setCors({
+            .requestHeaders = {
+                .mode = ruvia::CorsRequestHeadersMode::kFixed,
+                .names = {"content-type", "authorization"},
+            },
+            .maxAge = std::chrono::seconds(600),
+        });
     }
-
-    app.setWorkerCount(app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2)).setIdleTimeout(std::chrono::seconds(75)).setConnectionScanInterval(std::chrono::seconds(1)).setRequestHeaderTimeout(std::chrono::seconds(60)).setRequestBodyTimeout(std::chrono::seconds(60)).setWriteTimeout(std::chrono::seconds(60)).setMaxConnectionsPerWorker(10000).setMaxRequestsPerConnection(1000).setBodyLimit(16 * 1024 * 1024).setStreamBodyLimit(std::nullopt).setMaxWebSocketMessageBytes(16 * 1024 * 1024).setMemoryPoolConfig(memory).setCompression(std::move(compression)).setCors(std::move(cors));
 
     const auto cert = pathOrEmpty(app.env().get("RUVIA_TLS_CERT"));
     const auto key = pathOrEmpty(app.env().get("RUVIA_TLS_KEY"));
     if (!cert.empty() && !key.empty()) {
         std::string password;
         assignIfPresent(password, app.env().get("RUVIA_TLS_PASSWORD"));
-        ruvia::TlsConfig tls(ruvia::TlsIdentity::fromFiles({
+        ruvia::ListenConfig listener{
+            .address = "0.0.0.0",
+            .http = httpPort,
+            .https = app.env().get<std::uint16_t>("RUVIA_HTTPS_PORT").value_or(8443),
+            .tls = {
             .certificateChainFile = cert,
             .privateKeyFile = key,
             .privateKeyPassword = password,
-        }));
+            },
+            .autoHttpsRedirect = app.env().get<bool>("RUVIA_AUTO_HTTPS").value_or(false),
+        };
         const auto verifyFile = pathOrEmpty(app.env().get("RUVIA_TLS_VERIFY_FILE"));
         if (!verifyFile.empty()) {
-            tls.setClientCertificatePolicy(ruvia::TlsClientCertificatePolicy::optional(verifyFile));
+            listener.tls.clientCertificates.verifyFile = verifyFile;
         }
-        const auto httpsPort = app.env().get<std::uint16_t>("RUVIA_HTTPS_PORT").value_or(8443);
-        std::vector<ruvia::ListenerConfig> listeners;
-        listeners.reserve(2);
-        if (app.env().get<bool>("RUVIA_AUTO_HTTPS").value_or(false)) {
-            listeners.push_back(ruvia::ListenerConfig::redirectHttpToHttps(ruvia::ListenerId{1}, {
-                .address = "0.0.0.0",
-                .port = httpPort,
-                .target = ruvia::ListenerId{2},
-            }));
-        } else {
-            listeners.push_back(ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {
-                .address = "0.0.0.0",
-                .port = httpPort,
-            }));
-        }
-        listeners.push_back(ruvia::ListenerConfig::https(ruvia::ListenerId{2}, {
-            .address = "0.0.0.0",
-            .port = httpsPort,
-            .tls = std::move(tls),
-        }));
-        app.setListeners(std::move(listeners));
+        app.listen(std::move(listener));
     } else {
-        app.setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {
+        app.listen({
             .address = "0.0.0.0",
-            .port = httpPort,
-        })});
+            .http = httpPort,
+        });
     }
 
     app.setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).run();

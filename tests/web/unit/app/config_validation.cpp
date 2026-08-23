@@ -131,9 +131,9 @@ RUVIA_TEST(integration_config_copies_public_strings_into_internal_pmr_storage) {
     std::optional<ruvia::detail::RedisConfigStorage> redis;
     {
 #ifdef RUVIA_ENABLE_MARIADB
-        auto source = ruvia::DbConfig::mariaDb();
+        auto source = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
 #elif defined(RUVIA_ENABLE_POSTGRESQL)
-        auto source = ruvia::DbConfig::postgreSql();
+        auto source = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
 #endif
 #if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
         source.host = std::string(80, 'h');

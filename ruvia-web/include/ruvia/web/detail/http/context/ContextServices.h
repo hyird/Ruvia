@@ -230,18 +230,18 @@ public:
 
     // Views borrow connection-owned storage and remain valid for every Context
     // created while that connection is dispatched.
-    [[nodiscard]] ContextServices withPlainTransport(std::string_view remoteAddress, std::optional<ListenerId> listener = std::nullopt) const noexcept {
+    [[nodiscard]] ContextServices withPlainTransport(std::string_view remoteAddress) const noexcept {
         auto services = *this;
-        services.connInfo_ = ConnInfo::plain(remoteAddress, listener);
+        services.connInfo_ = ConnInfo::plain(remoteAddress);
         return services;
     }
 
     template <typename Traits, typename Allocator>
     ContextServices withPlainTransport(std::basic_string<char, Traits, Allocator>&&) const = delete;
 
-    [[nodiscard]] ContextServices withTlsTransport(std::string_view remoteAddress, std::string_view clientCertificateSubject = {}, std::optional<ListenerId> listener = std::nullopt) const noexcept {
+    [[nodiscard]] ContextServices withTlsTransport(std::string_view remoteAddress, std::string_view clientCertificateSubject = {}) const noexcept {
         auto services = *this;
-        services.connInfo_ = ConnInfo::tls(remoteAddress, clientCertificateSubject, listener);
+        services.connInfo_ = ConnInfo::tls(remoteAddress, clientCertificateSubject);
         return services;
     }
 

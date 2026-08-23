@@ -98,7 +98,7 @@ int main() {
         output << initialBody;
     }
     ruvia::StaticRootOptions rootOptions;
-    rootOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
+    rootOptions.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot root(dir, std::move(rootOptions));
 
     ruvia::DocumentRootRuntimeOptions documentRootRuntime;
@@ -114,7 +114,7 @@ int main() {
 
     ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
     server.start();
-    const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
+    const auto endpoint = server.localEndpoint();
 
     int rc = 0;
     auto fail = [&](int code, const char* message) {

@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -14,110 +15,9 @@
 #include "ruvia/web/App.h"
 #include "ruvia/http/HttpResponse.h"
 
-namespace {
-
-template <typename T>
-concept ExposesRvalueOwnedConfigBorrow = requires(T&& value) { std::move(value).host(); } || requires(T&& value) { std::move(value).value(); } || requires(T&& value) { std::move(value).origin(); } || requires(T&& value) { std::move(value).headers(); } || requires(T&& value) { std::move(value).extensions(); };
-
-static_assert(!ExposesRvalueOwnedConfigBorrow<ruvia::TlsSniIdentity>);
-static_assert(!ExposesRvalueOwnedConfigBorrow<ruvia::CorsOrigin>);
-static_assert(!ExposesRvalueOwnedConfigBorrow<ruvia::CorsOriginPolicy>);
-static_assert(!ExposesRvalueOwnedConfigBorrow<ruvia::CorsHeaderNames>);
-static_assert(!ExposesRvalueOwnedConfigBorrow<ruvia::CorsRequestHeadersPolicy>);
-static_assert(!ExposesRvalueOwnedConfigBorrow<ruvia::StaticFileTypePolicy>);
-
-}  // namespace
-
-RUVIA_TEST(cors_origin_policy_has_explicit_legal_alternatives) {
-    static_assert(!std::default_initializable<ruvia::CorsOriginPolicy>);
-    static_assert(!std::is_aggregate_v<ruvia::CorsOriginPolicy>);
-
-    const auto any = ruvia::CorsOriginPolicy::any();
-    const auto exact = ruvia::CorsOriginPolicy::exact(ruvia::CorsOrigin::serialized("https://app.example.com"));
-    const auto credentialed = ruvia::CorsOriginPolicy::credentialed(ruvia::CorsOrigin::serialized("https://app.example.com"));
-    RUVIA_CHECK(any.kind() == ruvia::CorsOriginPolicy::Kind::kAny);
-    RUVIA_CHECK(exact.kind() == ruvia::CorsOriginPolicy::Kind::kExact);
-    RUVIA_CHECK(credentialed.kind() == ruvia::CorsOriginPolicy::Kind::kCredentialedExact);
-}
-
-RUVIA_TEST(cors_origin_requires_an_explicit_valid_wire_value) {
-    const auto rejects = [](std::string_view value) {
-        try {
-            (void)ruvia::CorsOrigin::serialized(value);
-            return false;
-        } catch (const std::invalid_argument&) {
-            return true;
-        }
-    };
-
-    RUVIA_CHECK(rejects(""));
-    RUVIA_CHECK(rejects("*"));
-    RUVIA_CHECK(rejects("null"));
-    RUVIA_CHECK(rejects("https://a\r\nX: y"));
-    RUVIA_CHECK(rejects("https://app.example/"));
-    RUVIA_CHECK(rejects("https://APP.example"));
-    RUVIA_CHECK(rejects("https://app.example:65536"));
-
-    const auto opaque = ruvia::CorsOrigin::opaque();
-    RUVIA_CHECK_EQ(opaque.value(), std::string_view("null"));
-    const auto credentialedOpaque = ruvia::CorsOriginPolicy::credentialed(opaque);
-    RUVIA_CHECK_EQ(credentialedOpaque.origin(), std::string_view("null"));
-}
-
-RUVIA_TEST(cors_header_names_validate_each_field_name_at_construction) {
-    bool injectionThrew = false;
-    bool invalidNameThrew = false;
-    try {
-        (void)ruvia::CorsHeaderNames::of({"X-Bar\r\nX: y"});
-    } catch (const std::invalid_argument&) {
-        injectionThrew = true;
-    }
-    try {
-        (void)ruvia::CorsHeaderNames::of({"X Bad"});
-    } catch (const std::invalid_argument&) {
-        invalidNameThrew = true;
-    }
-
-    const auto valid = ruvia::CorsHeaderNames::of({"X-Exposed", "X-Other"});
-    RUVIA_CHECK(injectionThrew);
-    RUVIA_CHECK(invalidNameThrew);
-    RUVIA_CHECK_EQ(valid.value(), std::string_view("X-Exposed, X-Other"));
-}
-
-RUVIA_TEST(cors_fixed_request_headers_reject_invalid_value_at_construction) {
-    bool emptyThrew = false;
-    bool injectionThrew = false;
-    bool invalidNameThrew = false;
-    try {
-        (void)ruvia::CorsRequestHeadersPolicy::fixed(std::initializer_list<std::string_view>{});
-    } catch (const std::invalid_argument&) {
-        emptyThrew = true;
-    }
-    try {
-        (void)ruvia::CorsRequestHeadersPolicy::fixed({"X-Foo\r\nX: y"});
-    } catch (const std::invalid_argument&) {
-        injectionThrew = true;
-    }
-    try {
-        (void)ruvia::CorsRequestHeadersPolicy::fixed({"X Bad"});
-    } catch (const std::invalid_argument&) {
-        invalidNameThrew = true;
-    }
-    RUVIA_CHECK(emptyThrew);
-    RUVIA_CHECK(injectionThrew);
-    RUVIA_CHECK(invalidNameThrew);
-}
-
-RUVIA_TEST(cors_max_age_rejects_negative_value_at_construction) {
-    bool threw = false;
-    try {
-        (void)ruvia::CorsMaxAge(std::chrono::seconds(-1));
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
-    RUVIA_CHECK(threw);
-    RUVIA_CHECK_EQ(ruvia::CorsMaxAge(std::chrono::seconds(3600)).value(), std::chrono::seconds(3600));
-}
+static_assert(std::is_aggregate_v<ruvia::CorsOriginConfig>);
+static_assert(std::is_aggregate_v<ruvia::CorsRequestHeadersConfig>);
+static_assert(std::is_aggregate_v<ruvia::CorsConfig>);
 
 namespace {
 
@@ -133,17 +33,37 @@ void applyCorsHeaders(const ruvia::HttpRequest& request, HttpResponse& response,
 CorsConfig corsOptions(std::string_view configuredOrigin, bool credentials) {
     CorsConfig cors;
     if (configuredOrigin == "*") {
-        cors.origin = ruvia::CorsOriginPolicy::any();
         return cors;
     }
-    cors.origin = credentials ? ruvia::CorsOriginPolicy::credentialed(ruvia::CorsOrigin::serialized(configuredOrigin)) : ruvia::CorsOriginPolicy::exact(ruvia::CorsOrigin::serialized(configuredOrigin));
+    cors.origin = {
+        .mode = credentials ? ruvia::CorsOriginMode::kCredentialedExact : ruvia::CorsOriginMode::kExact,
+        .value = std::string(configuredOrigin),
+    };
     return cors;
 }
 
 }  // namespace
 
+RUVIA_TEST(cors_config_validates_when_consumed) {
+    const auto rejects = [](const ruvia::CorsConfig& config) {
+        try {
+            (void)ruvia::detail::makeCorsOptions(config, std::pmr::new_delete_resource());
+            return false;
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+    };
+
+    RUVIA_CHECK(rejects({.origin = {.mode = ruvia::CorsOriginMode::kExact}}));
+    RUVIA_CHECK(rejects({.origin = {.mode = ruvia::CorsOriginMode::kExact, .value = "https://APP.example"}}));
+    RUVIA_CHECK(rejects({.requestHeaders = {.mode = ruvia::CorsRequestHeadersMode::kFixed}}));
+    RUVIA_CHECK(rejects({.exposeHeaders = {"X-Bad\r\nInjected: yes"}}));
+    RUVIA_CHECK(rejects({.maxAge = std::chrono::seconds(-1)}));
+    RUVIA_CHECK(!rejects({.origin = {.mode = ruvia::CorsOriginMode::kCredentialedExact, .value = "null"}}));
+}
+
 RUVIA_TEST(cors_max_age_distinguishes_absence_from_zero) {
-    static_assert(std::same_as<decltype(ruvia::CorsConfig{}.maxAge), std::optional<ruvia::CorsMaxAge>>);
+    static_assert(std::same_as<decltype(ruvia::CorsConfig{}.maxAge), std::optional<std::chrono::seconds>>);
 
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
@@ -204,7 +124,7 @@ RUVIA_TEST(cors_static_response_metadata_is_cache_stable_without_origin) {
         const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
         HttpResponse response({.resource = std::pmr::new_delete_resource()});
         auto cors = corsOptions("*", false);
-        cors.exposeHeaders = ruvia::CorsHeaderNames::of({"X-Total-Count"});
+        cors.exposeHeaders = {"X-Total-Count"};
         applyCorsHeaders(result.request, response, cors);
         RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Origin").value_or(""), std::string_view("*"));
         RUVIA_CHECK_EQ(response.header("Access-Control-Expose-Headers").value_or(""), std::string_view("X-Total-Count"));
@@ -292,7 +212,10 @@ RUVIA_TEST(cors_preflight_prefers_configured_allow_headers) {
     HttpResponse response({.resource = std::pmr::new_delete_resource()});
 
     auto cors = corsOptions("https://app.example", false);
-    cors.requestHeaders = ruvia::CorsRequestHeadersPolicy::fixed({"Authorization", "X-Configured"});
+    cors.requestHeaders = {
+        .mode = ruvia::CorsRequestHeadersMode::kFixed,
+        .names = {"Authorization", "X-Configured"},
+    };
     applyCorsHeaders(result.request, response, cors);
 
     // The configured allow-list wins over reflecting the requested headers.
@@ -310,7 +233,7 @@ RUVIA_TEST(cors_runtime_exposes_configured_headers_on_simple_response) {
         const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
         HttpResponse response({.resource = std::pmr::new_delete_resource()});
         auto cors = corsOptions("https://app.example", false);
-        cors.exposeHeaders = ruvia::CorsHeaderNames::of({"X-Total-Count", "X-Request-Id"});
+        cors.exposeHeaders = {"X-Total-Count", "X-Request-Id"};
         applyCorsHeaders(result.request, response, cors);
         RUVIA_CHECK_EQ(response.header("Access-Control-Expose-Headers").value_or(""), std::string_view("X-Total-Count, X-Request-Id"));
     }
@@ -323,7 +246,7 @@ RUVIA_TEST(cors_runtime_exposes_configured_headers_on_simple_response) {
             "Access-Control-Request-Method: POST\r\n\r\n");
         HttpResponse response({.resource = std::pmr::new_delete_resource()});
         auto cors = corsOptions("https://app.example", false);
-        cors.exposeHeaders = ruvia::CorsHeaderNames::of({"X-Total-Count"});
+        cors.exposeHeaders = {"X-Total-Count"};
         applyCorsHeaders(result.request, response, cors);
         RUVIA_CHECK(!response.header("Access-Control-Expose-Headers").has_value());
     }

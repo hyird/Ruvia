@@ -90,7 +90,7 @@ int main() {
 
     ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
     server.start();
-    const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
+    const auto endpoint = server.localEndpoint();
     asio::io_context ctx;
 
     // 404 (no such path) keeps a bodyless connection alive.

@@ -58,7 +58,7 @@ int main() {
 
         asio::io_context clientContext;
         asio::ip::tcp::socket client(clientContext);
-        client.connect(server.localEndpoint(ruvia::ListenerId{1}));
+        client.connect(server.localEndpoint());
         constexpr std::string_view request = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
         asio::write(client, asio::buffer(request));
         asio::streambuf response;
@@ -79,7 +79,7 @@ int main() {
 
         asio::io_context clientContext;
         asio::ip::tcp::socket client(clientContext);
-        client.connect(server.localEndpoint(ruvia::ListenerId{1}));
+        client.connect(server.localEndpoint());
         constexpr std::string_view request = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
         asio::write(client, asio::buffer(request));
         asio::streambuf response;

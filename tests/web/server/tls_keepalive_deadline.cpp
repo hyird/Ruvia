@@ -174,12 +174,11 @@ int main() {
 
     ruvia::detail::WebWorkerRuntime server(
         ruvia::detail::HttpServerListenerDefinition(
-            ruvia::ListenerId{1},
             asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
             std::move(tls)),
         routerImpl.routeTable(), {}, std::move(options));
     server.start();
-    const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
+    const auto endpoint = server.localEndpoint();
 
     int result = 0;
     {

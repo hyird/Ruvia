@@ -3,10 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <initializer_list>
 #include <memory>
-#include <span>
-#include <string_view>
 #include <string>
 #include <vector>
 
@@ -19,36 +16,15 @@ struct StaticMimeType final {
     std::string contentType;
 };
 
-class StaticFileTypePolicy final {
-public:
+struct StaticFileTypePolicy final {
     enum class Kind : std::uint8_t {
         kDefaults,
         kAll,
         kOnly,
     };
 
-    [[nodiscard]] static StaticFileTypePolicy defaults();
-    [[nodiscard]] static StaticFileTypePolicy all();
-    [[nodiscard]] static StaticFileTypePolicy only(std::span<const std::string_view> extensions);
-    [[nodiscard]] static StaticFileTypePolicy only(std::initializer_list<std::string_view> extensions) {
-        return only(std::span<const std::string_view>(extensions.begin(), extensions.size()));
-    }
-
-    [[nodiscard]] constexpr Kind kind() const noexcept {
-        return kind_;
-    }
-
-    [[nodiscard]] constexpr std::span<const std::string> extensions() const& noexcept {
-        return extensions_;
-    }
-    std::span<const std::string> extensions() const&& = delete;
-
-private:
-    explicit StaticFileTypePolicy(Kind kind)
-        : kind_(kind) {}
-
-    Kind kind_;
-    std::vector<std::string> extensions_;
+    Kind kind{Kind::kDefaults};
+    std::vector<std::string> extensions;
 };
 
 enum class StaticRangeRequestPolicy : std::uint8_t {
@@ -71,7 +47,7 @@ struct StaticRootOptions final {
     std::string indexFile;
     std::string defaultContentType{"application/octet-stream"};
     std::vector<StaticMimeType> mimeTypes;
-    StaticFileTypePolicy fileTypes{StaticFileTypePolicy::defaults()};
+    StaticFileTypePolicy fileTypes;
     StaticRangeRequestPolicy rangeRequests{StaticRangeRequestPolicy::kHonor};
     StaticResponseValidatorPolicy responseValidators{StaticResponseValidatorPolicy::kEmit};
     // Serve files and directories whose name begins with '.' (dotfiles). Off by

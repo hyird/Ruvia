@@ -57,10 +57,11 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(postgresql_config_factory_selects_driver_and_port) {
-    const auto config = ruvia::DbConfig::postgreSql();
-    RUVIA_CHECK(config.driver() == ruvia::DbDriver::kPostgreSql);
-    RUVIA_CHECK(config.port == 5432);
+RUVIA_TEST(postgresql_config_selects_default_port_when_omitted) {
+    const auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
+    RUVIA_CHECK(config.driver == ruvia::DbDriver::kPostgreSql);
+    RUVIA_CHECK(!config.port.has_value());
+    RUVIA_CHECK_EQ(ruvia::detail::configuredDbPort(config), std::uint16_t{5432});
     RUVIA_CHECK(!throwsInvalidArgument([&] { ruvia::detail::validateDbConfig(config); }));
 }
 

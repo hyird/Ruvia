@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "ruvia/web/db/DbTypes.h"
+#include "ruvia/web/detail/db/DbConfigValidation.h"
 
 namespace ruvia::detail {
 
@@ -15,9 +16,9 @@ namespace ruvia::detail {
 // its owning PMR domain here.
 struct DbConfigStorage final {
     DbConfigStorage(const DbConfig& source, std::pmr::memory_resource* resource)
-        : driver(source.driver()),
+        : driver(source.driver),
           host(source.host, resource),
-          port(source.port),
+          port(source.port.value_or(defaultDbPort(source.driver))),
           username(source.username, resource),
           password(source.password, resource),
           database(source.database, resource),
@@ -40,9 +41,9 @@ struct DbConfigStorage final {
           queryTimeout(source.queryTimeout),
           acquireTimeout(source.acquireTimeout) {}
 
-    DbDriver driver{DbDriver::kMariaDb};
+    DbDriver driver{DbDriver::kUnspecified};
     std::pmr::string host;
-    std::uint16_t port{3306};
+    std::uint16_t port{0};
     std::pmr::string username;
     std::pmr::string password;
     std::pmr::string database;

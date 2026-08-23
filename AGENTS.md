@@ -28,6 +28,7 @@ ruvia-web   -> ruvia-core + ruvia-http
 - 不要回退、覆盖或整理用户已有改动，除非用户明确要求。
 - 需求不清时只问一个必要问题；能从仓库上下文判断时直接执行。
 - 默认优先选择长期正确、最优雅清晰的一等抽象、清晰命名和稳定边界，即使改动面更大；不要为了缩小 diff 把新能力塞进语义不匹配的旧接口或 `detail` 旁路。
+- 公开配置数据统一使用可直接 designated initialization 的普通聚合；能够由字段表达的配置不得增加静态工厂、builder、链式子配置或 identity wrapper。配置由职责 owner 在消费时整体校验并一次性归一化到所属 PMR 存储；可选 App 能力传配置表示开启或替换，传 `nullptr` 表示关闭。
 - 讨论协议行为时，以 HTTP、TLS、WebSocket、SSE、HTTP/2 相关 RFC 和标准优先。
 - 如果项目约束与协议标准冲突，优先修实现和文档以符合标准。
 - README 不写内部重构历史；AGENTS 不累积逐类型防回归目录。
@@ -205,7 +206,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
   DB、Redis、outbound HTTP client 和 user state；listener 数量不得乘增 worker 或
   数据资源。
 - 每个 Web worker 的 DB、Redis、outbound HTTP client、user state 和 rate limiter 必须由一个 worker capability owner 统一构造、启动、暴露和关闭；这些实例不得跨 worker 共享，也不得重新散落成相互独立的 runtime 生命周期字段。
-- listener 通过 `App::setListeners(std::vector<ListenerConfig>)` 原子配置；每项自带 bind address、port 和 transport，端口必须唯一，HTTP→HTTPS redirect 必须指向同一列表中的 HTTPS listener，不恢复全局 listen address 或固定单/双 listener topology 类型。公开配置必须在 setter 中一次性归一化到 App PMR 存储。
+- listener 通过一个 `App::listen(ListenConfig)` 原子配置统一的 bind address、可选 HTTP/HTTPS 端口、TLS 和自动跳转；未填写的端口表示不开启，自动跳转要求同一配置同时提供 HTTP 与 HTTPS。每个 worker 必须独立监听这组完全相同的端口，不得引入公开 listener ID 或按 worker 分组监听。
 - `App::run()` 为每个 worker 创建一个线程和完整 runtime，并为该 worker 的每个
   listener 创建独立 acceptor；连接由接受它的 worker 终身拥有，不跨线程迁移。
 - Web 启动必须先为全部 worker 完成 listener prepare，再启动全部 worker 并等待 worker-local DB/Redis 等能力全部 ready，最后一次性释放 serve 门禁；任何 worker 准备或启动失败都不得留下部分 worker 对外接收连接。`onStart` 只能在全部 worker 已进入 serving 后执行。

@@ -16,53 +16,28 @@ enum class RateLimitOverflowPolicy : std::uint8_t {
     kAllow,
 };
 
-struct RateLimitFixedWindowOptions final {
+// Per-worker, per-address fixed-window rule. Configuration remains a plain
+// value; each owner validates it once before publishing runtime state.
+struct RateLimitRule final {
     std::size_t maxRequests{0};
     std::chrono::milliseconds window{0};
     RateLimitOverflowPolicy overflowPolicy{RateLimitOverflowPolicy::kDeny};
 };
 
-// Per-worker, per-address fixed-window rule. Every worker owns an independent
-// allocation-free key table, so the admitted process-wide total depends on how
-// connections are distributed across workers. Absence, not a zero request
-// count, disables the app-level rule. The overflow policy applies when a worker
-// cannot represent or allocate a key in its fixed table.
-class RateLimitRule final {
-public:
-    [[nodiscard]] static constexpr RateLimitRule fixedWindow(RateLimitFixedWindowOptions options) {
-        if (options.maxRequests == 0) {
-            throw std::invalid_argument("rate limit max requests must be greater than zero");
-        }
-        if (options.window.count() <= 0) {
-            throw std::invalid_argument("rate limit window must be greater than zero");
-        }
-        if (options.overflowPolicy != RateLimitOverflowPolicy::kDeny && options.overflowPolicy != RateLimitOverflowPolicy::kAllow) {
-            throw std::invalid_argument("rate limit overflow policy is invalid");
-        }
-        return RateLimitRule(options.maxRequests, options.window, options.overflowPolicy);
+namespace detail {
+
+inline constexpr void validateRateLimitRule(const RateLimitRule& rule) {
+    if (rule.maxRequests == 0) {
+        throw std::invalid_argument("rate limit max requests must be greater than zero");
     }
-
-    [[nodiscard]] constexpr std::size_t maxRequests() const noexcept {
-        return maxRequests_;
+    if (rule.window.count() <= 0) {
+        throw std::invalid_argument("rate limit window must be greater than zero");
     }
-
-    [[nodiscard]] constexpr std::chrono::milliseconds window() const noexcept {
-        return window_;
+    if (rule.overflowPolicy != RateLimitOverflowPolicy::kDeny && rule.overflowPolicy != RateLimitOverflowPolicy::kAllow) {
+        throw std::invalid_argument("rate limit overflow policy is invalid");
     }
+}
 
-    [[nodiscard]] constexpr RateLimitOverflowPolicy overflowPolicy() const noexcept {
-        return overflowPolicy_;
-    }
-
-private:
-    constexpr RateLimitRule(std::size_t maxRequests, std::chrono::milliseconds window, RateLimitOverflowPolicy overflowPolicy) noexcept
-        : maxRequests_(maxRequests),
-          window_(window),
-          overflowPolicy_(overflowPolicy) {}
-
-    std::size_t maxRequests_;
-    std::chrono::milliseconds window_;
-    RateLimitOverflowPolicy overflowPolicy_;
-};
+}  // namespace detail
 
 }  // namespace ruvia

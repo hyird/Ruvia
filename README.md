@@ -68,7 +68,7 @@ public:
 
 int main() {
     ruvia::app()
-        .setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "0.0.0.0", .port = 8080})})
+        .listen({.address = "0.0.0.0", .http = 8080})
         .setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall)
         .run();
 }
@@ -95,21 +95,33 @@ responses through `Context`. Set response metadata through `c.status()`,
 HTTP status APIs use `ruvia::HttpStatusCode`: prefer named values such as
 `ruvia::http_status::kCreated`, and use `HttpStatusCode::fromValue()` only for
 validated extension codes.
-`setListeners()` atomically installs any number of
-`ListenerConfig::http(id, {...})`, `https(id, {...})`, and
-`redirectHttpToHttps(id, {...})` listeners. Redirect targets use a stable
-`ListenerId` naming an HTTPS listener in the same list, and ports and listener
-IDs must be unique. `setWorkerCount()` is the total Web worker count: every
-worker independently listens on the complete listener set and owns one
-worker-local DB, Redis, outbound HTTP client, and user-state set. Adding a
-listener does not multiply workers or data resources. During dispatch,
-`getConnInfo(c).listener()` identifies the listener that accepted the
-connection. It is empty only for a synthetic test context that did not pass
-through a configured listener; `ListenerId` itself is always nonzero.
-Public startup configuration uses ordinary C++ values (`std::string`,
-`std::vector`, paths, durations, and spans); callers never choose a PMR
-resource. Ruvia copies retained configuration into process-owned storage before
-workers start.
+Public configuration types are ordinary C++ aggregates. Configure them directly
+with designated initializers; there are no configuration factories, builders,
+or identity wrappers. Passing a config to an optional App feature enables or
+replaces it, and passing `nullptr` disables it. Ruvia validates each complete
+value before atomically copying retained data into process-owned PMR storage.
+
+`listen()` configures the bind address and its optional HTTP and HTTPS ports as
+one value. An omitted port is disabled, and automatic HTTP-to-HTTPS redirect is
+enabled in that same value:
+
+```cpp
+ruvia::app().listen({
+    .address = "0.0.0.0",
+    .http = 80,
+    .https = 443,
+    .tls = {
+        .certificateChainFile = "certs/server.crt",
+        .privateKeyFile = "certs/server.key",
+    },
+    .autoHttpsRedirect = true,
+});
+```
+
+`setWorkerCount()` is the total Web worker count. Every worker independently
+listens on the same configured ports and owns one worker-local DB, Redis,
+outbound HTTP client, and user-state set. Enabling both transports does not
+multiply workers or data resources.
 Policies that exist both app-wide and per route use one name and one rule: the
 narrower scope may only **tighten**. `setBodyLimit()` and `setRateLimit()` are
 the deployment's ceilings; `ruvia::BodyLimit<N>` and
@@ -130,10 +142,10 @@ App-wide fixed-window rules use an options object rather than positional
 arguments:
 
 ```cpp
-ruvia::app().setRateLimit(ruvia::RateLimitRule::fixedWindow({
+ruvia::app().setRateLimit({
     .maxRequests = 100,
     .window = std::chrono::seconds(60),
-}));
+});
 ```
 
 `setRateLimitCapacityPerWorker()` selects its power-of-two startup key capacity
@@ -423,7 +435,7 @@ ruvia::Task<void> runWorkerJob(ruvia::DbClient& db) {
 ruvia::EventLoopPool loops({.loopCount = 1});
 auto loop = loops.loop(0);
 
-auto pg = ruvia::DbConfig::postgreSql();
+auto pg = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
 pg.host = "127.0.0.1";
 pg.database = "app";
 ruvia::DbClient db(loop, std::move(pg));
@@ -560,7 +572,7 @@ owner needs a completion barrier. `BlockingPool` is a `ruvia::core` type and
 can be used directly outside Web; both layers use `runBlocking(...)` for the
 throwing form and `tryRunBlocking(...)` for the status-returning form.
 `App` creates a blocking pool by default using half the logical CPUs, clamped
-to 2..8 threads, with 64 queued tasks per thread. Pass `std::nullopt` to
+to 2..8 threads, with 64 queued tasks per thread. Pass `nullptr` to
 `App::setBlockingPool()` when an application intentionally needs no offload
 capacity and should not pay for idle threads. Large buffered responses then
 compress synchronously on their worker when response compression is enabled.
@@ -568,8 +580,8 @@ compress synchronously on their worker when response compression is enabled.
 ## Static Files and Compression
 
 Response compression is disabled by default. Enable negotiated gzip, Brotli,
-or zstd explicitly with `setCompression(CompressionConfig{})`; pass
-`std::nullopt` to disable it again.
+or zstd explicitly with `setCompression({})`; pass `nullptr` to disable it
+again.
 
 Buffered API responses use one bounded policy: bodies below `minBytes` remain
 identity, bodies through `syncBytes` are compressed on the worker, bodies
@@ -699,18 +711,23 @@ definition from the target and should not define it themselves.
 
 ## Database Drivers
 
-MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction and migration APIs. Each worker owns exactly one database connection. `DbConfig` has no driver-neutral default constructor: select an enabled driver through its factory, which also supplies that backend's default port:
+MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction
+and migration APIs. Each worker owns exactly one database connection. Select an
+enabled driver directly in `DbConfig`; omitting `port` selects that driver's
+standard port:
 
 ```cpp
-auto config = ruvia::DbConfig::postgreSql(); // port 5432
-config.username = "app";
-config.password = "secret";
-config.database = "app";
+auto config = ruvia::DbConfig{
+    .driver = ruvia::DbDriver::kPostgreSql,
+    .username = "app",
+    .password = "secret",
+    .database = "app",
+};
 app.useDb({.config = std::move(config)});
 ```
 
-The matching factory exists only when its CMake feature is enabled. PostgreSQL parameters use `$1`, `$2`,
-and so on; MariaDB parameters use `?`. A `?` inside a string literal, a quoted
+The selected driver must be enabled at build time. PostgreSQL parameters use
+`$1`, `$2`, and so on; MariaDB parameters use `?`. A `?` inside a string literal, a quoted
 identifier or a comment is data, not a placeholder. For generated PostgreSQL
 keys, use `INSERT ... RETURNING id` and read the returned row.
 

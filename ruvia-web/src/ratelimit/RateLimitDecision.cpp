@@ -72,7 +72,7 @@ bool applyRouteRateLimit(Context& context, const RouteRateLimitOptions& options)
         .message = error.message(),
         .statusText = error.statusText(),
     });
-    applyRouteRateLimitRejectionHeaders(response, *rejection, options.rule.maxRequests());
+    applyRouteRateLimitRejectionHeaders(response, *rejection, options.rule.maxRequests);
     context.respond(std::move(response));
     return false;
 }

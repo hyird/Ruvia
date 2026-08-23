@@ -33,9 +33,9 @@ constexpr auto kBudget = std::chrono::seconds(10);
 
 [[nodiscard]] ruvia::DbConfig silentBackendConfig(std::uint16_t port) {
 #ifdef RUVIA_ENABLE_MARIADB
-    auto config = ruvia::DbConfig::mariaDb();
+    auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
 #else
-    auto config = ruvia::DbConfig::postgreSql();
+    auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
 #endif
     config.host = "127.0.0.1";
     config.port = port;

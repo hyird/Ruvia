@@ -129,6 +129,22 @@ public:
         if (options.lifecycle.closeHandshakeTimeout.has_value() && options.lifecycle.closeHandshakeTimeout->count() <= 0) {
             throw std::invalid_argument("websocket close-handshake timeout must be greater than zero");
         }
+        if (!options.lifecycle.heartbeat.pingInterval.has_value()) {
+            if (options.lifecycle.heartbeat.pongTimeout.has_value()) {
+                throw std::invalid_argument("websocket pong timeout requires a ping interval");
+            }
+        } else {
+            if (options.lifecycle.heartbeat.pingInterval->count() <= 0) {
+                throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
+            }
+            auto& pongTimeout = options.lifecycle.heartbeat.pongTimeout;
+            if (!pongTimeout.has_value()) {
+                pongTimeout = options.lifecycle.heartbeat.pingInterval;
+            }
+            if (pongTimeout->count() <= 0) {
+                throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
+            }
+        }
         if (!options.subprotocols.empty() && !isValidWebSocketSubprotocolList(options.subprotocols)) {
             throw std::invalid_argument("websocket subprotocols must be a list of at most 64 unique HTTP tokens");
         }

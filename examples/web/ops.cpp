@@ -35,5 +35,5 @@ private:
 };
 
 int main() {
-    ruvia::app().setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "0.0.0.0", .port = 8080})}).setWorkerCount(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).run();
+    ruvia::app().listen({.address = "0.0.0.0", .http = 8080}).setWorkerCount(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).run();
 }

@@ -15,10 +15,10 @@ public:
         .subprotocols = "chat.v1",
         .lifecycle =
             {
-                .heartbeat = ruvia::WebSocketHeartbeatPolicy::periodic({
+                .heartbeat = {
                     .pingInterval = std::chrono::seconds(30),
                     .pongTimeout = std::chrono::seconds(10),
-                }),
+                },
                 .closeHandshakeTimeout = std::chrono::seconds(5),
             },
     };
@@ -51,5 +51,5 @@ private:
 };
 
 int main() {
-    ruvia::app().setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "0.0.0.0", .port = 8084})}).setWorkerCount(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).setMaxWebSocketMessageBytes(16 * 1024 * 1024).run();
+    ruvia::app().listen({.address = "0.0.0.0", .http = 8084}).setWorkerCount(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).setMaxWebSocketMessageBytes(16 * 1024 * 1024).run();
 }
