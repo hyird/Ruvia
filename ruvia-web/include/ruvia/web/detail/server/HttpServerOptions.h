@@ -16,6 +16,7 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/server/TrustedProxies.h"
 #include "ruvia/web/detail/http/CorsOptions.h"
+#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/server/DocumentRootBinding.h"
 
 namespace ruvia {
@@ -85,7 +86,8 @@ struct HttpServerOptions final {
         };
         struct Refreshing final {
             const StaticRoot* root;
-            DocumentRootRuntimeOptions options;
+            DocumentRootRuntimeConfig config;
+            StaticRootPrecompressionOptions precompression;
         };
 
     public:
@@ -97,8 +99,9 @@ struct HttpServerOptions final {
 
         [[nodiscard]] static DocumentRoot refreshing(
             const StaticRoot& root,
-            DocumentRootRuntimeOptions options = {}) noexcept {
-            return DocumentRoot(Refreshing{&root, options});
+            DocumentRootRuntimeConfig config = {},
+            StaticRootPrecompressionOptions precompression = {}) noexcept {
+            return DocumentRoot(Refreshing{&root, config, precompression});
         }
 
         [[nodiscard]] const StaticRoot* root() const noexcept {
@@ -107,9 +110,14 @@ struct HttpServerOptions final {
             return nullptr;
         }
 
-        [[nodiscard]] const DocumentRootRuntimeOptions* refreshOptions() const noexcept {
+        [[nodiscard]] const DocumentRootRuntimeConfig* refreshOptions() const noexcept {
             const auto* refreshing = std::get_if<Refreshing>(&state_);
-            return refreshing == nullptr ? nullptr : &refreshing->options;
+            return refreshing == nullptr ? nullptr : &refreshing->config;
+        }
+
+        [[nodiscard]] const StaticRootPrecompressionOptions* precompressionOptions() const noexcept {
+            const auto* refreshing = std::get_if<Refreshing>(&state_);
+            return refreshing == nullptr ? nullptr : &refreshing->precompression;
         }
 
         // Publishes the next immutable snapshot without changing the ownership
@@ -143,7 +151,6 @@ struct HttpServerOptions final {
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
     // Capacity of the explicit cross-thread queue for this Web worker.
     std::size_t workerMailboxCapacity{1024};
-    std::size_t httpClientOriginCacheCapacityPerWorker{64};
     MemoryPoolConfig memoryConfig{};
     std::optional<std::chrono::milliseconds> requestHeaderTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> requestBodyTimeout{std::chrono::seconds(60)};
@@ -158,28 +165,28 @@ struct HttpServerOptions final {
     // Content-Encoding is decoded. This limit must be greater than 0.
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
     // Stream routes are explicit; absence disables the stream body limit.
-    std::optional<std::size_t> maxStreamBodyBytes;
+    std::optional<std::size_t> maxStreamBodyBytes{};
     // WebSocket messages are assembled before delivery; this must be greater than 0.
     std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
     // Presence enables the policy; absence bypasses it without retaining an
     // inactive configuration state.
-    std::optional<CompressionConfig> compression;
-    std::optional<CorsOptions> cors;
-    DocumentRoot documentRoot;
+    std::optional<CompressionConfig> compression{};
+    std::optional<CorsOptions> cors{};
+    DocumentRoot documentRoot{};
     // Peers whose forwarding headers may be believed. Empty by default, so an
     // unconfigured server treats every direct peer as the client.
     // Absent means no handler deadline anywhere, and nothing is armed.
-    std::optional<DeadlineConfig> deadline;
-    TrustedProxySet trustedProxies;
-    AccessLogSink accessLog;
+    std::optional<DeadlineConfig> deadline{};
+    TrustedProxySet trustedProxies{};
+    AccessLogSink accessLog{};
     const Env* env{nullptr};
     // Process-wide, owned by App::run() and shared by every worker. Null only
     // when the app explicitly disabled the default pool; runBlocking() then
     // reports that state instead of blocking the worker.
     BlockingPool* blockingPool{nullptr};
-    WorkerFailureSink workerFailure;
-    ConnectionFailureSink connectionFailure;
-    std::optional<RateLimitRule> defaultRateLimitPerWorker;
+    WorkerFailureSink workerFailure{};
+    ConnectionFailureSink connectionFailure{};
+    std::optional<RateLimitRule> defaultRateLimitPerWorker{};
     std::size_t rateLimitCapacityPerWorker{kDefaultRateLimitCapacityPerWorker};
 
 };

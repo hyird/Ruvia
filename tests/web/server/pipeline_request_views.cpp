@@ -107,14 +107,14 @@ int main() {
     server.start();
 
     // A bodyless request keeps the whole pipelined successor in the read buffer.
-    const auto bodyless = logPipelinedBurst(server.localEndpoint(ruvia::ListenerId{1}), listener,
+    const auto bodyless = logPipelinedBurst(server.localEndpoint(), listener,
         "GET /first HTTP/1.1\r\nHost: localhost\r\n\r\n"
         "GET /second HTTP/1.1\r\nHost: localhost\r\n\r\n",
         2);
 
     // A known-length body puts the successor behind consumed body bytes, which
     // is a separate remainder path in the body reader.
-    const auto afterBody = logPipelinedBurst(server.localEndpoint(ruvia::ListenerId{1}), listener,
+    const auto afterBody = logPipelinedBurst(server.localEndpoint(), listener,
         "POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nhello"
         "GET /second HTTP/1.1\r\nHost: localhost\r\n\r\n",
         4);

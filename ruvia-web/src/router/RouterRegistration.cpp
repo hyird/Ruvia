@@ -41,8 +41,8 @@ void detail::RouterImpl::registerSseRoute(HttpKnownMethod method, std::pmr::stri
     registerEndpoint(method, std::move(path), RouteEndpoint::responseStream(handler, ResponseStreamKind::kSse), controllerMiddlewares, routeMiddlewares);
 }
 
-void detail::RouterImpl::registerWebSocketRoute(HttpKnownMethod method, std::pmr::string path, RouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares, WebSocketRouteOptions webSocketOptions) {
-    registerEndpoint(method, std::move(path), RouteEndpoint::webSocket(resource_, handler, webSocketOptions), controllerMiddlewares, routeMiddlewares);
+void detail::RouterImpl::registerWebSocketRoute(HttpKnownMethod method, std::pmr::string path, RouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares, WebSocketRouteConfig webSocketConfig) {
+    registerEndpoint(method, std::move(path), RouteEndpoint::webSocket(resource_, handler, std::move(webSocketConfig)), controllerMiddlewares, routeMiddlewares);
 }
 
 namespace {

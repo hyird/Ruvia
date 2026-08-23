@@ -220,10 +220,8 @@ RUVIA_TEST(db_migration_carries_its_atomicity) {
     // default; naming the exception is opt-in and per migration, so one
     // statement that cannot run in a transaction block does not cost the rest
     // of the list its atomicity.
-    constexpr DbMigration standard{{.id = "001", .sql = "CREATE TABLE a(id INT)"}};
-    static_assert(standard.atomicity() == DbMigrationAtomicity::kTransactional);
-    constexpr DbMigration concurrent{{.id = "002", .sql = "CREATE INDEX CONCURRENTLY i ON a (id)", .atomicity = DbMigrationAtomicity::kUnwrapped}};
-    static_assert(concurrent.atomicity() == DbMigrationAtomicity::kUnwrapped);
+    const DbMigration standard{{.id = "001", .sql = "CREATE TABLE a(id INT)"}};
+    const DbMigration concurrent{{.id = "002", .sql = "CREATE INDEX CONCURRENTLY i ON a (id)", .atomicity = DbMigrationAtomicity::kUnwrapped}};
     RUVIA_CHECK(standard.atomicity() == DbMigrationAtomicity::kTransactional);
     RUVIA_CHECK(concurrent.atomicity() == DbMigrationAtomicity::kUnwrapped);
 }

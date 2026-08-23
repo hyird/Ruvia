@@ -2,7 +2,7 @@
 //   - a route-declared BodyLimit actually REJECTS an oversized body (TestApp
 //     dispatches in memory and never runs the server layer that enforces it);
 //   - a route-declared Deadline actually cuts a handler's wait short;
-//   - App::setDeadline's app-wide value reaches a route that declares none.
+//   - App::deadline()'s app-wide value reaches a route that declares none.
 //
 // Each was previously covered only up to "the value reached the route table",
 // which is exactly the half that a silently uninitialized descriptor field once
@@ -113,7 +113,7 @@ int main() {
 
     ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
     server.start();
-    const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
+    const auto endpoint = server.localEndpoint();
 
     int result = 0;
     std::chrono::steady_clock::duration elapsed{};

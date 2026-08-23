@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
@@ -39,8 +40,39 @@ namespace {
     }
 }
 
+void validateSecurityHeadersConfig(const SecurityHeadersConfig& config) {
+    static_cast<void>(emitsDefaultSecurityHeader(config.contentTypeOptionsHeader));
+    static_cast<void>(emitsDefaultSecurityHeader(config.frameOptionsHeader));
+    static_cast<void>(emitsDefaultSecurityHeader(config.strictTransportSecurityHeader));
+    static_cast<void>(replacesExistingSecurityHeader(config.existingHeaders));
+    switch (config.xssProtectionHeader) {
+        case XssProtectionHeaderPolicy::kEmitDisabled:
+        case XssProtectionHeaderPolicy::kOmit:
+            break;
+        default:
+            throw std::invalid_argument("X-XSS-Protection header policy is invalid");
+    }
+
+    const auto validateValue = [](std::string_view value) {
+        if (!value.empty() && !isValidHttpHeaderValue(value)) {
+            throw std::invalid_argument("security header value is invalid");
+        }
+    };
+    validateValue(config.contentSecurityPolicy);
+    validateValue(config.referrerPolicy);
+    validateValue(config.permissionsPolicy);
+    for (const auto& header : config.customHeaders) {
+        if (!isValidHttpHeaderName(header.name)) {
+            throw std::invalid_argument("custom security header name is invalid");
+        }
+        if (!isValidHttpHeaderValue(header.value)) {
+            throw std::invalid_argument("custom security header value is invalid");
+        }
+    }
+}
+
 template <typename Target>
-void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& options, bool secureTransport) {
+void applySecurityHeadersTo(Target& target, const SecurityHeadersConfig& options, bool secureTransport) {
     const auto replaceExisting = replacesExistingSecurityHeader(options.existingHeaders);
     const auto setHeader = [&target, replaceExisting](std::string_view name, std::string_view value, bool skipEmpty) {
         if (skipEmpty && value.empty()) {
@@ -91,17 +123,26 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& option
 
 }  // namespace
 
-void applySecurityHeaders(Context& context, const SecurityHeadersOptions& options) {
+void applySecurityHeaders(Context& context, const SecurityHeadersConfig& options) {
+    validateSecurityHeadersConfig(options);
     const auto connection = getConnInfo(context);
     applySecurityHeadersTo(context, options, connection.scheme() == HttpScheme::kHttps);
+}
+
+SecurityHeadersMiddleware::SecurityHeadersMiddleware()
+    : SecurityHeadersMiddleware(SecurityHeadersConfig{}) {}
+
+SecurityHeadersMiddleware::SecurityHeadersMiddleware(SecurityHeadersConfig config)
+    : config_(std::move(config)) {
+    validateSecurityHeadersConfig(config_);
 }
 
 Task<void> SecurityHeadersMiddleware::handle(Context& context, Next& next) {
     const auto connection = getConnInfo(context);
     const bool secureTransport = connection.scheme() == HttpScheme::kHttps;
-    applySecurityHeadersTo(context, options_, secureTransport);
+    applySecurityHeadersTo(context, config_, secureTransport);
     co_await next();
-    applySecurityHeadersTo(detail::ContextAccess::responseStorage(context), options_, secureTransport);
+    applySecurityHeadersTo(detail::ContextAccess::responseStorage(context), config_, secureTransport);
 }
 
 }  // namespace ruvia

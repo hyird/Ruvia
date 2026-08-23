@@ -16,12 +16,18 @@ inline void validateHttpServerTlsIdentity(const HttpServerListenerDefinition::Tl
     }
 }
 
-inline void validateDocumentRootRuntimeOptions(const HttpServerOptions& options) {
+inline void validateDocumentRootRuntimeConfig(const HttpServerOptions& options) {
     const auto* refresh = options.documentRoot.refreshOptions();
     if (refresh == nullptr) return;
     ensurePositiveDuration(refresh->refreshInterval, "document root refresh interval must be greater than zero");
     if (options.blockingPool == nullptr) {
         throw std::invalid_argument("document root refresh cannot run while the blocking pool is disabled");
+    }
+    const auto* precompression = options.documentRoot.precompressionOptions();
+    if (precompression == nullptr) return;
+    ensurePositiveSize(precompression->minBytes, "document root precompression minimum size must be greater than zero");
+    if (precompression->maxBytes < precompression->minBytes) {
+        throw std::invalid_argument("document root precompression maximum size must not be smaller than the minimum size");
     }
 }
 
@@ -34,7 +40,6 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
     }
     ensurePositiveSize(options.memoryConfig.requestInitialBufferBytes, "memory pool config values must be greater than 0");
     ensurePositiveSize(options.maxBufferedBodyBytes, "buffered body limit must be greater than 0");
-    ensurePositiveSize(options.httpClientOriginCacheCapacityPerWorker, "HTTP client origin cache capacity must be greater than 0");
     ensurePositiveOptionalSize(options.maxStreamBodyBytes, "configured stream body limit must be greater than zero");
     ensurePositiveSize(options.maxWebSocketMessageBytes, "websocket message limit must be greater than 0");
     ensurePositiveOptionalSize(options.maxConnections, "configured connection limit must be greater than zero");
@@ -48,7 +53,7 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
             throw std::invalid_argument("compression maximum size must not be smaller than the synchronous size");
         }
     }
-    validateDocumentRootRuntimeOptions(options);
+    validateDocumentRootRuntimeConfig(options);
 }
 
 inline void validateHttpServerListener(const HttpServerListenerDefinition& listener) {

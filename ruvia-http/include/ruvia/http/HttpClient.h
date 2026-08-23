@@ -54,8 +54,8 @@ enum class HttpClientRequestContentSignal : std::uint8_t {
 };
 
 struct HttpOriginOptions final {
-    BorrowedText host;
-    std::optional<std::uint16_t> port;
+    BorrowedText host{};
+    std::optional<std::uint16_t> port{};
 };
 
 class HttpOriginView final {

@@ -21,7 +21,7 @@
 namespace {
 
 [[nodiscard]] ruvia::DbConfig closedPeerConfig(std::uint16_t port) {
-    auto config = ruvia::DbConfig::mariaDb();
+    auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
     config.host = "127.0.0.1";
     config.port = port;
     config.username = "ruvia";
@@ -63,7 +63,7 @@ int main() {
     });
     std::thread peer([&] { peerContext.run(); });
 
-    static constexpr std::array migrations{
+    static const std::array migrations{
         ruvia::DbMigration{{.id = "001_never_runs", .sql = "CREATE TABLE ruvia_never_runs (id INT)"}}};
     bool threw = false;
     bool typed = false;

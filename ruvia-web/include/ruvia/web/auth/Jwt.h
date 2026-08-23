@@ -30,8 +30,8 @@ enum class JwtExpirationClaimPolicy : std::uint8_t {
 };
 
 struct JwtClaimOptions final {
-    BorrowedText name;
-    BorrowedText value;
+    BorrowedText name{};
+    BorrowedText value{};
 };
 
 class JwtClaim final {
@@ -71,31 +71,31 @@ private:
 
 struct JwtSignOptions final {
     JwtAlgorithm algorithm{JwtAlgorithm::kHs256};
-    std::string secret;
-    std::string issuer;
-    std::string subject;
-    std::string audience;
-    std::string id;
+    std::string secret{};
+    std::string issuer{};
+    std::string subject{};
+    std::string audience{};
+    std::string id{};
     std::optional<std::chrono::seconds> expiresIn{std::chrono::hours(1)};
-    std::optional<std::chrono::seconds> notBeforeDelay;
-    std::vector<JwtClaim> claims;
+    std::optional<std::chrono::seconds> notBeforeDelay{};
+    std::vector<JwtClaim> claims{};
     std::pmr::memory_resource* resource{nullptr};
 };
 
 struct JwtVerifyOptions final {
-    BorrowedText token;
+    BorrowedText token{};
     JwtAlgorithm algorithm{JwtAlgorithm::kHs256};
-    std::string secret;
-    std::string issuer;
-    std::string subject;
-    std::string audience;
+    std::string secret{};
+    std::string issuer{};
+    std::string subject{};
+    std::string audience{};
     std::chrono::seconds leeway{0};
     JwtExpirationClaimPolicy expirationClaim{JwtExpirationClaimPolicy::kRequire};
     std::pmr::memory_resource* resource{nullptr};
 };
 
 struct JwtDecodeUnverifiedOptions final {
-    BorrowedText token;
+    BorrowedText token{};
     std::pmr::memory_resource* resource{nullptr};
 };
 

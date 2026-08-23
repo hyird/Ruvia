@@ -79,10 +79,9 @@ std::size_t Http2Connection::sendDataUpToWindow(Http2StreamState& stream, std::s
 }
 
 void Http2Connection::markSendWindowOpened() {
-    // Drain is a wire/state transaction. The first DATA append used to happen
-    // after the flow windows were consumed, so a throwing PMR resource could
-    // leave a queued body with a smaller window and no corresponding bytes.
-    // Simulate the complete drain first and reserve both outbound bytes and the
+    // Drain is a wire/state transaction: a throwing PMR resource must not leave
+    // a queued body with a smaller window and no corresponding bytes. Simulate
+    // the complete drain first and reserve both outbound bytes and the
     // completion notification vector before touching any stream state.
     std::size_t requiredOutputBytes = 0;
     std::size_t drainedCount = 0;

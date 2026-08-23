@@ -149,8 +149,7 @@ HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingS
     // it even when this particular response is left identity -- because the client
     // accepted no coding we support, or the body is below the size threshold. Set
     // Vary regardless of the outcome so a shared cache never serves this identity
-    // body to a client that would receive the compressed one (RFC 9110 12.5.5); it
-    // previously lived only on the compress-success path.
+    // body to a client that would receive the compressed one (RFC 9110 12.5.5).
     addVaryToken(response, "Accept-Encoding");
 
     if (coding == HttpContentCoding::kIdentity || responseContent.size() < options.minBytes || responseContent.size() > options.maxBytes || responseContent.size() > options.syncBytes) {

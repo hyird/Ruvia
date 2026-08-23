@@ -75,8 +75,8 @@ class ControllerRegistrationAccess final {
         scope.registerSseRoute(method, path, std::move(handler), middlewares);
     }
 
-    static void addWebSocketRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares, WebSocketRouteOptions webSocketOptions = {}) {
-        scope.registerWebSocketRoute(method, path, std::move(handler), middlewares, webSocketOptions);
+    static void addWebSocketRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares, WebSocketRouteConfig webSocketConfig = {}) {
+        scope.registerWebSocketRoute(method, path, std::move(handler), middlewares, std::move(webSocketConfig));
     }
 
     template <Task<HttpResponse> (ControllerT::*Handler)(Context&)>

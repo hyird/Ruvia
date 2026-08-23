@@ -50,11 +50,70 @@ void reflectCorsRequestHeaderNames(const HttpRequest& request, HttpResponse& res
     }
 }
 
+void assignCorsHeaderNames(
+    std::pmr::string& output,
+    const std::vector<std::string>& names,
+    const char* emptyMessage) {
+    if (emptyMessage != nullptr && names.empty()) {
+        throw std::invalid_argument(emptyMessage);
+    }
+    for (const auto& name : names) {
+        if (!isValidHttpHeaderName(name)) {
+            throw std::invalid_argument("CORS header names must be valid HTTP field names");
+        }
+        if (!output.empty()) {
+            output.append(", ");
+        }
+        output.append(name);
+    }
+}
+
 }  // namespace
+
+CorsOptions makeCorsOptions(const CorsConfig& config, std::pmr::memory_resource* resource) {
+    CorsOptions stored(resource);
+    stored.originMode = config.origin.mode;
+    switch (config.origin.mode) {
+        case CorsOriginMode::kAny:
+            if (!config.origin.value.empty()) {
+                throw std::invalid_argument("CORS wildcard origin must not include a value");
+            }
+            break;
+        case CorsOriginMode::kExact:
+        case CorsOriginMode::kCredentialedExact:
+            if (config.origin.value != "null" && !isValidHttpSerializedOrigin(config.origin.value)) {
+                throw std::invalid_argument("CORS origin must be a WHATWG serialized origin");
+            }
+            stored.origin = config.origin.value;
+            break;
+        default:
+            throw std::invalid_argument("CORS origin mode is invalid");
+    }
+
+    stored.requestHeadersMode = config.requestHeaders.mode;
+    switch (config.requestHeaders.mode) {
+        case CorsRequestHeadersMode::kReflect:
+            if (!config.requestHeaders.names.empty()) {
+                throw std::invalid_argument("CORS reflected request headers must not include fixed names");
+            }
+            break;
+        case CorsRequestHeadersMode::kFixed:
+            assignCorsHeaderNames(stored.requestHeaders, config.requestHeaders.names, "CORS fixed request headers must not be empty");
+            break;
+        default:
+            throw std::invalid_argument("CORS request headers mode is invalid");
+    }
+    assignCorsHeaderNames(stored.exposeHeaders, config.exposeHeaders, nullptr);
+    if (config.maxAge.has_value() && config.maxAge->count() < 0) {
+        throw std::invalid_argument("CORS max age must not be negative");
+    }
+    stored.maxAge = config.maxAge;
+    return stored;
+}
 
 void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const CorsOptions& cors) {
     const auto origin = requestKnownHeader(request, RequestKnownHeader::kOrigin);
-    const bool wildcardOrigin = cors.originKind == CorsOriginPolicy::Kind::kAny;
+    const bool wildcardOrigin = cors.originMode == CorsOriginMode::kAny;
     const auto allowOrigin = wildcardOrigin ? std::string_view("*") : std::string_view(cors.origin);
     std::array<std::string_view, 3> varyTokens{};
     std::size_t varyTokenCount = 0;
@@ -62,12 +121,12 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
     if (options) {
         varyTokens[varyTokenCount++] = "Origin";
         varyTokens[varyTokenCount++] = "Access-Control-Request-Method";
-        if (cors.requestHeadersKind == CorsRequestHeadersPolicy::Kind::kReflect) {
+        if (cors.requestHeadersMode == CorsRequestHeadersMode::kReflect) {
             varyTokens[varyTokenCount++] = "Access-Control-Request-Headers";
         }
     }
     setStableResponseHeaderIfMissing(response, kResponseHeaderAccessControlAllowOrigin, "Access-Control-Allow-Origin", allowOrigin);
-    if (cors.originKind == CorsOriginPolicy::Kind::kCredentialedExact && !responseHasKnownHeader(response, kResponseHeaderAccessControlAllowCredentials)) {
+    if (cors.originMode == CorsOriginMode::kCredentialedExact && !responseHasKnownHeader(response, kResponseHeaderAccessControlAllowCredentials)) {
         setResponseHeaderStableView(response, "Access-Control-Allow-Credentials", "true");
     }
 
@@ -76,7 +135,7 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
         if (const auto allow = responseKnownHeader(response, kResponseHeaderAllow); !allow.empty()) {
             setResponseHeaderIfMissing(response, kResponseHeaderAccessControlAllowMethods, "Access-Control-Allow-Methods", allow);
         }
-        if (cors.requestHeadersKind == CorsRequestHeadersPolicy::Kind::kFixed) {
+        if (cors.requestHeadersMode == CorsRequestHeadersMode::kFixed) {
             setStableResponseHeaderIfMissing(response, kResponseHeaderAccessControlAllowHeaders, "Access-Control-Allow-Headers", cors.requestHeaders);
         } else {
             reflectCorsRequestHeaderNames(request, response);
@@ -93,32 +152,3 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
 }
 
 }  // namespace ruvia::detail
-
-namespace ruvia {
-
-CorsOrigin CorsOrigin::serialized(std::string_view value) {
-    if (!detail::isValidHttpSerializedOrigin(value)) {
-        throw std::invalid_argument("CORS origin must be a WHATWG serialized origin");
-    }
-    return CorsOrigin(std::string(value));
-}
-
-CorsOrigin CorsOrigin::opaque() {
-    return CorsOrigin(std::string("null"));
-}
-
-CorsHeaderNames CorsHeaderNames::of(std::span<const std::string_view> names) {
-    std::string value;
-    for (const auto name : names) {
-        if (!isValidHttpHeaderName(name)) {
-            throw std::invalid_argument("CORS header names must be valid HTTP field names");
-        }
-        if (!value.empty()) {
-            value.append(", ");
-        }
-        value.append(name);
-    }
-    return CorsHeaderNames(std::move(value));
-}
-
-}  // namespace ruvia

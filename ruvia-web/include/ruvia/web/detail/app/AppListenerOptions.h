@@ -5,8 +5,6 @@
 
 namespace ruvia {
 
-class StaticRoot;
-
 namespace detail {
 
 // TLS paths reach the server as PMR strings, so a filesystem path whose native

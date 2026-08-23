@@ -96,7 +96,7 @@ private:
 };
 
 [[nodiscard]] ruvia::DbConfig silentPeerConfig(std::uint16_t port) {
-    auto config = ruvia::DbConfig::mariaDb();
+    auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
     config.host = "127.0.0.1";
     config.port = port;
     config.username = "ruvia";

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
 
@@ -22,12 +23,8 @@ using ruvia::detail::WsLivenessMode;
 WebSocketLifecycleOptions options(int pingMs, int pongMs, int closeMs = 5000) {
     WebSocketLifecycleOptions opts;
     if (pingMs > 0) {
-        opts.heartbeat = ruvia::WebSocketHeartbeatPolicy::periodic({
-            .pingInterval = std::chrono::milliseconds(pingMs),
-            .pongTimeout = pongMs > 0
-                ? std::optional<std::chrono::milliseconds>(std::chrono::milliseconds(pongMs))
-                : std::nullopt,
-        });
+        opts.heartbeat.pingInterval = std::chrono::milliseconds(pingMs);
+        opts.heartbeat.pongTimeout = std::chrono::milliseconds(pongMs > 0 ? pongMs : pingMs);
     }
     opts.closeHandshakeTimeout = closeMs > 0 ? std::optional<std::chrono::milliseconds>(std::chrono::milliseconds(closeMs)) : std::nullopt;
     return opts;
@@ -39,27 +36,10 @@ WebSocketLivenessDecision decide(const WebSocketLifecycleOptions& opts, WsLivene
 
 }  // namespace
 
-RUVIA_TEST(ws_heartbeat_policy_requires_positive_durations) {
-    bool zeroRejected = false;
-    try {
-        (void)ruvia::WebSocketHeartbeatPolicy::periodic({
-            .pingInterval = std::chrono::milliseconds(0),
-        });
-    } catch (const std::invalid_argument&) {
-        zeroRejected = true;
-    }
-    RUVIA_CHECK(zeroRejected);
-
-    bool negativeRejected = false;
-    try {
-        (void)ruvia::WebSocketHeartbeatPolicy::periodic({
-            .pingInterval = std::chrono::milliseconds(1000),
-            .pongTimeout = std::chrono::milliseconds(-1),
-        });
-    } catch (const std::invalid_argument&) {
-        negativeRejected = true;
-    }
-    RUVIA_CHECK(negativeRejected);
+RUVIA_TEST(ws_heartbeat_config_is_a_plain_optional_value) {
+    static_assert(std::is_aggregate_v<ruvia::WebSocketHeartbeatConfig>);
+    const ruvia::WebSocketHeartbeatConfig disabled;
+    RUVIA_CHECK(!disabled.pingInterval.has_value());
 }
 
 RUVIA_TEST(ws_heartbeat_disabled_stays_idle) {

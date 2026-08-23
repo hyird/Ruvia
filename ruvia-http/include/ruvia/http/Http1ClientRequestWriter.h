@@ -322,7 +322,8 @@ public:
         std::pmr::memory_resource* resource{nullptr};
     };
 
-    explicit Http1ClientRequestWriter(Options options = {}) noexcept;
+    Http1ClientRequestWriter() noexcept;
+    explicit Http1ClientRequestWriter(Options options) noexcept;
 
     [[nodiscard]] Http1ClientRequestPrepareResult prepare(const HttpOriginView& origin, const HttpClientRequestView& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = {}) const;
 

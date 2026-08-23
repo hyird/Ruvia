@@ -298,18 +298,16 @@ HttpClientHandle HttpClientHandle::withOptions(OperationOptions options) const {
 }
 
 ScopedOperation<HttpClientResponse> HttpClientHandle::send(
-    const HttpClientRequestView& view,
-    OperationOptions options) const {
+    const HttpClientRequestView& view) const {
     requireActive();
     detail::HttpClientRequestStorage request(
         view.method.view(), view.target.view(), detail::httpPmrResourceOrDefault(resource_));
     for (const auto& header : view.headers) request.appendHeader(header.name(), header.value());
     if (const auto* bytes = view.content.borrowedBytes()) request.setBody(bytes->value());
-    options = detail::mergeOperationOptions(options_, std::move(options));
-    detail::validateOperationOptions(options);
+    detail::validateOperationOptions(options_);
     return detail::makeScopedOperation(
         operationScope(),
-        pool_->execute(std::move(request), std::move(options), detail::httpPmrResourceOrDefault(resource_)));
+        pool_->execute(std::move(request), options_, detail::httpPmrResourceOrDefault(resource_)));
 }
 
 HttpClientStats HttpClientHandle::stats() const {
@@ -332,9 +330,15 @@ HttpScheme HttpClientHandle::scheme() const {
     return pool_->scheme();
 }
 
-HttpClientHandle Context::httpClient(HttpClientConfig config) const {
+HttpClientHandle Context::httpClient() const {
     if (httpClients_ == nullptr) throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
-    return httpClients_->get(std::move(config), resource(), operationScope_).withOptions(
+    return httpClients_->get(resource(), operationScope_).withOptions(
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+}
+
+HttpClientHandle Context::httpClient(std::string_view alias) const {
+    if (httpClients_ == nullptr) throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
+    return httpClients_->get(alias, resource(), operationScope_).withOptions(
         OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 

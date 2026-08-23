@@ -56,7 +56,7 @@ public:
         // combination is better than silently dropping either half of it.
         static_assert(!middlewareRunsOnUnmatchedRequests<MiddlewareT>(),
             "a middleware declaring ruviaRunsOnUnmatchedRequests cannot be path-scoped with useAt(); register it app-wide with use<T>()");
-        const auto normalized = normalizeFallbackPrefix(options.prefix.view());
+        const auto normalized = normalizeFallbackPrefix(options.prefix);
         return self().useMiddleware(makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...).scopedTo(retainRegistrationText(normalized)));
     }
 

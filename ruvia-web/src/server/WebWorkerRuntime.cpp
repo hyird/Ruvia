@@ -54,6 +54,14 @@ int selectAlpnProtocol(SSL*, const unsigned char** out, unsigned char* outLength
     return SSL_TLSEXT_ERR_NOACK;
 }
 
+[[nodiscard]] StaticRootPrecompressionOptions documentRootPrecompressionOptions(const HttpServerOptions& options) noexcept {
+    const auto* configured = options.documentRoot.precompressionOptions();
+    if (configured == nullptr || !options.compression.has_value()) {
+        return {};
+    }
+    return *configured;
+}
+
 // RFC 6066 SNI: switch the connection to the per-host SSL_CTX when the client's
 // server name matches a configured certificate; otherwise keep the default.
 int selectSniContext(SSL* ssl, int*, void* arg) noexcept {
@@ -131,7 +139,7 @@ void loadVerifyFile(asio::ssl::context& context, const std::pmr::string& filenam
 }  // namespace
 
 WebWorkerRuntime::WebWorkerRuntime(TcpEndpoint endpoint, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
-    : WebWorkerRuntime(HttpServerListenerDefinition(ListenerId{1}, std::move(endpoint)), routes, capabilities, std::move(options)) {}
+    : WebWorkerRuntime(HttpServerListenerDefinition(std::move(endpoint)), routes, capabilities, std::move(options)) {}
 
 WebWorkerRuntime::WebWorkerRuntime(HttpServerListenerDefinition listener, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
     : WebWorkerRuntime(std::span<const HttpServerListenerDefinition>(&listener, 1), routes, capabilities, std::move(options)) {}
@@ -160,7 +168,6 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedOptionsTag, std::span<const HttpServ
           memory_.resource(),
           capabilities,
           WorkerCapabilityOptions{
-              .maxHttpClientOrigins = options_.httpClientOriginCacheCapacityPerWorker,
               .defaultRateLimit = options_.defaultRateLimitPerWorker,
               .routeRateLimits = routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent : RouteRateLimitPresence::kAbsent,
               .rateLimitCapacity = options_.rateLimitCapacityPerWorker,
@@ -179,11 +186,6 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedOptionsTag, std::span<const HttpServ
     listeners_.reserve(listeners.size());
     for (const auto& listener : listeners) {
         validateHttpServerListener(listener);
-        for (const auto& existing : listeners_) {
-            if (existing->id == listener.id) {
-                throw std::invalid_argument("listener IDs must be unique within a worker");
-            }
-        }
         listeners_.push_back(makePmrObject<HttpServerListener>(memory_.resource(), ioContext_, listener, memory_.resource()));
     }
     if (options_.documentRoot.refreshOptions() != nullptr) {
@@ -191,6 +193,10 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedOptionsTag, std::span<const HttpServ
         if (configuredRoot == nullptr) std::terminate();
         auto rootOptions = StaticRootAccess::options(*configuredRoot);
         ownedDocumentRoot_ = makePmrObject<StaticRoot>(processResource(), configuredRoot->path(), std::move(rootOptions));
+        const auto precompression = documentRootPrecompressionOptions(options_);
+        if (precompression.enabled()) {
+            StaticRootAccess::installPrecompressedVariants(*ownedDocumentRoot_, configuredRoot, precompression);
+        }
         options_.documentRoot.publish(*ownedDocumentRoot_);
     }
     // Claim the failure sink's counter. Every reporting site shares this one
@@ -312,14 +318,11 @@ void WebWorkerRuntime::join() {
     }
 }
 
-TcpEndpoint WebWorkerRuntime::localEndpoint(ListenerId listener) const {
-    const auto configured = std::ranges::find_if(listeners_, [listener](const ListenerPtr& candidate) {
-        return candidate->id == listener;
-    });
-    if (configured == listeners_.end()) {
-        throw std::out_of_range("listener ID is not configured on this worker");
+TcpEndpoint WebWorkerRuntime::localEndpoint(std::size_t listenerIndex) const {
+    if (listenerIndex >= listeners_.size()) {
+        throw std::out_of_range("listener index is not configured on this worker");
     }
-    return (*configured)->endpoint;
+    return listeners_[listenerIndex]->endpoint;
 }
 
 HttpServerStats WebWorkerRuntime::stats() const noexcept {
@@ -629,6 +632,39 @@ Task<void> WebWorkerRuntime::staticRootRefreshLoop() {
         }
         if (StaticRootAccess::fingerprint(*candidate) == StaticRootAccess::fingerprint(*currentRoot) && StaticRootAccess::sameSnapshot(*candidate, *currentRoot)) {
             continue;
+        }
+
+        const auto precompression = documentRootPrecompressionOptions(options_);
+        if (precompression.enabled()) {
+            try {
+                auto prepared = co_await ruvia::tryRunBlocking(
+                    *options_.blockingPool,
+                    workerRuntime_.handle(),
+                    [candidate = std::move(candidate), precompression]() mutable {
+                        StaticRootAccess::installPrecompressedVariants(
+                            *candidate, nullptr, precompression);
+                        return std::move(candidate);
+                    });
+                if (!prepared.completed()) {
+                    if (prepared.failed()) {
+                        documentRootRefreshFailures_.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    if (!httpServerWorkerRunning(workerState_)) {
+                        co_return;
+                    }
+                    continue;
+                }
+                candidate = std::move(prepared).value();
+            } catch (...) {
+                documentRootRefreshFailures_.fetch_add(1, std::memory_order_relaxed);
+                if (!httpServerWorkerRunning(workerState_)) {
+                    co_return;
+                }
+                continue;
+            }
+            if (!httpServerWorkerRunning(workerState_)) {
+                co_return;
+            }
         }
 
         // A binding is a request-scoped lease. If no request can still hold

@@ -91,7 +91,10 @@ public:
         std::pmr::memory_resource* resource{nullptr};
     };
 
-    explicit Validator(Options options = {})
+    Validator()
+        : Validator(Options{}) {}
+
+    explicit Validator(Options options)
         : resource_(detail::pmrResourceOrDefault(options.resource)),
           issues_(resource_) {}
 

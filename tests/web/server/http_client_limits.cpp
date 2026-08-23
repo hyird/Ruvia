@@ -510,7 +510,7 @@ int testStopTokenCancellation() {
             int result = 1;
             try {
                 auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-                (void)co_await client.send(request, {.stopToken = source.token()});
+                (void)co_await client.withOptions({.stopToken = source.token()}).send(request);
             } catch (const ruvia::HttpClientError& error) {
                 result = error.code() == ruvia::HttpClientError::Code::kCancelled ? 0 : 2;
             }
@@ -538,7 +538,7 @@ int testConnectStopTokenCancellation() {
             int result = 1;
             try {
                 auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-                (void)co_await client.send(request, {.stopToken = source.token()});
+                (void)co_await client.withOptions({.stopToken = source.token()}).send(request);
             } catch (const ruvia::HttpClientError& error) {
                 result = error.code() == ruvia::HttpClientError::Code::kCancelled ? 0 : 2;
             }
@@ -631,10 +631,10 @@ int testOperationOptionsRejectNonpositiveTimeout() {
     const auto scopedResult = runClient(config, operationResource,
         [rejectsInvalidArgument](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
             if (!rejectsInvalidArgument([&client] {
-                    (void)client.send({}, {.timeout = 0ms});
+                    (void)client.withOptions({.timeout = 0ms}).send({});
                 })) co_return 1;
             if (!rejectsInvalidArgument([&client] {
-                    (void)client.send({}, {.timeout = -1ms});
+                    (void)client.withOptions({.timeout = -1ms}).send({});
                 })) co_return 2;
             co_return 0;
         });

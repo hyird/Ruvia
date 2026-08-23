@@ -20,6 +20,7 @@
 #include "ruvia/web/detail/app/AppRuntimeGraph.h"
 #include "ruvia/web/detail/app/AppState.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
+#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 
 namespace ruvia {
@@ -40,18 +41,21 @@ namespace {
 
     switch (source.fileTypeKind) {
         case StaticFileTypePolicy::Kind::kDefaults:
-            result.fileTypes = StaticFileTypePolicy::defaults();
+            result.fileTypes = {.kind = StaticFileTypePolicy::Kind::kDefaults};
             break;
         case StaticFileTypePolicy::Kind::kAll:
-            result.fileTypes = StaticFileTypePolicy::all();
+            result.fileTypes = {.kind = StaticFileTypePolicy::Kind::kAll};
             break;
         case StaticFileTypePolicy::Kind::kOnly: {
-            std::vector<std::string_view> extensions;
+            std::vector<std::string> extensions;
             extensions.reserve(source.fileTypeExtensions.size());
             for (const auto& extension : source.fileTypeExtensions) {
                 extensions.emplace_back(extension);
             }
-            result.fileTypes = StaticFileTypePolicy::only(extensions);
+            result.fileTypes = {
+                .kind = StaticFileTypePolicy::Kind::kOnly,
+                .extensions = std::move(extensions),
+            };
             break;
         }
     }
@@ -178,11 +182,19 @@ private:
             .invoke = [](void* target, std::exception_ptr) noexcept { static_cast<App*>(target)->stop(); },
         };
 
+        std::unique_ptr<StaticRoot, detail::PmrObjectDeleter<StaticRoot>> configuredDocumentRoot(
+            nullptr, detail::PmrObjectDeleter<StaticRoot>{runtimeResource_});
         if (state_.documentRootConfig.has_value()) {
             const auto documentRootPath = detail::makePathFromNativePath(state_.documentRootConfig->root);
-            runtime->documentRoot = detail::makePmrObject<StaticRoot>(runtimeResource_, documentRootPath, makeStaticRootOptions(state_.documentRootConfig->staticOptions));
+            configuredDocumentRoot = detail::makePmrObject<StaticRoot>(runtimeResource_, documentRootPath, makeStaticRootOptions(state_.documentRootConfig->staticOptions));
+            if (preparedOptions.compression.has_value() && state_.documentRootConfig->precompression.enabled()) {
+                detail::StaticRootAccess::installPrecompressedVariants(
+                    *configuredDocumentRoot, nullptr, state_.documentRootConfig->precompression);
+            }
             preparedOptions.documentRoot = detail::HttpServerOptions::DocumentRoot::refreshing(
-                *runtime->documentRoot, state_.documentRootConfig->runtimeOptions);
+                *configuredDocumentRoot,
+                state_.documentRootConfig->runtime,
+                state_.documentRootConfig->precompression);
         }
         if (state_.blockingPool.has_value()) {
             runtime->blockingPool = detail::makePmrObject<BlockingPool>(runtimeResource_, *state_.blockingPool);
@@ -193,7 +205,6 @@ private:
         listeners.reserve(state_.listeners.size());
         for (const auto& listener : state_.listeners) {
             listeners.emplace_back(
-                listener.id,
                 asio::ip::tcp::endpoint(asio::ip::make_address(std::string_view(listener.address)), listener.port),
                 listener.transport);
         }
@@ -215,6 +226,7 @@ private:
                 .redis = std::span<const detail::RedisDefinition>(state_.redis),
 #endif
                 .workerStates = std::span<const detail::WorkerStateDefinition>(state_.workerStates),
+                .httpClients = std::span<const detail::HttpClientDefinition>(state_.httpClients),
             };
             auto worker = detail::makePmrObject<detail::WebWorkerRuntime>(
                 runtimeResource_,

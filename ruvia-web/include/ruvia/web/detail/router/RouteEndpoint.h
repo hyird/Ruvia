@@ -82,7 +82,7 @@ public:
 private:
     friend class RouteEndpoint;
 
-    WebSocketRouteEndpoint(std::pmr::memory_resource* resource, RouteStreamHandler handler, WebSocketRouteOptions options)
+    WebSocketRouteEndpoint(std::pmr::memory_resource* resource, RouteStreamHandler handler, WebSocketRouteConfig options)
         : handler_(handler),
           subprotocols_(options.subprotocols, resource),
           lifecycle_(options.lifecycle) {}
@@ -122,12 +122,28 @@ public:
         return RouteEndpoint(ResponseStreamRouteEndpoint(handler, kind));
     }
 
-    [[nodiscard]] static RouteEndpoint webSocket(std::pmr::memory_resource* resource, RouteStreamHandler handler, WebSocketRouteOptions options = {}) {
+    [[nodiscard]] static RouteEndpoint webSocket(std::pmr::memory_resource* resource, RouteStreamHandler handler, WebSocketRouteConfig options = {}) {
         if (!handler.valid()) {
             throw std::invalid_argument("websocket route handler must not be empty");
         }
         if (options.lifecycle.closeHandshakeTimeout.has_value() && options.lifecycle.closeHandshakeTimeout->count() <= 0) {
             throw std::invalid_argument("websocket close-handshake timeout must be greater than zero");
+        }
+        if (!options.lifecycle.heartbeat.pingInterval.has_value()) {
+            if (options.lifecycle.heartbeat.pongTimeout.has_value()) {
+                throw std::invalid_argument("websocket pong timeout requires a ping interval");
+            }
+        } else {
+            if (options.lifecycle.heartbeat.pingInterval->count() <= 0) {
+                throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
+            }
+            auto& pongTimeout = options.lifecycle.heartbeat.pongTimeout;
+            if (!pongTimeout.has_value()) {
+                pongTimeout = options.lifecycle.heartbeat.pingInterval;
+            }
+            if (pongTimeout->count() <= 0) {
+                throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
+            }
         }
         if (!options.subprotocols.empty() && !isValidWebSocketSubprotocolList(options.subprotocols)) {
             throw std::invalid_argument("websocket subprotocols must be a list of at most 64 unique HTTP tokens");
@@ -143,7 +159,7 @@ public:
             return RouteEndpoint::responseStream(endpoint->handler(), endpoint->kind());
         }
         const auto& endpoint = *webSocket();
-        return RouteEndpoint::webSocket(resource, endpoint.handler(), WebSocketRouteOptions{endpoint.subprotocols(), endpoint.lifecycle()});
+        return RouteEndpoint::webSocket(resource, endpoint.handler(), WebSocketRouteConfig{.subprotocols = std::string(endpoint.subprotocols()), .lifecycle = endpoint.lifecycle()});
     }
 
     [[nodiscard]] const BufferedRouteEndpoint* buffered() const& noexcept {

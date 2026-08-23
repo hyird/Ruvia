@@ -27,10 +27,10 @@ namespace {
         stored.contentType = mime.contentType;
     }
 
-    result.fileTypeKind = source.fileTypes.kind();
+    result.fileTypeKind = source.fileTypes.kind;
     if (result.fileTypeKind == StaticFileTypePolicy::Kind::kOnly) {
-        result.fileTypeExtensions.reserve(source.fileTypes.extensions().size());
-        for (const auto& extension : source.fileTypes.extensions()) {
+        result.fileTypeExtensions.reserve(source.fileTypes.extensions.size());
+        for (const auto& extension : source.fileTypes.extensions) {
             result.fileTypeExtensions.push_back(std::pmr::string(extension, resource));
         }
     }
@@ -40,41 +40,74 @@ namespace {
     return result;
 }
 
-}  // namespace
-
-App& App::setCompression(std::optional<CompressionConfig> config) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change compression config while app is running", [&config](detail::AppState& state) { state.options.compression = std::move(config); });
+[[nodiscard]] detail::StaticRootPrecompressionOptions makeStaticRootPrecompressionOptions(const DocumentRootConfig& config) {
+    detail::ensurePositiveSize(config.precompressMinBytes, "document root precompression minimum size must be greater than zero");
+    if (config.precompressMaxBytes < config.precompressMinBytes) {
+        throw std::invalid_argument("document root precompression maximum size must not be smaller than the minimum size");
+    }
+    return detail::StaticRootPrecompressionOptions{
+        .gzip = config.precompressGzip,
+        .brotli = config.precompressBrotli,
+        .zstd = config.precompressZstd,
+        .minBytes = config.precompressMinBytes,
+        .maxBytes = config.precompressMaxBytes,
+    };
 }
 
-App& App::setCors(std::optional<CorsConfig> config) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change CORS config while app is running", [&config](detail::AppState& state) {
-        if (!config.has_value()) {
-            state.options.cors.reset();
-            return;
+}  // namespace
+
+App& App::compression(CompressionConfig config) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change compression config while app is running", [config = std::move(config)](detail::AppState& state) mutable {
+        detail::ensurePositiveSize(config.minBytes, "compression minimum size must be greater than zero");
+        if (config.syncBytes < config.minBytes) {
+            throw std::invalid_argument("compression synchronous size must not be smaller than the minimum size");
         }
-        state.options.cors = detail::makeCorsOptions(*config, detail::appResource());
+        if (config.maxBytes < config.syncBytes) {
+            throw std::invalid_argument("compression maximum size must not be smaller than the synchronous size");
+        }
+        state.options.compression = std::move(config);
     });
 }
 
-App& App::setDocumentRoot(DocumentRootConfig config) {
+App& App::compression(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change compression config while app is running", [](detail::AppState& state) { state.options.compression.reset(); });
+}
+
+App& App::cors(CorsConfig config) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change CORS config while app is running", [&config](detail::AppState& state) {
+        state.options.cors = detail::makeCorsOptions(config, detail::appResource());
+    });
+}
+
+App& App::cors(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change CORS config while app is running", [](detail::AppState& state) { state.options.cors.reset(); });
+}
+
+App& App::documentRoot(DocumentRootConfig config) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change document root while app is running", [&config](detail::AppState& state) {
         if (config.root.empty()) {
             throw std::invalid_argument("document root must not be empty");
         }
-        detail::ensurePositiveDuration(config.runtimeOptions.refreshInterval, "document root refresh interval must be greater than zero");
+        detail::ensurePositiveDuration(config.runtime.refreshInterval, "document root refresh interval must be greater than zero");
         if (config.staticOptions.indexFile.empty()) {
             config.staticOptions.indexFile = "index.html";
         }
         detail::normalizeMimeTypes(config.staticOptions.mimeTypes);
+        detail::normalizeFileTypes(config.staticOptions.fileTypes.extensions);
         detail::validateStaticRootOptions(config.staticOptions);
 
         detail::AppDocumentRootConfig replacement(detail::appResource());
         detail::assignNativePath(replacement.root, config.root);
         replacement.staticOptions = copyStaticRootOptionsToAppResource(config.staticOptions);
-        replacement.runtimeOptions = config.runtimeOptions;
+        replacement.runtime = config.runtime;
+        replacement.precompression = makeStaticRootPrecompressionOptions(config);
 
         state.documentRootConfig = std::move(replacement);
     });
+}
+
+App& App::documentRoot(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change document root while app is running", [](detail::AppState& state) { state.documentRootConfig.reset(); });
 }
 
 App& App::useMiddleware(detail::ControllerMiddlewareDescriptor descriptor) {
@@ -90,8 +123,12 @@ App& App::useMiddleware(detail::ControllerMiddlewareDescriptor descriptor) {
     return detail::mutateStoppedApp(*this, *state_, "cannot add app middleware while app is running", [descriptor](detail::AppState& state) { state.globalMiddlewares.push_back(descriptor); });
 }
 
-App& App::setBlockingPool(std::optional<BlockingPoolOptions> options) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change the blocking pool while app is running", [&options](detail::AppState& state) { state.blockingPool = options; });
+App& App::blockingPool(BlockingPoolOptions config) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change the blocking pool while app is running", [&config](detail::AppState& state) { state.blockingPool = config; });
+}
+
+App& App::blockingPool(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change the blocking pool while app is running", [](detail::AppState& state) { state.blockingPool.reset(); });
 }
 
 App& App::useWorkerStateDefinition(detail::WorkerStateDefinition definition) {
@@ -129,11 +166,11 @@ void appendPrefixHandler(Handlers& handlers, std::string_view prefix, Handler ha
 }  // namespace
 
 App& App::onError(ScopedErrorHandlerOptions options) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [options = std::move(options)](detail::AppState& state) mutable { appendPrefixHandler(state.prefixErrorHandlers, options.prefix.view(), std::move(options.handler)); });
+    return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [options = std::move(options)](detail::AppState& state) mutable { appendPrefixHandler(state.prefixErrorHandlers, options.prefix, std::move(options.handler)); });
 }
 
 App& App::onNotFound(ScopedNotFoundHandlerOptions options) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [options = std::move(options)](detail::AppState& state) mutable { appendPrefixHandler(state.prefixNotFoundHandlers, options.prefix.view(), std::move(options.handler)); });
+    return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [options = std::move(options)](detail::AppState& state) mutable { appendPrefixHandler(state.prefixNotFoundHandlers, options.prefix, std::move(options.handler)); });
 }
 
 }  // namespace ruvia

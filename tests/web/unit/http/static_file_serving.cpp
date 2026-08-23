@@ -39,6 +39,7 @@
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
+#include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
 #include "ruvia/web/detail/server/file/HttpFileOpen.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
@@ -86,7 +87,7 @@ RUVIA_TEST(static_root_copies_public_mime_configuration_into_owned_storage) {
 
     {
         ruvia::StaticRootOptions options;
-        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
         options.mimeTypes.push_back(ruvia::StaticMimeType{
             .extension = ".custom-resource",
             .contentType = "application/x-custom-resource-type",
@@ -135,7 +136,7 @@ RUVIA_TEST(static_root_rejects_permission_errors_in_index) {
     }
 
     ruvia::StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     bool rejected = false;
     try {
         ruvia::StaticRoot root(dir, std::move(options));
@@ -175,7 +176,7 @@ RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed)
 
     auto response = [&] {
         ruvia::StaticRootOptions options;
-        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
         ruvia::StaticRoot handlerLocalRoot(dir, std::move(options));
         return context.staticFile(handlerLocalRoot, {.relativePath = "payload.txt", .contentType = "text/plain"});
     }();
@@ -246,7 +247,7 @@ RUVIA_TEST(static_file_without_sidecar_stays_identity_when_precompressed_variant
     std::ofstream(dir / "payload.txt") << std::string(4096, 'c');
 
     ruvia::StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot root(dir, std::move(options));
 
     ruvia::WorkerMemory workerMemory;
@@ -279,7 +280,7 @@ RUVIA_TEST(document_root_snapshot_metadata_tracks_refresh) {
     std::ofstream(dir / "index.html") << "<html></html>";
 
     ruvia::StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot root(dir, std::move(options));
 
     auto equivalentOptions = ruvia::detail::StaticRootAccess::options(root);
@@ -287,7 +288,7 @@ RUVIA_TEST(document_root_snapshot_metadata_tracks_refresh) {
     RUVIA_CHECK(ruvia::detail::StaticRootAccess::sameSnapshot(root, equivalentRoot));
 
     auto clonedOptions = ruvia::detail::StaticRootAccess::options(root);
-    RUVIA_CHECK(clonedOptions.fileTypes.kind() == ruvia::StaticFileTypePolicy::Kind::kAll);
+    RUVIA_CHECK(clonedOptions.fileTypes.kind == ruvia::StaticFileTypePolicy::Kind::kAll);
 
     std::ofstream(dir / "new-file.txt") << "published on the next refresh";
     ruvia::StaticRoot refreshed(dir, std::move(clonedOptions));
@@ -304,7 +305,7 @@ RUVIA_TEST(configured_document_root_binding_is_a_move_only_request_snapshot_leas
     std::ofstream(dir / "payload.txt") << "payload";
 
     ruvia::StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot root(dir, std::move(options));
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
@@ -340,10 +341,10 @@ RUVIA_TEST(configured_document_root_binding_counts_belong_to_the_bound_snapshot)
     std::ofstream(secondDir / "payload.txt") << "second";
 
     ruvia::StaticRootOptions firstOptions;
-    firstOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
+    firstOptions.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot first(firstDir, std::move(firstOptions));
     ruvia::StaticRootOptions secondOptions;
-    secondOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
+    secondOptions.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot second(secondDir, std::move(secondOptions));
 
     {
@@ -373,7 +374,7 @@ RUVIA_TEST(standalone_static_root_bindings_do_not_share_request_lease_state) {
     std::ofstream(dir / "payload.txt") << "payload";
 
     ruvia::StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot root(dir, std::move(options));
     {
         auto binding = ruvia::detail::DocumentRootBinding::standalone(root);
@@ -415,7 +416,7 @@ RUVIA_TEST(static_file_replacement_cannot_reuse_indexed_metadata) {
     }
 
     ruvia::StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot root(dir, std::move(options));
 
     // Use the same byte length so a size-only guard would accept and transmit
@@ -451,7 +452,7 @@ RUVIA_TEST(static_file_replacement_cannot_reuse_indexed_metadata) {
     }
 
     ruvia::StaticRootOptions refreshedOptions;
-    refreshedOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
+    refreshedOptions.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot refreshedRoot(dir, std::move(refreshedOptions));
     auto refreshed = context.staticFile(refreshedRoot, {.relativePath = "payload.txt", .contentType = "text/plain"});
     RUVIA_CHECK(!oldEtag.empty());
@@ -505,12 +506,11 @@ RUVIA_TEST(context_file_replacement_cannot_reuse_response_metadata) {
 }
 
 RUVIA_TEST(static_file_type_policy_has_closed_exact_alternatives) {
-    static_assert(!std::default_initializable<ruvia::StaticFileTypePolicy>);
-    static_assert(!std::is_aggregate_v<ruvia::StaticFileTypePolicy>);
+    static_assert(std::is_aggregate_v<ruvia::StaticFileTypePolicy>);
 
     bool emptyOnlyThrew = false;
     try {
-        (void)ruvia::StaticFileTypePolicy::only({});
+        ruvia::detail::validateStaticRootOptions({.fileTypes = {.kind = ruvia::StaticFileTypePolicy::Kind::kOnly}});
     } catch (const std::invalid_argument&) {
         emptyOnlyThrew = true;
     }
@@ -519,7 +519,7 @@ RUVIA_TEST(static_file_type_policy_has_closed_exact_alternatives) {
     for (const std::string_view invalid : {"", ".", "..", "a/b", "a\\b"}) {
         bool invalidTypeThrew = false;
         try {
-            (void)ruvia::StaticFileTypePolicy::only({invalid});
+            ruvia::detail::validateStaticRootOptions({.fileTypes = {.kind = ruvia::StaticFileTypePolicy::Kind::kOnly, .extensions = {std::string(invalid)}}});
         } catch (const std::invalid_argument&) {
             invalidTypeThrew = true;
         }
@@ -538,13 +538,13 @@ RUVIA_TEST(static_file_type_policy_has_closed_exact_alternatives) {
     RUVIA_CHECK(!ruvia::detail::StaticRootAccess::find(defaultRoot, "asset.custom").has_value());
 
     ruvia::StaticRootOptions allOptions;
-    allOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
+    allOptions.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot allRoot(dir, std::move(allOptions));
     RUVIA_CHECK(ruvia::detail::StaticRootAccess::find(allRoot, "index.html").has_value());
     RUVIA_CHECK(ruvia::detail::StaticRootAccess::find(allRoot, "asset.custom").has_value());
 
     ruvia::StaticRootOptions onlyOptions;
-    onlyOptions.fileTypes = ruvia::StaticFileTypePolicy::only({".CUSTOM"});
+    onlyOptions.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kOnly, .extensions = {".CUSTOM"}};
     ruvia::StaticRoot onlyRoot(dir, std::move(onlyOptions));
     RUVIA_CHECK(!ruvia::detail::StaticRootAccess::find(onlyRoot, "index.html").has_value());
     RUVIA_CHECK(ruvia::detail::StaticRootAccess::find(onlyRoot, "asset.custom").has_value());
@@ -580,7 +580,7 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
         std::ofstream out(dir / "empty.txt", std::ios::binary | std::ios::trunc);
     }
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
     const auto serveMethod = [&root](std::string_view method, std::string_view path, std::string_view range) {
@@ -659,7 +659,7 @@ RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
     const auto serve = [&root](std::string_view path) {
@@ -712,7 +712,7 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
     ruvia::WorkerMemory worker;
@@ -758,7 +758,7 @@ RUVIA_TEST(static_file_preserves_context_vary_when_adding_accept_encoding) {
         out << "console.log('ok');";
     }
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
     ruvia::WorkerMemory worker;
@@ -830,7 +830,7 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
     // Serve with a Range plus an optional If-Range; returns (status, Last-Modified).
@@ -904,7 +904,7 @@ RUVIA_TEST(static_file_clamps_future_last_modified_and_rejects_it_for_if_range) 
     RUVIA_CHECK(!ec);
 
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
     const auto serve = [&root](std::optional<std::string_view> ifRange) {
@@ -959,7 +959,7 @@ RUVIA_TEST(static_file_without_response_validators_still_enforces_preconditions)
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     options.rangeRequests = StaticRangeRequestPolicy::kHonor;
     options.responseValidators = StaticResponseValidatorPolicy::kOmit;  // no ETag / Last-Modified on responses
     StaticRoot root(dir, std::move(options));
@@ -1051,7 +1051,7 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
     struct Header {
@@ -1148,7 +1148,7 @@ RUVIA_TEST(static_file_conditional_request_serving) {
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
     const auto serve = [&root](ruvia::detail::RequestKnownHeader slot, std::string_view headerName, std::string_view headerValue) {
@@ -1242,7 +1242,7 @@ RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
         out << "gzip";
     }
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
     struct ServedRepresentation final {
@@ -1347,7 +1347,7 @@ RUVIA_TEST(static_file_rejects_a_stale_precompressed_sidecar) {
     RUVIA_CHECK(!ec);
 
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
     ruvia::WorkerMemory worker;
@@ -1429,7 +1429,7 @@ RUVIA_TEST(static_file_internal_sidecar_does_not_bypass_file_type_policy) {
     // only entries admitted solely because their base type is allowed are
     // internal-only.
     ruvia::StaticRootOptions gzipOptions;
-    gzipOptions.fileTypes = ruvia::StaticFileTypePolicy::only({"gz"});
+    gzipOptions.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kOnly, .extensions = {"gz"}};
     StaticRoot gzipRoot(dir, std::move(gzipOptions));
     RUVIA_CHECK_EQ(std::get<0>(serve(gzipRoot, "app.js.gz", "")), ruvia::http_status::kOk);
 
@@ -1450,7 +1450,7 @@ RUVIA_TEST(static_root_rejects_empty_custom_mime_type) {
     }
 
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticMimeType mime;
     mime.extension = ".custom";
     options.mimeTypes.push_back(std::move(mime));
@@ -1488,19 +1488,19 @@ RUVIA_TEST(static_root_rejects_invalid_static_options_at_construction) {
 
     {
         StaticRootOptions options;
-        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
         options.cacheControl = " private";
         rejects(std::move(options));
     }
     {
         StaticRootOptions options;
-        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
         options.defaultContentType = "text plain";
         rejects(std::move(options));
     }
     {
         StaticRootOptions options;
-        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
         StaticMimeType mime;
         mime.extension = ".custom";
         mime.contentType = "text plain";
@@ -1509,7 +1509,7 @@ RUVIA_TEST(static_root_rejects_invalid_static_options_at_construction) {
     }
     for (const std::string_view invalidExtension : {"", ".", "..", "nested/custom", "nested\\custom"}) {
         StaticRootOptions options;
-        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
         StaticMimeType mime;
         mime.extension = std::string(invalidExtension);
         mime.contentType = "text/plain";
@@ -1518,7 +1518,7 @@ RUVIA_TEST(static_root_rejects_invalid_static_options_at_construction) {
     }
     {
         StaticRootOptions options;
-        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
         options.dotfiles = static_cast<ruvia::StaticDotfilePolicy>(42);
         rejects(std::move(options));
     }
@@ -1540,7 +1540,7 @@ RUVIA_TEST(static_file_rejects_an_empty_accept_encoding_set) {
     std::ofstream(dir / "data.txt") << "content";
     std::ofstream(dir / "data.txt.gz") << "compressed-content";
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
     ruvia::WorkerMemory worker;
@@ -1595,7 +1595,7 @@ RUVIA_TEST(static_file_if_modified_since_serving) {
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
     StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
     const auto serve = [&root](std::string_view ifModifiedSince) {
@@ -1651,7 +1651,7 @@ RUVIA_TEST(static_file_directory_root_index_and_403) {
     // A directory root with no configured index is forbidden (never a listing).
     {
         StaticRootOptions options;
-        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
         StaticRoot root(dir, std::move(options));
         RUVIA_CHECK_EQ(serveRoot(root), ruvia::http_status::kForbidden);
     }
@@ -1662,7 +1662,7 @@ RUVIA_TEST(static_file_directory_root_index_and_403) {
         out << "<h1>i</h1>";
         out.close();
         StaticRootOptions options;
-        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
         options.indexFile = "index.html";
         StaticRoot root(dir, std::move(options));
         RUVIA_CHECK_EQ(serveRoot(root), ruvia::http_status::kOk);

@@ -87,7 +87,7 @@ int main() {
     options.connectionFailure.callback = ruvia::detail::CallbackAccess::bind<void(const ruvia::ConnectionFailureRecord&) noexcept>(observation);
     ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
     server.start();
-    const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
+    const auto endpoint = server.localEndpoint();
 
     int rc = 0;
     auto fail = [&](int code, const char* message) {

@@ -63,33 +63,6 @@ const StaticMimeType* findStaticMimeType(const std::vector<StaticMimeType>& mime
 
 }  // namespace
 
-StaticFileTypePolicy StaticFileTypePolicy::defaults() {
-    return StaticFileTypePolicy(Kind::kDefaults);
-}
-
-StaticFileTypePolicy StaticFileTypePolicy::all() {
-    return StaticFileTypePolicy(Kind::kAll);
-}
-
-StaticFileTypePolicy StaticFileTypePolicy::only(std::span<const std::string_view> extensions) {
-    if (extensions.empty()) {
-        throw std::invalid_argument("static file type allow-list must not be empty");
-    }
-    StaticFileTypePolicy result(Kind::kOnly);
-    result.extensions_.reserve(extensions.size());
-    for (const auto extension : extensions) {
-        if (!detail::isValidStaticFileExtension(extension)) {
-            throw std::invalid_argument("invalid static file type");
-        }
-        result.extensions_.emplace_back(extension);
-    }
-    detail::normalizeFileTypes(result.extensions_);
-    if (result.extensions_.front().empty()) {
-        throw std::invalid_argument("invalid static file type");
-    }
-    return result;
-}
-
 namespace detail {
 
 bool isValidStaticFileExtension(std::string_view extension) noexcept {
@@ -135,7 +108,7 @@ void normalizeFileTypes(std::vector<std::string>& fileTypes) {
 }
 
 bool fileTypeAllowed(std::string_view extension, const StaticRootOptions& options) {
-    if (options.fileTypes.kind() == StaticFileTypePolicy::Kind::kAll) {
+    if (options.fileTypes.kind == StaticFileTypePolicy::Kind::kAll) {
         return true;
     }
 
@@ -143,10 +116,10 @@ bool fileTypeAllowed(std::string_view extension, const StaticRootOptions& option
         return false;
     }
     const auto value = extension.substr(1);
-    if (options.fileTypes.kind() == StaticFileTypePolicy::Kind::kDefaults) {
+    if (options.fileTypes.kind == StaticFileTypePolicy::Kind::kDefaults) {
         return std::ranges::binary_search(kDefaultStaticFileTypes, value);
     }
-    const auto extensions = options.fileTypes.extensions();
+    const auto& extensions = options.fileTypes.extensions;
     return std::ranges::binary_search(extensions, value);
 }
 

@@ -11,8 +11,12 @@
 #include <utility>
 
 #include <asio/io_context.hpp>
+#include <asio/bind_executor.hpp>
 
+#include <ruvia/core/RootTask.h>
+#include <ruvia/core/Task.h>
 #include <ruvia/core/WorkerHandle.h>
+#include <ruvia/core/detail/io/AsioAwait.h>
 
 namespace ruvia {
 
@@ -20,10 +24,6 @@ namespace detail {
 struct EventLoopState;
 class WorkerShutdownListener;
 
-// Where a loop sends an exception that has no caller left to receive it. A
-// pooled loop records it as the pool's first failure, which join() rethrows;
-// an attached loop has no such owner and leaves the sink empty.
-using EventLoopFailureSink = std::function<void(std::exception_ptr)>;
 }  // namespace detail
 
 class EventLoopStopRegistration final {
@@ -66,6 +66,43 @@ public:
         return handle().post(std::forward<Fn>(fn));
     }
 
+    // Starts one lazy Task on this loop and returns its structured completion
+    // owner. The loop owns the started coroutine until completion; abandoning
+    // the RootTask never destroys a suspended frame, and an abandoned failure
+    // is routed to the loop failure sink.
+    template <typename T>
+        requires detail::AsioTaskResult<T>
+    [[nodiscard]] RootTask<T> start(Task<T> task) const {
+        auto completion = std::make_shared<detail::RootTaskState<T>>(handle(), failureSink());
+        const auto boundExecutor = executor();
+        auto posted = post([task = std::move(task), completion, boundExecutor]() mutable {
+            try {
+                detail::asyncStartTask(
+                    std::move(task),
+                    asio::bind_executor(boundExecutor, [completion](detail::TaskCompletionResult<T> result) mutable {
+                        if (const auto* failure = result.failure()) {
+                            completion->completeFailure(failure->exception());
+                            return;
+                        }
+                        if constexpr (std::is_void_v<T>) {
+                            completion->completeValue();
+                        } else {
+                            completion->completeValue(std::move(*result.success()).takeValue());
+                        }
+                    }));
+            } catch (...) {
+                completion->completeFailure(std::current_exception());
+            }
+        });
+        if (!posted.accepted()) {
+            if (posted.status() == PostStatus::kQueueFull) {
+                throw std::runtime_error("event loop root task queue is full");
+            }
+            throw std::runtime_error("event loop is stopping");
+        }
+        return RootTask<T>(std::move(completion));
+    }
+
     template <typename Fn>
         requires detail::MoveOnlyFunctionTarget<void, Fn>
     [[nodiscard]] EventLoopStopRegistration onStop(Fn&& fn) const {
@@ -75,6 +112,7 @@ public:
 private:
     explicit EventLoop(std::shared_ptr<detail::EventLoopState> state) noexcept;
     [[nodiscard]] EventLoopStopRegistration registerStopCallback(MoveOnlyFunction<void()> callback) const;
+    [[nodiscard]] detail::EventLoopFailureSink failureSink() const;
 
     std::shared_ptr<detail::EventLoopState> state_;
     friend class EventLoopPool;

@@ -293,16 +293,16 @@ concept HasRedisTcpSocketPolicies = requires(T& config) {
 };
 
 template <typename T>
-concept HasRedisRegistrationOptions = requires(T& app, ruvia::RedisConfig config) {
-    { app.useRedis(ruvia::RedisRegistrationOptions{.config = config}) } ->
+concept HasRedisRegistrationConfig = requires(T& app, ruvia::RedisConfig config) {
+    { app.redis(ruvia::RedisRegistrationConfig{.config = config}) } ->
         std::same_as<ruvia::App&>;
 };
 
 template <typename T>
 concept HasRedisRegistrationPositional = requires(T& app, ruvia::RedisConfig config) {
-    app.useRedis(config);
+    app.redis(config);
 } || requires(T& app, ruvia::RedisConfig config) {
-    app.useRedis(std::string_view{}, config);
+    app.redis(std::string_view{}, config);
 };
 
 template <typename Match>
@@ -426,9 +426,9 @@ static_assert(ruvia::RedisConfig{}.tcpNoDelay == ruvia::TcpNoDelayPolicy::kEnabl
 static_assert(ruvia::RedisConfig{}.tcpKeepAlive == ruvia::TcpKeepAlivePolicy::kSystemDefault);
 static_assert(!HasRedisTcpNoDelayBoolean<ruvia::RedisConfig>);
 static_assert(!HasRedisKeepAliveBoolean<ruvia::RedisConfig>);
-static_assert(std::is_aggregate_v<ruvia::RedisRegistrationOptions>);
-static_assert(std::same_as<decltype(ruvia::RedisRegistrationOptions{.config = ruvia::RedisConfig{}}.alias), std::string>);
-static_assert(HasRedisRegistrationOptions<ruvia::App>);
+static_assert(std::is_aggregate_v<ruvia::RedisRegistrationConfig>);
+static_assert(std::same_as<decltype(ruvia::RedisRegistrationConfig{.config = ruvia::RedisConfig{}}.alias), std::string>);
+static_assert(HasRedisRegistrationConfig<ruvia::App>);
 static_assert(!HasRedisRegistrationPositional<ruvia::App>);
 constexpr ruvia::RedisScanOptions kLiteralRedisScanOptions{
     .match = "session:*",

@@ -16,6 +16,10 @@ namespace ruvia::detail {
 // Privileged access to a Context's session slot, used by the session middleware
 // to load the stored blob and read what the handler left behind.
 struct SessionAccess final {
+    static void bind(Context& context) noexcept {
+        context.sessionState_.bind();
+    }
+
     static void observePresentedId(Context& context, std::string_view id) {
         context.sessionState_.observePresentedId(id);
     }
@@ -88,27 +92,27 @@ struct SessionCommitPlan final {
     return true;
 }
 
-inline void appendSessionCookieHeader(HttpResponse& response, std::pmr::memory_resource* resource, std::string_view id, bool secure) {
+inline void appendSessionCookieHeader(HttpResponse& response, std::pmr::memory_resource* resource, std::string_view cookieName, std::string_view id, bool secure) {
     const CookieOptions options{
         .sameSite = CookieSameSite::kLax,
         .httpOnly = CookieAttributePolicy::kEmit,
         .secure = secure ? CookieAttributePolicy::kEmit : CookieAttributePolicy::kOmit,
     };
-    const SetCookiePlan plan("sid", id, options);
+    const SetCookiePlan plan(cookieName, id, options);
     std::pmr::string setCookie(resource);
     setCookie.resize(plan.size());
     plan.write(setCookie.data());
     response.header("Set-Cookie", setCookie, {.mode = ruvia::HttpResponseHeaderMode::kAppend});
 }
 
-inline void appendExpiredSessionCookieHeader(HttpResponse& response, std::pmr::memory_resource* resource, bool secure) {
+inline void appendExpiredSessionCookieHeader(HttpResponse& response, std::pmr::memory_resource* resource, std::string_view cookieName, bool secure) {
     const CookieOptions options{
         .sameSite = CookieSameSite::kLax,
         .maxAge = std::chrono::seconds(0),
         .httpOnly = CookieAttributePolicy::kEmit,
         .secure = secure ? CookieAttributePolicy::kEmit : CookieAttributePolicy::kOmit,
     };
-    const SetCookiePlan plan("sid", "", options);
+    const SetCookiePlan plan(cookieName, "", options);
     std::pmr::string setCookie(resource);
     setCookie.resize(plan.size());
     plan.write(setCookie.data());

@@ -168,7 +168,7 @@ int main() {
 
     ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
     server.start();
-    const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
+    const auto endpoint = server.localEndpoint();
 
     int rc = 0;
     auto fail = [&](int code, const char* message) {
@@ -279,7 +279,7 @@ int main() {
     ruvia::detail::WebWorkerRuntime sidecarServer(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
     sidecarServer.start();
     asio::ip::tcp::socket sidecarSocket(ctx);
-    sidecarSocket.connect(sidecarServer.localEndpoint(ruvia::ListenerId{1}), ec);
+    sidecarSocket.connect(sidecarServer.localEndpoint(), ec);
     asio::streambuf sidecarBuffer;
     asio::write(sidecarSocket, asio::buffer(std::string_view(
         "GET /asset.txt HTTP/1.1\r\nHost: localhost\r\n"

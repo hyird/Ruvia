@@ -9,6 +9,7 @@
 #include "ruvia/web/detail/http/context/ContextCapabilities.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/http/SessionAccess.h"
 #include "ruvia/web/detail/http/request/RequestBodyLoader.h"
 #include "ruvia/web/detail/http/StreamingAccess.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
@@ -209,6 +210,29 @@ RUVIA_TEST(context_services_borrows_address_stable_worker) {
     const auto derived = services.withPlainTransport("127.0.0.1");
     RUVIA_CHECK(&services.worker() == &handle);
     RUVIA_CHECK(&derived.worker() == &handle);
+}
+
+RUVIA_TEST(context_session_capability_requires_explicit_middleware_binding) {
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = makeRequest(memory.resource());
+    auto context = ruvia::detail::ContextAccess::make(
+        memory, request, ruvia::detail::ContextServices{});
+
+    RUVIA_CHECK(!context.trySession().has_value());
+    bool rejected = false;
+    try {
+        static_cast<void>(context.session());
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+
+    ruvia::detail::SessionAccess::bind(context);
+    auto session = context.session();
+    session.set("user=42");
+    RUVIA_CHECK_EQ(session.data(), std::string_view("user=42"));
+    RUVIA_CHECK(context.trySession().has_value());
 }
 
 RUVIA_TEST(context_exposes_the_server_shutdown_stop_token) {

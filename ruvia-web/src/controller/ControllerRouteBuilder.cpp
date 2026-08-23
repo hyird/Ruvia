@@ -104,8 +104,8 @@ void detail::ControllerRouteBuilder::registerSseRoute(HttpKnownMethod method, st
     RouterImpl::from(impl_->router()).registerSseRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler), impl_->middlewares(), middlewares);
 }
 
-void detail::ControllerRouteBuilder::registerWebSocketRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares, WebSocketRouteOptions webSocketOptions) const {
-    RouterImpl::from(impl_->router()).registerWebSocketRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler), impl_->middlewares(), middlewares, webSocketOptions);
+void detail::ControllerRouteBuilder::registerWebSocketRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares, WebSocketRouteConfig webSocketConfig) const {
+    RouterImpl::from(impl_->router()).registerWebSocketRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler), impl_->middlewares(), middlewares, std::move(webSocketConfig));
 }
 
 detail::ControllerRouteBuilder detail::ControllerRouteBuilder::createScope(std::string_view prefix, std::pmr::vector<ControllerMiddlewareDescriptor> middlewares) const {

@@ -55,7 +55,7 @@ int main() {
     asio::io_context context;
     asio::ip::tcp::socket socket(context);
     std::error_code ec;
-    socket.connect(server.localEndpoint(ruvia::ListenerId{1}), ec);
+    socket.connect(server.localEndpoint(), ec);
     if (ec) {
         std::fputs("client failed to connect to websocket test server\n", stderr);
         server.stop();

@@ -31,15 +31,14 @@ struct HttpClientDefinition;
 struct RedisDefinition;
 
 struct WorkerCapabilityDefinitions final {
-    std::span<const DbDefinition> databases;
-    std::span<const RedisDefinition> redis;
-    std::span<const WorkerStateDefinition> workerStates;
-    std::span<const HttpClientDefinition> httpClients;
+    std::span<const DbDefinition> databases{};
+    std::span<const RedisDefinition> redis{};
+    std::span<const WorkerStateDefinition> workerStates{};
+    std::span<const HttpClientDefinition> httpClients{};
 };
 
 struct WorkerCapabilityOptions final {
-    std::size_t maxHttpClientOrigins{64};
-    std::optional<RateLimitRule> defaultRateLimit;
+    std::optional<RateLimitRule> defaultRateLimit{};
     RouteRateLimitPresence routeRateLimits{RouteRateLimitPresence::kAbsent};
     std::size_t rateLimitCapacity{0};
     std::size_t maxDecodedBodyBytes{kDefaultMaxBufferedBodyBytes};

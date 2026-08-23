@@ -17,9 +17,9 @@ struct ValidationIssueAccess;
 }
 
 struct ValidationIssueOptions final {
-    BorrowedText field;
-    BorrowedText code;
-    BorrowedText message;
+    BorrowedText field{};
+    BorrowedText code{};
+    BorrowedText message{};
     std::pmr::memory_resource* resource{nullptr};
 };
 

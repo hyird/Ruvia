@@ -101,7 +101,7 @@ private:
     void registerExtensionMethodRoute(std::string_view methodToken, std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> middlewares = {}) const;
     void registerResponseStreamRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares = {}) const;
     void registerSseRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares = {}) const;
-    void registerWebSocketRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares = {}, WebSocketRouteOptions webSocketOptions = {}) const;
+    void registerWebSocketRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares = {}, WebSocketRouteConfig webSocketConfig = {}) const;
     [[nodiscard]] ControllerRouteBuilder createScope(std::string_view prefix, std::pmr::vector<ControllerMiddlewareDescriptor> middlewares = std::pmr::vector<ControllerMiddlewareDescriptor>(registrationResource())) const;
 
     struct OwnedPrefixTag final {};

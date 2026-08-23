@@ -105,6 +105,8 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_res
         validateDbConfig(config);
         PoolOwner owner;
         switch (definition.config.driver) {
+            case DbDriver::kUnspecified:
+                throw std::invalid_argument("database driver must be selected");
             case DbDriver::kMariaDb:
 #ifdef RUVIA_ENABLE_MARIADB
                 owner = detail::makePmrObject<MariaDbPool>(resource_, ioContext, std::move(config), resource_, worker);

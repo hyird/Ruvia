@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "ruvia/core/detail/util/NativePath.h"
-#include "ruvia/web/StaticFiles.h"
 
 namespace ruvia::detail {
 
@@ -31,20 +30,20 @@ void assignTlsFileName(std::pmr::string& output, const std::filesystem::path& pa
 
 HttpServerListenerDefinition::Tls makeTlsOptions(const TlsConfig& config, std::pmr::memory_resource* resource) {
     HttpServerListenerDefinition::Tls tls(resource);
-    assignTlsFileName(tls.identity.certificateChainFile, config.identity().certificateChainFile());
-    assignTlsFileName(tls.identity.privateKeyFile, config.identity().privateKeyFile());
-    tls.identity.privateKeyPassword = config.identity().privateKeyPassword();
-    if (config.clientCertificatePolicy().has_value()) {
-        auto& policy = tls.clientCertificates.emplace(resource, config.clientCertificatePolicy()->requirement());
-        assignTlsFileName(policy.verifyFile, config.clientCertificatePolicy()->verifyFile());
+    assignTlsFileName(tls.identity.certificateChainFile, config.certificateChainFile);
+    assignTlsFileName(tls.identity.privateKeyFile, config.privateKeyFile);
+    tls.identity.privateKeyPassword = config.privateKeyPassword;
+    if (config.clientCertificates.verifyFile.has_value()) {
+        auto& policy = tls.clientCertificates.emplace(resource, config.clientCertificates.requirement);
+        assignTlsFileName(policy.verifyFile, *config.clientCertificates.verifyFile);
     }
-    tls.sniIdentities.reserve(config.sniIdentities().size());
-    for (const auto& configured : config.sniIdentities()) {
+    tls.sniIdentities.reserve(config.sni.size());
+    for (const auto& configured : config.sni) {
         auto& sni = tls.sniIdentities.emplace_back(resource);
-        sni.host = configured.host();
-        assignTlsFileName(sni.identity.certificateChainFile, configured.identity().certificateChainFile());
-        assignTlsFileName(sni.identity.privateKeyFile, configured.identity().privateKeyFile());
-        sni.identity.privateKeyPassword = configured.identity().privateKeyPassword();
+        sni.host = configured.host;
+        assignTlsFileName(sni.identity.certificateChainFile, configured.certificateChainFile);
+        assignTlsFileName(sni.identity.privateKeyFile, configured.privateKeyFile);
+        sni.identity.privateKeyPassword = configured.privateKeyPassword;
     }
     return tls;
 }

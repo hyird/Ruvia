@@ -166,7 +166,8 @@ public:
         std::pmr::memory_resource* resource{nullptr};
     };
 
-    explicit HttpResponse(Options options = {});
+    HttpResponse();
+    explicit HttpResponse(Options options);
 
     HttpResponse(const HttpResponse&) = delete;
     HttpResponse& operator=(const HttpResponse&) = delete;

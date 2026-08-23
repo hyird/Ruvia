@@ -37,12 +37,12 @@ struct CookieOptions final {
     // Keep their zero-copy representation, but reject owning-string rvalues so
     // a stored options value cannot silently contain an already-dangling view.
     ::ruvia::BorrowedText path{"/"};
-    ::ruvia::BorrowedText domain;
-    std::optional<CookieSameSite> sameSite;
-    std::optional<CookiePriority> priority;
-    std::optional<std::chrono::system_clock::time_point> expires;
-    std::optional<std::chrono::seconds> maxAge;
-    std::optional<CookiePrefix> prefix;
+    ::ruvia::BorrowedText domain{};
+    std::optional<CookieSameSite> sameSite{};
+    std::optional<CookiePriority> priority{};
+    std::optional<std::chrono::system_clock::time_point> expires{};
+    std::optional<std::chrono::seconds> maxAge{};
+    std::optional<CookiePrefix> prefix{};
     CookieAttributePolicy httpOnly{CookieAttributePolicy::kOmit};
     CookieAttributePolicy secure{CookieAttributePolicy::kOmit};
     CookieAttributePolicy partitioned{CookieAttributePolicy::kOmit};

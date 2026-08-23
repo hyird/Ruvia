@@ -5,7 +5,7 @@
 RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     ruvia::detail::Router invalidRouter;
     auto& invalid = ruvia::detail::RouterImpl::from(invalidRouter);
-    ruvia::WebSocketRouteOptions invalidOptions;
+    ruvia::WebSocketRouteConfig invalidOptions;
     invalidOptions.lifecycle.closeHandshakeTimeout = std::chrono::milliseconds(0);
     bool rejected = false;
     try {
@@ -18,7 +18,7 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     const auto rejectsSubprotocols = [](std::string_view subprotocols) {
         ruvia::detail::Router router;
         auto& impl = ruvia::detail::RouterImpl::from(router);
-        ruvia::WebSocketRouteOptions options;
+        ruvia::WebSocketRouteConfig options;
         options.subprotocols = subprotocols;
         try {
             impl.registerWebSocketRoute(HttpKnownMethod::kGet, path("/invalid-ws-protocols"), ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{}, options);
@@ -42,7 +42,7 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
 
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    ruvia::WebSocketRouteOptions options;
+    ruvia::WebSocketRouteConfig options;
     options.lifecycle.closeHandshakeTimeout = std::chrono::milliseconds(1234);
     impl.registerWebSocketRoute(HttpKnownMethod::kGet, path("/ws"), ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{}, options);
     impl.finalize();
