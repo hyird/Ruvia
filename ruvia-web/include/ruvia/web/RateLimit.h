@@ -15,7 +15,7 @@ namespace ruvia {
 namespace detail {
 
 struct RouteRateLimitOptions final {
-    RateLimitRule rule;
+    RateLimitRule rule{};
 };
 
 [[nodiscard]] bool applyRouteRateLimit(Context& context, const RouteRateLimitOptions& options);

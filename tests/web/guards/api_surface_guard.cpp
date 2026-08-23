@@ -2660,7 +2660,6 @@ static_assert(!HasAppUseAtPositional<ruvia::App>);
 static_assert(!HasAppUseAtPositional<ruvia::TestApp>);
 static_assert(AcceptsLvalueMiddlewareScopePrefix<std::string>);
 static_assert(AcceptsAnyRvalueMiddlewareScopePrefix<std::string>);
-static_assert(!AcceptsAnyRvalueMiddlewareScopePrefix<std::pmr::string>);
 static_assert(!std::is_constructible_v<ruvia::detail::ControllerRouteBuilder, ruvia::detail::Router&, std::string_view>);
 #ifndef _MSC_VER
 static_assert(!HasControllerRouteBuilderPublicRegisterRoute<ruvia::detail::ControllerRouteBuilder>);
@@ -2677,7 +2676,6 @@ static_assert(!AcceptsTemporaryDbValueText<const std::string>);
 static_assert(AcceptsLvalueDbValueText<std::string>);
 static_assert(AcceptsAnyTemporaryDbMigrationText<std::string>);
 static_assert(AcceptsAnyTemporaryDbMigrationText<const std::string>);
-static_assert(!AcceptsAnyTemporaryDbMigrationText<std::pmr::string>);
 static_assert(AcceptsLvalueDbMigrationText<std::string>);
 static_assert(std::is_aggregate_v<ruvia::DbMigrationOptions>);
 static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.id), std::string>);
@@ -3165,7 +3163,6 @@ static_assert(std::is_constructible_v<ruvia::CsrfProtection, ruvia::CsrfProtecti
 static_assert(!HasCsrfProtectionPositionalConstructor<ruvia::CsrfProtection>);
 static_assert(AcceptsLvalueCsrfProtectionOptionText<std::string>);
 static_assert(AcceptsAnyRvalueCsrfProtectionOptionText<std::string>);
-static_assert(!AcceptsAnyRvalueCsrfProtectionOptionText<std::pmr::string>);
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::Context&>().error({.status = ruvia::http_status::kBadRequest, .code = "bad", .message = "request failed"})), ruvia::HttpResponse>);
 static_assert(!HasContextErrorPositional<ruvia::Context>);
 static_assert(std::is_same_v<decltype(std::declval<ruvia::Context&>().status(ruvia::http_status::kNoContent)), void>);

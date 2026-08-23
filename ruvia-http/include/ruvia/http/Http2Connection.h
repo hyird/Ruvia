@@ -87,7 +87,7 @@ private:
 struct Http2RegularRequestHeadView final {
     BorrowedText method{"GET"};
     BorrowedText scheme{"https"};
-    std::optional<BorrowedText> authority;
+    std::optional<BorrowedText> authority{};
     BorrowedText target{"/"};
     std::span<const HttpHeaderView> headers{};
     Http2RequestContent content{Http2RequestContent::none()};
@@ -95,14 +95,14 @@ struct Http2RegularRequestHeadView final {
 };
 
 struct Http2ConnectRequestHeadView final {
-    BorrowedText authority;
+    BorrowedText authority{};
     std::span<const HttpHeaderView> headers{};
 };
 
 struct Http2ExtendedConnectRequestHeadView final {
-    BorrowedText protocol;
+    BorrowedText protocol{};
     BorrowedText scheme{"https"};
-    BorrowedText authority;
+    BorrowedText authority{};
     BorrowedText target{"/"};
     std::span<const HttpHeaderView> headers{};
 };

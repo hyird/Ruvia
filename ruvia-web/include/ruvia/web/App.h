@@ -41,20 +41,20 @@ struct AppState;
 #ifdef RUVIA_ENABLE_DATABASE
 struct DbRegistrationConfig final {
     std::string alias{"default"};
-    DbConfig config;
+    DbConfig config{};
 };
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
 struct RedisRegistrationConfig final {
     std::string alias{"default"};
-    RedisConfig config;
+    RedisConfig config{};
 };
 #endif
 
 struct HttpClientRegistrationConfig final {
     std::string alias{"default"};
-    HttpClientConfig config;
+    HttpClientConfig config{};
 };
 
 class App final : public detail::AppConfiguration<App> {
@@ -65,8 +65,8 @@ public:
     App& server(ServerConfig config);
     App& listen(ListenConfig config);
     // The deployment's handler deadline. Absent by
-    // default: an app that declares no deadline anywhere behaves exactly as
-    // before and arms nothing per request. A route may tighten the handler
+    // default: an app that declares no deadline anywhere arms nothing per
+    // request. A route may tighten the handler
     // deadline with ruvia::Deadline<N> but never extend it -- the same rule
     // ServerConfig::maxBufferedBodyBytes follows.
     App& deadline(DeadlineConfig config);

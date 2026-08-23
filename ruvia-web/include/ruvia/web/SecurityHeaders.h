@@ -15,8 +15,8 @@
 namespace ruvia {
 
 struct SecurityHeader final {
-    std::string name;
-    std::string value;
+    std::string name{};
+    std::string value{};
 };
 
 // Legacy browser XSS filters can introduce vulnerabilities in otherwise safe
@@ -49,7 +49,7 @@ struct SecurityHeadersConfig final {
     std::string referrerPolicy{"strict-origin-when-cross-origin"};
     std::string permissionsPolicy{"geolocation=(), microphone=(), camera=()"};
 
-    std::vector<SecurityHeader> customHeaders;
+    std::vector<SecurityHeader> customHeaders{};
     SecurityHeaderConflictPolicy existingHeaders = SecurityHeaderConflictPolicy::kPreserveExisting;
 };
 
@@ -60,10 +60,8 @@ void applySecurityHeaders(Context& context, const SecurityHeadersConfig& config 
 class SecurityHeadersMiddleware final : public Middleware<SecurityHeadersMiddleware> {
 public:
     // A 404 is a response to an attacker-reachable URL like any other, so it
-    // needs the same CSP, frame and referrer policy a matched route gets.
-    // Without this the headers were silently absent from every 404, 405 and 501
-    // -- which is also why CORS had to be applied in the response layer instead
-    // of as middleware.
+    // needs the same CSP, frame and referrer policy a matched route gets. CORS
+    // follows the same response-layer rule for unmatched requests.
     static constexpr bool ruviaRunsOnUnmatchedRequests = true;
 
     SecurityHeadersMiddleware();

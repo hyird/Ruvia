@@ -59,8 +59,8 @@ RequestBindingHandle<std::remove_cvref_t<T>> bindValidatedModel(Context&, T&&) =
 }  // namespace detail
 
 struct SignedCookieLookupOptions final {
-    BorrowedText name;
-    BorrowedText secret;
+    BorrowedText name{};
+    BorrowedText secret{};
 };
 
 class ContextRequest final {

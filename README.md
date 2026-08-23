@@ -915,10 +915,6 @@ connection. `App::httpStats()` sums the same events across every worker as
 counters — active and shed connections, connection failures, transient accept
 failures, worker failures, document-root refresh failures — so a deployment can
 be monitored by polling instead of by installing callbacks.
-[`docs/ruvia-exception-policy.md`](docs/ruvia-exception-policy.md)
-is the full contract: what each layer raises, which failures are isolated where,
-and the three kinds of callback contract.
-
 Self-contained callbacks passed to App are owned and destroyed with the App;
 request dispatch retains only internal, allocation-free callback references.
 Public callback types never expose non-owning `bind()` or `borrow()` factories.

@@ -28,7 +28,7 @@ ruvia-web   -> ruvia-core + ruvia-http
 - 不要回退、覆盖或整理用户已有改动，除非用户明确要求。
 - 需求不清时只问一个必要问题；能从仓库上下文判断时直接执行。
 - 默认优先选择长期正确、最优雅清晰的一等抽象、清晰命名和稳定边界，即使改动面更大；不要为了缩小 diff 把新能力塞进语义不匹配的旧接口或 `detail` 旁路。
-- 公开配置数据统一使用可直接 designated initialization 的普通聚合；能够由字段表达的配置不得增加静态工厂、builder、链式子配置或 identity wrapper。配置由职责 owner 在消费时整体校验并一次性归一化到所属 PMR 存储；可选 App 能力传配置表示开启或替换，传 `nullptr` 表示关闭。
+- 公开配置数据统一使用可直接 designated initialization 的普通聚合；所有可默认构造字段必须有默认成员初始化，协议要求且不可默认构造的值保持必填。能够由字段表达的配置不得增加静态工厂、builder、链式子配置或 identity wrapper。配置由职责 owner 在消费时整体校验并一次性归一化到所属 PMR 存储；可选 App 能力传配置表示开启或替换，传 `nullptr` 表示关闭。
 - 讨论协议行为时，以 HTTP、TLS、WebSocket、SSE、HTTP/2 相关 RFC 和标准优先。
 - 如果项目约束与协议标准冲突，优先修实现和文档以符合标准。
 - README 不写内部重构历史；AGENTS 不累积逐类型防回归目录。

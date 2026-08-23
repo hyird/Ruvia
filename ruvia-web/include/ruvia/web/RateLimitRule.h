@@ -25,7 +25,7 @@ struct RateLimitRule final {
 };
 
 struct RateLimitConfig final {
-    RateLimitRule rule;
+    RateLimitRule rule{};
     std::size_t capacityPerWorker{kDefaultRateLimitCapacityPerWorker};
 };
 

@@ -16,10 +16,10 @@ struct ConnectionScannerOptions final {
     // Inactivity timeouts measured from the connection's last successful I/O.
     // Protocol runtimes map their own lifecycle states onto these generic phases.
     // Absence disables the corresponding phase timeout.
-    std::optional<std::chrono::milliseconds> idleTimeout;
-    std::optional<std::chrono::milliseconds> initialReadTimeout;
-    std::optional<std::chrono::milliseconds> payloadReadTimeout;
-    std::optional<std::chrono::milliseconds> writeTimeout;
+    std::optional<std::chrono::milliseconds> idleTimeout{};
+    std::optional<std::chrono::milliseconds> initialReadTimeout{};
+    std::optional<std::chrono::milliseconds> payloadReadTimeout{};
+    std::optional<std::chrono::milliseconds> writeTimeout{};
 };
 
 class ConnectionScanner final {

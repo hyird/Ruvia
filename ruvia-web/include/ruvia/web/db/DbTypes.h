@@ -35,14 +35,14 @@ struct DbConfig final {
     // Host name or unbracketed address only; keep the port in port.
     std::string host{"127.0.0.1"};
     // Absence selects the driver's standard port: 3306 or 5432.
-    std::optional<std::uint16_t> port;
-    std::string username;
-    std::string password;
-    std::string database;
+    std::optional<std::uint16_t> port{};
+    std::string username{};
+    std::string password{};
+    std::string database{};
     // Absence disables the corresponding timeout.
     std::optional<std::chrono::milliseconds> connectTimeout{std::chrono::seconds(5)};
-    std::optional<std::chrono::milliseconds> readTimeout;
-    std::optional<std::chrono::milliseconds> writeTimeout;
+    std::optional<std::chrono::milliseconds> readTimeout{};
+    std::optional<std::chrono::milliseconds> writeTimeout{};
     std::optional<std::chrono::milliseconds> queryTimeout{std::chrono::seconds(30)};
     std::optional<std::chrono::milliseconds> acquireTimeout{std::chrono::seconds(5)};
 };

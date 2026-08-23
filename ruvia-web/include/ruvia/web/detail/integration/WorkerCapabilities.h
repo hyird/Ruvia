@@ -38,7 +38,7 @@ struct WorkerCapabilityDefinitions final {
 };
 
 struct WorkerCapabilityOptions final {
-    std::optional<RateLimitRule> defaultRateLimit;
+    std::optional<RateLimitRule> defaultRateLimit{};
     RouteRateLimitPresence routeRateLimits{RouteRateLimitPresence::kAbsent};
     std::size_t rateLimitCapacity{0};
     std::size_t maxDecodedBodyBytes{kDefaultMaxBufferedBodyBytes};

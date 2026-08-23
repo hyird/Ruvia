@@ -57,13 +57,13 @@ struct ServerConfig final {
     std::optional<std::size_t> maxConnectionsPerWorker{1024};
     std::optional<std::size_t> maxRequestsPerConnection{1000};
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
-    std::optional<std::size_t> maxStreamBodyBytes;
+    std::optional<std::size_t> maxStreamBodyBytes{};
     std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
     MemoryPoolConfig memoryPool{};
 };
 
 struct TrustedProxyConfig final {
-    std::vector<std::string> cidrs;
+    std::vector<std::string> cidrs{};
 };
 
 namespace detail {
@@ -81,23 +81,23 @@ enum class TlsClientCertificateRequirement : std::uint8_t {
 struct TlsClientCertificateConfig final {
     // A CA bundle used to verify presented client certificates. Optional mode
     // admits a client without a certificate; required mode rejects it.
-    std::optional<std::filesystem::path> verifyFile;
+    std::optional<std::filesystem::path> verifyFile{};
     TlsClientCertificateRequirement requirement{TlsClientCertificateRequirement::kOptional};
 };
 
 struct TlsSniConfig final {
-    std::string host;
-    std::filesystem::path certificateChainFile;
-    std::filesystem::path privateKeyFile;
-    std::string privateKeyPassword;
+    std::string host{};
+    std::filesystem::path certificateChainFile{};
+    std::filesystem::path privateKeyFile{};
+    std::string privateKeyPassword{};
 };
 
 struct TlsConfig final {
-    std::filesystem::path certificateChainFile;
-    std::filesystem::path privateKeyFile;
-    std::string privateKeyPassword;
-    TlsClientCertificateConfig clientCertificates;
-    std::vector<TlsSniConfig> sni;
+    std::filesystem::path certificateChainFile{};
+    std::filesystem::path privateKeyFile{};
+    std::string privateKeyPassword{};
+    TlsClientCertificateConfig clientCertificates{};
+    std::vector<TlsSniConfig> sni{};
 };
 
 // One bind address with optional HTTP and HTTPS endpoints. App validates and
@@ -106,9 +106,9 @@ struct TlsConfig final {
 // endpoint into a redirect endpoint targeting the HTTPS port in this value.
 struct ListenConfig final {
     std::string address{"0.0.0.0"};
-    std::optional<std::uint16_t> http;
-    std::optional<std::uint16_t> https;
-    TlsConfig tls;
+    std::optional<std::uint16_t> http{};
+    std::optional<std::uint16_t> https{};
+    TlsConfig tls{};
     bool autoHttpsRedirect{false};
 };
 
@@ -138,7 +138,7 @@ struct CorsOriginConfig final {
     CorsOriginMode mode{CorsOriginMode::kAny};
     // Required for exact modes. "null" represents the serialized opaque
     // origin; wildcard mode requires this field to remain empty.
-    std::string value;
+    std::string value{};
 };
 
 enum class CorsRequestHeadersMode : std::uint8_t {
@@ -149,14 +149,14 @@ enum class CorsRequestHeadersMode : std::uint8_t {
 struct CorsRequestHeadersConfig final {
     CorsRequestHeadersMode mode{CorsRequestHeadersMode::kReflect};
     // Required in fixed mode and empty in reflect mode.
-    std::vector<std::string> names;
+    std::vector<std::string> names{};
 };
 
 struct CorsConfig final {
-    CorsOriginConfig origin;
-    CorsRequestHeadersConfig requestHeaders;
-    std::vector<std::string> exposeHeaders;
-    std::optional<std::chrono::seconds> maxAge;
+    CorsOriginConfig origin{};
+    CorsRequestHeadersConfig requestHeaders{};
+    std::vector<std::string> exposeHeaders{};
+    std::optional<std::chrono::seconds> maxAge{};
 };
 
 // How long a handler may run. The phase timeouts bound reading the head, reading
@@ -183,9 +183,9 @@ struct DocumentRootRuntimeConfig final {
 };
 
 struct DocumentRootConfig final {
-    std::filesystem::path root;
-    StaticRootOptions staticOptions;
-    DocumentRootRuntimeConfig runtime;
+    std::filesystem::path root{};
+    StaticRootOptions staticOptions{};
+    DocumentRootRuntimeConfig runtime{};
     bool precompressGzip{false};
     bool precompressBrotli{false};
     bool precompressZstd{false};

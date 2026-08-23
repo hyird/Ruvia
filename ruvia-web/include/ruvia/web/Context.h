@@ -174,9 +174,9 @@ public:
     // still suspended while the worker can run, the connection scanner's current
     // inactivity phase eventually drops the socket instead of answering on it.
     //
-    // Historical note kept because it still holds: HTTP/1 cannot observe a peer
-    // FIN while a handler is suspended without a concurrent transport read, so
-    // this is not a promise of immediate client-disconnect detection.
+    // HTTP/1 cannot observe a peer FIN while a handler is suspended without a
+    // concurrent transport read, so this is not a promise of immediate
+    // client-disconnect detection.
     //
     [[nodiscard]] StopToken stopToken() const noexcept {
         return stopToken_;

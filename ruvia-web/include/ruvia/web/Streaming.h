@@ -129,9 +129,8 @@ private:
           committed_(committed),
           aborted_(aborted) {}
 
-    // The request's stop token travels with the binding so sleep() can observe
-    // it. A framework-provided wait that ignores it would be a hole in every
-    // deadline built on that token -- which is exactly what this used to be.
+    // The request's stop token travels with the binding so sleep() observes it;
+    // every framework-provided wait must preserve the request deadline.
     void bindContext(Context& context, StopToken stopToken, StreamingHeadThunk streamingHead) {
         stopToken_ = stopToken;
         bindContext_(target_, &context, streamingHead);

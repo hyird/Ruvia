@@ -13,8 +13,8 @@ namespace ruvia {
 // timeout is an end-to-end bound beginning when the operation starts and must
 // be greater than zero.
 struct OperationOptions final {
-    std::optional<std::chrono::milliseconds> timeout;
-    StopToken stopToken;
+    std::optional<std::chrono::milliseconds> timeout{};
+    StopToken stopToken{};
 };
 
 namespace detail {

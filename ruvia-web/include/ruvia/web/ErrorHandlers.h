@@ -32,12 +32,12 @@ using HttpErrorHandler = detail::Callback<Task<HttpResponse>(Context&, HttpError
 using HttpNotFoundHandler = detail::Callback<Task<HttpResponse>(Context&)>;
 
 struct ScopedErrorHandlerOptions final {
-    std::string prefix;
+    std::string prefix{};
     HttpErrorHandler handler{nullptr};
 };
 
 struct ScopedNotFoundHandlerOptions final {
-    std::string prefix;
+    std::string prefix{};
     HttpNotFoundHandler handler{nullptr};
 };
 

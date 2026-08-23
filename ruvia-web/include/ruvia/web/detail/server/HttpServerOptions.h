@@ -165,28 +165,28 @@ struct HttpServerOptions final {
     // Content-Encoding is decoded. This limit must be greater than 0.
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
     // Stream routes are explicit; absence disables the stream body limit.
-    std::optional<std::size_t> maxStreamBodyBytes;
+    std::optional<std::size_t> maxStreamBodyBytes{};
     // WebSocket messages are assembled before delivery; this must be greater than 0.
     std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
     // Presence enables the policy; absence bypasses it without retaining an
     // inactive configuration state.
-    std::optional<CompressionConfig> compression;
-    std::optional<CorsOptions> cors;
-    DocumentRoot documentRoot;
+    std::optional<CompressionConfig> compression{};
+    std::optional<CorsOptions> cors{};
+    DocumentRoot documentRoot{};
     // Peers whose forwarding headers may be believed. Empty by default, so an
     // unconfigured server treats every direct peer as the client.
     // Absent means no handler deadline anywhere, and nothing is armed.
-    std::optional<DeadlineConfig> deadline;
-    TrustedProxySet trustedProxies;
-    AccessLogSink accessLog;
+    std::optional<DeadlineConfig> deadline{};
+    TrustedProxySet trustedProxies{};
+    AccessLogSink accessLog{};
     const Env* env{nullptr};
     // Process-wide, owned by App::run() and shared by every worker. Null only
     // when the app explicitly disabled the default pool; runBlocking() then
     // reports that state instead of blocking the worker.
     BlockingPool* blockingPool{nullptr};
-    WorkerFailureSink workerFailure;
-    ConnectionFailureSink connectionFailure;
-    std::optional<RateLimitRule> defaultRateLimitPerWorker;
+    WorkerFailureSink workerFailure{};
+    ConnectionFailureSink connectionFailure{};
+    std::optional<RateLimitRule> defaultRateLimitPerWorker{};
     std::size_t rateLimitCapacityPerWorker{kDefaultRateLimitCapacityPerWorker};
 
 };

@@ -682,6 +682,13 @@ if(RUVIA_BUILD_WEB)
 
     ruvia_add_test(ruvia_guard_web_api_surface
         web/guards/api_surface_guard.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_web_config_aggregates
+        web/guards/configuration_aggregates.cpp LIB ruvia::web)
+    if(NOT MSVC)
+        target_compile_options(ruvia_guard_web_config_aggregates PRIVATE
+            -Wmissing-field-initializers
+            -Werror=missing-field-initializers)
+    endif()
     ruvia_add_test(ruvia_guard_web_blocking_api
         web/guards/blocking_api_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_web_cancellation_mailbox
