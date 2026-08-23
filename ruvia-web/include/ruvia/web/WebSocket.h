@@ -17,59 +17,30 @@
 
 namespace ruvia {
 
-struct WebSocketHeartbeatOptions final {
-    std::chrono::milliseconds pingInterval{0};
-    std::optional<std::chrono::milliseconds> pongTimeout;
-};
-
-class WebSocketHeartbeatPolicy final {
-public:
-    [[nodiscard]] static WebSocketHeartbeatPolicy periodic(WebSocketHeartbeatOptions options) {
-        const auto pongTimeout = options.pongTimeout.value_or(options.pingInterval);
-        if (options.pingInterval.count() <= 0 || pongTimeout.count() <= 0) {
-            throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
-        }
-        return WebSocketHeartbeatPolicy(options.pingInterval, pongTimeout);
-    }
-
-    [[nodiscard]] std::chrono::milliseconds pingInterval() const noexcept {
-        return pingInterval_;
-    }
-
-    [[nodiscard]] std::chrono::milliseconds pongTimeout() const noexcept {
-        return pongTimeout_;
-    }
-
-private:
-    WebSocketHeartbeatPolicy(std::chrono::milliseconds pingInterval, std::chrono::milliseconds pongTimeout) noexcept
-        : pingInterval_(pingInterval),
-          pongTimeout_(pongTimeout) {}
-
-    std::chrono::milliseconds pingInterval_;
-    std::chrono::milliseconds pongTimeout_;
+struct WebSocketHeartbeatConfig final {
+    // Absence disables heartbeat. When ping is present and pong is absent,
+    // pong defaults to the ping interval during route registration.
+    std::optional<std::chrono::milliseconds> pingInterval{};
+    std::optional<std::chrono::milliseconds> pongTimeout{};
 };
 
 // Runtime-only liveness policy. Wire framing and close-handshake state remain in
 // ruvia-http; timers and transport abort policy belong to the Web runtime.
 struct WebSocketLifecycleOptions final {
-    std::optional<WebSocketHeartbeatPolicy> heartbeat;
+    WebSocketHeartbeatConfig heartbeat{};
     // A locally initiated Close waits for the peer Close before the underlying
     // transport is ended. nullopt disables this guard.
     std::optional<std::chrono::milliseconds> closeHandshakeTimeout{std::chrono::seconds(5)};
 };
 
-struct WebSocketRouteOptions final {
-    // Route registration copies this list into startup-owned PMR storage, but
-    // the options value itself can be retained before registration. Preserve
-    // the zero-copy input while rejecting owning-string rvalues that would
-    // leave it with an already-dangling view.
-    ::ruvia::BorrowedText subprotocols;
+struct WebSocketRouteConfig final {
+    std::string subprotocols{};
     WebSocketLifecycleOptions lifecycle{};
 };
 
 struct WebSocketCloseOptions final {
     std::uint16_t code{1000};
-    ::ruvia::BorrowedText reason;
+    ::ruvia::BorrowedText reason{};
 };
 
 namespace detail {

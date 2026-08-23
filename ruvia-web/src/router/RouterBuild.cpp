@@ -107,9 +107,9 @@ void detail::RouteTable::captureRouteIdentities() {
             identity.endpointKind = CompiledRoutePlan::EndpointKind::kWebSocket;
             identity.streamInvoke = webSocket.handler().invoke();
             identity.webSocketSubprotocols = webSocket.subprotocols();
-            if (webSocket.lifecycle().heartbeat.has_value()) {
-                identity.webSocketPingIntervalMs = webSocket.lifecycle().heartbeat->pingInterval().count();
-                identity.webSocketPongTimeoutMs = webSocket.lifecycle().heartbeat->pongTimeout().count();
+            if (webSocket.lifecycle().heartbeat.pingInterval.has_value()) {
+                identity.webSocketPingIntervalMs = webSocket.lifecycle().heartbeat.pingInterval->count();
+                identity.webSocketPongTimeoutMs = webSocket.lifecycle().heartbeat.pongTimeout->count();
             }
             if (webSocket.lifecycle().closeHandshakeTimeout.has_value()) {
                 identity.webSocketCloseTimeoutMs = webSocket.lifecycle().closeHandshakeTimeout->count();
@@ -174,11 +174,11 @@ void detail::RouteTable::bindCompiledPlan(const CompiledRoutePlan& plan) {
                               identity.streamInvoke == stream->handler().invoke();
         } else {
             const auto& webSocket = *endpoint.webSocket();
-            const auto pingIntervalMs = webSocket.lifecycle().heartbeat.has_value()
-                                            ? webSocket.lifecycle().heartbeat->pingInterval().count()
+            const auto pingIntervalMs = webSocket.lifecycle().heartbeat.pingInterval.has_value()
+                                            ? webSocket.lifecycle().heartbeat.pingInterval->count()
                                             : std::int64_t{-1};
-            const auto pongTimeoutMs = webSocket.lifecycle().heartbeat.has_value()
-                                           ? webSocket.lifecycle().heartbeat->pongTimeout().count()
+            const auto pongTimeoutMs = webSocket.lifecycle().heartbeat.pingInterval.has_value()
+                                           ? webSocket.lifecycle().heartbeat.pongTimeout->count()
                                            : std::int64_t{-1};
             const auto closeTimeoutMs = webSocket.lifecycle().closeHandshakeTimeout.has_value()
                                             ? webSocket.lifecycle().closeHandshakeTimeout->count()

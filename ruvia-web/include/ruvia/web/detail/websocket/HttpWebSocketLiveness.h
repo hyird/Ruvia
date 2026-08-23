@@ -56,12 +56,12 @@ using WebSocketLivenessState = std::variant<WebSocketLivenessIdle, WebSocketSend
         return livenessMode == WsLivenessMode::kAwaitingPeerClose && close != nullptr && options.closeHandshakeTimeout.has_value() && now - close->startedAtMs() >= options.closeHandshakeTimeout->count() ? WebSocketLivenessDecision::kAbortTransport : WebSocketLivenessDecision::kIdle;
     }
 
-    if (!options.heartbeat.has_value()) {
+    if (!options.heartbeat.pingInterval.has_value()) {
         return WebSocketLivenessDecision::kIdle;
     }
 
-    const auto pingInterval = options.heartbeat->pingInterval().count();
-    const auto pongTimeout = options.heartbeat->pongTimeout().count();
+    const auto pingInterval = options.heartbeat.pingInterval->count();
+    const auto pongTimeout = options.heartbeat.pongTimeout->count();
     if (const auto* pong = std::get_if<WebSocketAwaitingPong>(&state)) {
         return now - pong->sentAtMs() >= pongTimeout ? WebSocketLivenessDecision::kAbortTransport : WebSocketLivenessDecision::kIdle;
     }

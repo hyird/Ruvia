@@ -62,7 +62,7 @@ inline Task<void> WebWorkerRuntime::handleSession(HttpServerListener& listener, 
             }
             std::pmr::string clientCertificate(memory_.allocator<char>());
             extractTlsClientCertificate(tlsStream.native_handle(), clientCertificate);
-            const auto tlsServices = baseServices.withTlsTransport(remoteAddress, clientCertificate, listener.id);
+            const auto tlsServices = baseServices.withTlsTransport(remoteAddress, clientCertificate);
             if (isHttp2AlpnSelected(tlsStream)) {
                 co_await handleHttp2Session(tlsStream, socket, tlsServices);
             } else {
@@ -71,7 +71,7 @@ inline Task<void> WebWorkerRuntime::handleSession(HttpServerListener& listener, 
             closeSocket(socket);
             co_return;
         }
-        co_await handleStreamSession(listener, socket, socket, baseServices.withPlainTransport(remoteAddress, listener.id));
+        co_await handleStreamSession(listener, socket, socket, baseServices.withPlainTransport(remoteAddress));
     } catch (...) {
         // Last-resort safety net: any exception that escapes the session
         // body (including bad_alloc, error-handler failures, or framework

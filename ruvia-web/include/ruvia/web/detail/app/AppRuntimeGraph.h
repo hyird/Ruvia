@@ -7,7 +7,6 @@
 
 #include "ruvia/core/BlockingPool.h"
 #include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #include "ruvia/web/detail/router/CompiledRoutePlan.h"
 #include "ruvia/web/detail/router/Router.h"
@@ -37,12 +36,10 @@ struct AppWorkerSlot final {
 
 struct AppRuntimeGraph final {
     explicit AppRuntimeGraph(std::pmr::memory_resource* resource)
-        : documentRoot(nullptr, PmrObjectDeleter<StaticRoot>{resource}),
-          blockingPool(nullptr, PmrObjectDeleter<BlockingPool>{resource}),
+        : blockingPool(nullptr, PmrObjectDeleter<BlockingPool>{resource}),
           routePlan(nullptr, PmrObjectDeleter<CompiledRoutePlan>{resource}),
           workers(resource) {}
 
-    std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>> documentRoot;
     // Declared before workers so it is destroyed after suspended worker tasks.
     std::unique_ptr<BlockingPool, PmrObjectDeleter<BlockingPool>> blockingPool;
     // Every worker-local handler table borrows this immutable lookup plan.

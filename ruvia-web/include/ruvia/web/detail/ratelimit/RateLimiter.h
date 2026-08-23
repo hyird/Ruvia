@@ -103,6 +103,9 @@ public:
     BasicRateLimiter(std::optional<RateLimitRule> defaultRulePerWorker, RouteRateLimitPresence routeRules, std::size_t capacity, std::pmr::memory_resource* resource = nullptr)
         : defaultRulePerWorker_(std::move(defaultRulePerWorker)),
           slots_(pmrResourceOrDefault(resource)) {
+        if (defaultRulePerWorker_.has_value()) {
+            validateRateLimitRule(*defaultRulePerWorker_);
+        }
         if (!std::has_single_bit(capacity)) {
             throw std::invalid_argument("rate-limit capacity must be a power of two");
         }
@@ -170,7 +173,7 @@ private:
 
     [[nodiscard]] static std::uint64_t currentResetAtMs(std::int64_t nowMs, const RateLimitRule& rule) noexcept {
         const auto now = safeNowMs(nowMs);
-        const auto windowMs = static_cast<std::uint64_t>(rule.window().count());
+        const auto windowMs = static_cast<std::uint64_t>(rule.window.count());
         const auto bucket = now / windowMs;
         const auto maxTime = std::numeric_limits<std::uint64_t>::max();
         if (bucket >= maxTime / windowMs) {
@@ -213,7 +216,7 @@ private:
             slot.count = 1;
             return RateLimitDecision::allow();
         }
-        if (slot.count >= rule.maxRequests()) {
+        if (slot.count >= rule.maxRequests) {
             return RateLimitDecision::reject(std::chrono::milliseconds(resetAfterMs(nowMs, slot.resetAtMs)));
         }
         ++slot.count;
@@ -221,7 +224,7 @@ private:
     }
 
     [[nodiscard]] RateLimitDecision allow(std::uintptr_t scope, std::string_view key, const RateLimitRule& rule) noexcept {
-        const bool allowOnOverflow = rule.overflowPolicy() == RateLimitOverflowPolicy::kAllow;
+        const bool allowOnOverflow = rule.overflowPolicy == RateLimitOverflowPolicy::kAllow;
         if (slots_.empty()) {
             return allowOnOverflow ? RateLimitDecision::allow() : RateLimitDecision::reject(std::chrono::milliseconds(1));
         }

@@ -151,7 +151,8 @@ bool Http2Connection::closeStreamImpl(std::uint32_t streamId, Http2StreamCloseSo
     }
     // A public DATA credit is exact: a pinned closed stream remains the ledger
     // until the credit is acknowledged or its token is abandoned. Unpinned
-    // internal consumers retain the historical eager cleanup behavior.
+    // internal consumers have no external acknowledgement token, so their
+    // window debt is settled immediately.
     if (!isPinned(streamId)) {
         flushWindowDebt(*stream);
     }

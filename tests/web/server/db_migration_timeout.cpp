@@ -33,9 +33,9 @@ constexpr auto kBudget = std::chrono::seconds(10);
 
 [[nodiscard]] ruvia::DbConfig silentBackendConfig(std::uint16_t port) {
 #ifdef RUVIA_ENABLE_MARIADB
-    auto config = ruvia::DbConfig::mariaDb();
+    auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
 #else
-    auto config = ruvia::DbConfig::postgreSql();
+    auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
 #endif
     config.host = "127.0.0.1";
     config.port = port;
@@ -55,7 +55,7 @@ int main() {
     asio::ip::tcp::acceptor acceptor(ioContext, asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const auto port = acceptor.local_endpoint().port();
 
-    static constexpr std::array migrations{
+    static const std::array migrations{
         ruvia::DbMigration{{.id = "001_never_runs", .sql = "CREATE TABLE IF NOT EXISTS ruvia_timeout_probe (id INT PRIMARY KEY)"}}};
 
     const auto start = std::chrono::steady_clock::now();

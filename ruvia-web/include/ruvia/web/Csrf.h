@@ -1,19 +1,20 @@
 #pragma once
 
 #include "ruvia/core/Task.h"
-#include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Middleware.h"
 #include "ruvia/web/Next.h"
 
 #include <stdexcept>
+#include <string>
+#include <utility>
 
 namespace ruvia {
 
-struct CsrfProtectionOptions final {
-    ::ruvia::BorrowedText cookieName{"XSRF-TOKEN"};
-    ::ruvia::BorrowedText headerName{"X-XSRF-TOKEN"};
+struct CsrfProtectionConfig final {
+    std::string cookieName{"XSRF-TOKEN"};
+    std::string headerName{"X-XSRF-TOKEN"};
 };
 
 // Stateless CSRF protection using the double-submit-cookie pattern (no
@@ -26,13 +27,13 @@ struct CsrfProtectionOptions final {
 // and "X-XSRF-TOKEN" and can be rebranded per app.
 class CsrfProtection final : public Middleware<CsrfProtection> {
 public:
-    explicit CsrfProtection(CsrfProtectionOptions options = {})
-        : cookieName_(options.cookieName),
-          headerName_(options.headerName) {
-        if (!isValidHttpHeaderName(cookieName_.view())) {
+    explicit CsrfProtection(CsrfProtectionConfig config = {})
+        : cookieName_(std::move(config.cookieName)),
+          headerName_(std::move(config.headerName)) {
+        if (!isValidHttpHeaderName(cookieName_)) {
             throw std::invalid_argument("CSRF cookie name must be a valid HTTP token");
         }
-        if (!isValidHttpHeaderName(headerName_.view())) {
+        if (!isValidHttpHeaderName(headerName_)) {
             throw std::invalid_argument("CSRF header name must be a valid HTTP field name");
         }
     }
@@ -40,8 +41,8 @@ public:
     Task<void> handle(Context& c, Next& next);
 
 private:
-    ::ruvia::BorrowedText cookieName_;
-    ::ruvia::BorrowedText headerName_;
+    std::string cookieName_;
+    std::string headerName_;
 };
 
 }  // namespace ruvia

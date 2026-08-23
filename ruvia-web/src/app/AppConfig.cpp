@@ -1,15 +1,54 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 #include "ruvia/web/detail/app/EnvState.h"
 #include "ruvia/web/detail/app/AppListenerOptions.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 
-#include <algorithm>
 #include <bit>
+#include <cstddef>
 #include <memory_resource>
 #include <stdexcept>
-#include <type_traits>
 #include <utility>
 
 namespace ruvia {
+
+namespace detail {
+
+void applyServerConfig(AppState& state, const ServerConfig& config) {
+    ensurePositiveSize(config.workerCount, "worker count must be greater than zero");
+    if (config.processSignalHandlers != ProcessSignalHandlerPolicy::kExternalOwner &&
+        config.processSignalHandlers != ProcessSignalHandlerPolicy::kInstall) {
+        throw std::invalid_argument("process signal handler policy is invalid");
+    }
+    ensurePositiveSize(config.workerMailboxCapacity, "worker mailbox capacity must be greater than zero");
+    ensurePositiveOptionalDuration(config.idleTimeout, "configured idle timeout must be greater than zero");
+    ensurePositiveDuration(config.connectionScanInterval, "connection scan interval must be greater than zero");
+    ensurePositiveOptionalDuration(config.requestHeaderTimeout, "configured request header timeout must be greater than zero");
+    ensurePositiveOptionalDuration(config.requestBodyTimeout, "configured request body timeout must be greater than zero");
+    ensurePositiveOptionalDuration(config.writeTimeout, "configured write timeout must be greater than zero");
+    if (config.maxConnectionsPerWorker) ensurePositiveSize(*config.maxConnectionsPerWorker, "configured connection limit must be greater than zero");
+    if (config.maxRequestsPerConnection) ensurePositiveSize(*config.maxRequestsPerConnection, "configured requests-per-connection limit must be greater than zero");
+    ensurePositiveSize(config.maxBufferedBodyBytes, "buffered body limit must be greater than zero");
+    if (config.maxStreamBodyBytes) ensurePositiveSize(*config.maxStreamBodyBytes, "configured stream body limit must be greater than zero");
+    ensurePositiveSize(config.maxWebSocketMessageBytes, "websocket message limit must be greater than zero");
+    ensurePositiveSize(config.memoryPool.requestInitialBufferBytes, "memory pool config values must be greater than zero");
+
+    state.workerCount = config.workerCount;
+    state.processSignalHandlers = config.processSignalHandlers;
+    state.options.workerMailboxCapacity = config.workerMailboxCapacity;
+    state.options.idleTimeout = config.idleTimeout;
+    state.options.scanInterval = config.connectionScanInterval;
+    state.options.requestHeaderTimeout = config.requestHeaderTimeout;
+    state.options.requestBodyTimeout = config.requestBodyTimeout;
+    state.options.writeTimeout = config.writeTimeout;
+    state.options.maxConnections = config.maxConnectionsPerWorker;
+    state.options.maxRequestsPerConnection = config.maxRequestsPerConnection;
+    state.options.maxBufferedBodyBytes = config.maxBufferedBodyBytes;
+    state.options.maxStreamBodyBytes = config.maxStreamBodyBytes;
+    state.options.maxWebSocketMessageBytes = config.maxWebSocketMessageBytes;
+    state.options.memoryConfig = config.memoryPool;
+}
+
+}  // namespace detail
 
 App& App::loadDotenv(DotenvOptions options) {
     return detail::mutateStoppedApp(*this, *state_, "cannot load dotenv while app is running", [&](detail::AppState& state) { (void)detail::loadEnvFromExecutableDirectory(state.env, options); });
@@ -19,184 +58,98 @@ App& App::loadDotenv(const std::filesystem::path& path, DotenvOptions options) {
     return detail::mutateStoppedApp(*this, *state_, "cannot load dotenv while app is running", [&](detail::AppState& state) { (void)detail::loadEnvFromFile(state.env, path, options); });
 }
 
-App& App::setListeners(std::vector<ListenerConfig> listeners) {
-    if (listeners.empty()) {
-        throw std::invalid_argument("listener list must not be empty");
-    }
-
-    const auto portOf = [](const ListenerConfig& listener) {
-        return std::visit([](const auto& config) { return config.port; }, listener.listener_);
-    };
-    for (std::size_t i = 0; i < listeners.size(); ++i) {
-        const auto port = portOf(listeners[i]);
-        for (std::size_t j = i + 1; j < listeners.size(); ++j) {
-            if (listeners[i].id_ == listeners[j].id_) {
-                throw std::invalid_argument("listener IDs must be unique");
-            }
-            if (port == portOf(listeners[j])) {
-                throw std::invalid_argument("listener ports must be unique");
-            }
+App& App::listen(ListenConfig config) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change listeners while app is running", [&config](detail::AppState& state) {
+        if (config.address.empty()) {
+            throw std::invalid_argument("listen address must not be empty");
         }
-        if (const auto* redirect = std::get_if<ListenerConfig::RedirectHttpToHttps>(&listeners[i].listener_); redirect != nullptr) {
-            bool targetExists = false;
-            for (const auto& candidate : listeners) {
-                if (std::holds_alternative<ListenerConfig::Https>(candidate.listener_) && candidate.id_ == redirect->target) {
-                    targetExists = true;
-                    break;
+        if (!config.http.has_value() && !config.https.has_value()) {
+            throw std::invalid_argument("listen config must enable HTTP, HTTPS, or both");
+        }
+        detail::ensureNonZeroOptionalPort(config.http, "HTTP listen port must not be zero");
+        detail::ensureNonZeroOptionalPort(config.https, "HTTPS listen port must not be zero");
+        if (config.http.has_value() && config.http == config.https) {
+            throw std::invalid_argument("HTTP and HTTPS listen ports must be different");
+        }
+        if (config.autoHttpsRedirect && (!config.http.has_value() || !config.https.has_value())) {
+            throw std::invalid_argument("automatic HTTPS redirect requires both HTTP and HTTPS ports");
+        }
+
+        const bool tlsConfigured = !config.tls.certificateChainFile.empty() ||
+                                   !config.tls.privateKeyFile.empty() ||
+                                   !config.tls.privateKeyPassword.empty() ||
+                                   config.tls.clientCertificates.verifyFile.has_value() ||
+                                   config.tls.clientCertificates.requirement != TlsClientCertificateRequirement::kOptional ||
+                                   !config.tls.sni.empty();
+        if (!config.https.has_value()) {
+            if (tlsConfigured) {
+                throw std::invalid_argument("TLS config requires an HTTPS listen port");
+            }
+        } else {
+            if (config.tls.certificateChainFile.empty()) {
+                throw std::invalid_argument("TLS certificate chain file must not be empty");
+            }
+            if (config.tls.privateKeyFile.empty()) {
+                throw std::invalid_argument("TLS private key file must not be empty");
+            }
+            if (config.tls.clientCertificates.verifyFile.has_value()) {
+                if (config.tls.clientCertificates.verifyFile->empty()) {
+                    throw std::invalid_argument("TLS client certificate CA bundle must not be empty");
+                }
+                const auto requirement = config.tls.clientCertificates.requirement;
+                if (requirement != TlsClientCertificateRequirement::kOptional &&
+                    requirement != TlsClientCertificateRequirement::kRequired) {
+                    throw std::invalid_argument("TLS client certificate requirement is invalid");
+                }
+            } else if (config.tls.clientCertificates.requirement != TlsClientCertificateRequirement::kOptional) {
+                throw std::invalid_argument("TLS client certificate requirement needs a CA bundle");
+            }
+            for (std::size_t i = 0; i < config.tls.sni.size(); ++i) {
+                const auto& sni = config.tls.sni[i];
+                detail::ensureSniHost(sni.host, "SNI host must not be empty", "SNI host is invalid");
+                if (sni.certificateChainFile.empty() || sni.privateKeyFile.empty()) {
+                    throw std::invalid_argument("SNI TLS identity requires certificate chain and private key files");
+                }
+                for (std::size_t j = i + 1; j < config.tls.sni.size(); ++j) {
+                    if (detail::httpAsciiEqualsIgnoreCase(config.tls.sni[j].host, sni.host)) {
+                        throw std::invalid_argument("SNI hosts must be unique");
+                    }
                 }
             }
-            if (!targetExists) {
-                throw std::invalid_argument("HTTP redirect target must name an HTTPS listener");
-            }
         }
-    }
 
-    return detail::mutateStoppedApp(*this, *state_, "cannot change listeners while app is running", [&listeners, &portOf](detail::AppState& state) {
         auto* const resource = detail::appResource();
         std::pmr::vector<detail::AppListenerConfig> replacement(resource);
-        replacement.reserve(listeners.size());
-        for (const auto& listener : listeners) {
-            std::visit(
-                [&replacement, &listeners, &listener, &portOf, resource]<typename Listener>(const Listener& config) {
-                    if constexpr (std::is_same_v<Listener, ListenerConfig::Http>) {
-                        replacement.emplace_back(listener.id_, resource, config.address, config.port, detail::HttpServerListenerDefinition::PlainHttp{});
-                    } else if constexpr (std::is_same_v<Listener, ListenerConfig::Https>) {
-                        replacement.emplace_back(listener.id_, resource, config.address, config.port, detail::makeTlsOptions(config.tls, resource));
-                    } else {
-                        const auto target = std::find_if(listeners.begin(), listeners.end(), [&config](const ListenerConfig& candidate) {
-                            return candidate.id_ == config.target;
-                        });
-                        if (target == listeners.end()) std::terminate();
-                        replacement.emplace_back(listener.id_, resource, config.address, config.port, detail::HttpServerListenerDefinition::RedirectHttpToHttps{portOf(*target)});
-                    }
-                },
-                listener.listener_);
+        replacement.reserve(config.http.has_value() && config.https.has_value() ? 2 : 1);
+        if (config.http.has_value()) {
+            if (config.autoHttpsRedirect) {
+                replacement.emplace_back(resource, config.address, *config.http, detail::HttpServerListenerDefinition::RedirectHttpToHttps{*config.https});
+            } else {
+                replacement.emplace_back(resource, config.address, *config.http, detail::HttpServerListenerDefinition::PlainHttp{});
+            }
+        }
+        if (config.https.has_value()) {
+            replacement.emplace_back(resource, config.address, *config.https, detail::makeTlsOptions(config.tls, resource));
         }
         state.listeners = std::move(replacement);
     });
 }
 
-App& App::setWorkerCount(std::size_t workerCount) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change worker count while app is running", [workerCount](detail::AppState& state) {
-        if (workerCount == 0) {
-            throw std::invalid_argument("worker count must be greater than 0");
-        }
-
-        state.workerCount = workerCount;
+App& App::server(ServerConfig config) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change server config while app is running", [config = std::move(config)](detail::AppState& state) {
+        detail::applyServerConfig(state, config);
     });
 }
 
-App& App::setProcessSignalHandlers(ProcessSignalHandlerPolicy policy) {
-    if (policy != ProcessSignalHandlerPolicy::kExternalOwner &&
-        policy != ProcessSignalHandlerPolicy::kInstall) {
-        throw std::invalid_argument("process signal handler policy is invalid");
-    }
-    return detail::mutateStoppedApp(*this, *state_, "cannot change process signal handlers while app is running", [policy](detail::AppState& state) { state.processSignalHandlers = policy; });
-}
-
-App& App::setWorkerMailboxCapacity(std::size_t capacity) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change worker mailbox capacity while app is running", [capacity](detail::AppState& state) {
-        if (capacity == 0) {
-            throw std::invalid_argument("worker mailbox capacity must be greater than 0");
-        }
-        state.options.workerMailboxCapacity = capacity;
-    });
-}
-
-App& App::setHttpClientOriginCacheCapacityPerWorker(std::size_t capacityPerWorker) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change HTTP client origin cache capacity while app is running", [capacityPerWorker](detail::AppState& state) {
-        if (capacityPerWorker == 0) {
-            throw std::invalid_argument("HTTP client origin cache capacity must be greater than 0");
-        }
-        state.options.httpClientOriginCacheCapacityPerWorker = capacityPerWorker;
-    });
-}
-
-App& App::setIdleTimeout(std::optional<std::chrono::milliseconds> timeout) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change idle timeout while app is running", [timeout](detail::AppState& state) {
-        detail::ensurePositiveOptionalDuration(timeout, "configured idle timeout must be greater than zero");
-        state.options.idleTimeout = timeout;
-    });
-}
-
-App& App::setConnectionScanInterval(std::chrono::milliseconds interval) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change connection scan interval while app is running", [interval](detail::AppState& state) {
-        detail::ensurePositiveDuration(interval, "connection scan interval must be greater than 0");
-        state.options.scanInterval = interval;
-    });
-}
-
-App& App::setRequestHeaderTimeout(std::optional<std::chrono::milliseconds> timeout) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change request header timeout while app is running", [timeout](detail::AppState& state) {
-        detail::ensurePositiveOptionalDuration(timeout, "configured request header timeout must be greater than zero");
-        state.options.requestHeaderTimeout = timeout;
-    });
-}
-
-App& App::setRequestBodyTimeout(std::optional<std::chrono::milliseconds> timeout) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change request body timeout while app is running", [timeout](detail::AppState& state) {
-        detail::ensurePositiveOptionalDuration(timeout, "configured request body timeout must be greater than zero");
-        state.options.requestBodyTimeout = timeout;
-    });
-}
-
-App& App::setWriteTimeout(std::optional<std::chrono::milliseconds> timeout) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change write timeout while app is running", [timeout](detail::AppState& state) {
-        detail::ensurePositiveOptionalDuration(timeout, "configured write timeout must be greater than zero");
-        state.options.writeTimeout = timeout;
-    });
-}
-
-App& App::setMaxConnectionsPerWorker(std::optional<std::size_t> maxConnections) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change connection limit while app is running", [maxConnections](detail::AppState& state) {
-        detail::ensurePositiveOptionalSize(maxConnections, "configured connection limit must be greater than zero");
-        state.options.maxConnections = maxConnections;
-    });
-}
-
-App& App::setMaxRequestsPerConnection(std::optional<std::size_t> maxRequests) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change requests-per-connection limit while app is running", [maxRequests](detail::AppState& state) {
-        detail::ensurePositiveOptionalSize(maxRequests, "configured requests-per-connection limit must be greater than zero");
-        state.options.maxRequestsPerConnection = maxRequests;
-    });
-}
-
-App& App::setDeadline(std::optional<DeadlineConfig> config) {
+App& App::deadline(DeadlineConfig config) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change the deadline while app is running", [config](detail::AppState& state) {
-        if (config) {
-            detail::ensurePositiveOptionalDuration(config->handler, "handler deadline must be greater than zero");
-        }
+        detail::ensurePositiveDuration(config.handler, "handler deadline must be greater than zero");
         state.options.deadline = config;
     });
 }
 
-App& App::setBodyLimit(std::size_t bytes) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change buffered body limit while app is running", [bytes](detail::AppState& state) {
-        detail::ensurePositiveSize(bytes, "buffered body limit must be greater than 0");
-        state.options.maxBufferedBodyBytes = bytes;
-    });
-}
-
-App& App::setStreamBodyLimit(std::optional<std::size_t> bytes) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change stream body limit while app is running", [bytes](detail::AppState& state) {
-        detail::ensurePositiveOptionalSize(bytes, "configured stream body limit must be greater than zero");
-        state.options.maxStreamBodyBytes = bytes;
-    });
-}
-
-App& App::setMaxWebSocketMessageBytes(std::size_t bytes) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change websocket message limit while app is running", [bytes](detail::AppState& state) {
-        detail::ensurePositiveSize(bytes, "websocket message limit must be greater than 0");
-        state.options.maxWebSocketMessageBytes = bytes;
-    });
-}
-
-App& App::setMemoryPoolConfig(MemoryPoolConfig config) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change memory pool config while app is running", [config](detail::AppState& state) {
-        detail::ensurePositiveSize(config.requestInitialBufferBytes, "memory pool config values must be greater than 0");
-
-        state.options.memoryConfig = config;
-    });
+App& App::deadline(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change the deadline while app is running", [](detail::AppState& state) { state.options.deadline.reset(); });
 }
 
 App& App::onStart(AppHook hook) {
@@ -207,14 +160,25 @@ App& App::onStop(AppHook hook) {
     return detail::mutateStoppedApp(*this, *state_, "cannot register onStop hook while app is running", [&hook](detail::AppState& state) { state.onStopHooks.push_back(std::move(hook)); });
 }
 
-App& App::setRateLimit(std::optional<RateLimitRule> rule) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change the default rate limit per worker while app is running", [rule](detail::AppState& state) mutable { state.options.defaultRateLimitPerWorker = std::move(rule); });
+App& App::rateLimit(RateLimitConfig config) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change the default rate limit per worker while app is running", [config](detail::AppState& state) mutable {
+        detail::validateRateLimitRule(config.rule);
+        if (!std::has_single_bit(config.capacityPerWorker)) {
+            throw std::invalid_argument("rate-limit capacity per worker must be a power of two");
+        }
+        state.options.defaultRateLimitPerWorker = std::move(config.rule);
+        state.options.rateLimitCapacityPerWorker = config.capacityPerWorker;
+    });
 }
 
-App& App::setTrustedProxies(std::span<const std::string_view> cidrs) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change trusted proxies while app is running", [cidrs](detail::AppState& state) {
+App& App::rateLimit(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change the default rate limit per worker while app is running", [](detail::AppState& state) { state.options.defaultRateLimitPerWorker.reset(); });
+}
+
+App& App::trustedProxies(TrustedProxyConfig config) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change trusted proxies while app is running", [config = std::move(config)](detail::AppState& state) {
         detail::TrustedProxySet parsed(detail::appResource());
-        for (const auto cidr : cidrs) {
+        for (const auto& cidr : config.cidrs) {
             detail::TrustedProxyBlock block;
             if (!detail::parseTrustedProxyBlock(cidr, block)) {
                 // A typo here would silently trust nothing and leave every
@@ -227,12 +191,9 @@ App& App::setTrustedProxies(std::span<const std::string_view> cidrs) {
     });
 }
 
-App& App::setRateLimitCapacityPerWorker(std::size_t capacityPerWorker) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change rate-limit capacity per worker while app is running", [capacityPerWorker](detail::AppState& state) {
-        if (!std::has_single_bit(capacityPerWorker)) {
-            throw std::invalid_argument("rate-limit capacity per worker must be a power of two");
-        }
-        state.options.rateLimitCapacityPerWorker = capacityPerWorker;
+App& App::trustedProxies(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot change trusted proxies while app is running", [](detail::AppState& state) {
+        state.options.trustedProxies = detail::TrustedProxySet(detail::appResource());
     });
 }
 

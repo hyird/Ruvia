@@ -31,6 +31,26 @@ inline void validateStaticRootOptions(const StaticRootOptions& options) {
             throw std::invalid_argument("invalid static file mime type");
         }
     }
+    switch (options.fileTypes.kind) {
+        case StaticFileTypePolicy::Kind::kDefaults:
+        case StaticFileTypePolicy::Kind::kAll:
+            if (!options.fileTypes.extensions.empty()) {
+                throw std::invalid_argument("static file type extensions require kOnly mode");
+            }
+            break;
+        case StaticFileTypePolicy::Kind::kOnly:
+            if (options.fileTypes.extensions.empty()) {
+                throw std::invalid_argument("static file type allow-list must not be empty");
+            }
+            for (const auto& extension : options.fileTypes.extensions) {
+                if (!isValidStaticFileExtension(extension)) {
+                    throw std::invalid_argument("invalid static file type");
+                }
+            }
+            break;
+        default:
+            throw std::invalid_argument("invalid static file type mode");
+    }
     if (options.indexFile.find('/') != std::string_view::npos || options.indexFile.find('\\') != std::string_view::npos || options.indexFile == "." || options.indexFile == "..") {
         throw std::invalid_argument("invalid static file index name");
     }

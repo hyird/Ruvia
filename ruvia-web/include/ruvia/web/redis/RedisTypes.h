@@ -31,8 +31,8 @@ struct RedisConfig {
     std::string host{"127.0.0.1"};
     // Must be non-zero.
     std::uint16_t port{6379};
-    std::string username;
-    std::string password;
+    std::string username{};
+    std::string password{};
     std::uint32_t database{0};
     // Must be greater than zero.
     std::size_t poolSizePerWorker{4};
@@ -88,8 +88,8 @@ private:
 };
 
 struct RedisStreamReadView final {
-    BorrowedText stream;
-    BorrowedText id;
+    BorrowedText stream{};
+    BorrowedText id{};
 };
 
 enum class RedisXReadGroupAcknowledgementPolicy : std::uint8_t {
@@ -98,8 +98,8 @@ enum class RedisXReadGroupAcknowledgementPolicy : std::uint8_t {
 };
 
 struct RedisXReadGroupOptions final {
-    std::optional<std::uint64_t> count;
-    std::optional<RedisBlockWait> block;
+    std::optional<std::uint64_t> count{};
+    std::optional<RedisBlockWait> block{};
     RedisXReadGroupAcknowledgementPolicy acknowledgement{RedisXReadGroupAcknowledgementPolicy::kTrackPending};
 };
 
@@ -149,8 +149,8 @@ enum class RedisSetPreviousValuePolicy : std::uint8_t {
 };
 
 struct RedisSetOptions final {
-    std::optional<RedisSetCondition> condition;
-    std::optional<RedisSetExpiration> expiration;
+    std::optional<RedisSetCondition> condition{};
+    std::optional<RedisSetExpiration> expiration{};
     RedisSetPreviousValuePolicy previousValue{RedisSetPreviousValuePolicy::kDiscard};
 };
 
@@ -222,9 +222,9 @@ struct RedisScanOptions {
     // A scan options value may be retained before the command copies its
     // arguments. Keep MATCH zero-copy while rejecting owning-string rvalues
     // that would leave a saved options value with an already-dangling view.
-    std::optional<RedisScanCursor> cursor;
-    ::ruvia::BorrowedText match;
-    std::optional<std::uint64_t> count;
+    std::optional<RedisScanCursor> cursor{};
+    ::ruvia::BorrowedText match{};
+    std::optional<std::uint64_t> count{};
 };
 
 class RedisKeyValue final {

@@ -247,7 +247,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         // connection each get their own clock. It happens before every
         // server-layer rejection below: custom onError/middleware is a handler
         // too and must see the request stop token.
-        const auto handlerDeadline = effectiveHandlerDeadline(options.deadline ? options.deadline->handler : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
+        const auto handlerDeadline = effectiveHandlerDeadline(options.deadline ? std::optional{options.deadline->handler} : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
         if (handlerDeadline > std::chrono::milliseconds::zero()) {
             selectedRoute->armDeadline(baseServices.worker(), baseServices.stopToken(), handlerDeadline);
             requestServices = baseServices.withStopToken(selectedRoute->deadline()->token()).withRequestDeadline(selectedRoute->deadline());

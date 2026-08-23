@@ -48,6 +48,7 @@ set(_vcpkg_target_triplet [=[@VCPKG_TARGET_TRIPLET@]=])
 set(_vcpkg_host_triplet [=[@VCPKG_HOST_TRIPLET@]=])
 set(_consumer_cxx_flags [=[@CMAKE_CXX_FLAGS@]=])
 set(_consumer_exe_linker_flags [=[@CMAKE_EXE_LINKER_FLAGS@]=])
+set(_consumer_msvc_runtime [=[@CMAKE_MSVC_RUNTIME_LIBRARY@]=])
 
 function(ruvia_consumer_common_args out package_prefix)
     set(_consumer_prefix_path "${package_prefix}")
@@ -81,6 +82,13 @@ function(ruvia_consumer_common_args out package_prefix)
     endif()
     if(NOT _consumer_exe_linker_flags STREQUAL "")
         list(APPEND _args "-DCMAKE_EXE_LINKER_FLAGS=${_consumer_exe_linker_flags}")
+    endif()
+    if("@MSVC@" AND NOT _consumer_msvc_runtime STREQUAL "")
+        # Installed Ruvia archives use /MT or /MTd. Build executable consumers
+        # with the same runtime so this guard tests the package ABI rather than
+        # failing on CMake's /MD or /MDd default.
+        list(APPEND _args
+            "-DCMAKE_MSVC_RUNTIME_LIBRARY=${_consumer_msvc_runtime}")
     endif()
     if(NOT "@CMAKE_CONFIGURATION_TYPES@" STREQUAL "" AND
        DEFINED RUVIA_TEST_CONFIG AND NOT RUVIA_TEST_CONFIG STREQUAL "")

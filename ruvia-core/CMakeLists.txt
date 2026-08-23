@@ -50,29 +50,11 @@ ruvia_install_generated_public_header(
     "${_ruvia_core_version_header}"
     ruvia/core/version.h)
 
-ruvia_install_public_headers(core
-    include/ruvia/core/AsioTask.h
-    include/ruvia/core/BlockingPool.h
-    include/ruvia/core/Channel.h
-    include/ruvia/core/EventLoopPool.h
-    include/ruvia/core/MoveOnlyFunction.h
-    include/ruvia/core/OneShot.h
-    include/ruvia/core/OperationOptions.h
-    include/ruvia/core/ScopedOperation.h
-    include/ruvia/core/StopToken.h
-    include/ruvia/core/Task.h
-    include/ruvia/core/TaskScope.h
-    include/ruvia/core/TcpSocketOptions.h
-    include/ruvia/core/Timer.h
-    include/ruvia/core/WorkerHandle.h
-    include/ruvia/core/WorkerWaitResult.h
-    include/ruvia/core/memory/MemoryPool.h
-    include/ruvia/core/memory/PmrObject.h
-    include/ruvia/core/memory/PmrResource.h
-    include/ruvia/core/memory/ProcessResource.h
-)
+ruvia_install_public_header_closure(core include/ruvia/core)
 
-ruvia_install_public_header_tree(core include/ruvia/core/detail)
+# Compile-time contracts consumed by ruvia-web's installed template surface.
+ruvia_install_public_headers(core
+    include/ruvia/core/detail/number/DecimalNumber.h)
 
 if(WIN32)
     target_link_libraries(ruvia-core PUBLIC Mswsock Ws2_32)

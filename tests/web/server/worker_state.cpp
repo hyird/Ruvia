@@ -63,9 +63,7 @@ ruvia::Task<ruvia::HttpResponse> countHandler(void*, ruvia::Context& context) {
     auto& state = context.workerState<ProbeState>();
     ++state.counter;
     std::pmr::string body(context.resource());
-    body.append("listener:");
-    body.append(std::to_string(ruvia::getConnInfo(context).listener()->value()));
-    body.append(";count:");
+    body.append("count:");
     body.append(std::to_string(state.counter));
     co_return context.body(std::move(body));
 }
@@ -148,8 +146,8 @@ int main() {
 
         const auto loopback = asio::ip::make_address("127.0.0.1");
         ruvia::detail::HttpServerListenerDefinition listeners[] = {
-            {ruvia::ListenerId{1}, asio::ip::tcp::endpoint(loopback, 0)},
-            {ruvia::ListenerId{2}, asio::ip::tcp::endpoint(loopback, 0)},
+            {asio::ip::tcp::endpoint(loopback, 0)},
+            {asio::ip::tcp::endpoint(loopback, 0)},
         };
         ruvia::detail::HttpServerOptions options;
         ruvia::detail::WebWorkerRuntime server(
@@ -159,8 +157,8 @@ int main() {
             options);
         worker = server.worker();
         server.start();
-        const auto firstEndpoint = server.localEndpoint(ruvia::ListenerId{1});
-        const auto secondEndpoint = server.localEndpoint(ruvia::ListenerId{2});
+        const auto firstEndpoint = server.localEndpoint();
+        const auto secondEndpoint = server.localEndpoint(1);
         if (firstEndpoint == secondEndpoint) {
             fail(10, "independent listeners resolved to the same endpoint");
         }
@@ -175,11 +173,11 @@ int main() {
             sock.connect(firstEndpoint, ec);
             asio::streambuf buffer;
             asio::write(sock, asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
-            if (readResponse(sock, buffer, ec).find("listener:1;count:1") == std::string::npos) {
+            if (readResponse(sock, buffer, ec).find("count:1") == std::string::npos) {
                 fail(1, "first request did not see a fresh worker state");
             }
             asio::write(sock, asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
-            if (rc == 0 && readResponse(sock, buffer, ec).find("listener:1;count:2") == std::string::npos) {
+            if (rc == 0 && readResponse(sock, buffer, ec).find("count:2") == std::string::npos) {
                 fail(2, "second request did not see the first request's mutation");
             }
             sock.close(ec);
@@ -189,7 +187,7 @@ int main() {
             sock.connect(secondEndpoint, ec);
             asio::streambuf buffer;
             asio::write(sock, asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
-            if (readResponse(sock, buffer, ec).find("listener:2;count:3") == std::string::npos) {
+            if (readResponse(sock, buffer, ec).find("count:3") == std::string::npos) {
                 fail(3, "the second listener did not share the worker-scoped state");
             }
 
@@ -209,7 +207,7 @@ int main() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
                 asio::write(sock, asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
-                if (rc == 0 && readResponse(sock, buffer, ec).find("listener:2;count:14") == std::string::npos) {
+                if (rc == 0 && readResponse(sock, buffer, ec).find("count:14") == std::string::npos) {
                     fail(5, "HTTP and dispatch paths did not share one instance");
                 }
             }

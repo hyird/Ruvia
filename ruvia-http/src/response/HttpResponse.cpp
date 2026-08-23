@@ -16,6 +16,9 @@
 
 namespace ruvia {
 
+HttpResponse::HttpResponse()
+    : HttpResponse(Options{}) {}
+
 HttpResponse::HttpResponse(Options options)
     : HttpResponse(detail::HttpResolvedPmrResourceTag{}, detail::httpPmrResourceOrDefault(options.resource)) {}
 

@@ -36,7 +36,8 @@ std::uint16_t availablePort() {
 
 int main() {
     auto& app = ruvia::app();
-    app.setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "not-an-ip-address", .port = availablePort()})}).setWorkerCount(1).setMemoryPoolConfig({.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes});
+    app.listen({.address = "not-an-ip-address", .http = availablePort()})
+        .server({.workerCount = 1, .memoryPool = {.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes}});
 
     bool preparationFailed = false;
     try {
@@ -54,17 +55,17 @@ int main() {
     std::ofstream(staticRootPath / "index.html") << "ok";
     ruvia::DocumentRootConfig documentRoot;
     documentRoot.root = staticRootPath;
-    documentRoot.staticOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
+    documentRoot.staticOptions.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     documentRoot.staticOptions.mimeTypes.push_back(ruvia::StaticMimeType{
         .extension = ".custom",
         .contentType = "text/x-custom",
     });
-    app.setDocumentRoot(std::move(documentRoot));
+    app.documentRoot(std::move(documentRoot));
 
     bool started = false;
     std::size_t stopCalls = 0;
-    app.setListeners({ruvia::ListenerConfig::http(ruvia::ListenerId{1}, {.address = "127.0.0.1", .port = availablePort()})})
-        .setMemoryPoolConfig({.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes * 2})
+    app.listen({.address = "127.0.0.1", .http = availablePort()})
+        .server({.workerCount = 1, .memoryPool = {.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes * 2}})
         .onStart([&] {
             started = true;
             app.stop();

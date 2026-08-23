@@ -107,19 +107,19 @@ bool closeBeforeDispatch(ruvia::DbConfig config) {
 int main() {
     try {
 #ifdef RUVIA_ENABLE_MARIADB
-        if (!attachedWorker(ruvia::DbConfig::mariaDb())) {
+        if (!attachedWorker(ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb})) {
             return 1;
         }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-        if (!attachedWorker(ruvia::DbConfig::postgreSql())) {
+        if (!attachedWorker(ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql})) {
             return 2;
         }
 #endif
 #ifdef RUVIA_ENABLE_MARIADB
-        if (!closeBeforeDispatch(ruvia::DbConfig::mariaDb())) {
+        if (!closeBeforeDispatch(ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb})) {
 #else
-        if (!closeBeforeDispatch(ruvia::DbConfig::postgreSql())) {
+        if (!closeBeforeDispatch(ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql})) {
 #endif
             return 3;
         }

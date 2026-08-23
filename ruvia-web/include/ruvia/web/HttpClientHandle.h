@@ -51,8 +51,8 @@ enum class HttpClientReceivedCookiePolicy : std::uint8_t {
 
 struct HttpClientConfig final {
     HttpScheme scheme{HttpScheme::kHttps};
-    std::string host;
-    std::optional<std::uint16_t> port;
+    std::string host{};
+    std::optional<std::uint16_t> port{};
     std::size_t connectionsPerWorker{1};
     std::size_t maxConcurrentHttp2StreamsPerConnection{100};
     std::size_t maxBufferedRequestsPerWorker{1024};
@@ -68,12 +68,12 @@ struct HttpClientConfig final {
     TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
     TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kEnable};
     HttpClientReceivedCookiePolicy receivedCookies{HttpClientReceivedCookiePolicy::kIgnore};
-    std::string caFile;
-    std::string certificateChainFile;
-    std::string privateKeyFile;
-    std::string privateKeyPassword;
+    std::string caFile{};
+    std::string certificateChainFile{};
+    std::string privateKeyFile{};
+    std::string privateKeyPassword{};
     std::string userAgent{"Ruvia"};
-    std::vector<std::pair<std::string, std::string>> cookies;
+    std::vector<std::pair<std::string, std::string>> cookies{};
 };
 
 class HttpClientError final : public std::runtime_error {
@@ -240,9 +240,8 @@ public:
     HttpClientHandle(const HttpClientHandle& other);
     HttpClientHandle& operator=(const HttpClientHandle&) = delete;
 
-    [[nodiscard]] ScopedOperation<HttpClientResponse> send(
-        const HttpClientRequestView& request,
-        OperationOptions options = {}) const;
+    [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const;
+    [[nodiscard]] ScopedOperation<HttpClientResponse> send(const HttpClientRequestView& request) const;
     [[nodiscard]] HttpClientStats stats() const;
     [[nodiscard]] std::string_view host() const&;
     [[nodiscard]] std::string_view host() const&& = delete;
@@ -253,7 +252,6 @@ private:
     friend class Context;
     friend class WebWorkerContext;
     HttpClientHandle(detail::HttpClientPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope) noexcept;
-    [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
     detail::HttpClientPool* pool_{nullptr};

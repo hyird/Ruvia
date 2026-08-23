@@ -54,8 +54,7 @@ HttpServerListener::HttpServerListener(
     asio::io_context& ioContext,
     const HttpServerListenerDefinition& definition,
     std::pmr::memory_resource* resource)
-    : id(definition.id),
-      acceptor(ioContext),
+    : acceptor(ioContext),
       endpoint(definition.endpoint),
       transport(cloneTransport(definition.transport, resource)),
       sniContexts(resource),

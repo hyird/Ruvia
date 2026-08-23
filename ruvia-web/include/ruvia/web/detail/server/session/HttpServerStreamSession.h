@@ -202,7 +202,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                 // request would otherwise share the proxy's single key.
                 clientAddress = baseRouteServices.resolveConnInfo(parsed.request).client().address();
                 const auto* resolved = routeResolution.resolved();
-                const auto handlerDeadline = effectiveHandlerDeadline(options_.deadline ? options_.deadline->handler : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
+                const auto handlerDeadline = effectiveHandlerDeadline(options_.deadline ? std::optional{options_.deadline->handler} : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
                 if (handlerDeadline > std::chrono::milliseconds::zero()) {
                     requestDeadline.emplace(stopToken_);
                     requestDeadline->arm(workerRuntime_.handle(), handlerDeadline);

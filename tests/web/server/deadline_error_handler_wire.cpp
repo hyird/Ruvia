@@ -156,14 +156,14 @@ struct DeadlineAwareErrorHandler final {
     impl.finalize();
 
     ruvia::detail::HttpServerOptions options;
-    options.defaultRateLimitPerWorker = ruvia::RateLimitRule::fixedWindow({
+    options.defaultRateLimitPerWorker = ruvia::RateLimitRule{
         .maxRequests = 1,
         .window = 60s,
-    });
+    };
 
     ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
     server.start();
-    const auto endpoint = server.localEndpoint(ruvia::ListenerId{1});
+    const auto endpoint = server.localEndpoint();
 
     int rc = 0;
     std::chrono::steady_clock::duration elapsed{};

@@ -61,10 +61,9 @@ struct HttpServerListenerDefinition final {
 
     using Transport = std::variant<PlainHttp, Tls, RedirectHttpToHttps>;
 
-    HttpServerListenerDefinition(ListenerId configuredId, asio::ip::tcp::endpoint configuredEndpoint, Transport configuredTransport = PlainHttp{})
-        : id(configuredId), endpoint(std::move(configuredEndpoint)), transport(std::move(configuredTransport)) {}
+    HttpServerListenerDefinition(asio::ip::tcp::endpoint configuredEndpoint, Transport configuredTransport = PlainHttp{})
+        : endpoint(std::move(configuredEndpoint)), transport(std::move(configuredTransport)) {}
 
-    ListenerId id;
     asio::ip::tcp::endpoint endpoint;
     Transport transport;
 };
@@ -94,7 +93,6 @@ public:
     }
     const HttpServerListenerDefinition::RedirectHttpToHttps* redirect() const&& = delete;
 
-    ListenerId id;
     asio::ip::tcp::acceptor acceptor;
     asio::ip::tcp::endpoint endpoint;
     HttpServerListenerDefinition::Transport transport;

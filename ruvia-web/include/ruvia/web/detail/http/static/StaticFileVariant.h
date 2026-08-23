@@ -20,16 +20,26 @@ enum class StaticFileSelectionMode : std::uint8_t {
 
 namespace ruvia {
 
-// Which bytes a static route actually serves: the identity file, or a
-// precompressed sidecar the client accepts.
+// Which bytes a static route actually serves: the identity file, a
+// precompressed sidecar, or a refresh-built in-memory variant the client
+// accepts.
 class StaticFileRepresentation final {
 public:
     StaticFileRepresentation(detail::StaticRootEntryView entry, HttpContentCoding contentCoding) noexcept
         : entry_(entry),
           contentCoding_(contentCoding) {}
 
+    StaticFileRepresentation(detail::StaticRootEntryView entry, detail::StaticRootMemoryVariantView memoryVariant, HttpContentCoding contentCoding) noexcept
+        : entry_(entry),
+          memoryVariant_(memoryVariant),
+          contentCoding_(contentCoding) {}
+
     [[nodiscard]] const detail::StaticRootEntryView& entry() const noexcept {
         return entry_;
+    }
+
+    [[nodiscard]] const detail::StaticRootMemoryVariantView* memoryVariant() const noexcept {
+        return memoryVariant_.has_value() ? &*memoryVariant_ : nullptr;
     }
 
     [[nodiscard]] HttpContentCoding contentCoding() const noexcept {
@@ -38,6 +48,7 @@ public:
 
 private:
     detail::StaticRootEntryView entry_;
+    std::optional<detail::StaticRootMemoryVariantView> memoryVariant_;
     HttpContentCoding contentCoding_;
 };
 

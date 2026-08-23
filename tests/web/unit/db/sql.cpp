@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -209,28 +210,33 @@ RUVIA_TEST(db_interpolate_sql_rejects_unrepresentable_lengths) {
 
 RUVIA_TEST(db_config_validation_checks_every_field) {
     using ruvia::DbConfig;
+    using ruvia::DbDriver;
     using ruvia::detail::validateDbConfig;
     using std::chrono::milliseconds;
 
-    static_assert(!std::default_initializable<DbConfig>);
+    static_assert(std::default_initializable<DbConfig>);
+    static_assert(std::is_aggregate_v<DbConfig>);
     static_assert(std::same_as<decltype(std::declval<DbConfig&>().connectTimeout), std::optional<milliseconds>>);
     static_assert(std::same_as<decltype(std::declval<DbConfig&>().readTimeout), std::optional<milliseconds>>);
     static_assert(std::same_as<decltype(std::declval<DbConfig&>().writeTimeout), std::optional<milliseconds>>);
     static_assert(std::same_as<decltype(std::declval<DbConfig&>().queryTimeout), std::optional<milliseconds>>);
     static_assert(std::same_as<decltype(std::declval<DbConfig&>().acquireTimeout), std::optional<milliseconds>>);
+    RUVIA_CHECK(throwsOn([] { validateDbConfig(DbConfig{}); }));
 
-    // A driver factory supplies a valid port and finite end-to-end defaults.
-    const auto defaults = DbConfig::mariaDb();
+    // An omitted port selects the driver's standard port during normalization.
+    const auto defaults = DbConfig{.driver = DbDriver::kMariaDb};
+    RUVIA_CHECK(!defaults.port.has_value());
+    RUVIA_CHECK_EQ(ruvia::detail::configuredDbPort(defaults), std::uint16_t{3306});
     RUVIA_CHECK(defaults.connectTimeout == std::chrono::seconds(5));
     RUVIA_CHECK(defaults.queryTimeout == std::chrono::seconds(30));
     RUVIA_CHECK(defaults.acquireTimeout == std::chrono::seconds(5));
     RUVIA_CHECK(!defaults.readTimeout.has_value());
     RUVIA_CHECK(!defaults.writeTimeout.has_value());
-    RUVIA_CHECK(!throwsOn([] { validateDbConfig(DbConfig::mariaDb()); }));
+    RUVIA_CHECK(!throwsOn([] { validateDbConfig(DbConfig{.driver = DbDriver::kMariaDb}); }));
 
     // Explicit absence is the only way to request an unbounded operation.
     RUVIA_CHECK(!throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.connectTimeout = std::nullopt;
         c.queryTimeout = std::nullopt;
         c.acquireTimeout = std::nullopt;
@@ -239,12 +245,12 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
 
     // Host and port each have a required-value guard.
     RUVIA_CHECK(throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.host.clear();
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.port = 0;
         validateDbConfig(c);
     }));
@@ -252,52 +258,52 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     // Every configured timeout must be positive. Zero cannot silently recover the
     // former sentinel convention, and the whole fold must validate every field.
     RUVIA_CHECK(throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.connectTimeout = milliseconds(0);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.readTimeout = milliseconds(0);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.writeTimeout = milliseconds(0);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.queryTimeout = milliseconds(0);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.acquireTimeout = milliseconds(0);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.connectTimeout = milliseconds(-1);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.readTimeout = milliseconds(-1);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.writeTimeout = milliseconds(-1);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.queryTimeout = milliseconds(-1);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
-        auto c = DbConfig::mariaDb();
+        auto c = DbConfig{.driver = DbDriver::kMariaDb};
         c.acquireTimeout = milliseconds(-1);
         validateDbConfig(c);
     }));

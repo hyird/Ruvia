@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <concepts>
@@ -14,24 +15,56 @@
 #include <string>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/web/ListenerId.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/Callback.h"
 #include "ruvia/web/detail/CallbackRef.h"
 
 namespace ruvia {
+
+enum class ProcessSignalHandlerPolicy : std::uint8_t {
+    kExternalOwner,
+    kInstall,
+};
+
+// The complete always-present Web server runtime configuration. App consumes
+// this aggregate atomically, validates it as one unit, and publishes the same
+// normalized values to every worker. Optional fields disable only the policy
+// they name; optional App capabilities remain separate config-or-null calls.
+struct ServerConfig final {
+    std::size_t workerCount{std::max(1U, std::thread::hardware_concurrency())};
+    ProcessSignalHandlerPolicy processSignalHandlers{ProcessSignalHandlerPolicy::kExternalOwner};
+    std::size_t workerMailboxCapacity{1024};
+    std::optional<std::chrono::milliseconds> idleTimeout{std::chrono::seconds(75)};
+    std::chrono::milliseconds connectionScanInterval{std::chrono::seconds(1)};
+    std::optional<std::chrono::milliseconds> requestHeaderTimeout{std::chrono::seconds(60)};
+    std::optional<std::chrono::milliseconds> requestBodyTimeout{std::chrono::seconds(60)};
+    std::optional<std::chrono::milliseconds> writeTimeout{std::chrono::seconds(60)};
+    std::optional<std::size_t> maxConnectionsPerWorker{1024};
+    std::optional<std::size_t> maxRequestsPerConnection{1000};
+    std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
+    std::optional<std::size_t> maxStreamBodyBytes{};
+    std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
+    MemoryPoolConfig memoryPool{};
+};
+
+struct TrustedProxyConfig final {
+    std::vector<std::string> cidrs{};
+};
 
 namespace detail {
 struct AccessLogRecordAccess;
@@ -40,185 +73,48 @@ struct ConnectionFailureRecordAccess;
 struct ConnectionFailureSink;
 }  // namespace detail
 
-struct TlsIdentityFileOptions final {
-    std::filesystem::path certificateChainFile;
-    std::filesystem::path privateKeyFile;
-    std::string privateKeyPassword;
-};
-
-class TlsIdentity final {
-public:
-    [[nodiscard]] static TlsIdentity fromFiles(TlsIdentityFileOptions options);
-
-    [[nodiscard]] const std::filesystem::path& certificateChainFile() const& noexcept {
-        return certificateChainFile_;
-    }
-    const std::filesystem::path& certificateChainFile() const&& = delete;
-
-    [[nodiscard]] const std::filesystem::path& privateKeyFile() const& noexcept {
-        return privateKeyFile_;
-    }
-    const std::filesystem::path& privateKeyFile() const&& = delete;
-
-    [[nodiscard]] const std::string& privateKeyPassword() const& noexcept {
-        return privateKeyPassword_;
-    }
-    const std::string& privateKeyPassword() const&& = delete;
-
-private:
-    TlsIdentity(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::string privateKeyPassword) noexcept
-        : certificateChainFile_(std::move(certificateChainFile)),
-          privateKeyFile_(std::move(privateKeyFile)),
-          privateKeyPassword_(std::move(privateKeyPassword)) {}
-
-    std::filesystem::path certificateChainFile_;
-    std::filesystem::path privateKeyFile_;
-    std::string privateKeyPassword_;
-};
-
 enum class TlsClientCertificateRequirement : std::uint8_t {
     kOptional,
     kRequired,
 };
 
-class TlsClientCertificatePolicy final {
-public:
+struct TlsClientCertificateConfig final {
     // A CA bundle used to verify presented client certificates. Optional mode
     // admits a client without a certificate; required mode rejects it.
-    [[nodiscard]] static TlsClientCertificatePolicy optional(std::filesystem::path verifyFile);
-    [[nodiscard]] static TlsClientCertificatePolicy required(std::filesystem::path verifyFile);
-
-    [[nodiscard]] const std::filesystem::path& verifyFile() const& noexcept {
-        return verifyFile_;
-    }
-    const std::filesystem::path& verifyFile() const&& = delete;
-
-    [[nodiscard]] constexpr TlsClientCertificateRequirement requirement() const noexcept {
-        return requirement_;
-    }
-
-private:
-    TlsClientCertificatePolicy(std::filesystem::path verifyFile, TlsClientCertificateRequirement requirement) noexcept
-        : verifyFile_(std::move(verifyFile)),
-          requirement_(requirement) {}
-
-    std::filesystem::path verifyFile_;
-    TlsClientCertificateRequirement requirement_;
+    std::optional<std::filesystem::path> verifyFile{};
+    TlsClientCertificateRequirement requirement{TlsClientCertificateRequirement::kOptional};
 };
 
-class TlsSniIdentity final {
-public:
-    [[nodiscard]] std::string_view host() const& noexcept {
-        return host_;
-    }
-    std::string_view host() const&& = delete;
-    [[nodiscard]] const TlsIdentity& identity() const& noexcept {
-        return identity_;
-    }
-    const TlsIdentity& identity() const&& = delete;
-
-private:
-    friend class TlsConfig;
-
-    TlsSniIdentity(std::string host, TlsIdentity identity) noexcept
-        : host_(std::move(host)),
-          identity_(std::move(identity)) {}
-
-    std::string host_;
-    TlsIdentity identity_;
+struct TlsSniConfig final {
+    std::string host{};
+    std::filesystem::path certificateChainFile{};
+    std::filesystem::path privateKeyFile{};
+    std::string privateKeyPassword{};
 };
 
-struct TlsSniIdentityOptions final {
-    std::string host;
-    TlsIdentity identity;
+struct TlsConfig final {
+    std::filesystem::path certificateChainFile{};
+    std::filesystem::path privateKeyFile{};
+    std::string privateKeyPassword{};
+    TlsClientCertificateConfig clientCertificates{};
+    std::vector<TlsSniConfig> sni{};
 };
 
-class TlsConfig final {
-public:
-    explicit TlsConfig(TlsIdentity identity) noexcept
-        : identity_(std::move(identity)) {}
-
-    TlsConfig& setClientCertificatePolicy(TlsClientCertificatePolicy policy);
-    TlsConfig& addSniIdentity(TlsSniIdentityOptions options);
-
-    [[nodiscard]] const TlsIdentity& identity() const& noexcept {
-        return identity_;
-    }
-    const TlsIdentity& identity() const&& = delete;
-
-    [[nodiscard]] const std::optional<TlsClientCertificatePolicy>& clientCertificatePolicy() const& noexcept {
-        return clientCertificatePolicy_;
-    }
-    const std::optional<TlsClientCertificatePolicy>& clientCertificatePolicy() const&& = delete;
-
-    [[nodiscard]] const std::vector<TlsSniIdentity>& sniIdentities() const& noexcept {
-        return sniIdentities_;
-    }
-    const std::vector<TlsSniIdentity>& sniIdentities() const&& = delete;
-
-private:
-    TlsIdentity identity_;
-    std::optional<TlsClientCertificatePolicy> clientCertificatePolicy_;
-    std::vector<TlsSniIdentity> sniIdentities_;
-};
-
-struct HttpListenerOptions final {
+// One bind address with optional HTTP and HTTPS endpoints. App validates and
+// expands this value atomically, then gives every worker the same endpoints.
+// An omitted port disables that transport. autoHttpsRedirect turns the HTTP
+// endpoint into a redirect endpoint targeting the HTTPS port in this value.
+struct ListenConfig final {
     std::string address{"0.0.0.0"};
-    std::uint16_t port{8080};
+    std::optional<std::uint16_t> http{};
+    std::optional<std::uint16_t> https{};
+    TlsConfig tls{};
+    bool autoHttpsRedirect{false};
 };
 
-struct HttpsListenerOptions final {
-    std::string address{"0.0.0.0"};
-    std::uint16_t port{443};
-    TlsConfig tls;
-};
-
-struct RedirectHttpToHttpsListenerOptions final {
-    std::string address{"0.0.0.0"};
-    std::uint16_t port{8080};
-    ListenerId target{ListenerId{1}};
-};
-
-// One configured listener. App validates and stores the complete list
-// atomically, then replicates that same complete list into every worker
-// runtime.
-class ListenerConfig final {
-public:
-    [[nodiscard]] static ListenerConfig http(ListenerId id, HttpListenerOptions options = {});
-    [[nodiscard]] static ListenerConfig https(ListenerId id, HttpsListenerOptions options);
-    [[nodiscard]] static ListenerConfig redirectHttpToHttps(ListenerId id, RedirectHttpToHttpsListenerOptions options);
-
-private:
-    friend class App;
-
-    struct Http final {
-        std::string address;
-        std::uint16_t port;
-    };
-
-    struct Https final {
-        std::string address;
-        std::uint16_t port;
-        TlsConfig tls;
-    };
-
-    struct RedirectHttpToHttps final {
-        std::string address;
-        std::uint16_t port;
-        ListenerId target;
-    };
-
-    using Listener = std::variant<Http, Https, RedirectHttpToHttps>;
-
-    explicit ListenerConfig(ListenerId id, Listener listener) noexcept
-        : id_(id), listener_(std::move(listener)) {}
-
-    ListenerId id_;
-    Listener listener_;
-};
-
-// Canonical startup values shared by App setters and every worker's server
-// options. They stay top-level so configuration is not copied between models.
+// Canonical startup values shared by App configuration and every worker's
+// server options. They stay top-level so configuration is not copied between
+// models.
 struct CompressionConfig final {
     // Buffered in-memory responses below this size remain identity.
     std::size_t minBytes{1024};
@@ -226,159 +122,41 @@ struct CompressionConfig final {
     // worker; larger bodies are offloaded to the bounded blocking pool when it
     // is enabled, otherwise they are also encoded synchronously.
     std::size_t syncBytes{64u * 1024u};
-    // Buffered bodies above this size remain identity. Static files ignore all
-    // three thresholds and only negotiate existing precompressed sidecars.
+    // Buffered bodies above this size remain identity. Static files use their
+    // own document-root precompression thresholds and still prefer checked-in
+    // precompressed sidecars when present.
     std::size_t maxBytes{64u * 1024u * 1024u};
 };
 
-class CorsOrigin final {
-public:
-    [[nodiscard]] static CorsOrigin serialized(std::string_view value);
-    [[nodiscard]] static CorsOrigin opaque();
-
-    [[nodiscard]] std::string_view value() const& noexcept {
-        return value_;
-    }
-    std::string_view value() const&& = delete;
-
-private:
-    friend class CorsOriginPolicy;
-
-    explicit CorsOrigin(std::string value) noexcept
-        : value_(std::move(value)) {}
-
-    std::string value_;
+enum class CorsOriginMode : std::uint8_t {
+    kAny,
+    kExact,
+    kCredentialedExact,
 };
 
-class CorsOriginPolicy final {
-public:
-    enum class Kind : std::uint8_t {
-        kAny,
-        kExact,
-        kCredentialedExact,
-    };
-
-    [[nodiscard]] static CorsOriginPolicy any() {
-        return CorsOriginPolicy(Kind::kAny, {});
-    }
-
-    [[nodiscard]] static CorsOriginPolicy exact(CorsOrigin origin) {
-        return CorsOriginPolicy(Kind::kExact, std::move(origin.value_));
-    }
-
-    [[nodiscard]] static CorsOriginPolicy credentialed(CorsOrigin origin) {
-        return CorsOriginPolicy(Kind::kCredentialedExact, std::move(origin.value_));
-    }
-
-    [[nodiscard]] constexpr Kind kind() const noexcept {
-        return kind_;
-    }
-
-    [[nodiscard]] constexpr std::string_view origin() const& noexcept {
-        return value_;
-    }
-    std::string_view origin() const&& = delete;
-
-private:
-    CorsOriginPolicy(Kind kind, std::string value) noexcept
-        : kind_(kind),
-          value_(std::move(value)) {}
-
-    Kind kind_;
-    std::string value_;
+struct CorsOriginConfig final {
+    CorsOriginMode mode{CorsOriginMode::kAny};
+    // Required for exact modes. "null" represents the serialized opaque
+    // origin; wildcard mode requires this field to remain empty.
+    std::string value{};
 };
 
-class CorsHeaderNames final {
-public:
-    CorsHeaderNames() noexcept = default;
-
-    [[nodiscard]] static CorsHeaderNames of(std::span<const std::string_view> names);
-    [[nodiscard]] static CorsHeaderNames of(std::initializer_list<std::string_view> names) {
-        return of(std::span<const std::string_view>(names.begin(), names.size()));
-    }
-
-    [[nodiscard]] std::string_view value() const& noexcept {
-        return value_;
-    }
-    std::string_view value() const&& = delete;
-
-    [[nodiscard]] bool empty() const noexcept {
-        return value_.empty();
-    }
-
-private:
-    explicit CorsHeaderNames(std::string value) noexcept
-        : value_(std::move(value)) {}
-
-    std::string value_;
+enum class CorsRequestHeadersMode : std::uint8_t {
+    kReflect,
+    kFixed,
 };
 
-class CorsRequestHeadersPolicy final {
-public:
-    enum class Kind : std::uint8_t {
-        kReflect,
-        kFixed,
-    };
-
-    [[nodiscard]] static CorsRequestHeadersPolicy reflect() {
-        return CorsRequestHeadersPolicy(Kind::kReflect, CorsHeaderNames{});
-    }
-
-    [[nodiscard]] static CorsRequestHeadersPolicy fixed(CorsHeaderNames headers) {
-        if (headers.empty()) {
-            throw std::invalid_argument("CORS fixed request headers must not be empty");
-        }
-        return CorsRequestHeadersPolicy(Kind::kFixed, std::move(headers));
-    }
-
-    [[nodiscard]] static CorsRequestHeadersPolicy fixed(std::span<const std::string_view> headers) {
-        return fixed(CorsHeaderNames::of(headers));
-    }
-
-    [[nodiscard]] static CorsRequestHeadersPolicy fixed(std::initializer_list<std::string_view> headers) {
-        return fixed(std::span<const std::string_view>(headers.begin(), headers.size()));
-    }
-
-    [[nodiscard]] constexpr Kind kind() const noexcept {
-        return kind_;
-    }
-
-    [[nodiscard]] std::string_view headers() const& noexcept {
-        return headers_.value();
-    }
-    std::string_view headers() const&& = delete;
-
-private:
-    CorsRequestHeadersPolicy(Kind kind, CorsHeaderNames headers) noexcept
-        : kind_(kind),
-          headers_(std::move(headers)) {}
-
-    Kind kind_;
-    CorsHeaderNames headers_;
-};
-
-class CorsMaxAge final {
-public:
-    explicit CorsMaxAge(std::chrono::seconds value)
-        : value_(value) {
-        if (value.count() < 0) {
-            throw std::invalid_argument("CORS max age must not be negative");
-        }
-    }
-
-    [[nodiscard]] constexpr std::chrono::seconds value() const noexcept {
-        return value_;
-    }
-
-private:
-    std::chrono::seconds value_;
+struct CorsRequestHeadersConfig final {
+    CorsRequestHeadersMode mode{CorsRequestHeadersMode::kReflect};
+    // Required in fixed mode and empty in reflect mode.
+    std::vector<std::string> names{};
 };
 
 struct CorsConfig final {
-    CorsOriginPolicy origin{CorsOriginPolicy::any()};
-    CorsRequestHeadersPolicy requestHeaders{CorsRequestHeadersPolicy::reflect()};
-    CorsHeaderNames exposeHeaders;
-    std::optional<CorsMaxAge> maxAge;
+    CorsOriginConfig origin{};
+    CorsRequestHeadersConfig requestHeaders{};
+    std::vector<std::string> exposeHeaders{};
+    std::optional<std::chrono::seconds> maxAge{};
 };
 
 // How long a handler may run. The phase timeouts bound reading the head, reading
@@ -394,20 +172,25 @@ struct CorsConfig final {
 // something derived from this deadline, rather than arriving as a second setter
 // with its own name.
 struct DeadlineConfig final {
-    std::optional<std::chrono::milliseconds> handler;
+    std::chrono::milliseconds handler{0};
 };
 
 // Runtime behavior belongs to the server's document-root binding, not to the
 // immutable StaticRoot index. App document roots are always refreshed; a
 // standalone StaticRoot remains immutable because it has no server runtime.
-struct DocumentRootRuntimeOptions final {
+struct DocumentRootRuntimeConfig final {
     std::chrono::milliseconds refreshInterval{std::chrono::seconds(1)};
 };
 
 struct DocumentRootConfig final {
-    std::filesystem::path root;
-    StaticRootOptions staticOptions;
-    DocumentRootRuntimeOptions runtimeOptions;
+    std::filesystem::path root{};
+    StaticRootOptions staticOptions{};
+    DocumentRootRuntimeConfig runtime{};
+    bool precompressGzip{false};
+    bool precompressBrotli{false};
+    bool precompressZstd{false};
+    std::size_t precompressMinBytes{1024};
+    std::size_t precompressMaxBytes{256u * 1024u};
 };
 
 // One terminal response outcome with a committed final status, passed to the

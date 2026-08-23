@@ -42,11 +42,11 @@ using ManualRateLimiter = BasicRateLimiter<ManualRateLimiterClock>;
 
 // A window long enough that no reset happens during a test.
 RateLimitRule ruleWith(std::size_t maxRequests, bool failClosed = true) {
-    return RateLimitRule::fixedWindow({
+    return RateLimitRule{
         .maxRequests = maxRequests,
         .window = std::chrono::seconds(60),
         .overflowPolicy = failClosed ? RateLimitOverflowPolicy::kDeny : RateLimitOverflowPolicy::kAllow,
-    });
+    };
 }
 
 }  // namespace
@@ -93,10 +93,10 @@ RUVIA_TEST(rate_limiter_allocates_table_for_route_metadata_without_default_rule)
 }
 
 RUVIA_TEST(rate_limiter_resets_after_window) {
-    const auto rule = RateLimitRule::fixedWindow({
+    const auto rule = RateLimitRule{
         .maxRequests = 1,
         .window = std::chrono::milliseconds(20),
-    });
+    };
     ManualRateLimiterClock::set(1'000);
     ManualRateLimiter limiter(rule, kNoRouteRules, kCapacity);
     RUVIA_CHECK(rateLimitAllowed(limiter.allowDefault("k")));
@@ -178,10 +178,10 @@ RUVIA_TEST(rate_limiter_full_worker_table_honors_fail_policy) {
 }
 
 RUVIA_TEST(rate_limiter_reclaims_expired_worker_slot) {
-    const auto rule = RateLimitRule::fixedWindow({
+    const auto rule = RateLimitRule{
         .maxRequests = 1,
         .window = std::chrono::milliseconds(10),
-    });
+    };
     ManualRateLimiterClock::set(1'000);
     ManualRateLimiter limiter(rule, kNoRouteRules, 1);
 

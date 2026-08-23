@@ -28,6 +28,7 @@ ruvia-web   -> ruvia-core + ruvia-http
 - 不要回退、覆盖或整理用户已有改动，除非用户明确要求。
 - 需求不清时只问一个必要问题；能从仓库上下文判断时直接执行。
 - 默认优先选择长期正确、最优雅清晰的一等抽象、清晰命名和稳定边界，即使改动面更大；不要为了缩小 diff 把新能力塞进语义不匹配的旧接口或 `detail` 旁路。
+- 公开配置数据统一使用可直接 designated initialization 的普通聚合；所有可默认构造字段必须有默认成员初始化，协议要求且不可默认构造的值保持必填。能够由字段表达的配置不得增加静态工厂、builder、链式子配置或 identity wrapper。配置由职责 owner 在消费时整体校验并一次性归一化到所属 PMR 存储；可选 App 能力传配置表示开启或替换，传 `nullptr` 表示关闭。
 - 讨论协议行为时，以 HTTP、TLS、WebSocket、SSE、HTTP/2 相关 RFC 和标准优先。
 - 如果项目约束与协议标准冲突，优先修实现和文档以符合标准。
 - README 不写内部重构历史；AGENTS 不累积逐类型防回归目录。
@@ -90,6 +91,8 @@ target，只有跨 target 的通用支撑保留在独立目录。
 禁止在本 target 下创建或安装到另一个 target 的命名根，也禁止在 CMake source/header 列表中直接加入另一个 target 目录里的文件。
 
 跨 target 复用的编译期契约头放在所属 target 的 `include/ruvia/<target>/detail/`。禁止把另一个 target 的 `src/` 加入 include path，也禁止通过物理相对或绝对路径包含另一个 target 的源码或私有头。target 之间只能通过 `target_link_libraries()` 传播的公开 include interface 使用依赖方已安装的头。
+
+安装从非 `detail` 公开头出发，只包含真实的同 target 传递头依赖闭包；不得重新整树安装 `detail/`。少数跨 target 编译期契约由拥有它的 target 显式安装，并继续由默认 ctest 安装闭包门禁验证。
 
 `src/` 下最多保留一层业务分类目录，例如 `server/`、`http2/`、`websocket/`、`client/`；不要引入 `src/net/...`、`src/*/core/...` 等重复层级。`ruvia-core/src/` 保持扁平。`src/` 只保存实现和 target 自有 `pch.h`，契约头统一放在公开 `detail/` 根。
 
@@ -192,7 +195,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 每个 worker 拥有一个 standalone Asio `io_context`。
 - `io_context`、dispatcher endpoint 和稳定 `WorkerHandle` 必须由同一个 worker runtime context 组装和退役；不得让不同 runtime 各自复制 handle 发布、detach 或 executor 绑定逻辑。
 - 连接不能跨线程迁移。
-- `Task` 是 lazy structured coroutine owner：未启动任务可以丢弃，已启动任务必须在所属执行上下文运行到完成；取消只能显式请求后 await/join，禁止通过析构销毁或静默 detach 挂起中的协程帧。
+- `Task` 是 lazy structured coroutine owner：未启动任务可以丢弃，已启动任务必须在所属执行上下文运行到完成；取消只能显式请求后 await/join，禁止通过析构销毁或静默 detach 挂起中的协程帧。自建 `EventLoop` 的顶层任务统一由 `EventLoop::start()` 返回的 `RootTask<T>` 持有；遗弃 root 不得销毁挂起帧，未观察异常必须进入 loop failure sink。
 - `WorkerHandle` 直接持有可关闭的稳定 dispatcher endpoint；热路径操作不得通过 `weak_ptr::lock()` 临时取得所有权，context owner 必须在销毁执行上下文前 detach endpoint，使逃逸句柄安全失效。请求期 `ContextServices`/`Context` 只借用 server 中地址稳定的 handle，不复制其共享所有权。
 - DB stream/transaction 等线性 lease 同一时刻只允许一个异步操作；lazy Task 只能在真正启动时取得操作权，失败清理由 backend 唯一负责，失败后的 lease 不得复用。
 - 连接 teardown 必须先显式唤醒或终止挂起 I/O，再 join 所有仍持有连接对象的后台操作；不得只等待某一种操作来源。
@@ -200,17 +203,18 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - worker 线程只跑事件循环，不得阻塞。同步、阻塞、CPU 密集的调用必须经 `BlockingPool` 卸载到独立线程；卸载的可调用体在外部线程运行，只能按值/移动捕获自有数据，不得捕获 `Context`、请求内存或任何 worker 私有状态。停机不等待仍在运行的卸载任务：挂起的协程立即以 `kWorkerStopping` 恢复，池线程的结果被丢弃。
 - 池归 `App` 进程级所有并被所有 worker 共享，线程在 `App::run()` 一次性建立并常驻至停机，不得按调用创建线程；队列必须有界，满时向调用方回报拒绝，不得无界排队。
 - 卸载是上一条 handle 借用规则的唯一豁免：结果可能比发起它的请求活得久，`runBlocking` 因此复制一次 `WorkerHandle` 取得所有权。豁免仅限此路径，不得据此在其他请求期代码复制 handle。
-- `App::setWorkerCount()` 配置进程内完整 Web worker runtime 的总数。每个 worker
+- `App::server(ServerConfig)` 原子配置进程内完整 Web worker runtime；其中 `workerCount` 是总数。每个 worker
   独立拥有全部 listener 的 acceptor，并在同一 worker-local runtime 中只创建一份
   DB、Redis、outbound HTTP client 和 user state；listener 数量不得乘增 worker 或
   数据资源。
 - 每个 Web worker 的 DB、Redis、outbound HTTP client、user state 和 rate limiter 必须由一个 worker capability owner 统一构造、启动、暴露和关闭；这些实例不得跨 worker 共享，也不得重新散落成相互独立的 runtime 生命周期字段。
-- listener 通过 `App::setListeners(std::vector<ListenerConfig>)` 原子配置；每项自带 bind address、port 和 transport，端口必须唯一，HTTP→HTTPS redirect 必须指向同一列表中的 HTTPS listener，不恢复全局 listen address 或固定单/双 listener topology 类型。公开配置必须在 setter 中一次性归一化到 App PMR 存储。
+- listener 通过一个 `App::listen(ListenConfig)` 原子配置统一的 bind address、可选 HTTP/HTTPS 端口、TLS 和自动跳转；未填写的端口表示不开启，自动跳转要求同一配置同时提供 HTTP 与 HTTPS。每个 worker 必须独立监听这组完全相同的端口，不得引入公开 listener ID 或按 worker 分组监听。
 - `App::run()` 为每个 worker 创建一个线程和完整 runtime，并为该 worker 的每个
   listener 创建独立 acceptor；连接由接受它的 worker 终身拥有，不跨线程迁移。
 - Web 启动必须先为全部 worker 完成 listener prepare，再启动全部 worker 并等待 worker-local DB/Redis 等能力全部 ready，最后一次性释放 serve 门禁；任何 worker 准备或启动失败都不得留下部分 worker 对外接收连接。`onStart` 只能在全部 worker 已进入 serving 后执行。
 - `App::run()` 的调用线程是 App 生命周期的唯一执行线程，负责 `onStart`、`onStop`、join 和失败重抛。`App::stop()`、信号线程和 worker failure 只能提交单调 stop request 并关闭稳定 endpoint，不得在调用方线程执行用户 hook；App 单例的配置、运行和 runtime 借用必须继续受同一生命周期门禁保护。
 - outbound HTTP 与 DB 能力属于直接绑定 `EventLoop` 的一等 client 对象，不属于 `App`、HTTP `Context` 或特殊 worker context。应用自己创建或 attach 的 worker 默认可以构造同一套 `HttpClient` / `DbClient`；client 的连接、内存、取消和 shutdown 保持 worker-local，App 的 `Context`/`WebWorkerContext` 只提供同一底层实现的便捷入口。不得为自建 worker 增加聚合能力 service 或 `detail` 旁路。
+- App 内 outbound HTTP origin 必须通过 `App::httpClient(HttpClientRegistrationConfig)` 在启动前按 alias 固定注册；每个 worker 启动时一次性构造相同集合，`Context`/`WebWorkerContext` 只按默认项或 alias 取 handle。不得恢复请求期按 `HttpClientConfig` 建池、origin cache 或容量 setter。
 - standalone `DbClient::connect()` 必须保持绑定 loop 上启动的 lazy `Task<void>`，与后续 query/execute 使用同一 worker-affine coroutine 契约；不得恢复由调用线程隐式调度的 `std::future` 特例。
 - 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。
 - shutdown 只能在各 worker 自己的 `io_context` 上直接关闭 acceptor、活跃 socket 和 worker 资源；不等待请求优雅排空。
@@ -293,7 +297,8 @@ DB 的 `query()` 只接受产出行集的语句并返回 `DbRows`，`execute()` 
 - `RUVIA_BUILD_WEB=ON` 要求 core 与 HTTP 同时启用；core-only/http-only 不得查找或安装未选组件依赖。
 - MariaDB、PostgreSQL、Redis、JWT 是严格 feature：`RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_REDIS`、`RUVIA_ENABLE_JWT`。
 - Windows 只支持 MSVC，依赖使用 `x64-windows-static`；Windows CI 也必须
-  使用同一 static triplet。项目不覆盖 CMake 的 MSVC runtime 默认值。
+  使用同一 static triplet。项目统一 MSVC static runtime：Debug 使用 `/MTd`，
+  其他配置使用 `/MT`。
 - outbound HTTP 的 wire/framing/HTTP/2 状态机保留在 `ruvia-http`；`ruvia-web` 可以提供 worker-local DNS、socket、TLS/ALPN、连接复用、超时和取消驱动，但不提供含糊的 `fetch` 别名、proxy 或反向代理产品集成。
 - 安装包暴露 `ruvia::core`、`ruvia::http`、`ruvia::web`，不暴露历史别名。
 - 下游按需请求 `core`、`http` 或 `web` component；消费示例只放在 README。

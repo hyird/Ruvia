@@ -32,36 +32,69 @@ void upsertDefinition(std::pmr::vector<Definition>& definitions, std::string_vie
 }  // namespace
 
 #ifdef RUVIA_ENABLE_DATABASE
-App& App::useDb(DbRegistrationOptions options) {
+App& App::database(DbRegistrationConfig config) {
     return detail::mutateStoppedApp(*this, *state_, "cannot configure database while app is running", [&](detail::AppState& state) {
-        if (options.alias.empty()) {
+        if (config.alias.empty()) {
             throw std::invalid_argument("database alias must not be empty");
         }
-        detail::validateDbConfig(options.config);
+        detail::validateDbConfig(config.config);
 
-        auto storedConfig = detail::DbConfigStorage(options.config, detail::appResource());
-        upsertDefinition(state.databases, options.alias, storedConfig, [](std::string_view storedAlias, detail::DbConfigStorage&& definitionConfig) {
+        auto storedConfig = detail::DbConfigStorage(config.config, detail::appResource());
+        upsertDefinition(state.databases, config.alias, storedConfig, [](std::string_view storedAlias, detail::DbConfigStorage&& definitionConfig) {
             auto* resource = detail::appResource();
             return detail::DbDefinition{std::pmr::string(storedAlias, resource), std::move(definitionConfig)};
         });
     });
 }
+
+App& App::database(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure database while app is running", [](detail::AppState& state) {
+        state.databases.clear();
+    });
+}
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-App& App::useRedis(RedisRegistrationOptions options) {
+App& App::redis(RedisRegistrationConfig config) {
     return detail::mutateStoppedApp(*this, *state_, "cannot configure redis while app is running", [&](detail::AppState& state) {
-        if (options.alias.empty()) {
+        if (config.alias.empty()) {
             throw std::invalid_argument("redis alias must not be empty");
         }
-        detail::validateRedisConfig(options.config);
+        detail::validateRedisConfig(config.config);
 
-        auto storedConfig = detail::RedisConfigStorage(options.config, detail::appResource());
-        upsertDefinition(state.redis, options.alias, storedConfig, [](std::string_view storedAlias, detail::RedisConfigStorage&& definitionConfig) {
+        auto storedConfig = detail::RedisConfigStorage(config.config, detail::appResource());
+        upsertDefinition(state.redis, config.alias, storedConfig, [](std::string_view storedAlias, detail::RedisConfigStorage&& definitionConfig) {
             auto* resource = detail::appResource();
             return detail::RedisDefinition{std::pmr::string(storedAlias, resource), std::move(definitionConfig)};
         });
     });
 }
+
+App& App::redis(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure redis while app is running", [](detail::AppState& state) {
+        state.redis.clear();
+    });
+}
 #endif
+
+App& App::httpClient(HttpClientRegistrationConfig config) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure HTTP client while app is running", [&](detail::AppState& state) {
+        if (config.alias.empty()) {
+            throw std::invalid_argument("HTTP client alias must not be empty");
+        }
+        detail::validateHttpClientConfig(config.config);
+
+        auto storedConfig = detail::HttpClientConfigStorage(config.config, detail::appResource());
+        upsertDefinition(state.httpClients, config.alias, storedConfig, [](std::string_view storedAlias, detail::HttpClientConfigStorage&& definitionConfig) {
+            auto* resource = detail::appResource();
+            return detail::HttpClientDefinition{std::pmr::string(storedAlias, resource), std::move(definitionConfig)};
+        });
+    });
+}
+
+App& App::httpClient(std::nullptr_t) {
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure HTTP client while app is running", [](detail::AppState& state) {
+        state.httpClients.clear();
+    });
+}
 }  // namespace ruvia

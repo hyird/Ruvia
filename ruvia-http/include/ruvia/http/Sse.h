@@ -19,10 +19,10 @@ struct SseMessage final {
     // Absence emits no data field, so an event/id/retry-only block does not
     // dispatch a MessageEvent. A present empty value emits `data:` and therefore
     // dispatches one event whose data is empty.
-    std::optional<::ruvia::BorrowedText> data;
-    ::ruvia::BorrowedText event;
-    std::optional<::ruvia::BorrowedText> id;
-    std::optional<std::chrono::milliseconds> retry;
+    std::optional<::ruvia::BorrowedText> data{};
+    ::ruvia::BorrowedText event{};
+    std::optional<::ruvia::BorrowedText> id{};
+    std::optional<std::chrono::milliseconds> retry{};
 };
 
 struct SseFormatOptions final {

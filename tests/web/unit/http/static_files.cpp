@@ -42,7 +42,7 @@ RUVIA_TEST(static_root_hides_dotfiles_even_under_all_policy) {
     ruvia::StaticRootOptions options;
     // all() would otherwise index and serve every file regardless of extension;
     // the hidden-path default-deny must still keep secrets out of the index.
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot root(dir, std::move(options));
 
     RUVIA_CHECK(served(root, "app.js"));
@@ -58,7 +58,7 @@ RUVIA_TEST(static_root_hides_dotfiles_even_under_all_policy) {
 RUVIA_TEST(static_root_serves_dotfiles_when_opted_in) {
     const auto dir = makeDotfileRoot();
     ruvia::StaticRootOptions options;
-    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     options.dotfiles = ruvia::StaticDotfilePolicy::kServe;
     ruvia::StaticRoot root(dir, std::move(options));
 

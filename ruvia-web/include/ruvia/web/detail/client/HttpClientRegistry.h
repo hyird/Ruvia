@@ -49,7 +49,6 @@ public:
     [[nodiscard]] std::string_view host() const noexcept { return config_.host; }
     [[nodiscard]] std::uint16_t port() const noexcept;
     [[nodiscard]] HttpScheme scheme() const noexcept { return config_.scheme; }
-    [[nodiscard]] bool matches(const HttpClientConfig& config) const noexcept;
 
 private:
     friend class WorkerCancellationMailbox<HttpClientPool>;
@@ -242,25 +241,21 @@ private:
 
 class HttpClientRegistry final {
 public:
-    HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions, std::size_t maxOriginsPerWorker = 64);
+    HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions);
     ~HttpClientRegistry();
     HttpClientRegistry(const HttpClientRegistry&) = delete;
     HttpClientRegistry& operator=(const HttpClientRegistry&) = delete;
 
     void closeNow() noexcept;
     [[nodiscard]] Task<void> join();
-    [[nodiscard]] HttpClientHandle get(HttpClientConfig config, std::pmr::memory_resource* resource, ScopedOperationScope& scope);
-    // Internal harness access for registries constructed with fixed definitions.
     [[nodiscard]] HttpClientHandle get(std::pmr::memory_resource* resource, ScopedOperationScope& scope) const;
+    [[nodiscard]] HttpClientHandle get(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& scope) const;
 private:
     struct Entry final {
         std::pmr::string alias;
         std::unique_ptr<HttpClientPool, PmrObjectDeleter<HttpClientPool>> pool;
     };
     std::pmr::memory_resource* resource_;
-    asio::io_context* ioContext_;
-    const WorkerHandle* worker_;
-    std::size_t maxOriginsPerWorker_;
     std::pmr::vector<Entry> pools_;
     std::pmr::vector<std::size_t> aliasIndex_;
     std::optional<std::size_t> defaultPoolIndex_;
