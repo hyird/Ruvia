@@ -100,7 +100,8 @@ ruvia::Task<void> sendMultiplexed(
     std::size_t index) {
     auto request = ruvia::HttpClientRequestView{.method = "POST", .target = "/multiplex", .content = ruvia::HttpClientRequestContentView::bytes("multiplex")};
     auto response = co_await client.send(std::move(request));
-    results[index] = co_await response.body().readAll() == "multiplex" ? 1 : -1;
+    const auto body = co_await response.body().readAll();
+    results[index] = body == "multiplex" ? 1 : -1;
 }
 
 ruvia::Task<void> sendSlowWithTimeout(const ruvia::HttpClientHandle& client, bool& timedOut) {
