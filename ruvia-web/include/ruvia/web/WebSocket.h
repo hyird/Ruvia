@@ -20,27 +20,27 @@ namespace ruvia {
 struct WebSocketHeartbeatConfig final {
     // Absence disables heartbeat. When ping is present and pong is absent,
     // pong defaults to the ping interval during route registration.
-    std::optional<std::chrono::milliseconds> pingInterval;
-    std::optional<std::chrono::milliseconds> pongTimeout;
+    std::optional<std::chrono::milliseconds> pingInterval{};
+    std::optional<std::chrono::milliseconds> pongTimeout{};
 };
 
 // Runtime-only liveness policy. Wire framing and close-handshake state remain in
 // ruvia-http; timers and transport abort policy belong to the Web runtime.
 struct WebSocketLifecycleOptions final {
-    WebSocketHeartbeatConfig heartbeat;
+    WebSocketHeartbeatConfig heartbeat{};
     // A locally initiated Close waits for the peer Close before the underlying
     // transport is ended. nullopt disables this guard.
     std::optional<std::chrono::milliseconds> closeHandshakeTimeout{std::chrono::seconds(5)};
 };
 
 struct WebSocketRouteConfig final {
-    std::string subprotocols;
+    std::string subprotocols{};
     WebSocketLifecycleOptions lifecycle{};
 };
 
 struct WebSocketCloseOptions final {
     std::uint16_t code{1000};
-    ::ruvia::BorrowedText reason;
+    ::ruvia::BorrowedText reason{};
 };
 
 namespace detail {

@@ -5,7 +5,7 @@
 namespace ruvia {
 
 struct MiddlewareScopeOptions final {
-    std::string prefix;
+    std::string prefix{};
 };
 
 template <typename MiddlewareT>

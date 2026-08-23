@@ -845,9 +845,17 @@ Each library has an independent export. Consumers must request the component
 they use:
 
 ```cmake
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY
+        "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 find_package(ruvia CONFIG REQUIRED COMPONENTS web)
 target_link_libraries(my_app PRIVATE ruvia::web)
 ```
+
+Ruvia's Windows archives use the static MSVC runtime (`/MT`, or `/MTd` for
+Debug), so Windows consumers must select the same runtime before creating
+targets that link them.
 
 Narrower consumers can request only core or HTTP:
 

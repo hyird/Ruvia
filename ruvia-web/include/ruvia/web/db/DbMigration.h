@@ -31,8 +31,8 @@ enum class DbMigrationAtomicity : std::uint8_t {
 };
 
 struct DbMigrationOptions final {
-    std::string id;
-    std::string sql;
+    std::string id{};
+    std::string sql{};
     DbMigrationAtomicity atomicity{DbMigrationAtomicity::kTransactional};
 };
 

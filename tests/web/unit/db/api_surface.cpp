@@ -218,7 +218,7 @@ concept HasDbMigrationTextAccessors = requires(const T& migration) {
 
 static_assert(AcceptsAnyTemporaryDbMigrationText<std::string>);
 static_assert(AcceptsAnyTemporaryDbMigrationText<const std::string>);
-static_assert(AcceptsAnyTemporaryDbMigrationText<std::pmr::string>);
+static_assert(!AcceptsAnyTemporaryDbMigrationText<std::pmr::string>);
 static_assert(AcceptsLvalueDbMigrationText<std::string>);
 static_assert(std::is_aggregate_v<ruvia::DbMigrationOptions>);
 static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.id), std::string>);

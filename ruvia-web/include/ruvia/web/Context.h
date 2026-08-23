@@ -79,36 +79,36 @@ struct SessionAccess;
 }  // namespace detail
 
 struct RedirectResponseOptions final {
-    BorrowedText location;
+    BorrowedText location{};
     HttpStatusCode status{http_status::kFound};
 };
 
 struct SetCookieOptions final {
-    BorrowedText name;
-    BorrowedText value;
+    BorrowedText name{};
+    BorrowedText value{};
     CookieOptions attributes{};
 };
 
 struct SetSignedCookieOptions final {
-    BorrowedText name;
-    BorrowedText value;
-    BorrowedText secret;
+    BorrowedText name{};
+    BorrowedText value{};
+    BorrowedText secret{};
     CookieOptions attributes{};
 };
 
 struct DeleteCookieOptions final {
-    BorrowedText name;
+    BorrowedText name{};
     CookieOptions attributes{};
 };
 
 struct StaticFileResponseOptions final {
-    BorrowedText relativePath;
-    BorrowedText contentType;
+    BorrowedText relativePath{};
+    BorrowedText contentType{};
 };
 
 struct FileResponseOptions final {
-    std::filesystem::path path;
-    BorrowedText contentType;
+    std::filesystem::path path{};
+    BorrowedText contentType{};
 };
 
 class Context final : public detail::BlockingCapability<Context>, public detail::WorkerStateCapability<Context> {

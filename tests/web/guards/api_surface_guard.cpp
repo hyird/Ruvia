@@ -2213,17 +2213,17 @@ concept AcceptsTemporaryHttpClientResponseHeaderLookup = requires(T&& response) 
 template <typename T>
 concept HasHttpClientRedirectStatus = requires(const T& result) { result.status(); };
 
-template <typename T>
-concept HasPositionalHttpClientRedirectRequestPlan = requires(const ruvia::HttpClientRequestView& request) {
-    ruvia::planHttpClientRedirectRequest(request, ruvia::http_status::kFound);
-} || requires(const ruvia::HttpClientRequestView& request, std::pmr::memory_resource* resource) {
-    ruvia::planHttpClientRedirectRequest(request, ruvia::http_status::kFound, resource);
+template <typename Status>
+concept HasPositionalHttpClientRedirectRequestPlan = requires(const ruvia::HttpClientRequestView& request, Status status) {
+    ruvia::planHttpClientRedirectRequest(request, status);
+} || requires(const ruvia::HttpClientRequestView& request, Status status, std::pmr::memory_resource* resource) {
+    ruvia::planHttpClientRedirectRequest(request, status, resource);
 };
 
-template <typename T>
-concept HasPositionalHttpClientRedirectTargetResolution = requires(const ruvia::HttpOriginView& origin, std::string_view currentTarget, std::string_view location) {
+template <typename Target>
+concept HasPositionalHttpClientRedirectTargetResolution = requires(const ruvia::HttpOriginView& origin, Target currentTarget, Target location) {
     ruvia::resolveHttpClientRedirectTarget(origin, currentTarget, location);
-} || requires(const ruvia::HttpOriginView& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource) {
+} || requires(const ruvia::HttpOriginView& origin, Target currentTarget, Target location, std::pmr::memory_resource* resource) {
     ruvia::resolveHttpClientRedirectTarget(origin, currentTarget, location, resource);
 };
 
@@ -2660,7 +2660,7 @@ static_assert(!HasAppUseAtPositional<ruvia::App>);
 static_assert(!HasAppUseAtPositional<ruvia::TestApp>);
 static_assert(AcceptsLvalueMiddlewareScopePrefix<std::string>);
 static_assert(AcceptsAnyRvalueMiddlewareScopePrefix<std::string>);
-static_assert(AcceptsAnyRvalueMiddlewareScopePrefix<std::pmr::string>);
+static_assert(!AcceptsAnyRvalueMiddlewareScopePrefix<std::pmr::string>);
 static_assert(!std::is_constructible_v<ruvia::detail::ControllerRouteBuilder, ruvia::detail::Router&, std::string_view>);
 #ifndef _MSC_VER
 static_assert(!HasControllerRouteBuilderPublicRegisterRoute<ruvia::detail::ControllerRouteBuilder>);
@@ -2677,7 +2677,7 @@ static_assert(!AcceptsTemporaryDbValueText<const std::string>);
 static_assert(AcceptsLvalueDbValueText<std::string>);
 static_assert(AcceptsAnyTemporaryDbMigrationText<std::string>);
 static_assert(AcceptsAnyTemporaryDbMigrationText<const std::string>);
-static_assert(AcceptsAnyTemporaryDbMigrationText<std::pmr::string>);
+static_assert(!AcceptsAnyTemporaryDbMigrationText<std::pmr::string>);
 static_assert(AcceptsLvalueDbMigrationText<std::string>);
 static_assert(std::is_aggregate_v<ruvia::DbMigrationOptions>);
 static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.id), std::string>);
@@ -3099,8 +3099,8 @@ static_assert(std::is_aggregate_v<ruvia::HttpClientRedirectTargetOptions>);
 static_assert(std::same_as<decltype(ruvia::HttpClientRedirectTargetOptions{}.currentTarget), std::string_view>);
 static_assert(std::same_as<decltype(ruvia::HttpClientRedirectTargetOptions{}.location), std::string_view>);
 static_assert(std::same_as<decltype(ruvia::HttpClientRedirectTargetOptions{}.resource), std::pmr::memory_resource*>);
-static_assert(!HasPositionalHttpClientRedirectRequestPlan<ruvia::HttpClientRedirectRequestPlan>);
-static_assert(!HasPositionalHttpClientRedirectTargetResolution<ruvia::HttpClientRedirectResolutionResult>);
+static_assert(!HasPositionalHttpClientRedirectRequestPlan<ruvia::HttpStatusCode>);
+static_assert(!HasPositionalHttpClientRedirectTargetResolution<std::string_view>);
 static_assert(!std::is_copy_constructible_v<ruvia::HttpClientRedirectResolutionResult>);
 static_assert(std::is_move_constructible_v<ruvia::HttpClientRedirectResolutionResult>);
 static_assert(!std::is_copy_constructible_v<ruvia::HttpClientResolvedRedirect>);
@@ -3165,7 +3165,7 @@ static_assert(std::is_constructible_v<ruvia::CsrfProtection, ruvia::CsrfProtecti
 static_assert(!HasCsrfProtectionPositionalConstructor<ruvia::CsrfProtection>);
 static_assert(AcceptsLvalueCsrfProtectionOptionText<std::string>);
 static_assert(AcceptsAnyRvalueCsrfProtectionOptionText<std::string>);
-static_assert(AcceptsAnyRvalueCsrfProtectionOptionText<std::pmr::string>);
+static_assert(!AcceptsAnyRvalueCsrfProtectionOptionText<std::pmr::string>);
 static_assert(std::is_same_v<decltype(std::declval<const ruvia::Context&>().error({.status = ruvia::http_status::kBadRequest, .code = "bad", .message = "request failed"})), ruvia::HttpResponse>);
 static_assert(!HasContextErrorPositional<ruvia::Context>);
 static_assert(std::is_same_v<decltype(std::declval<ruvia::Context&>().status(ruvia::http_status::kNoContent)), void>);
