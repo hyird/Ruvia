@@ -24,6 +24,11 @@ struct RateLimitRule final {
     RateLimitOverflowPolicy overflowPolicy{RateLimitOverflowPolicy::kDeny};
 };
 
+struct RateLimitConfig final {
+    RateLimitRule rule;
+    std::size_t capacityPerWorker{kDefaultRateLimitCapacityPerWorker};
+};
+
 namespace detail {
 
 inline constexpr void validateRateLimitRule(const RateLimitRule& rule) {

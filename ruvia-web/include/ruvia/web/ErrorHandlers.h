@@ -2,11 +2,11 @@
 
 #include <concepts>
 #include <cstddef>
+#include <string>
 #include <type_traits>
 #include <utility>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/Callback.h"
@@ -32,12 +32,12 @@ using HttpErrorHandler = detail::Callback<Task<HttpResponse>(Context&, HttpError
 using HttpNotFoundHandler = detail::Callback<Task<HttpResponse>(Context&)>;
 
 struct ScopedErrorHandlerOptions final {
-    BorrowedText prefix;
+    std::string prefix;
     HttpErrorHandler handler{nullptr};
 };
 
 struct ScopedNotFoundHandlerOptions final {
-    BorrowedText prefix;
+    std::string prefix;
     HttpNotFoundHandler handler{nullptr};
 };
 

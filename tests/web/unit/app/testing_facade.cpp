@@ -432,7 +432,7 @@ RUVIA_TEST(testing_facade_rejects_duplicate_normalized_fallback_prefixes) {
     const auto rejectsMalformedPrefixedScope = [](std::string_view prefix) {
         ruvia::TestApp app;
         try {
-            app.onNotFound({.prefix = prefix, .handler = &apiScopedMiss});
+            app.onNotFound({.prefix = std::string(prefix), .handler = &apiScopedMiss});
         } catch (const std::invalid_argument& error) {
             return std::string_view(error.what()) == "fallback prefix must be an origin-form path without query";
         }

@@ -240,9 +240,8 @@ public:
     HttpClientHandle(const HttpClientHandle& other);
     HttpClientHandle& operator=(const HttpClientHandle&) = delete;
 
-    [[nodiscard]] ScopedOperation<HttpClientResponse> send(
-        const HttpClientRequestView& request,
-        OperationOptions options = {}) const;
+    [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const;
+    [[nodiscard]] ScopedOperation<HttpClientResponse> send(const HttpClientRequestView& request) const;
     [[nodiscard]] HttpClientStats stats() const;
     [[nodiscard]] std::string_view host() const&;
     [[nodiscard]] std::string_view host() const&& = delete;
@@ -253,7 +252,6 @@ private:
     friend class Context;
     friend class WebWorkerContext;
     HttpClientHandle(detail::HttpClientPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope) noexcept;
-    [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
     detail::HttpClientPool* pool_{nullptr};

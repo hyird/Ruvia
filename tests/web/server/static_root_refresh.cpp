@@ -21,6 +21,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/BlockingPool.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/WebWorkerRuntime.h"
@@ -84,6 +85,52 @@ namespace {
     return body;
 }
 
+struct FetchResult final {
+    std::string head;
+    std::string body;
+};
+
+[[nodiscard]] bool hasHeaderValue(std::string_view head, std::string_view name, std::string_view value) {
+    for (std::string_view rest = head; !rest.empty();) {
+        const auto eol = rest.find("\r\n");
+        const auto line = rest.substr(0, eol);
+        const auto colon = line.find(':');
+        if (colon != std::string_view::npos) {
+            auto lower = [](char c) noexcept {
+                return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+            };
+            bool nameMatches = colon == name.size();
+            for (std::size_t i = 0; nameMatches && i < name.size(); ++i) {
+                nameMatches = lower(line[i]) == lower(name[i]);
+            }
+            std::string_view headerValue = line.substr(colon + 1);
+            while (!headerValue.empty() && (headerValue.front() == ' ' || headerValue.front() == '\t')) {
+                headerValue.remove_prefix(1);
+            }
+            while (!headerValue.empty() && (headerValue.back() == ' ' || headerValue.back() == '\t')) {
+                headerValue.remove_suffix(1);
+            }
+            if (nameMatches && headerValue == value) {
+                return true;
+            }
+        }
+        if (eol == std::string_view::npos) {
+            break;
+        }
+        rest.remove_prefix(eol + 2);
+    }
+    return false;
+}
+
+[[nodiscard]] std::string gzipDecode(std::string_view encoded) {
+    auto result = ruvia::decodeHttpContent(
+        ruvia::HttpContentCoding::kGzip,
+        encoded,
+        {.maxDecodedBytes = 4096, .resource = std::pmr::get_default_resource()});
+    auto* decoded = result.decoded();
+    return decoded == nullptr ? std::string{} : std::string(decoded->bytes());
+}
+
 }  // namespace
 
 int main() {
@@ -101,7 +148,7 @@ int main() {
     rootOptions.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot root(dir, std::move(rootOptions));
 
-    ruvia::DocumentRootRuntimeOptions documentRootRuntime;
+    ruvia::DocumentRootRuntimeConfig documentRootRuntime;
     documentRootRuntime.refreshInterval = std::chrono::milliseconds(20);
 
     std::pmr::memory_resource* resource = std::pmr::get_default_resource();
@@ -109,7 +156,10 @@ int main() {
     ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1});
     ruvia::detail::HttpServerOptions options;
     options.documentRoot = ruvia::detail::HttpServerOptions::DocumentRoot::refreshing(
-        root, documentRootRuntime);
+        root,
+        documentRootRuntime,
+        {.gzip = true, .minBytes = 1, .maxBytes = 4096});
+    options.compression.emplace();
     options.blockingPool = &pool;
 
     ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
@@ -124,14 +174,20 @@ int main() {
     };
 
     asio::io_context context;
-    const auto fetchBody = [&](std::string_view path) -> std::optional<std::string> {
+    const auto fetch = [&](std::string_view path, std::string_view acceptEncoding = {}) -> std::optional<FetchResult> {
         asio::ip::tcp::socket socket(context);
         std::error_code ec;
         socket.connect(endpoint, ec);
         if (ec) {
             return std::nullopt;
         }
-        const std::string request = "GET " + std::string(path) + " HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        std::string request = "GET " + std::string(path) + " HTTP/1.1\r\nHost: localhost\r\n";
+        if (!acceptEncoding.empty()) {
+            request += "Accept-Encoding: ";
+            request.append(acceptEncoding.data(), acceptEncoding.size());
+            request += "\r\n";
+        }
+        request += "\r\n";
         asio::write(socket, asio::buffer(request), ec);
         if (ec) {
             return std::nullopt;
@@ -146,7 +202,15 @@ int main() {
         if (ec || !head.starts_with("HTTP/1.1 200")) {
             return std::nullopt;
         }
-        return body;
+        return FetchResult{head, body};
+    };
+
+    const auto fetchBody = [&](std::string_view path) -> std::optional<std::string> {
+        const auto result = fetch(path);
+        if (!result.has_value()) {
+            return std::nullopt;
+        }
+        return result->body;
     };
 
     const auto initial = fetchBody("/initial.txt");
@@ -154,7 +218,7 @@ int main() {
         fail(1, "initial document-root file was not served");
     }
 
-    const std::string refreshedBody = "published-after-poll";
+    const std::string refreshedBody(2048, 'r');
     {
         std::ofstream output(dir / "new.txt", std::ios::binary);
         output << refreshedBody;
@@ -170,6 +234,20 @@ int main() {
     }
     if (!refreshed) {
         fail(2, "new document-root file was not published by refresh");
+    }
+
+    bool refreshedGzip = false;
+    for (int attempt = 0; attempt != 60 && !refreshedGzip; ++attempt) {
+        const auto result = fetch("/new.txt", "gzip, identity;q=0");
+        refreshedGzip = result.has_value() &&
+                        hasHeaderValue(result->head, "Content-Encoding", "gzip") &&
+                        gzipDecode(result->body) == refreshedBody;
+        if (!refreshedGzip) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+    if (!refreshedGzip) {
+        fail(6, "new document-root file was not published as a refreshed gzip variant");
     }
 
     // A failed rebuild must retain the last complete snapshot and become

@@ -20,6 +20,7 @@
 #include "ruvia/web/detail/app/AppRuntimeGraph.h"
 #include "ruvia/web/detail/app/AppState.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
+#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 
 namespace ruvia {
@@ -181,11 +182,19 @@ private:
             .invoke = [](void* target, std::exception_ptr) noexcept { static_cast<App*>(target)->stop(); },
         };
 
+        std::unique_ptr<StaticRoot, detail::PmrObjectDeleter<StaticRoot>> configuredDocumentRoot(
+            nullptr, detail::PmrObjectDeleter<StaticRoot>{runtimeResource_});
         if (state_.documentRootConfig.has_value()) {
             const auto documentRootPath = detail::makePathFromNativePath(state_.documentRootConfig->root);
-            runtime->documentRoot = detail::makePmrObject<StaticRoot>(runtimeResource_, documentRootPath, makeStaticRootOptions(state_.documentRootConfig->staticOptions));
+            configuredDocumentRoot = detail::makePmrObject<StaticRoot>(runtimeResource_, documentRootPath, makeStaticRootOptions(state_.documentRootConfig->staticOptions));
+            if (preparedOptions.compression.has_value() && state_.documentRootConfig->precompression.enabled()) {
+                detail::StaticRootAccess::installPrecompressedVariants(
+                    *configuredDocumentRoot, nullptr, state_.documentRootConfig->precompression);
+            }
             preparedOptions.documentRoot = detail::HttpServerOptions::DocumentRoot::refreshing(
-                *runtime->documentRoot, state_.documentRootConfig->runtimeOptions);
+                *configuredDocumentRoot,
+                state_.documentRootConfig->runtime,
+                state_.documentRootConfig->precompression);
         }
         if (state_.blockingPool.has_value()) {
             runtime->blockingPool = detail::makePmrObject<BlockingPool>(runtimeResource_, *state_.blockingPool);
@@ -217,6 +226,7 @@ private:
                 .redis = std::span<const detail::RedisDefinition>(state_.redis),
 #endif
                 .workerStates = std::span<const detail::WorkerStateDefinition>(state_.workerStates),
+                .httpClients = std::span<const detail::HttpClientDefinition>(state_.httpClients),
             };
             auto worker = detail::makePmrObject<detail::WebWorkerRuntime>(
                 runtimeResource_,

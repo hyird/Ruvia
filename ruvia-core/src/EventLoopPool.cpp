@@ -313,6 +313,13 @@ WorkerHandle EventLoop::handle() const noexcept {
     return state_ ? state_->runtime.handle() : WorkerHandle{};
 }
 
+detail::EventLoopFailureSink EventLoop::failureSink() const {
+    if (!state_) {
+        throw std::logic_error("cannot start a task on an invalid event loop");
+    }
+    return state_->failureSink;
+}
+
 EventLoopStopRegistration EventLoop::registerStopCallback(MoveOnlyFunction<void()> callback) const {
     if (!state_) {
         throw std::logic_error("cannot register a stop callback on an invalid event loop");

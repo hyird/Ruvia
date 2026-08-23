@@ -31,6 +31,7 @@
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/MultipartReader.h"
 #include "ruvia/web/RequestFields.h"
+#include "ruvia/web/Session.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/web/WebSocket.h"
@@ -181,26 +182,9 @@ public:
         return stopToken_;
     }
 
-    // Server-side session blob (persisted by a SessionMiddleware via Redis; the
-    // application owns the blob's format). setSession/clearSession mark it for
-    // persistence on the way out.
-    [[nodiscard]] std::string_view session() const noexcept {
-        return sessionState_.data();
-    }
-    void setSession(std::string_view data) {
-        sessionState_.set(data);
-    }
-    void clearSession() {
-        sessionState_.clear();
-    }
-    // Force a fresh session id when the middleware persists on the way out, and
-    // drop the blob under the old id. Call this on any privilege change (e.g. after
-    // authenticating a user) to defeat session fixation: even a session whose id
-    // was recognized in the store gets a new, server-chosen id the client could not
-    // have planted. Mirrors PHP session_regenerate_id(true) / express regenerate.
-    void regenerateSession() {
-        sessionState_.regenerate();
-    }
+    // Present only while SessionMiddleware is bound for this request.
+    [[nodiscard]] Session session();
+    [[nodiscard]] std::optional<Session> trySession() noexcept;
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return memory_.resource();
@@ -268,7 +252,8 @@ public:
     [[nodiscard]] RedisHandle redis() const;
     [[nodiscard]] RedisHandle redis(std::string_view alias) const;
 #endif
-    [[nodiscard]] HttpClientHandle httpClient(HttpClientConfig config) const;
+    [[nodiscard]] HttpClientHandle httpClient() const;
+    [[nodiscard]] HttpClientHandle httpClient(std::string_view alias) const;
     [[nodiscard]] WebSocket& webSocket() const;
 
     [[nodiscard]] ResponseStreamWriter& stream();

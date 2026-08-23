@@ -54,6 +54,7 @@ set(VCPKG_MANIFEST_NO_DEFAULT_FEATURES ON CACHE BOOL "" FORCE)
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json" _ruvia_manifest)
 string(JSON _ruvia_version GET "${_ruvia_manifest}" version-string)
+
 project(ruvia VERSION ${_ruvia_version} LANGUAGES CXX)
 
 if(WIN32 AND NOT MSVC)
@@ -68,10 +69,9 @@ set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 # Shared build/install helpers used by every Ruvia component.
-# The root lists no per-target build logic of its own; it only includes this
-# module before add_subdirectory() so each component's CMakeLists can configure,
-# install, and export itself. Functions capture CMAKE_CURRENT_SOURCE_DIR at call
-# time, so a component invoking these resolves paths against its own directory.
+# The root lists no per-target build logic of its own. Functions capture
+# CMAKE_CURRENT_SOURCE_DIR at call time, so a component invoking these resolves
+# paths against its own directory.
 
 function(ruvia_deduplicate_link_interface target)
     if(NOT TARGET ${target})
@@ -186,6 +186,15 @@ endfunction()
 function(ruvia_install_public_headers component)
     foreach(_ruvia_header ${ARGN})
         ruvia_assert_component_header_path(${component} "${_ruvia_header}")
+        get_property(_ruvia_installed_header_paths GLOBAL PROPERTY
+            RUVIA_INSTALLED_HEADER_PATHS)
+        list(FIND _ruvia_installed_header_paths "${_ruvia_header}"
+            _ruvia_installed_header_index)
+        if(NOT _ruvia_installed_header_index EQUAL -1)
+            continue()
+        endif()
+        set_property(GLOBAL APPEND PROPERTY
+            RUVIA_INSTALLED_HEADER_PATHS "${_ruvia_header}")
         get_filename_component(_ruvia_header_dir "${_ruvia_header}" DIRECTORY)
         file(
             RELATIVE_PATH
@@ -205,58 +214,82 @@ function(ruvia_install_public_headers component)
     endforeach()
 endfunction()
 
-function(ruvia_install_public_header_tree component relative_dir)
+# Install the public header surface plus exactly the same-component detail
+# headers that surface includes transitively. Source-only implementation headers
+# stay build-private without requiring a second hand-maintained header list.
+function(ruvia_install_public_header_closure component relative_dir)
+    cmake_parse_arguments(PARSE_ARGV 2 _ruvia_closure "" ""
+        "EXCLUDE_DIRECTORIES")
     ruvia_assert_component_header_path(${component} "${relative_dir}")
-    file(
-        RELATIVE_PATH
-        _ruvia_header_tree_install_dir
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}"
-    )
-    install(
-        DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_tree_install_dir}"
-        COMPONENT ${component}
-        FILES_MATCHING
-            PATTERN "*.h"
-            PATTERN "*.inl"
-            ${ARGN}
-    )
 
-    # Mirror the same selection into the record. ARGN carries "PATTERN <p>
-    # EXCLUDE" triples, and install(DIRECTORY) matches a PATTERN against one
-    # path component, so a match anywhere along the path drops the file.
-    set(_ruvia_tree_excludes "")
-    set(_ruvia_expect_pattern FALSE)
-    foreach(_ruvia_tree_argument IN LISTS ARGN)
-        if(_ruvia_expect_pattern)
-            list(APPEND _ruvia_tree_excludes "${_ruvia_tree_argument}")
-            set(_ruvia_expect_pattern FALSE)
-        elseif(_ruvia_tree_argument STREQUAL "PATTERN")
-            set(_ruvia_expect_pattern TRUE)
-        endif()
-    endforeach()
-
-    file(GLOB_RECURSE _ruvia_tree_headers
-        RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}"
+    file(GLOB_RECURSE _ruvia_closure_candidates
+        RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.inl")
-    foreach(_ruvia_tree_header IN LISTS _ruvia_tree_headers)
-        set(_ruvia_tree_header_excluded FALSE)
-        string(REPLACE "/" ";" _ruvia_tree_components "${_ruvia_tree_header}")
-        foreach(_ruvia_tree_exclude IN LISTS _ruvia_tree_excludes)
-            foreach(_ruvia_tree_component IN LISTS _ruvia_tree_components)
-                if(_ruvia_tree_component STREQUAL _ruvia_tree_exclude)
-                    set(_ruvia_tree_header_excluded TRUE)
-                endif()
-            endforeach()
+
+    set(_ruvia_closure_queue)
+    foreach(_ruvia_candidate IN LISTS _ruvia_closure_candidates)
+        set(_ruvia_candidate_excluded FALSE)
+        string(REPLACE "/" ";" _ruvia_candidate_components
+            "${_ruvia_candidate}")
+        foreach(_ruvia_excluded_dir IN LISTS _ruvia_closure_EXCLUDE_DIRECTORIES)
+            list(FIND _ruvia_candidate_components "${_ruvia_excluded_dir}"
+                _ruvia_excluded_dir_index)
+            if(NOT _ruvia_excluded_dir_index EQUAL -1)
+                set(_ruvia_candidate_excluded TRUE)
+            endif()
         endforeach()
-        if(NOT _ruvia_tree_header_excluded)
-            ruvia_record_installed_header(
-                "${_ruvia_header_tree_install_dir}/${_ruvia_tree_header}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/${_ruvia_tree_header}")
+        if(NOT _ruvia_candidate_excluded
+           AND NOT _ruvia_candidate MATCHES "(^|/)detail(/|$)")
+            list(APPEND _ruvia_closure_queue "${_ruvia_candidate}")
         endif()
     endforeach()
+
+    set(_ruvia_closure_headers)
+    while(_ruvia_closure_queue)
+        list(POP_FRONT _ruvia_closure_queue _ruvia_header)
+        list(FIND _ruvia_closure_headers "${_ruvia_header}"
+            _ruvia_header_index)
+        if(NOT _ruvia_header_index EQUAL -1)
+            continue()
+        endif()
+        list(APPEND _ruvia_closure_headers "${_ruvia_header}")
+
+        file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header}"
+            _ruvia_header_text)
+        string(REGEX MATCHALL
+            "#[ \t]*include[ \t]*[<\"]ruvia/${component}/[^>\"]+[>\"]"
+            _ruvia_header_includes "${_ruvia_header_text}")
+        foreach(_ruvia_header_include IN LISTS _ruvia_header_includes)
+            string(REGEX REPLACE
+                ".*[<\"](ruvia/${component}/[^>\"]+)[>\"].*" "\\1"
+                _ruvia_included_path "${_ruvia_header_include}")
+            set(_ruvia_included_header "include/${_ruvia_included_path}")
+            if(NOT EXISTS
+               "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_included_header}")
+                continue()
+            endif()
+
+            set(_ruvia_included_excluded FALSE)
+            string(REPLACE "/" ";" _ruvia_included_components
+                "${_ruvia_included_header}")
+            foreach(_ruvia_excluded_dir IN LISTS
+                    _ruvia_closure_EXCLUDE_DIRECTORIES)
+                list(FIND _ruvia_included_components "${_ruvia_excluded_dir}"
+                    _ruvia_excluded_dir_index)
+                if(NOT _ruvia_excluded_dir_index EQUAL -1)
+                    set(_ruvia_included_excluded TRUE)
+                endif()
+            endforeach()
+            if(NOT _ruvia_included_excluded)
+                list(APPEND _ruvia_closure_queue
+                    "${_ruvia_included_header}")
+            endif()
+        endforeach()
+    endwhile()
+
+    list(SORT _ruvia_closure_headers)
+    ruvia_install_public_headers(${component} ${_ruvia_closure_headers})
 endfunction()
 
 function(ruvia_install_generated_public_header component generated_header relative_path)

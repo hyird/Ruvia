@@ -216,19 +216,16 @@ concept HasDbMigrationTextAccessors = requires(const T& migration) {
     { migration.sql() } -> std::same_as<std::string_view>;
 };
 
-static_assert(!AcceptsAnyTemporaryDbMigrationText<std::string>);
-static_assert(!AcceptsAnyTemporaryDbMigrationText<const std::string>);
-static_assert(!AcceptsAnyTemporaryDbMigrationText<std::pmr::string>);
+static_assert(AcceptsAnyTemporaryDbMigrationText<std::string>);
+static_assert(AcceptsAnyTemporaryDbMigrationText<const std::string>);
+static_assert(AcceptsAnyTemporaryDbMigrationText<std::pmr::string>);
 static_assert(AcceptsLvalueDbMigrationText<std::string>);
 static_assert(std::is_aggregate_v<ruvia::DbMigrationOptions>);
-static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.id), ruvia::BorrowedText>);
-static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.sql), ruvia::BorrowedText>);
+static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.id), std::string>);
+static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.sql), std::string>);
 static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.atomicity), ruvia::DbMigrationAtomicity>);
 static_assert(!HasPositionalDbMigrationConstructor<ruvia::DbMigration>);
 static_assert(HasDbMigrationTextAccessors<ruvia::DbMigration>);
-constexpr ruvia::DbMigration kCompileTimeMigration{{.id = "migration", .sql = "SELECT 1"}};
-static_assert(kCompileTimeMigration.id() == "migration");
-static_assert(kCompileTimeMigration.sql() == "SELECT 1");
 
 template <typename T>
 concept ExposesDbValueInspection = requires(const T& value) {

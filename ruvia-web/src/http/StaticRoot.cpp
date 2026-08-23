@@ -1,9 +1,11 @@
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <fstream>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -14,9 +16,12 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/http/detail/field/HttpDate.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/static/StaticFileTypes.h"
 #include "ruvia/web/detail/server/file/HttpNativeFile.h"
@@ -76,6 +81,176 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
     return extension == ".br" || extension == ".gz" || extension == ".zst";
 }
 
+[[nodiscard]] bool mediaTypeStartsWith(std::string_view mediaType, std::string_view prefix) noexcept {
+    return mediaType.size() >= prefix.size() && detail::httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
+}
+
+[[nodiscard]] bool mediaTypeEndsWith(std::string_view mediaType, std::string_view suffix) noexcept {
+    return mediaType.size() >= suffix.size() && detail::httpAsciiEqualsIgnoreCase(mediaType.substr(mediaType.size() - suffix.size()), suffix);
+}
+
+[[nodiscard]] bool staticContentTypeEligibleForPrecompression(std::string_view contentType) noexcept {
+    const auto semicolon = contentType.find(';');
+    const auto mediaType = detail::httpTrimOws(semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
+    if (mediaType.empty()) {
+        return false;
+    }
+    return mediaTypeStartsWith(mediaType, "text/") ||
+           detail::httpAsciiEqualsIgnoreCase(mediaType, "application/json") ||
+           detail::httpAsciiEqualsIgnoreCase(mediaType, "application/javascript") ||
+           detail::httpAsciiEqualsIgnoreCase(mediaType, "application/x-javascript") ||
+           detail::httpAsciiEqualsIgnoreCase(mediaType, "application/wasm") ||
+           detail::httpAsciiEqualsIgnoreCase(mediaType, "application/xml") ||
+           detail::httpAsciiEqualsIgnoreCase(mediaType, "application/xhtml+xml") ||
+           detail::httpAsciiEqualsIgnoreCase(mediaType, "image/svg+xml") ||
+           mediaTypeEndsWith(mediaType, "+json") ||
+           mediaTypeEndsWith(mediaType, "+xml");
+}
+
+[[nodiscard]] std::string_view staticPrecompressionSuffix(HttpContentCoding coding) noexcept {
+    switch (coding) {
+        case HttpContentCoding::kGzip:
+            return ".gz";
+        case HttpContentCoding::kBrotli:
+            return ".br";
+        case HttpContentCoding::kZstd:
+            return ".zst";
+        default:
+            return {};
+    }
+}
+
+[[nodiscard]] std::string_view staticPrecompressionEtagToken(HttpContentCoding coding) noexcept {
+    switch (coding) {
+        case HttpContentCoding::kGzip:
+            return "gzip";
+        case HttpContentCoding::kBrotli:
+            return "br";
+        case HttpContentCoding::kZstd:
+            return "zstd";
+        default:
+            return "identity";
+    }
+}
+
+[[nodiscard]] std::pmr::string makeStaticFileEncodedSnapshotEtag(std::pmr::memory_resource* resource, std::uint64_t encodedSize, std::uint64_t modifiedToken, detail::ResponseFileIdentity identity, HttpContentCoding coding) {
+    std::pmr::string output(resource);
+    output.reserve(144);
+    output.push_back('"');
+    detail::appendStaticFileUnsigned(output, encodedSize);
+    output.push_back('-');
+    detail::appendStaticFileUnsigned(output, modifiedToken);
+    for (const auto word : identity.words()) {
+        output.push_back('-');
+        detail::appendStaticFileUnsigned(output, word);
+    }
+    output.push_back('-');
+    const auto token = staticPrecompressionEtagToken(coding);
+    output.append(token.data(), token.size());
+    output.push_back('"');
+    return output;
+}
+
+[[nodiscard]] bool sameStaticRootFileSnapshot(const detail::StaticRootEntry& entry, const detail::ResponseFileSnapshot& snapshot) noexcept {
+    return entry.size == snapshot.size &&
+           entry.identity == snapshot.identity &&
+           entry.modifiedToken == snapshot.modifiedToken &&
+           entry.modifiedSeconds == snapshot.modifiedSeconds;
+}
+
+[[nodiscard]] bool sameStaticRootEntryMetadata(const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) noexcept {
+    return left.relativePath == right.relativePath &&
+           left.filePath == right.filePath &&
+           left.contentType == right.contentType &&
+           left.size == right.size &&
+           left.identity == right.identity &&
+           left.modifiedToken == right.modifiedToken &&
+           left.modifiedSeconds == right.modifiedSeconds &&
+           left.etag == right.etag &&
+           left.lastModified == right.lastModified &&
+           left.directlyServable == right.directlyServable;
+}
+
+[[nodiscard]] bool precompressedVariantIsAtLeastAsNew(const detail::StaticRootEntry& identity, const detail::StaticRootEntry& variant) noexcept {
+    if (variant.modifiedSeconds != identity.modifiedSeconds) {
+        return variant.modifiedSeconds > identity.modifiedSeconds;
+    }
+    return variant.modifiedToken >= identity.modifiedToken;
+}
+
+[[nodiscard]] const detail::StaticRootEntry* findFreshSidecarEntry(const detail::StaticRootState& state, const detail::StaticRootEntry& identity, HttpContentCoding coding) {
+    const auto suffix = staticPrecompressionSuffix(coding);
+    if (suffix.empty()) {
+        return nullptr;
+    }
+    std::pmr::string variantPath(detail::processResource());
+    variantPath.reserve(identity.relativePath.size() + suffix.size());
+    variantPath.append(identity.relativePath.data(), identity.relativePath.size());
+    variantPath.append(suffix.data(), suffix.size());
+    const auto* variant = findStaticRootEntry(state.entries, variantPath);
+    if (variant == nullptr || !precompressedVariantIsAtLeastAsNew(identity, *variant)) {
+        return nullptr;
+    }
+    return variant;
+}
+
+[[nodiscard]] const detail::StaticRootMemoryVariant* findMemoryVariant(const detail::StaticRootEntry& entry, HttpContentCoding coding) noexcept {
+    for (const auto& variant : entry.memoryVariants) {
+        if (variant.contentCoding == coding) {
+            return &variant;
+        }
+    }
+    return nullptr;
+}
+
+void copyMemoryVariant(detail::StaticRootEntry& entry, const detail::StaticRootMemoryVariant& source, std::pmr::memory_resource* resource) {
+    auto& stored = entry.memoryVariants.emplace_back(resource);
+    stored.contentCoding = source.contentCoding;
+    stored.bytes = source.bytes;
+    stored.modifiedToken = source.modifiedToken;
+    stored.modifiedSeconds = source.modifiedSeconds;
+    stored.etag = source.etag;
+    stored.lastModified = source.lastModified;
+}
+
+[[nodiscard]] std::pmr::string readStableStaticRootEntryBytes(const detail::StaticRootEntry& entry, std::pmr::memory_resource* resource) {
+    if (entry.size > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        throw std::runtime_error("static file is too large to precompress");
+    }
+    const auto size = static_cast<std::size_t>(entry.size);
+    std::pmr::string bytes(resource);
+    bytes.resize(size);
+    const std::filesystem::path path(entry.filePath.c_str());
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        throw std::filesystem::filesystem_error("open static file for precompression", path, std::make_error_code(std::errc::no_such_file_or_directory));
+    }
+    if (size != 0) {
+        input.read(bytes.data(), static_cast<std::streamsize>(size));
+        if (input.gcount() != static_cast<std::streamsize>(size)) {
+            throw std::runtime_error("static file changed while it was being precompressed");
+        }
+    }
+    std::error_code ec;
+    const auto after = detail::snapshotResponseFile(entry.filePath.c_str(), ec);
+    if (ec || !sameStaticRootFileSnapshot(entry, after)) {
+        throw std::runtime_error("static file changed while it was being precompressed");
+    }
+    return bytes;
+}
+
+void storePrecompressedVariant(detail::StaticRootEntry& entry, HttpContentCoding coding, std::pmr::string encoded, bool emitResponseValidators, std::pmr::memory_resource* resource) {
+    auto& variant = entry.memoryVariants.emplace_back(resource);
+    variant.contentCoding = coding;
+    variant.modifiedToken = entry.modifiedToken;
+    variant.modifiedSeconds = entry.modifiedSeconds;
+    variant.bytes = std::move(encoded);
+    if (emitResponseValidators) {
+        variant.etag = makeStaticFileEncodedSnapshotEtag(resource, variant.bytes.size(), entry.modifiedToken, entry.identity, coding);
+        variant.lastModified = entry.lastModified;
+    }
+}
+
 void hashBytes(std::uint64_t& hash, const char* bytes, std::size_t size) noexcept {
     for (std::size_t i = 0; i < size; ++i) {
         hash ^= static_cast<std::uint8_t>(bytes[i]);
@@ -107,16 +282,7 @@ void hashValue(std::uint64_t& hash, const T& value) noexcept {
 }
 
 [[nodiscard]] bool sameStaticRootEntry(const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) noexcept {
-    return left.relativePath == right.relativePath &&
-           left.filePath == right.filePath &&
-           left.contentType == right.contentType &&
-           left.size == right.size &&
-           left.identity == right.identity &&
-           left.modifiedToken == right.modifiedToken &&
-           left.modifiedSeconds == right.modifiedSeconds &&
-           left.etag == right.etag &&
-           left.lastModified == right.lastModified &&
-           left.directlyServable == right.directlyServable;
+    return sameStaticRootEntryMetadata(left, right);
 }
 
 }  // namespace
@@ -144,7 +310,7 @@ std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::findVariant
     if (entry == nullptr) {
         return std::nullopt;
     }
-    return detail::StaticRootEntryView(entry->filePath.c_str(), entry->contentType, state.cacheControl, entry->etag, entry->lastModified, entry->size, entry->identity, entry->modifiedToken, entry->modifiedSeconds, state.rangeRequests, state.responseValidators, entry->directlyServable);
+    return detail::StaticRootEntryView(entry->filePath.c_str(), entry->contentType, state.cacheControl, entry->etag, entry->lastModified, entry->size, entry->identity, entry->modifiedToken, entry->modifiedSeconds, state.rangeRequests, state.responseValidators, entry->directlyServable, &entry->memoryVariants);
 }
 
 bool detail::StaticRootAccess::isIndexedDirectory(const StaticRoot& root, std::string_view relativePath) noexcept {
@@ -210,6 +376,74 @@ void detail::StaticRootAccess::releaseBinding(const StaticRoot& root) noexcept {
 
 bool detail::StaticRootAccess::hasActiveBindings(const StaticRoot& root) noexcept {
     return root.state_->activeBindings != 0;
+}
+
+void detail::StaticRootAccess::installPrecompressedVariants(StaticRoot& root, const StaticRoot* previous, const StaticRootPrecompressionOptions& options) {
+    if (!options.enabled()) {
+        return;
+    }
+    if (options.minBytes == 0 || options.maxBytes < options.minBytes) {
+        throw std::invalid_argument("invalid static root precompression options");
+    }
+
+    auto& state = *root.state_;
+    auto* const resource = detail::processResource();
+    const std::array<HttpContentCoding, 3> codings{
+        HttpContentCoding::kBrotli,
+        HttpContentCoding::kZstd,
+        HttpContentCoding::kGzip,
+    };
+    const bool enabled[] = {
+        options.brotli,
+        options.zstd,
+        options.gzip,
+    };
+    const auto* previousState = previous == nullptr ? nullptr : previous->state_.get();
+    const bool emitResponseValidators = state.responseValidators == StaticResponseValidatorPolicy::kEmit;
+
+    for (auto& entry : state.entries) {
+        if (!entry.directlyServable ||
+            entry.size < options.minBytes ||
+            entry.size > options.maxBytes ||
+            !staticContentTypeEligibleForPrecompression(entry.contentType)) {
+            continue;
+        }
+
+        const detail::StaticRootEntry* previousEntry = nullptr;
+        if (previousState != nullptr) {
+            previousEntry = findStaticRootEntry(previousState->entries, entry.relativePath);
+            if (previousEntry != nullptr && !sameStaticRootEntryMetadata(entry, *previousEntry)) {
+                previousEntry = nullptr;
+            }
+        }
+
+        std::optional<std::pmr::string> plain;
+        for (std::size_t i = 0; i < codings.size(); ++i) {
+            if (!enabled[i]) {
+                continue;
+            }
+            const auto coding = codings[i];
+            if (findFreshSidecarEntry(state, entry, coding) != nullptr) {
+                continue;
+            }
+            if (previousEntry != nullptr) {
+                if (const auto* previousVariant = findMemoryVariant(*previousEntry, coding); previousVariant != nullptr) {
+                    copyMemoryVariant(entry, *previousVariant, resource);
+                    continue;
+                }
+            }
+            if (!plain.has_value()) {
+                plain.emplace(readStableStaticRootEntryBytes(entry, resource));
+            }
+            if (plain->empty()) {
+                continue;
+            }
+            auto encoded = encodeHttpContent(coding, *plain, {.maxEncodedBytes = plain->size() - 1, .resource = resource});
+            if (auto* content = encoded.encoded(); content != nullptr) {
+                storePrecompressedVariant(entry, coding, std::move(*content).takeBytes(), emitResponseValidators, resource);
+            }
+        }
+    }
 }
 
 bool detail::StaticRootAccess::sameSnapshot(const StaticRoot& left, const StaticRoot& right) noexcept {

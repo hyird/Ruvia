@@ -20,13 +20,7 @@ public:
 private:
     ruvia::Task<ruvia::HttpResponse> forward(ruvia::Context& c) {
         const auto incomingBody = co_await c.req().text();
-        auto client = c.httpClient({
-            .scheme = ruvia::HttpScheme::kHttps,
-            .host = "api.example.com",
-            .connectionsPerWorker = 4,
-            .protocol = ruvia::HttpClientProtocol::kNegotiate,
-            .receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend,
-        });
+        auto client = c.httpClient();
 
         try {
             std::array<ruvia::HttpHeaderView, 2> headers{};
@@ -38,13 +32,13 @@ private:
             if (const auto authorization = c.req().header("authorization")) {
                 headers[headerCount++] = {"authorization", *authorization};
             }
-            auto operation = client.send({
+            auto operation = client.withOptions({
+                .timeout = std::chrono::seconds(5),
+            }).send({
                 .method = "POST",
                 .target = "/v1/orders",
                 .headers = std::span(headers).first(headerCount),
                 .content = ruvia::HttpClientRequestContentView::bytes(incomingBody),
-            }, {
-                .timeout = std::chrono::seconds(5),
             });
             auto response = co_await std::move(operation);
             c.status(response.status());
@@ -61,11 +55,7 @@ private:
     }
 
     ruvia::Task<void> forwardStream(ruvia::Context& c) {
-        auto client = c.httpClient({
-            .scheme = ruvia::HttpScheme::kHttps,
-            .host = "api.example.com",
-            .connectionsPerWorker = 4,
-        });
+        auto client = c.httpClient();
         std::array<ruvia::HttpHeaderView, 1> headers{};
         std::size_t headerCount = 0;
         if (const auto authorization = c.req().header("authorization")) {
@@ -95,5 +85,14 @@ private:
 int main() {
     ruvia::app()
         .listen({.address = "0.0.0.0", .http = 8080})
+        .httpClient({
+            .config = {
+                .scheme = ruvia::HttpScheme::kHttps,
+                .host = "api.example.com",
+                .connectionsPerWorker = 4,
+                .protocol = ruvia::HttpClientProtocol::kNegotiate,
+                .receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend,
+            },
+        })
         .run();
 }

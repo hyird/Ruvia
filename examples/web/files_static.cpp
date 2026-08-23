@@ -56,12 +56,19 @@ int main() {
             .cacheControl = "public, max-age=3600",
             .indexFile = "index.html",
         },
+        .precompressGzip = true,
     };
     // Document roots refresh every second by default. To tune the interval:
-    // .runtimeOptions = {
+    // .runtime = {
     //     .refreshInterval = std::chrono::milliseconds(500),
     // },
+    // .precompressGzip refresh-builds gzip variants for changed text assets.
     // The application blocking pool is enabled by default.
 
-    ruvia::app().listen({.address = "0.0.0.0", .http = 8083}).setWorkerCount(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).setCompression(ruvia::CompressionConfig{}).setDocumentRoot(std::move(documentRoot)).run();
+    ruvia::app()
+        .listen({.address = "0.0.0.0", .http = 8083})
+        .server({.workerCount = 2, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .compression({})
+        .documentRoot(std::move(documentRoot))
+        .run();
 }

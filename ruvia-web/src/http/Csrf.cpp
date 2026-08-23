@@ -34,9 +34,9 @@ namespace ruvia {
 Task<void> CsrfProtection::handle(Context& c, Next& next) {
     const auto method = c.req().knownMethod();
     const bool safe = method == HttpKnownMethod::kGet || method == HttpKnownMethod::kHead || method == HttpKnownMethod::kOptions;
-    const auto cookie = c.req().cookie(cookieName_.view());
+    const auto cookie = c.req().cookie(cookieName_);
     if (!safe) {
-        const auto header = c.req().header(headerName_.view());
+        const auto header = c.req().header(headerName_);
         if (!cookie || cookie->empty() || !header || header->empty() || !detail::csrfTokensEqual(*cookie, *header)) {
             c.respond(c.error({.status = ruvia::http_status::kForbidden, .code = "csrf_token_mismatch", .message = "CSRF token missing or invalid"}));
             co_return;
@@ -62,7 +62,7 @@ Task<void> CsrfProtection::handle(Context& c, Next& next) {
             .sameSite = CookieSameSite::kLax,
             .secure = connection.tls() != nullptr ? CookieAttributePolicy::kEmit : CookieAttributePolicy::kOmit,
         };
-        c.setCookie({.name = cookieName_.view(), .value = token->value(), .attributes = options});
+        c.setCookie({.name = cookieName_, .value = token->value(), .attributes = options});
     }
     co_await next();
 }

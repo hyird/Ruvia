@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <concepts>
@@ -14,23 +15,56 @@
 #include <string>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/Callback.h"
 #include "ruvia/web/detail/CallbackRef.h"
 
 namespace ruvia {
+
+enum class ProcessSignalHandlerPolicy : std::uint8_t {
+    kExternalOwner,
+    kInstall,
+};
+
+// The complete always-present Web server runtime configuration. App consumes
+// this aggregate atomically, validates it as one unit, and publishes the same
+// normalized values to every worker. Optional fields disable only the policy
+// they name; optional App capabilities remain separate config-or-null calls.
+struct ServerConfig final {
+    std::size_t workerCount{std::max(1U, std::thread::hardware_concurrency())};
+    ProcessSignalHandlerPolicy processSignalHandlers{ProcessSignalHandlerPolicy::kExternalOwner};
+    std::size_t workerMailboxCapacity{1024};
+    std::optional<std::chrono::milliseconds> idleTimeout{std::chrono::seconds(75)};
+    std::chrono::milliseconds connectionScanInterval{std::chrono::seconds(1)};
+    std::optional<std::chrono::milliseconds> requestHeaderTimeout{std::chrono::seconds(60)};
+    std::optional<std::chrono::milliseconds> requestBodyTimeout{std::chrono::seconds(60)};
+    std::optional<std::chrono::milliseconds> writeTimeout{std::chrono::seconds(60)};
+    std::optional<std::size_t> maxConnectionsPerWorker{1024};
+    std::optional<std::size_t> maxRequestsPerConnection{1000};
+    std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
+    std::optional<std::size_t> maxStreamBodyBytes;
+    std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
+    MemoryPoolConfig memoryPool{};
+};
+
+struct TrustedProxyConfig final {
+    std::vector<std::string> cidrs;
+};
 
 namespace detail {
 struct AccessLogRecordAccess;
@@ -78,8 +112,9 @@ struct ListenConfig final {
     bool autoHttpsRedirect{false};
 };
 
-// Canonical startup values shared by App setters and every worker's server
-// options. They stay top-level so configuration is not copied between models.
+// Canonical startup values shared by App configuration and every worker's
+// server options. They stay top-level so configuration is not copied between
+// models.
 struct CompressionConfig final {
     // Buffered in-memory responses below this size remain identity.
     std::size_t minBytes{1024};
@@ -87,8 +122,9 @@ struct CompressionConfig final {
     // worker; larger bodies are offloaded to the bounded blocking pool when it
     // is enabled, otherwise they are also encoded synchronously.
     std::size_t syncBytes{64u * 1024u};
-    // Buffered bodies above this size remain identity. Static files ignore all
-    // three thresholds and only negotiate existing precompressed sidecars.
+    // Buffered bodies above this size remain identity. Static files use their
+    // own document-root precompression thresholds and still prefer checked-in
+    // precompressed sidecars when present.
     std::size_t maxBytes{64u * 1024u * 1024u};
 };
 
@@ -136,20 +172,25 @@ struct CorsConfig final {
 // something derived from this deadline, rather than arriving as a second setter
 // with its own name.
 struct DeadlineConfig final {
-    std::optional<std::chrono::milliseconds> handler;
+    std::chrono::milliseconds handler{0};
 };
 
 // Runtime behavior belongs to the server's document-root binding, not to the
 // immutable StaticRoot index. App document roots are always refreshed; a
 // standalone StaticRoot remains immutable because it has no server runtime.
-struct DocumentRootRuntimeOptions final {
+struct DocumentRootRuntimeConfig final {
     std::chrono::milliseconds refreshInterval{std::chrono::seconds(1)};
 };
 
 struct DocumentRootConfig final {
     std::filesystem::path root;
     StaticRootOptions staticOptions;
-    DocumentRootRuntimeOptions runtimeOptions;
+    DocumentRootRuntimeConfig runtime;
+    bool precompressGzip{false};
+    bool precompressBrotli{false};
+    bool precompressZstd{false};
+    std::size_t precompressMinBytes{1024};
+    std::size_t precompressMaxBytes{256u * 1024u};
 };
 
 // One terminal response outcome with a committed final status, passed to the

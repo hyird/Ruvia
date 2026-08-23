@@ -198,67 +198,19 @@ endif()
 
 ruvia_install_target(ruvia-web web)
 
-# Install the always-available Web contracts without leaking opt-in feature
-# contracts into a feature-off package. The whole-tree install keeps every new
-# public header packaged by construction; feature subtrees are pruned here and
-# installed below together with the public API that makes them usable.
-ruvia_install_public_header_tree(web include/ruvia/web
-    PATTERN "auth" EXCLUDE
-    PATTERN "db" EXCLUDE
-    PATTERN "redis" EXCLUDE)
-
-# DbDefinition and RedisDefinition name what an app was configured with, so the
-# integration headers carry them whether or not a driver is built. Their two
-# declaring headers install unconditionally; the rest of each feature tree does
-# not.
-ruvia_install_public_headers(web
-    include/ruvia/web/db/DbTypes.h
-    include/ruvia/web/redis/RedisTypes.h
-    include/ruvia/web/detail/db/DbConfigStorage.h
-    include/ruvia/web/detail/redis/RedisConfigStorage.h)
-
-if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
-    ruvia_install_public_header_tree(web include/ruvia/web/db
-        PATTERN "DbTypes.h" EXCLUDE)
-    ruvia_install_public_headers(web
-        include/ruvia/web/detail/db/DbBackend.h
-        include/ruvia/web/detail/db/DbConfigValidation.h
-        include/ruvia/web/detail/db/DbHostResolution.h
-        include/ruvia/web/detail/db/DbRegistry.h
-        include/ruvia/web/detail/db/DbMigrationChecksum.h
-        include/ruvia/web/detail/db/DbMigrationValidation.h
-        include/ruvia/web/detail/db/DbOperationState.h
-        include/ruvia/web/detail/db/DbParameterPack.h
-        include/ruvia/web/detail/db/DbPoolOperations.h
-        include/ruvia/web/detail/db/DbResultAccess.h
-        include/ruvia/web/detail/db/DbSlotSocket.h
-        include/ruvia/web/detail/db/DbSqlScan.h
-        include/ruvia/web/detail/db/DbUtils.h
-        include/ruvia/web/detail/db/DbValueAccess.h)
+set(_ruvia_web_excluded_header_directories)
+if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
+    list(APPEND _ruvia_web_excluded_header_directories db)
+endif()
+if(NOT RUVIA_ENABLE_REDIS)
+    list(APPEND _ruvia_web_excluded_header_directories redis)
+endif()
+if(NOT RUVIA_ENABLE_JWT)
+    list(APPEND _ruvia_web_excluded_header_directories auth)
 endif()
 
-if(RUVIA_ENABLE_MARIADB)
-    ruvia_install_public_headers(web
-        include/ruvia/web/detail/db/DbMysqlRuntime.h
-        include/ruvia/web/detail/db/DbSql.h)
-endif()
-
-if(RUVIA_ENABLE_POSTGRESQL)
-    ruvia_install_public_headers(web
-        include/ruvia/web/detail/db/DbPostgreSql.h)
-endif()
-
-if(RUVIA_ENABLE_REDIS)
-    ruvia_install_public_header_tree(web include/ruvia/web/redis
-        PATTERN "RedisTypes.h" EXCLUDE)
-    ruvia_install_public_header_tree(web include/ruvia/web/detail/redis
-        PATTERN "RedisConfigStorage.h" EXCLUDE)
-endif()
-
-if(RUVIA_ENABLE_JWT)
-    ruvia_install_public_header_tree(web include/ruvia/web/auth)
-    ruvia_install_public_header_tree(web include/ruvia/web/detail/auth)
-endif()
+ruvia_install_public_header_closure(web include/ruvia/web
+    EXCLUDE_DIRECTORIES ${_ruvia_web_excluded_header_directories})
 
 ruvia_install_export(web)
 ruvia_assert_target_file_ownership(ruvia-web)

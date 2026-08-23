@@ -55,7 +55,7 @@ int main() {
     asio::ip::tcp::acceptor acceptor(ioContext, asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const auto port = acceptor.local_endpoint().port();
 
-    static constexpr std::array migrations{
+    static const std::array migrations{
         ruvia::DbMigration{{.id = "001_never_runs", .sql = "CREATE TABLE IF NOT EXISTS ruvia_timeout_probe (id INT PRIMARY KEY)"}}};
 
     const auto start = std::chrono::steady_clock::now();

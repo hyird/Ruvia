@@ -42,16 +42,16 @@ concept HasVariadicOperations = requires(const T& client) {
 };
 
 template <typename T>
-concept HasDbRegistrationOptions = requires(T& app, ruvia::DbConfig config) {
-    { app.useDb(ruvia::DbRegistrationOptions{.config = config}) } -> std::same_as<ruvia::App&>;
+concept HasDbRegistrationConfig = requires(T& app, ruvia::DbConfig config) {
+    { app.database(ruvia::DbRegistrationConfig{.config = config}) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
-concept HasDbRegistrationPositional = requires(T& app, ruvia::DbConfig config) { app.useDb(config); } || requires(T& app, ruvia::DbConfig config) { app.useDb(std::string_view{}, config); };
+concept HasDbRegistrationPositional = requires(T& app, ruvia::DbConfig config) { app.database(config); } || requires(T& app, ruvia::DbConfig config) { app.database(std::string_view{}, config); };
 
-static_assert(std::is_aggregate_v<ruvia::DbRegistrationOptions>);
-static_assert(std::same_as<decltype(ruvia::DbRegistrationOptions{.config = std::declval<ruvia::DbConfig>()}.alias), std::string>);
-static_assert(HasDbRegistrationOptions<ruvia::App>);
+static_assert(std::is_aggregate_v<ruvia::DbRegistrationConfig>);
+static_assert(std::same_as<decltype(ruvia::DbRegistrationConfig{.config = std::declval<ruvia::DbConfig>()}.alias), std::string>);
+static_assert(HasDbRegistrationConfig<ruvia::App>);
 static_assert(!HasDbRegistrationPositional<ruvia::App>);
 
 static_assert(std::constructible_from<ruvia::DbClient, ruvia::EventLoop, ruvia::DbConfig>);

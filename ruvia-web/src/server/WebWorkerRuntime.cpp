@@ -54,6 +54,14 @@ int selectAlpnProtocol(SSL*, const unsigned char** out, unsigned char* outLength
     return SSL_TLSEXT_ERR_NOACK;
 }
 
+[[nodiscard]] StaticRootPrecompressionOptions documentRootPrecompressionOptions(const HttpServerOptions& options) noexcept {
+    const auto* configured = options.documentRoot.precompressionOptions();
+    if (configured == nullptr || !options.compression.has_value()) {
+        return {};
+    }
+    return *configured;
+}
+
 // RFC 6066 SNI: switch the connection to the per-host SSL_CTX when the client's
 // server name matches a configured certificate; otherwise keep the default.
 int selectSniContext(SSL* ssl, int*, void* arg) noexcept {
@@ -160,7 +168,6 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedOptionsTag, std::span<const HttpServ
           memory_.resource(),
           capabilities,
           WorkerCapabilityOptions{
-              .maxHttpClientOrigins = options_.httpClientOriginCacheCapacityPerWorker,
               .defaultRateLimit = options_.defaultRateLimitPerWorker,
               .routeRateLimits = routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent : RouteRateLimitPresence::kAbsent,
               .rateLimitCapacity = options_.rateLimitCapacityPerWorker,
@@ -186,6 +193,10 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedOptionsTag, std::span<const HttpServ
         if (configuredRoot == nullptr) std::terminate();
         auto rootOptions = StaticRootAccess::options(*configuredRoot);
         ownedDocumentRoot_ = makePmrObject<StaticRoot>(processResource(), configuredRoot->path(), std::move(rootOptions));
+        const auto precompression = documentRootPrecompressionOptions(options_);
+        if (precompression.enabled()) {
+            StaticRootAccess::installPrecompressedVariants(*ownedDocumentRoot_, configuredRoot, precompression);
+        }
         options_.documentRoot.publish(*ownedDocumentRoot_);
     }
     // Claim the failure sink's counter. Every reporting site shares this one
@@ -621,6 +632,39 @@ Task<void> WebWorkerRuntime::staticRootRefreshLoop() {
         }
         if (StaticRootAccess::fingerprint(*candidate) == StaticRootAccess::fingerprint(*currentRoot) && StaticRootAccess::sameSnapshot(*candidate, *currentRoot)) {
             continue;
+        }
+
+        const auto precompression = documentRootPrecompressionOptions(options_);
+        if (precompression.enabled()) {
+            try {
+                auto prepared = co_await ruvia::tryRunBlocking(
+                    *options_.blockingPool,
+                    workerRuntime_.handle(),
+                    [candidate = std::move(candidate), precompression]() mutable {
+                        StaticRootAccess::installPrecompressedVariants(
+                            *candidate, nullptr, precompression);
+                        return std::move(candidate);
+                    });
+                if (!prepared.completed()) {
+                    if (prepared.failed()) {
+                        documentRootRefreshFailures_.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    if (!httpServerWorkerRunning(workerState_)) {
+                        co_return;
+                    }
+                    continue;
+                }
+                candidate = std::move(prepared).value();
+            } catch (...) {
+                documentRootRefreshFailures_.fetch_add(1, std::memory_order_relaxed);
+                if (!httpServerWorkerRunning(workerState_)) {
+                    co_return;
+                }
+                continue;
+            }
+            if (!httpServerWorkerRunning(workerState_)) {
+                co_return;
+            }
         }
 
         // A binding is a request-scoped lease. If no request can still hold

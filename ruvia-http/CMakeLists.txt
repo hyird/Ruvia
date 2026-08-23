@@ -101,46 +101,12 @@ target_link_libraries(ruvia-http
 
 ruvia_install_target(ruvia-http http)
 
-ruvia_install_public_headers(http
-    include/ruvia/http/BorrowedText.h
-    include/ruvia/http/Cookies.h
-    include/ruvia/http/Hpack.h
-    include/ruvia/http/ProtocolByteLimit.h
-    include/ruvia/http/HttpProtocolError.h
-    include/ruvia/http/HttpCache.h
-    include/ruvia/http/HttpClient.h
-    include/ruvia/http/HttpClientRedirect.h
-    include/ruvia/http/HttpContentCodec.h
-    include/ruvia/http/HttpContentCoding.h
-    include/ruvia/http/HttpHeader.h
-    include/ruvia/http/HttpExpectations.h
-    include/ruvia/http/HttpTransferCoding.h
-    include/ruvia/http/Http1InterimResponseWriter.h
-    include/ruvia/http/HttpInterimResponse.h
-    include/ruvia/http/HttpLimits.h
-    include/ruvia/http/HttpKnownMethod.h
-    include/ruvia/http/HttpParseError.h
-    include/ruvia/http/HttpProtocolVersion.h
-    include/ruvia/http/Http1ClientRequestWriter.h
-    include/ruvia/http/Http1ClientResponseParser.h
-    include/ruvia/http/Http1ClosePolicy.h
-    include/ruvia/http/Http1RequestParser.h
-    include/ruvia/http/Http1RequestBodyPlan.h
-    include/ruvia/http/Http2Framing.h
-    include/ruvia/http/Http2Connection.h
-    include/ruvia/http/HttpRequest.h
-    include/ruvia/http/HttpResponse.h
-    include/ruvia/http/HttpStatus.h
-    include/ruvia/http/HttpSetCookie.h
-    include/ruvia/http/MultipartParser.h
-    include/ruvia/http/Sse.h
-    include/ruvia/http/UrlEncoding.h
-    include/ruvia/http/WebSocketProtocol.h
-    include/ruvia/http/WebSocketHandshake.h
-    include/ruvia/http/WebSocketServerConnection.h
-)
+ruvia_install_public_header_closure(http include/ruvia/http)
 
-ruvia_install_public_header_tree(http include/ruvia/http/detail)
+# Compile-time contracts consumed by ruvia-web's installed template surface.
+ruvia_install_public_headers(http
+    include/ruvia/http/detail/parser/HttpRequestTarget.h
+    include/ruvia/http/detail/util/HttpNumberFormat.h)
 
 ruvia_install_export(http)
 ruvia_assert_target_file_ownership(ruvia-http)

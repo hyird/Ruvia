@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ruvia {
@@ -30,14 +31,14 @@ enum class DbMigrationAtomicity : std::uint8_t {
 };
 
 struct DbMigrationOptions final {
-    BorrowedText id;
-    BorrowedText sql;
+    std::string id;
+    std::string sql;
     DbMigrationAtomicity atomicity{DbMigrationAtomicity::kTransactional};
 };
 
-// Immutable migration descriptor borrowing stable application storage. String
-// literals and owning-string lvalues preserve constexpr/zero-allocation use;
-// owning-string rvalues are rejected before an async run can retain them.
+// Immutable owning migration descriptor. Migrations are startup data, so the
+// descriptor accepts temporary strings without imposing a hidden lifetime
+// requirement on the asynchronous runner.
 //
 // `sql` is exactly one statement. Neither backend accepts more than one per
 // call -- libpq's extended protocol refuses multiple commands and the MariaDB
@@ -50,17 +51,17 @@ struct DbMigrationOptions final {
 // backend.
 class DbMigration final {
 public:
-    constexpr explicit DbMigration(DbMigrationOptions options) noexcept
-        : id_(options.id),
-          sql_(options.sql),
+    explicit DbMigration(DbMigrationOptions options)
+        : id_(std::move(options.id)),
+          sql_(std::move(options.sql)),
           atomicity_(options.atomicity) {}
 
-    [[nodiscard]] constexpr std::string_view id() const noexcept {
-        return id_.view();
+    [[nodiscard]] std::string_view id() const noexcept {
+        return id_;
     }
 
-    [[nodiscard]] constexpr std::string_view sql() const noexcept {
-        return sql_.view();
+    [[nodiscard]] std::string_view sql() const noexcept {
+        return sql_;
     }
 
     [[nodiscard]] constexpr DbMigrationAtomicity atomicity() const noexcept {
@@ -68,8 +69,8 @@ public:
     }
 
 private:
-    BorrowedText id_;
-    BorrowedText sql_;
+    std::string id_;
+    std::string sql_;
     DbMigrationAtomicity atomicity_;
 };
 

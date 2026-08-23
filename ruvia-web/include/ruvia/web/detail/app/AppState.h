@@ -24,10 +24,14 @@
 #endif
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
+#include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 
 namespace ruvia::detail {
 
 struct AppRuntimeGraph;
+struct AppState;
+
+void applyServerConfig(AppState& state, const ServerConfig& config);
 
 struct AppStaticMimeType final {
     explicit AppStaticMimeType(std::pmr::memory_resource* resource)
@@ -64,7 +68,8 @@ struct AppDocumentRootConfig final {
 
     NativePathString root;
     AppStaticRootOptions staticOptions;
-    DocumentRootRuntimeOptions runtimeOptions;
+    DocumentRootRuntimeConfig runtime;
+    StaticRootPrecompressionOptions precompression;
 };
 
 struct AppListenerConfig final {
@@ -87,7 +92,7 @@ struct AppState final {
     ~AppState();
 
     std::pmr::vector<AppListenerConfig> listeners{appResource()};
-    std::size_t workerCount;
+    std::size_t workerCount{0};
     ProcessSignalHandlerPolicy processSignalHandlers{ProcessSignalHandlerPolicy::kExternalOwner};
     AccessLogCallback accessLogCallback;
     ConnectionFailureCallback connectionFailureCallback;
@@ -108,6 +113,7 @@ struct AppState final {
 #ifdef RUVIA_ENABLE_REDIS
     std::pmr::vector<RedisDefinition> redis{appResource()};
 #endif
+    std::pmr::vector<HttpClientDefinition> httpClients{appResource()};
     Env env;
     std::unique_ptr<AppRuntimeGraph, PmrObjectDeleter<AppRuntimeGraph>> runtime;
 

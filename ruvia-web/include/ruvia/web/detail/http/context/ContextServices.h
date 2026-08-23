@@ -197,7 +197,7 @@ public:
     }
 
     // Server-owned static-file policy. When response compression is enabled,
-    // staticFile() may negotiate an existing precompressed sidecar. It never
+    // staticFile() may negotiate an indexed precompressed variant. It never
     // performs request-time file compression.
     [[nodiscard]] constexpr bool precompressedStaticFiles() const noexcept {
         return precompressedStaticFiles_;

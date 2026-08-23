@@ -50,7 +50,7 @@ RUVIA_TEST(session_cookie_append_preserves_existing_set_cookie) {
     auto response = makeResponse();
     response.header("Set-Cookie", "theme=light", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
 
-    ruvia::detail::appendSessionCookieHeader(response, std::pmr::new_delete_resource(), "abcdef", false);
+    ruvia::detail::appendSessionCookieHeader(response, std::pmr::new_delete_resource(), "sid", "abcdef", false);
 
     const auto& headers = response.headers();
     RUVIA_CHECK_EQ(headers.size(), std::size_t{2});
@@ -65,7 +65,7 @@ RUVIA_TEST(session_cookie_append_preserves_existing_set_cookie) {
 RUVIA_TEST(session_cookie_secure_flag_appended_for_secure_requests) {
     auto response = makeResponse();
 
-    ruvia::detail::appendSessionCookieHeader(response, std::pmr::new_delete_resource(), "abcdef", true);
+    ruvia::detail::appendSessionCookieHeader(response, std::pmr::new_delete_resource(), "sid", "abcdef", true);
 
     const auto& headers = response.headers();
     RUVIA_CHECK_EQ(headers.size(), std::size_t{1});

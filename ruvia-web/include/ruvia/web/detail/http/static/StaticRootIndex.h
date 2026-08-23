@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/core/detail/util/NativePath.h"
+#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/detail/response/HttpResponseFileBody.h"
 #include "ruvia/web/StaticFiles.h"
 
@@ -16,13 +17,40 @@
 
 namespace ruvia::detail {
 
+struct StaticRootPrecompressionOptions final {
+    bool gzip{false};
+    bool brotli{false};
+    bool zstd{false};
+    std::size_t minBytes{1024};
+    std::size_t maxBytes{256u * 1024u};
+
+    [[nodiscard]] constexpr bool enabled() const noexcept {
+        return gzip || brotli || zstd;
+    }
+};
+
+struct StaticRootMemoryVariant final {
+    explicit StaticRootMemoryVariant(std::pmr::memory_resource* resource)
+        : bytes(resource),
+          etag(resource),
+          lastModified(resource) {}
+
+    HttpContentCoding contentCoding{HttpContentCoding::kIdentity};
+    std::pmr::string bytes;
+    std::uint64_t modifiedToken{0};
+    std::time_t modifiedSeconds{0};
+    std::pmr::string etag;
+    std::pmr::string lastModified;
+};
+
 struct StaticRootEntry final {
     explicit StaticRootEntry(std::pmr::memory_resource* resource)
         : relativePath(resource),
           filePath(resource),
           contentType(resource),
           etag(resource),
-          lastModified(resource) {}
+          lastModified(resource),
+          memoryVariants(resource) {}
 
     std::pmr::string relativePath;
     NativePathString filePath;
@@ -34,6 +62,7 @@ struct StaticRootEntry final {
     std::pmr::string etag;
     std::pmr::string lastModified;
     bool directlyServable{true};
+    std::pmr::vector<StaticRootMemoryVariant> memoryVariants;
 };
 
 struct StaticMimeTypeStorage final {
@@ -75,6 +104,55 @@ struct StaticRootState final {
           fileTypeExtensions(resource),
           entries(resource),
           directories(resource) {}
+};
+
+class StaticRootMemoryVariantView final {
+public:
+    [[nodiscard]] HttpContentCoding contentCoding() const noexcept {
+        return contentCoding_;
+    }
+
+    [[nodiscard]] std::string_view bytes() const noexcept {
+        return bytes_;
+    }
+
+    [[nodiscard]] std::uint64_t size() const noexcept {
+        return static_cast<std::uint64_t>(bytes_.size());
+    }
+
+    [[nodiscard]] std::uint64_t modifiedToken() const noexcept {
+        return modifiedToken_;
+    }
+
+    [[nodiscard]] std::time_t modifiedSeconds() const noexcept {
+        return modifiedSeconds_;
+    }
+
+    [[nodiscard]] std::string_view etag() const noexcept {
+        return etag_;
+    }
+
+    [[nodiscard]] std::string_view lastModified() const noexcept {
+        return lastModified_;
+    }
+
+private:
+    friend class StaticRootEntryView;
+
+    StaticRootMemoryVariantView(HttpContentCoding contentCoding, std::string_view bytes, std::uint64_t modifiedToken, std::time_t modifiedSeconds, std::string_view etag, std::string_view lastModified) noexcept
+        : contentCoding_(contentCoding),
+          bytes_(bytes),
+          modifiedToken_(modifiedToken),
+          modifiedSeconds_(modifiedSeconds),
+          etag_(etag),
+          lastModified_(lastModified) {}
+
+    HttpContentCoding contentCoding_;
+    std::string_view bytes_;
+    std::uint64_t modifiedToken_;
+    std::time_t modifiedSeconds_;
+    std::string_view etag_;
+    std::string_view lastModified_;
 };
 
 class StaticRootEntryView final {
@@ -123,10 +201,28 @@ public:
         return responseValidators_;
     }
 
+    [[nodiscard]] std::optional<StaticRootMemoryVariantView> memoryVariant(HttpContentCoding coding) const noexcept {
+        if (memoryVariants_ == nullptr) {
+            return std::nullopt;
+        }
+        for (const auto& variant : *memoryVariants_) {
+            if (variant.contentCoding == coding) {
+                return StaticRootMemoryVariantView(
+                    variant.contentCoding,
+                    variant.bytes,
+                    variant.modifiedToken,
+                    variant.modifiedSeconds,
+                    variant.etag,
+                    variant.lastModified);
+            }
+        }
+        return std::nullopt;
+    }
+
 private:
     friend class StaticRootAccess;
 
-    StaticRootEntryView(const NativePathChar* filePath, std::string_view contentType, std::string_view cacheControl, std::string_view etag, std::string_view lastModified, std::uint64_t size, ResponseFileIdentity identity, std::uint64_t modifiedToken, std::time_t modifiedSeconds, StaticRangeRequestPolicy rangeRequests, StaticResponseValidatorPolicy responseValidators, bool directlyServable) noexcept
+    StaticRootEntryView(const NativePathChar* filePath, std::string_view contentType, std::string_view cacheControl, std::string_view etag, std::string_view lastModified, std::uint64_t size, ResponseFileIdentity identity, std::uint64_t modifiedToken, std::time_t modifiedSeconds, StaticRangeRequestPolicy rangeRequests, StaticResponseValidatorPolicy responseValidators, bool directlyServable, const std::pmr::vector<StaticRootMemoryVariant>* memoryVariants) noexcept
         : filePath_(filePath),
           contentType_(contentType),
           cacheControl_(cacheControl),
@@ -138,7 +234,8 @@ private:
           modifiedSeconds_(modifiedSeconds),
           rangeRequests_(rangeRequests),
           responseValidators_(responseValidators),
-          directlyServable_(directlyServable) {}
+          directlyServable_(directlyServable),
+          memoryVariants_(memoryVariants) {}
 
     const NativePathChar* filePath_;
     std::string_view contentType_;
@@ -152,6 +249,7 @@ private:
     StaticRangeRequestPolicy rangeRequests_;
     StaticResponseValidatorPolicy responseValidators_;
     bool directlyServable_;
+    const std::pmr::vector<StaticRootMemoryVariant>* memoryVariants_;
 };
 
 class StaticRootAccess final {
@@ -167,6 +265,7 @@ public:
     static void acquireBinding(const StaticRoot& root) noexcept;
     static void releaseBinding(const StaticRoot& root) noexcept;
     [[nodiscard]] static bool hasActiveBindings(const StaticRoot& root) noexcept;
+    static void installPrecompressedVariants(StaticRoot& root, const StaticRoot* previous, const StaticRootPrecompressionOptions& options);
 };
 
 }  // namespace ruvia::detail

@@ -1,37 +1,23 @@
 #pragma once
 
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <initializer_list>
-#include <ranges>
-#include <span>
 #include <string>
 #include <string_view>
-#include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/http/BorrowedText.h"
 #include "ruvia/web/Middleware.h"
 #include "ruvia/web/Next.h"
 
 namespace ruvia {
 
 struct SecurityHeader final {
-    // Security header definitions and options are commonly retained by custom
-    // middleware. Keep their text zero-copy while rejecting owning-string
-    // rvalues that would leave a saved definition with dangling views.
-    ::ruvia::BorrowedText name;
-    ::ruvia::BorrowedText value;
+    std::string name;
+    std::string value;
 };
-
-namespace detail {
-
-template <typename Range>
-concept SecurityHeaderRange = std::ranges::contiguous_range<Range> && std::same_as<std::remove_cv_t<std::ranges::range_value_t<Range>>, SecurityHeader>;
-
-}  // namespace detail
 
 // Legacy browser XSS filters can introduce vulnerabilities in otherwise safe
 // pages. Modern policy either emits X-XSS-Protection: 0 to disable the obsolete
@@ -51,62 +37,7 @@ enum class SecurityHeaderConflictPolicy : std::uint8_t {
     kReplaceExisting,
 };
 
-struct SecurityHeadersOptions final {
-    // The collection itself is borrowed alongside the text in each element.
-    // Borrowed ranges and owning-range lvalues remain valid inputs; temporary
-    // owning ranges are rejected before their storage can disappear.
-    class HeaderInit final {
-    public:
-        constexpr HeaderInit() noexcept = default;
-
-        template <detail::SecurityHeaderRange Range>
-            requires(std::is_lvalue_reference_v<Range &&> || std::ranges::borrowed_range<Range>)
-        constexpr HeaderInit(Range&& headers) noexcept
-            : headers_(std::ranges::data(headers), std::ranges::size(headers)) {}
-
-        template <detail::SecurityHeaderRange Range>
-            requires(!std::is_lvalue_reference_v<Range &&> && !std::ranges::borrowed_range<Range>)
-        HeaderInit(Range&&) = delete;
-
-        constexpr HeaderInit(std::initializer_list<SecurityHeader>) = delete;
-
-        template <detail::SecurityHeaderRange Range>
-            requires(std::is_lvalue_reference_v<Range &&> || std::ranges::borrowed_range<Range>)
-        constexpr HeaderInit& operator=(Range&& headers) noexcept {
-            headers_ = std::span<const SecurityHeader>(std::ranges::data(headers), std::ranges::size(headers));
-            return *this;
-        }
-
-        template <detail::SecurityHeaderRange Range>
-            requires(!std::is_lvalue_reference_v<Range &&> && !std::ranges::borrowed_range<Range>)
-        HeaderInit& operator=(Range&&) = delete;
-
-        HeaderInit& operator=(std::initializer_list<SecurityHeader>) = delete;
-
-        [[nodiscard]] constexpr operator std::span<const SecurityHeader>() const noexcept {
-            return headers_;
-        }
-
-        [[nodiscard]] constexpr auto begin() const noexcept {
-            return headers_.begin();
-        }
-
-        [[nodiscard]] constexpr auto end() const noexcept {
-            return headers_.end();
-        }
-
-        [[nodiscard]] constexpr std::size_t size() const noexcept {
-            return headers_.size();
-        }
-
-        [[nodiscard]] constexpr bool empty() const noexcept {
-            return headers_.empty();
-        }
-
-    private:
-        std::span<const SecurityHeader> headers_{};
-    };
-
+struct SecurityHeadersConfig final {
     DefaultSecurityHeaderPolicy contentTypeOptionsHeader = DefaultSecurityHeaderPolicy::kEmitDefault;
     DefaultSecurityHeaderPolicy frameOptionsHeader = DefaultSecurityHeaderPolicy::kEmitDefault;
     // Emitted only for requests received over TLS. Plain HTTP responses must
@@ -114,23 +45,18 @@ struct SecurityHeadersOptions final {
     DefaultSecurityHeaderPolicy strictTransportSecurityHeader = DefaultSecurityHeaderPolicy::kEmitDefault;
     XssProtectionHeaderPolicy xssProtectionHeader = XssProtectionHeaderPolicy::kEmitDisabled;
 
-    ::ruvia::BorrowedText contentSecurityPolicy = "default-src 'self'";
-    ::ruvia::BorrowedText referrerPolicy = "strict-origin-when-cross-origin";
-    ::ruvia::BorrowedText permissionsPolicy = "geolocation=(), microphone=(), camera=()";
+    std::string contentSecurityPolicy{"default-src 'self'"};
+    std::string referrerPolicy{"strict-origin-when-cross-origin"};
+    std::string permissionsPolicy{"geolocation=(), microphone=(), camera=()"};
 
-    HeaderInit customHeaders{};
+    std::vector<SecurityHeader> customHeaders;
     SecurityHeaderConflictPolicy existingHeaders = SecurityHeaderConflictPolicy::kPreserveExisting;
 };
 
-static_assert(sizeof(SecurityHeadersOptions::HeaderInit) == sizeof(std::span<const SecurityHeader>));
-
-void applySecurityHeaders(Context& context, const SecurityHeadersOptions& options = {});
+void applySecurityHeaders(Context& context, const SecurityHeadersConfig& config = {});
 
 // Registered app-wide with the defaults as `app().use<SecurityHeadersMiddleware>()`,
-// or with a policy as `app().use<SecurityHeadersMiddleware>(options)`. The
-// options value is borrowed text throughout, and one instance serves the whole
-// process, so whatever it points at must outlive App::run() -- the same rule the
-// SecurityHeadersOptions members already enforce against owning temporaries.
+// or with an owning policy as `app().use<SecurityHeadersMiddleware>(config)`.
 class SecurityHeadersMiddleware final : public Middleware<SecurityHeadersMiddleware> {
 public:
     // A 404 is a response to an attacker-reachable URL like any other, so it
@@ -140,15 +66,13 @@ public:
     // of as middleware.
     static constexpr bool ruviaRunsOnUnmatchedRequests = true;
 
-    SecurityHeadersMiddleware() noexcept = default;
-
-    explicit SecurityHeadersMiddleware(SecurityHeadersOptions options) noexcept
-        : options_(options) {}
+    SecurityHeadersMiddleware();
+    explicit SecurityHeadersMiddleware(SecurityHeadersConfig config);
 
     Task<void> handle(Context& context, Next& next);
 
 private:
-    SecurityHeadersOptions options_{};
+    SecurityHeadersConfig config_{};
 };
 
 }  // namespace ruvia

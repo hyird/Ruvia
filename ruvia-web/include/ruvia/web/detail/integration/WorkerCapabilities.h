@@ -38,7 +38,6 @@ struct WorkerCapabilityDefinitions final {
 };
 
 struct WorkerCapabilityOptions final {
-    std::size_t maxHttpClientOrigins{64};
     std::optional<RateLimitRule> defaultRateLimit;
     RouteRateLimitPresence routeRateLimits{RouteRateLimitPresence::kAbsent};
     std::size_t rateLimitCapacity{0};

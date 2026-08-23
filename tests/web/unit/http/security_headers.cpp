@@ -27,7 +27,7 @@ using ruvia::HttpResponse;
 using ruvia::RequestMemory;
 using ruvia::SecurityHeaderConflictPolicy;
 using ruvia::SecurityHeader;
-using ruvia::SecurityHeadersOptions;
+using ruvia::SecurityHeadersConfig;
 using ruvia::XssProtectionHeaderPolicy;
 using ruvia::WorkerMemory;
 using ruvia::detail::ContextAccess;
@@ -35,157 +35,27 @@ using ruvia::detail::ContextServices;
 using ruvia::detail::HttpRequestAccess;
 
 template <typename Target>
-concept HasContextlessSecurityHeaders = requires(Target& target, const SecurityHeadersOptions& options) { ruvia::applySecurityHeaders(target, options); };
+concept HasContextlessSecurityHeaders = requires(Target& target, const SecurityHeadersConfig& options) { ruvia::applySecurityHeaders(target, options); };
 
 static_assert(!HasContextlessSecurityHeaders<HttpResponse>);
-
-template <typename Text>
-concept AcceptsAnySecurityHeaderText = requires(Text&& text) {
-    SecurityHeader{
-        .name = std::forward<Text>(text),
-        .value = "value",
-    };
-} || requires(Text&& text) {
-    SecurityHeader{
-        .name = "X-Test",
-        .value = std::forward<Text>(text),
-    };
-};
-
-template <typename Text>
-concept AcceptsAllSecurityHeaderText = requires(Text&& text) {
-    SecurityHeader{
-        .name = std::forward<Text>(text),
-        .value = "value",
-    };
-    SecurityHeader{
-        .name = "X-Test",
-        .value = std::forward<Text>(text),
-    };
-};
-
-template <typename Text>
-concept AssignsAnySecurityHeaderText = requires(SecurityHeader& header, Text&& text) { header.name = std::forward<Text>(text); } || requires(SecurityHeader& header, Text&& text) { header.value = std::forward<Text>(text); };
-
-template <typename Text>
-concept AssignsAllSecurityHeaderText = requires(SecurityHeader& header, Text&& text) {
-    header.name = std::forward<Text>(text);
-    header.value = std::forward<Text>(text);
-};
-
-template <typename Text>
-concept AcceptsAnySecurityPolicyText = requires(Text&& text) {
-    SecurityHeadersOptions{
-        .contentSecurityPolicy = std::forward<Text>(text),
-    };
-} || requires(Text&& text) {
-    SecurityHeadersOptions{
-        .referrerPolicy = std::forward<Text>(text),
-    };
-} || requires(Text&& text) {
-    SecurityHeadersOptions{
-        .permissionsPolicy = std::forward<Text>(text),
-    };
-};
-
-template <typename Text>
-concept AcceptsAllSecurityPolicyText = requires(Text&& text) {
-    SecurityHeadersOptions{
-        .contentSecurityPolicy = std::forward<Text>(text),
-    };
-    SecurityHeadersOptions{
-        .referrerPolicy = std::forward<Text>(text),
-    };
-    SecurityHeadersOptions{
-        .permissionsPolicy = std::forward<Text>(text),
-    };
-};
-
-template <typename Text>
-concept AssignsAnySecurityPolicyText = requires(SecurityHeadersOptions& options, Text&& text) { options.contentSecurityPolicy = std::forward<Text>(text); } || requires(SecurityHeadersOptions& options, Text&& text) { options.referrerPolicy = std::forward<Text>(text); } || requires(SecurityHeadersOptions& options, Text&& text) { options.permissionsPolicy = std::forward<Text>(text); };
-
-template <typename Text>
-concept AssignsAllSecurityPolicyText = requires(SecurityHeadersOptions& options, Text&& text) {
-    options.contentSecurityPolicy = std::forward<Text>(text);
-    options.referrerPolicy = std::forward<Text>(text);
-    options.permissionsPolicy = std::forward<Text>(text);
-};
-
-template <typename Headers>
-concept AcceptsSecurityCustomHeaders = requires(Headers&& headers) {
-    SecurityHeadersOptions{
-        .customHeaders = std::forward<Headers>(headers),
-    };
-};
-
-template <typename Headers>
-concept AssignsSecurityCustomHeaders = requires(SecurityHeadersOptions& options, Headers&& headers) { options.customHeaders = std::forward<Headers>(headers); };
 
 template <typename T>
 concept HasSecurityHeadersOverwriteExistingBoolean = requires(T& options) { options.overwriteExisting = true; };
 
-using SecurityHeaderArray = std::array<SecurityHeader, 1>;
-using SecurityHeaderVector = std::vector<SecurityHeader>;
-
 static_assert(std::is_aggregate_v<SecurityHeader>);
-static_assert(std::is_aggregate_v<SecurityHeadersOptions>);
-static_assert(SecurityHeadersOptions{}.contentTypeOptionsHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
-static_assert(SecurityHeadersOptions{}.frameOptionsHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
-static_assert(SecurityHeadersOptions{}.strictTransportSecurityHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
-static_assert(std::same_as<decltype(SecurityHeadersOptions{}.existingHeaders), SecurityHeaderConflictPolicy>);
-static_assert(SecurityHeadersOptions{}.existingHeaders == SecurityHeaderConflictPolicy::kPreserveExisting);
-static_assert(!HasSecurityHeadersOverwriteExistingBoolean<SecurityHeadersOptions>);
-constexpr SecurityHeader kLiteralSecurityHeader{
-    .name = "X-Test",
-    .value = "value",
-};
-constexpr std::array kLiteralSecurityHeaders{kLiteralSecurityHeader};
-constexpr SecurityHeadersOptions kLiteralSecurityHeaderOptions{
-    .contentSecurityPolicy = "default-src 'none'",
-    .customHeaders = kLiteralSecurityHeaders,
-};
-static_assert(kLiteralSecurityHeader.name.view() == "X-Test");
-static_assert(kLiteralSecurityHeader.value.view() == "value");
-static_assert(kLiteralSecurityHeaderOptions.contentSecurityPolicy.view() == "default-src 'none'");
-static_assert(kLiteralSecurityHeaderOptions.customHeaders.size() == 1);
-static_assert(!AcceptsAnySecurityHeaderText<std::string>);
-static_assert(!AcceptsAnySecurityHeaderText<const std::string>);
-static_assert(!AcceptsAnySecurityHeaderText<std::pmr::string>);
-static_assert(AcceptsAllSecurityHeaderText<std::string&>);
-static_assert(AcceptsAllSecurityHeaderText<std::pmr::string&>);
-static_assert(AcceptsAllSecurityHeaderText<std::string_view>);
-static_assert(!AssignsAnySecurityHeaderText<std::string>);
-static_assert(!AssignsAnySecurityHeaderText<const std::string>);
-static_assert(!AssignsAnySecurityHeaderText<std::pmr::string>);
-static_assert(AssignsAllSecurityHeaderText<std::string&>);
-static_assert(AssignsAllSecurityHeaderText<std::pmr::string&>);
-static_assert(AssignsAllSecurityHeaderText<std::string_view>);
-static_assert(!AcceptsAnySecurityPolicyText<std::string>);
-static_assert(!AcceptsAnySecurityPolicyText<const std::string>);
-static_assert(!AcceptsAnySecurityPolicyText<std::pmr::string>);
-static_assert(AcceptsAllSecurityPolicyText<std::string&>);
-static_assert(AcceptsAllSecurityPolicyText<std::pmr::string&>);
-static_assert(AcceptsAllSecurityPolicyText<std::string_view>);
-static_assert(!AssignsAnySecurityPolicyText<std::string>);
-static_assert(!AssignsAnySecurityPolicyText<const std::string>);
-static_assert(!AssignsAnySecurityPolicyText<std::pmr::string>);
-static_assert(AssignsAllSecurityPolicyText<std::string&>);
-static_assert(AssignsAllSecurityPolicyText<std::pmr::string&>);
-static_assert(AssignsAllSecurityPolicyText<std::string_view>);
-static_assert(!AcceptsSecurityCustomHeaders<SecurityHeaderArray>);
-static_assert(!AcceptsSecurityCustomHeaders<const SecurityHeaderArray>);
-static_assert(!AcceptsSecurityCustomHeaders<SecurityHeaderVector>);
-static_assert(!AcceptsSecurityCustomHeaders<const SecurityHeaderVector>);
-static_assert(AcceptsSecurityCustomHeaders<SecurityHeaderArray&>);
-static_assert(AcceptsSecurityCustomHeaders<SecurityHeaderVector&>);
-static_assert(AcceptsSecurityCustomHeaders<std::span<const SecurityHeader>>);
-static_assert(!AssignsSecurityCustomHeaders<SecurityHeaderArray>);
-static_assert(!AssignsSecurityCustomHeaders<const SecurityHeaderArray>);
-static_assert(!AssignsSecurityCustomHeaders<SecurityHeaderVector>);
-static_assert(!AssignsSecurityCustomHeaders<const SecurityHeaderVector>);
-static_assert(AssignsSecurityCustomHeaders<SecurityHeaderArray&>);
-static_assert(AssignsSecurityCustomHeaders<SecurityHeaderVector&>);
-static_assert(AssignsSecurityCustomHeaders<std::span<const SecurityHeader>>);
+static_assert(std::is_aggregate_v<SecurityHeadersConfig>);
+static_assert(std::same_as<decltype(SecurityHeader{}.name), std::string>);
+static_assert(std::same_as<decltype(SecurityHeader{}.value), std::string>);
+static_assert(std::same_as<decltype(SecurityHeadersConfig{}.contentSecurityPolicy), std::string>);
+static_assert(std::same_as<decltype(SecurityHeadersConfig{}.referrerPolicy), std::string>);
+static_assert(std::same_as<decltype(SecurityHeadersConfig{}.permissionsPolicy), std::string>);
+static_assert(std::same_as<decltype(SecurityHeadersConfig{}.customHeaders), std::vector<SecurityHeader>>);
+static_assert(SecurityHeadersConfig{}.contentTypeOptionsHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
+static_assert(SecurityHeadersConfig{}.frameOptionsHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
+static_assert(SecurityHeadersConfig{}.strictTransportSecurityHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
+static_assert(std::same_as<decltype(SecurityHeadersConfig{}.existingHeaders), SecurityHeaderConflictPolicy>);
+static_assert(SecurityHeadersConfig{}.existingHeaders == SecurityHeaderConflictPolicy::kPreserveExisting);
+static_assert(!HasSecurityHeadersOverwriteExistingBoolean<SecurityHeadersConfig>);
 
 class SecurityContextFixture final {
 public:
@@ -220,7 +90,7 @@ private:
 
 RUVIA_TEST(security_headers_default_set) {
     SecurityContextFixture fixture(ContextServices{}.withTlsTransport("192.0.2.1"));
-    applySecurityHeaders(fixture.context(), SecurityHeadersOptions{});
+    applySecurityHeaders(fixture.context(), SecurityHeadersConfig{});
     const auto& response = fixture.response();
 
     RUVIA_CHECK_EQ(response.header("X-Content-Type-Options"), std::string_view("nosniff"));
@@ -245,10 +115,10 @@ RUVIA_TEST(security_headers_emit_hsts_only_for_tls_contexts) {
 }
 
 RUVIA_TEST(security_headers_xss_protection_header_policy_is_explicit) {
-    static_assert(SecurityHeadersOptions{}.xssProtectionHeader == XssProtectionHeaderPolicy::kEmitDisabled);
+    static_assert(SecurityHeadersConfig{}.xssProtectionHeader == XssProtectionHeaderPolicy::kEmitDisabled);
 
     SecurityContextFixture fixture;
-    const SecurityHeadersOptions options{
+    const SecurityHeadersConfig options{
         .xssProtectionHeader = XssProtectionHeaderPolicy::kOmit,
     };
     applySecurityHeaders(fixture.context(), options);
@@ -258,7 +128,7 @@ RUVIA_TEST(security_headers_xss_protection_header_policy_is_explicit) {
 
 RUVIA_TEST(security_headers_reject_invalid_xss_protection_header_policy) {
     SecurityContextFixture fixture;
-    const SecurityHeadersOptions options{
+    const SecurityHeadersConfig options{
         .xssProtectionHeader = static_cast<XssProtectionHeaderPolicy>(0xFF),
     };
 
@@ -273,7 +143,7 @@ RUVIA_TEST(security_headers_reject_invalid_xss_protection_header_policy) {
 
 RUVIA_TEST(security_headers_reject_invalid_default_header_policy) {
     SecurityContextFixture fixture;
-    const SecurityHeadersOptions options{
+    const SecurityHeadersConfig options{
         .frameOptionsHeader = static_cast<DefaultSecurityHeaderPolicy>(0xFF),
     };
 
@@ -290,7 +160,7 @@ RUVIA_TEST(security_headers_empty_policy_is_not_emitted) {
     // An explicitly-cleared policy string produces no header (rather than an
     // empty-valued one).
     SecurityContextFixture fixture;
-    SecurityHeadersOptions options;
+    SecurityHeadersConfig options;
     options.contentSecurityPolicy = "";
     options.referrerPolicy = "";
     applySecurityHeaders(fixture.context(), options);
@@ -301,7 +171,7 @@ RUVIA_TEST(security_headers_empty_policy_is_not_emitted) {
 
 RUVIA_TEST(security_headers_disabled_options_omit_headers) {
     SecurityContextFixture fixture;
-    SecurityHeadersOptions options;
+    SecurityHeadersConfig options;
     options.frameOptionsHeader = DefaultSecurityHeaderPolicy::kOmit;
     options.strictTransportSecurityHeader = DefaultSecurityHeaderPolicy::kOmit;
     applySecurityHeaders(fixture.context(), options);
@@ -314,7 +184,7 @@ RUVIA_TEST(security_headers_disabled_options_omit_headers) {
 
 RUVIA_TEST(security_headers_emit_configured_policies) {
     SecurityContextFixture fixture;
-    SecurityHeadersOptions options;
+    SecurityHeadersConfig options;
     options.contentSecurityPolicy = "default-src 'self'";
     options.referrerPolicy = "no-referrer";
     applySecurityHeaders(fixture.context(), options);
@@ -326,11 +196,11 @@ RUVIA_TEST(security_headers_emit_configured_policies) {
 
 RUVIA_TEST(security_headers_apply_custom_headers) {
     SecurityContextFixture fixture;
-    const ruvia::SecurityHeader custom[] = {
+    const std::vector<ruvia::SecurityHeader> custom = {
         {"X-Custom-Security", "value-1"},
         {"X-Report-To", "endpoint"},
     };
-    SecurityHeadersOptions options;
+    SecurityHeadersConfig options;
     options.customHeaders = custom;
     applySecurityHeaders(fixture.context(), options);
     const auto& response = fixture.response();
@@ -341,11 +211,33 @@ RUVIA_TEST(security_headers_apply_custom_headers) {
     RUVIA_CHECK_EQ(response.header("X-Frame-Options"), std::string_view("DENY"));
 }
 
+RUVIA_TEST(security_headers_reject_invalid_custom_header_at_construction) {
+    bool invalidNameRejected = false;
+    try {
+        static_cast<void>(ruvia::SecurityHeadersMiddleware(SecurityHeadersConfig{
+            .customHeaders = {{"bad name", "value"}},
+        }));
+    } catch (const std::invalid_argument&) {
+        invalidNameRejected = true;
+    }
+    RUVIA_CHECK(invalidNameRejected);
+
+    bool invalidValueRejected = false;
+    try {
+        static_cast<void>(ruvia::SecurityHeadersMiddleware(SecurityHeadersConfig{
+            .customHeaders = {{"X-Security", "bad\r\nvalue"}},
+        }));
+    } catch (const std::invalid_argument&) {
+        invalidValueRejected = true;
+    }
+    RUVIA_CHECK(invalidValueRejected);
+}
+
 RUVIA_TEST(security_headers_custom_hsts_is_still_tls_only) {
-    const ruvia::SecurityHeader custom[] = {
+    const std::vector<ruvia::SecurityHeader> custom = {
         {"Strict-Transport-Security", "max-age=1"},
     };
-    SecurityHeadersOptions options;
+    SecurityHeadersConfig options;
     options.strictTransportSecurityHeader = DefaultSecurityHeaderPolicy::kOmit;
     options.customHeaders = custom;
 
@@ -363,13 +255,13 @@ RUVIA_TEST(security_headers_respect_existing_header_conflict_policy) {
     // only supplies defaults.
     SecurityContextFixture keep;
     keep.context().header("X-Frame-Options", "SAMEORIGIN");
-    applySecurityHeaders(keep.context(), SecurityHeadersOptions{});
+    applySecurityHeaders(keep.context(), SecurityHeadersConfig{});
     RUVIA_CHECK_EQ(keep.response().header("X-Frame-Options"), std::string_view("SAMEORIGIN"));
 
     SecurityContextFixture replace;
     replace.context().header("X-Frame-Options", "SAMEORIGIN");
     applySecurityHeaders(replace.context(),
-        SecurityHeadersOptions{
+        SecurityHeadersConfig{
             .existingHeaders = SecurityHeaderConflictPolicy::kReplaceExisting,
         });
     RUVIA_CHECK_EQ(replace.response().header("X-Frame-Options"), std::string_view("DENY"));
@@ -377,7 +269,7 @@ RUVIA_TEST(security_headers_respect_existing_header_conflict_policy) {
 
 RUVIA_TEST(security_headers_reject_invalid_conflict_policy) {
     SecurityContextFixture fixture;
-    const SecurityHeadersOptions options{
+    const SecurityHeadersConfig options{
         .existingHeaders = static_cast<SecurityHeaderConflictPolicy>(0xFF),
     };
 

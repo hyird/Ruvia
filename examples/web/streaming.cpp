@@ -88,5 +88,13 @@ private:
 };
 
 int main() {
-    ruvia::app().listen({.address = "0.0.0.0", .http = 8082}).setWorkerCount(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).setBodyLimit(16 * 1024 * 1024).setStreamBodyLimit(nullptr).run();
+    ruvia::app()
+        .listen({.address = "0.0.0.0", .http = 8082})
+        .server({
+            .workerCount = 2,
+            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,
+            .maxBufferedBodyBytes = 16 * 1024 * 1024,
+            .maxStreamBodyBytes = std::nullopt,
+        })
+        .run();
 }

@@ -60,9 +60,6 @@ HttpServerListenerDefinition makeListener(Transport&& transport) {
         std::forward<Transport>(transport));
 }
 
-template <typename T>
-concept HasLegacyHttpClientOriginLimit = requires(T& options) { options.maxHttpClientOriginsPerWorker; };
-
 template <typename Fn>
 bool throwsInvalid(Fn&& fn) {
     try {
@@ -93,15 +90,12 @@ RUVIA_TEST(validate_server_options_accepts_defaults) {
     static_assert(std::same_as<decltype(HttpServerOptions{}.maxStreamBodyBytes), std::optional<std::size_t>>);
     static_assert(std::same_as<decltype(HttpServerOptions{}.defaultRateLimitPerWorker), std::optional<ruvia::RateLimitRule>>);
     static_assert(std::same_as<decltype(HttpServerOptions{}.rateLimitCapacityPerWorker), std::size_t>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.httpClientOriginCacheCapacityPerWorker), std::size_t>);
-    static_assert(!HasLegacyHttpClientOriginLimit<HttpServerOptions>);
     RUVIA_CHECK(!HttpServerOptions{}.maxStreamBodyBytes.has_value());
     RUVIA_CHECK(!HttpServerOptions{}.compression.has_value());
     RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.minBytes, std::size_t{1024});
     RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.syncBytes, std::size_t{64} * 1024);
     RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.maxBytes, std::size_t{64} * 1024 * 1024);
     RUVIA_CHECK_EQ(HttpServerOptions{}.rateLimitCapacityPerWorker, ruvia::kDefaultRateLimitCapacityPerWorker);
-    RUVIA_CHECK_EQ(HttpServerOptions{}.httpClientOriginCacheCapacityPerWorker, std::size_t{64});
     // An unconfigured server is bounded by default against connection floods.
     RUVIA_CHECK(HttpServerOptions{}.maxConnections.has_value());
     RUVIA_CHECK_EQ(*HttpServerOptions{}.maxConnections, std::size_t{1024});
@@ -161,6 +155,19 @@ RUVIA_TEST(validate_server_options_owns_document_root_runtime_policy) {
     options.documentRoot = HttpServerOptions::DocumentRoot::refreshing(
         root, {.refreshInterval = std::chrono::milliseconds(1)});
     RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    options.documentRoot = HttpServerOptions::DocumentRoot::refreshing(
+        root,
+        {.refreshInterval = std::chrono::milliseconds(1)},
+        {.gzip = true, .minBytes = 0});
+    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+
+    options.documentRoot = HttpServerOptions::DocumentRoot::refreshing(
+        root,
+        {.refreshInterval = std::chrono::milliseconds(1)},
+        {.gzip = true, .minBytes = 1024, .maxBytes = 512});
+    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+
     fs::remove_all(dir);
 }
 
@@ -360,7 +367,7 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
             .tls = {.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"},
         });
     }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().setProcessSignalHandlers(static_cast<ruvia::ProcessSignalHandlerPolicy>(0xFF)); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().server({.processSignalHandlers = static_cast<ruvia::ProcessSignalHandlerPolicy>(0xFF)}); }));
 }
 
 RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {

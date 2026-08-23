@@ -25,7 +25,7 @@ public:
     void bindStop();
     void requestClose() noexcept;
 
-    [[nodiscard]] ScopedOperation<HttpClientResponse> send(const HttpClientRequestView& request, OperationOptions options);
+    [[nodiscard]] HttpClientHandle handle(OperationOptions options);
     [[nodiscard]] HttpClientStats stats();
     [[nodiscard]] std::string_view host();
     [[nodiscard]] std::uint16_t port();

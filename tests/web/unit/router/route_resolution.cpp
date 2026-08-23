@@ -26,7 +26,7 @@ using ruvia::detail::RouteStreamHandler;
 using ruvia::detail::RouteTable;
 
 template <typename Text>
-concept WebSocketSubprotocolsAccepts = requires(ruvia::WebSocketRouteOptions& options, Text&& text) { options.subprotocols = std::forward<Text>(text); };
+concept WebSocketSubprotocolsAccepts = requires(ruvia::WebSocketRouteConfig& options, Text&& text) { options.subprotocols = std::forward<Text>(text); };
 
 template <typename T>
 concept HasLooseRouteResolutionAccessors = requires(const T& value) {
@@ -54,13 +54,10 @@ static_assert(!std::is_move_constructible_v<RouteTable>);
 static_assert(!std::is_move_assignable_v<RouteTable>);
 static_assert(WebSocketSubprotocolsAccepts<std::string&>);
 static_assert(WebSocketSubprotocolsAccepts<const std::pmr::string&>);
-static_assert(!WebSocketSubprotocolsAccepts<std::string>);
-static_assert(!WebSocketSubprotocolsAccepts<const std::string>);
-static_assert(!WebSocketSubprotocolsAccepts<std::pmr::string>);
-constexpr ruvia::WebSocketRouteOptions kLiteralWebSocketOptions{.subprotocols = "chat.v1"};
-static_assert(kLiteralWebSocketOptions.subprotocols.view() == "chat.v1");
-static_assert(kLiteralWebSocketOptions.subprotocols == "chat.v1");
-static_assert("chat.v1" == kLiteralWebSocketOptions.subprotocols);
+static_assert(WebSocketSubprotocolsAccepts<std::string>);
+static_assert(WebSocketSubprotocolsAccepts<const std::string>);
+static_assert(WebSocketSubprotocolsAccepts<std::pmr::string>);
+static_assert(std::same_as<decltype(ruvia::WebSocketRouteConfig{}.subprotocols), std::string>);
 
 ruvia::Task<ruvia::HttpResponse> routeHandler(void*, ruvia::Context& context) {
     co_return ruvia::HttpResponse({.resource = context.resource()});
@@ -90,7 +87,7 @@ RUVIA_TEST(route_endpoint_binds_handler_shape_and_only_relevant_metadata) {
     RUVIA_CHECK(stream.requestBodyMode() == ruvia::detail::RequestBodyMode::kBuffered);
 
     std::pmr::string sourceProtocols("chat, superchat", std::pmr::get_default_resource());
-    ruvia::WebSocketRouteOptions options;
+    ruvia::WebSocketRouteConfig options;
     options.subprotocols = sourceProtocols;
     options.lifecycle.heartbeat = {
         .pingInterval = std::chrono::milliseconds(25),

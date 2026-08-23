@@ -82,7 +82,7 @@ public:
 private:
     friend class RouteEndpoint;
 
-    WebSocketRouteEndpoint(std::pmr::memory_resource* resource, RouteStreamHandler handler, WebSocketRouteOptions options)
+    WebSocketRouteEndpoint(std::pmr::memory_resource* resource, RouteStreamHandler handler, WebSocketRouteConfig options)
         : handler_(handler),
           subprotocols_(options.subprotocols, resource),
           lifecycle_(options.lifecycle) {}
@@ -122,7 +122,7 @@ public:
         return RouteEndpoint(ResponseStreamRouteEndpoint(handler, kind));
     }
 
-    [[nodiscard]] static RouteEndpoint webSocket(std::pmr::memory_resource* resource, RouteStreamHandler handler, WebSocketRouteOptions options = {}) {
+    [[nodiscard]] static RouteEndpoint webSocket(std::pmr::memory_resource* resource, RouteStreamHandler handler, WebSocketRouteConfig options = {}) {
         if (!handler.valid()) {
             throw std::invalid_argument("websocket route handler must not be empty");
         }
@@ -159,7 +159,7 @@ public:
             return RouteEndpoint::responseStream(endpoint->handler(), endpoint->kind());
         }
         const auto& endpoint = *webSocket();
-        return RouteEndpoint::webSocket(resource, endpoint.handler(), WebSocketRouteOptions{endpoint.subprotocols(), endpoint.lifecycle()});
+        return RouteEndpoint::webSocket(resource, endpoint.handler(), WebSocketRouteConfig{.subprotocols = std::string(endpoint.subprotocols()), .lifecycle = endpoint.lifecycle()});
     }
 
     [[nodiscard]] const BufferedRouteEndpoint* buffered() const& noexcept {

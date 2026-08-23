@@ -11,7 +11,7 @@ public:
     RUVIA_CONTROLLER_GROUP("/ws")
 
     RUVIA_ROUTES_BEGIN
-    const auto chatOptions = ruvia::WebSocketRouteOptions{
+    const auto chatOptions = ruvia::WebSocketRouteConfig{
         .subprotocols = "chat.v1",
         .lifecycle =
             {
@@ -51,5 +51,12 @@ private:
 };
 
 int main() {
-    ruvia::app().listen({.address = "0.0.0.0", .http = 8084}).setWorkerCount(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).setMaxWebSocketMessageBytes(16 * 1024 * 1024).run();
+    ruvia::app()
+        .listen({.address = "0.0.0.0", .http = 8084})
+        .server({
+            .workerCount = 2,
+            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,
+            .maxWebSocketMessageBytes = 16 * 1024 * 1024,
+        })
+        .run();
 }

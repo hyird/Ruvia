@@ -1,13 +1,9 @@
 #pragma once
 
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <initializer_list>
-#include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -42,74 +38,47 @@ struct AppState;
 
 }  // namespace detail
 
-enum class ProcessSignalHandlerPolicy : std::uint8_t {
-    kExternalOwner,
-    kInstall,
-};
-
 #ifdef RUVIA_ENABLE_DATABASE
-struct DbRegistrationOptions final {
+struct DbRegistrationConfig final {
     std::string alias{"default"};
     DbConfig config;
 };
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-struct RedisRegistrationOptions final {
+struct RedisRegistrationConfig final {
     std::string alias{"default"};
     RedisConfig config;
 };
 #endif
+
+struct HttpClientRegistrationConfig final {
+    std::string alias{"default"};
+    HttpClientConfig config;
+};
 
 class App final : public detail::AppConfiguration<App> {
 public:
     [[nodiscard]] const Env& env() const noexcept;
     App& loadDotenv(DotenvOptions options = {});
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
+    App& server(ServerConfig config);
     App& listen(ListenConfig config);
-    App& setWorkerCount(std::size_t workerCount);
-    App& setProcessSignalHandlers(ProcessSignalHandlerPolicy policy);
-    App& setWorkerMailboxCapacity(std::size_t capacity);
-    App& setIdleTimeout(std::chrono::milliseconds timeout);
-    App& setIdleTimeout(std::nullptr_t);
-    App& setConnectionScanInterval(std::chrono::milliseconds interval);
-    App& setRequestHeaderTimeout(std::chrono::milliseconds timeout);
-    App& setRequestHeaderTimeout(std::nullptr_t);
-    App& setRequestBodyTimeout(std::chrono::milliseconds timeout);
-    App& setRequestBodyTimeout(std::nullptr_t);
-    App& setWriteTimeout(std::chrono::milliseconds timeout);
-    App& setWriteTimeout(std::nullptr_t);
-    App& setMaxConnectionsPerWorker(std::size_t maxConnections);
-    App& setMaxConnectionsPerWorker(std::nullptr_t);
-    App& setMaxRequestsPerConnection(std::size_t maxRequests);
-    App& setMaxRequestsPerConnection(std::nullptr_t);
     // The deployment's handler deadline. Absent by
     // default: an app that declares no deadline anywhere behaves exactly as
     // before and arms nothing per request. A route may tighten the handler
     // deadline with ruvia::Deadline<N> but never extend it -- the same rule
-    // setBodyLimit() follows.
-    App& setDeadline(DeadlineConfig config);
-    App& setDeadline(std::nullptr_t);
-
-    // The deployment's request-body ceiling. A route may declare a smaller one
-    // with ruvia::BodyLimit<N>; where both exist the STRICTER wins, and a route
-    // can never raise this. That is the single rule for every policy with both
-    // an app-wide and a route-level form -- narrower scope may only tighten.
-    App& setBodyLimit(std::size_t bytes);
-    // The same ceiling for explicit stream routes. Pass nullptr for no app-wide
-    // stream limit. A route's ruvia::BodyLimit<N> bounds even that.
-    App& setStreamBodyLimit(std::size_t bytes);
-    App& setStreamBodyLimit(std::nullptr_t);
-    App& setMaxWebSocketMessageBytes(std::size_t bytes);
+    // ServerConfig::maxBufferedBodyBytes follows.
+    App& deadline(DeadlineConfig config);
+    App& deadline(std::nullptr_t);
     // Disabled by default. A config enables response coding and precompressed
-    // static sidecar negotiation; nullptr disables both.
-    App& setCompression(CompressionConfig config);
-    App& setCompression(std::nullptr_t);
-    App& setCors(CorsConfig config);
-    App& setCors(std::nullptr_t);
-    App& setDocumentRoot(DocumentRootConfig config);
-    App& setDocumentRoot(std::nullptr_t);
-    App& setMemoryPoolConfig(MemoryPoolConfig config);
+    // static variant negotiation; nullptr disables both.
+    App& compression(CompressionConfig config);
+    App& compression(std::nullptr_t);
+    App& cors(CorsConfig config);
+    App& cors(std::nullptr_t);
+    App& documentRoot(DocumentRootConfig config);
+    App& documentRoot(std::nullptr_t);
     // Configures the process-wide ordinary-thread pool used by
     // Context::runBlocking() and large buffered-response compression. It is
     // enabled by default with bounded CPU-based sizing; nullptr explicitly
@@ -117,8 +86,8 @@ public:
     // run() starts the threads before the first request; after workers stop,
     // running callables are not awaited and may finish on the pool's detached
     // state.
-    App& setBlockingPool(BlockingPoolOptions options);
-    App& setBlockingPool(std::nullptr_t);
+    App& blockingPool(BlockingPoolOptions config);
+    App& blockingPool(std::nullptr_t);
 
     App& onError(HttpErrorHandler handler);
     App& onNotFound(HttpNotFoundHandler handler);
@@ -140,26 +109,18 @@ public:
     // caller pick its own rate-limit key and claim a secure scheme. Configure
     // this ONLY with the addresses of proxies you operate, and the request's
     // ConnInfo::client()/scheme() then reflect the original caller.
-    App& setTrustedProxies(std::span<const std::string_view> cidrs);
-
-    App& setTrustedProxies(std::initializer_list<std::string_view> cidrs) {
-        return setTrustedProxies(std::span<const std::string_view>(cidrs.begin(), cidrs.size()));
-    }
+    App& trustedProxies(TrustedProxyConfig config);
+    App& trustedProxies(std::nullptr_t);
 
     // The rate limit every request passes. A route may add its own with
     // ruvia::RateLimit<max, windowMs>; both then apply, so the stricter is what
     // a caller actually meets -- the same "narrower scope may only tighten"
-    // rule setBodyLimit() follows.
+    // rule ServerConfig::maxBufferedBodyBytes follows.
     //
     // Worker-local: each worker counts independently, so a deployment with N
     // workers admits up to N times this rule. Size it accordingly.
-    App& setRateLimit(RateLimitRule rule);
-    App& setRateLimit(std::nullptr_t);
-    // Startup key capacity of that worker-local table, not a policy. Workers
-    // with neither an app-wide nor a route-specific rule allocate no table at
-    // all.
-    App& setRateLimitCapacityPerWorker(std::size_t capacityPerWorker);
-    App& setHttpClientOriginCacheCapacityPerWorker(std::size_t capacityPerWorker);
+    App& rateLimit(RateLimitConfig config);
+    App& rateLimit(std::nullptr_t);
     App& onAccess(AccessLogCallback callback);
     // Observes connections lost to an exception that escaped their session --
     // the failures onError cannot answer because the response is already
@@ -169,11 +130,15 @@ public:
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
 #ifdef RUVIA_ENABLE_DATABASE
-    App& useDb(DbRegistrationOptions options);
+    App& database(DbRegistrationConfig config);
+    App& database(std::nullptr_t);
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-    App& useRedis(RedisRegistrationOptions options);
+    App& redis(RedisRegistrationConfig config);
+    App& redis(std::nullptr_t);
 #endif
+    App& httpClient(HttpClientRegistrationConfig config);
+    App& httpClient(std::nullptr_t);
     void run();
     void stop();
     // HTTP serving counters summed across every worker. All zero before run()

@@ -129,12 +129,17 @@ int main() {
     }();
 
     auto& app = ruvia::app();
-    app.listen(listener).setWorkerCount(4).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).setMaxRequestsPerConnection(1u << 30).setMaxConnectionsPerWorker(20000);
+    app.listen(listener).server({
+        .workerCount = 4,
+        .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,
+        .maxConnectionsPerWorker = 20000,
+        .maxRequestsPerConnection = 1u << 30,
+    });
 
     // Response compression is off by default. Enable it explicitly when the
     // benchmark is intended to include negotiation and encoding work.
     if (const char* compression = std::getenv("COMPRESSION"); compression != nullptr && compression[0] == '1') {
-        app.setCompression(ruvia::CompressionConfig{});
+        app.compression({});
     }
 
     app.run();

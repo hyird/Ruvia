@@ -1,6 +1,7 @@
 #include "ruvia/web/Context.h"
 
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/response/HttpResponseFileAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/response/ResponseHeaderUtils.h"
@@ -27,6 +28,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 namespace ruvia {
 namespace {
@@ -83,11 +85,62 @@ private:
     bool consumed_{false};
 };
 
+class FileResponseBodySource final {
+public:
+    [[nodiscard]] static FileResponseBodySource file(FileResponsePath path) {
+        return FileResponseBodySource(std::move(path));
+    }
+
+    [[nodiscard]] static FileResponseBodySource bytes(std::string_view bytes) {
+        return FileResponseBodySource(bytes);
+    }
+
+    [[nodiscard]] std::string_view guessedContentType() const noexcept {
+        if (const auto* path = std::get_if<FileResponsePath>(&value_)) {
+            return path->guessedContentType();
+        }
+        return "application/octet-stream";
+    }
+
+    [[nodiscard]] detail::ResponseFileIdentity identity() const noexcept {
+        if (const auto* path = std::get_if<FileResponsePath>(&value_)) {
+            return path->identity();
+        }
+        return detail::ResponseFileIdentity::unchecked();
+    }
+
+    void setBody(HttpResponse& response, std::pmr::memory_resource* resource, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
+        if (auto* path = std::get_if<FileResponsePath>(&value_)) {
+            path->setBody(response, size, offset, length);
+            return;
+        }
+        const auto bytes = std::get<std::string_view>(value_);
+        if (offset > bytes.size() || length > bytes.size() - offset) {
+            throw std::logic_error("static memory response slice is out of range");
+        }
+        std::pmr::string owned(bytes.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(length)), resource);
+        detail::setResponseBodyOwned(response, std::move(owned));
+    }
+
+    void setFullBody(HttpResponse& response, std::pmr::memory_resource* resource, std::uint64_t size) {
+        setBody(response, resource, size, 0, size);
+    }
+
+private:
+    explicit FileResponseBodySource(FileResponsePath path) noexcept
+        : value_(std::move(path)) {}
+
+    explicit FileResponseBodySource(std::string_view bytes) noexcept
+        : value_(bytes) {}
+
+    std::variant<FileResponsePath, std::string_view> value_;
+};
+
 // What one file response describes: which bytes, when they last changed, and
 // the policy the serving route attached to them. Fifteen positional arguments
 // at a call site said none of that; designated initializers do.
 struct FileResponseSource final {
-    FileResponsePath path;
+    FileResponseBodySource body;
     std::uint64_t size{0};
     std::uint64_t modifiedToken{0};
     std::time_t modifiedSeconds{0};
@@ -121,7 +174,7 @@ template <typename ApplyResponseState>
     const auto validatorModifiedSeconds = lastModifiedIsActual ? source.modifiedSeconds : responseSeconds;
     if (emitResponseValidators) {
         if (source.precomputedEtag.empty()) {
-            etagStorage = detail::makeStaticFileSnapshotEtag(context.resource(), source.size, source.modifiedToken, source.path.identity());
+            etagStorage = detail::makeStaticFileSnapshotEtag(context.resource(), source.size, source.modifiedToken, source.body.identity());
             etag = etagStorage;
         } else {
             etag = source.precomputedEtag;
@@ -135,9 +188,9 @@ template <typename ApplyResponseState>
     }
 
     auto addFileHeaders = [&](HttpResponse& response) {
-        detail::reserveResponseHeaders(response, kFileResponseHeaderReserve);
+            detail::reserveResponseHeaders(response, kFileResponseHeaderReserve);
         if (source.contentType.empty()) {
-            detail::setResponseHeaderStableView(response, "Content-Type", source.path.guessedContentType());
+            detail::setResponseHeaderStableView(response, "Content-Type", source.body.guessedContentType());
         } else {
             response.header("Content-Type", source.contentType);
         }
@@ -168,8 +221,8 @@ template <typename ApplyResponseState>
             detail::addVaryToken(response, "Accept-Encoding");
         }
     };
-    auto setFileBody = [&](HttpResponse& response, std::uint64_t offset, std::uint64_t length) { source.path.setBody(response, source.size, offset, length); };
-    auto setFullFileBody = [&](HttpResponse& response) { source.path.setFullBody(response, source.size); };
+    auto setFileBody = [&](HttpResponse& response, std::uint64_t offset, std::uint64_t length) { source.body.setBody(response, context.resource(), source.size, offset, length); };
+    auto setFullFileBody = [&](HttpResponse& response) { source.body.setFullBody(response, context.resource(), source.size); };
     auto makeHeaderOnlyResponse = [&](std::optional<HttpStatusCode> statusCode) {
         HttpResponse response({.resource = context.resource()});
         addFileHeaders(response);
@@ -272,7 +325,7 @@ HttpResponse Context::file(FileResponseOptions options) const {
     const auto applyState = [this](HttpResponse& response, std::optional<HttpStatusCode> statusCode) { applyResponseState(response, statusCode); };
     return makeFileResponse(*this, request_,
         FileResponseSource{
-            .path = FileResponsePath::copying(std::move(options.path), snapshot.identity),
+            .body = FileResponseBodySource::file(FileResponsePath::copying(std::move(options.path), snapshot.identity)),
             .size = snapshot.size,
             .modifiedToken = snapshot.modifiedToken,
             .modifiedSeconds = snapshot.modifiedSeconds,
@@ -333,27 +386,35 @@ HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptio
     }
     const auto& baseEntry = *entry;
 
-    // Serve a precompressed sidecar when the client accepts one; the bytes and
+    // Serve a precompressed variant when the client accepts one; the bytes and
     // validators come from the variant, the Content-Type from the base entry.
     const auto served = selectStaticFileRepresentation(root, relative, request_, resource(), baseEntry, mode);
     if (!served.has_value()) {
         throw HttpError({.status = ruvia::http_status::kNotAcceptable, .code = "not_acceptable", .message = "no acceptable response content coding"});
     }
     const auto& servedEntry = served->entry();
+    const auto* const memoryVariant = served->memoryVariant();
+    const auto responseSize = memoryVariant == nullptr ? servedEntry.size() : memoryVariant->size();
+    const auto responseModifiedToken = memoryVariant == nullptr ? servedEntry.modifiedToken() : memoryVariant->modifiedToken();
+    const auto responseModifiedSeconds = memoryVariant == nullptr ? servedEntry.modifiedSeconds() : memoryVariant->modifiedSeconds();
+    const auto responseEtag = memoryVariant == nullptr ? servedEntry.etag() : memoryVariant->etag();
+    const auto responseLastModified = memoryVariant == nullptr ? servedEntry.lastModified() : memoryVariant->lastModified();
 
     const auto applyState = [this](HttpResponse& response, std::optional<HttpStatusCode> statusCode) { applyResponseState(response, statusCode); };
     return makeFileResponse(*this, request_,
         FileResponseSource{
-            .path = FileResponsePath::copyingNative(servedEntry.filePath(), servedEntry.identity()),
-            .size = servedEntry.size(),
-            .modifiedToken = servedEntry.modifiedToken(),
-            .modifiedSeconds = servedEntry.modifiedSeconds(),
+            .body = memoryVariant == nullptr
+                         ? FileResponseBodySource::file(FileResponsePath::copyingNative(servedEntry.filePath(), servedEntry.identity()))
+                         : FileResponseBodySource::bytes(memoryVariant->bytes()),
+            .size = responseSize,
+            .modifiedToken = responseModifiedToken,
+            .modifiedSeconds = responseModifiedSeconds,
             .contentType = contentType.empty() ? baseEntry.contentType() : contentType,
             .cacheControl = baseEntry.cacheControl(),
             .rangeRequests = baseEntry.rangeRequests(),
             .responseValidators = baseEntry.responseValidators(),
-            .precomputedEtag = servedEntry.etag(),
-            .precomputedLastModified = servedEntry.lastModified(),
+            .precomputedEtag = responseEtag,
+            .precomputedLastModified = responseLastModified,
             .contentCoding = served->contentCoding(),
             // staticFile negotiates the representation by Accept-Encoding.
             .negotiatesEncoding = true,

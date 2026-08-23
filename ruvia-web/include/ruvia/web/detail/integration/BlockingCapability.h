@@ -19,7 +19,7 @@ namespace ruvia::detail {
 template <typename Derived>
 class BlockingCapability {
 public:
-    // Runs blocking work on App::setBlockingPool()'s threads and resumes the
+    // Runs blocking work on App::blockingPool()'s threads and resumes the
     // caller on its own worker with the result, so the worker keeps serving its
     // other connections meanwhile. Without this, a blocking call inside a
     // handler freezes every connection the worker owns.
@@ -55,7 +55,7 @@ public:
     // runBlocking() without the exceptions: the result carries the status, so
     // an overloaded pool can be answered with a cheaper response instead of an
     // error. Still throws std::logic_error when no pool was configured -- that
-    // is a missing App::setBlockingPool(), not a runtime condition.
+    // is a missing App::blockingPool(), not a runtime condition.
     template <typename Fn>
     [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(Fn fn) const {
         const auto& self = static_cast<const Derived&>(*this);

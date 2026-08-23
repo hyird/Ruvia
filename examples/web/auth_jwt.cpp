@@ -102,5 +102,8 @@ private:
 };
 
 int main() {
-    ruvia::app().listen({.address = "0.0.0.0", .http = 8085}).setWorkerCount(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).run();
+    ruvia::app()
+        .listen({.address = "0.0.0.0", .http = 8085})
+        .server({.workerCount = 2, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .run();
 }

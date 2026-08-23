@@ -56,15 +56,28 @@ int main() {
     app.loadDotenv();
     app.use<GlobalHeaderMiddleware>();
 
-    ruvia::MemoryPoolConfig memory;
-    memory.requestInitialBufferBytes = 4096;
     const auto httpPort = app.env().get<std::uint16_t>("RUVIA_HTTP_PORT").value_or(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8087));
-    app.setWorkerCount(app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2)).setIdleTimeout(std::chrono::seconds(75)).setConnectionScanInterval(std::chrono::seconds(1)).setRequestHeaderTimeout(std::chrono::seconds(60)).setRequestBodyTimeout(std::chrono::seconds(60)).setWriteTimeout(std::chrono::seconds(60)).setMaxConnectionsPerWorker(10000).setMaxRequestsPerConnection(1000).setBodyLimit(16 * 1024 * 1024).setStreamBodyLimit(nullptr).setMaxWebSocketMessageBytes(16 * 1024 * 1024).setMemoryPoolConfig(memory);
+    app.server({
+        .workerCount = app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
+        .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,
+        .idleTimeout = std::chrono::seconds(75),
+        .connectionScanInterval = std::chrono::seconds(1),
+        .requestHeaderTimeout = std::chrono::seconds(60),
+        .requestBodyTimeout = std::chrono::seconds(60),
+        .writeTimeout = std::chrono::seconds(60),
+        .maxConnectionsPerWorker = 10000,
+        .maxRequestsPerConnection = 1000,
+        .maxBufferedBodyBytes = 16 * 1024 * 1024,
+        .maxWebSocketMessageBytes = 16 * 1024 * 1024,
+        .memoryPool = {
+            .requestInitialBufferBytes = 4096,
+        },
+    });
     if (app.env().get<bool>("RUVIA_GZIP").value_or(false)) {
-        app.setCompression({});
+        app.compression({});
     }
     if (app.env().get<bool>("RUVIA_CORS").value_or(false)) {
-        app.setCors({
+        app.cors({
             .requestHeaders = {
                 .mode = ruvia::CorsRequestHeadersMode::kFixed,
                 .names = {"content-type", "authorization"},
@@ -83,9 +96,9 @@ int main() {
             .http = httpPort,
             .https = app.env().get<std::uint16_t>("RUVIA_HTTPS_PORT").value_or(8443),
             .tls = {
-            .certificateChainFile = cert,
-            .privateKeyFile = key,
-            .privateKeyPassword = password,
+                .certificateChainFile = cert,
+                .privateKeyFile = key,
+                .privateKeyPassword = password,
             },
             .autoHttpsRedirect = app.env().get<bool>("RUVIA_AUTO_HTTPS").value_or(false),
         };
@@ -101,5 +114,5 @@ int main() {
         });
     }
 
-    app.setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).run();
+    app.run();
 }

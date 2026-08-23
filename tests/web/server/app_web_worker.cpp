@@ -42,7 +42,7 @@ public:
         const bool runtimeUnpublished = ruvia::app().workers().empty();
         bool mutationRejected = false;
         try {
-            ruvia::app().setWorkerCount(2);
+            ruvia::app().server({.workerCount = 2});
         } catch (const std::logic_error&) {
             mutationRejected = true;
         }
@@ -78,7 +78,7 @@ int main() {
     auto& app = ruvia::app();
     bool rejectedZeroCapacity = false;
     try {
-        app.setWorkerMailboxCapacity(0);
+        app.server({.workerMailboxCapacity = 0});
     } catch (const std::invalid_argument&) {
         rejectedZeroCapacity = true;
     }
@@ -95,8 +95,7 @@ int main() {
     const auto runThread = std::this_thread::get_id();
 
     app.listen({.address = "127.0.0.1", .http = ports[0]})
-        .setWorkerCount(2)
-        .setWorkerMailboxCapacity(8)
+        .server({.workerCount = 2, .workerMailboxCapacity = 8})
         .onStop([&] {
             hooksRanOnRunThread = hooksRanOnRunThread && std::this_thread::get_id() == runThread;
             ++stopCalls;

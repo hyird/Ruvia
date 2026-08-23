@@ -33,12 +33,8 @@ struct WebSocketLifecycleOptions final {
     std::optional<std::chrono::milliseconds> closeHandshakeTimeout{std::chrono::seconds(5)};
 };
 
-struct WebSocketRouteOptions final {
-    // Route registration copies this list into startup-owned PMR storage, but
-    // the options value itself can be retained before registration. Preserve
-    // the zero-copy input while rejecting owning-string rvalues that would
-    // leave it with an already-dangling view.
-    ::ruvia::BorrowedText subprotocols;
+struct WebSocketRouteConfig final {
+    std::string subprotocols;
     WebSocketLifecycleOptions lifecycle{};
 };
 

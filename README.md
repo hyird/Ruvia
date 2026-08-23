@@ -68,14 +68,16 @@ public:
 
 int main() {
     ruvia::app()
+        .server({
+            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,
+        })
         .listen({.address = "0.0.0.0", .http = 8080})
-        .setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall)
         .run();
 }
 ```
 
 `App` does not install process signal handlers by default. Standalone servers
-can opt in with `setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall)` as above; embedded runtimes retain
+can opt in through `ServerConfig::processSignalHandlers` as above; embedded runtimes retain
 ownership of SIGINT/SIGTERM and call `App::stop()` themselves.
 
 The same route is part of the compiled
@@ -118,12 +120,13 @@ ruvia::app().listen({
 });
 ```
 
-`setWorkerCount()` is the total Web worker count. Every worker independently
+`ServerConfig::workerCount` is the total Web worker count. Every worker independently
 listens on the same configured ports and owns one worker-local DB, Redis,
 outbound HTTP client, and user-state set. Enabling both transports does not
 multiply workers or data resources.
 Policies that exist both app-wide and per route use one name and one rule: the
-narrower scope may only **tighten**. `setBodyLimit()` and `setRateLimit()` are
+narrower scope may only **tighten**. `ServerConfig::maxBufferedBodyBytes` and
+`rateLimit()` are
 the deployment's ceilings; `ruvia::BodyLimit<N>` and
 `ruvia::RateLimit<max, windowMs>` declare a route's own, named in the same
 middleware list as any other route middleware. A route can never raise an
@@ -142,15 +145,19 @@ App-wide fixed-window rules use an options object rather than positional
 arguments:
 
 ```cpp
-ruvia::app().setRateLimit({
-    .maxRequests = 100,
-    .window = std::chrono::seconds(60),
+ruvia::app().rateLimit({
+    .rule = {
+        .maxRequests = 100,
+        .window = std::chrono::seconds(60),
+    },
+    .capacityPerWorker = 8192,
 });
 ```
 
-`setRateLimitCapacityPerWorker()` selects its power-of-two startup key capacity
-(`kDefaultRateLimitCapacityPerWorker` by default), and workers with neither an
-app-wide nor a route-specific rule allocate no table.
+`capacityPerWorker` is a power-of-two startup key capacity
+(`kDefaultRateLimitCapacityPerWorker` by default). Workers with neither an
+app-wide nor a route-specific rule allocate no table. Pass `nullptr` to
+`rateLimit()` to disable the app-wide rule.
 
 Connection metadata is deliberately separate from the HTTP request model:
 
@@ -184,13 +191,29 @@ reverse-proxy product API.
 
 ## Outbound HTTP Client
 
-Pass the origin configuration where the request is made. Each Web worker keeps
-a bounded cache of origin pools; no client socket, cookie jar, or protocol state
-crosses worker threads. `Context::httpClient({...})` returns a request-scoped
-`HttpClientHandle`, so it cannot escape dispatch or be mistaken for a globally
-shared client. HTTPS negotiates HTTP/2 with ALPN and falls back to HTTP/1.1 by
-default. Cleartext uses HTTP/1.1 unless `kHttp2Only` explicitly requests h2
-prior knowledge.
+Register outbound origins once before `App::run()`. Every Web worker then owns
+one pool for each registered alias; no client socket, cookie jar, or protocol
+state crosses worker threads, and request dispatch never mutates an origin
+cache. `Context::httpClient()` returns the registered `default` client while
+`Context::httpClient("billing")` selects a named one. Both are request-scoped
+handles and cannot escape dispatch. Pass `nullptr` to `App::httpClient()` to
+clear all registrations.
+
+```cpp
+ruvia::app().httpClient({
+    .alias = "default",
+    .config = {
+        .scheme = ruvia::HttpScheme::kHttps,
+        .host = "api.example.com",
+        .connectionsPerWorker = 2,
+        .requestTimeout = std::chrono::seconds(10),
+    },
+});
+```
+
+HTTPS negotiates HTTP/2 with ALPN and falls back to HTTP/1.1 by default.
+Cleartext uses HTTP/1.1 unless `kHttp2Only` explicitly requests h2 prior
+knowledge.
 
 Handlers use an origin-bound handle and the protocol target's existing borrowed
 `HttpClientRequestView`. The handle copies that view into request PMR memory
@@ -199,17 +222,10 @@ synchronous `send()` call:
 
 ```cpp
 ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
-    auto client = c.httpClient({
-        .scheme = ruvia::HttpScheme::kHttps,
-        .host = "api.example.com",
-        .connectionsPerWorker = 2,
-        .requestTimeout = std::chrono::seconds(10),
-    });
-    auto operation = client.send({
-        .target = "/v1/data",
-    }, {
-        .timeout = std::chrono::seconds(2),
-    });
+    auto client = c.httpClient();
+    auto operation = client
+        .withOptions({.timeout = std::chrono::seconds(2)})
+        .send({.target = "/v1/data"});
     auto response = co_await std::move(operation);
     c.status(response.status());
     co_return c.body(co_await response.body().readAll());
@@ -244,7 +260,6 @@ Use `HttpClientProtocol::kHttp1Only` or `kHttp2Only` when negotiation fallback
 is not acceptable. Client certificates, a custom CA file, certificate
 verification policy, connect/acquire/request/write timeouts, TCP keepalive, and
 per-worker connection capacity are supplied in the same `{}` configuration.
-Repeated calls for an origin must use the same configuration.
 Additional operations wait in the bounded per-worker queue and fail with
 `kQueueFull` when it is full or `kTimeout` when `acquireTimeout` expires.
 
@@ -252,9 +267,9 @@ Cleartext HTTP/2 uses RFC 9113 prior knowledge when `kHttp2Only` is selected. HT
 `Upgrade: h2c` is not performed implicitly, so a server that only accepts the
 Upgrade transition must be configured for HTTP/1 or exposed through TLS/ALPN.
 
-The Controller-facing surface provides one `send(HttpClientRequestView,
-OperationOptions)` operation, origin inspection, and a single `stats()`
-snapshot. Requests are awaited as scoped
+The Controller-facing surface provides one `send(HttpClientRequestView)`
+operation, immutable `withOptions(OperationOptions)` derivation, origin
+inspection, and a single `stats()` snapshot. Requests are awaited as scoped
 coroutine operations; there are no blocking overloads or callback ownership model.
 
 Every response has one linear body reader. `read()` consumes one borrowed
@@ -286,10 +301,8 @@ header in the supplied `HttpClientRequestView`; `HttpClientConfig::cookies`
 seeds every worker-local jar when the origin is first used.
 `maxCookiesPerWorker` and
 `maxCookieBytesPerWorker` bound each worker-local jar; received cookies beyond
-either bound are ignored, while invalid configuration is rejected before the
-handle is returned. The worker-local origin cache defaults to 64 entries and
-can be sized explicitly with
-`ruvia::app().setHttpClientOriginCacheCapacityPerWorker(...)`.
+either bound are ignored. Invalid registration is rejected during App
+configuration, before any worker starts.
 
 ## Core Runtime
 
@@ -329,13 +342,10 @@ use bounded `EventLoop::post()` rather than raw `asio::post()`, so shutdown and
 backpressure remain observable. Web workers deliberately expose only
 `WorkerHandle`/`WebWorkerHandle`, not their `io_context` or executor.
 
-A lazy `Task<T>` needs an explicit root owner. Core applications can adapt one
-to Asio and retain its completion with a non-detached completion token:
+A lazy `Task<T>` needs an explicit root owner. `EventLoop::start()` schedules it
+on that loop and returns a move-only `RootTask<T>` completion owner:
 
 ```cpp
-#include <asio/co_spawn.hpp>
-#include <asio/use_future.hpp>
-#include <ruvia/core/AsioTask.h>
 #include <ruvia/core/EventLoopPool.h>
 
 ruvia::Task<ruvia::WorkerId> currentWorker(ruvia::WorkerHandle worker) {
@@ -344,10 +354,7 @@ ruvia::Task<ruvia::WorkerId> currentWorker(ruvia::WorkerHandle worker) {
 
 ruvia::EventLoopPool loops({.loopCount = 1});
 auto loop = loops.loop(0);
-auto completed = asio::co_spawn(
-    loop.executor(),
-    ruvia::asAwaitable(currentWorker(loop.handle())),
-    asio::use_future);
+auto completed = loop.start(currentWorker(loop.handle()));
 
 loops.start();
 const auto workerId = completed.get();
@@ -355,14 +362,13 @@ loops.stop();
 loops.join();
 ```
 
-`asAwaitable()` only transfers the task into the returned awaitable; it neither
-starts nor detaches it. Keep the `co_spawn` completion owner and wait for it
-before stopping resources the task may still use. Exceptions from `Task<T>` are
-reported through that completion token, so `future::get()` rethrows them. This
-boundary accepts `void` or nothrow-move-constructible result types so completion
-delivery itself cannot strand the awaiting coroutine. This setup-time root
-ownership does not replace bounded `EventLoop::post()` for ongoing cross-thread
-submissions.
+Keep the `RootTask` and consume it before stopping resources the task may still
+use. `get()` waits and rethrows the task exception. Destroying an in-flight
+`RootTask` never destroys its suspended coroutine frame; an eventual unobserved
+failure is routed to the loop failure sink and a pooled loop rethrows it from
+`join()`. This setup-time root ownership does not replace bounded
+`EventLoop::post()` for ongoing cross-thread submissions. `asAwaitable()`
+remains available when an application is already inside an Asio coroutine.
 
 Existing Asio applications can attach one Ruvia event loop to an externally
 owned context without transferring thread or lifecycle ownership:
@@ -406,6 +412,10 @@ ruvia::HttpClient client(loop, {
     .scheme = ruvia::HttpScheme::kHttps,
     .host = "api.example.com",
 });
+
+auto completed = loop.start(callUpstream(client));
+loops.start();
+completed.get();
 ```
 
 Construction creates no thread and opens no connection. The first `send()`
@@ -421,10 +431,7 @@ each client directly to any `EventLoop` created by `EventLoopPool` or
 connections between workers:
 
 ```cpp
-#include <asio/co_spawn.hpp>
-#include <asio/use_future.hpp>
 #include <ruvia/core/EventLoopPool.h>
-#include <ruvia/core/AsioTask.h>
 #include <ruvia/web/db/DbClient.h>
 
 ruvia::Task<void> runWorkerJob(ruvia::DbClient& db) {
@@ -440,16 +447,10 @@ pg.host = "127.0.0.1";
 pg.database = "app";
 ruvia::DbClient db(loop, std::move(pg));
 
-auto ready = asio::co_spawn(
-    loop.executor(),
-    ruvia::asAwaitable(db.connect()),
-    asio::use_future);
+auto ready = loop.start(db.connect());
 loops.start();
 ready.get();
-auto done = asio::co_spawn(
-    loop.executor(),
-    ruvia::asAwaitable(runWorkerJob(db)),
-    asio::use_future);
+auto done = loop.start(runWorkerJob(db));
 done.get();
 
 db.close();
@@ -458,8 +459,8 @@ loops.join();
 ```
 
 `DbClient::connect()` is a lazy `Task<void>` and must run on its bound loop, just
-like every later database operation; the `co_spawn` above only adapts the
-top-level completion to a future owned by `main`. Result, stream, and transaction
+like every later database operation; `EventLoop::start()` owns each top-level
+completion. Result, stream, and transaction
 values remain worker-affine and must finish before the owning client and event
 loop are destroyed. `close()` is idempotent; `EventLoopPool::join()` (or the
 attached context owner's equivalent drain) is the shutdown barrier. App handlers use
@@ -484,7 +485,7 @@ auto result = worker.post(
 Web job contract:
 
 - **Backpressure** — configure the bounded queue before startup with
-  `App::setWorkerMailboxCapacity()` and handle `kQueueFull` at every producer.
+  `ServerConfig::workerMailboxCapacity` and handle `kQueueFull` at every producer.
 - **Metrics** — `WebWorkerHandle::stats()` exposes accepted, rejected,
   completed, failed, and outstanding counts.
 - **Shutdown completion** — a job accepted before shutdown remains owned until
@@ -525,7 +526,7 @@ once by `App::run()` and shared by every worker. Offloading enqueues a task and
 wakes a waiting thread; it never spawns one per call.
 
 ```cpp
-ruvia::app().setBlockingPool(ruvia::BlockingPoolOptions{
+ruvia::app().blockingPool({
     .threadCount = 8,     // 0 selects half the logical CPUs, clamped to 2..8
     .queueCapacity = 512, // 0 selects threadCount * 64
 });
@@ -573,14 +574,14 @@ can be used directly outside Web; both layers use `runBlocking(...)` for the
 throwing form and `tryRunBlocking(...)` for the status-returning form.
 `App` creates a blocking pool by default using half the logical CPUs, clamped
 to 2..8 threads, with 64 queued tasks per thread. Pass `nullptr` to
-`App::setBlockingPool()` when an application intentionally needs no offload
+`App::blockingPool()` when an application intentionally needs no offload
 capacity and should not pay for idle threads. Large buffered responses then
 compress synchronously on their worker when response compression is enabled.
 
 ## Static Files and Compression
 
 Response compression is disabled by default. Enable negotiated gzip, Brotli,
-or zstd explicitly with `setCompression({})`; pass `nullptr` to disable it
+or zstd explicitly with `compression({})`; pass `nullptr` to disable it
 again.
 
 Buffered API responses use one bounded policy: bodies below `minBytes` remain
@@ -605,14 +606,15 @@ while explicitly disabling the blocking pool is rejected at startup:
 ```cpp
 auto documentRoot = ruvia::DocumentRootConfig{
     .root = "public",
-    .runtimeOptions = {
+    .runtime = {
         .refreshInterval = std::chrono::milliseconds(500),
     },
+    .precompressGzip = true,
 };
 
 ruvia::app()
-    .setCompression(ruvia::CompressionConfig{})
-    .setDocumentRoot(std::move(documentRoot))
+    .compression({})
+    .documentRoot(std::move(documentRoot))
     .run();
 ```
 
@@ -622,16 +624,20 @@ that intentionally publishes hidden paths such as `.well-known/`.
 
 When compression is enabled, static files may select checked-in `.br`, `.gz`,
 or `.zst` sidecars whose mtime is at least as new as the identity file; an older
-sidecar is ignored so an update cannot serve stale decoded bytes. Static files
-never perform request-time compression and do not use the buffered-response
-size thresholds. Without a usable sidecar they retain the identity/zero-copy
-path when identity is acceptable, otherwise the response is `406 Not Acceptable`.
-Disabling compression also disables sidecar negotiation. `Context::file()`
-always serves the selected file as identity; `Context::staticFile()` and the
-document-root fallback can negotiate indexed sidecars when the server switch is
-enabled.
+sidecar is ignored so an update cannot serve stale decoded bytes. A document
+root with `precompressGzip`, `precompressBrotli`, or `precompressZstd` enabled
+also builds in-memory variants during refresh for eligible text-like files
+between `precompressMinBytes` and `precompressMaxBytes`. Checked-in sidecars
+still win; refresh-built variants are used only when no fresh sidecar satisfies
+the selected coding. Static files never perform request-time compression.
+Without a usable sidecar or refresh-built variant they retain the
+identity/zero-copy path when identity is acceptable, otherwise the response is
+`406 Not Acceptable`. Disabling compression also disables static variant
+negotiation. `Context::file()` always serves the selected file as identity;
+`Context::staticFile()` and the document-root fallback can negotiate indexed
+variants when the server switch is enabled.
 
-`setCompression()` also enables incremental gzip, Brotli, or zstd for response
+`compression()` also enables incremental gzip, Brotli, or zstd for response
 streams; each handler write is flushed through the encoder so SSE and other
 low-latency streams do not wait for a full buffered response.
 An application-provided known `Content-Encoding` (including a stack composed only
@@ -723,7 +729,7 @@ auto config = ruvia::DbConfig{
     .password = "secret",
     .database = "app",
 };
-app.useDb({.config = std::move(config)});
+ruvia::app().database({.config = std::move(config)});
 ```
 
 The selected driver must be enabled at build time. PostgreSQL parameters use
@@ -997,7 +1003,7 @@ limits. It throws `std::logic_error` before dispatching a route with a
 `Deadline`, because its synchronous no-worker execution cannot simulate that
 timer without silently weakening production policy.
 
-`SecurityHeadersOptions` uses `DefaultSecurityHeaderPolicy::kEmitDefault` for
+`SecurityHeadersConfig` uses `DefaultSecurityHeaderPolicy::kEmitDefault` for
 the built-in `nosniff`, `DENY`, and TLS-only HSTS defaults; use `kOmit` for any
 of those headers you want to supply yourself. It also defaults to
 `XssProtectionHeaderPolicy::kEmitDisabled`, emitting `X-XSS-Protection: 0`
@@ -1006,6 +1012,12 @@ header, while Content Security Policy remains the modern content control. The
 default `SecurityHeaderConflictPolicy::kPreserveExisting` leaves handler-supplied
 headers in place; use `kReplaceExisting` when security defaults should override
 them.
+
+With Redis enabled, `SessionMiddleware` binds one typed request capability.
+Use `auto session = c.session()` followed by `data()`, `set()`, `clear()`, or
+`regenerate()`; `trySession()` returns `std::nullopt` when the middleware is not
+present. `SessionConfig` owns its Redis alias, cookie name, key prefix, and TTL,
+so a designated-initialized temporary is safe to register.
 
 ## HTTP Protocol Library
 

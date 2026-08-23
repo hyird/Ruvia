@@ -1,7 +1,7 @@
 // Worker-local state and blocking work: useWorkerState<T> per-worker
 // instances shared by the HTTP and dispatch paths, cross-worker task posting
 // via App::workerFor / WebWorkerHandle::post, and Context::runBlocking() --
-// the escape hatch for calls that block, which run on App::setBlockingPool()'s
+// the escape hatch for calls that block, which run on App::blockingPool()'s
 // threads so the worker stays free to serve its other connections.
 
 #include <chrono>
@@ -113,8 +113,7 @@ private:
 int main() {
     ruvia::app()
         .listen({.address = "0.0.0.0", .http = 8090})
-        .setWorkerCount(2)
-        .setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall)
+        .server({.workerCount = 2, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
         // Each worker builds its own WorkerStats before serving; the factory
         // form (useWorkerState<T>(fn)) covers non-default-constructible types.
         .useWorkerState<WorkerStats>()
@@ -122,7 +121,7 @@ int main() {
         // a bounded pool by default; this overrides its size for the example.
         // App::blockingPoolStats() reports queue depth and rejections for
         // production tuning.
-        .setBlockingPool(ruvia::BlockingPoolOptions{
+        .blockingPool({
             .threadCount = 4,
             .queueCapacity = 128,
         })

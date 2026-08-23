@@ -141,13 +141,13 @@ TestApp& TestApp::onNotFound(HttpNotFoundHandler handler) {
 
 TestApp& TestApp::onError(ScopedErrorHandlerOptions options) {
     impl_->requireConfigurable();
-    appendPrefixHandler(impl_->prefixErrorHandlers, options.prefix.view(), std::move(options.handler));
+    appendPrefixHandler(impl_->prefixErrorHandlers, options.prefix, std::move(options.handler));
     return *this;
 }
 
 TestApp& TestApp::onNotFound(ScopedNotFoundHandlerOptions options) {
     impl_->requireConfigurable();
-    appendPrefixHandler(impl_->prefixNotFoundHandlers, options.prefix.view(), std::move(options.handler));
+    appendPrefixHandler(impl_->prefixNotFoundHandlers, options.prefix, std::move(options.handler));
     return *this;
 }
 

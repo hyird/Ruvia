@@ -442,10 +442,12 @@ int main() {
     auto& app = ruvia::app();
     app.loadDotenv();
     auto config = redisConfig(app.env());
-    app.useRedis({.config = config})
-        .useRedis({.alias = "cache", .config = config})
+    app.redis({.config = config})
+        .redis({.alias = "cache", .config = config})
         .listen({.address = "0.0.0.0", .http = app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090)})
-        .setWorkerCount(app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2))
-        .setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall)
+        .server({
+            .workerCount = app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
+            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,
+        })
         .run();
 }

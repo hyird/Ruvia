@@ -1,10 +1,8 @@
 #include "ruvia/web/detail/app/AppState.h"
 
-#include <algorithm>
 #include <exception>
 #include <mutex>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 #include "ruvia/core/detail/util/FailureReport.h"
@@ -15,8 +13,8 @@
 namespace ruvia::detail {
 
 AppState::AppState()
-    : workerCount(std::max(1U, std::thread::hardware_concurrency())),
-      runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{appResource()}) {
+    : runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{appResource()}) {
+    applyServerConfig(*this, ServerConfig{});
     listeners.emplace_back(appResource(), "0.0.0.0", 8080, HttpServerListenerDefinition::PlainHttp{});
 }
 

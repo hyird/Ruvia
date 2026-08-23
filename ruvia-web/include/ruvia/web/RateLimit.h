@@ -43,7 +43,7 @@ struct RouteRateLimitOptions final {
 //
 // The limit is scoped to the route it is registered on and keyed on the client
 // address, so two routes carrying the same numbers count independently. It does
-// not replace App::setRateLimit() -- both apply, so the stricter is what a
+// not replace App::rateLimit() -- both apply, so the stricter is what a
 // caller meets, the same "narrower scope may only tighten" rule BodyLimit
 // follows. Worker-local, like the app-wide rule.
 template <std::size_t MaxRequests, std::int64_t WindowMs>

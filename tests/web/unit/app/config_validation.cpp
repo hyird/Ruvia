@@ -112,15 +112,24 @@ RUVIA_TEST(app_document_root_rejects_invalid_static_options_at_configuration) {
     config.root = "public";
     config.staticOptions.cacheControl = " private";
 
-    RUVIA_CHECK(throwsInvalid([&config] { ruvia::app().setDocumentRoot(std::move(config)); }));
+    RUVIA_CHECK(throwsInvalid([&config] { ruvia::app().documentRoot(std::move(config)); }));
 }
 
 RUVIA_TEST(app_document_root_rejects_disabled_refresh) {
     ruvia::DocumentRootConfig disabledRefresh;
     disabledRefresh.root = "public";
-    disabledRefresh.runtimeOptions.refreshInterval = std::chrono::milliseconds::zero();
-    RUVIA_CHECK(throwsInvalid([&disabledRefresh] { ruvia::app().setDocumentRoot(std::move(disabledRefresh)); }));
+    disabledRefresh.runtime.refreshInterval = std::chrono::milliseconds::zero();
+    RUVIA_CHECK(throwsInvalid([&disabledRefresh] { ruvia::app().documentRoot(std::move(disabledRefresh)); }));
 
+}
+
+RUVIA_TEST(app_compression_rejects_invalid_thresholds_at_configuration) {
+    RUVIA_CHECK(throwsInvalid([] {
+        ruvia::app().compression({.minBytes = 1024, .syncBytes = 512});
+    }));
+    RUVIA_CHECK(throwsInvalid([] {
+        ruvia::app().compression({.minBytes = 1024, .syncBytes = 2048, .maxBytes = 1024});
+    }));
 }
 
 RUVIA_TEST(integration_config_copies_public_strings_into_internal_pmr_storage) {

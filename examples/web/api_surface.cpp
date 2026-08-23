@@ -230,7 +230,8 @@ private:
     ruvia::Task<ruvia::HttpResponse> contextInfo(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         body.append("session=");
-        body.append(c.session());
+        const auto session = c.session();
+        body.append(session.data());
         body.append("\nenv-vars=");
         appendUnsigned(body, c.env().size());
         body.push_back('\n');
@@ -665,5 +666,9 @@ private:
 };
 
 int main() {
-    ruvia::app().listen({.address = "0.0.0.0", .http = 8088}).setWorkerCount(2).setProcessSignalHandlers(ruvia::ProcessSignalHandlerPolicy::kInstall).onNotFound(&surfaceNotFound).run();
+    ruvia::app()
+        .listen({.address = "0.0.0.0", .http = 8088})
+        .server({.workerCount = 2, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .onNotFound(&surfaceNotFound)
+        .run();
 }

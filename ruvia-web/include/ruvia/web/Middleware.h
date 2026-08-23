@@ -1,11 +1,11 @@
 #pragma once
 
-#include "ruvia/http/BorrowedText.h"
+#include <string>
 
 namespace ruvia {
 
 struct MiddlewareScopeOptions final {
-    BorrowedText prefix;
+    std::string prefix;
 };
 
 template <typename MiddlewareT>

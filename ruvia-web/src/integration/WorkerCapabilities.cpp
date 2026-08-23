@@ -14,7 +14,7 @@ WorkerCapabilities::WorkerCapabilities(
     WorkerCapabilityOptions options,
     ConnectionScanner& scanner)
     : data_(ioContext, worker, resource, definitions.databases, definitions.redis, scanner),
-      httpClients_(ioContext, worker, resource, definitions.httpClients, options.maxHttpClientOrigins),
+      httpClients_(ioContext, worker, resource, definitions.httpClients),
       workerStates_(resource, definitions.workerStates),
       rateLimiter_(options.defaultRateLimit, options.routeRateLimits, options.rateLimitCapacity, resource),
       options_(std::move(options)) {}

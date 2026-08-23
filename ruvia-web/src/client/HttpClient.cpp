@@ -32,7 +32,7 @@ HttpClientState::HttpClientState(EventLoop loop, HttpClientConfig config)
       worker_(loop_.handle()),
       memory_(),
       definitions_(makeDefinitions(config, memory_.resource())),
-      clients_(loop_.ioContext(), worker_, memory_.resource(), definitions_, 1) {}
+      clients_(loop_.ioContext(), worker_, memory_.resource(), definitions_) {}
 
 HttpClientState::~HttpClientState() {
     if (phase_.load(std::memory_order_acquire) != Phase::kClosed || operationScope_.hasPendingOperations()) {
@@ -55,10 +55,10 @@ void HttpClientState::bindStop() {
     }
 }
 
-ScopedOperation<HttpClientResponse> HttpClientState::send(const HttpClientRequestView& request, OperationOptions options) {
+HttpClientHandle HttpClientState::handle(OperationOptions options) {
     requireOpenOnWorker();
     options = mergeOperationOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopSource_.token()}, std::move(options));
-    return clients_.get(memory_.resource(), operationScope_).send(request, std::move(options));
+    return clients_.get(memory_.resource(), operationScope_).withOptions(std::move(options));
 }
 
 HttpClientStats HttpClientState::stats() {
@@ -159,8 +159,12 @@ HttpClient::~HttpClient() {
     state_->requestClose();
 }
 
-ScopedOperation<HttpClientResponse> HttpClient::send(const HttpClientRequestView& request, OperationOptions options) const {
-    return state_->send(request, std::move(options));
+HttpClientHandle HttpClient::withOptions(OperationOptions options) const {
+    return state_->handle(std::move(options));
+}
+
+ScopedOperation<HttpClientResponse> HttpClient::send(const HttpClientRequestView& request) const {
+    return withOptions({}).send(request);
 }
 
 void HttpClient::close() noexcept {

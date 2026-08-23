@@ -40,11 +40,12 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
         std::string_view suffix;
         HttpContentCoding contentCoding;
         std::optional<detail::StaticRootEntryView> entry;
+        std::optional<detail::StaticRootMemoryVariantView> memoryVariant;
     };
     Candidate candidates[] = {
-        {".br", HttpContentCoding::kBrotli, std::nullopt},
-        {".zst", HttpContentCoding::kZstd, std::nullopt},
-        {".gz", HttpContentCoding::kGzip, std::nullopt},
+        {".br", HttpContentCoding::kBrotli, std::nullopt, std::nullopt},
+        {".zst", HttpContentCoding::kZstd, std::nullopt, std::nullopt},
+        {".gz", HttpContentCoding::kGzip, std::nullopt, std::nullopt},
     };
 
     auto available = detail::HttpResponseCodingCandidates::identityOnly();
@@ -58,9 +59,18 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
         variantPath.append(candidate.suffix.data(), candidate.suffix.size());
         if (const auto entry = detail::StaticRootAccess::findVariant(root, variantPath); entry.has_value()) {
             if (!precompressedVariantIsAtLeastAsNew(identity, *entry)) {
+                if (auto memoryVariant = identity.memoryVariant(candidate.contentCoding); memoryVariant.has_value()) {
+                    candidate.memoryVariant = *memoryVariant;
+                    available.include(candidate.contentCoding);
+                }
                 continue;
             }
             candidate.entry = *entry;
+            available.include(candidate.contentCoding);
+            continue;
+        }
+        if (auto memoryVariant = identity.memoryVariant(candidate.contentCoding); memoryVariant.has_value()) {
+            candidate.memoryVariant = *memoryVariant;
             available.include(candidate.contentCoding);
         }
     }
@@ -73,6 +83,9 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
         for (const auto& candidate : candidates) {
             if (candidate.contentCoding == selection->coding() && candidate.entry.has_value()) {
                 return StaticFileRepresentation(*candidate.entry, candidate.contentCoding);
+            }
+            if (candidate.contentCoding == selection->coding() && candidate.memoryVariant.has_value()) {
+                return StaticFileRepresentation(identity, *candidate.memoryVariant, candidate.contentCoding);
             }
         }
     }

@@ -36,7 +36,8 @@ std::uint16_t availablePort() {
 
 int main() {
     auto& app = ruvia::app();
-    app.listen({.address = "not-an-ip-address", .http = availablePort()}).setWorkerCount(1).setMemoryPoolConfig({.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes});
+    app.listen({.address = "not-an-ip-address", .http = availablePort()})
+        .server({.workerCount = 1, .memoryPool = {.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes}});
 
     bool preparationFailed = false;
     try {
@@ -59,12 +60,12 @@ int main() {
         .extension = ".custom",
         .contentType = "text/x-custom",
     });
-    app.setDocumentRoot(std::move(documentRoot));
+    app.documentRoot(std::move(documentRoot));
 
     bool started = false;
     std::size_t stopCalls = 0;
     app.listen({.address = "127.0.0.1", .http = availablePort()})
-        .setMemoryPoolConfig({.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes * 2})
+        .server({.workerCount = 1, .memoryPool = {.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes * 2}})
         .onStart([&] {
             started = true;
             app.stop();
