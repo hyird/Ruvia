@@ -118,6 +118,9 @@
 #include <ruvia/http/detail/websocket/WsConnection.h>
 #include <ruvia/http/detail/websocket/WsEvent.h>
 
+template <typename Dependency, typename T>
+using ApiGuardDependent = std::conditional_t<(sizeof(Dependency) > 0), T, T>;
+
 template <typename T>
 concept HasLegacyResponseBodyCopy = requires(T& response) { response.setBodyCopy(std::string_view{}); };
 
@@ -444,10 +447,10 @@ concept HasPositionalMultipartParserConstructor = requires(std::pmr::memory_reso
 };
 
 template <typename T>
-concept HasPositionalMultipartBodyParse = requires(std::string_view body, std::pmr::memory_resource* resource) {
-    ruvia::parseMultipartBody(body, ruvia::MultipartBoundary("x"));
-} || requires(std::string_view body, std::pmr::memory_resource* resource) {
-    ruvia::parseMultipartBody(body, ruvia::MultipartBoundary("x"), resource);
+concept HasPositionalMultipartBodyParse = requires(ApiGuardDependent<T, std::string_view> body, ApiGuardDependent<T, ruvia::MultipartBoundary> boundary, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+    ruvia::parseMultipartBody(body, boundary);
+} || requires(ApiGuardDependent<T, std::string_view> body, ApiGuardDependent<T, ruvia::MultipartBoundary> boundary, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+    ruvia::parseMultipartBody(body, boundary, resource);
 };
 
 template <typename Input>
@@ -652,10 +655,10 @@ template <typename T>
 concept ExposesRvalueDecodeFailure = requires(const T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept HasPositionalHttpContentDecode = requires(std::string_view input, std::pmr::memory_resource* resource) {
-    ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, input, std::size_t{0});
-} || requires(std::string_view input, std::pmr::memory_resource* resource) {
-    ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, input, std::size_t{0}, resource);
+concept HasPositionalHttpContentDecode = requires(ApiGuardDependent<T, std::string_view> input, ApiGuardDependent<T, std::size_t> maxDecodedBytes, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+    ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, input, maxDecodedBytes);
+} || requires(ApiGuardDependent<T, std::string_view> input, ApiGuardDependent<T, std::size_t> maxDecodedBytes, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+    ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, input, maxDecodedBytes, resource);
 };
 
 template <typename T>
@@ -671,10 +674,10 @@ template <typename T>
 concept ExposesRvalueEncodeFailure = requires(const T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept HasPositionalHttpContentEncode = requires(std::string_view input, std::pmr::memory_resource* resource) {
-    ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, input, std::size_t{0});
-} || requires(std::string_view input, std::pmr::memory_resource* resource) {
-    ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, input, std::size_t{0}, resource);
+concept HasPositionalHttpContentEncode = requires(ApiGuardDependent<T, std::string_view> input, ApiGuardDependent<T, std::size_t> maxEncodedBytes, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+    ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, input, maxEncodedBytes);
+} || requires(ApiGuardDependent<T, std::string_view> input, ApiGuardDependent<T, std::size_t> maxEncodedBytes, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+    ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, input, maxEncodedBytes, resource);
 };
 
 template <typename T>
@@ -993,8 +996,8 @@ template <typename T>
 concept HasAnyRvalueRequestContentDecodeAccessor = requires(T&& result) { std::move(result).decoded(); } || requires(T&& result) { std::move(result).protocolFailure(); } || requires(T&& result) { std::move(result).decoderFailure(); };
 
 template <typename T>
-concept HasPositionalHttpRequestContentDecode = requires(std::string_view input, std::pmr::memory_resource* resource) {
-    ruvia::detail::decodeHttpRequestContent(ruvia::HttpContentCoding::kGzip, input, std::size_t{0}, resource);
+concept HasPositionalHttpRequestContentDecode = requires(ApiGuardDependent<T, std::string_view> input, ApiGuardDependent<T, std::size_t> maxDecodedBytes, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+    ruvia::detail::decodeHttpRequestContent(ruvia::HttpContentCoding::kGzip, input, maxDecodedBytes, resource);
 };
 
 template <typename T>
@@ -1029,16 +1032,16 @@ template <typename T>
 concept HasHttpClientRedirectStatus = requires(const T& result) { result.status(); };
 
 template <typename T>
-concept HasPositionalHttpClientRedirectRequestPlan = requires(const ruvia::HttpClientRequestView& request) {
-    ruvia::planHttpClientRedirectRequest(request, ruvia::http_status::kFound);
-} || requires(const ruvia::HttpClientRequestView& request, std::pmr::memory_resource* resource) {
-    ruvia::planHttpClientRedirectRequest(request, ruvia::http_status::kFound, resource);
+concept HasPositionalHttpClientRedirectRequestPlan = requires(const ruvia::HttpClientRequestView& request, ApiGuardDependent<T, ruvia::HttpStatusCode> status, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+    ruvia::planHttpClientRedirectRequest(request, status);
+} || requires(const ruvia::HttpClientRequestView& request, ApiGuardDependent<T, ruvia::HttpStatusCode> status, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+    ruvia::planHttpClientRedirectRequest(request, status, resource);
 };
 
 template <typename T>
-concept HasPositionalHttpClientRedirectTargetResolution = requires(const ruvia::HttpOriginView& origin, std::string_view currentTarget, std::string_view location) {
+concept HasPositionalHttpClientRedirectTargetResolution = requires(const ruvia::HttpOriginView& origin, ApiGuardDependent<T, std::string_view> currentTarget, ApiGuardDependent<T, std::string_view> location, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
     ruvia::resolveHttpClientRedirectTarget(origin, currentTarget, location);
-} || requires(const ruvia::HttpOriginView& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource) {
+} || requires(const ruvia::HttpOriginView& origin, ApiGuardDependent<T, std::string_view> currentTarget, ApiGuardDependent<T, std::string_view> location, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
     ruvia::resolveHttpClientRedirectTarget(origin, currentTarget, location, resource);
 };
 
@@ -1104,7 +1107,7 @@ concept HasLegacyHttp1ClientExpectationAlternatives = requires(const T& policy) 
 
 template <typename T>
 concept HasHttp1ClientExpectation = requires(const T& policy) {
-    { policy.expectation } -> std::same_as<ruvia::HttpClientRequestExpectation>;
+    { policy.expectation } -> std::same_as<const ruvia::HttpClientRequestExpectation&>;
 };
 
 template <typename T>
@@ -2234,16 +2237,16 @@ using WebSocketHandshakeFieldValidator = bool (*)(const ruvia::HttpRequest&) noe
 using WebSocketClientOfferHeaderValidator = bool (*)(std::span<const ruvia::HttpHeaderView>) noexcept;
 
 template <typename T>
-concept HasPositionalWebSocketServerNegotiationFactory = requires(const ruvia::HttpRequest& request, std::string_view supportedSubprotocols) {
+concept HasPositionalWebSocketServerNegotiationFactory = requires(const ruvia::HttpRequest& request, ApiGuardDependent<T, std::string_view> supportedSubprotocols, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
     ruvia::detail::makeWebSocketServerNegotiation(request, supportedSubprotocols);
-} || requires(const ruvia::HttpRequest& request, std::string_view supportedSubprotocols, std::pmr::memory_resource* resource) {
+} || requires(const ruvia::HttpRequest& request, ApiGuardDependent<T, std::string_view> supportedSubprotocols, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
     ruvia::detail::makeWebSocketServerNegotiation(request, supportedSubprotocols, resource);
 };
 
 template <typename T>
-concept HasPositionalWebSocketServerHandshakeFactory = requires(const ruvia::HttpRequest& request, std::string_view supportedSubprotocols) {
+concept HasPositionalWebSocketServerHandshakeFactory = requires(const ruvia::HttpRequest& request, ApiGuardDependent<T, std::string_view> supportedSubprotocols, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
     ruvia::makeWebSocketServerHandshake(request, supportedSubprotocols);
-} || requires(const ruvia::HttpRequest& request, std::string_view supportedSubprotocols, std::pmr::memory_resource* resource) {
+} || requires(const ruvia::HttpRequest& request, ApiGuardDependent<T, std::string_view> supportedSubprotocols, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
     ruvia::makeWebSocketServerHandshake(request, supportedSubprotocols, resource);
 };
 
