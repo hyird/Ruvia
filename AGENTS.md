@@ -297,7 +297,8 @@ DB 的 `query()` 只接受产出行集的语句并返回 `DbRows`，`execute()` 
 - `RUVIA_BUILD_WEB=ON` 要求 core 与 HTTP 同时启用；core-only/http-only 不得查找或安装未选组件依赖。
 - MariaDB、PostgreSQL、Redis、JWT 是严格 feature：`RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_REDIS`、`RUVIA_ENABLE_JWT`。
 - Windows 只支持 MSVC，依赖使用 `x64-windows-static`；Windows CI 也必须
-  使用同一 static triplet。项目不覆盖 CMake 的 MSVC runtime 默认值。
+  使用同一 static triplet。项目统一 MSVC static runtime：Debug 使用 `/MTd`，
+  其他配置使用 `/MT`。
 - outbound HTTP 的 wire/framing/HTTP/2 状态机保留在 `ruvia-http`；`ruvia-web` 可以提供 worker-local DNS、socket、TLS/ALPN、连接复用、超时和取消驱动，但不提供含糊的 `fetch` 别名、proxy 或反向代理产品集成。
 - 安装包暴露 `ruvia::core`、`ruvia::http`、`ruvia::web`，不暴露历史别名。
 - 下游按需请求 `core`、`http` 或 `web` component；消费示例只放在 README。

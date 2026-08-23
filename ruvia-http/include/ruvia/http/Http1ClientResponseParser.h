@@ -429,10 +429,8 @@ public:
         std::pmr::memory_resource* resource{nullptr};
     };
 
-    explicit Http1ClientResponseParser(Http1ClientExchangeState exchangeState, Options options = {}) noexcept
-        : exchangeState_(std::move(exchangeState)),
-          resource_(options.resource),
-          requestContentPhase_(initialRequestContentPhase(exchangeState_)) {}
+    explicit Http1ClientResponseParser(Http1ClientExchangeState exchangeState) noexcept;
+    explicit Http1ClientResponseParser(Http1ClientExchangeState exchangeState, Options options) noexcept;
 
     Http1ClientResponseParser(const Http1ClientResponseParser&) = delete;
     Http1ClientResponseParser& operator=(const Http1ClientResponseParser&) = delete;
@@ -468,5 +466,13 @@ private:
     detail::Http1ClientRequestContentPhase requestContentPhase_;
     std::uint8_t informationalResponseCount_{0};
 };
+
+inline Http1ClientResponseParser::Http1ClientResponseParser(Http1ClientExchangeState exchangeState) noexcept
+    : Http1ClientResponseParser(std::move(exchangeState), Options{}) {}
+
+inline Http1ClientResponseParser::Http1ClientResponseParser(Http1ClientExchangeState exchangeState, Options options) noexcept
+    : exchangeState_(std::move(exchangeState)),
+      resource_(options.resource),
+      requestContentPhase_(initialRequestContentPhase(exchangeState_)) {}
 
 }  // namespace ruvia

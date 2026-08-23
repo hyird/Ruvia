@@ -55,6 +55,11 @@ set(VCPKG_MANIFEST_NO_DEFAULT_FEATURES ON CACHE BOOL "" FORCE)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json" _ruvia_manifest)
 string(JSON _ruvia_version GET "${_ruvia_manifest}" version-string)
 
+set(CMAKE_MSVC_RUNTIME_LIBRARY
+    "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING
+    "Use the static MSVC runtime: /MT for non-Debug configs and /MTd for Debug"
+    FORCE)
+
 project(ruvia VERSION ${_ruvia_version} LANGUAGES CXX)
 
 if(WIN32 AND NOT MSVC)

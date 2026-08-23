@@ -269,6 +269,9 @@ std::string_view http1ClientRequestPrepareErrorMessage(Http1ClientRequestPrepare
     return "invalid HTTP/1 client request";
 }
 
+Http1ClientRequestWriter::Http1ClientRequestWriter() noexcept
+    : Http1ClientRequestWriter(Options{}) {}
+
 Http1ClientRequestWriter::Http1ClientRequestWriter(Options options) noexcept
     : resource_(detail::httpPmrResourceOrDefault(options.resource)) {}
 
