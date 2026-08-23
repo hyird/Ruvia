@@ -12,8 +12,8 @@ namespace ruvia {
 class StaticRoot;
 
 struct StaticMimeType final {
-    std::string extension;
-    std::string contentType;
+    std::string extension{};
+    std::string contentType{};
 };
 
 struct StaticFileTypePolicy final {
@@ -24,7 +24,7 @@ struct StaticFileTypePolicy final {
     };
 
     Kind kind{Kind::kDefaults};
-    std::vector<std::string> extensions;
+    std::vector<std::string> extensions{};
 };
 
 enum class StaticRangeRequestPolicy : std::uint8_t {
@@ -43,11 +43,11 @@ enum class StaticDotfilePolicy : std::uint8_t {
 };
 
 struct StaticRootOptions final {
-    std::string cacheControl;
-    std::string indexFile;
+    std::string cacheControl{};
+    std::string indexFile{};
     std::string defaultContentType{"application/octet-stream"};
-    std::vector<StaticMimeType> mimeTypes;
-    StaticFileTypePolicy fileTypes;
+    std::vector<StaticMimeType> mimeTypes{};
+    StaticFileTypePolicy fileTypes{};
     StaticRangeRequestPolicy rangeRequests{StaticRangeRequestPolicy::kHonor};
     StaticResponseValidatorPolicy responseValidators{StaticResponseValidatorPolicy::kEmit};
     // Serve files and directories whose name begins with '.' (dotfiles). Off by

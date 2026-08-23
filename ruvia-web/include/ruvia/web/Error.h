@@ -59,10 +59,10 @@ private:
 
 struct HttpErrorInfoOptions final {
     HttpStatusCode status{http_status::kInternalServerError};
-    BorrowedText code;
-    BorrowedText message;
-    BorrowedText statusText;
-    BorrowedValidationIssues validationIssues;
+    BorrowedText code{};
+    BorrowedText message{};
+    BorrowedText statusText{};
+    BorrowedValidationIssues validationIssues{};
 };
 
 // Non-owning Web application error metadata used by Context and custom error
