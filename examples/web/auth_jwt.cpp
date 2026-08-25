@@ -16,7 +16,7 @@ constexpr std::string_view kJwtSecret = "replace-this-development-secret";
 
 ruvia::JwtSignOptions signOptions(ruvia::Context& c) {
     ruvia::JwtSignOptions options;
-    options.secret.assign(kJwtSecret.data(), kJwtSecret.size());
+    options.secret = kJwtSecret;
     options.issuer.assign("ruvia-example");
     options.audience.assign("ruvia-api");
     options.expiresIn = std::chrono::minutes(30);
@@ -28,7 +28,7 @@ ruvia::JwtSignOptions signOptions(ruvia::Context& c) {
 ruvia::JwtVerifyOptions verifyOptions(std::string_view token, std::pmr::memory_resource* resource) {
     ruvia::JwtVerifyOptions options;
     options.token = token;
-    options.secret.assign(kJwtSecret.data(), kJwtSecret.size());
+    options.secret = kJwtSecret;
     options.issuer.assign("ruvia-example");
     options.audience.assign("ruvia-api");
     options.leeway = std::chrono::seconds(30);
