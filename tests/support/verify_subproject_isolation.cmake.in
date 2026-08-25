@@ -1,0 +1,73 @@
+set(_probe_root "@PROJECT_BINARY_DIR@/subproject-isolation")
+set(_source_dir "${_probe_root}/source")
+set(_build_dir "${_probe_root}/build")
+set(_fake_vcpkg_root "${_probe_root}/vcpkg")
+
+file(REMOVE_RECURSE "${_probe_root}")
+file(MAKE_DIRECTORY
+    "${_source_dir}"
+    "${_fake_vcpkg_root}/scripts/buildsystems")
+file(WRITE "${_fake_vcpkg_root}/scripts/buildsystems/vcpkg.cmake"
+    "# The isolation probe only verifies that an embedded Ruvia ignores VCPKG_ROOT.\n")
+
+file(WRITE "${_source_dir}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(ruvia_subproject_isolation LANGUAGES CXX)
+
+set(VCPKG_MANIFEST_FEATURES "parent-feature" CACHE STRING "")
+set(VCPKG_MANIFEST_NO_DEFAULT_FEATURES OFF CACHE BOOL "")
+set(CMAKE_MSVC_RUNTIME_LIBRARY
+    "MultiThreadedDLL$<$<CONFIG:Debug>:Debug>" CACHE STRING "")
+
+set(RUVIA_BUILD_CORE OFF CACHE BOOL "")
+set(RUVIA_BUILD_HTTP OFF CACHE BOOL "")
+set(RUVIA_BUILD_WEB OFF CACHE BOOL "")
+set(RUVIA_BUILD_EXAMPLES OFF CACHE BOOL "")
+set(RUVIA_BUILD_TESTS OFF CACHE BOOL "")
+set(RUVIA_BUILD_BENCHMARKS OFF CACHE BOOL "")
+
+add_subdirectory("@PROJECT_SOURCE_DIR@" ruvia)
+
+if(NOT VCPKG_MANIFEST_FEATURES STREQUAL "parent-feature")
+    message(FATAL_ERROR
+        "embedded Ruvia changed VCPKG_MANIFEST_FEATURES to '${VCPKG_MANIFEST_FEATURES}'")
+endif()
+if(VCPKG_MANIFEST_NO_DEFAULT_FEATURES)
+    message(FATAL_ERROR
+        "embedded Ruvia changed VCPKG_MANIFEST_NO_DEFAULT_FEATURES")
+endif()
+if(NOT CMAKE_MSVC_RUNTIME_LIBRARY STREQUAL
+   "MultiThreadedDLL$<$<CONFIG:Debug>:Debug>")
+    message(FATAL_ERROR
+        "embedded Ruvia changed CMAKE_MSVC_RUNTIME_LIBRARY to '${CMAKE_MSVC_RUNTIME_LIBRARY}'")
+endif()
+
+get_property(_toolchain_cached CACHE CMAKE_TOOLCHAIN_FILE PROPERTY TYPE SET)
+if(_toolchain_cached)
+    message(FATAL_ERROR
+        "embedded Ruvia populated parent CMAKE_TOOLCHAIN_FILE from VCPKG_ROOT")
+endif()
+
+if(EXISTS "${CMAKE_BINARY_DIR}/ruvia_installed_headers.txt")
+    message(FATAL_ERROR
+        "embedded Ruvia wrote its installed-header record into the parent build root")
+endif()
+if(NOT EXISTS "${CMAKE_CURRENT_BINARY_DIR}/ruvia/ruvia_installed_headers.txt")
+    message(FATAL_ERROR
+        "embedded Ruvia did not keep its installed-header record in its own build directory")
+endif()
+]=])
+
+execute_process(
+    COMMAND "@CMAKE_COMMAND@" -E env
+        "VCPKG_ROOT=${_fake_vcpkg_root}"
+        "@CMAKE_COMMAND@" -S "${_source_dir}" -B "${_build_dir}"
+    RESULT_VARIABLE _configure_result
+    OUTPUT_VARIABLE _configure_stdout
+    ERROR_VARIABLE _configure_stderr)
+
+if(NOT _configure_result EQUAL 0)
+    message(FATAL_ERROR
+        "Ruvia subproject isolation probe failed to configure:\n"
+        "${_configure_stdout}\n${_configure_stderr}")
+endif()

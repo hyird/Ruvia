@@ -1,4 +1,4 @@
-set(_ruvia_source_root "@CMAKE_SOURCE_DIR@")
+set(_ruvia_source_root "@PROJECT_SOURCE_DIR@")
 
 # Product target include boundaries. CMake already prevents a target from
 # compiling another target's source or adding another target's private include

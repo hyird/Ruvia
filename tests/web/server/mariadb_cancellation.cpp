@@ -3,7 +3,7 @@
 // in a socket wait until either an operation StopToken or registry shutdown
 // closes the failed lease.
 
-#include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/db/DbRegistry.h"

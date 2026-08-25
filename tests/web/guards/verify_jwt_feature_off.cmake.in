@@ -1,5 +1,5 @@
 set(build_command
-    "@CMAKE_COMMAND@" --build "@CMAKE_BINARY_DIR@"
+    "@CMAKE_COMMAND@" --build "@PROJECT_BINARY_DIR@"
     --target ruvia_jwt_feature_off_probe)
 if(DEFINED CONFIG AND NOT CONFIG STREQUAL "")
     list(APPEND build_command --config "${CONFIG}")

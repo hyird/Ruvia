@@ -1,4 +1,4 @@
-set(_manifest "@CMAKE_BINARY_DIR@/ruvia_installed_headers.txt")
+set(_manifest "@PROJECT_BINARY_DIR@/ruvia_installed_headers.txt")
 
 # An installed header that includes a header this configuration does not install
 # cannot be compiled by anyone who consumes the package. The build never notices:

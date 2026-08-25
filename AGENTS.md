@@ -299,6 +299,9 @@ DB 的 `query()` 只接受产出行集的语句并返回 `DbRows`，`execute()` 
 - Windows 只支持 MSVC，依赖使用 `x64-windows-static`；Windows CI 也必须
   使用同一 static triplet。项目统一 MSVC static runtime：Debug 使用 `/MTd`，
   其他配置使用 `/MT`。
+- 独立构建可以从环境初始化 vcpkg toolchain、triplet 和 manifest feature；作为
+  `FetchContent` / `add_subdirectory` 子项目时不得修改父项目的 `CMAKE_*` 或
+  `VCPKG_*` cache，生成的配置与门禁输入必须留在 Ruvia 自己的 binary tree。
 - outbound HTTP 的 wire/framing/HTTP/2 状态机保留在 `ruvia-http`；`ruvia-web` 可以提供 worker-local DNS、socket、TLS/ALPN、连接复用、超时和取消驱动，但不提供含糊的 `fetch` 别名、proxy 或反向代理产品集成。
 - 安装包暴露 `ruvia::core`、`ruvia::http`、`ruvia::web`，不暴露历史别名。
 - 下游按需请求 `core`、`http` 或 `web` component；消费示例只放在 README。
