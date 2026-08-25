@@ -66,12 +66,14 @@ public:
         std::optional<DbDriver> driver,
         std::string message,
         std::optional<std::int64_t> nativeCode = std::nullopt,
-        std::string sqlState = {})
+        std::string sqlState = {},
+        std::string constraintName = {})
         : std::runtime_error(std::move(message)),
           code_(code),
           driver_(driver),
           nativeCode_(nativeCode),
-          sqlState_(std::move(sqlState)) {}
+          sqlState_(std::move(sqlState)),
+          constraintName_(std::move(constraintName)) {}
 
     [[nodiscard]] Code code() const noexcept {
         return code_;
@@ -94,11 +96,21 @@ public:
 
     [[nodiscard]] std::optional<std::string_view> sqlState() const&& = delete;
 
+    [[nodiscard]] std::optional<std::string_view> constraintName() const& noexcept {
+        if (constraintName_.empty()) {
+            return std::nullopt;
+        }
+        return constraintName_;
+    }
+
+    [[nodiscard]] std::optional<std::string_view> constraintName() const&& = delete;
+
 private:
     Code code_;
     std::optional<DbDriver> driver_;
     std::optional<std::int64_t> nativeCode_;
     std::string sqlState_;
+    std::string constraintName_;
 };
 
 namespace detail {

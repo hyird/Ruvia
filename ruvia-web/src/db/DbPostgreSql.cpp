@@ -16,6 +16,7 @@ DbError postgreSqlError(const pg_conn& connection, std::string_view operation, D
     std::pmr::string error(operation, processResource());
     error.append(" failed");
     const char* state = result == nullptr ? nullptr : PQresultErrorField(const_cast<PGresult*>(result), PG_DIAG_SQLSTATE);
+    const char* constraint = result == nullptr ? nullptr : PQresultErrorField(const_cast<PGresult*>(result), PG_DIAG_CONSTRAINT_NAME);
     if (state != nullptr && state[0] != '\0') {
         error.append(" [sqlstate=");
         error.append(state);
@@ -37,7 +38,8 @@ DbError postgreSqlError(const pg_conn& connection, std::string_view operation, D
         DbDriver::kPostgreSql,
         std::string(error),
         std::nullopt,
-        state == nullptr ? std::string{} : std::string(state));
+        state == nullptr ? std::string{} : std::string(state),
+        constraint == nullptr ? std::string{} : std::string(constraint));
 }
 
 PostgreSqlParams::PostgreSqlParams(std::pmr::memory_resource* resource)

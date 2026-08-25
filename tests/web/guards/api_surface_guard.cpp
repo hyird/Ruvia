@@ -2722,6 +2722,9 @@ static_assert(std::same_as<
 static_assert(std::same_as<
               decltype(std::declval<const ruvia::DbError&>().sqlState()),
               std::optional<std::string_view>>);
+static_assert(std::same_as<
+              decltype(std::declval<const ruvia::DbError&>().constraintName()),
+              std::optional<std::string_view>>);
 static_assert(!HasRowsCanonicalReadAccessors<ruvia::DbExecResult>);
 static_assert(HasExecResultCanonicalReadAccessors<ruvia::DbExecResult>);
 static_assert(std::is_move_constructible_v<ruvia::DbStreamResult>);
