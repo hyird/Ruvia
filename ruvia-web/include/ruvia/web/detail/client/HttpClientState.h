@@ -5,7 +5,7 @@
 #include <memory_resource>
 #include <vector>
 
-#include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/EventLoop.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/HttpClient.h"

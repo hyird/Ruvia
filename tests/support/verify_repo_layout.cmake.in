@@ -1,4 +1,4 @@
-set(_source_root "@CMAKE_SOURCE_DIR@")
+set(_source_root "@PROJECT_SOURCE_DIR@")
 
 # Stable repository layout rules from AGENTS.md. This guard intentionally checks
 # structural invariants that are cheap to prove from the source tree: target

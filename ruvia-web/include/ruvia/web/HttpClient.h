@@ -2,7 +2,7 @@
 
 #include <memory>
 
-#include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/EventLoop.h"
 #include "ruvia/web/HttpClientHandle.h"
 
 namespace ruvia {

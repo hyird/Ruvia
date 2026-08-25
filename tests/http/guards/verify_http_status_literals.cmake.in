@@ -1,4 +1,4 @@
-set(_ruvia_source_root "@CMAKE_SOURCE_DIR@")
+set(_ruvia_source_root "@PROJECT_SOURCE_DIR@")
 set(_status_registry
     "${_ruvia_source_root}/ruvia-http/include/ruvia/http/HttpStatus.h")
 

@@ -13,6 +13,7 @@
 #include <asio/use_future.hpp>
 
 #include "ruvia/core/AsioTask.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/EventLoopPool.h"
 #include "ruvia/web/db/DbClient.h"
 

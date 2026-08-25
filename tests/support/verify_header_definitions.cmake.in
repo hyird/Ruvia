@@ -1,4 +1,4 @@
-set(_source_root "@CMAKE_SOURCE_DIR@")
+set(_source_root "@PROJECT_SOURCE_DIR@")
 
 # A function defined in a header at namespace scope, without inline, constexpr
 # or a template parameter list, links only as long as exactly one translation

@@ -13,6 +13,7 @@
 #include <asio/streambuf.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/HttpClient.h"

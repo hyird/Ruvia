@@ -20,7 +20,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"

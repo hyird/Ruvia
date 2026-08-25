@@ -166,6 +166,10 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_repo_layout.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/verify_repo_layout.cmake
     @ONLY)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_subproject_isolation.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/verify_subproject_isolation.cmake
+    @ONLY)
 add_test(
     NAME ruvia_guard_header_definitions
     COMMAND ${CMAKE_COMMAND}
@@ -207,6 +211,12 @@ add_test(
     NAME ruvia_guard_repo_layout
     COMMAND ${CMAKE_COMMAND}
         -P ${CMAKE_CURRENT_BINARY_DIR}/verify_repo_layout.cmake)
+
+add_test(
+    NAME ruvia_guard_subproject_isolation
+    COMMAND ${CMAKE_COMMAND}
+        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_subproject_isolation.cmake)
+set_tests_properties(ruvia_guard_subproject_isolation PROPERTIES TIMEOUT 60)
 
 if(RUVIA_BUILD_CORE)
 ruvia_add_unit_suite(ruvia_core_unit_tests ruvia::core
@@ -563,6 +573,7 @@ if(RUVIA_BUILD_CORE)
     add_test(NAME ruvia_smoke_core_target COMMAND ruvia_smoke_core_target)
 
     ruvia_add_test(ruvia_connection_scanner_lifetime core/connection_scanner_lifetime.cpp LIB ruvia::core)
+    ruvia_add_test(ruvia_event_loop_headers core/event_loop_headers.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_event_loop_pool core/runtime_worker.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_operation_deadline core/operation_deadline.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_pool_lease_scheduler core/pool_lease_scheduler.cpp
@@ -689,6 +700,8 @@ if(RUVIA_BUILD_WEB)
             -Wmissing-field-initializers
             -Werror=missing-field-initializers)
     endif()
+    ruvia_add_test(ruvia_guard_web_http_client_headers
+        web/guards/http_client_headers.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_web_blocking_api
         web/guards/blocking_api_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_web_cancellation_mailbox

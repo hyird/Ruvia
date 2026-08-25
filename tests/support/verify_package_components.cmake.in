@@ -1,5 +1,5 @@
-set(_generated_config "@CMAKE_BINARY_DIR@/ruviaConfig.cmake")
-set(_config_template "@CMAKE_SOURCE_DIR@/cmake/ruviaConfig.cmake.in")
+set(_generated_config "@PROJECT_BINARY_DIR@/ruviaConfig.cmake")
+set(_config_template "@PROJECT_SOURCE_DIR@/cmake/ruviaConfig.cmake.in")
 
 # Package imports must be explicit. A component-less find_package used to import
 # every installed target, which silently pulled Web dependencies into consumers

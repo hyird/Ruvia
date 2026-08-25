@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.24)
 
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE
+set(_ruvia_is_top_level OFF)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(_ruvia_is_top_level ON)
+endif()
+
+if(_ruvia_is_top_level
+   AND NOT DEFINED CMAKE_TOOLCHAIN_FILE
    AND DEFINED ENV{VCPKG_ROOT}
    AND NOT "$ENV{VCPKG_ROOT}" STREQUAL "")
     file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" _ruvia_vcpkg_root)
@@ -26,10 +32,10 @@ option(RUVIA_ENABLE_POSTGRESQL "Enable PostgreSQL" OFF)
 option(RUVIA_ENABLE_REDIS "Enable Redis" OFF)
 option(RUVIA_ENABLE_JWT "Enable JWT" OFF)
 
-if(NOT "$ENV{VCPKG_DEFAULT_TRIPLET}" STREQUAL "")
+if(_ruvia_is_top_level AND NOT "$ENV{VCPKG_DEFAULT_TRIPLET}" STREQUAL "")
     set(VCPKG_TARGET_TRIPLET "$ENV{VCPKG_DEFAULT_TRIPLET}" CACHE STRING "")
 endif()
-if(NOT "$ENV{VCPKG_DEFAULT_HOST_TRIPLET}" STREQUAL "")
+if(_ruvia_is_top_level AND NOT "$ENV{VCPKG_DEFAULT_HOST_TRIPLET}" STREQUAL "")
     set(VCPKG_HOST_TRIPLET "$ENV{VCPKG_DEFAULT_HOST_TRIPLET}" CACHE STRING "")
 endif()
 
@@ -49,16 +55,16 @@ foreach(_ruvia_option _ruvia_feature IN ZIP_LISTS _ruvia_options _ruvia_features
         list(APPEND _ruvia_vcpkg_features ${_ruvia_feature})
     endif()
 endforeach()
-set(VCPKG_MANIFEST_FEATURES "${_ruvia_vcpkg_features}" CACHE STRING "" FORCE)
-set(VCPKG_MANIFEST_NO_DEFAULT_FEATURES ON CACHE BOOL "" FORCE)
+if(_ruvia_is_top_level)
+    set(VCPKG_MANIFEST_FEATURES "${_ruvia_vcpkg_features}" CACHE STRING "" FORCE)
+    set(VCPKG_MANIFEST_NO_DEFAULT_FEATURES ON CACHE BOOL "" FORCE)
+endif()
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json" _ruvia_manifest)
 string(JSON _ruvia_version GET "${_ruvia_manifest}" version-string)
 
 set(CMAKE_MSVC_RUNTIME_LIBRARY
-    "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING
-    "Use the static MSVC runtime: /MT for non-Debug configs and /MTd for Debug"
-    FORCE)
+    "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 project(ruvia VERSION ${_ruvia_version} LANGUAGES CXX)
 
@@ -383,7 +389,7 @@ endforeach()
 get_property(_ruvia_installed_headers GLOBAL PROPERTY RUVIA_INSTALLED_HEADERS)
 list(SORT _ruvia_installed_headers)
 list(JOIN _ruvia_installed_headers "\n" _ruvia_installed_headers_text)
-file(WRITE "${CMAKE_BINARY_DIR}/ruvia_installed_headers.txt"
+file(WRITE "${PROJECT_BINARY_DIR}/ruvia_installed_headers.txt"
     "${_ruvia_installed_headers_text}\n")
 
 if(RUVIA_BUILD_EXAMPLES)

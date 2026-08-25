@@ -14,7 +14,7 @@
 #include "ruvia/web/Dotenv.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ErrorHandlers.h"
-#include "ruvia/web/HttpClientHandle.h"
+#include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/WebWorker.h"

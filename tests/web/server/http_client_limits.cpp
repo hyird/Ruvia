@@ -550,8 +550,8 @@ int testConnectStopTokenCancellation() {
 int testCookieCapacity() {
     auto config = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
     config.protocol = ruvia::HttpClientProtocol::kHttp1Only;
-    config.maxCookiesPerWorker = 1;
-    config.maxCookieBytesPerWorker = 8;
+    config.maxCookies = 1;
+    config.maxCookieBytes = 8;
     config.cookies.emplace_back("a", "1");
     ruvia::detail::validateHttpClientConfig(config);
     config.cookies.emplace_back("b", "2");
@@ -658,8 +658,8 @@ int testAutomaticCookieCapacity() {
     });
     auto config = plainConfig(server.port());
     config.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
-    config.maxCookiesPerWorker = 1;
-    config.maxCookieBytesPerWorker = 64;
+    config.maxCookies = 1;
+    config.maxCookieBytes = 64;
     CountingResource operationResource;
     return runClient(config, operationResource,
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&, CountingResource*) -> ruvia::Task<int> {
@@ -693,7 +693,7 @@ int testAutomaticCookieInsertionFailureDoesNotRetainPartialCookie() {
     CountingResource operationResource;
     auto config = plainConfig(server.port());
     config.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
-    config.maxCookieBytesPerWorker = 64 * 1024;
+    config.maxCookieBytes = 64 * 1024;
     config.userAgent.clear();
 
     ruvia::detail::HttpClientConfigStorage stored(config, &poolResource);
