@@ -2,15 +2,15 @@
 
 #include <memory_resource>
 
-#include "ruvia/web/HttpClientHandle.h"
+#include "ruvia/web/HttpClientTypes.h"
 
 namespace ruvia::detail {
 
 struct HttpClientConfigStorage final {
     HttpClientConfigStorage(const HttpClientConfig& source, std::pmr::memory_resource* resource)
         : host(source.host, resource),
-          scheme(source.scheme), port(source.port.value_or(source.scheme == HttpScheme::kHttps ? 443 : 80)), connectionsPerWorker(source.connectionsPerWorker), maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection), maxBufferedRequestsPerWorker(source.maxBufferedRequestsPerWorker),
-          maxCookiesPerWorker(source.maxCookiesPerWorker), maxCookieBytesPerWorker(source.maxCookieBytesPerWorker),
+          scheme(source.scheme), port(source.port.value_or(source.scheme == HttpScheme::kHttps ? 443 : 80)), connectionCount(source.connectionCount), maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection), maxBufferedRequests(source.maxBufferedRequests),
+          maxCookies(source.maxCookies), maxCookieBytes(source.maxCookieBytes),
           connectTimeout(source.connectTimeout), writeTimeout(source.writeTimeout), requestTimeout(source.requestTimeout), acquireTimeout(source.acquireTimeout),
           maxResponseBytes(source.maxResponseBytes), protocol(source.protocol), tlsPeerVerification(source.tlsPeerVerification),
           tcpNoDelay(source.tcpNoDelay), tcpKeepAlive(source.tcpKeepAlive), receivedCookies(source.receivedCookies), caFile(source.caFile, resource),
@@ -21,8 +21,8 @@ struct HttpClientConfigStorage final {
     }
 
     HttpClientConfigStorage(const HttpClientConfigStorage& source, std::pmr::memory_resource* resource)
-        : host(source.host, resource), scheme(source.scheme), port(source.port), connectionsPerWorker(source.connectionsPerWorker), maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection), maxBufferedRequestsPerWorker(source.maxBufferedRequestsPerWorker),
-          maxCookiesPerWorker(source.maxCookiesPerWorker), maxCookieBytesPerWorker(source.maxCookieBytesPerWorker),
+        : host(source.host, resource), scheme(source.scheme), port(source.port), connectionCount(source.connectionCount), maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection), maxBufferedRequests(source.maxBufferedRequests),
+          maxCookies(source.maxCookies), maxCookieBytes(source.maxCookieBytes),
           connectTimeout(source.connectTimeout), writeTimeout(source.writeTimeout), requestTimeout(source.requestTimeout), acquireTimeout(source.acquireTimeout),
           maxResponseBytes(source.maxResponseBytes), protocol(source.protocol), tlsPeerVerification(source.tlsPeerVerification),
           tcpNoDelay(source.tcpNoDelay), tcpKeepAlive(source.tcpKeepAlive), receivedCookies(source.receivedCookies), caFile(source.caFile, resource),
@@ -35,11 +35,11 @@ struct HttpClientConfigStorage final {
     std::pmr::string host;
     HttpScheme scheme;
     std::uint16_t port;
-    std::size_t connectionsPerWorker;
+    std::size_t connectionCount;
     std::size_t maxConcurrentHttp2StreamsPerConnection;
-    std::size_t maxBufferedRequestsPerWorker;
-    std::size_t maxCookiesPerWorker;
-    std::size_t maxCookieBytesPerWorker;
+    std::size_t maxBufferedRequests;
+    std::size_t maxCookies;
+    std::size_t maxCookieBytes;
     std::chrono::milliseconds connectTimeout;
     std::optional<std::chrono::milliseconds> writeTimeout;
     std::optional<std::chrono::milliseconds> requestTimeout;

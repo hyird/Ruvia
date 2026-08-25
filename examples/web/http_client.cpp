@@ -89,7 +89,7 @@ int main() {
             .config = {
                 .scheme = ruvia::HttpScheme::kHttps,
                 .host = "api.example.com",
-                .connectionsPerWorker = 4,
+                .connectionCount = 4,
                 .protocol = ruvia::HttpClientProtocol::kNegotiate,
                 .receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend,
             },

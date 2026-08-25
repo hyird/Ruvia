@@ -495,7 +495,7 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
     if (scheme == ruvia::HttpScheme::kHttps) {
         publicConfig.tlsPeerVerification = ruvia::HttpClientTlsPeerVerificationPolicy::kSkipVerification;
     }
-    publicConfig.connectionsPerWorker = 1;
+    publicConfig.connectionCount = 1;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
     ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
     ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
@@ -823,8 +823,8 @@ int runBoundedBuffer() {
     auto publicConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
     publicConfig.port = port;
     publicConfig.protocol = ruvia::HttpClientProtocol::kHttp1Only;
-    publicConfig.connectionsPerWorker = 1;
-    publicConfig.maxBufferedRequestsPerWorker = 1;
+    publicConfig.connectionCount = 1;
+    publicConfig.maxBufferedRequests = 1;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
     ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
     ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));

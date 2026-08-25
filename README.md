@@ -205,7 +205,7 @@ ruvia::app().httpClient({
     .config = {
         .scheme = ruvia::HttpScheme::kHttps,
         .host = "api.example.com",
-        .connectionsPerWorker = 2,
+        .connectionCount = 2,
         .requestTimeout = std::chrono::seconds(10),
     },
 });
@@ -259,8 +259,8 @@ requests are never retried automatically.
 Use `HttpClientProtocol::kHttp1Only` or `kHttp2Only` when negotiation fallback
 is not acceptable. Client certificates, a custom CA file, certificate
 verification policy, connect/acquire/request/write timeouts, TCP keepalive, and
-per-worker connection capacity are supplied in the same `{}` configuration.
-Additional operations wait in the bounded per-worker queue and fail with
+per-client connection capacity are supplied in the same `{}` configuration.
+Additional operations wait in the bounded client-local queue and fail with
 `kQueueFull` when it is full or `kTimeout` when `acquireTimeout` expires.
 
 Cleartext HTTP/2 uses RFC 9113 prior knowledge when `kHttp2Only` is selected. HTTP/1.1
@@ -298,18 +298,18 @@ Received cookies are ignored by default. Set
 the origin configuration to retain matching `Set-Cookie` response fields and
 send them on later requests. A per-request cookie is an ordinary `cookie`
 header in the supplied `HttpClientRequestView`; `HttpClientConfig::cookies`
-seeds every worker-local jar when the origin is first used.
-`maxCookiesPerWorker` and
-`maxCookieBytesPerWorker` bound each worker-local jar; received cookies beyond
+seeds each client-local jar when the origin is first used.
+`maxCookies` and
+`maxCookieBytes` bound each client-local jar; received cookies beyond
 either bound are ignored. Invalid registration is rejected during App
 configuration, before any worker starts.
 
 ## Core Runtime
 
-`ruvia::EventLoopPool` creates application-owned event loops. Every
-`EventLoop` owns one thread and one standalone Asio `io_context`, which is
-available for application TCP, UDP, DNS, and TLS integrations. Its bounded
-`post()` remains the cross-thread queue-in-loop API:
+`ruvia::EventLoopPool` owns application runtime threads and standalone Asio
+`io_context` instances. Each returned `EventLoop` is a stable handle to one of
+those runtimes, which is available for application TCP, UDP, DNS, and TLS
+integrations. Its bounded `post()` remains the cross-thread queue-in-loop API:
 
 ```cpp
 #include <ruvia/core/EventLoopPool.h>
@@ -374,6 +374,8 @@ Existing Asio applications can attach one Ruvia event loop to an externally
 owned context without transferring thread or lifecycle ownership:
 
 ```cpp
+#include <ruvia/core/EventLoopAttachment.h>
+
 asio::io_context io;
 auto attachment = ruvia::attachEventLoop(io);
 auto loop = attachment.loop();

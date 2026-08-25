@@ -1,3 +1,4 @@
+#include <ruvia/core/EventLoopAttachment.h>
 #include <ruvia/core/EventLoopPool.h>
 #include <ruvia/core/detail/RuntimeLifecycle.h>
 

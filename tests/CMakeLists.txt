@@ -563,6 +563,7 @@ if(RUVIA_BUILD_CORE)
     add_test(NAME ruvia_smoke_core_target COMMAND ruvia_smoke_core_target)
 
     ruvia_add_test(ruvia_connection_scanner_lifetime core/connection_scanner_lifetime.cpp LIB ruvia::core)
+    ruvia_add_test(ruvia_event_loop_headers core/event_loop_headers.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_event_loop_pool core/runtime_worker.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_operation_deadline core/operation_deadline.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_pool_lease_scheduler core/pool_lease_scheduler.cpp
@@ -689,6 +690,8 @@ if(RUVIA_BUILD_WEB)
             -Wmissing-field-initializers
             -Werror=missing-field-initializers)
     endif()
+    ruvia_add_test(ruvia_guard_web_http_client_headers
+        web/guards/http_client_headers.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_web_blocking_api
         web/guards/blocking_api_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_web_cancellation_mailbox

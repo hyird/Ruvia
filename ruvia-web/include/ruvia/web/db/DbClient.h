@@ -8,7 +8,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/EventLoop.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/db/DbHandle.h"
 #include "ruvia/web/db/DbTypes.h"

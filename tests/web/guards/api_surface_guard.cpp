@@ -46,6 +46,8 @@
 #include "ruvia/web/Health.h"
 #include "ruvia/web/HttpClient.h"
 #include "ruvia/web/HttpClientHandle.h"
+#include "ruvia/web/HttpClientResponse.h"
+#include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/Model.h"
 #include "ruvia/web/RateLimit.h"
 #include "ruvia/web/SecurityHeaders.h"
@@ -3298,8 +3300,8 @@ static_assert(!HasHttpClientKeepAliveBoolean<ruvia::HttpClientConfig>);
 static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientConfig&>().receivedCookies), ruvia::HttpClientReceivedCookiePolicy>);
 static_assert(ruvia::HttpClientConfig{}.receivedCookies == ruvia::HttpClientReceivedCookiePolicy::kIgnore);
 static_assert(!HasHttpClientCookiesEnabledBoolean<ruvia::HttpClientConfig>);
-static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientConfig&>().maxCookiesPerWorker), std::size_t>);
-static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientConfig&>().maxCookieBytesPerWorker), std::size_t>);
+static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientConfig&>().maxCookies), std::size_t>);
+static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientConfig&>().maxCookieBytes), std::size_t>);
 static_assert(!HasAliasedUseHttpClient<ruvia::App>);
 static_assert(!std::is_copy_constructible_v<ruvia::HttpClientResponse>);
 static_assert(std::is_move_constructible_v<ruvia::HttpClientResponse>);

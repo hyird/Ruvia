@@ -11,7 +11,7 @@
 
 #include "db_integration_fixture.h"
 
-#include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/db/DbMigration.h"

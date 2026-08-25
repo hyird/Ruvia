@@ -75,11 +75,11 @@ bool canSerializeReceivedCookie(std::string_view name, std::string_view value) n
 }
 
 std::size_t httpClientSchedulerSlots(const HttpClientConfigStorage& config) {
-    if (config.protocol == HttpClientProtocol::kHttp1Only) return config.connectionsPerWorker;
-    if (config.maxConcurrentHttp2StreamsPerConnection > std::numeric_limits<std::size_t>::max() / config.connectionsPerWorker) {
+    if (config.protocol == HttpClientProtocol::kHttp1Only) return config.connectionCount;
+    if (config.maxConcurrentHttp2StreamsPerConnection > std::numeric_limits<std::size_t>::max() / config.connectionCount) {
         throw std::invalid_argument("HTTP client connection and HTTP/2 stream capacity is too large");
     }
-    return config.connectionsPerWorker * config.maxConcurrentHttp2StreamsPerConnection;
+    return config.connectionCount * config.maxConcurrentHttp2StreamsPerConnection;
 }
 
 std::string_view requestPathOnly(std::string_view target) noexcept {
@@ -126,8 +126,8 @@ HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& 
     validateHttpClientConfig(config_);
     for (const auto& [name, value] : config_.cookies) addCookie(name, value);
     configureTls();
-    connections_.reserve(config_.connectionsPerWorker);
-    for (std::size_t i = 0; i < config_.connectionsPerWorker; ++i) connections_.emplace_back(ioContext_, tlsContext_, worker_, resource_);
+    connections_.reserve(config_.connectionCount);
+    for (std::size_t i = 0; i < config_.connectionCount; ++i) connections_.emplace_back(ioContext_, tlsContext_, worker_, resource_);
     cancellationMailbox_ = std::make_shared<HttpClientOperationCancellationMailbox>(*this, worker_);
 }
 
@@ -256,11 +256,11 @@ bool HttpClientPool::cookieCapacityAvailable(
     std::size_t replacedBytes,
     std::size_t replacementBytes,
     bool adding) const noexcept {
-    if (adding && cookies_.size() >= config_.maxCookiesPerWorker) return false;
+    if (adding && cookies_.size() >= config_.maxCookies) return false;
     if (replacedBytes > cookieBytes_) return false;
     const auto retainedBytes = cookieBytes_ - replacedBytes;
-    return replacementBytes <= config_.maxCookieBytesPerWorker -
-        std::min(retainedBytes, config_.maxCookieBytesPerWorker);
+    return replacementBytes <= config_.maxCookieBytes -
+        std::min(retainedBytes, config_.maxCookieBytes);
 }
 
 void HttpClientPool::appendAutomaticHeaders(const HttpClientRequestStorage& request, std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader) {
@@ -713,7 +713,7 @@ Task<void> HttpClientPool::executeRequestInto(HttpClientRequestStorage request, 
     HttpClientResponse response(state, true);
     const OperationTimeout timeout(options.timeout.has_value() ? options.timeout : config_.requestTimeout);
     const auto acquireTimeout = timeout.constrainedBy(config_.acquireTimeout);
-    if (requestsBuffered_ >= config_.maxBufferedRequestsPerWorker) {
+    if (requestsBuffered_ >= config_.maxBufferedRequests) {
         ++failedRequests_;
         throw HttpClientError(HttpClientError::Code::kQueueFull, "http client request buffer is full");
     }
@@ -751,7 +751,7 @@ Task<void> HttpClientPool::executeRequestInto(HttpClientRequestStorage request, 
             discardConnection = false;
             auto& runtime = *connection.http2Runtime;
             const bool mustBuffer = runtime.http1Operations != 0;
-            if (mustBuffer && requestsBuffered_ >= config_.maxBufferedRequestsPerWorker) {
+            if (mustBuffer && requestsBuffered_ >= config_.maxBufferedRequests) {
                 throw HttpClientError(HttpClientError::Code::kQueueFull, "HTTP client request buffer is full");
             }
             ++runtime.http1Operations;
