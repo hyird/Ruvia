@@ -761,7 +761,9 @@ concept. Use `query()` for PostgreSQL statements with `RETURNING`.
 drops the connection, whatever the server is still doing with the statement;
 explicit `std::nullopt` requests an unbounded wait. Database failures throw
 `DbError`; it exposes a stable code, the driver when a backend was selected,
-and, when available, the backend's native code and SQLSTATE.
+and, when available, the backend's native code, SQLSTATE, and constraint name.
+Use `constraintName()` to map a PostgreSQL constraint failure to an application
+error without parsing backend error text.
 
 For one operation, bind a tighter timeout or an additional stop token to the
 handle before starting it; DB, Redis, and outbound HTTP all use this same
