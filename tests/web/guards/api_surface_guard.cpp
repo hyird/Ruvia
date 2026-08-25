@@ -1544,6 +1544,15 @@ template <typename String>
 concept AcceptsAnyRvalueJwtTokenOptionText = requires(String&& value) { ruvia::JwtVerifyOptions{.token = std::forward<String>(value)}; } || requires(String&& value) { ruvia::JwtDecodeUnverifiedOptions{.token = std::forward<String>(value)}; };
 
 template <typename String>
+concept AcceptsAnyRvalueJwtSecretOptionText = requires(String&& value) { ruvia::JwtSignOptions{.secret = std::forward<String>(value)}; } || requires(String&& value) { ruvia::JwtVerifyOptions{.secret = std::forward<String>(value)}; };
+
+template <typename String>
+concept AcceptsLvalueJwtSecretOptionText = requires(String& value) {
+    ruvia::JwtSignOptions{.secret = value};
+    ruvia::JwtVerifyOptions{.secret = value};
+};
+
+template <typename String>
 concept AcceptsLvalueJwtClaimOptionText = requires(String& value) { ruvia::JwtClaimOptions{.name = value, .value = value}; };
 
 template <typename T>
@@ -2744,8 +2753,10 @@ static_assert(std::is_aggregate_v<ruvia::JwtVerifyOptions>);
 static_assert(std::is_aggregate_v<ruvia::JwtDecodeUnverifiedOptions>);
 static_assert(std::same_as<decltype(ruvia::JwtClaimOptions{}.name), ruvia::BorrowedText>);
 static_assert(std::same_as<decltype(ruvia::JwtClaimOptions{}.value), ruvia::BorrowedText>);
+static_assert(std::same_as<decltype(ruvia::JwtSignOptions{}.secret), ruvia::BorrowedText>);
 static_assert(std::same_as<decltype(ruvia::JwtSignOptions{}.resource), std::pmr::memory_resource*>);
 static_assert(std::same_as<decltype(ruvia::JwtVerifyOptions{}.token), ruvia::BorrowedText>);
+static_assert(std::same_as<decltype(ruvia::JwtVerifyOptions{}.secret), ruvia::BorrowedText>);
 static_assert(std::same_as<decltype(ruvia::JwtVerifyOptions{}.resource), std::pmr::memory_resource*>);
 static_assert(std::same_as<decltype(ruvia::JwtDecodeUnverifiedOptions{}.token), ruvia::BorrowedText>);
 static_assert(std::same_as<decltype(ruvia::JwtDecodeUnverifiedOptions{}.resource), std::pmr::memory_resource*>);
@@ -2761,6 +2772,9 @@ static_assert(!AcceptsAnyRvalueJwtClaimOptionText<std::string>);
 static_assert(!AcceptsAnyRvalueJwtClaimOptionText<std::pmr::string>);
 static_assert(!AcceptsAnyRvalueJwtTokenOptionText<std::string>);
 static_assert(!AcceptsAnyRvalueJwtTokenOptionText<std::pmr::string>);
+static_assert(AcceptsLvalueJwtSecretOptionText<std::string>);
+static_assert(!AcceptsAnyRvalueJwtSecretOptionText<std::string>);
+static_assert(!AcceptsAnyRvalueJwtSecretOptionText<std::pmr::string>);
 #ifndef _MSC_VER
 static_assert(!HasJwtClaimPublicFields<ruvia::JwtClaim>);
 #endif

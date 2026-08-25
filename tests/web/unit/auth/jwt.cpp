@@ -28,8 +28,10 @@ using ruvia::JwtVerifyOptions;
 static_assert(std::is_empty_v<ruvia::detail::JwtPayloadAccess>);
 static_assert(std::is_same_v<decltype(JwtSignOptions{}.expiresIn), std::optional<std::chrono::seconds>>);
 static_assert(std::is_same_v<decltype(JwtSignOptions{}.notBeforeDelay), std::optional<std::chrono::seconds>>);
+static_assert(std::is_same_v<decltype(JwtSignOptions{}.secret), ruvia::BorrowedText>);
 static_assert(std::is_same_v<decltype(JwtSignOptions{}.resource), std::pmr::memory_resource*>);
 static_assert(std::is_same_v<decltype(JwtVerifyOptions{}.token), ruvia::BorrowedText>);
+static_assert(std::is_same_v<decltype(JwtVerifyOptions{}.secret), ruvia::BorrowedText>);
 static_assert(std::is_same_v<decltype(JwtVerifyOptions{}.expirationClaim), JwtExpirationClaimPolicy>);
 static_assert(std::is_same_v<decltype(JwtVerifyOptions{}.resource), std::pmr::memory_resource*>);
 static_assert(std::is_aggregate_v<ruvia::JwtDecodeUnverifiedOptions>);
@@ -70,6 +72,15 @@ template <typename String>
 concept AcceptsAnyRvalueJwtTokenOptionText = requires(String&& value) { ruvia::JwtVerifyOptions{.token = std::forward<String>(value)}; } || requires(String&& value) { ruvia::JwtDecodeUnverifiedOptions{.token = std::forward<String>(value)}; };
 
 template <typename String>
+concept AcceptsAnyRvalueJwtSecretOptionText = requires(String&& value) { ruvia::JwtSignOptions{.secret = std::forward<String>(value)}; } || requires(String&& value) { ruvia::JwtVerifyOptions{.secret = std::forward<String>(value)}; };
+
+template <typename String>
+concept AcceptsLvalueJwtSecretOptionText = requires(String& value) {
+    ruvia::JwtSignOptions{.secret = value};
+    ruvia::JwtVerifyOptions{.secret = value};
+};
+
+template <typename String>
 concept AcceptsLvalueJwtClaimOptionText = requires(String& value) { ruvia::JwtClaimOptions{.name = value, .value = value}; };
 
 static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtClaim>);
@@ -88,6 +99,9 @@ static_assert(!AcceptsAnyRvalueJwtClaimOptionText<std::string>);
 static_assert(!AcceptsAnyRvalueJwtClaimOptionText<std::pmr::string>);
 static_assert(!AcceptsAnyRvalueJwtTokenOptionText<std::string>);
 static_assert(!AcceptsAnyRvalueJwtTokenOptionText<std::pmr::string>);
+static_assert(AcceptsLvalueJwtSecretOptionText<std::string>);
+static_assert(!AcceptsAnyRvalueJwtSecretOptionText<std::string>);
+static_assert(!AcceptsAnyRvalueJwtSecretOptionText<std::pmr::string>);
 
 template <typename Token>
 concept AcceptsJwtTokenSplit = requires(Token&& token) { ruvia::detail::jwtSplitToken(std::forward<Token>(token)); };
@@ -110,7 +124,7 @@ static_assert(AcceptsJwtBearerToken<std::string_view>);
 
 JwtSignOptions signOptions(std::string_view secret) {
     JwtSignOptions options;
-    options.secret.assign(secret.data(), secret.size());
+    options.secret = secret;
     options.issuer.assign("ruvia");
     options.subject.assign("user-1");
     return options;
@@ -118,7 +132,7 @@ JwtSignOptions signOptions(std::string_view secret) {
 
 JwtVerifyOptions verifyOptions(std::string_view secret) {
     JwtVerifyOptions options;
-    options.secret.assign(secret.data(), secret.size());
+    options.secret = secret;
     return options;
 }
 

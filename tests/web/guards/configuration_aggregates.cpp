@@ -108,8 +108,10 @@ int main() {
     consume(ruvia::JwtClaimOptions{.name = "claim"});
     consume(ruvia::JwtClaimOptions{.value = "value"});
     consume(ruvia::JwtSignOptions{.algorithm = ruvia::JwtAlgorithm::kHs256});
+    consume(ruvia::JwtSignOptions{.secret = "secret"});
     consume(ruvia::JwtSignOptions{.resource = std::pmr::get_default_resource()});
     consume(ruvia::JwtVerifyOptions{.token = "token"});
+    consume(ruvia::JwtVerifyOptions{.secret = "secret"});
     consume(ruvia::JwtVerifyOptions{.resource = std::pmr::get_default_resource()});
     consume(ruvia::JwtDecodeUnverifiedOptions{.token = "token"});
     consume(ruvia::JwtDecodeUnverifiedOptions{.resource = std::pmr::get_default_resource()});

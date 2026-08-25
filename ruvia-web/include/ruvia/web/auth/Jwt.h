@@ -71,7 +71,7 @@ private:
 
 struct JwtSignOptions final {
     JwtAlgorithm algorithm{JwtAlgorithm::kHs256};
-    std::string secret{};
+    BorrowedText secret{};
     std::string issuer{};
     std::string subject{};
     std::string audience{};
@@ -85,7 +85,7 @@ struct JwtSignOptions final {
 struct JwtVerifyOptions final {
     BorrowedText token{};
     JwtAlgorithm algorithm{JwtAlgorithm::kHs256};
-    std::string secret{};
+    BorrowedText secret{};
     std::string issuer{};
     std::string subject{};
     std::string audience{};
