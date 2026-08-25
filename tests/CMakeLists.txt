@@ -166,6 +166,10 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_repo_layout.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/verify_repo_layout.cmake
     @ONLY)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_subproject_isolation.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/verify_subproject_isolation.cmake
+    @ONLY)
 add_test(
     NAME ruvia_guard_header_definitions
     COMMAND ${CMAKE_COMMAND}
@@ -207,6 +211,12 @@ add_test(
     NAME ruvia_guard_repo_layout
     COMMAND ${CMAKE_COMMAND}
         -P ${CMAKE_CURRENT_BINARY_DIR}/verify_repo_layout.cmake)
+
+add_test(
+    NAME ruvia_guard_subproject_isolation
+    COMMAND ${CMAKE_COMMAND}
+        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_subproject_isolation.cmake)
+set_tests_properties(ruvia_guard_subproject_isolation PROPERTIES TIMEOUT 60)
 
 if(RUVIA_BUILD_CORE)
 ruvia_add_unit_suite(ruvia_core_unit_tests ruvia::core

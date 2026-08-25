@@ -1,4 +1,4 @@
-set(_ruvia_source_root "@CMAKE_SOURCE_DIR@")
+set(_ruvia_source_root "@PROJECT_SOURCE_DIR@")
 
 # Test directories mirror product target ownership. A target test may use
 # neutral test infrastructure and declared dependency targets, but it must not

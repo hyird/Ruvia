@@ -666,8 +666,16 @@ upgrade routes reject before committing their response head.
 
 ## Build
 
-Set `VCPKG_ROOT` to the root of your vcpkg checkout. Ruvia automatically uses
-its toolchain unless `CMAKE_TOOLCHAIN_FILE` was set explicitly.
+For a standalone Ruvia build, set `VCPKG_ROOT` to the root of your vcpkg
+checkout. Ruvia automatically uses its toolchain unless
+`CMAKE_TOOLCHAIN_FILE` was set explicitly.
+
+When Ruvia is included with `FetchContent` or `add_subdirectory`, the parent
+project owns its toolchain, vcpkg manifest features, triplets, and cache-wide
+compiler policy. Select the dependencies needed by the enabled `RUVIA_*`
+options in the parent manifest. On MSVC, select the static runtime before
+creating parent targets that link Ruvia; Ruvia applies `/MT` or `/MTd` only to
+targets in its own directory tree.
 
 Linux / macOS:
 

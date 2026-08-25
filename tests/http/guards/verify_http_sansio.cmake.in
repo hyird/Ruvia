@@ -1,4 +1,4 @@
-set(_ruvia_source_root "@CMAKE_SOURCE_DIR@")
+set(_ruvia_source_root "@PROJECT_SOURCE_DIR@")
 
 # ruvia-http is the pure sans-I/O protocol layer: it must never reach an OS or
 # network I/O primitive. Only ruvia-http is scanned — core and web perform real

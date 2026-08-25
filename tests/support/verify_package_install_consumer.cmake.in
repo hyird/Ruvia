@@ -1,4 +1,4 @@
-set(_build_dir [=[@CMAKE_BINARY_DIR@]=])
+set(_build_dir [=[@PROJECT_BINARY_DIR@]=])
 set(_scratch_root [=[@CMAKE_CURRENT_BINARY_DIR@/package_install_consumer]=])
 set(_prefix "${_scratch_root}/prefix")
 set(_consumer_root "${_scratch_root}/consumers")
