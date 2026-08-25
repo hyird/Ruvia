@@ -177,6 +177,15 @@ ruvia::Task<void> withDatabase(
     }
     auto committedCount = co_await db.query("SELECT count(*) FROM ruvia_pg_integration_items");
     dbRequire(committedCount[0][0].as<std::uint64_t>() == 1, "commit did not persist state");
+    bool reportedConstraint = false;
+    try {
+        (void)co_await db.execute(
+            "INSERT INTO ruvia_pg_integration_items(value) VALUES ($1)", "hello");
+    } catch (const ruvia::DbError& error) {
+        reportedConstraint = error.sqlState() == "23505" &&
+                             error.constraintName() == "uq_ruvia_pg_integration_items_value";
+    }
+    dbRequire(reportedConstraint, "PostgreSQL unique violation lost its constraint name");
     auto updated = co_await db.execute("UPDATE ruvia_pg_integration_items SET value = $1", std::span<const ruvia::DbValue>(params.data(), 1));
     dbRequire(updated.affectedRows() == 1, "affected-row count is incorrect");
 
@@ -225,7 +234,8 @@ int main() {
         const std::array migrations{ruvia::DbMigration{{.id = "001_create_items",
             .sql = "CREATE TABLE ruvia_pg_integration_items ("
                    "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
-                   "value TEXT NOT NULL)"}}};
+                   "value TEXT NOT NULL, "
+                   "CONSTRAINT uq_ruvia_pg_integration_items_value UNIQUE (value))"}}};
         ruvia::DbMigratorOptions options;
         options.table = kMigrationsTable;
         const auto first = ruvia::DbMigrator::migrate(config, migrations, options);
@@ -238,7 +248,8 @@ int main() {
         const std::array edited{ruvia::DbMigration{{.id = "001_create_items",
             .sql = "CREATE TABLE ruvia_pg_integration_items ("
                    "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
-                   "value TEXT NOT NULL, note TEXT)"}}};
+                   "value TEXT NOT NULL, note TEXT, "
+                   "CONSTRAINT uq_ruvia_pg_integration_items_value UNIQUE (value))"}}};
         dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }),
             "an edited migration body was accepted");
 

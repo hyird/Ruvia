@@ -407,6 +407,13 @@ RUVIA_TEST(db_error_carries_category_and_native_diagnostics) {
         "timeout",
         1205,
         "HY000");
+    const ruvia::DbError uniqueViolation(
+        ruvia::DbError::Code::kStatementFailed,
+        ruvia::DbDriver::kPostgreSql,
+        "duplicate key",
+        std::nullopt,
+        "23505",
+        "uq_jobs_key");
     const ruvia::DbError cancelled(
         ruvia::DbError::Code::kCancelled,
         ruvia::DbDriver::kPostgreSql,
@@ -419,10 +426,13 @@ RUVIA_TEST(db_error_carries_category_and_native_diagnostics) {
     RUVIA_CHECK(timeout.driver() == ruvia::DbDriver::kMariaDb);
     RUVIA_CHECK(timeout.nativeCode() == 1205);
     RUVIA_CHECK(timeout.sqlState() == "HY000");
+    RUVIA_CHECK(!timeout.constraintName().has_value());
+    RUVIA_CHECK(uniqueViolation.constraintName() == "uq_jobs_key");
     RUVIA_CHECK(cancelled.code() == ruvia::DbError::Code::kCancelled);
     RUVIA_CHECK(cancelled.driver() == ruvia::DbDriver::kPostgreSql);
     RUVIA_CHECK(!cancelled.nativeCode().has_value());
     RUVIA_CHECK(!cancelled.sqlState().has_value());
+    RUVIA_CHECK(!cancelled.constraintName().has_value());
     RUVIA_CHECK(closing.code() == ruvia::DbError::Code::kClosing);
 }
 
