@@ -22,6 +22,7 @@ using ruvia::detail::WsAbortDisposition;
 using ruvia::detail::WsCloseEvent;
 using ruvia::detail::WsCloseSubmitStatus;
 using ruvia::detail::WsConnection;
+using ruvia::detail::WsConnectionRole;
 using ruvia::detail::WsEvent;
 using ruvia::detail::WsEventKind;
 using ruvia::detail::WsFrameSubmitStatus;
@@ -154,7 +155,55 @@ std::optional<WsEvent> pollBytes(WsConnection& connection, std::pmr::string& inp
     return connection.poll();
 }
 
+bool fixedMask(void*, ruvia::detail::WsMaskKey& key) noexcept {
+    key = {'\x11', '\x22', '\x33', '\x44'};
+    return true;
+}
+
+std::pmr::string unmaskedFrame(std::pmr::memory_resource* resource, std::uint8_t opcode, std::string_view payload) {
+    std::pmr::string frame(resource);
+    frame.push_back(static_cast<char>(0x80U | opcode));
+    frame.push_back(static_cast<char>(payload.size()));
+    frame.append(payload);
+    return frame;
+}
+
 }  // namespace
+
+RUVIA_TEST(ws_client_role_masks_outbound_and_accepts_unmasked_server_frames) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string input(&resource);
+    WsConnection client(input, ProtocolByteLimit::limited(1024), WebSocketCompression::kDisabled,
+        WsConnectionRole::kClient, &fixedMask, nullptr);
+
+    RUVIA_CHECK(client.submitFrame(WebSocketOpcode::kText, "hi") == WsFrameSubmitStatus::kAccepted);
+    const auto output = client.outputPlan().bytes();
+    RUVIA_CHECK_EQ(output.size(), std::size_t{8});
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(output[0]), static_cast<unsigned char>(0x81));
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(output[1]), static_cast<unsigned char>(0x82));
+    RUVIA_CHECK_EQ(output.substr(2, 4), std::string_view("\x11\x22\x33\x44", 4));
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(output[6]), static_cast<unsigned char>('h' ^ 0x11));
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(output[7]), static_cast<unsigned char>('i' ^ 0x22));
+
+    const auto serverFrame = unmaskedFrame(&resource, 0x1, "ok");
+    const auto event = pollBytes(client, input, serverFrame);
+    RUVIA_CHECK(event.has_value());
+    RUVIA_CHECK(event->message() != nullptr);
+    RUVIA_CHECK_EQ(event->message()->payload(), std::string_view("ok"));
+}
+
+RUVIA_TEST(ws_client_role_rejects_masked_server_frames) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string input(&resource);
+    WsConnection client(input, ProtocolByteLimit::limited(1024), WebSocketCompression::kDisabled,
+        WsConnectionRole::kClient, &fixedMask, nullptr);
+    const auto serverViolation = maskedFrame(&resource, 0x1, "bad");
+    const auto event = pollBytes(client, input, serverViolation);
+    RUVIA_CHECK(event.has_value());
+    RUVIA_CHECK(event->protocolError() != nullptr);
+    RUVIA_CHECK_EQ(event->protocolError()->closeCode(), std::uint16_t{1002});
+    RUVIA_CHECK((static_cast<unsigned char>(client.outputPlan().bytes()[1]) & 0x80U) != 0);
+}
 
 // A single masked Text frame is delivered as one complete typed event, unmasked.
 RUVIA_TEST(ws_connection_event_is_optional_and_discriminated) {

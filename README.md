@@ -36,6 +36,7 @@ protocol library do not require the full Web framework.
 - [Quick Start](#quick-start)
 - [Targets](#targets)
 - [Outbound HTTP Client](#outbound-http-client)
+- [Outbound WebSocket Client](#outbound-websocket-client)
 - [Core Runtime](#core-runtime)
 - [Blocking Work](#blocking-work)
 - [Static Files and Compression](#static-files-and-compression)
@@ -303,6 +304,56 @@ seeds each client-local jar when the origin is first used.
 `maxCookieBytes` bound each client-local jar; received cookies beyond
 either bound are ignored. Invalid registration is rejected during App
 configuration, before any worker starts.
+
+## Outbound WebSocket Client
+
+`WebSocketClient` is one long-lived `ws` or `wss` connection bound to one
+`EventLoop`. Its API follows the standalone `HttpClient` shape: configuration is
+a designated-initializable aggregate, construction performs no I/O, `connect()`
+is lazy and worker-affine, `withOptions(OperationOptions)` derives operation
+policy, and `close()` is an idempotent immediate shutdown callable from any
+thread. Use the typed `close(WebSocketCloseOptions)` overload for an awaited RFC
+6455 close handshake.
+
+```cpp
+#include <ruvia/web/WebSocketClient.h>
+
+ruvia::Task<void> consumeEvents(ruvia::WebSocketClient& client) {
+    co_await client.connect();
+    co_await client.text("ready");
+
+    while (auto message = co_await client
+               .withOptions({.timeout = std::chrono::seconds(30)})
+               .read()) {
+        if (message->text()) {
+            // message->payload() is valid until the next read on this client.
+        }
+    }
+}
+
+ruvia::WebSocketClient client(loop, {
+    .scheme = ruvia::WebSocketScheme::kWss,
+    .host = "events.example.com",
+    .target = "/v1/stream",
+    .subprotocols = "events.v1, events.v2",
+});
+
+auto completed = loop.start(consumeEvents(client));
+```
+
+The opening handshake uses HTTP/1.1 Upgrade, validates the server accept key and
+selected subprotocol, and rejects unsolicited extensions. Client frames use a
+cryptographically generated mask; inbound masked server frames are rejected.
+The driver automatically answers Ping, completes peer-initiated Close, enforces
+one concurrent read and one concurrent write, bounds complete messages, and
+closes the transport when an operation is cancelled or times out. `wss` verifies
+the peer certificate and host name by default and supports the same CA and client
+certificate fields as `HttpClientConfig`.
+
+`WebSocketMessage::payload()` borrows the client read buffer and remains valid
+only until the next `read()` on that connection. Copy it first when it must live
+longer. A WebSocket connection stays on its bound loop for its complete lifetime;
+it is not pooled or migrated between workers.
 
 ## Core Runtime
 

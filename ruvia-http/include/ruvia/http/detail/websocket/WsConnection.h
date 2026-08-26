@@ -1,9 +1,10 @@
 #pragma once
 
-// WebSocket sans-I/O server connection core.
+// WebSocket sans-I/O connection core shared by server and client runtimes.
 //
 // The caller owns one persistent PMR input buffer and appends transport bytes to
-// it. poll() parses and unmasks that buffer in place, emits at most one event,
+// it. poll() parses that buffer (unmasking client-to-server frames in place),
+// emits at most one event,
 // and leaves its payload view valid until the next poll() call. This keeps the
 // runtime hot path zero-copy for complete unfragmented messages; fragmented and
 // compressed messages use only their protocol-required assembly/decode storage.
@@ -16,6 +17,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -70,6 +72,14 @@ enum class WsOutputConsumeStatus : std::uint8_t {
     kOutOfRange,
 };
 
+enum class WsConnectionRole : std::uint8_t {
+    kServer,
+    kClient,
+};
+
+using WsMaskKey = std::array<char, 4>;
+using WsMaskKeyGenerator = bool (*)(void*, WsMaskKey&) noexcept;
+
 class WsOutputPlan final {
 public:
     [[nodiscard]] constexpr std::string_view bytes() const noexcept {
@@ -93,7 +103,7 @@ private:
 
 class WsConnection final {
 public:
-    explicit WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(), WebSocketCompression compression = WebSocketCompression::kDisabled);
+    explicit WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(), WebSocketCompression compression = WebSocketCompression::kDisabled, WsConnectionRole role = WsConnectionRole::kServer, WsMaskKeyGenerator maskKeyGenerator = nullptr, void* maskKeyContext = nullptr);
 
     // Parse buffered transport bytes until one protocol event is available or
     // more input is required (nullopt). Every materialized event contains one
@@ -110,7 +120,7 @@ public:
     [[nodiscard]] WsAbortDisposition abort() noexcept;
     [[nodiscard]] WsLivenessMode livenessMode() const noexcept;
 
-    // Submit one complete logical message/control payload. Server masking,
+    // Submit one complete logical message/control payload. Role-correct masking,
     // outbound text UTF-8 validation, optional data-message compression and
     // wire header encoding stay inside the core.
     // Close has a separate typed entry because it owns code/reason validation
@@ -150,6 +160,10 @@ private:
     std::optional<WebSocketDeflate> deflate_;
     std::pmr::string inboundInflated_;
     std::pmr::string outboundDeflated_;
+
+    WsConnectionRole role_{WsConnectionRole::kServer};
+    WsMaskKeyGenerator maskKeyGenerator_{nullptr};
+    void* maskKeyContext_{nullptr};
 
     ClosePhase closePhase_{ClosePhase::kOpen};
 };

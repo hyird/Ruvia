@@ -60,6 +60,7 @@ public:
 
 private:
     friend std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(unsigned char, unsigned char, bool) noexcept;
+    friend std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(unsigned char, unsigned char, bool, bool) noexcept;
 
     constexpr WebSocketFrameStart(WebSocketFrameKind kind, bool final, bool compressed) noexcept
         : kind_(kind),
@@ -86,16 +87,20 @@ private:
 // allowRsv1 enables the RSV1 (compressed) bit when permessage-deflate is
 // negotiated; it is valid only on the first frame of a data message, never on a
 // continuation or control frame (RFC 7692 §6.1). RSV2/RSV3 are always rejected.
-[[nodiscard]] inline std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(unsigned char first, unsigned char second, bool allowRsv1) noexcept {
+[[nodiscard]] inline std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(unsigned char first, unsigned char second, bool allowRsv1, bool expectMasked) noexcept {
     const auto rawOpcode = static_cast<std::uint8_t>(first & 0x0FU);
     const bool rsv1 = (first & 0x40U) != 0;
-    if ((first & 0x30U) != 0 || (second & 0x80U) == 0 || isInvalidWebSocketRawOpcode(rawOpcode)) {
+    if ((first & 0x30U) != 0 || ((second & 0x80U) != 0) != expectMasked || isInvalidWebSocketRawOpcode(rawOpcode)) {
         return std::nullopt;
     }
     if (rsv1 && (!allowRsv1 || rawOpcode == 0 || rawOpcode >= 0x8)) {
         return std::nullopt;
     }
     return WebSocketFrameStart(static_cast<WebSocketFrameKind>(rawOpcode), (first & 0x80U) != 0, rsv1);
+}
+
+[[nodiscard]] inline std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(unsigned char first, unsigned char second, bool allowRsv1) noexcept {
+    return decodeWebSocketFrameStart(first, second, allowRsv1, true);
 }
 
 [[nodiscard]] inline bool isInvalidWebSocketControlFrame(const WebSocketFrameStart& frame, std::uint64_t payloadSize) noexcept {
@@ -148,17 +153,17 @@ private:
     return true;
 }
 
-[[nodiscard]] inline std::size_t encodeWebSocketFrameHeader(WebSocketFrameHeader& header, WebSocketOpcode opcode, std::size_t payloadSize, bool rsv1 = false) noexcept {
+[[nodiscard]] inline std::size_t encodeWebSocketFrameHeader(WebSocketFrameHeader& header, WebSocketOpcode opcode, std::size_t payloadSize, bool rsv1 = false, bool masked = false) noexcept {
     std::size_t headerSize = 0;
     header[headerSize++] = static_cast<char>(0x80U | (rsv1 ? 0x40U : 0U) | static_cast<std::uint8_t>(opcode));
     if (payloadSize <= 125) {
-        header[headerSize++] = static_cast<char>(payloadSize);
+        header[headerSize++] = static_cast<char>((masked ? 0x80U : 0U) | payloadSize);
     } else if (payloadSize <= 0xFFFF) {
-        header[headerSize++] = static_cast<char>(126);
+        header[headerSize++] = static_cast<char>((masked ? 0x80U : 0U) | 126U);
         header[headerSize++] = static_cast<char>((payloadSize >> 8) & 0xFF);
         header[headerSize++] = static_cast<char>(payloadSize & 0xFF);
     } else {
-        header[headerSize++] = static_cast<char>(127);
+        header[headerSize++] = static_cast<char>((masked ? 0x80U : 0U) | 127U);
         const auto size = static_cast<std::uint64_t>(payloadSize);
         for (int shift = 56; shift >= 0; shift -= 8) {
             header[headerSize++] = static_cast<char>((size >> shift) & 0xFF);

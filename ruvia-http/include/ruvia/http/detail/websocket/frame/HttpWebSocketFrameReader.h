@@ -86,7 +86,7 @@ public:
     [[nodiscard]] constexpr const WebSocketFrameReadFailure* failure() const&& = delete;
 
 private:
-    friend WebSocketFrameReadResult webSocketTryReadFrame(std::pmr::string&, std::size_t&, std::size_t&, ProtocolByteLimit, bool);
+    friend WebSocketFrameReadResult webSocketTryReadFrame(std::pmr::string&, std::size_t&, std::size_t&, ProtocolByteLimit, bool, bool);
 
     using Value = std::variant<WebSocketFrameNeedInput, WebSocketFrameView, WebSocketFrameReadFailure>;
 
@@ -110,10 +110,11 @@ private:
 };
 
 // Single owner of WebSocket frame decode (RFC 6455 §5.2): FIN/opcode/length
-// parsing, control-frame and length-limit validation, and in-place unmasking.
+// parsing, role-correct masking validation, control-frame and length-limit
+// validation, and in-place unmasking when the peer is a client.
 // It never performs I/O and never throws for peer bytes; callers append transport
 // input after needInput(), while failure() carries the Close reason.
-[[nodiscard]] inline WebSocketFrameReadResult webSocketTryReadFrame(std::pmr::string& buffer, std::size_t& offset, std::size_t& pendingCompactUntil, ProtocolByteLimit messageLimit, bool permessageDeflate) {
+[[nodiscard]] inline WebSocketFrameReadResult webSocketTryReadFrame(std::pmr::string& buffer, std::size_t& offset, std::size_t& pendingCompactUntil, ProtocolByteLimit messageLimit, bool permessageDeflate, bool expectMasked) {
     compactWebSocketReadBuffer(buffer, offset, pendingCompactUntil);
     const auto available = buffer.size() - offset;
     if (available < 2) {
@@ -124,7 +125,7 @@ private:
     std::uint64_t length = second & 0x7FU;
     std::size_t headerSize = 2;
 
-    const auto frameStart = decodeWebSocketFrameStart(first, second, permessageDeflate);
+    const auto frameStart = decodeWebSocketFrameStart(first, second, permessageDeflate, expectMasked);
     if (!frameStart.has_value()) {
         return WebSocketFrameReadResult::makeFailure(WebSocketProtocolFailure::kProtocolError);
     }
@@ -161,19 +162,23 @@ private:
     if (webSocketFrameExceedsMessageLimit(frameStart->kind(), length, messageLimit)) {
         return WebSocketFrameReadResult::makeFailure(WebSocketProtocolFailure::kMessageTooLarge);
     }
-    if (webSocketMaskedFrameReadSizeOverflows(length, headerSize)) {
+    const auto maskBytes = expectMasked ? std::size_t{4} : std::size_t{0};
+    if (headerSize > (std::numeric_limits<std::size_t>::max)() - maskBytes ||
+        length > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)() - headerSize - maskBytes)) {
         return WebSocketFrameReadResult::makeFailure(WebSocketProtocolFailure::kProtocolError);
     }
-    const auto totalFrameBytes = headerSize + 4 + static_cast<std::size_t>(length);
+    const auto totalFrameBytes = headerSize + maskBytes + static_cast<std::size_t>(length);
     if (available < totalFrameBytes) {
         return WebSocketFrameReadResult::makeNeedInput();
     }
 
     const auto maskOffset = offset + headerSize;
-    const auto payloadOffset = maskOffset + 4;
+    const auto payloadOffset = maskOffset + maskBytes;
     const auto payloadSize = static_cast<std::size_t>(length);
     auto* payload = buffer.data() + payloadOffset;
-    decodeMaskedWebSocketPayload(payload, payloadSize, buffer.data() + maskOffset);
+    if (expectMasked) {
+        decodeMaskedWebSocketPayload(payload, payloadSize, buffer.data() + maskOffset);
+    }
     const auto payloadView = std::string_view(payload, payloadSize);
     if (frameStart->kind() == WebSocketFrameKind::kClose) {
         if (const auto failure = webSocketClosePayloadFailure(payloadView)) {
@@ -183,5 +188,10 @@ private:
     offset = payloadOffset + payloadSize;
     pendingCompactUntil = offset;
     return WebSocketFrameReadResult::makeFrame(*frameStart, payloadView);
+}
+
+
+[[nodiscard]] inline WebSocketFrameReadResult webSocketTryReadFrame(std::pmr::string& buffer, std::size_t& offset, std::size_t& pendingCompactUntil, ProtocolByteLimit messageLimit, bool permessageDeflate) {
+    return webSocketTryReadFrame(buffer, offset, pendingCompactUntil, messageLimit, permessageDeflate, true);
 }
 }  // namespace ruvia::detail

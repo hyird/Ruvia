@@ -8,13 +8,19 @@
 
 namespace ruvia::detail {
 
-WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit, WebSocketCompression compression)
+WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit, WebSocketCompression compression, WsConnectionRole role, WsMaskKeyGenerator maskKeyGenerator, void* maskKeyContext)
     : input_(&input),
       messageLimit_(messageLimit),
       outBuffer_(input.get_allocator().resource()),
       assembler_(input.get_allocator().resource()),
       inboundInflated_(input.get_allocator().resource()),
-      outboundDeflated_(input.get_allocator().resource()) {
+      outboundDeflated_(input.get_allocator().resource()),
+      role_(role),
+      maskKeyGenerator_(maskKeyGenerator),
+      maskKeyContext_(maskKeyContext) {
+    if (role_ == WsConnectionRole::kClient && maskKeyGenerator_ == nullptr) {
+        throw std::invalid_argument("WebSocket client connection requires a mask key generator");
+    }
     if (webSocketDeflateNegotiated(compression)) {
         deflate_.emplace();
     }
@@ -102,16 +108,30 @@ void WsConnection::appendFrame(WebSocketOpcode opcode, std::string_view payload,
         }
     }
     WebSocketFrameHeader header;
-    const auto headerSize = encodeWebSocketFrameHeader(header, opcode, payload.size(), rsv1);
+    const bool masked = role_ == WsConnectionRole::kClient;
+    WsMaskKey mask{};
+    if (masked && !maskKeyGenerator_(maskKeyContext_, mask)) {
+        throw std::runtime_error("failed to generate WebSocket client mask key");
+    }
+    const auto headerSize = encodeWebSocketFrameHeader(header, opcode, payload.size(), rsv1, masked);
+    const auto maskSize = masked ? mask.size() : std::size_t{0};
     if (headerSize > outBuffer_.max_size() - outBuffer_.size() ||
-        payload.size() > outBuffer_.max_size() - outBuffer_.size() - headerSize) {
+        maskSize > outBuffer_.max_size() - outBuffer_.size() - headerSize ||
+        payload.size() > outBuffer_.max_size() - outBuffer_.size() - headerSize - maskSize) {
         throw std::length_error("WebSocket output frame size overflow");
     }
     // One reserve is the transaction boundary. Once it succeeds, neither append
     // can allocate, so an exception can never publish an orphan wire header.
-    outBuffer_.reserve(outBuffer_.size() + headerSize + payload.size());
+    outBuffer_.reserve(outBuffer_.size() + headerSize + maskSize + payload.size());
     outBuffer_.append(header.data(), headerSize);
-    outBuffer_.append(payload.data(), payload.size());
+    if (masked) {
+        outBuffer_.append(mask.data(), mask.size());
+        const auto payloadStart = outBuffer_.size();
+        outBuffer_.append(payload.data(), payload.size());
+        decodeMaskedWebSocketPayload(outBuffer_.data() + payloadStart, payload.size(), mask.data());
+    } else {
+        outBuffer_.append(payload.data(), payload.size());
+    }
 }
 
 void WsConnection::fail(std::uint16_t code, std::string_view reason) {
@@ -182,7 +202,7 @@ WsCloseSubmitStatus WsConnection::submitClose(std::uint16_t code, std::string_vi
     // were absent from the server handshake. This core emits server frames;
     // a server must reject that mismatch during the opening handshake rather
     // than initiate a Close frame with the client-only status code.
-    if (code == 1010) {
+    if (role_ == WsConnectionRole::kServer && code == 1010) {
         return WsCloseSubmitStatus::kInvalidCode;
     }
     const auto payload = encodeWebSocketClosePayload(code, reason);
@@ -226,7 +246,7 @@ std::optional<WsEvent> WsConnection::pollImpl() & {
     };
 
     for (;;) {
-        const auto read = webSocketTryReadFrame(*input_, inputOffset_, pendingCompactUntil_, messageLimit_, deflate_.has_value());
+        const auto read = webSocketTryReadFrame(*input_, inputOffset_, pendingCompactUntil_, messageLimit_, deflate_.has_value(), role_ == WsConnectionRole::kServer);
         if (read.needInput() != nullptr) {
             return std::nullopt;
         }
