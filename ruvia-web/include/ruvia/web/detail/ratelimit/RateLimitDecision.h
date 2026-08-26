@@ -10,7 +10,8 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline RateLimitDecision decideRequestRateLimit(RateLimiter* limiter, std::string_view remoteAddress) noexcept {
+[[nodiscard]] inline RateLimitDecision decideRequestRateLimit(
+    RateLimiter* limiter, std::string_view remoteAddress) noexcept {
     if (limiter == nullptr || !limiter->hasDefaultRule()) {
         return RateLimitDecision::allow();
     }
@@ -22,6 +23,7 @@ namespace ruvia::detail {
 
 void applyRateLimitRejectionHeaders(HttpResponse& response, const RateLimitRejection& rejection);
 
-void applyRouteRateLimitRejectionHeaders(HttpResponse& response, const RateLimitRejection& rejection, std::size_t maxRequests);
+void applyRouteRateLimitRejectionHeaders(
+    HttpResponse& response, const RateLimitRejection& rejection, std::size_t maxRequests);
 
 }  // namespace ruvia::detail

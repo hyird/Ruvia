@@ -84,7 +84,12 @@ private:
 }  // namespace
 
 template <typename T>
-concept ExposesAnyRvalueModelBoxedArrayBorrow = requires { std::declval<const T&&>()[std::size_t{}]; } || requires { std::declval<const T&&>().front(); } || requires { std::declval<const T&&>().begin(); } || requires { std::declval<const T&&>().end(); } || requires { std::declval<T&&>().emplace(1); } || requires { std::declval<T&&>().emplaceMove(typename T::value_type{}); };
+concept ExposesAnyRvalueModelBoxedArrayBorrow =
+    requires { std::declval<const T&&>()[std::size_t{}]; } ||
+    requires { std::declval<const T&&>().front(); } ||
+    requires { std::declval<const T&&>().begin(); } ||
+    requires { std::declval<const T&&>().end(); } || requires { std::declval<T&&>().emplace(1); } ||
+    requires { std::declval<T&&>().emplaceMove(typename T::value_type{}); };
 
 static_assert(!ExposesAnyRvalueModelBoxedArrayBorrow<ruvia::BoxedArray<ruvia::Int32>>);
 

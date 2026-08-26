@@ -538,6 +538,9 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         LIB ruvia::web TIMEOUT 60 LABELS "database")
 endif()
 
+ruvia_add_test(ruvia_websocket_client web/server/websocket_client.cpp
+    LIB ruvia::web TIMEOUT 30 LABELS "websocket;client;worker")
+
 ruvia_validate_test_sources(ruvia_http2_conformance_server ruvia::web
     web/server/http2_conformance_server.cpp)
 add_executable(ruvia_http2_conformance_server web/server/http2_conformance_server.cpp)
@@ -702,6 +705,8 @@ if(RUVIA_BUILD_WEB)
     endif()
     ruvia_add_test(ruvia_guard_web_http_client_headers
         web/guards/http_client_headers.cpp LIB ruvia::web)
+    ruvia_add_test(ruvia_guard_web_websocket_client_headers
+        web/guards/websocket_client_headers.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_web_blocking_api
         web/guards/blocking_api_guard.cpp LIB ruvia::web)
     ruvia_add_test(ruvia_guard_web_cancellation_mailbox

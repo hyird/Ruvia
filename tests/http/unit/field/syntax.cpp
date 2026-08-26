@@ -65,15 +65,25 @@ RUVIA_TEST(http_parse_error_messages) {
     const auto headerTooLarge = httpParseProtocolError(HttpParseError::kHeaderTooLarge);
     const auto unsupportedVersion = httpParseProtocolError(HttpParseError::kUnsupportedHttpVersion);
     RUVIA_CHECK_EQ(std::string_view(missingHost.what()), std::string_view("missing Host header"));
-    RUVIA_CHECK_EQ(std::string_view(headerTooLarge.what()), std::string_view("request header is too large"));
-    RUVIA_CHECK_EQ(std::string_view(unsupportedVersion.what()), std::string_view("unsupported HTTP version"));
+    RUVIA_CHECK_EQ(
+        std::string_view(headerTooLarge.what()), std::string_view("request header is too large"));
+    RUVIA_CHECK_EQ(
+        std::string_view(unsupportedVersion.what()), std::string_view("unsupported HTTP version"));
     // The two Content-Length faults intentionally share one message.
     const auto invalidLength = httpParseProtocolError(HttpParseError::kInvalidContentLength);
-    const auto conflictingLength = httpParseProtocolError(HttpParseError::kConflictingContentLength);
-    RUVIA_CHECK_EQ(std::string_view(invalidLength.what()), std::string_view(conflictingLength.what()));
+    const auto conflictingLength =
+        httpParseProtocolError(HttpParseError::kConflictingContentLength);
+    RUVIA_CHECK_EQ(
+        std::string_view(invalidLength.what()), std::string_view(conflictingLength.what()));
     // Reachable errors all map to a non-empty message.
-    RUVIA_CHECK(std::string_view(httpParseProtocolError(HttpParseError::kChunkSizeOverflow).what()).size() != 0);
-    RUVIA_CHECK(std::string_view(httpParseProtocolError(HttpParseError::kInvalidTransferEncoding).what()).size() != 0);
-    RUVIA_CHECK(std::string_view(httpParseProtocolError(HttpParseError::kInvalidConnection).what()).size() != 0);
-    RUVIA_CHECK(std::string_view(httpParseProtocolError(HttpParseError::kInvalidUpgrade).what()).size() != 0);
+    RUVIA_CHECK(std::string_view(httpParseProtocolError(HttpParseError::kChunkSizeOverflow).what())
+                    .size() != 0);
+    RUVIA_CHECK(
+        std::string_view(httpParseProtocolError(HttpParseError::kInvalidTransferEncoding).what())
+            .size() != 0);
+    RUVIA_CHECK(std::string_view(httpParseProtocolError(HttpParseError::kInvalidConnection).what())
+                    .size() != 0);
+    RUVIA_CHECK(
+        std::string_view(httpParseProtocolError(HttpParseError::kInvalidUpgrade).what()).size() !=
+        0);
 }

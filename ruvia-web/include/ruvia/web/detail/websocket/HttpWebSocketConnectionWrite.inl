@@ -35,14 +35,12 @@ Task<void> WebSocketConnection<Transport>::close(::ruvia::WebSocketCloseOptions 
         if (flushOutput) {
             co_await flushProtocolOutputNow();
         }
-        if (awaitPeerClose &&
-            protocol_.livenessMode() == WsLivenessMode::kAwaitingPeerClose) {
+        if (awaitPeerClose && protocol_.livenessMode() == WsLivenessMode::kAwaitingPeerClose) {
             // The timeout bounds the peer's response window, so commit it only
             // after the local Close bytes have reached the transport. The
             // successful flush touched the scanner with the current coarse
             // worker timestamp.
-            livenessState_ = WebSocketAwaitingPeerClose(
-                scannerEntry_.lastActiveMs());
+            livenessState_ = WebSocketAwaitingPeerClose(scannerEntry_.lastActiveMs());
         }
     }
 
@@ -96,8 +94,7 @@ void WebSocketConnection<Transport>::notifyWriteIdle() noexcept {
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::writeExclusive(
-    WebSocketOpcode opcode,
-    std::string_view payload) {
+    WebSocketOpcode opcode, std::string_view payload) {
     co_await waitForHeartbeatWrite();
     WriteGuard writeGuard(*this, WritePhase::kApplication);
     co_await writeFrameNow(opcode, payload);
@@ -105,8 +102,7 @@ Task<void> WebSocketConnection<Transport>::writeExclusive(
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::writeFrameNow(
-    WebSocketOpcode opcode,
-    std::string_view payload) {
+    WebSocketOpcode opcode, std::string_view payload) {
     switch (protocol_.submitFrame(opcode, payload)) {
         case WsFrameSubmitStatus::kAccepted:
             break;
@@ -117,8 +113,7 @@ Task<void> WebSocketConnection<Transport>::writeFrameNow(
         case WsFrameSubmitStatus::kMessageTooLarge:
             throw std::invalid_argument("websocket message is too large");
         case WsFrameSubmitStatus::kInvalidTextPayload:
-            throw std::invalid_argument(
-                "websocket text payload is not valid UTF-8");
+            throw std::invalid_argument("websocket text payload is not valid UTF-8");
         case WsFrameSubmitStatus::kControlFrameTooLarge:
             throw std::invalid_argument("websocket control frame is too large");
     }
@@ -137,19 +132,16 @@ Task<void> WebSocketConnection<Transport>::flushProtocolOutputNow() {
     for (;;) {
         const auto plan = protocol_.outputPlan();
         const auto disposition = plan.disposition();
-        if (plan.bytes().empty() &&
-            disposition == WsTransportDisposition::kKeepOpen) {
+        if (plan.bytes().empty() && disposition == WsTransportDisposition::kKeepOpen) {
             co_return;
         }
-        const auto ec = co_await transport_.writeBytes(
-            plan.bytes(), disposition);
+        const auto ec = co_await transport_.writeBytes(plan.bytes(), disposition);
         if (ec) {
             transport_.abort();
             (void)protocol_.abort();
             throw std::system_error(ec, "failed to write websocket bytes");
         }
-        if (protocol_.consumeOutput(plan.bytes().size()) !=
-            WsOutputConsumeStatus::kDrained) {
+        if (protocol_.consumeOutput(plan.bytes().size()) != WsOutputConsumeStatus::kDrained) {
             std::terminate();
         }
         scannerEntry_.touch();

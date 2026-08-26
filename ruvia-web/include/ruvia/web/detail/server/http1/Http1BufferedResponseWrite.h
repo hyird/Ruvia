@@ -58,12 +58,14 @@ public:
     }
     const Http1BufferedResponseWriteCompleted* completed() const&& = delete;
 
-    [[nodiscard]] constexpr const Http1BufferedResponseWriteFailedBeforeCommit* failedBeforeCommit() const& noexcept {
+    [[nodiscard]] constexpr const Http1BufferedResponseWriteFailedBeforeCommit* failedBeforeCommit()
+        const& noexcept {
         return state_ == State::kFailedBeforeCommit ? &value_.failedBeforeCommit : nullptr;
     }
     const Http1BufferedResponseWriteFailedBeforeCommit* failedBeforeCommit() const&& = delete;
 
-    [[nodiscard]] constexpr const Http1BufferedResponseWriteFailedAfterCommit* failedAfterCommit() const& noexcept {
+    [[nodiscard]] constexpr const Http1BufferedResponseWriteFailedAfterCommit* failedAfterCommit()
+        const& noexcept {
         return state_ == State::kFailedAfterCommit ? &value_.failedAfterCommit : nullptr;
     }
     const Http1BufferedResponseWriteFailedAfterCommit* failedAfterCommit() const&& = delete;
@@ -79,7 +81,8 @@ public:
     }
 
 private:
-    friend Http1BufferedResponseWriteResult classifyHttp1BufferedResponseWrite(const Http1BufferedResponsePlan&, std::size_t, std::error_code, std::size_t) noexcept;
+    friend Http1BufferedResponseWriteResult classifyHttp1BufferedResponseWrite(
+        const Http1BufferedResponsePlan&, std::size_t, std::error_code, std::size_t) noexcept;
 
     enum class State : std::uint8_t { kCompleted, kFailedBeforeCommit, kFailedAfterCommit };
 
@@ -96,27 +99,34 @@ private:
         Http1BufferedResponseWriteFailedAfterCommit failedAfterCommit;
     };
 
-    [[nodiscard]] static constexpr Http1BufferedResponseWriteResult makeCompleted(HttpStatusCode status) noexcept {
+    [[nodiscard]] static constexpr Http1BufferedResponseWriteResult makeCompleted(
+        HttpStatusCode status) noexcept {
         return Http1BufferedResponseWriteResult(Http1BufferedResponseWriteCompleted(status));
     }
 
-    [[nodiscard]] static constexpr Http1BufferedResponseWriteResult makeFailedBeforeCommit() noexcept {
+    [[nodiscard]] static constexpr Http1BufferedResponseWriteResult
+    makeFailedBeforeCommit() noexcept {
         return Http1BufferedResponseWriteResult(Http1BufferedResponseWriteFailedBeforeCommit());
     }
 
-    [[nodiscard]] static constexpr Http1BufferedResponseWriteResult makeFailedAfterCommit(HttpStatusCode status) noexcept {
-        return Http1BufferedResponseWriteResult(Http1BufferedResponseWriteFailedAfterCommit(status));
+    [[nodiscard]] static constexpr Http1BufferedResponseWriteResult makeFailedAfterCommit(
+        HttpStatusCode status) noexcept {
+        return Http1BufferedResponseWriteResult(
+            Http1BufferedResponseWriteFailedAfterCommit(status));
     }
 
-    explicit constexpr Http1BufferedResponseWriteResult(Http1BufferedResponseWriteCompleted value) noexcept
+    explicit constexpr Http1BufferedResponseWriteResult(
+        Http1BufferedResponseWriteCompleted value) noexcept
         : value_(value),
           state_(State::kCompleted) {}
 
-    explicit constexpr Http1BufferedResponseWriteResult(Http1BufferedResponseWriteFailedBeforeCommit value) noexcept
+    explicit constexpr Http1BufferedResponseWriteResult(
+        Http1BufferedResponseWriteFailedBeforeCommit value) noexcept
         : value_(value),
           state_(State::kFailedBeforeCommit) {}
 
-    explicit constexpr Http1BufferedResponseWriteResult(Http1BufferedResponseWriteFailedAfterCommit value) noexcept
+    explicit constexpr Http1BufferedResponseWriteResult(
+        Http1BufferedResponseWriteFailedAfterCommit value) noexcept
         : value_(value),
           state_(State::kFailedAfterCommit) {}
 
@@ -129,7 +139,9 @@ static_assert(sizeof(Http1BufferedResponseWriteResult) <= 4);
 
 // `bytesTransferred` is the composed async-write prefix accepted before `error`.
 // Only a prefix containing the entire serialized head commits a final status.
-[[nodiscard]] inline Http1BufferedResponseWriteResult classifyHttp1BufferedResponseWrite(const Http1BufferedResponsePlan& plan, std::size_t responseHeadBytes, std::error_code error, std::size_t bytesTransferred) noexcept {
+[[nodiscard]] inline Http1BufferedResponseWriteResult classifyHttp1BufferedResponseWrite(
+    const Http1BufferedResponsePlan& plan, std::size_t responseHeadBytes, std::error_code error,
+    std::size_t bytesTransferred) noexcept {
     const auto status = plan.responseStatus();
     if (!error) {
         if (responseHeadBytes == 0 || bytesTransferred < responseHeadBytes) {

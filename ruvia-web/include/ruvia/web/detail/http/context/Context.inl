@@ -22,5 +22,4 @@ inline HttpResponse Context::html(const char (&body)[N]) const {
     return htmlStaticView(std::string_view(body, size));
 }
 
-
 }  // namespace ruvia

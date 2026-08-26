@@ -20,11 +20,12 @@ struct RouteRateLimitOptions final {
 
 [[nodiscard]] bool applyRouteRateLimit(Context& context, const RouteRateLimitOptions& options);
 
-[[nodiscard]] constexpr RouteRateLimitOptions routeRateLimitOptions(std::size_t maxRequests, std::int64_t windowMs) {
+[[nodiscard]] constexpr RouteRateLimitOptions routeRateLimitOptions(
+    std::size_t maxRequests, std::int64_t windowMs) {
     return RouteRateLimitOptions{.rule = {
-        .maxRequests = maxRequests,
-        .window = std::chrono::milliseconds(windowMs),
-    }};
+                                     .maxRequests = maxRequests,
+                                     .window = std::chrono::milliseconds(windowMs),
+                                 }};
 }
 
 }  // namespace detail

@@ -26,7 +26,9 @@ using ruvia::detail::RouteStreamHandler;
 using ruvia::detail::RouteTable;
 
 template <typename Text>
-concept WebSocketSubprotocolsAccepts = requires(ruvia::WebSocketRouteConfig& options, Text&& text) { options.subprotocols = std::forward<Text>(text); };
+concept WebSocketSubprotocolsAccepts = requires(ruvia::WebSocketRouteConfig& options, Text&& text) {
+    options.subprotocols = std::forward<Text>(text);
+};
 
 template <typename T>
 concept HasLooseRouteResolutionAccessors = requires(const T& value) {
@@ -37,7 +39,12 @@ concept HasLooseRouteResolutionAccessors = requires(const T& value) {
 };
 
 template <typename T>
-concept HasAnyRvalueRouteResolutionBorrow = requires(T&& value) { std::move(value).values(); } || requires(T&& value) { std::move(value).match(); } || requires(T&& value) { std::move(value).resolved(); } || requires(T&& value) { std::move(value).methodNotAllowed(); } || requires(T&& value) { std::move(value).notFound(); };
+concept HasAnyRvalueRouteResolutionBorrow =
+    requires(T&& value) { std::move(value).values(); } ||
+    requires(T&& value) { std::move(value).match(); } ||
+    requires(T&& value) { std::move(value).resolved(); } ||
+    requires(T&& value) { std::move(value).methodNotAllowed(); } ||
+    requires(T&& value) { std::move(value).notFound(); };
 
 static_assert(!HasLooseRouteResolutionAccessors<RouteResolution>);
 static_assert(!HasAnyRvalueRouteResolutionBorrow<RouteMatch>);
@@ -68,18 +75,25 @@ ruvia::Task<void> streamRouteHandler(void*, ruvia::Context&) {
 }
 
 const RouteEntry& fakeRoute() {
-    static RouteEntry route(std::pmr::get_default_resource(), RouteEntry::Init{.method = ruvia::HttpKnownMethod::kGet, .path = "/route", .endpoint = ruvia::detail::RouteEndpoint::buffered(ruvia::detail::RouteHandler(nullptr, &routeHandler), ruvia::detail::RequestBodyMode::kBuffered)});
+    static RouteEntry route(std::pmr::get_default_resource(),
+        RouteEntry::Init{.method = ruvia::HttpKnownMethod::kGet,
+            .path = "/route",
+            .endpoint = ruvia::detail::RouteEndpoint::buffered(
+                ruvia::detail::RouteHandler(nullptr, &routeHandler),
+                ruvia::detail::RequestBodyMode::kBuffered)});
     return route;
 }
 
 RUVIA_TEST(route_endpoint_binds_handler_shape_and_only_relevant_metadata) {
-    const auto buffered = RouteEndpoint::buffered(RouteHandler(nullptr, &routeHandler), ruvia::detail::RequestBodyMode::kStream);
+    const auto buffered = RouteEndpoint::buffered(
+        RouteHandler(nullptr, &routeHandler), ruvia::detail::RequestBodyMode::kStream);
     RUVIA_CHECK(buffered.buffered() != nullptr);
     RUVIA_CHECK(buffered.responseStream() == nullptr);
     RUVIA_CHECK(buffered.webSocket() == nullptr);
     RUVIA_CHECK(buffered.requestBodyMode() == ruvia::detail::RequestBodyMode::kStream);
 
-    const auto stream = RouteEndpoint::responseStream(RouteStreamHandler(nullptr, &streamRouteHandler), ruvia::detail::ResponseStreamKind::kSse);
+    const auto stream = RouteEndpoint::responseStream(
+        RouteStreamHandler(nullptr, &streamRouteHandler), ruvia::detail::ResponseStreamKind::kSse);
     RUVIA_CHECK(stream.buffered() == nullptr);
     RUVIA_CHECK(stream.responseStream() != nullptr);
     RUVIA_CHECK(stream.webSocket() == nullptr);
@@ -92,14 +106,17 @@ RUVIA_TEST(route_endpoint_binds_handler_shape_and_only_relevant_metadata) {
     options.lifecycle.heartbeat = {
         .pingInterval = std::chrono::milliseconds(25),
     };
-    const auto webSocket = RouteEndpoint::webSocket(std::pmr::get_default_resource(), RouteStreamHandler(nullptr, &streamRouteHandler), options);
+    const auto webSocket = RouteEndpoint::webSocket(std::pmr::get_default_resource(),
+        RouteStreamHandler(nullptr, &streamRouteHandler), options);
     sourceProtocols.assign("mutated");
     RUVIA_CHECK(webSocket.buffered() == nullptr);
     RUVIA_CHECK(webSocket.responseStream() == nullptr);
     RUVIA_CHECK(webSocket.webSocket() != nullptr);
     RUVIA_CHECK(webSocket.webSocket()->subprotocols() == "chat, superchat");
-    RUVIA_CHECK_EQ(webSocket.webSocket()->lifecycle().heartbeat.pingInterval->count(), std::int64_t{25});
-    RUVIA_CHECK_EQ(webSocket.webSocket()->lifecycle().heartbeat.pongTimeout->count(), std::int64_t{25});
+    RUVIA_CHECK_EQ(
+        webSocket.webSocket()->lifecycle().heartbeat.pingInterval->count(), std::int64_t{25});
+    RUVIA_CHECK_EQ(
+        webSocket.webSocket()->lifecycle().heartbeat.pongTimeout->count(), std::int64_t{25});
 }
 
 RUVIA_TEST(route_endpoint_rejects_empty_handlers_and_invalid_discriminants) {
@@ -113,7 +130,8 @@ RUVIA_TEST(route_endpoint_rejects_empty_handlers_and_invalid_discriminants) {
 
     rejected = false;
     try {
-        (void)RouteEndpoint::buffered(RouteHandler(nullptr, &routeHandler), static_cast<ruvia::detail::RequestBodyMode>(99));
+        (void)RouteEndpoint::buffered(
+            RouteHandler(nullptr, &routeHandler), static_cast<ruvia::detail::RequestBodyMode>(99));
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
@@ -121,7 +139,8 @@ RUVIA_TEST(route_endpoint_rejects_empty_handlers_and_invalid_discriminants) {
 
     rejected = false;
     try {
-        (void)RouteEndpoint::responseStream(RouteStreamHandler(nullptr, &streamRouteHandler), static_cast<ruvia::detail::ResponseStreamKind>(99));
+        (void)RouteEndpoint::responseStream(RouteStreamHandler(nullptr, &streamRouteHandler),
+            static_cast<ruvia::detail::ResponseStreamKind>(99));
     } catch (const std::invalid_argument&) {
         rejected = true;
     }

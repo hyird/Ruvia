@@ -49,7 +49,6 @@ private:
 // context with run() on exactly one thread and retains ownership of its
 // unrelated work and stop/restart policy.
 [[nodiscard]] EventLoopAttachment attachEventLoop(
-    asio::io_context& ioContext,
-    EventLoopAttachmentOptions options = {});
+    asio::io_context& ioContext, EventLoopAttachmentOptions options = {});
 
 }  // namespace ruvia

@@ -55,10 +55,13 @@ RUVIA_TEST(chunk_trailers_reject_malformed) {
 
 RUVIA_TEST(chunk_trailers_reject_forbidden_fields) {
     // Fields that govern framing/state must not appear in a trailer section.
-    RUVIA_CHECK(validateHttpChunkTrailers("TE: trailers\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(
+        validateHttpChunkTrailers("TE: trailers\r\n") == HttpChunkScanError::kInvalidTrailer);
     RUVIA_CHECK(validateHttpChunkTrailers("Trailer: X\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Set-Cookie: a=b\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Content-Encoding: gzip\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(
+        validateHttpChunkTrailers("Set-Cookie: a=b\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Content-Encoding: gzip\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
 }
 
 RUVIA_TEST(chunk_trailers_reject_framing_and_routing_fields) {
@@ -67,17 +70,27 @@ RUVIA_TEST(chunk_trailers_reject_framing_and_routing_fields) {
     // honor after the head was already processed. These are rejected through the
     // classified-header path (distinct from the name-length switch exercised
     // above), so pin them explicitly -- dropping one reopens trailer smuggling.
-    RUVIA_CHECK(validateHttpChunkTrailers("Content-Length: 10\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Transfer-Encoding: chunked\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Host: evil.example\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Connection: close\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Authorization: Bearer x\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Cookie: sid=1\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Origin: https://app.example\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Access-Control-Request-Method: POST\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Access-Control-Request-Headers: X-One\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(
+        validateHttpChunkTrailers("Content-Length: 10\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Transfer-Encoding: chunked\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(
+        validateHttpChunkTrailers("Host: evil.example\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(
+        validateHttpChunkTrailers("Connection: close\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Authorization: Bearer x\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(
+        validateHttpChunkTrailers("Cookie: sid=1\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Origin: https://app.example\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Access-Control-Request-Method: POST\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Access-Control-Request-Headers: X-One\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
     // The classification is case-insensitive, so a lowercase spelling is caught too.
-    RUVIA_CHECK(validateHttpChunkTrailers("content-length: 10\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(
+        validateHttpChunkTrailers("content-length: 10\r\n") == HttpChunkScanError::kInvalidTrailer);
 }
 
 RUVIA_TEST(chunk_trailers_reject_remaining_forbidden_fields) {
@@ -91,24 +104,33 @@ RUVIA_TEST(chunk_trailers_reject_remaining_forbidden_fields) {
     // because HTTP/2 already bans Upgrade as a connection-specific regular header
     // upstream. Over HTTP/1 there is no such upstream ban, so the trailer check is
     // the guard that stops a smuggled protocol-switch request modifier -- pin it.
-    RUVIA_CHECK(validateHttpChunkTrailers("Upgrade: websocket\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(
+        validateHttpChunkTrailers("Upgrade: websocket\r\n") == HttpChunkScanError::kInvalidTrailer);
     // Proxy-Connection is the fifth connection-specific field, alongside
     // Connection / Keep-Alive / Transfer-Encoding / Upgrade (all pinned here). The
     // HTTP/1 list previously covered four of the five and dropped this one, so a
     // "Proxy-Connection" trailer slipped through even though HTTP/2 rejects it as a
     // connection-specific header -- the same upstream/trailer asymmetry noted for
     // Upgrade above. Pin it so the two protocols agree on the connection set.
-    RUVIA_CHECK(validateHttpChunkTrailers("Proxy-Connection: keep-alive\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Proxy-Connection: keep-alive\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
 
     // The name-length switch tier (each an RFC 7230 §4.1.2 / 7231 control or
     // routing/auth field that must not be delivered late in a trailer).
-    RUVIA_CHECK(validateHttpChunkTrailers("Keep-Alive: timeout=5\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Max-Forwards: 10\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Cache-Control: no-cache\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Accept-Ranges: bytes\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Content-Range: bytes 0-1/2\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Proxy-Authenticate: Basic\r\n") == HttpChunkScanError::kInvalidTrailer);
-    RUVIA_CHECK(validateHttpChunkTrailers("Proxy-Authorization: Basic eA==\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Keep-Alive: timeout=5\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(
+        validateHttpChunkTrailers("Max-Forwards: 10\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Cache-Control: no-cache\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Accept-Ranges: bytes\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Content-Range: bytes 0-1/2\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Proxy-Authenticate: Basic\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Proxy-Authorization: Basic eA==\r\n") ==
+                HttpChunkScanError::kInvalidTrailer);
     // A genuinely trailer-safe field is still accepted (negative control).
     RUVIA_CHECK(!validateHttpChunkTrailers("X-Checksum: abc\r\n").has_value());
 }

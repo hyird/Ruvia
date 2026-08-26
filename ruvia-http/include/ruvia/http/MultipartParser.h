@@ -52,7 +52,8 @@ public:
 private:
     friend struct detail::MultipartPartAccess;
 
-    MultipartPart(std::pmr::string name, std::pmr::string filename, std::string_view contentType, std::string_view body, bool filenamePresent) noexcept
+    MultipartPart(std::pmr::string name, std::pmr::string filename, std::string_view contentType,
+        std::string_view body, bool filenamePresent) noexcept
         : name_(std::move(name)),
           filename_(std::move(filename)),
           contentType_(contentType),
@@ -80,7 +81,8 @@ public:
 
     // Validation-only entry for parsing paths that must report failure as a
     // value rather than drive control flow through the throwing constructor.
-    [[nodiscard]] static std::optional<MultipartBoundary> tryCreate(std::string_view value) noexcept {
+    [[nodiscard]] static std::optional<MultipartBoundary> tryCreate(
+        std::string_view value) noexcept {
         if (!valid(value)) {
             return std::nullopt;
         }
@@ -100,14 +102,18 @@ private:
     static constexpr std::size_t kMaxSize = 70;
 
     [[nodiscard]] static constexpr bool nonSpaceChar(char value) noexcept {
-        return (value >= '0' && value <= '9') || (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') || value == '\'' || value == '(' || value == ')' || value == '+' || value == '_' || value == ',' || value == '-' || value == '.' || value == '/' || value == ':' || value == '=' || value == '?';
+        return (value >= '0' && value <= '9') || (value >= 'A' && value <= 'Z') ||
+               (value >= 'a' && value <= 'z') || value == '\'' || value == '(' || value == ')' ||
+               value == '+' || value == '_' || value == ',' || value == '-' || value == '.' ||
+               value == '/' || value == ':' || value == '=' || value == '?';
     }
 
     [[nodiscard]] static constexpr bool valid(std::string_view value) noexcept {
         if (value.empty() || value.size() > kMaxSize || value.back() == ' ') {
             return false;
         }
-        return std::ranges::all_of(value, [](char byte) noexcept { return byte == ' ' || nonSpaceChar(byte); });
+        return std::ranges::all_of(
+            value, [](char byte) noexcept { return byte == ' ' || nonSpaceChar(byte); });
     }
 
     constexpr void assign(std::string_view value) noexcept {
@@ -168,7 +174,8 @@ public:
 private:
     friend MultipartBoundaryParseResult parseMultipartBoundary(std::string_view);
 
-    using Value = std::variant<MultipartBoundary, MultipartBoundaryNotApplicable, MultipartBoundaryParseFailure>;
+    using Value = std::variant<MultipartBoundary, MultipartBoundaryNotApplicable,
+        MultipartBoundaryParseFailure>;
 
     explicit MultipartBoundaryParseResult(MultipartBoundary boundary)
         : value_(std::move(boundary)) {}
@@ -181,7 +188,8 @@ private:
         return MultipartBoundaryParseResult(MultipartBoundaryParseFailure());
     }
 
-    explicit constexpr MultipartBoundaryParseResult(MultipartBoundaryNotApplicable notApplicable) noexcept
+    explicit constexpr MultipartBoundaryParseResult(
+        MultipartBoundaryNotApplicable notApplicable) noexcept
         : value_(notApplicable) {}
 
     explicit constexpr MultipartBoundaryParseResult(MultipartBoundaryParseFailure failure) noexcept
@@ -230,7 +238,9 @@ public:
 private:
     friend struct detail::MultipartStreamPartAccess;
 
-    constexpr MultipartStreamPart(std::string_view name, std::string_view filename, std::string_view contentType, std::string_view body, MultipartChunkPhase phase, bool filenamePresent) noexcept
+    constexpr MultipartStreamPart(std::string_view name, std::string_view filename,
+        std::string_view contentType, std::string_view body, MultipartChunkPhase phase,
+        bool filenamePresent) noexcept
         : name_(name),
           filename_(filename),
           contentType_(contentType),
@@ -313,7 +323,8 @@ public:
 private:
     friend class MultipartParser;
 
-    using Value = std::variant<MultipartPollNeedInput, MultipartStreamPart, MultipartPollDone, MultipartPollFailure>;
+    using Value = std::variant<MultipartPollNeedInput, MultipartStreamPart, MultipartPollDone,
+        MultipartPollFailure>;
 
     explicit constexpr MultipartPollResult(MultipartPollNeedInput value) noexcept
         : value_(value) {}
@@ -339,7 +350,8 @@ private:
         return MultipartPollResult(MultipartPollDone());
     }
 
-    [[nodiscard]] static constexpr MultipartPollResult makeFailure(MultipartParseError error) noexcept {
+    [[nodiscard]] static constexpr MultipartPollResult makeFailure(
+        MultipartParseError error) noexcept {
         return MultipartPollResult(MultipartPollFailure(error));
     }
 
@@ -465,7 +477,8 @@ public:
 
 private:
     static constexpr std::size_t kCompactConsumedPrefixBytes = 64 * 1024;
-    using Value = std::variant<MultipartBorrowedInput, MultipartStreamingInputOpen, MultipartStreamingInputEof>;
+    using Value = std::variant<MultipartBorrowedInput, MultipartStreamingInputOpen,
+        MultipartStreamingInputEof>;
 
     [[nodiscard]] std::pmr::string* ownedBytes() noexcept;
     [[nodiscard]] const std::pmr::string* ownedBytes() const noexcept;
@@ -539,7 +552,8 @@ private:
 
 // Parses a complete multipart/form-data body without I/O. Returned part bodies
 // and content types borrow `body`; decoded name/filename values own PMR storage.
-[[nodiscard]] MultipartBodyParseResult parseMultipartBody(std::string_view body, MultipartParseOptions options);
+[[nodiscard]] MultipartBodyParseResult parseMultipartBody(
+    std::string_view body, MultipartParseOptions options);
 
 template <detail::HttpTemporaryOwningCharString Body>
 MultipartBodyParseResult parseMultipartBody(Body&&, MultipartParseOptions) = delete;

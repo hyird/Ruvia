@@ -11,8 +11,8 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readChunked() {
 
     for (;;) {
         const auto source = !initialBodyAndPipeline_.empty()
-            ? std::string_view(initialBodyAndPipeline_)
-            : std::string_view(buffer_);
+                                ? std::string_view(initialBodyAndPipeline_)
+                                : std::string_view(buffer_);
         const auto result = chunkDecoder_.decode(source.substr(readCursor_));
         if (result.consumedBytes() != 0) {
             pendingCompactUntil_ = readCursor_ + result.consumedBytes();
@@ -47,19 +47,16 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readTransferDeco
     }
 
     if (transferOutput_.empty()) {
-        resizePmrStringForOverwrite(
-            transferOutput_, kBodyReadChunkBytes);
+        resizePmrStringForOverwrite(transferOutput_, kBodyReadChunkBytes);
     }
 
     // Keep the borrowed encoded chunk until the decoder reports its consumed
     // prefix. readChunked() is called only after that view is empty, so its
     // compaction cannot invalidate decoder input across application reads.
     for (;;) {
-        const auto result = transferDecoder_->decode(
-            transferInput_,
-            std::span<char>(transferOutput_));
-        transferInput_.remove_prefix(
-            std::min(transferInput_.size(), result.consumedBytes()));
+        const auto result =
+            transferDecoder_->decode(transferInput_, std::span<char>(transferOutput_));
+        transferInput_.remove_prefix(std::min(transferInput_.size(), result.consumedBytes()));
         if (const auto* output = result.output()) {
             co_return output->bytes();
         }
@@ -69,10 +66,8 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readTransferDeco
         if (result.decoderFailure() != nullptr) {
             throwTransferCodingDecoderFailure();
         }
-        if (result.complete() == nullptr &&
-            result.needInput() == nullptr) {
-            throw std::logic_error(
-                "unexpected transfer-coding decode result");
+        if (result.complete() == nullptr && result.needInput() == nullptr) {
+            throw std::logic_error("unexpected transfer-coding decode result");
         }
 
         auto chunk = co_await readChunked();

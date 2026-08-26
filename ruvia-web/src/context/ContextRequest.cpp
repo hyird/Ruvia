@@ -41,7 +41,9 @@ namespace detail {
 // endpoint: RFC 9110 15.5.16 assigns that 415, distinct from the 400 a
 // malformed body of the RIGHT type earns below.
 [[noreturn]] void throwInvalidJsonContentType() {
-    throw HttpError({.status = http_status::kUnsupportedMediaType, .code = "unsupported_media_type", .message = "request body must be application/json"});
+    throw HttpError({.status = http_status::kUnsupportedMediaType,
+        .code = "unsupported_media_type",
+        .message = "request body must be application/json"});
 }
 
 [[noreturn]] void throwInvalidJsonBody() {
@@ -49,7 +51,9 @@ namespace detail {
 }
 
 [[noreturn]] void throwInvalidFormContentType() {
-    throw HttpError({.status = http_status::kUnsupportedMediaType, .code = "unsupported_media_type", .message = "request body must be application/x-www-form-urlencoded"});
+    throw HttpError({.status = http_status::kUnsupportedMediaType,
+        .code = "unsupported_media_type",
+        .message = "request body must be application/x-www-form-urlencoded"});
 }
 
 [[noreturn]] void throwInvalidFormBody() {
@@ -57,7 +61,9 @@ namespace detail {
 }
 
 [[noreturn]] void throwTooManyFormFields() {
-    throw HttpError({.status = http_status::kContentTooLarge, .code = "too_many_form_fields", .message = "request form has too many fields"});
+    throw HttpError({.status = http_status::kContentTooLarge,
+        .code = "too_many_form_fields",
+        .message = "request form has too many fields"});
 }
 
 [[noreturn]] void throwInvalidQuery() {
@@ -125,7 +131,9 @@ const RequestNameValueList& Context::requestHeaders() const {
             auto& name = names.emplace_back();
             name.reserve(rawHeader.name().size());
             detail::appendLowerAscii(name, rawHeader.name());
-            detail::RequestNameValueListAccess::pushBack(headers, detail::RequestNameValueViewAccess::make(std::string_view(name), rawHeader.value()));
+            detail::RequestNameValueListAccess::pushBack(
+                headers, detail::RequestNameValueViewAccess::make(
+                             std::string_view(name), rawHeader.value()));
         }
         cache.emplace(std::move(names), std::move(headers));
     }
@@ -153,18 +161,21 @@ void Context::ensureRequestQuery() const {
     std::pmr::vector<std::pmr::string> storage(resource());
     storage.reserve(detail::boundedFieldReserve(pairCount * 2));
     bool valid = true;
-    const bool completed = detail::visitUrlEncodedPairs(request_.queryString(), [this, &storage, &valid](std::string_view key, std::string_view value) {
-        std::pmr::string decodedName(resource());
-        std::pmr::string decodedValue(resource());
-        if (!detail::assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm) || !detail::assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm)) {
-            valid = false;
-            return false;
-        }
+    const bool completed = detail::visitUrlEncodedPairs(request_.queryString(),
+        [this, &storage, &valid](std::string_view key, std::string_view value) {
+            std::pmr::string decodedName(resource());
+            std::pmr::string decodedValue(resource());
+            if (!detail::assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm) ||
+                !detail::assignUrlDecodedOrCopy(
+                    decodedValue, value, detail::UrlDecodeMode::kForm)) {
+                valid = false;
+                return false;
+            }
 
-        storage.push_back(std::move(decodedName));
-        storage.push_back(std::move(decodedValue));
-        return true;
-    });
+            storage.push_back(std::move(decodedName));
+            storage.push_back(std::move(decodedValue));
+            return true;
+        });
     if (!completed || !valid) {
         requestStorage_->queryInvalid = true;
         detail::throwInvalidQuery();
@@ -188,7 +199,9 @@ void Context::ensureRequestQuery() const {
         } while (offset < order.size() && detail::pairNameAt(storage, order[offset]) == name);
         builds.push_back(QueryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
-    std::ranges::sort(builds, [](const QueryBuild& left, const QueryBuild& right) noexcept { return left.firstIndex < right.firstIndex; });
+    std::ranges::sort(builds, [](const QueryBuild& left, const QueryBuild& right) noexcept {
+        return left.firstIndex < right.firstIndex;
+    });
 
     auto query = detail::RequestNameValueListAccess::make(resource());
     detail::RequestQueryValues groups{resource()};
@@ -197,10 +210,9 @@ void Context::ensureRequestQuery() const {
     groups.reserve(builds.size());
     for (std::size_t pairIndex = 0; pairIndex < decodedPairCount; ++pairIndex) {
         detail::RequestNameValueListAccess::pushBack(
-            query,
-            detail::RequestNameValueViewAccess::make(
-                detail::storedStringView(storage[pairIndex * 2]),
-                detail::storedStringView(storage[pairIndex * 2 + 1])));
+            query, detail::RequestNameValueViewAccess::make(
+                       detail::storedStringView(storage[pairIndex * 2]),
+                       detail::storedStringView(storage[pairIndex * 2 + 1])));
     }
     for (const auto& build : builds) {
         // A duplicated query name resolves to its LAST value, matching every other
@@ -259,15 +271,18 @@ const RequestNameValueList& Context::requestCookies() const {
         }
 
         auto cookies = detail::RequestNameValueListAccess::make(resource());
-        detail::RequestNameValueListAccess::reserve(cookies, detail::boundedFieldReserve(cookieCount));
+        detail::RequestNameValueListAccess::reserve(
+            cookies, detail::boundedFieldReserve(cookieCount));
         for (const auto& header : request_.headers()) {
             if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
                 continue;
             }
-            detail::httpVisitSemicolonParameters(header.value(), [&cookies](std::string_view key, std::string_view value) {
-                detail::RequestNameValueListAccess::pushBack(cookies, detail::RequestNameValueViewAccess::make(key, value));
-                return true;
-            });
+            detail::httpVisitSemicolonParameters(
+                header.value(), [&cookies](std::string_view key, std::string_view value) {
+                    detail::RequestNameValueListAccess::pushBack(
+                        cookies, detail::RequestNameValueViewAccess::make(key, value));
+                    return true;
+                });
         }
         cache.emplace(std::move(cookies));
     }
@@ -303,7 +318,8 @@ void Context::ensureRouteParams() const {
     for (std::size_t i = 0; i < paramCount_; ++i) {
         auto value = paramValues_[i];
         if (detail::hasUrlEncoding(value, detail::UrlDecodeMode::kPercent)) {
-            auto decoded = detail::decodeUrlComponent(value, {.mode = detail::UrlDecodeMode::kPercent, .resource = resource()});
+            auto decoded = detail::decodeUrlComponent(
+                value, {.mode = detail::UrlDecodeMode::kPercent, .resource = resource()});
             if (!decoded) {
                 requestStorage_->routeParamsInvalid = true;
                 detail::throwInvalidParam();
@@ -311,7 +327,8 @@ void Context::ensureRouteParams() const {
             auto& owned = storage.emplace_back(std::move(*decoded));
             value = detail::storedStringView(owned);
         }
-        detail::RequestNameValueListAccess::pushBack(params, detail::RequestNameValueViewAccess::make(paramNames_[i], value));
+        detail::RequestNameValueListAccess::pushBack(
+            params, detail::RequestNameValueViewAccess::make(paramNames_[i], value));
     }
     cache.emplace(std::move(storage), std::move(params));
 }
@@ -342,7 +359,8 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
         }
         sawAccept = true;
         if (!header.value().empty()) {
-            detail::httpAccumulateMediaTypeAcceptance(header.value(), mediaType, bestSpecificity, bestQuality);
+            detail::httpAccumulateMediaTypeAcceptance(
+                header.value(), mediaType, bestSpecificity, bestQuality);
         }
     }
     // Only absence means no preference. A present but empty Accept field is an
@@ -371,7 +389,8 @@ namespace {
 
 }  // namespace
 
-std::optional<std::string_view> Context::requestNegotiate(ContextRequest::Negotiable field, std::span<const std::string_view> supported) const noexcept {
+std::optional<std::string_view> Context::requestNegotiate(
+    ContextRequest::Negotiable field, std::span<const std::string_view> supported) const noexcept {
     if (supported.empty()) {
         return std::nullopt;
     }
@@ -400,9 +419,11 @@ std::optional<std::string_view> Context::requestNegotiate(ContextRequest::Negoti
                 continue;
             }
             if (mediaType) {
-                detail::httpAccumulateMediaTypeAcceptance(header.value(), offered, specificity, quality);
+                detail::httpAccumulateMediaTypeAcceptance(
+                    header.value(), offered, specificity, quality);
             } else {
-                detail::httpAccumulateTokenAcceptance(header.value(), offered, prefixMatching, specificity, quality);
+                detail::httpAccumulateTokenAcceptance(
+                    header.value(), offered, prefixMatching, specificity, quality);
             }
         }
         if (specificity < 0 || quality <= 0) {
@@ -452,7 +473,8 @@ Task<std::string_view> Context::requestBody() const {
     if (coding == HttpContentCoding::kIdentity) {
         co_return raw;
     }
-    auto decodeResult = detail::decodeHttpRequestContent(coding, raw, {.maxDecodedBytes = maxDecodedBodyBytes_, .resource = resource()});
+    auto decodeResult = detail::decodeHttpRequestContent(
+        coding, raw, {.maxDecodedBytes = maxDecodedBodyBytes_, .resource = resource()});
     auto* decodedContent = decodeResult.decoded();
     if (decodedContent == nullptr) {
         if (const auto* failure = decodeResult.protocolFailure()) {
@@ -469,7 +491,8 @@ Task<std::string_view> Context::requestBody() const {
     co_return std::string_view(decoded);
 }
 
-std::optional<std::string_view> ContextRequest::signedCookie(SignedCookieLookupOptions options) const {
+std::optional<std::string_view> ContextRequest::signedCookie(
+    SignedCookieLookupOptions options) const {
     const auto name = options.name.view();
     const auto secret = options.secret.view();
     const auto stored = cookie(name);
@@ -491,7 +514,8 @@ std::optional<std::string_view> ContextRequest::signedCookie(SignedCookieLookupO
 }
 
 bool Context::requestContentTypeMatches(std::string_view expected) const noexcept {
-    return detail::contentTypeMatches(detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType), expected);
+    return detail::contentTypeMatches(
+        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType), expected);
 }
 
 Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
@@ -500,9 +524,12 @@ Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
     co_return detail::parseCompleteMultipartBody(requestBody, boundary, resource());
 }
 
-Task<ContextRequest::RequestFormData> Context::parseRequestBody(ContextRequest::ParseBodyOptions options) const {
+Task<ContextRequest::RequestFormData> Context::parseRequestBody(
+    ContextRequest::ParseBodyOptions options) const {
     const auto requestBody = co_await this->requestBody();
-    co_return detail::parseFormBodyFromView(detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType), requestBody, resource(), options);
+    co_return detail::parseFormBodyFromView(
+        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType), requestBody,
+        resource(), options);
 }
 
 Task<void> Context::requestDiscardBody() const {
@@ -525,16 +552,20 @@ BodyReader& Context::requestBodyReader() const {
 }
 
 MultipartReader Context::requestMultipartReader() const {
-    return MultipartReader(requestBodyReader(), {.boundary = multipartBoundary(), .resource = resource()});
+    return MultipartReader(
+        requestBodyReader(), {.boundary = multipartBoundary(), .resource = resource()});
 }
 
 MultipartBoundary Context::multipartBoundary() const {
-    const auto boundary = parseMultipartBoundary(detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType));
+    const auto boundary = parseMultipartBoundary(
+        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType));
     if (const auto* parsed = boundary.boundary()) {
         return *parsed;
     }
     if (boundary.notApplicable() != nullptr) {
-        throw HttpError({.status = http_status::kUnsupportedMediaType, .code = "unsupported_media_type", .message = "request body must be multipart/form-data"});
+        throw HttpError({.status = http_status::kUnsupportedMediaType,
+            .code = "unsupported_media_type",
+            .message = "request body must be multipart/form-data"});
     }
     if (const auto* failure = boundary.failure()) {
         throw failure->protocolError();

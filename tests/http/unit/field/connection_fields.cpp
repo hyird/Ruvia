@@ -12,14 +12,14 @@
 namespace {
 
 using ruvia::httpClientExpectationIsValid;
+using ruvia::HttpRequestContentIndication;
+using ruvia::HttpRequestExpectations;
+using ruvia::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::HttpConnectionOptions;
 using ruvia::detail::HttpFieldListParseStatus;
 using ruvia::detail::HttpFieldListRole;
 using ruvia::detail::httpFindSemicolonParameterIgnoreCase;
 using ruvia::detail::httpFindSemicolonParameterQuotedIgnoreCase;
-using ruvia::HttpRequestContentIndication;
-using ruvia::HttpRequestExpectations;
-using ruvia::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::HttpUpgradeProtocols;
 
 // {close, keepAlive, upgrade, te} after recipient-side parsing.
@@ -67,12 +67,14 @@ RUVIA_TEST(connection_options_commit_presence_and_tokens_in_one_byte) {
 
     HttpConnectionOptions options;
     RUVIA_CHECK(!options.hasField());
-    RUVIA_CHECK(options.parseField(", ,", HttpFieldListRole::kRecipient) == HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(
+        options.parseField(", ,", HttpFieldListRole::kRecipient) == HttpFieldListParseStatus::kOk);
     RUVIA_CHECK(options.hasField());
     RUVIA_CHECK(!options.close());
     RUVIA_CHECK(!options.upgrade());
 
-    RUVIA_CHECK(options.parseField("close, Upgrade", HttpFieldListRole::kRecipient) == HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(options.parseField("close, Upgrade", HttpFieldListRole::kRecipient) ==
+                HttpFieldListParseStatus::kOk);
     RUVIA_CHECK(options.hasField());
     RUVIA_CHECK(options.close());
     RUVIA_CHECK(options.upgrade());
@@ -81,18 +83,22 @@ RUVIA_TEST(connection_options_commit_presence_and_tokens_in_one_byte) {
 RUVIA_TEST(connection_options_enforce_sender_and_recipient_list_roles) {
     for (const auto value : {",close", "close,", "close,,Upgrade", ""}) {
         HttpConnectionOptions sender;
-        RUVIA_CHECK(sender.parseField(value, HttpFieldListRole::kSender) == HttpFieldListParseStatus::kMalformed);
+        RUVIA_CHECK(sender.parseField(value, HttpFieldListRole::kSender) ==
+                    HttpFieldListParseStatus::kMalformed);
     }
 
     HttpConnectionOptions repeated;
-    RUVIA_CHECK(repeated.parseField("keep-alive", HttpFieldListRole::kSender) == HttpFieldListParseStatus::kOk);
-    RUVIA_CHECK(repeated.parseField("TE, Upgrade", HttpFieldListRole::kSender) == HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(repeated.parseField("keep-alive", HttpFieldListRole::kSender) ==
+                HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(repeated.parseField("TE, Upgrade", HttpFieldListRole::kSender) ==
+                HttpFieldListParseStatus::kOk);
     RUVIA_CHECK(repeated.keepAlive());
     RUVIA_CHECK(repeated.te());
     RUVIA_CHECK(repeated.upgrade());
 
     HttpConnectionOptions malformed;
-    RUVIA_CHECK(malformed.parseField("close;param", HttpFieldListRole::kRecipient) == HttpFieldListParseStatus::kMalformed);
+    RUVIA_CHECK(malformed.parseField("close;param", HttpFieldListRole::kRecipient) ==
+                HttpFieldListParseStatus::kMalformed);
 }
 
 RUVIA_TEST(upgrade_protocols_commit_one_explicit_field_state) {
@@ -101,15 +107,18 @@ RUVIA_TEST(upgrade_protocols_commit_one_explicit_field_state) {
     RUVIA_CHECK(!protocols.hasProtocol());
 
     const auto accept = [](const auto&) noexcept { return true; };
-    RUVIA_CHECK(protocols.parseField(", ,", HttpFieldListRole::kRecipient, accept) == HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(protocols.parseField(", ,", HttpFieldListRole::kRecipient, accept) ==
+                HttpFieldListParseStatus::kOk);
     RUVIA_CHECK(protocols.hasField());
     RUVIA_CHECK(!protocols.hasProtocol());
 
-    RUVIA_CHECK(protocols.parseField("websocket", HttpFieldListRole::kRecipient, accept) == HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(protocols.parseField("websocket", HttpFieldListRole::kRecipient, accept) ==
+                HttpFieldListParseStatus::kOk);
     RUVIA_CHECK(protocols.hasField());
     RUVIA_CHECK(protocols.hasProtocol());
 
-    RUVIA_CHECK(protocols.parseField("", HttpFieldListRole::kRecipient, accept) == HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(protocols.parseField("", HttpFieldListRole::kRecipient, accept) ==
+                HttpFieldListParseStatus::kOk);
     RUVIA_CHECK(protocols.hasProtocol());
 }
 
@@ -117,12 +126,15 @@ RUVIA_TEST(upgrade_protocols_only_commit_successful_fields) {
     const auto accept = [](const auto&) noexcept { return true; };
 
     HttpUpgradeProtocols malformed;
-    RUVIA_CHECK(malformed.parseField("", HttpFieldListRole::kSender, accept) == HttpFieldListParseStatus::kMalformed);
+    RUVIA_CHECK(malformed.parseField("", HttpFieldListRole::kSender, accept) ==
+                HttpFieldListParseStatus::kMalformed);
     RUVIA_CHECK(!malformed.hasField());
     RUVIA_CHECK(!malformed.hasProtocol());
 
     HttpUpgradeProtocols rejected;
-    RUVIA_CHECK(rejected.parseField("websocket", HttpFieldListRole::kRecipient, [](const auto&) noexcept { return false; }) == HttpFieldListParseStatus::kRejected);
+    RUVIA_CHECK(
+        rejected.parseField("websocket", HttpFieldListRole::kRecipient,
+            [](const auto&) noexcept { return false; }) == HttpFieldListParseStatus::kRejected);
     RUVIA_CHECK(!rejected.hasField());
     RUVIA_CHECK(!rejected.hasProtocol());
 }

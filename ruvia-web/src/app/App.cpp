@@ -15,7 +15,8 @@ namespace ruvia::detail {
 AppState::AppState()
     : runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{appResource()}) {
     applyServerConfig(*this, ServerConfig{});
-    listeners.emplace_back(appResource(), "0.0.0.0", 8080, HttpServerListenerDefinition::PlainHttp{});
+    listeners.emplace_back(
+        appResource(), "0.0.0.0", 8080, HttpServerListenerDefinition::PlainHttp{});
 }
 
 AppState::~AppState() = default;
@@ -113,7 +114,8 @@ void App::stop() {
                 try {
                     worker.runtime->stop();
                 } catch (...) {
-                    detail::reportUnhandledFailure("web worker stop request", std::current_exception());
+                    detail::reportUnhandledFailure(
+                        "web worker stop request", std::current_exception());
                 }
             }
         }

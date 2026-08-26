@@ -56,7 +56,8 @@ template <typename T>
 concept HasStaleMarkReset = requires(T& value) { value.markReset(Http2StreamCloseSource::kLocal); };
 
 template <typename T>
-concept HasStaleMarkClosed = requires(T& value) { value.markClosed(Http2StreamCloseSource::kLocal); };
+concept HasStaleMarkClosed =
+    requires(T& value) { value.markClosed(Http2StreamCloseSource::kLocal); };
 
 template <typename T>
 concept HasStaleBodyEnded = requires(const T& value) { value.bodyEnded(); };
@@ -98,8 +99,10 @@ static_assert(!HasStaleResetAccessor<Http2LocalSendState>);
 static_assert(!HasStaleResetAccessor<Http2StreamLifecycle>);
 static_assert(!HasStaleMarkReset<Http2StreamLifecycle>);
 static_assert(!HasStaleMarkClosed<Http2StreamLifecycle>);
-static_assert(std::same_as<decltype(std::declval<const Http2StreamLifecycle&>().localSend()), const Http2LocalSendState&>);
-static_assert(std::same_as<decltype(std::declval<const Http2StreamLifecycle&>().remoteReceive()), const Http2RemoteReceiveState&>);
+static_assert(std::same_as<decltype(std::declval<const Http2StreamLifecycle&>().localSend()),
+    const Http2LocalSendState&>);
+static_assert(std::same_as<decltype(std::declval<const Http2StreamLifecycle&>().remoteReceive()),
+    const Http2RemoteReceiveState&>);
 static_assert(!HasStaleBodyEnded<Http2StreamLifecycle>);
 static_assert(!HasStalePeerEndStream<Http2StreamLifecycle>);
 static_assert(!HasStaleBodyEnded<Http2StreamState>);
@@ -107,7 +110,9 @@ static_assert(!HasStalePeerEndStream<Http2StreamState>);
 static_assert(!HasStaleHeadersDecoded<Http2StreamState>);
 
 template <typename T>
-concept ExposesRvalueHttp2StreamLifecycleStorage = requires(T&& lifecycle) { std::move(lifecycle).localSend(); } || requires(T&& lifecycle) { std::move(lifecycle).remoteReceive(); };
+concept ExposesRvalueHttp2StreamLifecycleStorage = requires(T&& lifecycle) {
+    std::move(lifecycle).localSend();
+} || requires(T&& lifecycle) { std::move(lifecycle).remoteReceive(); };
 
 static_assert(!ExposesRvalueHttp2StreamLifecycleStorage<Http2StreamLifecycle>);
 
@@ -223,7 +228,8 @@ RUVIA_TEST(http2_local_send_state_abort_owns_immutable_close_source) {
     RUVIA_CHECK(aborted != nullptr);
     RUVIA_CHECK(aborted != nullptr && aborted->source() == Http2StreamCloseSource::kLocal);
     RUVIA_CHECK(!stream.abort(Http2StreamCloseSource::kPeer));
-    RUVIA_CHECK(state.aborted() != nullptr && state.aborted()->source() == Http2StreamCloseSource::kLocal);
+    RUVIA_CHECK(
+        state.aborted() != nullptr && state.aborted()->source() == Http2StreamCloseSource::kLocal);
     RUVIA_CHECK(!stream.beginLocalRequestContent());
     RUVIA_CHECK(!stream.commitLocalEndStream());
 }

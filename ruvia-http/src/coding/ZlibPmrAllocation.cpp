@@ -8,12 +8,14 @@ namespace ruvia::detail {
 
 void* pmrCodecAllocate(void* opaque, std::size_t bytes) noexcept {
     auto* resource = static_cast<std::pmr::memory_resource*>(opaque);
-    if (resource == nullptr || bytes > (std::numeric_limits<std::size_t>::max)() - sizeof(PmrCodecAllocationHeader)) {
+    if (resource == nullptr ||
+        bytes > (std::numeric_limits<std::size_t>::max)() - sizeof(PmrCodecAllocationHeader)) {
         return nullptr;
     }
     const auto totalBytes = sizeof(PmrCodecAllocationHeader) + bytes;
     try {
-        auto* raw = static_cast<std::byte*>(resource->allocate(totalBytes, alignof(PmrCodecAllocationHeader)));
+        auto* raw = static_cast<std::byte*>(
+            resource->allocate(totalBytes, alignof(PmrCodecAllocationHeader)));
         auto* header = reinterpret_cast<PmrCodecAllocationHeader*>(raw);
         header->resource = resource;
         header->bytes = totalBytes;
@@ -47,7 +49,8 @@ voidpf zlibPmrAllocate(std::pmr::memory_resource* resource, uInt items, uInt siz
     }
     const auto totalBytes = sizeof(ZlibAllocationHeader) + payloadBytes;
     try {
-        auto* raw = static_cast<std::byte*>(resource->allocate(totalBytes, alignof(ZlibAllocationHeader)));
+        auto* raw =
+            static_cast<std::byte*>(resource->allocate(totalBytes, alignof(ZlibAllocationHeader)));
         auto* header = reinterpret_cast<ZlibAllocationHeader*>(raw);
         header->resource = resource;
         header->bytes = totalBytes;

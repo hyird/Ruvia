@@ -105,7 +105,8 @@ private:
     void finish(Node* node) noexcept;
     void rethrowFailure();
 
-    using Lifecycle = std::variant<TaskScopeEmpty, TaskScopeOpen, TaskScopeJoinReserved, TaskScopeJoining, TaskScopeJoined>;
+    using Lifecycle = std::variant<TaskScopeEmpty, TaskScopeOpen, TaskScopeJoinReserved,
+        TaskScopeJoining, TaskScopeJoined>;
     using Outcome = std::variant<TaskScopeSuccess, TaskScopeFailure>;
 
     const WorkerHandle& worker_;

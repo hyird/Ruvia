@@ -35,12 +35,20 @@ public:
     constexpr Callback(std::nullptr_t) noexcept {}
 
     template <typename Callable, typename Stored = std::decay_t<Callable>>
-        requires(!std::is_same_v<Stored, Callback> && std::is_invocable_r_v<Result, Stored&, Args...> && std::is_copy_constructible_v<Stored>)
+        requires(!std::is_same_v<Stored, Callback> &&
+                    std::is_invocable_r_v<Result, Stored&, Args...> &&
+                    std::is_copy_constructible_v<Stored>)
     Callback(Callable&& callable)
         : target_(constructPmrObject<Stored>(processResource(), std::forward<Callable>(callable))),
-          invoke_([](void* target, Args... args) -> Result { return (*static_cast<Stored*>(target))(std::forward<Args>(args)...); }),
-          destroy_([](void* target, std::pmr::memory_resource* resource) noexcept { destroyPmrObject(static_cast<Stored*>(target), resource); }),
-          clone_([](const void* target, std::pmr::memory_resource* resource) -> void* { return constructPmrObject<Stored>(resource, *static_cast<const Stored*>(target)); }),
+          invoke_([](void* target, Args... args) -> Result {
+              return (*static_cast<Stored*>(target))(std::forward<Args>(args)...);
+          }),
+          destroy_([](void* target, std::pmr::memory_resource* resource) noexcept {
+              destroyPmrObject(static_cast<Stored*>(target), resource);
+          }),
+          clone_([](const void* target, std::pmr::memory_resource* resource) -> void* {
+              return constructPmrObject<Stored>(resource, *static_cast<const Stored*>(target));
+          }),
           resource_(processResource()) {}
 
     Callback(const Callback& other) {
@@ -82,7 +90,8 @@ public:
         return invoke_ != nullptr;
     }
 
-    [[nodiscard]] friend constexpr bool operator==(const Callback& left, const Callback& right) noexcept {
+    [[nodiscard]] friend constexpr bool operator==(
+        const Callback& left, const Callback& right) noexcept {
         return left.target_ == right.target_ && left.invoke_ == right.invoke_;
     }
 
@@ -98,7 +107,8 @@ private:
     }
 
     void copyFrom(const Callback& other) {
-        target_ = other.clone_ == nullptr ? other.target_ : other.clone_(other.target_, other.resource_);
+        target_ =
+            other.clone_ == nullptr ? other.target_ : other.clone_(other.target_, other.resource_);
         invoke_ = other.invoke_;
         destroy_ = other.destroy_;
         clone_ = other.clone_;
@@ -147,12 +157,20 @@ public:
     constexpr Callback(std::nullptr_t) noexcept {}
 
     template <typename Callable, typename Stored = std::decay_t<Callable>>
-        requires(!std::is_same_v<Stored, Callback> && !std::is_lvalue_reference_v<Callable> && std::is_nothrow_invocable_r_v<Result, Stored&, Args...> && std::is_copy_constructible_v<Stored>)
+        requires(!std::is_same_v<Stored, Callback> && !std::is_lvalue_reference_v<Callable> &&
+                    std::is_nothrow_invocable_r_v<Result, Stored&, Args...> &&
+                    std::is_copy_constructible_v<Stored>)
     Callback(Callable&& callable)
         : target_(constructPmrObject<Stored>(processResource(), std::forward<Callable>(callable))),
-          invoke_([](void* target, Args... args) noexcept -> Result { return (*static_cast<Stored*>(target))(std::forward<Args>(args)...); }),
-          destroy_([](void* target, std::pmr::memory_resource* resource) noexcept { destroyPmrObject(static_cast<Stored*>(target), resource); }),
-          clone_([](const void* target, std::pmr::memory_resource* resource) -> void* { return constructPmrObject<Stored>(resource, *static_cast<const Stored*>(target)); }),
+          invoke_([](void* target, Args... args) noexcept -> Result {
+              return (*static_cast<Stored*>(target))(std::forward<Args>(args)...);
+          }),
+          destroy_([](void* target, std::pmr::memory_resource* resource) noexcept {
+              destroyPmrObject(static_cast<Stored*>(target), resource);
+          }),
+          clone_([](const void* target, std::pmr::memory_resource* resource) -> void* {
+              return constructPmrObject<Stored>(resource, *static_cast<const Stored*>(target));
+          }),
           resource_(processResource()) {}
 
     Callback(const Callback& other) {
@@ -194,7 +212,8 @@ public:
         return invoke_ != nullptr;
     }
 
-    [[nodiscard]] friend constexpr bool operator==(const Callback& left, const Callback& right) noexcept {
+    [[nodiscard]] friend constexpr bool operator==(
+        const Callback& left, const Callback& right) noexcept {
         return left.target_ == right.target_ && left.invoke_ == right.invoke_;
     }
 
@@ -210,7 +229,8 @@ private:
     }
 
     void copyFrom(const Callback& other) {
-        target_ = other.clone_ == nullptr ? other.target_ : other.clone_(other.target_, other.resource_);
+        target_ =
+            other.clone_ == nullptr ? other.target_ : other.clone_(other.target_, other.resource_);
         invoke_ = other.invoke_;
         destroy_ = other.destroy_;
         clone_ = other.clone_;

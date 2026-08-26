@@ -25,7 +25,8 @@ RedisPool::Connection::~Connection() = default;
 RedisPool::Connection::Connection(Connection&&) noexcept = default;
 RedisPool::Connection& RedisPool::Connection::operator=(Connection&&) noexcept = default;
 
-RedisPool::RedisPool(asio::io_context& ioContext, RedisConfigStorage config, std::size_t poolSize, std::pmr::memory_resource* resource, const WorkerHandle* worker)
+RedisPool::RedisPool(asio::io_context& ioContext, RedisConfigStorage config, std::size_t poolSize,
+    std::pmr::memory_resource* resource, const WorkerHandle* worker)
     : ioContext_(ioContext),
       worker_(worker),
       config_(std::move(config)),

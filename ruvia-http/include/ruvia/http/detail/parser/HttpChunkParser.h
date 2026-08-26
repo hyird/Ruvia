@@ -11,13 +11,24 @@
 
 namespace ruvia::detail {
 
-enum class HttpChunkScanError : std::uint8_t { kInvalidSize, kSizeOverflow, kInvalidExtension, kInvalidCrlf, kInvalidTrailer, kTooLarge };
+enum class HttpChunkScanError : std::uint8_t {
+    kInvalidSize,
+    kSizeOverflow,
+    kInvalidExtension,
+    kInvalidCrlf,
+    kInvalidTrailer,
+    kTooLarge
+};
 
 class HttpChunkTrailerField final {
 public:
-    [[nodiscard]] constexpr std::string_view name() const& noexcept { return name_; }
+    [[nodiscard]] constexpr std::string_view name() const& noexcept {
+        return name_;
+    }
     std::string_view name() const&& = delete;
-    [[nodiscard]] constexpr std::string_view value() const& noexcept { return value_; }
+    [[nodiscard]] constexpr std::string_view value() const& noexcept {
+        return value_;
+    }
     std::string_view value() const&& = delete;
 
 private:
@@ -25,7 +36,8 @@ private:
     friend class HttpChunkTrailerParser;
 
     constexpr HttpChunkTrailerField(std::string_view name, std::string_view value) noexcept
-        : name_(name), value_(value) {}
+        : name_(name),
+          value_(value) {}
 
     std::string_view name_;
     std::string_view value_;
@@ -40,7 +52,9 @@ private:
 
 class HttpChunkTrailerFailure final {
 public:
-    [[nodiscard]] constexpr HttpChunkScanError error() const noexcept { return error_; }
+    [[nodiscard]] constexpr HttpChunkScanError error() const noexcept {
+        return error_;
+    }
 
 private:
     friend class HttpChunkTrailerParseResult;
@@ -181,7 +195,8 @@ private:
 };
 
 [[nodiscard]] bool parseHttpChunkSize(std::string_view value, std::size_t& size) noexcept;
-[[nodiscard]] std::optional<HttpChunkScanError> validateHttpChunkTrailers(std::string_view trailers) noexcept;
+[[nodiscard]] std::optional<HttpChunkScanError> validateHttpChunkTrailers(
+    std::string_view trailers) noexcept;
 [[nodiscard]] HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept;
 
 }  // namespace ruvia::detail

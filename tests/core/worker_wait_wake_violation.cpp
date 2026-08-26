@@ -18,8 +18,7 @@ class ManualOwner final {
 public:
     struct promise_type {
         [[nodiscard]] ManualOwner get_return_object() noexcept {
-            return ManualOwner(
-                std::coroutine_handle<promise_type>::from_promise(*this));
+            return ManualOwner(std::coroutine_handle<promise_type>::from_promise(*this));
         }
         [[nodiscard]] std::suspend_always initial_suspend() const noexcept {
             return {};
@@ -33,8 +32,7 @@ public:
         }
     };
 
-    explicit ManualOwner(
-        std::coroutine_handle<promise_type> handle) noexcept
+    explicit ManualOwner(std::coroutine_handle<promise_type> handle) noexcept
         : handle_(handle) {}
 
     ~ManualOwner() {
@@ -78,23 +76,19 @@ private:
     std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher_;
 };
 
-ManualOwner waitForOneShot(
-    ruvia::OneShotReceiver<DetachDispatcherOnMove>& receiver) {
+ManualOwner waitForOneShot(ruvia::OneShotReceiver<DetachDispatcherOnMove>& receiver) {
     (void)co_await receiver.wait();
 }
 
-ManualOwner waitForChannel(
-    ruvia::ChannelReceiver<DetachDispatcherOnMove>& receiver) {
+ManualOwner waitForChannel(ruvia::ChannelReceiver<DetachDispatcherOnMove>& receiver) {
     (void)co_await receiver.receive();
 }
 
 template <typename StartWait, typename Complete>
 void runDispatchFailureProbe(StartWait startWait, Complete complete) {
     asio::io_context ioContext;
-    auto dispatcher =
-        std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
-    auto owner = startWait(
-        ruvia::detail::WorkerHandleAccess::make(dispatcher));
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
+    auto owner = startWait(ruvia::detail::WorkerHandleAccess::make(dispatcher));
     asio::post(ioContext, [&owner] { owner.start(); });
     ioContext.run();
 
@@ -113,20 +107,15 @@ void probeOneShot() {
     std::shared_ptr<ruvia::OneShotReceiver<DetachDispatcherOnMove>> receiver;
     runDispatchFailureProbe(
         [&](ruvia::WorkerHandle worker) {
-            auto pair =
-                ruvia::makeOneShot<DetachDispatcherOnMove>(std::move(worker));
-            completion = std::make_shared<
-                ruvia::OneShotCompletion<DetachDispatcherOnMove>>(
-                    std::move(pair.first));
-            receiver =
-                std::make_shared<
-                    ruvia::OneShotReceiver<DetachDispatcherOnMove>>(
-                        std::move(pair.second));
+            auto pair = ruvia::makeOneShot<DetachDispatcherOnMove>(std::move(worker));
+            completion = std::make_shared<ruvia::OneShotCompletion<DetachDispatcherOnMove>>(
+                std::move(pair.first));
+            receiver = std::make_shared<ruvia::OneShotReceiver<DetachDispatcherOnMove>>(
+                std::move(pair.second));
             return waitForOneShot(*receiver);
         },
         [&](std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher) {
-            (void)completion->complete(
-                DetachDispatcherOnMove(std::move(dispatcher)));
+            (void)completion->complete(DetachDispatcherOnMove(std::move(dispatcher)));
         });
 }
 
@@ -136,21 +125,15 @@ void probeChannel() {
     runDispatchFailureProbe(
         [&](ruvia::WorkerHandle worker) {
             auto pair =
-                ruvia::makeChannel<DetachDispatcherOnMove>(
-                    std::move(worker), {.capacity = 1});
-            sender =
-                std::make_shared<
-                    ruvia::ChannelSender<DetachDispatcherOnMove>>(
-                        std::move(pair.first));
-            receiver =
-                std::make_shared<
-                    ruvia::ChannelReceiver<DetachDispatcherOnMove>>(
-                        std::move(pair.second));
+                ruvia::makeChannel<DetachDispatcherOnMove>(std::move(worker), {.capacity = 1});
+            sender = std::make_shared<ruvia::ChannelSender<DetachDispatcherOnMove>>(
+                std::move(pair.first));
+            receiver = std::make_shared<ruvia::ChannelReceiver<DetachDispatcherOnMove>>(
+                std::move(pair.second));
             return waitForChannel(*receiver);
         },
         [&](std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher) {
-            (void)sender->send(
-                DetachDispatcherOnMove(std::move(dispatcher)));
+            (void)sender->send(DetachDispatcherOnMove(std::move(dispatcher)));
         });
 }
 

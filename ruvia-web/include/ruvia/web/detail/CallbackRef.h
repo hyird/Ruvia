@@ -34,7 +34,8 @@ private:
     friend struct CallbackAccess;
 
     constexpr CallbackRef(void* target, Invoke invoke) noexcept
-        : target_(target), invoke_(invoke) {}
+        : target_(target),
+          invoke_(invoke) {}
 
     template <typename Callable>
         requires std::is_invocable_r_v<Result, Callable&, Args...>
@@ -69,14 +70,16 @@ private:
     friend struct CallbackAccess;
 
     constexpr CallbackRef(void* target, Invoke invoke) noexcept
-        : target_(target), invoke_(invoke) {}
+        : target_(target),
+          invoke_(invoke) {}
 
     template <typename Callable>
         requires std::is_nothrow_invocable_r_v<Result, Callable&, Args...>
     [[nodiscard]] static constexpr CallbackRef bind(Callable& callable) noexcept {
-        return CallbackRef(std::addressof(callable), [](void* target, Args... args) noexcept -> Result {
-            return (*static_cast<Callable*>(target))(std::forward<Args>(args)...);
-        });
+        return CallbackRef(
+            std::addressof(callable), [](void* target, Args... args) noexcept -> Result {
+                return (*static_cast<Callable*>(target))(std::forward<Args>(args)...);
+            });
     }
 
     void* target_{nullptr};
@@ -85,7 +88,8 @@ private:
 
 struct CallbackAccess final {
     template <typename Signature>
-    [[nodiscard]] static constexpr CallbackRef<Signature> make(void* target, typename CallbackRef<Signature>::Invoke invoke) noexcept {
+    [[nodiscard]] static constexpr CallbackRef<Signature> make(
+        void* target, typename CallbackRef<Signature>::Invoke invoke) noexcept {
         return CallbackRef<Signature>(target, invoke);
     }
 

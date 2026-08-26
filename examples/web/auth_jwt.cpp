@@ -48,7 +48,9 @@ public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         const auto token = ruvia::jwtBearerToken(c.req().header("Authorization").value_or(""));
         if (!token) {
-            c.respond(c.error({.status = ruvia::http_status::kUnauthorized, .code = "missing_token", .message = "missing bearer token"}));
+            c.respond(c.error({.status = ruvia::http_status::kUnauthorized,
+                .code = "missing_token",
+                .message = "missing bearer token"}));
             co_return;
         }
 
@@ -59,7 +61,9 @@ public:
         try {
             payload.emplace(ruvia::jwtVerify(verifyOptions(*token, c.resource())));
         } catch (...) {
-            c.respond(c.error({.status = ruvia::http_status::kUnauthorized, .code = "invalid_token", .message = "invalid bearer token"}));
+            c.respond(c.error({.status = ruvia::http_status::kUnauthorized,
+                .code = "invalid_token",
+                .message = "invalid bearer token"}));
             co_return;
         }
 
@@ -104,6 +108,7 @@ private:
 int main() {
     ruvia::app()
         .listen({.address = "0.0.0.0", .http = 8085})
-        .server({.workerCount = 2, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .server({.workerCount = 2,
+            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
         .run();
 }

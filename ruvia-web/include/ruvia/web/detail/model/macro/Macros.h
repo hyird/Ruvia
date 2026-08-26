@@ -9,14 +9,14 @@
 // Repeat each role marker on the generated final type so language services do
 // not need to resolve it through the CRTP base.
 
-#define RUVIA_REQUEST_MODEL(T, ...)                         \
+#define RUVIA_REQUEST_MODEL(T, ...)                          \
     struct T final : ::ruvia::RequestModel<T, __VA_ARGS__> { \
-        using RuviaModelBase::RuviaModelBase;               \
-        using RuviaRequestModelSchema = void;               \
+        using RuviaModelBase::RuviaModelBase;                \
+        using RuviaRequestModelSchema = void;                \
     }
 
-#define RUVIA_RESPONSE_MODEL(T, ...)                         \
+#define RUVIA_RESPONSE_MODEL(T, ...)                          \
     struct T final : ::ruvia::ResponseModel<T, __VA_ARGS__> { \
-        using RuviaModelBase::RuviaModelBase;               \
-        using RuviaResponseModelSchema = void;              \
+        using RuviaModelBase::RuviaModelBase;                 \
+        using RuviaResponseModelSchema = void;                \
     }

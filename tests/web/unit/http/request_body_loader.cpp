@@ -45,7 +45,8 @@ ruvia::Task<void> completeLoad(ruvia::detail::RequestBodyLoader& loader, std::st
     body = co_await loader.readAll();
 }
 
-ruvia::Task<void> rejectConcurrentDiscard(ruvia::detail::RequestBodyLoader& loader, bool& rejected) {
+ruvia::Task<void> rejectConcurrentDiscard(
+    ruvia::detail::RequestBodyLoader& loader, bool& rejected) {
     try {
         co_await loader.discard();
     } catch (const std::logic_error&) {
@@ -62,7 +63,8 @@ ruvia::Task<void> discardThenRejectLoad(ruvia::detail::RequestBodyLoader& loader
     }
 }
 
-ruvia::Task<void> loadTwice(ruvia::detail::RequestBodyLoader& loader, std::string_view& first, std::string_view& second) {
+ruvia::Task<void> loadTwice(
+    ruvia::detail::RequestBodyLoader& loader, std::string_view& first, std::string_view& second) {
     first = co_await loader.readAll();
     second = co_await loader.readAll();
 }
@@ -75,12 +77,15 @@ RUVIA_TEST(request_body_loader_rejects_read_discard_overlap) {
     std::string_view body;
     bool rejected = false;
 
-    auto first = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(completeLoad(binding.facade(), body)), asio::use_future);
+    auto first = asio::co_spawn(
+        io, ruvia::detail::taskAsAwaitable(completeLoad(binding.facade(), body)), asio::use_future);
     io.poll();
     RUVIA_CHECK(body.empty());
 
     io.restart();
-    auto second = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(rejectConcurrentDiscard(binding.facade(), rejected)), asio::use_future);
+    auto second = asio::co_spawn(io,
+        ruvia::detail::taskAsAwaitable(rejectConcurrentDiscard(binding.facade(), rejected)),
+        asio::use_future);
     asio::post(io, [&binding] { binding.loader().signal.notify(); });
     io.run();
     first.get();
@@ -97,7 +102,9 @@ RUVIA_TEST(request_body_loader_discard_is_terminal) {
     ruvia::detail::RequestBodyLoaderBinding<SuspendedLoader> binding(io);
     bool rejected = false;
 
-    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(discardThenRejectLoad(binding.facade(), rejected)), asio::use_future);
+    auto future = asio::co_spawn(io,
+        ruvia::detail::taskAsAwaitable(discardThenRejectLoad(binding.facade(), rejected)),
+        asio::use_future);
     io.poll();
     RUVIA_CHECK(!rejected);
 
@@ -117,7 +124,9 @@ RUVIA_TEST(request_body_loader_reuses_one_buffered_result) {
     std::string_view first;
     std::string_view second;
 
-    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(loadTwice(binding.facade(), first, second)), asio::use_future);
+    auto future = asio::co_spawn(io,
+        ruvia::detail::taskAsAwaitable(loadTwice(binding.facade(), first, second)),
+        asio::use_future);
     io.poll();
     RUVIA_CHECK(first.empty());
 

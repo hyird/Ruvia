@@ -16,7 +16,8 @@ namespace ruvia::detail {
 
 class RedisRegistry final {
 public:
-    RedisRegistry(asio::io_context&, std::pmr::memory_resource*, std::span<const RedisDefinition>, const WorkerHandle* = nullptr) {}
+    RedisRegistry(asio::io_context&, std::pmr::memory_resource*, std::span<const RedisDefinition>,
+        const WorkerHandle* = nullptr) {}
 
     RedisRegistry(const RedisRegistry&) = delete;
     RedisRegistry& operator=(const RedisRegistry&) = delete;
@@ -81,7 +82,8 @@ inline constexpr std::size_t kRedisReadBufferBytes = 8192;
 
 class RedisPool final {
 public:
-    RedisPool(asio::io_context& ioContext, RedisConfigStorage config, std::size_t poolSize, std::pmr::memory_resource* resource = nullptr, const WorkerHandle* worker = nullptr);
+    RedisPool(asio::io_context& ioContext, RedisConfigStorage config, std::size_t poolSize,
+        std::pmr::memory_resource* resource = nullptr, const WorkerHandle* worker = nullptr);
     ~RedisPool();
 
     RedisPool(const RedisPool&) = delete;
@@ -91,9 +93,14 @@ public:
     void closeNow() noexcept;
     void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept;
     [[nodiscard]] bool needsDeadlineScan() const noexcept;
-    Task<RedisValue> executeOwned(std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource, OperationOptions options = {});
-    Task<std::pmr::vector<RedisValue>> executePipeline(std::span<const RedisPipeline::Command> commands, OperationOptions options, std::pmr::memory_resource* resource);
-    Task<std::pmr::vector<RedisValue>> executePipeline(std::span<const RedisCommandArgsView> commands, OperationOptions options, std::pmr::memory_resource* resource);
+    Task<RedisValue> executeOwned(std::pmr::vector<std::pmr::string> args,
+        std::pmr::memory_resource* resource, OperationOptions options = {});
+    Task<std::pmr::vector<RedisValue>> executePipeline(
+        std::span<const RedisPipeline::Command> commands, OperationOptions options,
+        std::pmr::memory_resource* resource);
+    Task<std::pmr::vector<RedisValue>> executePipeline(
+        std::span<const RedisCommandArgsView> commands, OperationOptions options,
+        std::pmr::memory_resource* resource);
 
 private:
     friend class ::ruvia::RedisHandle;
@@ -121,7 +128,8 @@ private:
         std::uint64_t cancellationId{0};
         enum class DeadlineKind : std::uint8_t { kResolve, kSocket };
         OperationDeadline<DeadlineKind> deadline;
-        std::unique_ptr<WorkerTimerRegistration, PmrObjectDeleter<WorkerTimerRegistration>> deadlineTimer;
+        std::unique_ptr<WorkerTimerRegistration, PmrObjectDeleter<WorkerTimerRegistration>>
+            deadlineTimer;
     };
 
     class ConnectionGuard final {
@@ -145,17 +153,22 @@ private:
     void close(Connection& connection) noexcept;
     void configureSocket(Connection& connection) noexcept;
     void ensureReader(Connection& connection);
-    [[nodiscard]] bool armDeadline(Connection& connection, const OperationTimeout& timeout, Connection::DeadlineKind kind);
+    [[nodiscard]] bool armDeadline(
+        Connection& connection, const OperationTimeout& timeout, Connection::DeadlineKind kind);
     [[nodiscard]] bool clearDeadline(Connection& connection) noexcept;
     Task<void> connect(Connection& connection, const OperationTimeout* operationTimeout = nullptr);
     Task<void> authenticate(Connection& connection, const OperationTimeout& connectTimeout);
-    Task<RedisValue> readReply(Connection& connection, const OperationTimeout& timeout, std::pmr::memory_resource* resource);
+    Task<RedisValue> readReply(Connection& connection, const OperationTimeout& timeout,
+        std::pmr::memory_resource* resource);
     template <typename ArgSource>
-    Task<RedisValue> executeWithTimeoutImpl(ArgSource args, OperationOptions options, std::pmr::memory_resource* resource);
+    Task<RedisValue> executeWithTimeoutImpl(
+        ArgSource args, OperationOptions options, std::pmr::memory_resource* resource);
     template <typename CommandSource>
-    Task<std::pmr::vector<RedisValue>> executePipelineImpl(CommandSource commands, OperationOptions options, std::pmr::memory_resource* resource);
+    Task<std::pmr::vector<RedisValue>> executePipelineImpl(
+        CommandSource commands, OperationOptions options, std::pmr::memory_resource* resource);
     Task<std::error_code> asyncSocketWrite(Connection& connection, const OperationTimeout& timeout);
-    Task<AsioCompletion<std::size_t>> asyncSocketReadSome(Connection& connection, std::span<char> buffer, const OperationTimeout& timeout);
+    Task<AsioCompletion<std::size_t>> asyncSocketReadSome(
+        Connection& connection, std::span<char> buffer, const OperationTimeout& timeout);
     [[nodiscard]] std::uint64_t nextCancellationId() noexcept;
     void cancelOperationById(std::uint64_t cancellationId) noexcept;
     void throwIfAborted(const Connection& connection) const;
@@ -176,7 +189,8 @@ struct RedisCommandExecutor final {
 
 class RedisRegistry final {
 public:
-    RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const RedisDefinition> redis, const WorkerHandle* worker = nullptr);
+    RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource,
+        std::span<const RedisDefinition> redis, const WorkerHandle* worker = nullptr);
     ~RedisRegistry();
 
     RedisRegistry(const RedisRegistry&) = delete;
@@ -187,8 +201,10 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool needsDeadlineScan() const noexcept;
-    [[nodiscard]] RedisHandle get(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const;
-    [[nodiscard]] RedisHandle get(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const;
+    [[nodiscard]] RedisHandle get(
+        std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const;
+    [[nodiscard]] RedisHandle get(std::string_view alias, std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope) const;
     void scanDeadlines() noexcept;
 
 private:

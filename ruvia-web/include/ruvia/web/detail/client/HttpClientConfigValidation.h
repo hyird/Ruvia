@@ -48,7 +48,8 @@ void validateHttpClientConfig(const Config& config) {
     }
     validateTcpNoDelayPolicy(config.tcpNoDelay);
     validateTcpKeepAlivePolicy(config.tcpKeepAlive);
-    ensureConfigHost(host, "http client host must not be empty", "http client host is invalid", kSeparatedPortHostRules);
+    ensureConfigHost(host, "http client host must not be empty", "http client host is invalid",
+        kSeparatedPortHostRules);
     if (port == 0) {
         throw std::invalid_argument("http client port must be greater than zero");
     }
@@ -64,19 +65,28 @@ void validateHttpClientConfig(const Config& config) {
     if (!isValidHttpHost(wireHost)) {
         throw std::invalid_argument("http client host is invalid");
     }
-    ensurePositiveSize(config.connectionCount, "http client connection count must be greater than zero");
-    ensurePositiveSize(config.maxConcurrentHttp2StreamsPerConnection, "http client HTTP/2 stream limit per connection must be greater than zero");
-    ensurePositiveSize(config.maxBufferedRequests, "http client buffered request limit must be greater than zero");
+    ensurePositiveSize(
+        config.connectionCount, "http client connection count must be greater than zero");
+    ensurePositiveSize(config.maxConcurrentHttp2StreamsPerConnection,
+        "http client HTTP/2 stream limit per connection must be greater than zero");
+    ensurePositiveSize(
+        config.maxBufferedRequests, "http client buffered request limit must be greater than zero");
     ensurePositiveSize(config.maxCookies, "http client cookie limit must be greater than zero");
-    ensurePositiveSize(config.maxCookieBytes, "http client cookie byte limit must be greater than zero");
-    ensurePositiveSize(config.maxResponseBytes, "http client response byte limit must be greater than zero");
-    ensurePositiveOptionalDurations("configured http client timeouts must be greater than zero", std::optional{config.connectTimeout}, config.writeTimeout, config.requestTimeout, config.acquireTimeout);
+    ensurePositiveSize(
+        config.maxCookieBytes, "http client cookie byte limit must be greater than zero");
+    ensurePositiveSize(
+        config.maxResponseBytes, "http client response byte limit must be greater than zero");
+    ensurePositiveOptionalDurations("configured http client timeouts must be greater than zero",
+        std::optional{config.connectTimeout}, config.writeTimeout, config.requestTimeout,
+        config.acquireTimeout);
     if ((config.certificateChainFile.empty()) != (config.privateKeyFile.empty())) {
-        throw std::invalid_argument("http client certificate chain and private key must be configured together");
+        throw std::invalid_argument(
+            "http client certificate chain and private key must be configured together");
     }
     validateHttpClientUserAgent(config.userAgent);
     if (config.cookies.size() > config.maxCookies) {
-        throw std::invalid_argument("configured HTTP client cookies exceed the client cookie limit");
+        throw std::invalid_argument(
+            "configured HTTP client cookies exceed the client cookie limit");
     }
     std::size_t cookieBytes = 0;
     for (const auto& [name, value] : config.cookies) {
@@ -84,15 +94,18 @@ void validateHttpClientConfig(const Config& config) {
             throw std::invalid_argument("configured HTTP client cookie is invalid");
         }
         if (name.size() > config.maxCookieBytes - cookieBytes) {
-            throw std::invalid_argument("configured HTTP client cookies exceed the client byte limit");
+            throw std::invalid_argument(
+                "configured HTTP client cookies exceed the client byte limit");
         }
         cookieBytes += name.size();
         if (value.size() > config.maxCookieBytes - cookieBytes) {
-            throw std::invalid_argument("configured HTTP client cookies exceed the client byte limit");
+            throw std::invalid_argument(
+                "configured HTTP client cookies exceed the client byte limit");
         }
         cookieBytes += value.size();
         if (cookieBytes == config.maxCookieBytes) {
-            throw std::invalid_argument("configured HTTP client cookies exceed the client byte limit");
+            throw std::invalid_argument(
+                "configured HTTP client cookies exceed the client byte limit");
         }
         ++cookieBytes;  // Every configured cookie is stored with the default "/" path.
     }
@@ -106,8 +119,7 @@ void validateHttpClientConfig(const Config& config) {
 }
 
 [[nodiscard]] inline std::pmr::string httpClientWireHost(
-    const HttpClientConfigStorage& config,
-    std::pmr::memory_resource* resource) {
+    const HttpClientConfigStorage& config, std::pmr::memory_resource* resource) {
     std::pmr::string host(resource);
     if (config.host.find(':') != std::string_view::npos) {
         host.reserve(config.host.size() + 2);

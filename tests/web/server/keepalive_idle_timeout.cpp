@@ -49,7 +49,9 @@ int main() {
     options.idleTimeout = kIdleTimeout;
     options.scanInterval = 50ms;
 
-    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, std::move(options));
+    ruvia::detail::WebWorkerRuntime server(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {},
+        std::move(options));
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -66,7 +68,8 @@ int main() {
 
         // Serve one request so the connection enters keep-alive idle.
         if (result == 0) {
-            asio::write(socket, asio::buffer(std::string_view("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+            asio::write(socket,
+                asio::buffer(std::string_view("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
             char resp[2048];
             const auto got = socket.read_some(asio::buffer(resp), ec);
             if (ec || got == 0) {

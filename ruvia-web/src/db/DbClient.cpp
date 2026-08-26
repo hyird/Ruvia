@@ -18,7 +18,8 @@ EventLoop DbClientState::requireLoop(EventLoop loop) {
     return loop;
 }
 
-std::pmr::vector<DbDefinition> DbClientState::makeDefinitions(const DbConfig& config, std::pmr::memory_resource* resource) {
+std::pmr::vector<DbDefinition> DbClientState::makeDefinitions(
+    const DbConfig& config, std::pmr::memory_resource* resource) {
     std::pmr::vector<DbDefinition> definitions(resource);
     definitions.push_back(DbDefinition{
         std::pmr::string("default", resource),
@@ -47,7 +48,8 @@ DbClientState::DbClientState(EventLoop loop, DbConfig config)
 
 DbClientState::~DbClientState() {
     const auto phase = phase_.load(std::memory_order_acquire);
-    if ((phase != Phase::kFresh && phase != Phase::kClosed) || operationScope_.hasPendingOperations()) {
+    if ((phase != Phase::kFresh && phase != Phase::kClosed) ||
+        operationScope_.hasPendingOperations()) {
         std::terminate();
     }
 }
@@ -76,7 +78,8 @@ Task<void> DbClientState::connectOnWorker() {
 
     try {
         auto expected = Phase::kFresh;
-        if (!phase_.compare_exchange_strong(expected, Phase::kConnecting, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        if (!phase_.compare_exchange_strong(expected, Phase::kConnecting, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
             if (expected == Phase::kClosing || expected == Phase::kClosed) {
                 throw std::runtime_error("database client closed before connecting");
             }
@@ -90,7 +93,8 @@ Task<void> DbClientState::connectOnWorker() {
         }
         co_await databases_.connect();
         expected = Phase::kConnecting;
-        if (!phase_.compare_exchange_strong(expected, Phase::kConnected, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        if (!phase_.compare_exchange_strong(expected, Phase::kConnected, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
             throw std::runtime_error("worker stopped while database client was connecting");
         }
     } catch (...) {
@@ -104,7 +108,9 @@ Task<void> DbClientState::connectOnWorker() {
 
 DbHandle DbClientState::handle(OperationOptions options) {
     requireConnectedOnWorker();
-    options = mergeOperationOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopSource_.token()}, std::move(options));
+    options = mergeOperationOptions(
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopSource_.token()},
+        std::move(options));
     return databases_.get(memory_.resource(), operationScope_).withOptions(std::move(options));
 }
 
@@ -125,12 +131,14 @@ void DbClientState::requestClose() noexcept {
             return;
         }
         if (phase == Phase::kFresh) {
-            if (phase_.compare_exchange_weak(phase, Phase::kClosed, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            if (phase_.compare_exchange_weak(
+                    phase, Phase::kClosed, std::memory_order_acq_rel, std::memory_order_acquire)) {
                 return;
             }
             continue;
         }
-        if (phase_.compare_exchange_weak(phase, Phase::kClosing, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        if (phase_.compare_exchange_weak(
+                phase, Phase::kClosing, std::memory_order_acq_rel, std::memory_order_acquire)) {
             break;
         }
     }
@@ -140,7 +148,8 @@ void DbClientState::requestClose() noexcept {
         return;
     }
     try {
-        if (!WorkerHandleAccess::deferIfAttached(worker_, [state = shared_from_this()] { state->closeOnWorker(); })) {
+        if (!WorkerHandleAccess::deferIfAttached(
+                worker_, [state = shared_from_this()] { state->closeOnWorker(); })) {
             if (phase_.load(std::memory_order_acquire) != Phase::kClosed) {
                 std::terminate();
             }
@@ -185,15 +194,18 @@ DbHandle DbClient::withOptions(OperationOptions options) const {
     return state_->handle(std::move(options));
 }
 
-ScopedOperation<DbRows> DbClient::query(std::string_view sql, std::span<const DbValue> params) const {
+ScopedOperation<DbRows> DbClient::query(
+    std::string_view sql, std::span<const DbValue> params) const {
     return withOptions({}).query(sql, params);
 }
 
-ScopedOperation<DbExecResult> DbClient::execute(std::string_view sql, std::span<const DbValue> params) const {
+ScopedOperation<DbExecResult> DbClient::execute(
+    std::string_view sql, std::span<const DbValue> params) const {
     return withOptions({}).execute(sql, params);
 }
 
-ScopedOperation<DbStreamResult> DbClient::queryStream(std::string_view sql, std::span<const DbValue> params) const {
+ScopedOperation<DbStreamResult> DbClient::queryStream(
+    std::string_view sql, std::span<const DbValue> params) const {
     return withOptions({}).queryStream(sql, params);
 }
 

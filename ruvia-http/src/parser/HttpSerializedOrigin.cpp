@@ -45,13 +45,13 @@ namespace {
     }
     if (value.size() >= 2 && value.front() == '0' && (value[1] == 'x' || value[1] == 'X')) {
         return std::ranges::all_of(value.substr(2), [](char digit) noexcept {
-            return isDecimalDigit(digit) || (digit >= 'a' && digit <= 'f') || (digit >= 'A' && digit <= 'F');
+            return isDecimalDigit(digit) || (digit >= 'a' && digit <= 'f') ||
+                   (digit >= 'A' && digit <= 'F');
         });
     }
     if (value.size() >= 2 && value.front() == '0') {
-        return std::ranges::all_of(value.substr(1), [](char digit) noexcept {
-            return digit >= '0' && digit <= '7';
-        });
+        return std::ranges::all_of(
+            value.substr(1), [](char digit) noexcept { return digit >= '0' && digit <= '7'; });
     }
     return false;
 }
@@ -61,7 +61,8 @@ namespace {
         domain.remove_suffix(1);
     }
     const auto separator = domain.rfind('.');
-    const auto lastLabel = separator == std::string_view::npos ? domain : domain.substr(separator + 1);
+    const auto lastLabel =
+        separator == std::string_view::npos ? domain : domain.substr(separator + 1);
     return isSerializedOriginIpv4Number(lastLabel);
 }
 
@@ -101,7 +102,8 @@ namespace {
     });
 }
 
-[[nodiscard]] std::optional<std::uint16_t> parseSerializedOriginH16(std::string_view group) noexcept {
+[[nodiscard]] std::optional<std::uint16_t> parseSerializedOriginH16(
+    std::string_view group) noexcept {
     if (group.empty() || group.size() > 4 || (group.size() > 1 && group.front() == '0')) {
         return std::nullopt;
     }
@@ -110,12 +112,15 @@ namespace {
         if (!isLowerHexDigit(digit)) {
             return std::nullopt;
         }
-        value = static_cast<std::uint16_t>(value * 16U + (isDecimalDigit(digit) ? static_cast<unsigned>(digit - '0') : static_cast<unsigned>(digit - 'a' + 10)));
+        value = static_cast<std::uint16_t>(
+            value * 16U + (isDecimalDigit(digit) ? static_cast<unsigned>(digit - '0')
+                                                 : static_cast<unsigned>(digit - 'a' + 10)));
     }
     return value;
 }
 
-[[nodiscard]] bool parseSerializedOriginIpv6Groups(std::string_view side, std::array<std::uint16_t, 8>& pieces, std::size_t start, std::size_t& count) noexcept {
+[[nodiscard]] bool parseSerializedOriginIpv6Groups(std::string_view side,
+    std::array<std::uint16_t, 8>& pieces, std::size_t start, std::size_t& count) noexcept {
     count = 0;
     if (side.empty()) {
         return true;
@@ -123,7 +128,8 @@ namespace {
     std::size_t offset = 0;
     for (;;) {
         const auto separator = side.find(':', offset);
-        const auto group = side.substr(offset, separator == std::string_view::npos ? std::string_view::npos : separator - offset);
+        const auto group = side.substr(offset,
+            separator == std::string_view::npos ? std::string_view::npos : separator - offset);
         const auto value = parseSerializedOriginH16(group);
         if (!value.has_value() || start + count >= pieces.size()) {
             return false;
@@ -140,7 +146,8 @@ namespace {
     }
 }
 
-[[nodiscard]] std::size_t findSerializedOriginIpv6CompressionIndex(const std::array<std::uint16_t, 8>& pieces) noexcept {
+[[nodiscard]] std::size_t findSerializedOriginIpv6CompressionIndex(
+    const std::array<std::uint16_t, 8>& pieces) noexcept {
     constexpr std::size_t kNoCompression = 8;
     std::size_t longestIndex = kNoCompression;
     std::size_t longestSize = 1;
@@ -168,7 +175,8 @@ namespace {
     return longestIndex;
 }
 
-[[nodiscard]] bool appendSerializedOriginIpv6Hex(std::array<char, 39>& output, std::size_t& size, std::uint16_t value) noexcept {
+[[nodiscard]] bool appendSerializedOriginIpv6Hex(
+    std::array<char, 39>& output, std::size_t& size, std::uint16_t value) noexcept {
     constexpr std::string_view kHex = "0123456789abcdef";
     bool emitted = false;
     for (int shift = 12; shift >= 0; shift -= 4) {
@@ -185,7 +193,8 @@ namespace {
     return true;
 }
 
-[[nodiscard]] bool appendSerializedOriginIpv6Byte(std::array<char, 39>& output, std::size_t& size, char byte) noexcept {
+[[nodiscard]] bool appendSerializedOriginIpv6Byte(
+    std::array<char, 39>& output, std::size_t& size, char byte) noexcept {
     if (size == output.size()) {
         return false;
     }
@@ -193,7 +202,8 @@ namespace {
     return true;
 }
 
-[[nodiscard]] bool isCanonicalSerializedOriginIpv6(std::string_view literal, const std::array<std::uint16_t, 8>& pieces) noexcept {
+[[nodiscard]] bool isCanonicalSerializedOriginIpv6(
+    std::string_view literal, const std::array<std::uint16_t, 8>& pieces) noexcept {
     std::array<char, 39> serialized{};
     std::size_t size = 0;
     const auto compressionIndex = findSerializedOriginIpv6CompressionIndex(pieces);
@@ -221,12 +231,15 @@ namespace {
         if (!appendSerializedOriginIpv6Hex(serialized, size, pieces[pieceIndex])) {
             return false;
         }
-        if (pieceIndex != pieces.size() - 1 && !appendSerializedOriginIpv6Byte(serialized, size, ':')) {
+        if (pieceIndex != pieces.size() - 1 &&
+            !appendSerializedOriginIpv6Byte(serialized, size, ':')) {
             return false;
         }
     }
 
-    return literal.size() == size && std::equal(serialized.begin(), serialized.begin() + static_cast<std::ptrdiff_t>(size), literal.begin());
+    return literal.size() == size &&
+           std::equal(serialized.begin(), serialized.begin() + static_cast<std::ptrdiff_t>(size),
+               literal.begin());
 }
 
 [[nodiscard]] bool isValidSerializedOriginIpv6(std::string_view literal) noexcept {
@@ -234,7 +247,8 @@ namespace {
     const auto compression = literal.find("::");
     if (compression == std::string_view::npos) {
         std::size_t groups = 0;
-        return parseSerializedOriginIpv6Groups(literal, pieces, 0, groups) && groups == pieces.size() && isCanonicalSerializedOriginIpv6(literal, pieces);
+        return parseSerializedOriginIpv6Groups(literal, pieces, 0, groups) &&
+               groups == pieces.size() && isCanonicalSerializedOriginIpv6(literal, pieces);
     }
     if (literal.find("::", compression + 2) != std::string_view::npos) {
         return false;
@@ -242,7 +256,10 @@ namespace {
     std::size_t leftGroups = 0;
     std::size_t rightGroups = 0;
     std::array<std::uint16_t, 8> rightPieces{};
-    if (!parseSerializedOriginIpv6Groups(literal.substr(0, compression), pieces, 0, leftGroups) || !parseSerializedOriginIpv6Groups(literal.substr(compression + 2), rightPieces, 0, rightGroups) || leftGroups + rightGroups > 7) {
+    if (!parseSerializedOriginIpv6Groups(literal.substr(0, compression), pieces, 0, leftGroups) ||
+        !parseSerializedOriginIpv6Groups(
+            literal.substr(compression + 2), rightPieces, 0, rightGroups) ||
+        leftGroups + rightGroups > 7) {
         return false;
     }
     for (std::size_t i = 0; i < rightGroups; ++i) {
@@ -261,7 +278,8 @@ namespace {
     return parsePortValue(value, port);
 }
 
-[[nodiscard]] std::optional<std::uint16_t> serializedOriginDefaultPort(std::string_view scheme) noexcept {
+[[nodiscard]] std::optional<std::uint16_t> serializedOriginDefaultPort(
+    std::string_view scheme) noexcept {
     if (scheme == "ftp") {
         return 21;
     }

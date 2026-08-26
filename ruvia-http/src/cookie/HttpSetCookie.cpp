@@ -15,7 +15,8 @@ constexpr std::size_t kMaxReceivedCookieBytes = 4096;
 constexpr std::size_t kMaxReceivedCookieAttributeBytes = 1024;
 
 std::string_view trimOws(std::string_view value) noexcept {
-    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) value.remove_prefix(1);
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
+        value.remove_prefix(1);
     while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) value.remove_suffix(1);
     return value;
 }
@@ -36,17 +37,13 @@ std::optional<std::int64_t> parseMaxAgeSeconds(std::string_view value) noexcept 
     }
 
     std::int64_t seconds = 0;
-    const auto [parsed, error] = std::from_chars(
-        value.data(), value.data() + value.size(), seconds);
+    const auto [parsed, error] =
+        std::from_chars(value.data(), value.data() + value.size(), seconds);
     if (error == std::errc::result_out_of_range) {
-        return negative
-            ? std::numeric_limits<std::int64_t>::min()
-            : detail::kMaxCookieAgeSeconds;
+        return negative ? std::numeric_limits<std::int64_t>::min() : detail::kMaxCookieAgeSeconds;
     }
     if (error != std::errc{} || parsed != value.data() + value.size()) return std::nullopt;
-    return seconds > detail::kMaxCookieAgeSeconds
-        ? detail::kMaxCookieAgeSeconds
-        : seconds;
+    return seconds > detail::kMaxCookieAgeSeconds ? detail::kMaxCookieAgeSeconds : seconds;
 }
 
 bool containsRejectedReceivedCookieControl(std::string_view value) noexcept {
@@ -60,16 +57,12 @@ bool containsRejectedReceivedCookieControl(std::string_view value) noexcept {
 }
 
 bool isCookieDateDelimiter(unsigned char byte) noexcept {
-    return byte == 0x09 || (byte >= 0x20 && byte <= 0x2f) ||
-        (byte >= 0x3b && byte <= 0x40) ||
-        (byte >= 0x5b && byte <= 0x60) ||
-        (byte >= 0x7b && byte <= 0x7e);
+    return byte == 0x09 || (byte >= 0x20 && byte <= 0x2f) || (byte >= 0x3b && byte <= 0x40) ||
+           (byte >= 0x5b && byte <= 0x60) || (byte >= 0x7b && byte <= 0x7e);
 }
 
 std::optional<int> parseCookieDateDigits(
-    std::string_view value,
-    std::size_t minimumDigits,
-    std::size_t maximumDigits) noexcept {
+    std::string_view value, std::size_t minimumDigits, std::size_t maximumDigits) noexcept {
     if (value.size() < minimumDigits || value.size() > maximumDigits) return std::nullopt;
     int result = 0;
     for (const char character : value) {
@@ -94,8 +87,8 @@ std::optional<CookieDateTime> parseCookieDateTime(std::string_view value) noexce
         return std::nullopt;
     }
     const auto hour = parseCookieDateDigits(value.substr(0, firstColon), 1, 2);
-    const auto minute = parseCookieDateDigits(
-        value.substr(firstColon + 1, secondColon - firstColon - 1), 1, 2);
+    const auto minute =
+        parseCookieDateDigits(value.substr(firstColon + 1, secondColon - firstColon - 1), 1, 2);
     const auto second = parseCookieDateDigits(value.substr(secondColon + 1), 1, 2);
     if (!hour || !minute || !second) return std::nullopt;
     return CookieDateTime{*hour, *minute, *second};
@@ -103,8 +96,7 @@ std::optional<CookieDateTime> parseCookieDateTime(std::string_view value) noexce
 
 std::optional<int> parseCookieDateMonth(std::string_view value) noexcept {
     constexpr std::array<std::string_view, 12> months{
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
     for (std::size_t index = 0; index < months.size(); ++index) {
         if (detail::httpAsciiEqualsIgnoreCase(value, months[index])) {
             return static_cast<int>(index + 1);
@@ -122,12 +114,12 @@ std::optional<std::time_t> parseCookieDate(std::string_view value) noexcept {
     std::size_t cursor = 0;
     while (cursor < value.size()) {
         while (cursor < value.size() &&
-            isCookieDateDelimiter(static_cast<unsigned char>(value[cursor]))) {
+               isCookieDateDelimiter(static_cast<unsigned char>(value[cursor]))) {
             ++cursor;
         }
         const auto begin = cursor;
         while (cursor < value.size() &&
-            !isCookieDateDelimiter(static_cast<unsigned char>(value[cursor]))) {
+               !isCookieDateDelimiter(static_cast<unsigned char>(value[cursor]))) {
             ++cursor;
         }
         if (begin == cursor) continue;
@@ -148,14 +140,15 @@ std::optional<std::time_t> parseCookieDate(std::string_view value) noexcept {
     }
 
     if (!time || !day || !month || !year) return std::nullopt;
-    if (*year >= 70 && *year <= 99) *year += 1900;
-    else if (*year <= 69) *year += 2000;
-    if (*year < 1601 || *day < 1 || *day > 31 ||
-        time->hour > 23 || time->minute > 59 || time->second > 59) {
+    if (*year >= 70 && *year <= 99)
+        *year += 1900;
+    else if (*year <= 69)
+        *year += 2000;
+    if (*year < 1601 || *day < 1 || *day > 31 || time->hour > 23 || time->minute > 59 ||
+        time->second > 59) {
         return std::nullopt;
     }
-    return detail::httpCivilToTimeT(
-        *year, *month, *day, time->hour, time->minute, time->second);
+    return detail::httpCivilToTimeT(*year, *month, *day, time->hour, time->minute, time->second);
 }
 
 }  // namespace
@@ -172,8 +165,7 @@ std::optional<HttpSetCookieView> parseSetCookie(std::string_view value) noexcept
         name = fields.first;
         cookieValue = fields.second;
     }
-    if ((name.empty() && cookieValue.empty()) ||
-        name.size() > kMaxReceivedCookieBytes ||
+    if ((name.empty() && cookieValue.empty()) || name.size() > kMaxReceivedCookieBytes ||
         cookieValue.size() > kMaxReceivedCookieBytes - name.size() ||
         containsRejectedReceivedCookieControl(name) ||
         containsRejectedReceivedCookieControl(cookieValue)) {
@@ -184,7 +176,8 @@ std::optional<HttpSetCookieView> parseSetCookie(std::string_view value) noexcept
     std::size_t offset = firstEnd == std::string_view::npos ? value.size() : firstEnd + 1;
     while (offset < value.size()) {
         const auto end = value.find(';', offset);
-        const auto [attribute, argument] = splitAttribute(value.substr(offset, end == std::string_view::npos ? value.size() - offset : end - offset));
+        const auto [attribute, argument] = splitAttribute(value.substr(
+            offset, end == std::string_view::npos ? value.size() - offset : end - offset));
         if (argument.size() > kMaxReceivedCookieAttributeBytes) {
             // Ignore this cookie-av and continue with later attributes.
         } else if (detail::httpAsciiEqualsIgnoreCase(attribute, "Path")) {

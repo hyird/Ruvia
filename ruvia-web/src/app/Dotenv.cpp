@@ -16,7 +16,10 @@ namespace {
 
 template <typename Variables>
 [[nodiscard]] auto findVariableSlot(Variables& variables, std::string_view name) noexcept {
-    return std::ranges::lower_bound(variables, name, std::ranges::less{}, [](const detail::EnvVariable& variable) noexcept { return std::string_view(variable.name); });
+    return std::ranges::lower_bound(
+        variables, name, std::ranges::less{}, [](const detail::EnvVariable& variable) noexcept {
+            return std::string_view(variable.name);
+        });
 }
 
 }  // namespace
@@ -51,10 +54,14 @@ std::optional<bool> Env::parseBoolValue(std::string_view value) noexcept {
     // ASCII-only case fold via the shared owner: the boolean tokens are ASCII, and
     // std::tolower is locale-dependent (a non-"C" LC_CTYPE set by the host app could
     // fold bytes unexpectedly).
-    if (detail::httpAsciiEqualsIgnoreCase(value, "true") || detail::httpAsciiEqualsIgnoreCase(value, "yes") || detail::httpAsciiEqualsIgnoreCase(value, "on")) {
+    if (detail::httpAsciiEqualsIgnoreCase(value, "true") ||
+        detail::httpAsciiEqualsIgnoreCase(value, "yes") ||
+        detail::httpAsciiEqualsIgnoreCase(value, "on")) {
         return true;
     }
-    if (detail::httpAsciiEqualsIgnoreCase(value, "false") || detail::httpAsciiEqualsIgnoreCase(value, "no") || detail::httpAsciiEqualsIgnoreCase(value, "off")) {
+    if (detail::httpAsciiEqualsIgnoreCase(value, "false") ||
+        detail::httpAsciiEqualsIgnoreCase(value, "no") ||
+        detail::httpAsciiEqualsIgnoreCase(value, "off")) {
         return false;
     }
 
@@ -73,7 +80,8 @@ DotenvResult detail::loadEnvFromExecutableDirectory(Env& env, DotenvOptions opti
     return detail::loadEnvFromFile(env, detail::dotenvExecutableDirectory() / ".env", options);
 }
 
-DotenvResult detail::loadEnvFromFile(Env& env, const std::filesystem::path& path, DotenvOptions options) {
+DotenvResult detail::loadEnvFromFile(
+    Env& env, const std::filesystem::path& path, DotenvOptions options) {
     if (options.existingVariables != DotenvExistingVariablePolicy::kPreserve &&
         options.existingVariables != DotenvExistingVariablePolicy::kOverride) {
         throw std::invalid_argument("dotenv existing variable policy is invalid");

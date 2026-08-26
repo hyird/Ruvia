@@ -13,13 +13,8 @@ void WebSocketConnection<Transport>::finishWrite(WritePhase phase) noexcept {
 
 template <typename Transport>
 void WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
-    switch (webSocketLivenessDecision(
-        lifecycleOptions_,
-        protocol_.livenessMode(),
-        livenessState_,
-        writePhase_ != WritePhase::kIdle,
-        scannerEntry_.lastActiveMs(),
-        now)) {
+    switch (webSocketLivenessDecision(lifecycleOptions_, protocol_.livenessMode(), livenessState_,
+        writePhase_ != WritePhase::kIdle, scannerEntry_.lastActiveMs(), now)) {
         case WebSocketLivenessDecision::kIdle:
             return;
         case WebSocketLivenessDecision::kAbortTransport:
@@ -34,9 +29,7 @@ void WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
     livenessState_ = WebSocketSendingPing{};
     writePhase_ = WritePhase::kHeartbeat;
     try {
-        asio::co_spawn(
-            transport_.executor(),
-            taskAsAwaitable(writeHeartbeatPing()),
+        asio::co_spawn(transport_.executor(), taskAsAwaitable(writeHeartbeatPing()),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
         finishWrite(WritePhase::kHeartbeat);
@@ -47,16 +40,12 @@ void WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::writeHeartbeatPing() {
-    WriteGuard writeGuard(
-        *this,
-        WritePhase::kHeartbeat,
-        WriteClaim::kAdopt);
+    WriteGuard writeGuard(*this, WritePhase::kHeartbeat, WriteClaim::kAdopt);
     try {
         co_await writeFrameNow(WebSocketOpcode::kPing, {});
         if (protocol_.livenessMode() == WsLivenessMode::kOpen &&
             std::holds_alternative<WebSocketSendingPing>(livenessState_)) {
-            livenessState_ = WebSocketAwaitingPong(
-                scannerEntry_.lastActiveMs());
+            livenessState_ = WebSocketAwaitingPong(scannerEntry_.lastActiveMs());
         }
     } catch (...) {
         abortTransport();

@@ -10,14 +10,20 @@ namespace ruvia::detail {
 
 class WorkerDataState::Impl final {
 public:
-    Impl(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const DbDefinition> databaseDefinitions, std::span<const RedisDefinition> redisDefinitions, ConnectionScanner& scanner)
+    Impl(asio::io_context& ioContext, const WorkerHandle& worker,
+        std::pmr::memory_resource* resource, std::span<const DbDefinition> databaseDefinitions,
+        std::span<const RedisDefinition> redisDefinitions, ConnectionScanner& scanner)
         : databases(ioContext, resource, databaseDefinitions, &worker),
           redis(ioContext, resource, redisDefinitions, &worker) {
         if (databases.needsDeadlineScan()) {
-            scanner.registerWorkerMaintenance(databaseDeadlineCheck, &databases, [](void* target) noexcept { static_cast<DbRegistry*>(target)->scanDeadlines(); });
+            scanner.registerWorkerMaintenance(databaseDeadlineCheck, &databases,
+                [](void* target) noexcept { static_cast<DbRegistry*>(target)->scanDeadlines(); });
         }
         if (redis.needsDeadlineScan()) {
-            scanner.registerWorkerMaintenance(redisDeadlineCheck, &redis, [](void* target) noexcept { static_cast<RedisRegistry*>(target)->scanDeadlines(); });
+            scanner.registerWorkerMaintenance(
+                redisDeadlineCheck, &redis, [](void* target) noexcept {
+                    static_cast<RedisRegistry*>(target)->scanDeadlines();
+                });
         }
     }
 
@@ -27,7 +33,9 @@ public:
     ConnectionScanner::WorkerMaintenanceRegistration redisDeadlineCheck;
 };
 
-WorkerDataState::WorkerDataState(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, ConnectionScanner& scanner)
+WorkerDataState::WorkerDataState(asio::io_context& ioContext, const WorkerHandle& worker,
+    std::pmr::memory_resource* resource, std::span<const DbDefinition> databases,
+    std::span<const RedisDefinition> redis, ConnectionScanner& scanner)
     : impl_(std::make_unique<Impl>(ioContext, worker, resource, databases, redis, scanner)) {}
 
 WorkerDataState::~WorkerDataState() = default;

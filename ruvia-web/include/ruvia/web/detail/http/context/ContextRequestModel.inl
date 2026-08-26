@@ -19,8 +19,8 @@ Task<T> ContextRequest::jsonModelTask(const Context* context) {
         detail::throwInvalidJsonContentType();
     }
     const auto requestBody = co_await contextTextTask(context);
-    auto parsed = detail::ModelParseAccess::parseJsonBorrowed<T>(
-        requestBody, contextResource(context));
+    auto parsed =
+        detail::ModelParseAccess::parseJsonBorrowed<T>(requestBody, contextResource(context));
     if (!parsed) {
         detail::throwInvalidJsonBody();
     }
@@ -29,8 +29,7 @@ Task<T> ContextRequest::jsonModelTask(const Context* context) {
 
 template <typename T>
 ScopedOperation<T> ContextRequest::json() const {
-    return detail::makeScopedOperation(
-        contextOperationScope(context_), jsonModelTask<T>(context_));
+    return detail::makeScopedOperation(contextOperationScope(context_), jsonModelTask<T>(context_));
 }
 
 template <typename T>
@@ -40,8 +39,8 @@ Task<std::optional<T>> ContextRequest::jsonIfModelTask(const Context* context) {
         co_return std::nullopt;
     }
     const auto requestBody = co_await contextTextTask(context);
-    auto parsed = detail::ModelParseAccess::parseJsonBorrowed<T>(
-        requestBody, contextResource(context));
+    auto parsed =
+        detail::ModelParseAccess::parseJsonBorrowed<T>(requestBody, contextResource(context));
     if (!parsed) {
         // Once Content-Type selects JSON, malformed JSON is a 400 rather than
         // an absent optional format. This keeps jsonIf<T>() from turning an
@@ -64,8 +63,8 @@ Task<T> ContextRequest::formModelTask(const Context* context) {
         detail::throwInvalidFormContentType();
     }
     const auto requestBody = co_await contextTextTask(context);
-    auto parsed = detail::ModelParseAccess::parseFormBorrowed<T>(
-        requestBody, contextResource(context));
+    auto parsed =
+        detail::ModelParseAccess::parseFormBorrowed<T>(requestBody, contextResource(context));
     if (!parsed) {
         detail::throwInvalidFormBody();
     }
@@ -74,8 +73,7 @@ Task<T> ContextRequest::formModelTask(const Context* context) {
 
 template <typename T>
 ScopedOperation<T> ContextRequest::form() const {
-    return detail::makeScopedOperation(
-        contextOperationScope(context_), formModelTask<T>(context_));
+    return detail::makeScopedOperation(contextOperationScope(context_), formModelTask<T>(context_));
 }
 
 template <typename T>
@@ -85,8 +83,8 @@ Task<std::optional<T>> ContextRequest::formIfModelTask(const Context* context) {
         co_return std::nullopt;
     }
     const auto requestBody = co_await contextTextTask(context);
-    auto parsed = detail::ModelParseAccess::parseFormBorrowed<T>(
-        requestBody, contextResource(context));
+    auto parsed =
+        detail::ModelParseAccess::parseFormBorrowed<T>(requestBody, contextResource(context));
     if (!parsed) {
         // The selected form media type makes a malformed body a client error;
         // nullopt is reserved for a different Content-Type.

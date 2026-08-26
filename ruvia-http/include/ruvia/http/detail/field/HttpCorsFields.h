@@ -36,7 +36,8 @@ namespace ruvia::detail {
 }
 
 template <typename Visitor>
-[[nodiscard]] inline bool visitHttpCorsRequestHeaderNames(std::string_view value, Visitor&& visitor) {
+[[nodiscard]] inline bool visitHttpCorsRequestHeaderNames(
+    std::string_view value, Visitor&& visitor) {
     bool sawName = false;
     std::size_t offset = 0;
     for (;;) {

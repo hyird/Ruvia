@@ -8,12 +8,12 @@
 
 namespace {
 
-using ruvia::detail::HttpAcceptedEncodingQuality;
 using ruvia::HttpContentCoding;
+using ruvia::detail::HttpAcceptedEncodingQuality;
+using ruvia::detail::httpParseQualityValue;
 using ruvia::detail::HttpResponseCodingCandidates;
 using ruvia::detail::HttpResponseCodingQualities;
 using ruvia::detail::HttpResponseCodingSelection;
-using ruvia::detail::httpParseQualityValue;
 
 // Reference form: one full Accept-Encoding scan per coding. The aggregate
 // single-pass update must produce identical qualities.
@@ -139,7 +139,8 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
         RUVIA_CHECK(result.selected() == nullptr);
         RUVIA_CHECK(result.failure() != nullptr);
         if (const auto* failure = result.failure()) {
-            RUVIA_CHECK(failure->error() == ruvia::detail::HttpResponseCodingSelectionError::kNoAcceptableCoding);
+            RUVIA_CHECK(failure->error() ==
+                        ruvia::detail::HttpResponseCodingSelectionError::kNoAcceptableCoding);
         }
     }
     HttpResponseCodingQualities explicitEmpty;
@@ -232,5 +233,4 @@ RUVIA_TEST(response_coding_selection_carries_identity_fallback_once) {
         RUVIA_CHECK(coding->coding() == HttpContentCoding::kGzip);
         RUVIA_CHECK(!coding->identityAccepted());
     }
-
 }

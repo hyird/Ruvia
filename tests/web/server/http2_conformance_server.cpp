@@ -37,7 +37,8 @@ int main(int argc, char** argv) {
 
     ruvia::app()
         .listen({.address = "127.0.0.1", .http = port})
-        .server({.workerCount = 1, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .server({.workerCount = 1,
+            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
         .compression(nullptr)
         .run();
 }

@@ -31,7 +31,8 @@ public:
         replaceIndex_ = (replaceIndex_ + 1) % kRecordLimit;
     }
 
-    [[nodiscard]] std::optional<Http2StreamCloseSource> source(std::uint32_t streamId) const noexcept {
+    [[nodiscard]] std::optional<Http2StreamCloseSource> source(
+        std::uint32_t streamId) const noexcept {
         for (std::size_t i = 0; i < size_; ++i) {
             const auto& record = records_[i];
             if (record.id == streamId) {

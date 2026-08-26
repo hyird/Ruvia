@@ -16,7 +16,8 @@ namespace ruvia {
 class MultipartReader final : private detail::ScopedCapabilityNode {
 public:
     MultipartReader(BodyReader& bodyReader, MultipartParseOptions options)
-        : detail::ScopedCapabilityNode(bodyReader.operationScope_, &MultipartReader::expireCapability),
+        : detail::ScopedCapabilityNode(
+              bodyReader.operationScope_, &MultipartReader::expireCapability),
           bodyReader_(&bodyReader),
           parser_(std::move(options)) {}
 

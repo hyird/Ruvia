@@ -78,7 +78,8 @@ private:
 
     // See Http1RequestParseResultAccess::parsed: HttpRequest moves are memcpys,
     // so the only one on this path is the member initialization below.
-    Http1ParsedRequest(HttpRequest&& request, Http1RequestBodyPlan bodyPlan, std::string_view wireBody, std::size_t consumedBytes) noexcept
+    Http1ParsedRequest(HttpRequest&& request, Http1RequestBodyPlan bodyPlan,
+        std::string_view wireBody, std::size_t consumedBytes) noexcept
         : request_(std::move(request)),
           bodyPlan_(bodyPlan),
           wireBody_(wireBody),

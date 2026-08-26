@@ -19,8 +19,7 @@ namespace ruvia::detail {
     throw std::runtime_error("transfer-coding decoder failure");
 }
 
-inline void requireCompleteTransferCoding(
-    TransferCodingDecoder& decoder) {
+inline void requireCompleteTransferCoding(TransferCodingDecoder& decoder) {
     const auto finishResult = decoder.finishInput();
     if (finishResult.complete() != nullptr) {
         return;
@@ -35,19 +34,14 @@ inline void requireCompleteTransferCoding(
 }
 
 template <typename Stream>
-StreamBodyReader<Stream>::StreamBodyReader(
-    Stream& stream,
-    std::pmr::polymorphic_allocator<char> allocator,
-    std::string_view initialBodyAndPipeline,
-    Http1RequestBodyPlan bodyPlan,
-    ProtocolByteLimit bodyLimit,
+StreamBodyReader<Stream>::StreamBodyReader(Stream& stream,
+    std::pmr::polymorphic_allocator<char> allocator, std::string_view initialBodyAndPipeline,
+    Http1RequestBodyPlan bodyPlan, ProtocolByteLimit bodyLimit,
     ConnectionScanner::Entry& scannerEntry)
     : stream_(stream),
       buffer_(allocator),
       transferOutput_(allocator),
-      transferDecoder_(
-          nullptr,
-          PmrObjectDeleter<TransferCodingDecoder>{allocator.resource()}),
+      transferDecoder_(nullptr, PmrObjectDeleter<TransferCodingDecoder>{allocator.resource()}),
       initialBodyAndPipeline_(initialBodyAndPipeline),
       bodyPlan_(bodyPlan),
       bodyLimit_(bodyLimit),
@@ -56,19 +50,15 @@ StreamBodyReader<Stream>::StreamBodyReader(
       finished_(!bodyPlan_.requiresConsumption()) {
     const auto* chunked = bodyPlan_.chunked();
     if (chunked != nullptr && !chunked->transferCodings().empty()) {
-        transferDecoder_ = makePmrObject<TransferCodingDecoder>(
-            allocator.resource(),
-            chunked->transferCodings().values[0],
-            allocator.resource(),
-            bodyLimit);
+        transferDecoder_ = makePmrObject<TransferCodingDecoder>(allocator.resource(),
+            chunked->transferCodings().values[0], allocator.resource(), bodyLimit);
     }
 }
 
 template <typename Stream>
 Http1RequestBodyConsumption StreamBodyReader<Stream>::consumption() const noexcept {
-    return finished_
-        ? Http1RequestBodyConsumption::kComplete
-        : Http1RequestBodyConsumption::kIncomplete;
+    return finished_ ? Http1RequestBodyConsumption::kComplete
+                     : Http1RequestBodyConsumption::kIncomplete;
 }
 
 template <typename Stream>
@@ -107,9 +97,7 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::read() {
 template <typename Stream>
 Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body) {
     if (const auto* knownLength = bodyPlan_.knownLength()) {
-        co_return co_await readKnownLengthAll(
-            body,
-            knownLength->contentLength());
+        co_return co_await readKnownLengthAll(body, knownLength->contentLength());
     }
     if (bodyPlan_.withoutBody() != nullptr) {
         co_return std::string_view(body);
@@ -135,17 +123,12 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
 
 template <typename Stream>
 void StreamBodyReader<Stream>::decodeTransferAppend(
-    std::string_view input,
-    std::pmr::string& target) {
+    std::string_view input, std::pmr::string& target) {
     for (;;) {
         const auto oldSize = target.size();
-        resizePmrStringForOverwrite(
-            target, oldSize + kBodyReadChunkBytes);
+        resizePmrStringForOverwrite(target, oldSize + kBodyReadChunkBytes);
         const auto result = transferDecoder_->decode(
-            input,
-            std::span<char>(
-                target.data() + oldSize,
-                kBodyReadChunkBytes));
+            input, std::span<char>(target.data() + oldSize, kBodyReadChunkBytes));
         input.remove_prefix(std::min(input.size(), result.consumedBytes()));
         if (const auto* output = result.output()) {
             target.resize(oldSize + output->bytes().size());
@@ -170,8 +153,8 @@ void StreamBodyReader<Stream>::decodeTransferAppend(
 
 template <typename Stream>
 Task<void> StreamBodyReader<Stream>::ensureContinue() {
-    const auto expectationPlan = bodyPlan_.expectationPlan(
-        HttpUnsupportedExpectationPolicy::kReject);
+    const auto expectationPlan =
+        bodyPlan_.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
     if (expectationPlan.sendContinue() != nullptr && !continueSent_) {
         co_await writeHttp1Continue(stream_);
         continueSent_ = true;
@@ -182,9 +165,8 @@ template <typename Stream>
 Task<void> StreamBodyReader<Stream>::readMore() {
     compactPending();
     const auto oldSize = buffer_.size();
-    const auto hardLimit = bodyPlan_.chunked() != nullptr
-        ? kChunkedEncodedBufferBytes
-        : bodyLimit_.readCeiling();
+    const auto hardLimit =
+        bodyPlan_.chunked() != nullptr ? kChunkedEncodedBufferBytes : bodyLimit_.readCeiling();
     if (oldSize >= hardLimit) {
         throwRequestBodyTooLarge();
     }
@@ -194,17 +176,14 @@ Task<void> StreamBodyReader<Stream>::readMore() {
             hardLimit);
         buffer_.reserve(nextCapacity);
     }
-    const auto writable = std::min<std::size_t>(
-        kBodyReadChunkBytes,
-        hardLimit - oldSize);
+    const auto writable = std::min<std::size_t>(kBodyReadChunkBytes, hardLimit - oldSize);
     resizePmrStringForOverwrite(buffer_, oldSize + writable);
 
     scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingPayload);
-    auto readCompletion = co_await asyncAsio<std::size_t>(
-        [this, oldSize, writable](auto handler) mutable {
+    auto readCompletion =
+        co_await asyncAsio<std::size_t>([this, oldSize, writable](auto handler) mutable {
             stream_.async_read_some(
-                asio::buffer(buffer_.data() + oldSize, writable),
-                std::move(handler));
+                asio::buffer(buffer_.data() + oldSize, writable), std::move(handler));
         });
     const auto ec = readCompletion.errorCode();
     const auto bytesRead = readCompletion.result();

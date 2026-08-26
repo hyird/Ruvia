@@ -81,7 +81,8 @@ template <std::size_t N>
 FixedString(const char (&)[N]) -> FixedString<N>;
 
 template <std::size_t LeftN, std::size_t RightN>
-[[nodiscard]] constexpr bool operator==(const FixedString<LeftN>& left, const FixedString<RightN>& right) noexcept {
+[[nodiscard]] constexpr bool operator==(
+    const FixedString<LeftN>& left, const FixedString<RightN>& right) noexcept {
     if constexpr (LeftN != RightN) {
         return false;
     } else {
@@ -92,7 +93,8 @@ template <std::size_t LeftN, std::size_t RightN>
 class String final {
 public:
     explicit String(ModelOptions options = {})
-        : String(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(options.resource)) {}
+        : String(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(options.resource)) {
+    }
 
     String(std::string_view value, ModelOptions options = {})
         : resource_(detail::pmrResourceOrDefault(options.resource)),
@@ -166,7 +168,8 @@ private:
         : resource_(resource),
           storage_(std::in_place_type<std::string_view>) {}
 
-    String(detail::ResolvedPmrResourceTag, std::string_view value, std::pmr::memory_resource* resource)
+    String(
+        detail::ResolvedPmrResourceTag, std::string_view value, std::pmr::memory_resource* resource)
         : resource_(resource),
           storage_(std::in_place_type<std::string_view>, value) {}
 
@@ -253,7 +256,8 @@ public:
     using value_type = T;
 
     explicit BoxedArray(ModelOptions options = {})
-        : BoxedArray(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(options.resource)) {}
+        : BoxedArray(
+              detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(options.resource)) {}
 
     BoxedArray(const BoxedArray&) = delete;
     BoxedArray& operator=(const BoxedArray&) = delete;
@@ -320,9 +324,11 @@ public:
     T& emplace(Args&&... args) & {
         T* value = nullptr;
         if constexpr (sizeof...(Args) == 0 && std::constructible_from<T, ModelOptions>) {
-            value = detail::constructPmrObject<T>(detail::ResolvedPmrResourceTag{}, resource_, ModelOptions{.resource = resource_});
+            value = detail::constructPmrObject<T>(
+                detail::ResolvedPmrResourceTag{}, resource_, ModelOptions{.resource = resource_});
         } else {
-            value = detail::constructPmrObject<T>(detail::ResolvedPmrResourceTag{}, resource_, std::forward<Args>(args)...);
+            value = detail::constructPmrObject<T>(
+                detail::ResolvedPmrResourceTag{}, resource_, std::forward<Args>(args)...);
         }
         try {
             items_.push_back(value);
@@ -398,7 +404,8 @@ struct ModelValueFactory final {
         return String(ResolvedPmrResourceTag{}, resource);
     }
 
-    [[nodiscard]] static String makeString(std::string_view value, std::pmr::memory_resource* resource) {
+    [[nodiscard]] static String makeString(
+        std::string_view value, std::pmr::memory_resource* resource) {
         return String(ResolvedPmrResourceTag{}, value, resource);
     }
 

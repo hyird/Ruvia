@@ -43,8 +43,12 @@ public:
     explicit ContextSessionState(std::pmr::memory_resource* resource) noexcept
         : resource_(resource) {}
 
-    void bind() noexcept { available_ = true; }
-    [[nodiscard]] bool available() const noexcept { return available_; }
+    void bind() noexcept {
+        available_ = true;
+    }
+    [[nodiscard]] bool available() const noexcept {
+        return available_;
+    }
     void observePresentedId(std::string_view id);
     void loadRecognized(std::string_view data);
     void set(std::string_view data);
@@ -94,7 +98,9 @@ private:
 
     std::pmr::memory_resource* resource_;
     bool available_{false};
-    std::variant<SessionUntouched, SessionUnrecognized, SessionLoaded, SessionPersistNew, SessionPersistExisting, SessionRotate, SessionClear> value_;
+    std::variant<SessionUntouched, SessionUnrecognized, SessionLoaded, SessionPersistNew,
+        SessionPersistExisting, SessionRotate, SessionClear>
+        value_;
 };
 
 }  // namespace ruvia::detail

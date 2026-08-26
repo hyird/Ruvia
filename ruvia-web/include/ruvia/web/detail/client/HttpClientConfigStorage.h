@@ -9,27 +9,65 @@ namespace ruvia::detail {
 struct HttpClientConfigStorage final {
     HttpClientConfigStorage(const HttpClientConfig& source, std::pmr::memory_resource* resource)
         : host(source.host, resource),
-          scheme(source.scheme), port(source.port.value_or(source.scheme == HttpScheme::kHttps ? 443 : 80)), connectionCount(source.connectionCount), maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection), maxBufferedRequests(source.maxBufferedRequests),
-          maxCookies(source.maxCookies), maxCookieBytes(source.maxCookieBytes),
-          connectTimeout(source.connectTimeout), writeTimeout(source.writeTimeout), requestTimeout(source.requestTimeout), acquireTimeout(source.acquireTimeout),
-          maxResponseBytes(source.maxResponseBytes), protocol(source.protocol), tlsPeerVerification(source.tlsPeerVerification),
-          tcpNoDelay(source.tcpNoDelay), tcpKeepAlive(source.tcpKeepAlive), receivedCookies(source.receivedCookies), caFile(source.caFile, resource),
-          certificateChainFile(source.certificateChainFile, resource), privateKeyFile(source.privateKeyFile, resource),
-          privateKeyPassword(source.privateKeyPassword, resource), userAgent(source.userAgent, resource), cookies(resource) {
+          scheme(source.scheme),
+          port(source.port.value_or(source.scheme == HttpScheme::kHttps ? 443 : 80)),
+          connectionCount(source.connectionCount),
+          maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection),
+          maxBufferedRequests(source.maxBufferedRequests),
+          maxCookies(source.maxCookies),
+          maxCookieBytes(source.maxCookieBytes),
+          connectTimeout(source.connectTimeout),
+          writeTimeout(source.writeTimeout),
+          requestTimeout(source.requestTimeout),
+          acquireTimeout(source.acquireTimeout),
+          maxResponseBytes(source.maxResponseBytes),
+          protocol(source.protocol),
+          tlsPeerVerification(source.tlsPeerVerification),
+          tcpNoDelay(source.tcpNoDelay),
+          tcpKeepAlive(source.tcpKeepAlive),
+          receivedCookies(source.receivedCookies),
+          caFile(source.caFile, resource),
+          certificateChainFile(source.certificateChainFile, resource),
+          privateKeyFile(source.privateKeyFile, resource),
+          privateKeyPassword(source.privateKeyPassword, resource),
+          userAgent(source.userAgent, resource),
+          cookies(resource) {
         cookies.reserve(source.cookies.size());
-        for (const auto& [name, value] : source.cookies) cookies.emplace_back(std::pmr::string(name, resource), std::pmr::string(value, resource));
+        for (const auto& [name, value] : source.cookies)
+            cookies.emplace_back(
+                std::pmr::string(name, resource), std::pmr::string(value, resource));
     }
 
-    HttpClientConfigStorage(const HttpClientConfigStorage& source, std::pmr::memory_resource* resource)
-        : host(source.host, resource), scheme(source.scheme), port(source.port), connectionCount(source.connectionCount), maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection), maxBufferedRequests(source.maxBufferedRequests),
-          maxCookies(source.maxCookies), maxCookieBytes(source.maxCookieBytes),
-          connectTimeout(source.connectTimeout), writeTimeout(source.writeTimeout), requestTimeout(source.requestTimeout), acquireTimeout(source.acquireTimeout),
-          maxResponseBytes(source.maxResponseBytes), protocol(source.protocol), tlsPeerVerification(source.tlsPeerVerification),
-          tcpNoDelay(source.tcpNoDelay), tcpKeepAlive(source.tcpKeepAlive), receivedCookies(source.receivedCookies), caFile(source.caFile, resource),
-          certificateChainFile(source.certificateChainFile, resource), privateKeyFile(source.privateKeyFile, resource),
-          privateKeyPassword(source.privateKeyPassword, resource), userAgent(source.userAgent, resource), cookies(resource) {
+    HttpClientConfigStorage(
+        const HttpClientConfigStorage& source, std::pmr::memory_resource* resource)
+        : host(source.host, resource),
+          scheme(source.scheme),
+          port(source.port),
+          connectionCount(source.connectionCount),
+          maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection),
+          maxBufferedRequests(source.maxBufferedRequests),
+          maxCookies(source.maxCookies),
+          maxCookieBytes(source.maxCookieBytes),
+          connectTimeout(source.connectTimeout),
+          writeTimeout(source.writeTimeout),
+          requestTimeout(source.requestTimeout),
+          acquireTimeout(source.acquireTimeout),
+          maxResponseBytes(source.maxResponseBytes),
+          protocol(source.protocol),
+          tlsPeerVerification(source.tlsPeerVerification),
+          tcpNoDelay(source.tcpNoDelay),
+          tcpKeepAlive(source.tcpKeepAlive),
+          receivedCookies(source.receivedCookies),
+          caFile(source.caFile, resource),
+          certificateChainFile(source.certificateChainFile, resource),
+          privateKeyFile(source.privateKeyFile, resource),
+          privateKeyPassword(source.privateKeyPassword, resource),
+          userAgent(source.userAgent, resource),
+          cookies(resource) {
         cookies.reserve(source.cookies.size());
-        for (const auto& [name, value] : source.cookies) cookies.emplace_back(std::pmr::string(name, resource), std::pmr::string(value, resource));
+        for (const auto& [name, value] : source.cookies)
+            cookies.emplace_back(
+                std::pmr::string(name, resource), std::pmr::string(value, resource));
     }
 
     std::pmr::string host;

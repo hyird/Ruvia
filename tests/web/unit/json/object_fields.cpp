@@ -14,7 +14,10 @@ using Field = std::pair<std::string, std::string>;
 
 // Collect (decoded key, raw value) pairs; returns whether parsing succeeded.
 bool collect(std::string_view body, std::vector<Field>& out) {
-    return ruvia::detail::visitJsonObjectFields(body, std::pmr::get_default_resource(), [&out](std::string_view key, std::string_view value) { out.emplace_back(std::string(key), std::string(value)); });
+    return ruvia::detail::visitJsonObjectFields(body, std::pmr::get_default_resource(),
+        [&out](std::string_view key, std::string_view value) {
+            out.emplace_back(std::string(key), std::string(value));
+        });
 }
 
 }  // namespace
@@ -83,10 +86,11 @@ RUVIA_TEST(json_object_fields_rejects_malformed) {
 
 RUVIA_TEST(json_object_fields_visitor_can_stop_early) {
     int visited = 0;
-    const bool ok = ruvia::detail::visitJsonObjectFields(R"({"a":1,"b":2,"c":3})", std::pmr::get_default_resource(), [&visited](std::string_view, std::string_view) {
-        ++visited;
-        return false;  // stop after the first field
-    });
+    const bool ok = ruvia::detail::visitJsonObjectFields(R"({"a":1,"b":2,"c":3})",
+        std::pmr::get_default_resource(), [&visited](std::string_view, std::string_view) {
+            ++visited;
+            return false;  // stop after the first field
+        });
     RUVIA_CHECK(ok);  // an early stop is a success, not a parse error
     RUVIA_CHECK_EQ(visited, 1);
 }

@@ -16,7 +16,9 @@ namespace {
 using ruvia::detail::readDotenvEntries;
 
 template <typename T>
-concept ExposesAnyRvalueEnvBorrow = requires { std::declval<const T&&>().get("NAME"); } || requires { std::declval<const T&&>().template get<std::string_view>("NAME"); };
+concept ExposesAnyRvalueEnvBorrow = requires {
+    std::declval<const T&&>().get("NAME");
+} || requires { std::declval<const T&&>().template get<std::string_view>("NAME"); };
 
 template <typename T>
 concept HasDotenvOverrideExistingBoolean = requires(T& options) { options.overrideExisting; };
@@ -25,9 +27,12 @@ template <typename T>
 concept HasDotenvRequiredBoolean = requires(T& options) { options.required; };
 
 static_assert(!ExposesAnyRvalueEnvBorrow<ruvia::Env>);
-static_assert(std::is_same_v<decltype(ruvia::DotenvOptions{}.existingVariables), ruvia::DotenvExistingVariablePolicy>);
-static_assert(std::is_same_v<decltype(ruvia::DotenvOptions{}.missingFile), ruvia::DotenvMissingFilePolicy>);
-static_assert(ruvia::DotenvOptions{}.existingVariables == ruvia::DotenvExistingVariablePolicy::kPreserve);
+static_assert(std::is_same_v<decltype(ruvia::DotenvOptions{}.existingVariables),
+    ruvia::DotenvExistingVariablePolicy>);
+static_assert(
+    std::is_same_v<decltype(ruvia::DotenvOptions{}.missingFile), ruvia::DotenvMissingFilePolicy>);
+static_assert(
+    ruvia::DotenvOptions{}.existingVariables == ruvia::DotenvExistingVariablePolicy::kPreserve);
 static_assert(ruvia::DotenvOptions{}.missingFile == ruvia::DotenvMissingFilePolicy::kIgnore);
 static_assert(!HasDotenvOverrideExistingBoolean<ruvia::DotenvOptions>);
 static_assert(!HasDotenvRequiredBoolean<ruvia::DotenvOptions>);
@@ -175,9 +180,9 @@ RUVIA_TEST(dotenv_hash_is_literal_unless_space_preceded) {
     // test only covers the space-preceded (comment) case, so a regression dropping
     // the "preceded by space" guard would pass it while corrupting these values.
     const auto path = writeTempEnv("ruvia_dotenv_hash.env",
-        "MIDHASH=a#b\n"                            // '#' not space-preceded -> literal
-        "URL=http://host/path#frag\n"              // a URL fragment must survive
-        "HASHSTART=# rest\n"                       // '#' at value start -> whole value commented (empty)
+        "MIDHASH=a#b\n"                // '#' not space-preceded -> literal
+        "URL=http://host/path#frag\n"  // a URL fragment must survive
+        "HASHSTART=# rest\n"           // '#' at value start -> whole value commented (empty)
         "QUOTEDNOTE=\"kept\" # trailing note\n");  // a comment after a quoted value is allowed
     const auto entries = readDotenvEntries(path);
     std::filesystem::remove(path);
@@ -190,7 +195,8 @@ RUVIA_TEST(dotenv_hash_is_literal_unless_space_preceded) {
 }
 
 RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
-    const auto path = writeTempEnv("ruvia_dotenv_typed.env", "PORT=8080\nBAD_PORT=not-a-port\nENABLED=maybe\nBAD_DOUBLE=nan\nBAD_INF=inf\n");
+    const auto path = writeTempEnv("ruvia_dotenv_typed.env",
+        "PORT=8080\nBAD_PORT=not-a-port\nENABLED=maybe\nBAD_DOUBLE=nan\nBAD_INF=inf\n");
     ruvia::Env env;
     (void)ruvia::detail::loadEnvFromFile(env, path, {});
     std::filesystem::remove(path);
@@ -218,7 +224,8 @@ RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
     try {
         (void)env.get<double>("BAD_DOUBLE");
     } catch (const std::invalid_argument& error) {
-        badDoubleThrew = std::string_view(error.what()).find("BAD_DOUBLE") != std::string_view::npos;
+        badDoubleThrew =
+            std::string_view(error.what()).find("BAD_DOUBLE") != std::string_view::npos;
     }
     RUVIA_CHECK(badDoubleThrew);
 
@@ -250,9 +257,7 @@ RUVIA_TEST(dotenv_options_use_explicit_policies) {
     RUVIA_CHECK_EQ(env.get("NEW").value_or(""), std::string_view("value"));
 
     const auto overridden = ruvia::detail::loadEnvFromFile(
-        env,
-        second,
-        {.existingVariables = ruvia::DotenvExistingVariablePolicy::kOverride});
+        env, second, {.existingVariables = ruvia::DotenvExistingVariablePolicy::kOverride});
     RUVIA_CHECK_EQ(overridden.variablesSet(), std::size_t{2});
     RUVIA_CHECK_EQ(overridden.variablesSkipped(), std::size_t{0});
     RUVIA_CHECK_EQ(env.get("KEY").value_or(""), std::string_view("second"));
@@ -263,9 +268,7 @@ RUVIA_TEST(dotenv_options_use_explicit_policies) {
     bool requiredMissingThrew = false;
     try {
         (void)ruvia::detail::loadEnvFromFile(
-            env,
-            missing,
-            {.missingFile = ruvia::DotenvMissingFilePolicy::kRequire});
+            env, missing, {.missingFile = ruvia::DotenvMissingFilePolicy::kRequire});
     } catch (const std::runtime_error&) {
         requiredMissingThrew = true;
     }
@@ -273,9 +276,7 @@ RUVIA_TEST(dotenv_options_use_explicit_policies) {
 
     bool invalidExistingPolicyThrew = false;
     try {
-        (void)ruvia::detail::loadEnvFromFile(
-            env,
-            first,
+        (void)ruvia::detail::loadEnvFromFile(env, first,
             {.existingVariables = static_cast<ruvia::DotenvExistingVariablePolicy>(0xFF)});
     } catch (const std::invalid_argument&) {
         invalidExistingPolicyThrew = true;
@@ -285,9 +286,7 @@ RUVIA_TEST(dotenv_options_use_explicit_policies) {
     bool invalidMissingPolicyThrew = false;
     try {
         (void)ruvia::detail::loadEnvFromFile(
-            env,
-            first,
-            {.missingFile = static_cast<ruvia::DotenvMissingFilePolicy>(0xFF)});
+            env, first, {.missingFile = static_cast<ruvia::DotenvMissingFilePolicy>(0xFF)});
     } catch (const std::invalid_argument&) {
         invalidMissingPolicyThrew = true;
     }

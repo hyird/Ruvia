@@ -20,8 +20,14 @@ class HttpClientPool;
 class HttpClientResponseState final {
 public:
     HttpClientResponseState(const WorkerHandle& worker, std::pmr::memory_resource* resource)
-        : headSignal(worker), dataSignal(worker), spaceSignal(worker), resource(resource),
-          headers(resource), trailers(resource), buffered(resource), pending(resource) {}
+        : headSignal(worker),
+          dataSignal(worker),
+          spaceSignal(worker),
+          resource(resource),
+          headers(resource),
+          trailers(resource),
+          buffered(resource),
+          pending(resource) {}
 
     WorkerSignal headSignal;
     WorkerSignal dataSignal;

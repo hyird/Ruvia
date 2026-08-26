@@ -25,8 +25,8 @@ HttpChunkTrailerParseResult HttpChunkTrailerParser::next() noexcept {
 
     const auto lineEnd = trailers_.find("\r\n", cursor_);
     const auto line = lineEnd == std::string_view::npos
-        ? trailers_.substr(cursor_)
-        : trailers_.substr(cursor_, lineEnd - cursor_);
+                          ? trailers_.substr(cursor_)
+                          : trailers_.substr(cursor_, lineEnd - cursor_);
     if (line.empty() || line.front() == ' ' || line.front() == '\t') {
         return fail(HttpChunkScanError::kInvalidTrailer);
     }
@@ -65,7 +65,8 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
     std::size_t decoded = 0;
     std::size_t encodedOverhead = 0;
     const auto addOverhead = [&encodedOverhead](std::size_t bytes) noexcept {
-        if (bytes > kDefaultMaxBufferedBodyBytes || encodedOverhead > kDefaultMaxBufferedBodyBytes - bytes) {
+        if (bytes > kDefaultMaxBufferedBodyBytes ||
+            encodedOverhead > kDefaultMaxBufferedBodyBytes - bytes) {
             return false;
         }
         encodedOverhead += bytes;
@@ -114,7 +115,9 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
                 if (trailerEnd - cursor > kMaxHttpHeaderBytes - 4) {
                     return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
                 }
-                if (const auto trailerError = validateHttpChunkTrailers(body.substr(cursor, trailerEnd - cursor)); trailerError.has_value()) {
+                if (const auto trailerError =
+                        validateHttpChunkTrailers(body.substr(cursor, trailerEnd - cursor));
+                    trailerError.has_value()) {
                     return HttpChunkScanResult::makeFailure(*trailerError);
                 }
                 if (!addOverhead(trailerEnd - cursor + 4)) {
@@ -131,7 +134,8 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
             return HttpChunkScanResult::makeNeedMore();
         }
 
-        if (chunkSize > kDefaultMaxBufferedBodyBytes || decoded > kDefaultMaxBufferedBodyBytes - chunkSize) {
+        if (chunkSize > kDefaultMaxBufferedBodyBytes ||
+            decoded > kDefaultMaxBufferedBodyBytes - chunkSize) {
             return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
         }
         if (body.size() < cursor + chunkSize + 2) {

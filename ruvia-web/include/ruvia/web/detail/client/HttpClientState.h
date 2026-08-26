@@ -43,7 +43,8 @@ private:
     };
 
     [[nodiscard]] static EventLoop requireLoop(EventLoop loop);
-    [[nodiscard]] static std::pmr::vector<HttpClientDefinition> makeDefinitions(const HttpClientConfig& config, std::pmr::memory_resource* resource);
+    [[nodiscard]] static std::pmr::vector<HttpClientDefinition> makeDefinitions(
+        const HttpClientConfig& config, std::pmr::memory_resource* resource);
 
     void requireOpenOnWorker() const;
     void startCloseOnWorker() noexcept;

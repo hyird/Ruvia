@@ -97,7 +97,9 @@ public:
     RUVIA_ROUTES_END
 
     ruvia::Task<ruvia::HttpResponse> ping(ruvia::Context& c) {
-        co_await c.redis().withOptions({.timeout = std::chrono::seconds(2), .stopToken = c.stopToken()}).ping();
+        co_await c.redis()
+            .withOptions({.timeout = std::chrono::seconds(2), .stopToken = c.stopToken()})
+            .ping();
         auto message = co_await c.redis().ping("hello");
         co_return c.text(std::move(message));
     }
@@ -105,7 +107,9 @@ public:
     ruvia::Task<ruvia::HttpResponse> getValue(ruvia::Context& c) {
         auto value = co_await c.redis().get(c.req().param("key").value_or(""));
         if (!value) {
-            co_return c.error({.status = ruvia::http_status::kNotFound, .code = "not_found", .message = "redis key not found"});
+            co_return c.error({.status = ruvia::http_status::kNotFound,
+                .code = "not_found",
+                .message = "redis key not found"});
         }
         co_return c.text(std::move(*value));
     }
@@ -371,7 +375,15 @@ public:
 
     ruvia::Task<ruvia::HttpResponse> pipeline(ruvia::Context& c) {
         auto pipeline = c.redis().pipeline();
-        pipeline.set("ruvia:example:pipeline", "1").get("ruvia:example:pipeline").incr("ruvia:example:pipeline").hset("ruvia:example:pipeline:hash", "field", "value").hget("ruvia:example:pipeline:hash", "field").lpush("ruvia:example:pipeline:list", "item").sadd("ruvia:example:pipeline:set", "member").zadd("ruvia:example:pipeline:zset", 1.0, "member").command("TYPE", "ruvia:example:pipeline");
+        pipeline.set("ruvia:example:pipeline", "1")
+            .get("ruvia:example:pipeline")
+            .incr("ruvia:example:pipeline")
+            .hset("ruvia:example:pipeline:hash", "field", "value")
+            .hget("ruvia:example:pipeline:hash", "field")
+            .lpush("ruvia:example:pipeline:list", "item")
+            .sadd("ruvia:example:pipeline:set", "member")
+            .zadd("ruvia:example:pipeline:zset", 1.0, "member")
+            .command("TYPE", "ruvia:example:pipeline");
         auto results = co_await std::move(pipeline).exec();
 
         std::pmr::string body(c.allocator<char>());
@@ -383,7 +395,10 @@ public:
 
     ruvia::Task<ruvia::HttpResponse> transaction(ruvia::Context& c) {
         auto tx = c.redis().transaction();
-        tx.watch("ruvia:example:tx").set("ruvia:example:tx", "1").incr("ruvia:example:tx").get("ruvia:example:tx");
+        tx.watch("ruvia:example:tx")
+            .set("ruvia:example:tx", "1")
+            .incr("ruvia:example:tx")
+            .get("ruvia:example:tx");
         auto results = co_await std::move(tx).exec();
 
         std::pmr::string body(c.allocator<char>());
@@ -414,8 +429,10 @@ public:
 
     ruvia::Task<ruvia::HttpResponse> blockingPop(ruvia::Context& c) {
         const std::array<std::string_view, 1> keys{"ruvia:example:blocking"};
-        auto left = co_await c.redis().blpop(keys, ruvia::RedisBlockWait::forDuration(std::chrono::seconds(1)));
-        auto right = co_await c.redis().brpop(keys, ruvia::RedisBlockWait::forDuration(std::chrono::seconds(1)));
+        auto left = co_await c.redis().blpop(
+            keys, ruvia::RedisBlockWait::forDuration(std::chrono::seconds(1)));
+        auto right = co_await c.redis().brpop(
+            keys, ruvia::RedisBlockWait::forDuration(std::chrono::seconds(1)));
 
         std::pmr::string body(c.allocator<char>());
         body.append("left=");
@@ -444,7 +461,8 @@ int main() {
     auto config = redisConfig(app.env());
     app.redis({.config = config})
         .redis({.alias = "cache", .config = config})
-        .listen({.address = "0.0.0.0", .http = app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090)})
+        .listen({.address = "0.0.0.0",
+            .http = app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090)})
         .server({
             .workerCount = app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
             .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,

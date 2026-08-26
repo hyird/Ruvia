@@ -33,12 +33,16 @@ namespace ruvia {
 
 Task<void> CsrfProtection::handle(Context& c, Next& next) {
     const auto method = c.req().knownMethod();
-    const bool safe = method == HttpKnownMethod::kGet || method == HttpKnownMethod::kHead || method == HttpKnownMethod::kOptions;
+    const bool safe = method == HttpKnownMethod::kGet || method == HttpKnownMethod::kHead ||
+                      method == HttpKnownMethod::kOptions;
     const auto cookie = c.req().cookie(cookieName_);
     if (!safe) {
         const auto header = c.req().header(headerName_);
-        if (!cookie || cookie->empty() || !header || header->empty() || !detail::csrfTokensEqual(*cookie, *header)) {
-            c.respond(c.error({.status = ruvia::http_status::kForbidden, .code = "csrf_token_mismatch", .message = "CSRF token missing or invalid"}));
+        if (!cookie || cookie->empty() || !header || header->empty() ||
+            !detail::csrfTokensEqual(*cookie, *header)) {
+            c.respond(c.error({.status = ruvia::http_status::kForbidden,
+                .code = "csrf_token_mismatch",
+                .message = "CSRF token missing or invalid"}));
             co_return;
         }
     } else if (!cookie || cookie->empty()) {
@@ -53,14 +57,17 @@ Task<void> CsrfProtection::handle(Context& c, Next& next) {
         const auto tokenResult = detail::generateSecureToken(buffer);
         const auto* token = tokenResult.ready();
         if (token == nullptr) {
-            c.respond(c.error({.status = ruvia::http_status::kInternalServerError, .code = "secure_random_failed", .message = "secure token generation failed"}));
+            c.respond(c.error({.status = ruvia::http_status::kInternalServerError,
+                .code = "secure_random_failed",
+                .message = "secure token generation failed"}));
             co_return;
         }
         const auto connection = getConnInfo(c);
         const CookieOptions options{
             .path = "/",
             .sameSite = CookieSameSite::kLax,
-            .secure = connection.tls() != nullptr ? CookieAttributePolicy::kEmit : CookieAttributePolicy::kOmit,
+            .secure = connection.tls() != nullptr ? CookieAttributePolicy::kEmit
+                                                  : CookieAttributePolicy::kOmit,
         };
         c.setCookie({.name = cookieName_, .value = token->value(), .attributes = options});
     }

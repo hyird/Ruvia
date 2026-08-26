@@ -50,7 +50,9 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
     return detail::constructPmrObject<detail::StaticRootState>(resource, resource);
 }
 
-[[nodiscard]] const detail::StaticRootEntry* findStaticRootEntry(const std::pmr::vector<detail::StaticRootEntry>& entries, std::string_view relativePath) noexcept {
+[[nodiscard]] const detail::StaticRootEntry* findStaticRootEntry(
+    const std::pmr::vector<detail::StaticRootEntry>& entries,
+    std::string_view relativePath) noexcept {
     if (entries.size() <= kStaticRootLinearLookupLimit) {
         for (const auto& entry : entries) {
             if (entry.relativePath == relativePath) {
@@ -60,19 +62,28 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
         return nullptr;
     }
 
-    const auto iter = std::ranges::lower_bound(entries, relativePath, std::ranges::less{}, [](const detail::StaticRootEntry& entry) noexcept { return std::string_view(entry.relativePath); });
+    const auto iter = std::ranges::lower_bound(entries, relativePath, std::ranges::less{},
+        [](const detail::StaticRootEntry& entry) noexcept {
+            return std::string_view(entry.relativePath);
+        });
     if (iter == entries.end() || std::string_view(iter->relativePath) != relativePath) {
         return nullptr;
     }
     return &*iter;
 }
 
-[[nodiscard]] bool containsStaticDirectory(const std::pmr::vector<std::pmr::string>& directories, std::string_view relativePath) noexcept {
+[[nodiscard]] bool containsStaticDirectory(
+    const std::pmr::vector<std::pmr::string>& directories, std::string_view relativePath) noexcept {
     if (directories.size() <= kStaticRootLinearLookupLimit) {
-        return std::ranges::find(directories, relativePath, [](const auto& directory) noexcept { return std::string_view(directory); }) != directories.end();
+        return std::ranges::find(directories, relativePath, [](const auto& directory) noexcept {
+            return std::string_view(directory);
+        }) != directories.end();
     }
 
-    return std::ranges::binary_search(directories, relativePath, [](const auto& left, const auto& right) { return std::string_view(left) < std::string_view(right); });
+    return std::ranges::binary_search(
+        directories, relativePath, [](const auto& left, const auto& right) {
+            return std::string_view(left) < std::string_view(right);
+        });
 }
 
 // A precompressed sidecar (foo.js.br / .gz / .zst) is indexed when its base
@@ -81,17 +92,23 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
     return extension == ".br" || extension == ".gz" || extension == ".zst";
 }
 
-[[nodiscard]] bool mediaTypeStartsWith(std::string_view mediaType, std::string_view prefix) noexcept {
-    return mediaType.size() >= prefix.size() && detail::httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
+[[nodiscard]] bool mediaTypeStartsWith(
+    std::string_view mediaType, std::string_view prefix) noexcept {
+    return mediaType.size() >= prefix.size() &&
+           detail::httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
 }
 
 [[nodiscard]] bool mediaTypeEndsWith(std::string_view mediaType, std::string_view suffix) noexcept {
-    return mediaType.size() >= suffix.size() && detail::httpAsciiEqualsIgnoreCase(mediaType.substr(mediaType.size() - suffix.size()), suffix);
+    return mediaType.size() >= suffix.size() &&
+           detail::httpAsciiEqualsIgnoreCase(
+               mediaType.substr(mediaType.size() - suffix.size()), suffix);
 }
 
-[[nodiscard]] bool staticContentTypeEligibleForPrecompression(std::string_view contentType) noexcept {
+[[nodiscard]] bool staticContentTypeEligibleForPrecompression(
+    std::string_view contentType) noexcept {
     const auto semicolon = contentType.find(';');
-    const auto mediaType = detail::httpTrimOws(semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
+    const auto mediaType = detail::httpTrimOws(
+        semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
     if (mediaType.empty()) {
         return false;
     }
@@ -103,8 +120,7 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
            detail::httpAsciiEqualsIgnoreCase(mediaType, "application/xml") ||
            detail::httpAsciiEqualsIgnoreCase(mediaType, "application/xhtml+xml") ||
            detail::httpAsciiEqualsIgnoreCase(mediaType, "image/svg+xml") ||
-           mediaTypeEndsWith(mediaType, "+json") ||
-           mediaTypeEndsWith(mediaType, "+xml");
+           mediaTypeEndsWith(mediaType, "+json") || mediaTypeEndsWith(mediaType, "+xml");
 }
 
 [[nodiscard]] std::string_view staticPrecompressionSuffix(HttpContentCoding coding) noexcept {
@@ -133,7 +149,9 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
     }
 }
 
-[[nodiscard]] std::pmr::string makeStaticFileEncodedSnapshotEtag(std::pmr::memory_resource* resource, std::uint64_t encodedSize, std::uint64_t modifiedToken, detail::ResponseFileIdentity identity, HttpContentCoding coding) {
+[[nodiscard]] std::pmr::string makeStaticFileEncodedSnapshotEtag(
+    std::pmr::memory_resource* resource, std::uint64_t encodedSize, std::uint64_t modifiedToken,
+    detail::ResponseFileIdentity identity, HttpContentCoding coding) {
     std::pmr::string output(resource);
     output.reserve(144);
     output.push_back('"');
@@ -151,34 +169,34 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
     return output;
 }
 
-[[nodiscard]] bool sameStaticRootFileSnapshot(const detail::StaticRootEntry& entry, const detail::ResponseFileSnapshot& snapshot) noexcept {
-    return entry.size == snapshot.size &&
-           entry.identity == snapshot.identity &&
+[[nodiscard]] bool sameStaticRootFileSnapshot(
+    const detail::StaticRootEntry& entry, const detail::ResponseFileSnapshot& snapshot) noexcept {
+    return entry.size == snapshot.size && entry.identity == snapshot.identity &&
            entry.modifiedToken == snapshot.modifiedToken &&
            entry.modifiedSeconds == snapshot.modifiedSeconds;
 }
 
-[[nodiscard]] bool sameStaticRootEntryMetadata(const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) noexcept {
-    return left.relativePath == right.relativePath &&
-           left.filePath == right.filePath &&
-           left.contentType == right.contentType &&
-           left.size == right.size &&
-           left.identity == right.identity &&
-           left.modifiedToken == right.modifiedToken &&
-           left.modifiedSeconds == right.modifiedSeconds &&
-           left.etag == right.etag &&
+[[nodiscard]] bool sameStaticRootEntryMetadata(
+    const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) noexcept {
+    return left.relativePath == right.relativePath && left.filePath == right.filePath &&
+           left.contentType == right.contentType && left.size == right.size &&
+           left.identity == right.identity && left.modifiedToken == right.modifiedToken &&
+           left.modifiedSeconds == right.modifiedSeconds && left.etag == right.etag &&
            left.lastModified == right.lastModified &&
            left.directlyServable == right.directlyServable;
 }
 
-[[nodiscard]] bool precompressedVariantIsAtLeastAsNew(const detail::StaticRootEntry& identity, const detail::StaticRootEntry& variant) noexcept {
+[[nodiscard]] bool precompressedVariantIsAtLeastAsNew(
+    const detail::StaticRootEntry& identity, const detail::StaticRootEntry& variant) noexcept {
     if (variant.modifiedSeconds != identity.modifiedSeconds) {
         return variant.modifiedSeconds > identity.modifiedSeconds;
     }
     return variant.modifiedToken >= identity.modifiedToken;
 }
 
-[[nodiscard]] const detail::StaticRootEntry* findFreshSidecarEntry(const detail::StaticRootState& state, const detail::StaticRootEntry& identity, HttpContentCoding coding) {
+[[nodiscard]] const detail::StaticRootEntry* findFreshSidecarEntry(
+    const detail::StaticRootState& state, const detail::StaticRootEntry& identity,
+    HttpContentCoding coding) {
     const auto suffix = staticPrecompressionSuffix(coding);
     if (suffix.empty()) {
         return nullptr;
@@ -194,7 +212,8 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
     return variant;
 }
 
-[[nodiscard]] const detail::StaticRootMemoryVariant* findMemoryVariant(const detail::StaticRootEntry& entry, HttpContentCoding coding) noexcept {
+[[nodiscard]] const detail::StaticRootMemoryVariant* findMemoryVariant(
+    const detail::StaticRootEntry& entry, HttpContentCoding coding) noexcept {
     for (const auto& variant : entry.memoryVariants) {
         if (variant.contentCoding == coding) {
             return &variant;
@@ -203,7 +222,8 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
     return nullptr;
 }
 
-void copyMemoryVariant(detail::StaticRootEntry& entry, const detail::StaticRootMemoryVariant& source, std::pmr::memory_resource* resource) {
+void copyMemoryVariant(detail::StaticRootEntry& entry,
+    const detail::StaticRootMemoryVariant& source, std::pmr::memory_resource* resource) {
     auto& stored = entry.memoryVariants.emplace_back(resource);
     stored.contentCoding = source.contentCoding;
     stored.bytes = source.bytes;
@@ -213,7 +233,8 @@ void copyMemoryVariant(detail::StaticRootEntry& entry, const detail::StaticRootM
     stored.lastModified = source.lastModified;
 }
 
-[[nodiscard]] std::pmr::string readStableStaticRootEntryBytes(const detail::StaticRootEntry& entry, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::pmr::string readStableStaticRootEntryBytes(
+    const detail::StaticRootEntry& entry, std::pmr::memory_resource* resource) {
     if (entry.size > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
         throw std::runtime_error("static file is too large to precompress");
     }
@@ -223,7 +244,8 @@ void copyMemoryVariant(detail::StaticRootEntry& entry, const detail::StaticRootM
     const std::filesystem::path path(entry.filePath.c_str());
     std::ifstream input(path, std::ios::binary);
     if (!input) {
-        throw std::filesystem::filesystem_error("open static file for precompression", path, std::make_error_code(std::errc::no_such_file_or_directory));
+        throw std::filesystem::filesystem_error("open static file for precompression", path,
+            std::make_error_code(std::errc::no_such_file_or_directory));
     }
     if (size != 0) {
         input.read(bytes.data(), static_cast<std::streamsize>(size));
@@ -239,14 +261,16 @@ void copyMemoryVariant(detail::StaticRootEntry& entry, const detail::StaticRootM
     return bytes;
 }
 
-void storePrecompressedVariant(detail::StaticRootEntry& entry, HttpContentCoding coding, std::pmr::string encoded, bool emitResponseValidators, std::pmr::memory_resource* resource) {
+void storePrecompressedVariant(detail::StaticRootEntry& entry, HttpContentCoding coding,
+    std::pmr::string encoded, bool emitResponseValidators, std::pmr::memory_resource* resource) {
     auto& variant = entry.memoryVariants.emplace_back(resource);
     variant.contentCoding = coding;
     variant.modifiedToken = entry.modifiedToken;
     variant.modifiedSeconds = entry.modifiedSeconds;
     variant.bytes = std::move(encoded);
     if (emitResponseValidators) {
-        variant.etag = makeStaticFileEncodedSnapshotEtag(resource, variant.bytes.size(), entry.modifiedToken, entry.identity, coding);
+        variant.etag = makeStaticFileEncodedSnapshotEtag(
+            resource, variant.bytes.size(), entry.modifiedToken, entry.identity, coding);
         variant.lastModified = entry.lastModified;
     }
 }
@@ -281,7 +305,8 @@ void hashValue(std::uint64_t& hash, const T& value) noexcept {
     return hash;
 }
 
-[[nodiscard]] bool sameStaticRootEntry(const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) noexcept {
+[[nodiscard]] bool sameStaticRootEntry(
+    const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) noexcept {
     return sameStaticRootEntryMetadata(left, right);
 }
 
@@ -295,7 +320,8 @@ bool detail::StaticRootAccess::hasDirectoryIndex(const StaticRoot& root) noexcep
     return !root.state_->indexFile.empty();
 }
 
-std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(const StaticRoot& root, std::string_view relativePath) noexcept {
+std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(
+    const StaticRoot& root, std::string_view relativePath) noexcept {
     auto entry = findVariant(root, relativePath);
     if (!entry.has_value() || !entry->directlyServable_) {
         return std::nullopt;
@@ -303,17 +329,22 @@ std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(const 
     return entry;
 }
 
-std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::findVariant(const StaticRoot& root, std::string_view relativePath) noexcept {
+std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::findVariant(
+    const StaticRoot& root, std::string_view relativePath) noexcept {
     const auto& state = *root.state_;
     const auto& entries = state.entries;
     const auto* const entry = findStaticRootEntry(entries, relativePath);
     if (entry == nullptr) {
         return std::nullopt;
     }
-    return detail::StaticRootEntryView(entry->filePath.c_str(), entry->contentType, state.cacheControl, entry->etag, entry->lastModified, entry->size, entry->identity, entry->modifiedToken, entry->modifiedSeconds, state.rangeRequests, state.responseValidators, entry->directlyServable, &entry->memoryVariants);
+    return detail::StaticRootEntryView(entry->filePath.c_str(), entry->contentType,
+        state.cacheControl, entry->etag, entry->lastModified, entry->size, entry->identity,
+        entry->modifiedToken, entry->modifiedSeconds, state.rangeRequests, state.responseValidators,
+        entry->directlyServable, &entry->memoryVariants);
 }
 
-bool detail::StaticRootAccess::isIndexedDirectory(const StaticRoot& root, std::string_view relativePath) noexcept {
+bool detail::StaticRootAccess::isIndexedDirectory(
+    const StaticRoot& root, std::string_view relativePath) noexcept {
     if (!hasDirectoryIndex(root)) {
         return false;
     }
@@ -378,7 +409,8 @@ bool detail::StaticRootAccess::hasActiveBindings(const StaticRoot& root) noexcep
     return root.state_->activeBindings != 0;
 }
 
-void detail::StaticRootAccess::installPrecompressedVariants(StaticRoot& root, const StaticRoot* previous, const StaticRootPrecompressionOptions& options) {
+void detail::StaticRootAccess::installPrecompressedVariants(
+    StaticRoot& root, const StaticRoot* previous, const StaticRootPrecompressionOptions& options) {
     if (!options.enabled()) {
         return;
     }
@@ -399,11 +431,11 @@ void detail::StaticRootAccess::installPrecompressedVariants(StaticRoot& root, co
         options.gzip,
     };
     const auto* previousState = previous == nullptr ? nullptr : previous->state_.get();
-    const bool emitResponseValidators = state.responseValidators == StaticResponseValidatorPolicy::kEmit;
+    const bool emitResponseValidators =
+        state.responseValidators == StaticResponseValidatorPolicy::kEmit;
 
     for (auto& entry : state.entries) {
-        if (!entry.directlyServable ||
-            entry.size < options.minBytes ||
+        if (!entry.directlyServable || entry.size < options.minBytes ||
             entry.size > options.maxBytes ||
             !staticContentTypeEligibleForPrecompression(entry.contentType)) {
             continue;
@@ -427,7 +459,8 @@ void detail::StaticRootAccess::installPrecompressedVariants(StaticRoot& root, co
                 continue;
             }
             if (previousEntry != nullptr) {
-                if (const auto* previousVariant = findMemoryVariant(*previousEntry, coding); previousVariant != nullptr) {
+                if (const auto* previousVariant = findMemoryVariant(*previousEntry, coding);
+                    previousVariant != nullptr) {
                     copyMemoryVariant(entry, *previousVariant, resource);
                     continue;
                 }
@@ -438,33 +471,31 @@ void detail::StaticRootAccess::installPrecompressedVariants(StaticRoot& root, co
             if (plain->empty()) {
                 continue;
             }
-            auto encoded = encodeHttpContent(coding, *plain, {.maxEncodedBytes = plain->size() - 1, .resource = resource});
+            auto encoded = encodeHttpContent(
+                coding, *plain, {.maxEncodedBytes = plain->size() - 1, .resource = resource});
             if (auto* content = encoded.encoded(); content != nullptr) {
-                storePrecompressedVariant(entry, coding, std::move(*content).takeBytes(), emitResponseValidators, resource);
+                storePrecompressedVariant(entry, coding, std::move(*content).takeBytes(),
+                    emitResponseValidators, resource);
             }
         }
     }
 }
 
-bool detail::StaticRootAccess::sameSnapshot(const StaticRoot& left, const StaticRoot& right) noexcept {
+bool detail::StaticRootAccess::sameSnapshot(
+    const StaticRoot& left, const StaticRoot& right) noexcept {
     const auto& lhs = *left.state_;
     const auto& rhs = *right.state_;
-    if (lhs.root != rhs.root ||
-        lhs.indexFile != rhs.indexFile ||
-        lhs.cacheControl != rhs.cacheControl ||
-        lhs.defaultContentType != rhs.defaultContentType ||
-        lhs.fileTypeKind != rhs.fileTypeKind ||
-        lhs.rangeRequests != rhs.rangeRequests ||
-        lhs.responseValidators != rhs.responseValidators ||
-        lhs.dotfiles != rhs.dotfiles ||
-        lhs.fileTypeExtensions != rhs.fileTypeExtensions ||
-        lhs.directories != rhs.directories ||
-        lhs.mimeTypes.size() != rhs.mimeTypes.size() ||
-        lhs.entries.size() != rhs.entries.size()) {
+    if (lhs.root != rhs.root || lhs.indexFile != rhs.indexFile ||
+        lhs.cacheControl != rhs.cacheControl || lhs.defaultContentType != rhs.defaultContentType ||
+        lhs.fileTypeKind != rhs.fileTypeKind || lhs.rangeRequests != rhs.rangeRequests ||
+        lhs.responseValidators != rhs.responseValidators || lhs.dotfiles != rhs.dotfiles ||
+        lhs.fileTypeExtensions != rhs.fileTypeExtensions || lhs.directories != rhs.directories ||
+        lhs.mimeTypes.size() != rhs.mimeTypes.size() || lhs.entries.size() != rhs.entries.size()) {
         return false;
     }
     for (std::size_t i = 0; i < lhs.mimeTypes.size(); ++i) {
-        if (lhs.mimeTypes[i].extension != rhs.mimeTypes[i].extension || lhs.mimeTypes[i].contentType != rhs.mimeTypes[i].contentType) {
+        if (lhs.mimeTypes[i].extension != rhs.mimeTypes[i].extension ||
+            lhs.mimeTypes[i].contentType != rhs.mimeTypes[i].contentType) {
             return false;
         }
     }
@@ -536,7 +567,10 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         if (std::filesystem::is_symlink(status)) {
             continue;
         }
-        auto relative = filePath.lexically_relative(canonicalRoot).generic_string<char, std::char_traits<char>, std::pmr::polymorphic_allocator<char>>(std::pmr::polymorphic_allocator<char>(upstream));
+        auto relative = filePath.lexically_relative(canonicalRoot)
+                            .generic_string<char, std::char_traits<char>,
+                                std::pmr::polymorphic_allocator<char>>(
+                                std::pmr::polymorphic_allocator<char>(upstream));
         if (relative.empty() || relative.starts_with("../")) {
             continue;
         }
@@ -561,7 +595,8 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         const bool directlyServable = detail::fileTypeAllowed(extension, options);
         bool usableAsSidecar = false;
         if (!directlyServable && isPrecompressedSidecarExtension(extension)) {
-            usableAsSidecar = detail::fileTypeAllowed(detail::lowerStaticFileExtension(filePath.stem(), upstream), options);
+            usableAsSidecar = detail::fileTypeAllowed(
+                detail::lowerStaticFileExtension(filePath.stem(), upstream), options);
         }
         if (!directlyServable && !usableAsSidecar) {
             continue;
@@ -569,9 +604,11 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         ec.clear();
         const auto snapshot = detail::snapshotResponseFile(filePath.c_str(), ec);
         if (ec) {
-            throw std::filesystem::filesystem_error("snapshot static file root entry", filePath, ec);
+            throw std::filesystem::filesystem_error(
+                "snapshot static file root entry", filePath, ec);
         }
-        const auto emitResponseValidators = state.responseValidators == StaticResponseValidatorPolicy::kEmit;
+        const auto emitResponseValidators =
+            state.responseValidators == StaticResponseValidatorPolicy::kEmit;
         detail::StaticRootEntry entry(upstream);
         entry.relativePath = std::move(relative);
         detail::assignNativePath(entry.filePath, filePath);
@@ -582,7 +619,8 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         entry.modifiedSeconds = snapshot.modifiedSeconds;
         entry.directlyServable = directlyServable;
         if (emitResponseValidators) {
-            entry.etag = detail::makeStaticFileSnapshotEtag(upstream, snapshot.size, snapshot.modifiedToken, snapshot.identity);
+            entry.etag = detail::makeStaticFileSnapshotEtag(
+                upstream, snapshot.size, snapshot.modifiedToken, snapshot.identity);
             entry.lastModified = detail::httpFormatDate(upstream, snapshot.modifiedSeconds);
         }
         state.entries.push_back(std::move(entry));
@@ -590,9 +628,13 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
     if (ec) {
         throw std::filesystem::filesystem_error("iterate static file root", canonicalRoot, ec);
     }
-    std::ranges::sort(state.entries, [](const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) { return left.relativePath < right.relativePath; });
+    std::ranges::sort(state.entries,
+        [](const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) {
+            return left.relativePath < right.relativePath;
+        });
     std::ranges::sort(state.directories);
-    state.directories.erase(std::ranges::unique(state.directories).begin(), state.directories.end());
+    state.directories.erase(
+        std::ranges::unique(state.directories).begin(), state.directories.end());
     state.fingerprint = staticRootFingerprint(state);
 }
 

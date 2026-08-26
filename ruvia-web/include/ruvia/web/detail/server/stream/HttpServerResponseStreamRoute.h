@@ -21,32 +21,42 @@
 namespace ruvia::detail {
 
 template <typename Stream>
-Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(Http1RouteDispatch<Stream> d, ResponseHeadBuffer& responseHead, const Http1ServerRequestHeadReady& requestHead, const ResolvedRoute& resolved) {
-    const auto streamPlan = http1PlanResponseStream(d.parsed, d.requestSequence.nextResponseClosePolicy());
+Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(Http1RouteDispatch<Stream> d,
+    ResponseHeadBuffer& responseHead, const Http1ServerRequestHeadReady& requestHead,
+    const ResolvedRoute& resolved) {
+    const auto streamPlan =
+        http1PlanResponseStream(d.parsed, d.requestSequence.nextResponseClosePolicy());
     auto connectionPlan = streamPlan.requestConnectionPlan();
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().responseStream();
-    ResponseSink responseSink(d.stream, d.memory, responseHead, d.scannerEntry, d.baseRouteServices.worker(), endpoint.kind(), streamPlan, d.responseCoding, d.responseCodingAvailability);
+    ResponseSink responseSink(d.stream, d.memory, responseHead, d.scannerEntry,
+        d.baseRouteServices.worker(), endpoint.kind(), streamPlan, d.responseCoding,
+        d.responseCodingAvailability);
 
     d.scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
-    auto result = co_await dispatchResponseStreamWith(responseSink, d.routes, d.parsed.request, resolved, d.requestMemory, d.baseRouteServices,
+    auto result = co_await dispatchResponseStreamWith(responseSink, d.routes, d.parsed.request,
+        resolved, d.requestMemory, d.baseRouteServices,
         /*peerAborted=*/[]() noexcept { return false; });
 
     if (result.peerAbortedBeforeCommit() != nullptr) {
-        throw std::logic_error("HTTP/1 d.response d.stream reported an impossible peer-abort predicate");
+        throw std::logic_error(
+            "HTTP/1 d.response d.stream reported an impossible peer-abort predicate");
     }
     if (auto* recovered = result.recoveredFailure()) {
         d.response = std::move(*recovered).takeResponse();
         d.scannerEntry.touch();
-        connectionPlan = requireHttp1FinalResponseCommit(d.response, streamPlan.requestConnectionPlan().requireClose());
+        connectionPlan = requireHttp1FinalResponseCommit(
+            d.response, streamPlan.requestConnectionPlan().requireClose());
         co_return Http1SessionRequestCompletion::makeBufferedClosing(connectionPlan);
     }
     if (auto* routeResponse = result.routeResponse()) {
         d.response = std::move(*routeResponse).takeResponse();
         d.scannerEntry.touch();
-        connectionPlan = finalizeBufferedRouteResponse(d.response, connectionPlan, d.requestSequence);
-        co_return Http1SessionRequestCompletion::makeBufferedUnrestored(connectionPlan, requestHead.headerBytes());
+        connectionPlan =
+            finalizeBufferedRouteResponse(d.response, connectionPlan, d.requestSequence);
+        co_return Http1SessionRequestCompletion::makeBufferedUnrestored(
+            connectionPlan, requestHead.headerBytes());
     }
 
     const auto committedStatus = result.committedStatus();
@@ -61,11 +71,13 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(Http1RouteDi
         if (const auto* failed = result.failedAfterCommit()) {
             // The client only learns of this as a truncated response; this is
             // the one place the reason for the truncation still exists.
-            d.options.connectionFailure.invoke(d.baseRouteServices.connInfo().remote().address(), failed->exception());
+            d.options.connectionFailure.invoke(
+                d.baseRouteServices.connInfo().remote().address(), failed->exception());
         }
         connectionPlan = connectionPlan.requireClose();
     }
-    co_return Http1SessionRequestCompletion::makeCommittedStream(connectionPlan, *committedStatus, requestHead.headerBytes());
+    co_return Http1SessionRequestCompletion::makeCommittedStream(
+        connectionPlan, *committedStatus, requestHead.headerBytes());
 }
 
 }  // namespace ruvia::detail

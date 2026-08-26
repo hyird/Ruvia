@@ -22,14 +22,23 @@ template <typename T>
 concept ExposesRvalueHttpErrorInfo = requires { std::declval<const T&&>().info(); };
 
 template <typename String>
-concept AcceptsAnyRvalueHttpErrorInfoText = requires(String&& value) { ruvia::HttpErrorInfo({.code = std::forward<String>(value)}); } || requires(String&& value) { ruvia::HttpErrorInfo({.message = std::forward<String>(value)}); } || requires(String&& value) { ruvia::HttpErrorInfo({.statusText = std::forward<String>(value)}); };
+concept AcceptsAnyRvalueHttpErrorInfoText =
+    requires(String&& value) { ruvia::HttpErrorInfo({.code = std::forward<String>(value)}); } ||
+    requires(String&& value) { ruvia::HttpErrorInfo({.message = std::forward<String>(value)}); } ||
+    requires(String&& value) { ruvia::HttpErrorInfo({.statusText = std::forward<String>(value)}); };
 
 template <typename String>
-concept AcceptsLvalueHttpErrorInfoText = requires(String& value) { ruvia::HttpErrorInfo({.status = ruvia::http_status::kBadRequest, .code = value, .message = value, .statusText = value}); };
+concept AcceptsLvalueHttpErrorInfoText = requires(String& value) {
+    ruvia::HttpErrorInfo({.status = ruvia::http_status::kBadRequest,
+        .code = value,
+        .message = value,
+        .statusText = value});
+};
 
 template <typename Issues>
 concept AcceptsRvalueHttpErrorInfoIssues = requires(Issues&& issues) {
-    ruvia::HttpErrorInfo({.status = ruvia::http_status::kBadRequest, .validationIssues = std::forward<Issues>(issues)});
+    ruvia::HttpErrorInfo({.status = ruvia::http_status::kBadRequest,
+        .validationIssues = std::forward<Issues>(issues)});
 };
 
 template <typename Issues>
@@ -50,14 +59,19 @@ static_assert(!AcceptsRvalueHttpErrorInfoIssues<ValidationIssuesOwningView>);
 static_assert(AcceptsLvalueHttpErrorInfoIssues<ValidationIssuesOwningView>);
 
 RUVIA_TEST(default_error_code_mapping) {
-    RUVIA_CHECK_EQ(defaultErrorCode(ruvia::http_status::kBadRequest), std::string_view("bad_request"));
+    RUVIA_CHECK_EQ(
+        defaultErrorCode(ruvia::http_status::kBadRequest), std::string_view("bad_request"));
     RUVIA_CHECK_EQ(defaultErrorCode(ruvia::http_status::kNotFound), std::string_view("not_found"));
-    RUVIA_CHECK_EQ(defaultErrorCode(ruvia::http_status::kMethodNotAllowed), std::string_view("method_not_allowed"));
-    RUVIA_CHECK_EQ(defaultErrorCode(ruvia::http_status::kContentTooLarge), std::string_view("content_too_large"));
+    RUVIA_CHECK_EQ(defaultErrorCode(ruvia::http_status::kMethodNotAllowed),
+        std::string_view("method_not_allowed"));
+    RUVIA_CHECK_EQ(defaultErrorCode(ruvia::http_status::kContentTooLarge),
+        std::string_view("content_too_large"));
 }
 
 RUVIA_TEST(http_error_info_round_trips) {
-    const HttpError error({.status = ruvia::http_status::kUnprocessableContent, .code = "unprocessable", .message = "bad fields"});
+    const HttpError error({.status = ruvia::http_status::kUnprocessableContent,
+        .code = "unprocessable",
+        .message = "bad fields"});
     const auto info = error.info();
     RUVIA_CHECK_EQ(info.status(), ruvia::http_status::kUnprocessableContent);
     RUVIA_CHECK_EQ(info.code(), std::string_view("unprocessable"));

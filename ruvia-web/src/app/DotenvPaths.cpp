@@ -19,7 +19,8 @@ std::filesystem::path dotenvExecutableDirectory() {
 #ifdef _WIN32
     std::wstring buffer(260, L'\0');
     for (;;) {
-        const auto length = ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        const auto length =
+            ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
         if (length == 0) {
             throw std::runtime_error("failed to resolve executable path");
         }
@@ -45,7 +46,9 @@ std::filesystem::path dotenvExecutableDirectory() {
             throw std::runtime_error("failed to resolve executable path");
         }
         if (static_cast<std::size_t>(length) < buffer.size()) {
-            return std::filesystem::path(std::string_view(buffer.data(), static_cast<std::size_t>(length))).parent_path();
+            return std::filesystem::path(
+                std::string_view(buffer.data(), static_cast<std::size_t>(length)))
+                .parent_path();
         }
         buffer.resize(buffer.size() * 2);
     }

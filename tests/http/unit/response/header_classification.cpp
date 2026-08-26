@@ -38,7 +38,8 @@ const Case kKnown[] = {
     {"Access-Control-Allow-Methods", ruvia::detail::kResponseHeaderAccessControlAllowMethods},
     {"Access-Control-Allow-Headers", ruvia::detail::kResponseHeaderAccessControlAllowHeaders},
     {"Access-Control-Expose-Headers", ruvia::detail::kResponseHeaderAccessControlExposeHeaders},
-    {"Access-Control-Allow-Credentials", ruvia::detail::kResponseHeaderAccessControlAllowCredentials},
+    {"Access-Control-Allow-Credentials",
+        ruvia::detail::kResponseHeaderAccessControlAllowCredentials},
 };
 
 }  // namespace
@@ -62,8 +63,10 @@ RUVIA_TEST(response_header_bits_are_distinct) {
 
 RUVIA_TEST(response_header_classification_case_and_unknown) {
     RUVIA_CHECK(classifyResponseHeaderName("date") == ruvia::detail::kResponseHeaderDate);
-    RUVIA_CHECK(classifyResponseHeaderName("SET-COOKIE") == ruvia::detail::kResponseHeaderSetCookie);
-    RUVIA_CHECK(classifyResponseHeaderName("content-length") == ruvia::detail::kResponseHeaderContentLength);
+    RUVIA_CHECK(
+        classifyResponseHeaderName("SET-COOKIE") == ruvia::detail::kResponseHeaderSetCookie);
+    RUVIA_CHECK(classifyResponseHeaderName("content-length") ==
+                ruvia::detail::kResponseHeaderContentLength);
     RUVIA_CHECK(classifyResponseHeaderName("") == 0U);
     RUVIA_CHECK(classifyResponseHeaderName("X-Custom") == 0U);
     RUVIA_CHECK(classifyResponseHeaderName("Datex") == 0U);  // 5 bytes, not "Allow"

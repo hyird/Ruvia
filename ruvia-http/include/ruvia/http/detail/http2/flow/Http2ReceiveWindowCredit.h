@@ -10,7 +10,8 @@ namespace ruvia::detail {
 // Consumed receive credit is intentionally not advertised frame-by-frame. Waiting
 // until half the configured window has accumulated preserves at least half-window
 // forward progress while bounding WINDOW_UPDATE amplification for tiny DATA frames.
-inline constexpr std::uint32_t kHttp2ReceiveWindowUpdateThreshold = Http2LocalSettings::kInitialWindowSize / 2;
+inline constexpr std::uint32_t kHttp2ReceiveWindowUpdateThreshold =
+    Http2LocalSettings::kInitialWindowSize / 2;
 
 static_assert(kHttp2ReceiveWindowUpdateThreshold > 0);
 

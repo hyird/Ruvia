@@ -34,7 +34,8 @@ struct AccessLogSink final {
 };
 
 struct ConnectionFailureRecordAccess final {
-    [[nodiscard]] static ConnectionFailureRecord make(std::string_view remoteAddress, std::exception_ptr exception) noexcept {
+    [[nodiscard]] static ConnectionFailureRecord make(
+        std::string_view remoteAddress, std::exception_ptr exception) noexcept {
         return ConnectionFailureRecord(remoteAddress, std::move(exception));
     }
 };
@@ -97,8 +98,7 @@ struct HttpServerOptions final {
             return DocumentRoot(Standalone{&root});
         }
 
-        [[nodiscard]] static DocumentRoot refreshing(
-            const StaticRoot& root,
+        [[nodiscard]] static DocumentRoot refreshing(const StaticRoot& root,
             DocumentRootRuntimeConfig config = {},
             StaticRootPrecompressionOptions precompression = {}) noexcept {
             return DocumentRoot(Refreshing{&root, config, precompression});
@@ -115,7 +115,8 @@ struct HttpServerOptions final {
             return refreshing == nullptr ? nullptr : &refreshing->config;
         }
 
-        [[nodiscard]] const StaticRootPrecompressionOptions* precompressionOptions() const noexcept {
+        [[nodiscard]] const StaticRootPrecompressionOptions* precompressionOptions()
+            const noexcept {
             const auto* refreshing = std::get_if<Refreshing>(&state_);
             return refreshing == nullptr ? nullptr : &refreshing->precompression;
         }
@@ -139,8 +140,10 @@ struct HttpServerOptions final {
         }
 
     private:
-        explicit DocumentRoot(Standalone state) noexcept : state_(state) {}
-        explicit DocumentRoot(Refreshing state) noexcept : state_(state) {}
+        explicit DocumentRoot(Standalone state) noexcept
+            : state_(state) {}
+        explicit DocumentRoot(Refreshing state) noexcept
+            : state_(state) {}
 
         std::variant<std::monostate, Standalone, Refreshing> state_;
     };
@@ -188,7 +191,6 @@ struct HttpServerOptions final {
     ConnectionFailureSink connectionFailure{};
     std::optional<RateLimitRule> defaultRateLimitPerWorker{};
     std::size_t rateLimitCapacityPerWorker{kDefaultRateLimitCapacityPerWorker};
-
 };
 
 }  // namespace ruvia::detail

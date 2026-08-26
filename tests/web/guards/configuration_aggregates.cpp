@@ -56,7 +56,8 @@ int main() {
     consume(ruvia::ServerConfig{.workerCount = 1});
     consume(ruvia::ServerConfig{.memoryPool = {}});
     consume(ruvia::TlsClientCertificateConfig{.verifyFile = std::nullopt});
-    consume(ruvia::TlsClientCertificateConfig{.requirement = ruvia::TlsClientCertificateRequirement::kOptional});
+    consume(ruvia::TlsClientCertificateConfig{
+        .requirement = ruvia::TlsClientCertificateRequirement::kOptional});
     consume(ruvia::TlsSniConfig{.host = "example.test"});
     consume(ruvia::TlsSniConfig{.privateKeyPassword = {}});
     consume(ruvia::TlsConfig{.certificateChainFile = {}});
@@ -97,8 +98,10 @@ int main() {
     consume(ruvia::RateLimitConfig{.capacityPerWorker = 1});
     consume(ruvia::SecurityHeader{.name = "X-Test"});
     consume(ruvia::SecurityHeader{.value = "enabled"});
-    consume(ruvia::SecurityHeadersConfig{.contentTypeOptionsHeader = ruvia::DefaultSecurityHeaderPolicy::kEmitDefault});
-    consume(ruvia::SecurityHeadersConfig{.existingHeaders = ruvia::SecurityHeaderConflictPolicy::kPreserveExisting});
+    consume(ruvia::SecurityHeadersConfig{
+        .contentTypeOptionsHeader = ruvia::DefaultSecurityHeaderPolicy::kEmitDefault});
+    consume(ruvia::SecurityHeadersConfig{
+        .existingHeaders = ruvia::SecurityHeaderConflictPolicy::kPreserveExisting});
     consume(ruvia::ValidationIssueOptions{.field = "field"});
     consume(ruvia::ValidationIssueOptions{.resource = std::pmr::get_default_resource()});
     consume(ruvia::WebSocketRouteConfig{.subprotocols = {}});
@@ -125,7 +128,8 @@ int main() {
     consume(ruvia::RedisStreamReadView{.stream = "events"});
     consume(ruvia::RedisStreamReadView{.id = ">"});
     consume(ruvia::RedisXReadGroupOptions{.count = std::nullopt});
-    consume(ruvia::RedisXReadGroupOptions{.acknowledgement = ruvia::RedisXReadGroupAcknowledgementPolicy::kTrackPending});
+    consume(ruvia::RedisXReadGroupOptions{
+        .acknowledgement = ruvia::RedisXReadGroupAcknowledgementPolicy::kTrackPending});
     consume(ruvia::RedisSetOptions{.condition = std::nullopt});
     consume(ruvia::RedisSetOptions{.previousValue = ruvia::RedisSetPreviousValuePolicy::kDiscard});
     consume(ruvia::RedisScanOptions{.cursor = std::nullopt});

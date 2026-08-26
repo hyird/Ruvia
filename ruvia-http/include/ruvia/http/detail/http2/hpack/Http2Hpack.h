@@ -19,7 +19,15 @@ struct HpackDecoderOptions final {
 
 class HpackDecodeResult;
 
-enum class HpackDecodeError { kNeedMore, kIntegerOverflow, kInvalidIndex, kInvalidString, kInvalidHuffman, kDynamicTableSize, kCallbackRejected };
+enum class HpackDecodeError {
+    kNeedMore,
+    kIntegerOverflow,
+    kInvalidIndex,
+    kInvalidString,
+    kInvalidHuffman,
+    kDynamicTableSize,
+    kCallbackRejected
+};
 
 class HpackDecoded final {
 private:
@@ -107,7 +115,8 @@ inline constexpr std::uint8_t kHpackLiteralNeverIndexed = 0x10;     // §6.2.3
 // in a shared dynamic table (a compression side-channel, cf. CRIME). Names must
 // already be lowercased (both encode call sites lowercase before dispatch).
 [[nodiscard]] inline bool hpackHeaderNameIsSensitive(std::string_view name) noexcept {
-    return name == "authorization" || name == "proxy-authorization" || name == "cookie" || name == "set-cookie";
+    return name == "authorization" || name == "proxy-authorization" || name == "cookie" ||
+           name == "set-cookie";
 }
 
 class HpackDecoder final {
@@ -144,8 +153,10 @@ public:
 
     void setMaxDynamicTableSize(std::size_t bytes);
     [[nodiscard]] DecodeTransaction beginTransaction() noexcept;
-    [[nodiscard]] HpackDecodeResult decode(std::string_view block, void* target, HeaderCallback callback);
-    [[nodiscard]] HpackDecodeResult decode(std::string_view block, void* target, HeaderCallback callback, DecodeTransaction& transaction);
+    [[nodiscard]] HpackDecodeResult decode(
+        std::string_view block, void* target, HeaderCallback callback);
+    [[nodiscard]] HpackDecodeResult decode(std::string_view block, void* target,
+        HeaderCallback callback, DecodeTransaction& transaction);
 
 private:
     using StepResult = std::optional<HpackDecodeError>;
@@ -160,20 +171,27 @@ private:
         std::string_view value;
     };
 
-    [[nodiscard]] static std::size_t entrySize(std::string_view name, std::string_view value) noexcept;
-    [[nodiscard]] HpackDecodeResult decodeBlock(std::string_view block, void* target, HeaderCallback callback);
-    [[nodiscard]] StepResult decodeInteger(const unsigned char*& cursor, const unsigned char* end, std::uint8_t prefixBits, std::uint32_t& value) const noexcept;
-    [[nodiscard]] StepResult decodeString(const unsigned char*& cursor, const unsigned char* end, std::pmr::string& scratch, std::string_view& value);
+    [[nodiscard]] static std::size_t entrySize(
+        std::string_view name, std::string_view value) noexcept;
+    [[nodiscard]] HpackDecodeResult decodeBlock(
+        std::string_view block, void* target, HeaderCallback callback);
+    [[nodiscard]] StepResult decodeInteger(const unsigned char*& cursor, const unsigned char* end,
+        std::uint8_t prefixBits, std::uint32_t& value) const noexcept;
+    [[nodiscard]] StepResult decodeString(const unsigned char*& cursor, const unsigned char* end,
+        std::pmr::string& scratch, std::string_view& value);
     // `rejected` is an in/out latch: once a callback has returned false, no further
     // callbacks fire, BUT the block keeps decoding and dynamic-table insertions still
     // apply (including this entry's) so the connection-global table stays consistent
     // -- RFC 7541 requires the whole field block to be processed. Set true here when a
     // fresh callback rejects; the caller reports it after finishing the block.
-    [[nodiscard]] StepResult decodeLiteralHeader(const unsigned char*& cursor, const unsigned char* end, std::uint8_t nameIndexPrefixBits, bool indexIntoDynamic, void* target, HeaderCallback callback, bool& rejected);
+    [[nodiscard]] StepResult decodeLiteralHeader(const unsigned char*& cursor,
+        const unsigned char* end, std::uint8_t nameIndexPrefixBits, bool indexIntoDynamic,
+        void* target, HeaderCallback callback, bool& rejected);
     [[nodiscard]] StepResult decodeHuffman(std::string_view encoded, std::pmr::string& output);
     void releaseScratch();
     [[nodiscard]] StepResult indexedHeader(std::uint32_t index, HeaderView& header) const noexcept;
-    [[nodiscard]] StepResult indexedName(std::uint32_t index, std::string_view& name) const noexcept;
+    [[nodiscard]] StepResult indexedName(
+        std::uint32_t index, std::string_view& name) const noexcept;
     [[nodiscard]] std::size_t dynamicEntryCount() const noexcept;
     [[nodiscard]] const Entry& dynamicEntryByNewestIndex(std::size_t newestIndex) const noexcept;
     void addDynamic(std::string_view name, std::string_view value);
@@ -209,11 +227,13 @@ public:
     static void encodeHeader(std::pmr::string& out, std::string_view name, std::string_view value);
     // Throws std::length_error before changing `out` when `value` is too large for
     // the HPACK string length field.
-    static void encodeHeaderWithNameIndex(std::pmr::string& out, std::uint32_t nameIndex, std::string_view value, bool neverIndexed = false);
+    static void encodeHeaderWithNameIndex(std::pmr::string& out, std::uint32_t nameIndex,
+        std::string_view value, bool neverIndexed = false);
     static void encodeStatus(std::pmr::string& out, HttpStatusCode status);
 
 private:
-    static void encodeInteger(std::pmr::string& out, std::uint8_t firstByteMask, std::uint8_t prefixBits, std::uint32_t value);
+    static void encodeInteger(std::pmr::string& out, std::uint8_t firstByteMask,
+        std::uint8_t prefixBits, std::uint32_t value);
     static void encodeString(std::pmr::string& out, std::string_view value);
 };
 

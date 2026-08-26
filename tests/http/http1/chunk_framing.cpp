@@ -60,7 +60,8 @@ RUVIA_TEST(chunk_scan_rejects_unterminated_framing_at_the_header_limit) {
     std::string oversizedTerminatedSizeLine = "1;x=";
     oversizedTerminatedSizeLine.append(ruvia::kMaxHttpHeaderBytes, 'a');
     oversizedTerminatedSizeLine.append("\r\n");
-    const auto terminatedSizeLineResult = ruvia::detail::scanHttpChunkedBody(oversizedTerminatedSizeLine);
+    const auto terminatedSizeLineResult =
+        ruvia::detail::scanHttpChunkedBody(oversizedTerminatedSizeLine);
     RUVIA_CHECK(terminatedSizeLineResult.failure() != nullptr);
     if (const auto* failure = terminatedSizeLineResult.failure()) {
         RUVIA_CHECK(failure->error() == ruvia::detail::HttpChunkScanError::kTooLarge);

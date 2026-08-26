@@ -20,7 +20,8 @@ class WorkerCancellationMailbox final
     : public std::enable_shared_from_this<WorkerCancellationMailbox<Owner>> {
 public:
     WorkerCancellationMailbox(Owner& owner, const WorkerHandle& worker) noexcept
-        : owner_(&owner), worker_(worker) {}
+        : owner_(&owner),
+          worker_(worker) {}
 
     [[nodiscard]] const WorkerHandle& worker() const noexcept {
         return worker_;
@@ -60,7 +61,8 @@ template <typename Mailbox>
 class WorkerCancellationDispatch final {
 public:
     WorkerCancellationDispatch(std::shared_ptr<Mailbox> mailbox, std::uint64_t operationId) noexcept
-        : mailbox_(std::move(mailbox)), operationId_(operationId) {}
+        : mailbox_(std::move(mailbox)),
+          operationId_(operationId) {}
 
     void operator()() noexcept {
         mailbox_->dispatch(operationId_);
@@ -74,8 +76,10 @@ private:
 template <typename Mailbox>
 class WorkerCancellationPost final {
 public:
-    WorkerCancellationPost(const std::shared_ptr<Mailbox>& mailbox, std::uint64_t operationId) noexcept
-        : mailbox_(mailbox.get()), operationId_(operationId) {
+    WorkerCancellationPost(
+        const std::shared_ptr<Mailbox>& mailbox, std::uint64_t operationId) noexcept
+        : mailbox_(mailbox.get()),
+          operationId_(operationId) {
         if (mailbox_ == nullptr) {
             std::terminate();
         }
