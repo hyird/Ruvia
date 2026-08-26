@@ -73,15 +73,18 @@ public:
     }
     [[nodiscard]] constexpr const Http1RequestBufferCompaction* compaction() const&& = delete;
 
-    [[nodiscard]] constexpr const Http1RequestBufferPipelineRestore* pipelineRestore() const& noexcept {
+    [[nodiscard]] constexpr const Http1RequestBufferPipelineRestore* pipelineRestore()
+        const& noexcept {
         return std::get_if<Http1RequestBufferPipelineRestore>(&value_);
     }
-    [[nodiscard]] constexpr const Http1RequestBufferPipelineRestore* pipelineRestore() const&& = delete;
+    [[nodiscard]] constexpr const Http1RequestBufferPipelineRestore* pipelineRestore() const&& =
+        delete;
 
 private:
     friend class Http1SessionRequestCompletion;
 
-    using Value = std::variant<Http1RequestBufferDiscarded, Http1RequestBufferCompaction, Http1RequestBufferPipelineRestore>;
+    using Value = std::variant<Http1RequestBufferDiscarded, Http1RequestBufferCompaction,
+        Http1RequestBufferPipelineRestore>;
 
     template <typename Alternative>
     explicit constexpr Http1RequestBufferCompletion(Alternative alternative) noexcept
@@ -120,29 +123,39 @@ private:
 // session never reconstructs them from an optional status plus scalar flags.
 class Http1SessionRequestCompletion final {
 public:
-    [[nodiscard]] static Http1SessionRequestCompletion makeBufferedClosing(Http1ServerConnectionPlan connectionPlan) noexcept {
+    [[nodiscard]] static Http1SessionRequestCompletion makeBufferedClosing(
+        Http1ServerConnectionPlan connectionPlan) noexcept {
         if (connectionPlan.disposition() != Http1ClosePolicy::kCloseAfterResponse) {
             std::terminate();
         }
-        return Http1SessionRequestCompletion(Http1BufferedResponseReady{}, connectionPlan, Http1RequestBufferCompletion(Http1RequestBufferDiscarded{}));
+        return Http1SessionRequestCompletion(Http1BufferedResponseReady{}, connectionPlan,
+            Http1RequestBufferCompletion(Http1RequestBufferDiscarded{}));
     }
 
-    [[nodiscard]] static Http1SessionRequestCompletion makeBufferedUnrestored(Http1ServerConnectionPlan connectionPlan, std::size_t consumedBytes) noexcept {
-        return Http1SessionRequestCompletion(Http1BufferedResponseReady{}, connectionPlan, unshiftedBufferCompletion(connectionPlan, consumedBytes));
+    [[nodiscard]] static Http1SessionRequestCompletion makeBufferedUnrestored(
+        Http1ServerConnectionPlan connectionPlan, std::size_t consumedBytes) noexcept {
+        return Http1SessionRequestCompletion(Http1BufferedResponseReady{}, connectionPlan,
+            unshiftedBufferCompletion(connectionPlan, consumedBytes));
     }
 
-    [[nodiscard]] static Http1SessionRequestCompletion makeBufferedPipelineRestore(Http1ServerConnectionPlan connectionPlan, std::string_view pipeline) noexcept {
+    [[nodiscard]] static Http1SessionRequestCompletion makeBufferedPipelineRestore(
+        Http1ServerConnectionPlan connectionPlan, std::string_view pipeline) noexcept {
         if (connectionPlan.disposition() != Http1ClosePolicy::kAllowReuse) {
             std::terminate();
         }
-        return Http1SessionRequestCompletion(Http1BufferedResponseReady{}, connectionPlan, Http1RequestBufferCompletion(Http1RequestBufferPipelineRestore(pipeline)));
+        return Http1SessionRequestCompletion(Http1BufferedResponseReady{}, connectionPlan,
+            Http1RequestBufferCompletion(Http1RequestBufferPipelineRestore(pipeline)));
     }
 
     template <HttpTemporaryOwningCharString Pipeline>
-    static Http1SessionRequestCompletion makeBufferedPipelineRestore(Http1ServerConnectionPlan, Pipeline&&) = delete;
+    static Http1SessionRequestCompletion makeBufferedPipelineRestore(
+        Http1ServerConnectionPlan, Pipeline&&) = delete;
 
-    [[nodiscard]] static Http1SessionRequestCompletion makeCommittedStream(Http1ServerConnectionPlan connectionPlan, HttpStatusCode status, std::size_t consumedBytes) noexcept {
-        return Http1SessionRequestCompletion(Http1CommittedStreamResponse(status), connectionPlan, unshiftedBufferCompletion(connectionPlan, consumedBytes));
+    [[nodiscard]] static Http1SessionRequestCompletion makeCommittedStream(
+        Http1ServerConnectionPlan connectionPlan, HttpStatusCode status,
+        std::size_t consumedBytes) noexcept {
+        return Http1SessionRequestCompletion(Http1CommittedStreamResponse(status), connectionPlan,
+            unshiftedBufferCompletion(connectionPlan, consumedBytes));
     }
 
     [[nodiscard]] constexpr const Http1BufferedResponseReady* bufferedResponse() const& noexcept {
@@ -168,7 +181,8 @@ public:
     // representation preparation (for example a forbidden identity fallback).
     // Rebind the final response plan without losing the exact read-buffer
     // cleanup alternative already established by request-body dispatch.
-    [[nodiscard]] Http1SessionRequestCompletion withBufferedConnectionPlan(Http1ServerConnectionPlan connectionPlan) const& noexcept {
+    [[nodiscard]] Http1SessionRequestCompletion withBufferedConnectionPlan(
+        Http1ServerConnectionPlan connectionPlan) const& noexcept {
         if (std::get_if<Http1CommittedStreamResponse>(&value_) != nullptr) {
             std::terminate();
         }
@@ -190,7 +204,8 @@ public:
 private:
     using Value = std::variant<Http1BufferedResponseReady, Http1CommittedStreamResponse>;
 
-    [[nodiscard]] static Http1RequestBufferCompletion unshiftedBufferCompletion(Http1ServerConnectionPlan connectionPlan, std::size_t consumedBytes) noexcept {
+    [[nodiscard]] static Http1RequestBufferCompletion unshiftedBufferCompletion(
+        Http1ServerConnectionPlan connectionPlan, std::size_t consumedBytes) noexcept {
         if (connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse) {
             return Http1RequestBufferCompletion(Http1RequestBufferDiscarded{});
         }
@@ -198,7 +213,8 @@ private:
     }
 
     template <typename Alternative>
-    Http1SessionRequestCompletion(Alternative alternative, Http1ServerConnectionPlan connectionPlan, Http1RequestBufferCompletion bufferCompletion) noexcept
+    Http1SessionRequestCompletion(Alternative alternative, Http1ServerConnectionPlan connectionPlan,
+        Http1RequestBufferCompletion bufferCompletion) noexcept
         : value_(std::move(alternative)),
           connectionPlan_(connectionPlan),
           bufferCompletion_(std::move(bufferCompletion)) {}

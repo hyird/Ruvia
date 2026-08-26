@@ -11,7 +11,8 @@ namespace ruvia::detail {
 // a client that presents none (optional mutual TLS); adding
 // verify_fail_if_no_peer_cert makes a missing certificate fail the handshake
 // (mandatory mutual TLS).
-[[nodiscard]] inline asio::ssl::verify_mode httpServerTlsVerifyMode(TlsClientCertificateRequirement requirement) noexcept {
+[[nodiscard]] inline asio::ssl::verify_mode httpServerTlsVerifyMode(
+    TlsClientCertificateRequirement requirement) noexcept {
     auto mode = asio::ssl::verify_peer;
     if (requirement == TlsClientCertificateRequirement::kRequired) {
         mode |= asio::ssl::verify_fail_if_no_peer_cert;

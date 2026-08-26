@@ -36,7 +36,8 @@ public:
 private:
     friend class Http1ClosingRejection;
 
-    constexpr Http1ClosingRateLimitRejection(HttpErrorInfo error, RateLimitRejection rejection) noexcept
+    constexpr Http1ClosingRateLimitRejection(
+        HttpErrorInfo error, RateLimitRejection rejection) noexcept
         : error_(error),
           rejection_(rejection) {}
 
@@ -52,7 +53,8 @@ public:
         return Http1ClosingRejection(Http1ClosingError(error));
     }
 
-    [[nodiscard]] static constexpr Http1ClosingRejection rateLimit(HttpErrorInfo error, RateLimitRejection rejection) noexcept {
+    [[nodiscard]] static constexpr Http1ClosingRejection rateLimit(
+        HttpErrorInfo error, RateLimitRejection rejection) noexcept {
         return Http1ClosingRejection(Http1ClosingRateLimitRejection(error, rejection));
     }
 

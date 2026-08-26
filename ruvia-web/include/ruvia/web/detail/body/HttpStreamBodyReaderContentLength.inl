@@ -4,8 +4,7 @@ namespace ruvia::detail {
 
 template <typename Stream>
 Task<std::string_view> StreamBodyReader<Stream>::readKnownLengthAll(
-    std::pmr::string& body,
-    std::size_t contentLength) {
+    std::pmr::string& body, std::size_t contentLength) {
     compactPending();
     if (finished_) {
         co_return std::string_view(body);
@@ -30,11 +29,10 @@ Task<std::string_view> StreamBodyReader<Stream>::readKnownLengthAll(
     std::size_t offset = initialBodyBytes;
     while (offset < contentLength) {
         scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingPayload);
-        auto readCompletion = co_await asyncAsio<std::size_t>(
-            [this, &body, offset](auto handler) mutable {
+        auto readCompletion =
+            co_await asyncAsio<std::size_t>([this, &body, offset](auto handler) mutable {
                 stream_.async_read_some(
-                    asio::buffer(body.data() + offset, body.size() - offset),
-                    std::move(handler));
+                    asio::buffer(body.data() + offset, body.size() - offset), std::move(handler));
             });
         const auto ec = readCompletion.errorCode();
         const auto bytesRead = readCompletion.result();

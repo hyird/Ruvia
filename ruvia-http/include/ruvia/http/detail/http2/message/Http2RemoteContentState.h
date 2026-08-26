@@ -18,7 +18,8 @@ public:
 private:
     friend class Http2RemoteContentState;
 
-    explicit constexpr Http2RemoteContentAllowedWithoutLength(std::size_t receivedBytes = 0) noexcept
+    explicit constexpr Http2RemoteContentAllowedWithoutLength(
+        std::size_t receivedBytes = 0) noexcept
         : receivedBytes_(receivedBytes) {}
 
     std::size_t receivedBytes_{0};
@@ -37,7 +38,8 @@ public:
 private:
     friend class Http2RemoteContentState;
 
-    explicit constexpr Http2RemoteContentAllowedKnownLength(std::size_t declaredLength, std::size_t receivedBytes = 0) noexcept
+    explicit constexpr Http2RemoteContentAllowedKnownLength(
+        std::size_t declaredLength, std::size_t receivedBytes = 0) noexcept
         : declaredLength_(declaredLength),
           receivedBytes_(receivedBytes) {}
 
@@ -61,13 +63,19 @@ public:
 private:
     friend class Http2RemoteContentState;
 
-    explicit constexpr Http2RemoteContentMetadataOnlyKnownLength(std::size_t declaredLength) noexcept
+    explicit constexpr Http2RemoteContentMetadataOnlyKnownLength(
+        std::size_t declaredLength) noexcept
         : declaredLength_(declaredLength) {}
 
     std::size_t declaredLength_;
 };
 
-enum class Http2RemoteContentAccountingResult : std::uint8_t { kAccepted, kCounterOverflow, kDeclaredLengthExceeded, kContentForbidden };
+enum class Http2RemoteContentAccountingResult : std::uint8_t {
+    kAccepted,
+    kCounterOverflow,
+    kDeclaredLengthExceeded,
+    kContentForbidden
+};
 
 // Content allowance, Content-Length ownership, and received-byte accounting are
 // one exclusive state. HEAD/204/304 responses retain representation length
@@ -121,45 +129,57 @@ public:
     }
 
     [[nodiscard]] Http2RemoteContentAccountingResult account(std::size_t bytes) noexcept {
-        if (auto* allowed = std::get_if<Http2RemoteContentAllowedWithoutLength>(&state_); allowed != nullptr) {
+        if (auto* allowed = std::get_if<Http2RemoteContentAllowedWithoutLength>(&state_);
+            allowed != nullptr) {
             if (bytes > std::numeric_limits<std::size_t>::max() - allowed->receivedBytes_) {
                 return Http2RemoteContentAccountingResult::kCounterOverflow;
             }
             allowed->receivedBytes_ += bytes;
             return Http2RemoteContentAccountingResult::kAccepted;
         }
-        if (auto* allowed = std::get_if<Http2RemoteContentAllowedKnownLength>(&state_); allowed != nullptr) {
+        if (auto* allowed = std::get_if<Http2RemoteContentAllowedKnownLength>(&state_);
+            allowed != nullptr) {
             if (bytes > std::numeric_limits<std::size_t>::max() - allowed->receivedBytes_) {
                 return Http2RemoteContentAccountingResult::kCounterOverflow;
             }
-            if (allowed->receivedBytes_ > allowed->declaredLength_ || bytes > allowed->declaredLength_ - allowed->receivedBytes_) {
+            if (allowed->receivedBytes_ > allowed->declaredLength_ ||
+                bytes > allowed->declaredLength_ - allowed->receivedBytes_) {
                 return Http2RemoteContentAccountingResult::kDeclaredLengthExceeded;
             }
             allowed->receivedBytes_ += bytes;
             return Http2RemoteContentAccountingResult::kAccepted;
         }
-        return bytes == 0 ? Http2RemoteContentAccountingResult::kAccepted : Http2RemoteContentAccountingResult::kContentForbidden;
+        return bytes == 0 ? Http2RemoteContentAccountingResult::kAccepted
+                          : Http2RemoteContentAccountingResult::kContentForbidden;
     }
 
-    [[nodiscard]] constexpr const Http2RemoteContentAllowedWithoutLength* allowedWithoutLength() const& noexcept {
+    [[nodiscard]] constexpr const Http2RemoteContentAllowedWithoutLength* allowedWithoutLength()
+        const& noexcept {
         return std::get_if<Http2RemoteContentAllowedWithoutLength>(&state_);
     }
-    [[nodiscard]] constexpr const Http2RemoteContentAllowedWithoutLength* allowedWithoutLength() const&& = delete;
+    [[nodiscard]] constexpr const Http2RemoteContentAllowedWithoutLength* allowedWithoutLength()
+        const&& = delete;
 
-    [[nodiscard]] constexpr const Http2RemoteContentAllowedKnownLength* allowedKnownLength() const& noexcept {
+    [[nodiscard]] constexpr const Http2RemoteContentAllowedKnownLength* allowedKnownLength()
+        const& noexcept {
         return std::get_if<Http2RemoteContentAllowedKnownLength>(&state_);
     }
-    [[nodiscard]] constexpr const Http2RemoteContentAllowedKnownLength* allowedKnownLength() const&& = delete;
+    [[nodiscard]] constexpr const Http2RemoteContentAllowedKnownLength* allowedKnownLength()
+        const&& = delete;
 
-    [[nodiscard]] constexpr const Http2RemoteContentMetadataOnlyWithoutLength* metadataOnlyWithoutLength() const& noexcept {
+    [[nodiscard]] constexpr const Http2RemoteContentMetadataOnlyWithoutLength*
+    metadataOnlyWithoutLength() const& noexcept {
         return std::get_if<Http2RemoteContentMetadataOnlyWithoutLength>(&state_);
     }
-    [[nodiscard]] constexpr const Http2RemoteContentMetadataOnlyWithoutLength* metadataOnlyWithoutLength() const&& = delete;
+    [[nodiscard]] constexpr const Http2RemoteContentMetadataOnlyWithoutLength*
+    metadataOnlyWithoutLength() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2RemoteContentMetadataOnlyKnownLength* metadataOnlyKnownLength() const& noexcept {
+    [[nodiscard]] constexpr const Http2RemoteContentMetadataOnlyKnownLength*
+    metadataOnlyKnownLength() const& noexcept {
         return std::get_if<Http2RemoteContentMetadataOnlyKnownLength>(&state_);
     }
-    [[nodiscard]] constexpr const Http2RemoteContentMetadataOnlyKnownLength* metadataOnlyKnownLength() const&& = delete;
+    [[nodiscard]] constexpr const Http2RemoteContentMetadataOnlyKnownLength*
+    metadataOnlyKnownLength() const&& = delete;
 
     [[nodiscard]] bool terminalLengthValid() const noexcept {
         const auto* known = allowedKnownLength();
@@ -167,7 +187,9 @@ public:
     }
 
 private:
-    using State = std::variant<Http2RemoteContentAllowedWithoutLength, Http2RemoteContentAllowedKnownLength, Http2RemoteContentMetadataOnlyWithoutLength, Http2RemoteContentMetadataOnlyKnownLength>;
+    using State =
+        std::variant<Http2RemoteContentAllowedWithoutLength, Http2RemoteContentAllowedKnownLength,
+            Http2RemoteContentMetadataOnlyWithoutLength, Http2RemoteContentMetadataOnlyKnownLength>;
 
     State state_;
 };

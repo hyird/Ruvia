@@ -9,7 +9,8 @@
 namespace ruvia::detail::model {
 
 template <std::size_t Capacity>
-[[nodiscard]] constexpr bool appendPatternAtom(std::string_view pattern, std::size_t end, std::size_t& cursor, PatternPlan<Capacity>& plan) noexcept {
+[[nodiscard]] constexpr bool appendPatternAtom(std::string_view pattern, std::size_t end,
+    std::size_t& cursor, PatternPlan<Capacity>& plan) noexcept {
     if (cursor >= end || plan.count >= Capacity) {
         return false;
     }
@@ -78,7 +79,8 @@ template <std::size_t Capacity>
 }
 
 template <std::size_t Capacity>
-[[nodiscard]] constexpr PatternPlan<Capacity> compilePatternPlan(std::string_view pattern) noexcept {
+[[nodiscard]] constexpr PatternPlan<Capacity> compilePatternPlan(
+    std::string_view pattern) noexcept {
     PatternPlan<Capacity> plan{};
     if (pattern.size() < 2 || pattern.front() != '^' || pattern.back() != '$') {
         return plan;
@@ -92,7 +94,8 @@ template <std::size_t Capacity>
             return {};
         }
 
-        if (cursor < patternEnd && (pattern[cursor] == '*' || pattern[cursor] == '+' || pattern[cursor] == '?')) {
+        if (cursor < patternEnd &&
+            (pattern[cursor] == '*' || pattern[cursor] == '+' || pattern[cursor] == '?')) {
             switch (pattern[cursor++]) {
                 case '*':
                     plan.atoms[index].quantifier = PatternQuantifier::kZeroOrMore;
@@ -118,7 +121,8 @@ struct CompiledPatternPlan final {
     static constexpr auto value = compilePatternPlan<Pattern.view().size()>(Pattern.view());
     static_assert(value.valid,
         "RUVIA_PATTERN supports only anchored lightweight full-match patterns. "
-        "Use RUVIA_REGEX for full std::regex syntax or RUVIA_CUSTOM for a custom hot-path matcher.");
+        "Use RUVIA_REGEX for full std::regex syntax or RUVIA_CUSTOM for a custom hot-path "
+        "matcher.");
 };
 
 }  // namespace ruvia::detail::model

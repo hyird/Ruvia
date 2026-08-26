@@ -27,7 +27,8 @@ RUVIA_TEST(websocket_accept_rfc6455_vector) {
 
 RUVIA_TEST(websocket_accept_trims_ows_and_is_key_sensitive) {
     // Leading/trailing OWS on the header value is trimmed before hashing.
-    RUVIA_CHECK_EQ(accept("  dGhlIHNhbXBsZSBub25jZQ==  "), std::string("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="));
+    RUVIA_CHECK_EQ(
+        accept("  dGhlIHNhbXBsZSBub25jZQ==  "), std::string("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="));
     // The accept is always 28 base64 characters (a 20-byte SHA-1 digest).
     RUVIA_CHECK_EQ(accept("dGhlIHNhbXBsZSBub25jZQ==").size(), std::size_t{28});
     // A different key yields a different accept.

@@ -57,8 +57,10 @@ struct TestApp::Impl final {
     detail::ControllerStore controllers;
     WorkerMemory memory;
     Env env;
-    std::pmr::vector<detail::ControllerMiddlewareDescriptor> globalMiddlewares{detail::registrationResource()};
-    std::pmr::vector<detail::WorkerStateDefinition> workerStateDefinitions{detail::registrationResource()};
+    std::pmr::vector<detail::ControllerMiddlewareDescriptor> globalMiddlewares{
+        detail::registrationResource()};
+    std::pmr::vector<detail::WorkerStateDefinition> workerStateDefinitions{
+        detail::registrationResource()};
     std::vector<std::pair<std::string, HttpErrorHandler>> prefixErrorHandlers;
     std::vector<std::pair<std::string, HttpNotFoundHandler>> prefixNotFoundHandlers;
     HttpErrorHandler errorHandler{nullptr};
@@ -99,7 +101,8 @@ struct TestApp::Impl final {
             routes.setPrefixErrorHandlers(views);
         }
         if (!prefixNotFoundHandlers.empty()) {
-            std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(detail::registrationResource());
+            std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(
+                detail::registrationResource());
             views.reserve(prefixNotFoundHandlers.size());
             for (const auto& [prefix, handler] : prefixNotFoundHandlers) {
                 views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
@@ -112,10 +115,7 @@ struct TestApp::Impl final {
         routes.finalize();
         if (routes.routeTable().hasRouteRateLimit()) {
             rateLimiter.emplace(
-                std::nullopt,
-                detail::RouteRateLimitPresence::kPresent,
-                1024,
-                memory.resource());
+                std::nullopt, detail::RouteRateLimitPresence::kPresent, 1024, memory.resource());
         }
         workerStates.emplace(memory.resource(), workerStateDefinitions);
         workerStates->initialize();
@@ -197,12 +197,14 @@ TestResponse TestApp::request(const TestRequest& request) {
                 break;
             }
         }
-        if (!parseError.has_value() && !request.cookies_.empty() && !detail::isValidHttpHeaderValue(request.cookies_)) {
+        if (!parseError.has_value() && !request.cookies_.empty() &&
+            !detail::isValidHttpHeaderValue(request.cookies_)) {
             parseError = HttpParseError::kInvalidHeader;
         }
     }
     if (!parseError.has_value()) {
-        requestHead.reserve(request.method_.size() + request.target_.size() + request.cookies_.size() + 16);
+        requestHead.reserve(
+            request.method_.size() + request.target_.size() + request.cookies_.size() + 16);
         requestHead.append(request.method_);
         requestHead.push_back(' ');
         requestHead.append(request.target_);
@@ -218,7 +220,8 @@ TestResponse TestApp::request(const TestRequest& request) {
         detail::ParsedRequestHeaderBlock block;
         if (requestHead.size() > kMaxHttpHeaderBytes) {
             parseError = HttpParseError::kHeaderTooLarge;
-        } else if (const auto error = detail::parseHttpHeaderBlock(requestHead, requestHead.size(), block)) {
+        } else if (const auto error =
+                       detail::parseHttpHeaderBlock(requestHead, requestHead.size(), block)) {
             parseError = *error;
         } else {
             const auto contentLength = block.contentLength.value();
@@ -226,27 +229,40 @@ TestResponse TestApp::request(const TestRequest& request) {
             const auto contentSemantics = detail::httpRequestContentSemantics(request.method_);
             if (transferEncoding.has_value() && contentLength.has_value()) {
                 parseError = HttpParseError::kInvalidTransferEncoding;
-            } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden && transferEncoding.has_value()) {
+            } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden &&
+                       transferEncoding.has_value()) {
                 parseError = HttpParseError::kInvalidTransferEncoding;
-            } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden && contentLength.has_value()) {
+            } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden &&
+                       contentLength.has_value()) {
                 parseError = HttpParseError::kInvalidContentLength;
-            } else if (transferEncoding.has_value() && transferEncoding->finalChunked() == nullptr) {
+            } else if (transferEncoding.has_value() &&
+                       transferEncoding->finalChunked() == nullptr) {
                 parseError = HttpParseError::kInvalidTransferEncoding;
-            } else if (contentSemantics == detail::HttpRequestContentSemantics::kContentTypeRequired && (contentLength.has_value() || transferEncoding.has_value()) && (block.seenHeaderBits & detail::singletonRequestHeaderBit(detail::RequestHeaderKind::kContentType)) == 0) {
+            } else if (contentSemantics ==
+                           detail::HttpRequestContentSemantics::kContentTypeRequired &&
+                       (contentLength.has_value() || transferEncoding.has_value()) &&
+                       (block.seenHeaderBits & detail::singletonRequestHeaderBit(
+                                                   detail::RequestHeaderKind::kContentType)) == 0) {
                 parseError = HttpParseError::kInvalidHeader;
             }
 
             if (!parseError.has_value()) {
-                const auto targetRebindsHost = targetView.form == detail::HttpRequestTargetForm::kAbsolute || targetView.form == detail::HttpRequestTargetForm::kAuthority;
+                const auto targetRebindsHost =
+                    targetView.form == detail::HttpRequestTargetForm::kAbsolute ||
+                    targetView.form == detail::HttpRequestTargetForm::kAuthority;
                 for (std::size_t i = 0; i < block.headerCount; ++i) {
                     const auto& header = block.headers[i];
                     auto value = header.value.bind(requestHead);
-                    if (targetRebindsHost && block.hostHeaderIndex >= 0 && i == static_cast<std::size_t>(block.hostHeaderIndex)) {
+                    if (targetRebindsHost && block.hostHeaderIndex >= 0 &&
+                        i == static_cast<std::size_t>(block.hostHeaderIndex)) {
                         value = targetView.authority;
                     }
                     const HttpHeaderView view{header.name.bind(requestHead), value};
                     const auto slot = detail::requestHeaderKindKnownSlot(header.kind);
-                    const bool added = slot < detail::kRequestHeaderKindCount ? detail::HttpRequestAccess::addHeader(parsed, view, slot) : detail::HttpRequestAccess::addHeader(parsed, view);
+                    const bool added =
+                        slot < detail::kRequestHeaderKindCount
+                            ? detail::HttpRequestAccess::addHeader(parsed, view, slot)
+                            : detail::HttpRequestAccess::addHeader(parsed, view);
                     if (!added) {
                         parseError = HttpParseError::kTooManyHeaders;
                         break;
@@ -261,13 +277,12 @@ TestResponse TestApp::request(const TestRequest& request) {
     const auto resolution = routes.resolve(parsed);
     const auto* resolved = resolution.resolved();
     if (!parseError.has_value() && resolved != nullptr && resolved->route().deadlineMs() != 0) {
-        throw std::logic_error("TestApp cannot dispatch a route with Deadline; use a loopback WebWorkerRuntime");
+        throw std::logic_error(
+            "TestApp cannot dispatch a route with Deadline; use a loopback WebWorkerRuntime");
     }
 
     detail::ContextServices services(
-        nullptr,
-        nullptr,
-        impl_->rateLimiter ? &*impl_->rateLimiter : nullptr);
+        nullptr, nullptr, impl_->rateLimiter ? &*impl_->rateLimiter : nullptr);
     services = services.withEnv(impl_->env).withWorkerStates(*impl_->workerStates);
 
     std::optional<HttpProtocolError> bodyLimitError;
@@ -282,16 +297,17 @@ TestResponse TestApp::request(const TestRequest& request) {
     auto dispatch = [&]() -> asio::awaitable<HttpResponse> {
         if (parseError.has_value()) {
             const auto error = httpParseProtocolError(*parseError);
-            co_return co_await detail::taskAsAwaitable(routes.handleError(parsed, requestMemory, HttpErrorInfo({.status = error.status(), .message = error.what()}), services));
+            co_return co_await detail::taskAsAwaitable(routes.handleError(parsed, requestMemory,
+                HttpErrorInfo({.status = error.status(), .message = error.what()}), services));
         }
         if (bodyLimitError.has_value()) {
-            co_return co_await detail::taskAsAwaitable(routes.handleError(
-                parsed,
-                requestMemory,
-                HttpErrorInfo({.status = bodyLimitError->status(), .message = bodyLimitError->what()}),
+            co_return co_await detail::taskAsAwaitable(routes.handleError(parsed, requestMemory,
+                HttpErrorInfo(
+                    {.status = bodyLimitError->status(), .message = bodyLimitError->what()}),
                 services));
         }
-        co_return co_await detail::taskAsAwaitable(routes.dispatchBufferedResponse(parsed, resolution, requestMemory, detail::DocumentRootBinding::none(), services));
+        co_return co_await detail::taskAsAwaitable(routes.dispatchBufferedResponse(
+            parsed, resolution, requestMemory, detail::DocumentRootBinding::none(), services));
     };
     auto future = asio::co_spawn(context, dispatch(), asio::use_future);
     context.run();

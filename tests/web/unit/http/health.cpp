@@ -10,7 +10,8 @@
 
 namespace {
 
-[[nodiscard]] ruvia::Context makeContext(ruvia::RequestMemory& memory, ruvia::HttpRequest& request) {
+[[nodiscard]] ruvia::Context makeContext(
+    ruvia::RequestMemory& memory, ruvia::HttpRequest& request) {
     ruvia::detail::HttpRequestAccess::reset(request);
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
     return ruvia::detail::ContextAccess::make(memory, request);
@@ -30,8 +31,10 @@ RUVIA_TEST(health_responses_use_context_response_state) {
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
     RUVIA_CHECK_EQ(response.header("X-Trace"), std::string_view("health"));
-    RUVIA_CHECK(response.header("Set-Cookie").value_or(std::string_view{}).starts_with("probe=ok;"));
-    RUVIA_CHECK_EQ(ruvia::detail::responseBody(response).bytes(), std::string_view("{\"status\":\"ok\"}"));
+    RUVIA_CHECK(
+        response.header("Set-Cookie").value_or(std::string_view{}).starts_with("probe=ok;"));
+    RUVIA_CHECK_EQ(
+        ruvia::detail::responseBody(response).bytes(), std::string_view("{\"status\":\"ok\"}"));
 }
 
 RUVIA_TEST(readiness_response_defaults_to_ready) {
@@ -43,7 +46,8 @@ RUVIA_TEST(readiness_response_defaults_to_ready) {
     const auto response = ruvia::makeReadinessResponse(context);
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
-    RUVIA_CHECK_EQ(ruvia::detail::responseBody(response).bytes(), std::string_view("{\"status\":\"ready\"}"));
+    RUVIA_CHECK_EQ(
+        ruvia::detail::responseBody(response).bytes(), std::string_view("{\"status\":\"ready\"}"));
 }
 
 RUVIA_TEST(readiness_response_keeps_explicit_failure_status) {
@@ -53,11 +57,13 @@ RUVIA_TEST(readiness_response_keeps_explicit_failure_status) {
     auto context = makeContext(memory, request);
     context.status(ruvia::http_status::kCreated);
 
-    const auto response = ruvia::makeReadinessResponse(context, {
-        .state = ruvia::ReadinessState::kUnavailable,
-        .unavailableReason = "database is unavailable",
-    });
+    const auto response =
+        ruvia::makeReadinessResponse(context, {
+                                                  .state = ruvia::ReadinessState::kUnavailable,
+                                                  .unavailableReason = "database is unavailable",
+                                              });
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kServiceUnavailable);
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
-    RUVIA_CHECK_EQ(ruvia::detail::responseBody(response).bytes(), std::string_view("{\"status\":\"not_ready\",\"reason\":\"database is unavailable\"}"));
+    RUVIA_CHECK_EQ(ruvia::detail::responseBody(response).bytes(),
+        std::string_view("{\"status\":\"not_ready\",\"reason\":\"database is unavailable\"}"));
 }

@@ -45,7 +45,9 @@ struct OwnedHttpErrorInfo final {
     }
 
     OwnedHttpErrorInfo(std::pmr::memory_resource* resource, std::exception_ptr exception)
-        : OwnedHttpErrorInfo(HttpErrorInfo({.status = ruvia::http_status::kInternalServerError, .message = "unhandled exception"}), resource) {
+        : OwnedHttpErrorInfo(HttpErrorInfo({.status = ruvia::http_status::kInternalServerError,
+                                 .message = "unhandled exception"}),
+              resource) {
         assignExceptionError(*this, exception);
     }
 
@@ -56,11 +58,16 @@ struct OwnedHttpErrorInfo final {
         std::pmr::vector<ValidationIssue> copied(validationIssues.get_allocator().resource());
         copied.reserve(source.validationIssues().size());
         for (const auto& issue : source.validationIssues()) {
-            copied.push_back(detail::ValidationIssueAccess::copy(issue, copied.get_allocator().resource()));
+            copied.push_back(
+                detail::ValidationIssueAccess::copy(issue, copied.get_allocator().resource()));
         }
         validationIssues = std::move(copied);
 
-        info = HttpErrorInfo({.status = source.status(), .code = code, .message = message, .statusText = statusText, .validationIssues = validationIssues});
+        info = HttpErrorInfo({.status = source.status(),
+            .code = code,
+            .message = message,
+            .statusText = statusText,
+            .validationIssues = validationIssues});
     }
 };
 
@@ -72,7 +79,9 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
     } catch (const ValidationError& error) {
         errorInfo.assign(error.info());
     } catch (const detail::UnsupportedRequestContentCoding& error) {
-        errorInfo.assign(HttpErrorInfo({.status = HttpUnsupportedContentCoding::status(), .code = "unsupported_content_coding", .message = error.what()}));
+        errorInfo.assign(HttpErrorInfo({.status = HttpUnsupportedContentCoding::status(),
+            .code = "unsupported_content_coding",
+            .message = error.what()}));
     } catch (const HttpError& error) {
         errorInfo.assign(error.info());
     } catch (const HttpProtocolError& error) {
@@ -82,7 +91,9 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
         // is capacity, not a bug in the request: answer it like any other
         // overload instead of a 500. The message is the framework's own and
         // names no application internals.
-        errorInfo.assign(HttpErrorInfo({.status = ruvia::http_status::kServiceUnavailable, .code = "blocking_pool_unavailable", .message = error.what()}));
+        errorInfo.assign(HttpErrorInfo({.status = ruvia::http_status::kServiceUnavailable,
+            .code = "blocking_pool_unavailable",
+            .message = error.what()}));
     } catch (const std::exception&) {
         // An unexpected exception (e.g. a database/library error) may carry
         // internal detail -- table names, query fragments, file paths. Do NOT echo
@@ -117,14 +128,16 @@ void applyExceptionResponseMetadata(HttpResponse& response, std::exception_ptr e
 
 }  // namespace
 
-Task<HttpResponse> detail::RouteTable::handleError(const HttpRequest& request, RequestMemory& memory, HttpErrorInfo error, ContextServices services) const {
+Task<HttpResponse> detail::RouteTable::handleError(const HttpRequest& request,
+    RequestMemory& memory, HttpErrorInfo error, ContextServices services) const {
     const auto errorHandler = errorHandlerFor(request.path());
     // Nothing to wrap and no handler: the original allocation-free path.
     if (errorHandler == nullptr && unmatchedMiddlewareCount_ == 0) {
         co_return makeDefaultErrorResponse(memory.resource(), error);
     }
 
-    auto context = detail::ContextAccess::make(memory, request, withRouteHandlers(services, *this, errorHandler, notFoundHandlerFor(request.path())));
+    auto context = detail::ContextAccess::make(memory, request,
+        withRouteHandlers(services, *this, errorHandler, notFoundHandlerFor(request.path())));
     auto terminal = [this, error, errorHandler](Context& terminalContext) -> Task<HttpResponse> {
         if (errorHandler == nullptr) {
             co_return makeDefaultErrorResponse(terminalContext.resource(), error);
@@ -135,7 +148,8 @@ Task<HttpResponse> detail::RouteTable::handleError(const HttpRequest& request, R
     co_return co_await runUnmatchedChain(context, terminalRef);
 }
 
-Task<HttpResponse> detail::RouteTable::handleException(const HttpRequest& request, RequestMemory& memory, std::exception_ptr exception, ContextServices services) const {
+Task<HttpResponse> detail::RouteTable::handleException(const HttpRequest& request,
+    RequestMemory& memory, std::exception_ptr exception, ContextServices services) const {
     if (errorHandlerFor(request.path()) == nullptr) {
         OwnedHttpErrorInfo errorInfo(memory.resource(), exception);
         auto response = makeDefaultErrorResponse(memory.resource(), errorInfo.info);
@@ -143,27 +157,35 @@ Task<HttpResponse> detail::RouteTable::handleException(const HttpRequest& reques
         co_return response;
     }
 
-    auto context = detail::ContextAccess::make(memory, request, withRouteHandlers(services, *this, errorHandlerFor(request.path()), notFoundHandlerFor(request.path())));
+    auto context = detail::ContextAccess::make(memory, request,
+        withRouteHandlers(
+            services, *this, errorHandlerFor(request.path()), notFoundHandlerFor(request.path())));
     co_return co_await handleException(context, exception);
 }
 
 Task<HttpResponse> detail::RouteTable::handleError(Context& context, HttpErrorInfo error) const {
-    return invokeErrorHandler(context, error, errorHandlerFor(detail::ContextAccess::request(context).path()));
+    return invokeErrorHandler(
+        context, error, errorHandlerFor(detail::ContextAccess::request(context).path()));
 }
 
-Task<HttpResponse> detail::RouteTable::handleNotFound(const HttpRequest& request, RequestMemory& memory, ContextServices services) const {
+Task<HttpResponse> detail::RouteTable::handleNotFound(
+    const HttpRequest& request, RequestMemory& memory, ContextServices services) const {
     const auto notFoundHandler = notFoundHandlerFor(request.path());
     if (notFoundHandler == nullptr && unmatchedMiddlewareCount_ == 0) {
-        co_return makeDefaultErrorResponse(memory.resource(), HttpErrorInfo({.status = ruvia::http_status::kNotFound, .message = "route not found"}));
+        co_return makeDefaultErrorResponse(memory.resource(),
+            HttpErrorInfo({.status = ruvia::http_status::kNotFound, .message = "route not found"}));
     }
 
-    auto context = detail::ContextAccess::make(memory, request, withRouteHandlers(services, *this, errorHandlerFor(request.path()), notFoundHandler));
+    auto context = detail::ContextAccess::make(memory, request,
+        withRouteHandlers(services, *this, errorHandlerFor(request.path()), notFoundHandler));
 
     // The handler's own failure keeps going through handleException, exactly as
     // before; wrapping it in the chain must not change which layer answers it.
     auto terminal = [this, notFoundHandler](Context& terminalContext) -> Task<HttpResponse> {
         if (notFoundHandler == nullptr) {
-            co_return makeDefaultErrorResponse(terminalContext.resource(), HttpErrorInfo({.status = ruvia::http_status::kNotFound, .message = "route not found"}));
+            co_return makeDefaultErrorResponse(terminalContext.resource(),
+                HttpErrorInfo(
+                    {.status = ruvia::http_status::kNotFound, .message = "route not found"}));
         }
         std::exception_ptr exception;
         try {
@@ -177,7 +199,8 @@ Task<HttpResponse> detail::RouteTable::handleNotFound(const HttpRequest& request
     co_return co_await runUnmatchedChain(context, terminalRef);
 }
 
-Task<HttpResponse> detail::RouteTable::handleException(Context& context, std::exception_ptr exception) const {
+Task<HttpResponse> detail::RouteTable::handleException(
+    Context& context, std::exception_ptr exception) const {
     detail::ContextAccess::setError(context, exception);
     OwnedHttpErrorInfo errorInfo(context.resource(), exception);
 
@@ -201,7 +224,8 @@ void detail::RouteTable::setNotFoundHandler(HttpNotFoundHandlerRef handler) noex
 namespace {
 
 template <typename Stored, typename Registration>
-void replacePrefixHandlers(std::pmr::vector<Stored>& stored, std::pmr::memory_resource* resource, std::span<const Registration> handlers) {
+void replacePrefixHandlers(std::pmr::vector<Stored>& stored, std::pmr::memory_resource* resource,
+    std::span<const Registration> handlers) {
     std::pmr::vector<Stored> normalized(resource);
     normalized.reserve(handlers.size());
     for (const auto& registration : handlers) {
@@ -218,7 +242,9 @@ void replacePrefixHandlers(std::pmr::vector<Stored>& stored, std::pmr::memory_re
     }
     // Longest prefix first: selection is a first-match scan. Equal lengths
     // cannot nest, so their relative order is irrelevant; keep it stable.
-    std::ranges::stable_sort(normalized, [](const Stored& left, const Stored& right) noexcept { return left.prefix.size() > right.prefix.size(); });
+    std::ranges::stable_sort(normalized, [](const Stored& left, const Stored& right) noexcept {
+        return left.prefix.size() > right.prefix.size();
+    });
     stored = std::move(normalized);
 }
 
@@ -226,7 +252,8 @@ void replacePrefixHandlers(std::pmr::vector<Stored>& stored, std::pmr::memory_re
 // matches on whole path segments only, so "/api" scopes "/api" and "/api/x"
 // but never "/apix".
 template <typename Stored>
-[[nodiscard]] auto selectPrefixHandler(const std::pmr::vector<Stored>& stored, std::string_view path) noexcept {
+[[nodiscard]] auto selectPrefixHandler(
+    const std::pmr::vector<Stored>& stored, std::string_view path) noexcept {
     for (const auto& candidate : stored) {
         const std::string_view prefix(candidate.prefix);
         if (detail::pathIsUnderPrefix(path, prefix)) {
@@ -242,16 +269,19 @@ void detail::RouteTable::setPrefixErrorHandlers(std::span<const HttpPrefixErrorH
     replacePrefixHandlers(prefixErrorHandlers_, resource_, handlers);
 }
 
-void detail::RouteTable::setPrefixNotFoundHandlers(std::span<const HttpPrefixNotFoundHandler> handlers) {
+void detail::RouteTable::setPrefixNotFoundHandlers(
+    std::span<const HttpPrefixNotFoundHandler> handlers) {
     replacePrefixHandlers(prefixNotFoundHandlers_, resource_, handlers);
 }
 
-detail::HttpErrorHandlerRef detail::RouteTable::errorHandlerFor(std::string_view path) const noexcept {
+detail::HttpErrorHandlerRef detail::RouteTable::errorHandlerFor(
+    std::string_view path) const noexcept {
     const auto handler = selectPrefixHandler(prefixErrorHandlers_, path);
     return handler != nullptr ? handler : errorHandler_;
 }
 
-detail::HttpNotFoundHandlerRef detail::RouteTable::notFoundHandlerFor(std::string_view path) const noexcept {
+detail::HttpNotFoundHandlerRef detail::RouteTable::notFoundHandlerFor(
+    std::string_view path) const noexcept {
     const auto handler = selectPrefixHandler(prefixNotFoundHandlers_, path);
     return handler != nullptr ? handler : notFoundHandler_;
 }

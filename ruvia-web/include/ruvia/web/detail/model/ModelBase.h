@@ -25,8 +25,10 @@ public:
 
     explicit ModelStorage(::ruvia::ModelOptions options = {}) noexcept
         : resource_(detail::pmrResourceOrDefault(options.resource)) {
-        static_assert(uniqueModelFieldNames<DescriptorTs...>(), "Ruvia model source field names must be unique");
-        static_assert(uniqueModelWireNames<DescriptorTs...>(), "Ruvia model JSON field names must be unique");
+        static_assert(uniqueModelFieldNames<DescriptorTs...>(),
+            "Ruvia model source field names must be unique");
+        static_assert(
+            uniqueModelWireNames<DescriptorTs...>(), "Ruvia model JSON field names must be unique");
     }
 
     template <typename ResourceOwnerT>
@@ -71,18 +73,16 @@ public:
     [[nodiscard]] decltype(auto) ensure() && = delete;
 
     template <FixedString Field>
-        requires(!std::tuple_element_t<
-                 modelFieldIndex<Field, DescriptorTs...>(),
-                 std::tuple<DescriptorTs...>>::required)
+        requires(!std::tuple_element_t<modelFieldIndex<Field, DescriptorTs...>(),
+            std::tuple<DescriptorTs...>>::required)
     void reset() & noexcept {
         constexpr auto index = modelFieldIndex<Field, DescriptorTs...>();
         std::get<index>(fields_).reset();
     }
 
     template <FixedString Field>
-        requires(!std::tuple_element_t<
-                 modelFieldIndex<Field, DescriptorTs...>(),
-                 std::tuple<DescriptorTs...>>::required)
+        requires(!std::tuple_element_t<modelFieldIndex<Field, DescriptorTs...>(),
+                    std::tuple<DescriptorTs...>>::required)
     void reset() && = delete;
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
@@ -154,8 +154,7 @@ private:
     friend struct detail::ModelParseAccess;
 
     [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonBody(
-        std::string_view body,
-        std::pmr::memory_resource* resource) {
+        std::string_view body, std::pmr::memory_resource* resource) {
         auto model = ruviaParseJsonBodyPartial(body, resource);
         if (!model || !detail::ModelValidationAccess::structureValid(*model)) {
             return std::nullopt;
@@ -164,33 +163,23 @@ private:
     }
 
     [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonBodyPartial(
-        std::string_view body,
-        std::pmr::memory_resource* resource) {
+        std::string_view body, std::pmr::memory_resource* resource) {
         return ruviaParseJsonBodyDepthPartial(
-            body,
-            resource,
-            0,
-            detail::ModelStringStorage::kBorrowed);
+            body, resource, 0, detail::ModelStringStorage::kBorrowed);
     }
 
     [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonBodyOwned(
-        std::string_view body,
-        std::pmr::memory_resource* resource) {
-        auto model = ruviaParseJsonBodyDepthPartial(
-            body,
-            resource,
-            0,
-            detail::ModelStringStorage::kOwned);
+        std::string_view body, std::pmr::memory_resource* resource) {
+        auto model =
+            ruviaParseJsonBodyDepthPartial(body, resource, 0, detail::ModelStringStorage::kOwned);
         if (!model || !detail::ModelValidationAccess::structureValid(*model)) {
             return std::nullopt;
         }
         return model;
     }
 
-    [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonBodyDepth(
-        std::string_view body,
-        std::pmr::memory_resource* resource,
-        std::size_t depth,
+    [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonBodyDepth(std::string_view body,
+        std::pmr::memory_resource* resource, std::size_t depth,
         detail::ModelStringStorage stringStorage) {
         auto model = ruviaParseJsonBodyDepthPartial(body, resource, depth, stringStorage);
         if (!model || !detail::ModelValidationAccess::structureValid(*model)) {
@@ -200,9 +189,7 @@ private:
     }
 
     [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonBodyDepthPartial(
-        std::string_view body,
-        std::pmr::memory_resource* resource,
-        std::size_t depth,
+        std::string_view body, std::pmr::memory_resource* resource, std::size_t depth,
         detail::ModelStringStorage stringStorage) {
         auto input = body;
         auto model = ruviaParseJsonValue(input, resource, depth, stringStorage);
@@ -213,10 +200,8 @@ private:
         return model;
     }
 
-    [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonValue(
-        std::string_view& input,
-        std::pmr::memory_resource* resource,
-        std::size_t depth,
+    [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonValue(std::string_view& input,
+        std::pmr::memory_resource* resource, std::size_t depth,
         detail::ModelStringStorage stringStorage) {
         if (depth > detail::kMaxJsonDepth) {
             return std::nullopt;
@@ -229,8 +214,7 @@ private:
     }
 
     [[nodiscard]] static std::optional<DerivedT> ruviaParseFormBody(
-        std::string_view body,
-        std::pmr::memory_resource* resource) {
+        std::string_view body, std::pmr::memory_resource* resource) {
         auto model = ruviaParseFormBodyPartial(body, resource);
         if (!model || !detail::ModelValidationAccess::structureValid(*model)) {
             return std::nullopt;
@@ -239,20 +223,14 @@ private:
     }
 
     [[nodiscard]] static std::optional<DerivedT> ruviaParseFormBodyPartial(
-        std::string_view body,
-        std::pmr::memory_resource* resource) {
-        return ruviaMaterializeFormInput(
-            detail::makeFormModelInput(body, resource));
+        std::string_view body, std::pmr::memory_resource* resource) {
+        return ruviaMaterializeFormInput(detail::makeFormModelInput(body, resource));
     }
 
     [[nodiscard]] static std::optional<DerivedT> ruviaParseFormBodyOwned(
-        std::string_view body,
-        std::pmr::memory_resource* resource) {
+        std::string_view body, std::pmr::memory_resource* resource) {
         auto model = ruviaMaterializeFormInput(
-            detail::makeFormModelInput(
-                body,
-                resource,
-                detail::ModelStringStorage::kOwned));
+            detail::makeFormModelInput(body, resource, detail::ModelStringStorage::kOwned));
         if (!model || !detail::ModelValidationAccess::structureValid(*model)) {
             return std::nullopt;
         }
@@ -260,8 +238,7 @@ private:
     }
 
     [[nodiscard]] static std::optional<DerivedT> ruviaParseFormFields(
-        const RequestNameValueList& fields,
-        std::pmr::memory_resource* resource) {
+        const RequestNameValueList& fields, std::pmr::memory_resource* resource) {
         auto model = ruviaParseFormFieldsPartial(fields, resource);
         if (!model || !detail::ModelValidationAccess::structureValid(*model)) {
             return std::nullopt;
@@ -270,10 +247,8 @@ private:
     }
 
     [[nodiscard]] static std::optional<DerivedT> ruviaParseFormFieldsPartial(
-        const RequestNameValueList& fields,
-        std::pmr::memory_resource* resource) {
-        return ruviaMaterializeFormInput(
-            detail::makeFormFieldsModelInput(fields, resource));
+        const RequestNameValueList& fields, std::pmr::memory_resource* resource) {
+        return ruviaMaterializeFormInput(detail::makeFormFieldsModelInput(fields, resource));
     }
 
     [[nodiscard]] static std::optional<DerivedT> ruviaMaterializeFormInput(
@@ -286,27 +261,16 @@ private:
     }
 
     bool ruviaMaterializeJson(
-        std::string_view& input,
-        std::size_t depth,
-        detail::ModelStringStorage stringStorage) {
+        std::string_view& input, std::size_t depth, detail::ModelStringStorage stringStorage) {
         auto* const resource = this->resource_;
-        const bool valid = detail::consumeJsonObjectFields(
-            detail::ResolvedPmrResourceTag{},
-            input,
-            resource,
-            depth,
+        const bool valid = detail::consumeJsonObjectFields(detail::ResolvedPmrResourceTag{}, input,
+            resource, depth,
             [this, resource, depth, stringStorage](
-                std::string_view key,
-                std::string_view& valueInput) -> bool {
+                std::string_view key, std::string_view& valueInput) -> bool {
                 const auto keyHash = detail::model::modelFieldNameHash(key);
                 bool fieldResult = true;
-                const bool matched = detail::model::visitModelFieldByWireName(
-                    this->derived(),
-                    Base::ruviaSchema(),
-                    keyHash,
-                    key,
-                    fieldResult,
-                    [&](auto& slot) -> bool {
+                const bool matched = detail::model::visitModelFieldByWireName(this->derived(),
+                    Base::ruviaSchema(), keyHash, key, fieldResult, [&](auto& slot) -> bool {
                         if (slot.state() != detail::ModelFieldState::kMissing) {
                             slot.markDuplicate();
                             return detail::skipJsonValue(valueInput, depth + 1);
@@ -314,10 +278,7 @@ private:
                         const auto originalInput = valueInput;
                         using ValueT = typename std::remove_cvref_t<decltype(slot)>::value_type;
                         if (auto value = detail::parseJsonValue<ValueT>(
-                                valueInput,
-                                resource,
-                                depth + 1,
-                                stringStorage);
+                                valueInput, resource, depth + 1, stringStorage);
                             value) {
                             slot.emplaceParsed(std::move(*value));
                             return true;
@@ -335,12 +296,8 @@ private:
                 return detail::skipJsonValue(valueInput, depth + 1);
             });
         if (valid) {
-            detail::model::visitModelFields(
-                this->derived(),
-                Base::ruviaSchema(),
-                [resource](const auto&, auto& slot) {
-                    slot.applyDefault(resource);
-                });
+            detail::model::visitModelFields(this->derived(), Base::ruviaSchema(),
+                [resource](const auto&, auto& slot) { slot.applyDefault(resource); });
         }
         return valid;
     }
@@ -348,13 +305,10 @@ private:
     bool ruviaMaterializeForm(const detail::ModelInput& input) {
         auto* const resource = this->resource_;
         const bool valid = detail::visitModelInputFormFields(
-            input,
-            [this, &input, resource](std::string_view key, std::string_view value) {
+            input, [this, &input, resource](std::string_view key, std::string_view value) {
                 bool matched = false;
                 detail::model::visitModelFields(
-                    this->derived(),
-                    Base::ruviaSchema(),
-                    [&](const auto&, auto& slot) {
+                    this->derived(), Base::ruviaSchema(), [&](const auto&, auto& slot) {
                         using SlotT = std::remove_cvref_t<decltype(slot)>;
                         if constexpr (detail::isFormField<typename SlotT::value_type>) {
                             if (matched || key != slot.wireName()) {
@@ -365,16 +319,14 @@ private:
                                 slot.markDuplicate();
                                 return;
                             }
-                            const auto encoding = input.kind() == detail::ModelInputKind::kFormFields
-                                ? detail::FormValueEncoding::kDecoded
-                                : detail::FormValueEncoding::kUrlEncoded;
+                            const auto encoding =
+                                input.kind() == detail::ModelInputKind::kFormFields
+                                    ? detail::FormValueEncoding::kDecoded
+                                    : detail::FormValueEncoding::kUrlEncoded;
                             using ValueT = typename SlotT::value_type;
-                            auto parsed = detail::parseFormValue<ValueT>(
-                                detail::ResolvedPmrResourceTag{},
-                                value,
-                                encoding,
-                                resource,
-                                input.stringStorage());
+                            auto parsed =
+                                detail::parseFormValue<ValueT>(detail::ResolvedPmrResourceTag{},
+                                    value, encoding, resource, input.stringStorage());
                             if (parsed) {
                                 slot.emplaceParsed(std::move(*parsed));
                             } else {
@@ -384,19 +336,14 @@ private:
                     });
             });
         if (valid) {
-            detail::model::visitModelFields(
-                this->derived(),
-                Base::ruviaSchema(),
-                [resource](const auto&, auto& slot) {
-                    slot.applyDefault(resource);
-                });
+            detail::model::visitModelFields(this->derived(), Base::ruviaSchema(),
+                [resource](const auto&, auto& slot) { slot.applyDefault(resource); });
         }
         return valid;
     }
 
     static consteval void validateFieldTypes() {
-        static_assert(
-            (detail::isRequestModelField<typename DescriptorTs::value_type> && ...),
+        static_assert((detail::isRequestModelField<typename DescriptorTs::value_type> && ...),
             "request model fields must use Ruvia values or nested request models");
     }
 };
@@ -428,9 +375,7 @@ private:
         output.push_back('{');
         bool first = true;
         detail::model::visitModelFields(
-            this->derived(),
-            Base::ruviaSchema(),
-            [&output, &first](const auto&, const auto& slot) {
+            this->derived(), Base::ruviaSchema(), [&output, &first](const auto&, const auto& slot) {
                 const auto& value = slot.value();
                 if (value && !(slot.omitEmpty() && detail::model::isEmptyValue(*value))) {
                     if (!first) {
@@ -456,9 +401,7 @@ private:
         std::size_t size = 2;
         bool first = true;
         detail::model::visitModelFields(
-            this->derived(),
-            Base::ruviaSchema(),
-            [&size, &first](const auto&, const auto& slot) {
+            this->derived(), Base::ruviaSchema(), [&size, &first](const auto&, const auto& slot) {
                 const auto& value = slot.value();
                 if (value && !(slot.omitEmpty() && detail::model::isEmptyValue(*value))) {
                     if (!first) {
@@ -479,8 +422,7 @@ private:
     }
 
     static consteval void validateFieldTypes() {
-        static_assert(
-            (detail::isResponseModelField<typename DescriptorTs::value_type> && ...),
+        static_assert((detail::isResponseModelField<typename DescriptorTs::value_type> && ...),
             "response model fields must use Ruvia values or nested response models");
     }
 };

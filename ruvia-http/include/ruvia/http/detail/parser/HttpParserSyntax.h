@@ -8,16 +8,46 @@
 #include <string_view>
 namespace ruvia::detail {
 
-enum class RequestHeaderKind { kOther, kAccept, kAcceptEncoding, kAccessControlRequestHeaders, kAccessControlRequestMethod, kAuthorization, kConnection, kContentEncoding, kContentLength, kContentType, kCookie, kExpect, kHost, kIfMatch, kIfModifiedSince, kIfNoneMatch, kIfRange, kIfUnmodifiedSince, kOrigin, kRange, kSecWebSocketKey, kSecWebSocketProtocol, kSecWebSocketVersion, kTransferEncoding, kUpgrade, kUserAgent };
+enum class RequestHeaderKind {
+    kOther,
+    kAccept,
+    kAcceptEncoding,
+    kAccessControlRequestHeaders,
+    kAccessControlRequestMethod,
+    kAuthorization,
+    kConnection,
+    kContentEncoding,
+    kContentLength,
+    kContentType,
+    kCookie,
+    kExpect,
+    kHost,
+    kIfMatch,
+    kIfModifiedSince,
+    kIfNoneMatch,
+    kIfRange,
+    kIfUnmodifiedSince,
+    kOrigin,
+    kRange,
+    kSecWebSocketKey,
+    kSecWebSocketProtocol,
+    kSecWebSocketVersion,
+    kTransferEncoding,
+    kUpgrade,
+    kUserAgent
+};
 
-inline constexpr std::size_t kRequestHeaderKindCount = static_cast<std::size_t>(RequestHeaderKind::kUserAgent) + 1;
+inline constexpr std::size_t kRequestHeaderKindCount =
+    static_cast<std::size_t>(RequestHeaderKind::kUserAgent) + 1;
 
-[[nodiscard]] inline constexpr std::size_t requestHeaderKindKnownSlot(RequestHeaderKind kind) noexcept {
+[[nodiscard]] inline constexpr std::size_t requestHeaderKindKnownSlot(
+    RequestHeaderKind kind) noexcept {
     const auto index = static_cast<std::size_t>(kind);
     return index == 0 ? kRequestHeaderKindCount : index - 1;
 }
 
-[[nodiscard]] inline constexpr std::uint32_t singletonRequestHeaderBit(RequestHeaderKind kind) noexcept {
+[[nodiscard]] inline constexpr std::uint32_t singletonRequestHeaderBit(
+    RequestHeaderKind kind) noexcept {
     switch (kind) {
         case RequestHeaderKind::kAccessControlRequestMethod:
         case RequestHeaderKind::kAuthorization:
@@ -66,7 +96,8 @@ inline constexpr std::array<bool, 256> kHttpTokenCharTable = [] {
     for (unsigned c = 'a'; c <= 'z'; ++c) {
         table[c] = true;
     }
-    for (const unsigned char c : {'!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~'}) {
+    for (const unsigned char c :
+        {'!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~'}) {
         table[c] = true;
     }
     return table;
@@ -94,6 +125,7 @@ inline constexpr std::array<bool, 256> kHttpFieldValueCharTable = [] {
 [[nodiscard]] bool isValidHttpHeaderName(std::string_view name) noexcept;
 [[nodiscard]] bool isValidHttpHeaderValue(std::string_view value) noexcept;
 [[nodiscard]] bool isValidHttpChunkExtension(std::string_view value) noexcept;
-[[nodiscard]] ChunkSizeLineStatus parseHttpChunkSizeLine(std::string_view value, std::size_t& size) noexcept;
+[[nodiscard]] ChunkSizeLineStatus parseHttpChunkSizeLine(
+    std::string_view value, std::size_t& size) noexcept;
 
 }  // namespace ruvia::detail

@@ -52,7 +52,8 @@ std::pmr::string joinControllerPaths(std::string_view prefix, std::string_view p
 }
 
 template <typename BaseRange, typename ExtraRange>
-[[nodiscard]] std::pmr::vector<ControllerMiddlewareDescriptor> mergeMiddlewareDescriptors(const BaseRange& base, const ExtraRange& extra) {
+[[nodiscard]] std::pmr::vector<ControllerMiddlewareDescriptor> mergeMiddlewareDescriptors(
+    const BaseRange& base, const ExtraRange& extra) {
     std::pmr::vector<ControllerMiddlewareDescriptor> middlewares(registrationResource());
     middlewares.reserve(base.size() + extra.size());
     middlewares.insert(middlewares.end(), base.begin(), base.end());
@@ -60,7 +61,8 @@ template <typename BaseRange, typename ExtraRange>
     return middlewares;
 }
 
-[[nodiscard]] std::pmr::vector<ControllerMiddlewareDescriptor> normalizeControllerMiddlewares(std::pmr::vector<ControllerMiddlewareDescriptor> middlewares) {
+[[nodiscard]] std::pmr::vector<ControllerMiddlewareDescriptor> normalizeControllerMiddlewares(
+    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares) {
     if (middlewares.get_allocator().resource() == registrationResource()) {
         return middlewares;
     }
@@ -76,41 +78,69 @@ void detail::ControllerRouteBuilder::ImplDeleter::operator()(Impl* impl) const n
     destroyPmrObject(impl, registrationResource());
 }
 
-detail::ControllerRouteBuilder::ControllerRouteBuilder(Router& router, std::string_view prefix, std::pmr::vector<ControllerMiddlewareDescriptor> middlewares)
-    : ControllerRouteBuilder(router, joinControllerPaths({}, prefix), std::move(middlewares), OwnedPrefixTag{}) {}
+detail::ControllerRouteBuilder::ControllerRouteBuilder(Router& router, std::string_view prefix,
+    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares)
+    : ControllerRouteBuilder(
+          router, joinControllerPaths({}, prefix), std::move(middlewares), OwnedPrefixTag{}) {}
 
-detail::ControllerRouteBuilder::ControllerRouteBuilder(Router& router, std::pmr::string prefix, std::pmr::vector<ControllerMiddlewareDescriptor> middlewares, OwnedPrefixTag)
-    : impl_(constructPmrObject<Impl>(registrationResource(), router, std::move(prefix), normalizeControllerMiddlewares(std::move(middlewares)))) {}
+detail::ControllerRouteBuilder::ControllerRouteBuilder(Router& router, std::pmr::string prefix,
+    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares, OwnedPrefixTag)
+    : impl_(constructPmrObject<Impl>(registrationResource(), router, std::move(prefix),
+          normalizeControllerMiddlewares(std::move(middlewares)))) {}
 
 detail::ControllerRouteBuilder::ControllerRouteBuilder(ControllerRouteBuilder&&) noexcept = default;
 
-detail::ControllerRouteBuilder& detail::ControllerRouteBuilder::operator=(ControllerRouteBuilder&&) noexcept = default;
+detail::ControllerRouteBuilder& detail::ControllerRouteBuilder::operator=(
+    ControllerRouteBuilder&&) noexcept = default;
 
 detail::ControllerRouteBuilder::~ControllerRouteBuilder() = default;
 
-void detail::ControllerRouteBuilder::registerRoute(HttpKnownMethod method, std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> middlewares) const {
-    RouterImpl::from(impl_->router()).registerRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler), bodyMode, impl_->middlewares(), middlewares);
+void detail::ControllerRouteBuilder::registerRoute(HttpKnownMethod method, std::string_view path,
+    ControllerRouteHandler handler, RequestBodyMode bodyMode,
+    std::span<const ControllerMiddlewareDescriptor> middlewares) const {
+    RouterImpl::from(impl_->router())
+        .registerRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler),
+            bodyMode, impl_->middlewares(), middlewares);
 }
 
-void detail::ControllerRouteBuilder::registerExtensionMethodRoute(std::string_view methodToken, std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> middlewares) const {
-    RouterImpl::from(impl_->router()).registerExtensionMethodRoute(methodToken, joinControllerPaths(impl_->prefix(), path), std::move(handler), bodyMode, impl_->middlewares(), middlewares);
+void detail::ControllerRouteBuilder::registerExtensionMethodRoute(std::string_view methodToken,
+    std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode,
+    std::span<const ControllerMiddlewareDescriptor> middlewares) const {
+    RouterImpl::from(impl_->router())
+        .registerExtensionMethodRoute(methodToken, joinControllerPaths(impl_->prefix(), path),
+            std::move(handler), bodyMode, impl_->middlewares(), middlewares);
 }
 
-void detail::ControllerRouteBuilder::registerResponseStreamRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares) const {
-    RouterImpl::from(impl_->router()).registerResponseStreamRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler), impl_->middlewares(), middlewares);
+void detail::ControllerRouteBuilder::registerResponseStreamRoute(HttpKnownMethod method,
+    std::string_view path, ControllerRouteStreamHandler handler,
+    std::span<const ControllerMiddlewareDescriptor> middlewares) const {
+    RouterImpl::from(impl_->router())
+        .registerResponseStreamRoute(method, joinControllerPaths(impl_->prefix(), path),
+            std::move(handler), impl_->middlewares(), middlewares);
 }
 
-void detail::ControllerRouteBuilder::registerSseRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares) const {
-    RouterImpl::from(impl_->router()).registerSseRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler), impl_->middlewares(), middlewares);
+void detail::ControllerRouteBuilder::registerSseRoute(HttpKnownMethod method, std::string_view path,
+    ControllerRouteStreamHandler handler,
+    std::span<const ControllerMiddlewareDescriptor> middlewares) const {
+    RouterImpl::from(impl_->router())
+        .registerSseRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler),
+            impl_->middlewares(), middlewares);
 }
 
-void detail::ControllerRouteBuilder::registerWebSocketRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares, WebSocketRouteConfig webSocketConfig) const {
-    RouterImpl::from(impl_->router()).registerWebSocketRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler), impl_->middlewares(), middlewares, std::move(webSocketConfig));
+void detail::ControllerRouteBuilder::registerWebSocketRoute(HttpKnownMethod method,
+    std::string_view path, ControllerRouteStreamHandler handler,
+    std::span<const ControllerMiddlewareDescriptor> middlewares,
+    WebSocketRouteConfig webSocketConfig) const {
+    RouterImpl::from(impl_->router())
+        .registerWebSocketRoute(method, joinControllerPaths(impl_->prefix(), path),
+            std::move(handler), impl_->middlewares(), middlewares, std::move(webSocketConfig));
 }
 
-detail::ControllerRouteBuilder detail::ControllerRouteBuilder::createScope(std::string_view prefix, std::pmr::vector<ControllerMiddlewareDescriptor> middlewares) const {
+detail::ControllerRouteBuilder detail::ControllerRouteBuilder::createScope(
+    std::string_view prefix, std::pmr::vector<ControllerMiddlewareDescriptor> middlewares) const {
     auto merged = mergeMiddlewareDescriptors(impl_->middlewares(), middlewares);
-    return ControllerRouteBuilder(impl_->router(), joinControllerPaths(impl_->prefix(), prefix), std::move(merged), OwnedPrefixTag{});
+    return ControllerRouteBuilder(impl_->router(), joinControllerPaths(impl_->prefix(), prefix),
+        std::move(merged), OwnedPrefixTag{});
 }
 
 }  // namespace ruvia

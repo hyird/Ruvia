@@ -27,20 +27,26 @@ enum class BufferedCompressionAttemptStatus : std::uint8_t {
 
 struct BufferedCompressionAttempt final {
     explicit BufferedCompressionAttempt(BufferedCompressionAttemptStatus status) noexcept
-        : status(status), bytes(processResource()) {}
+        : status(status),
+          bytes(processResource()) {}
 
-    BufferedCompressionAttempt(BufferedCompressionAttemptStatus status, std::pmr::string bytes) noexcept
-        : status(status), bytes(std::move(bytes)) {}
+    BufferedCompressionAttempt(
+        BufferedCompressionAttemptStatus status, std::pmr::string bytes) noexcept
+        : status(status),
+          bytes(std::move(bytes)) {}
 
     BufferedCompressionAttemptStatus status;
     std::pmr::string bytes;
 };
 
-[[nodiscard]] BufferedCompressionAttempt encodeBufferedBody(HttpContentCoding coding, std::pmr::string plain) {
+[[nodiscard]] BufferedCompressionAttempt encodeBufferedBody(
+    HttpContentCoding coding, std::pmr::string plain) {
     const auto maxEncodedBytes = plain.empty() ? 0 : plain.size() - 1;
-    auto encoding = encodeHttpContent(coding, plain, {.maxEncodedBytes = maxEncodedBytes, .resource = processResource()});
+    auto encoding = encodeHttpContent(
+        coding, plain, {.maxEncodedBytes = maxEncodedBytes, .resource = processResource()});
     if (auto* encoded = encoding.encoded(); encoded != nullptr) {
-        return BufferedCompressionAttempt(BufferedCompressionAttemptStatus::kCompressed, std::move(*encoded).takeBytes());
+        return BufferedCompressionAttempt(
+            BufferedCompressionAttemptStatus::kCompressed, std::move(*encoded).takeBytes());
     }
     const auto* failure = encoding.failure();
     if (failure != nullptr && failure->error() == HttpContentEncodeError::kEncodedSizeExceeded) {
@@ -49,8 +55,10 @@ struct BufferedCompressionAttempt final {
     return BufferedCompressionAttempt(BufferedCompressionAttemptStatus::kFailed);
 }
 
-[[nodiscard]] bool mediaTypeStartsWith(std::string_view mediaType, std::string_view prefix) noexcept {
-    return mediaType.size() >= prefix.size() && httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
+[[nodiscard]] bool mediaTypeStartsWith(
+    std::string_view mediaType, std::string_view prefix) noexcept {
+    return mediaType.size() >= prefix.size() &&
+           httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
 }
 
 [[nodiscard]] bool responseContentTypeSkipsCompression(std::string_view contentType) noexcept {
@@ -58,18 +66,27 @@ struct BufferedCompressionAttempt final {
         return false;
     }
     const auto semicolon = contentType.find(';');
-    const auto mediaType = httpTrimOws(semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
+    const auto mediaType = httpTrimOws(
+        semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
     if (mediaType.empty()) {
         return false;
     }
     // Dominant compressible types short-circuit the skip list below.
-    if (mediaTypeStartsWith(mediaType, "text/") || httpAsciiEqualsIgnoreCase(mediaType, "application/json")) {
+    if (mediaTypeStartsWith(mediaType, "text/") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/json")) {
         return false;
     }
     if (httpAsciiEqualsIgnoreCase(mediaType, "image/svg+xml")) {
         return false;
     }
-    return mediaTypeStartsWith(mediaType, "image/") || mediaTypeStartsWith(mediaType, "video/") || mediaTypeStartsWith(mediaType, "audio/") || httpAsciiEqualsIgnoreCase(mediaType, "application/gzip") || httpAsciiEqualsIgnoreCase(mediaType, "application/x-gzip") || httpAsciiEqualsIgnoreCase(mediaType, "application/zip") || httpAsciiEqualsIgnoreCase(mediaType, "application/zstd") || httpAsciiEqualsIgnoreCase(mediaType, "application/pdf") || httpAsciiEqualsIgnoreCase(mediaType, "application/octet-stream");
+    return mediaTypeStartsWith(mediaType, "image/") || mediaTypeStartsWith(mediaType, "video/") ||
+           mediaTypeStartsWith(mediaType, "audio/") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "application/gzip") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "application/x-gzip") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "application/zip") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "application/zstd") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "application/pdf") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "application/octet-stream");
 }
 
 [[nodiscard]] CacheControl responseCacheControl(const HttpResponse& response) noexcept {
@@ -114,7 +131,9 @@ void weakenStrongResponseEtag(HttpResponse& response) {
 
 }  // namespace
 
-HttpResponseCompressionEligibility httpResponseCompressionEligibility(const HttpResponseCodingSelection& /*selection*/, HttpKnownMethod requestMethod, const HttpResponse& response, ResponseStreamKind kind) noexcept {
+HttpResponseCompressionEligibility httpResponseCompressionEligibility(
+    const HttpResponseCodingSelection& /*selection*/, HttpKnownMethod requestMethod,
+    const HttpResponse& response, ResponseStreamKind kind) noexcept {
     const auto bodyPlan = httpResponseBodyPlan(requestMethod, response.status());
     if (!bodyPlan.statusAllowsBody()) {
         return HttpResponseCompressionEligibility::kIneligible;
@@ -125,13 +144,19 @@ HttpResponseCompressionEligibility httpResponseCompressionEligibility(const Http
         return HttpResponseCompressionEligibility::kIneligible;
     }
 
-    if (responseHasKnownHeader(response, kResponseHeaderContentEncoding) || responseHasKnownHeader(response, kResponseHeaderContentRange) || (kind != ResponseStreamKind::kSse && responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType))) || responseCacheControl(response).has(CacheControlDirective::kNoTransform)) {
+    if (responseHasKnownHeader(response, kResponseHeaderContentEncoding) ||
+        responseHasKnownHeader(response, kResponseHeaderContentRange) ||
+        (kind != ResponseStreamKind::kSse &&
+            responseContentTypeSkipsCompression(
+                responseKnownHeader(response, kResponseHeaderContentType))) ||
+        responseCacheControl(response).has(CacheControlDirective::kNoTransform)) {
         return HttpResponseCompressionEligibility::kIneligible;
     }
     return HttpResponseCompressionEligibility::kEligible;
 }
 
-HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, HttpResponse& response, const CompressionConfig& options) {
+HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingSelection& selection,
+    HttpKnownMethod requestMethod, HttpResponse& response, const CompressionConfig& options) {
     const auto& responseContent = responseBody(response);
 
     // These responses never vary by Accept-Encoding, so they are served identity
@@ -139,7 +164,9 @@ HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingS
     // the representation): a file body (framed and Vary'd by the static-file path),
     // an already-chosen Content-Encoding, a Content-Range, an incompressible media
     // type, or an explicit no-transform.
-    if (responseContent.file().has_value() || httpResponseCompressionEligibility(selection, requestMethod, response, ResponseStreamKind::kGeneric) != HttpResponseCompressionEligibility::kEligible) {
+    if (responseContent.file().has_value() ||
+        httpResponseCompressionEligibility(selection, requestMethod, response,
+            ResponseStreamKind::kGeneric) != HttpResponseCompressionEligibility::kEligible) {
         return HttpResponseCompressionResult::makeNotApplicable();
     }
 
@@ -152,28 +179,32 @@ HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingS
     // body to a client that would receive the compressed one (RFC 9110 12.5.5).
     addVaryToken(response, "Accept-Encoding");
 
-    if (coding == HttpContentCoding::kIdentity || responseContent.size() < options.minBytes || responseContent.size() > options.maxBytes || responseContent.size() > options.syncBytes) {
+    if (coding == HttpContentCoding::kIdentity || responseContent.size() < options.minBytes ||
+        responseContent.size() > options.maxBytes || responseContent.size() > options.syncBytes) {
         return HttpResponseCompressionResult::makeNotApplicable();
     }
     const auto body = responseContent.bytes();
     const auto maxEncodedBytes = body.empty() ? 0 : body.size() - 1;
     std::optional<HttpContentEncodeResult> encoding;
     try {
-        encoding.emplace(encodeHttpContent(coding, body, {.maxEncodedBytes = maxEncodedBytes, .resource = responseResource(response)}));
+        encoding.emplace(encodeHttpContent(coding, body,
+            {.maxEncodedBytes = maxEncodedBytes, .resource = responseResource(response)}));
     } catch (...) {
         return HttpResponseCompressionResult::makeFailed();
     }
     auto* encoded = encoding->encoded();
     if (encoded == nullptr) {
         const auto* failure = encoding->failure();
-        if (failure != nullptr && failure->error() == HttpContentEncodeError::kEncodedSizeExceeded) {
+        if (failure != nullptr &&
+            failure->error() == HttpContentEncodeError::kEncodedSizeExceeded) {
             return HttpResponseCompressionResult::makeNotApplicable();
         }
         return HttpResponseCompressionResult::makeFailed();
     }
 
     try {
-        replaceResponseBodyWithContentEncoding(response, std::move(*encoded).takeBytes(), httpContentCodingToken(coding));
+        replaceResponseBodyWithContentEncoding(
+            response, std::move(*encoded).takeBytes(), httpContentCodingToken(coding));
     } catch (...) {
         // The representation commit stages every affected header before
         // publishing the owned body. A request-resource failure therefore
@@ -184,9 +215,14 @@ HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingS
     return HttpResponseCompressionResult::makeCompressed();
 }
 
-Task<HttpResponseCompressionResult> applyResponseCompressionAsync(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, HttpResponse& response, CompressionConfig options, BlockingPool* pool, const WorkerHandle& worker) {
+Task<HttpResponseCompressionResult> applyResponseCompressionAsync(
+    const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod,
+    HttpResponse& response, CompressionConfig options, BlockingPool* pool,
+    const WorkerHandle& worker) {
     const auto& responseContent = responseBody(response);
-    if (responseContent.file().has_value() || httpResponseCompressionEligibility(selection, requestMethod, response, ResponseStreamKind::kGeneric) != HttpResponseCompressionEligibility::kEligible) {
+    if (responseContent.file().has_value() ||
+        httpResponseCompressionEligibility(selection, requestMethod, response,
+            ResponseStreamKind::kGeneric) != HttpResponseCompressionEligibility::kEligible) {
         co_return HttpResponseCompressionResult::makeNotApplicable();
     }
 
@@ -203,15 +239,17 @@ Task<HttpResponseCompressionResult> applyResponseCompressionAsync(const HttpResp
         co_return applyResponseCompression(selection, requestMethod, response, options);
     }
     addVaryToken(response, "Accept-Encoding");
-    if (coding == HttpContentCoding::kIdentity || size < options.minBytes || size > options.maxBytes) {
+    if (coding == HttpContentCoding::kIdentity || size < options.minBytes ||
+        size > options.maxBytes) {
         co_return HttpResponseCompressionResult::makeNotApplicable();
     }
 
     try {
         std::pmr::string plain(responseContent.bytes(), processResource());
-        auto result = co_await tryRunBlocking(*pool, worker, [coding, plain = std::move(plain)]() mutable {
-            return encodeBufferedBody(coding, std::move(plain));
-        });
+        auto result =
+            co_await tryRunBlocking(*pool, worker, [coding, plain = std::move(plain)]() mutable {
+                return encodeBufferedBody(coding, std::move(plain));
+            });
         if (result.failed()) {
             co_return HttpResponseCompressionResult::makeFailed();
         }
@@ -224,11 +262,13 @@ Task<HttpResponseCompressionResult> applyResponseCompressionAsync(const HttpResp
         if (attempt.status == BufferedCompressionAttemptStatus::kNotSmaller) {
             co_return HttpResponseCompressionResult::makeNotApplicable();
         }
-        if (attempt.status != BufferedCompressionAttemptStatus::kCompressed || attempt.bytes.empty()) {
+        if (attempt.status != BufferedCompressionAttemptStatus::kCompressed ||
+            attempt.bytes.empty()) {
             co_return HttpResponseCompressionResult::makeFailed();
         }
         try {
-            replaceResponseBodyWithContentEncoding(response, std::move(attempt.bytes), httpContentCodingToken(coding));
+            replaceResponseBodyWithContentEncoding(
+                response, std::move(attempt.bytes), httpContentCodingToken(coding));
         } catch (...) {
             co_return HttpResponseCompressionResult::makeFailed();
         }
@@ -240,8 +280,11 @@ Task<HttpResponseCompressionResult> applyResponseCompressionAsync(const HttpResp
     }
 }
 
-bool prepareStreamingResponseCompression(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, HttpResponse& response, ResponseStreamKind kind) {
-    if (selection.coding() == HttpContentCoding::kIdentity || httpResponseCompressionEligibility(selection, requestMethod, response, kind) != HttpResponseCompressionEligibility::kEligible) {
+bool prepareStreamingResponseCompression(const HttpResponseCodingSelection& selection,
+    HttpKnownMethod requestMethod, HttpResponse& response, ResponseStreamKind kind) {
+    if (selection.coding() == HttpContentCoding::kIdentity ||
+        httpResponseCompressionEligibility(selection, requestMethod, response, kind) !=
+            HttpResponseCompressionEligibility::kEligible) {
         return false;
     }
 
@@ -250,7 +293,8 @@ bool prepareStreamingResponseCompression(const HttpResponseCodingSelection& sele
     // The encoded length is not known until finish(), so a handler-provided
     // identity Content-Length cannot survive selecting a coding.
     response.removeHeader("Content-Length");
-    setResponseHeaderStableView(response, "Content-Encoding", httpContentCodingToken(selection.coding()));
+    setResponseHeaderStableView(
+        response, "Content-Encoding", httpContentCodingToken(selection.coding()));
     weakenStrongResponseEtag(response);
     return true;
 }

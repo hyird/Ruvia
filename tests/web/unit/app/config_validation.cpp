@@ -68,7 +68,7 @@ RUVIA_TEST(config_host_validation_separated_port_rules) {
     RUVIA_CHECK(!isValidConfigHost("[::1]", kSeparatedPortHostRules));    // brackets rejected
     RUVIA_CHECK(!isValidConfigHost("host:80", kSeparatedPortHostRules));  // single colon rejected
     RUVIA_CHECK(isValidConfigHost("host", kSeparatedPortHostRules));      // bare host is fine
-    RUVIA_CHECK(isValidConfigHost("::1", kSeparatedPortHostRules));       // two colons is not "single"
+    RUVIA_CHECK(isValidConfigHost("::1", kSeparatedPortHostRules));  // two colons is not "single"
 }
 
 RUVIA_TEST(sni_host_validation_accepts_dns_name_only) {
@@ -102,9 +102,12 @@ RUVIA_TEST(config_size_port_duration_guards) {
 RUVIA_TEST(config_ensure_host_throws_distinct_messages) {
     // An empty host reports the empty message; an invalid host reports the
     // invalid message; a valid host does not throw.
-    RUVIA_CHECK_EQ(caughtMessage([] { ensureConfigHost("", "was-empty", "was-invalid"); }), std::string("was-empty"));
-    RUVIA_CHECK_EQ(caughtMessage([] { ensureConfigHost("bad host", "was-empty", "was-invalid"); }), std::string("was-invalid"));
-    RUVIA_CHECK(caughtMessage([] { ensureConfigHost("example.com", "was-empty", "was-invalid"); }).empty());
+    RUVIA_CHECK_EQ(caughtMessage([] { ensureConfigHost("", "was-empty", "was-invalid"); }),
+        std::string("was-empty"));
+    RUVIA_CHECK_EQ(caughtMessage([] { ensureConfigHost("bad host", "was-empty", "was-invalid"); }),
+        std::string("was-invalid"));
+    RUVIA_CHECK(
+        caughtMessage([] { ensureConfigHost("example.com", "was-empty", "was-invalid"); }).empty());
 }
 
 RUVIA_TEST(app_document_root_rejects_invalid_static_options_at_configuration) {
@@ -119,17 +122,15 @@ RUVIA_TEST(app_document_root_rejects_disabled_refresh) {
     ruvia::DocumentRootConfig disabledRefresh;
     disabledRefresh.root = "public";
     disabledRefresh.runtime.refreshInterval = std::chrono::milliseconds::zero();
-    RUVIA_CHECK(throwsInvalid([&disabledRefresh] { ruvia::app().documentRoot(std::move(disabledRefresh)); }));
-
+    RUVIA_CHECK(throwsInvalid(
+        [&disabledRefresh] { ruvia::app().documentRoot(std::move(disabledRefresh)); }));
 }
 
 RUVIA_TEST(app_compression_rejects_invalid_thresholds_at_configuration) {
-    RUVIA_CHECK(throwsInvalid([] {
-        ruvia::app().compression({.minBytes = 1024, .syncBytes = 512});
-    }));
-    RUVIA_CHECK(throwsInvalid([] {
-        ruvia::app().compression({.minBytes = 1024, .syncBytes = 2048, .maxBytes = 1024});
-    }));
+    RUVIA_CHECK(
+        throwsInvalid([] { ruvia::app().compression({.minBytes = 1024, .syncBytes = 512}); }));
+    RUVIA_CHECK(throwsInvalid(
+        [] { ruvia::app().compression({.minBytes = 1024, .syncBytes = 2048, .maxBytes = 1024}); }));
 }
 
 RUVIA_TEST(integration_config_copies_public_strings_into_internal_pmr_storage) {

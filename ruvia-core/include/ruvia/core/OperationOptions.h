@@ -26,8 +26,7 @@ inline void validateOperationOptions(const OperationOptions& options) {
 }
 
 [[nodiscard]] inline OperationOptions mergeOperationOptions(
-    const OperationOptions& base,
-    OperationOptions overrides) {
+    const OperationOptions& base, OperationOptions overrides) {
     OperationOptions merged = base;
     if (overrides.timeout.has_value() &&
         (!merged.timeout.has_value() || *overrides.timeout < *merged.timeout)) {

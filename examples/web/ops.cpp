@@ -27,16 +27,19 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> ready(ruvia::Context& c) {
         const bool databaseReady = c.req().query("db").value_or("up") != "down";
-        co_return ruvia::makeReadinessResponse(c, {
-            .state = databaseReady ? ruvia::ReadinessState::kReady : ruvia::ReadinessState::kUnavailable,
-            .unavailableReason = "database is not ready",
-        });
+        co_return ruvia::makeReadinessResponse(
+            c, {
+                   .state = databaseReady ? ruvia::ReadinessState::kReady
+                                          : ruvia::ReadinessState::kUnavailable,
+                   .unavailableReason = "database is not ready",
+               });
     }
 };
 
 int main() {
     ruvia::app()
         .listen({.address = "0.0.0.0", .http = 8080})
-        .server({.workerCount = 2, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .server({.workerCount = 2,
+            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
         .run();
 }

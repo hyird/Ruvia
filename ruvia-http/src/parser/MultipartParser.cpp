@@ -51,7 +51,8 @@ constexpr std::size_t kMaxMultipartDelimiterLineBytes = 64 * 1024;
         case MultipartParseError::kPreambleTooLarge:
         case MultipartParseError::kPartHeadersTooLarge:
         case MultipartParseError::kDelimiterLineTooLarge:
-            return HttpProtocolError(http_status::kContentTooLarge, multipartParseErrorMessage(error));
+            return HttpProtocolError(
+                http_status::kContentTooLarge, multipartParseErrorMessage(error));
         case MultipartParseError::kIncompleteBody:
         case MultipartParseError::kInvalidDelimiter:
         case MultipartParseError::kInvalidPartHeaders:
@@ -80,7 +81,8 @@ MultipartParser::MultipartParser(MultipartParseOptions options)
       currentFilename_(resource_),
       currentContentType_(resource_) {}
 
-MultipartParser::MultipartParser(std::string_view completeBody, MultipartParseOptions options, CompleteInputTag)
+MultipartParser::MultipartParser(
+    std::string_view completeBody, MultipartParseOptions options, CompleteInputTag)
     : resource_(detail::httpPmrResourceOrDefault(options.resource)),
       boundary_(std::move(options.boundary)),
       input_(detail::MultipartBorrowedInput{completeBody}),
@@ -96,7 +98,8 @@ MultipartBodyParseResult parseMultipartBody(std::string_view body, MultipartPars
     for (;;) {
         auto result = parser.poll();
         if (const auto* part = result.part()) {
-            parts.push_back(detail::MultipartPartAccess::makeDecoded(part->name(), part->filename(), part->contentType(), part->body(), part->hasFilename(), resource));
+            parts.push_back(detail::MultipartPartAccess::makeDecoded(part->name(), part->filename(),
+                part->contentType(), part->body(), part->hasFilename(), resource));
             continue;
         }
         if (result.done() != nullptr) {
@@ -127,7 +130,8 @@ void MultipartParser::compactPending() {
 
 void MultipartParser::feed(std::string_view chunk) {
     const auto* progress = std::get_if<ProgressState>(&state_);
-    if (input_.streamingOpen() == nullptr || progress == nullptr || *progress == ProgressState::kDone) {
+    if (input_.streamingOpen() == nullptr || progress == nullptr ||
+        *progress == ProgressState::kDone) {
         throw std::logic_error("multipart parser cannot accept input in a terminal state");
     }
     input_.feed(chunk);
@@ -200,7 +204,8 @@ MultipartParser::StepResult MultipartParser::processBoundary() {
     // the streaming and buffered paths accept exactly the same bodies.
     for (;;) {
         if (firstBoundary_) {
-            const auto delimiter = detail::httpFindInitialMultipartDelimiter(bufferView(), boundary_, input_.eof());
+            const auto delimiter =
+                detail::httpFindInitialMultipartDelimiter(bufferView(), boundary_, input_.eof());
             if (delimiter.noMatch() != nullptr) {
                 if (bufferView().size() > kMaxMultipartPreambleBytes) {
                     return MultipartParseError::kPreambleTooLarge;
@@ -232,7 +237,8 @@ MultipartParser::StepResult MultipartParser::processBoundary() {
             consume(2);
         }
 
-        const auto delimiter = detail::httpMatchMultipartDelimiterLine(bufferView(), boundary_, input_.eof());
+        const auto delimiter =
+            detail::httpMatchMultipartDelimiterLine(bufferView(), boundary_, input_.eof());
         if (delimiter.needInput() != nullptr) {
             return StepProgress::kNeedInput;
         }
@@ -297,7 +303,8 @@ MultipartParser::StepResult MultipartParser::processHeaders() {
             if (input_.borrowed() != nullptr) {
                 currentContentTypeView_ = partHeaders->contentType();
             } else {
-                currentContentType_.assign(partHeaders->contentType().data(), partHeaders->contentType().size());
+                currentContentType_.assign(
+                    partHeaders->contentType().data(), partHeaders->contentType().size());
                 currentContentTypeView_ = currentContentType_;
             }
         }
@@ -309,8 +316,11 @@ MultipartParser::StepResult MultipartParser::processHeaders() {
 }
 
 MultipartStreamPart MultipartParser::makePart(std::string_view body, bool partEnd) {
-    const auto phase = nextChunkIsFirst_ ? (partEnd ? MultipartChunkPhase::kComplete : MultipartChunkPhase::kFirst) : (partEnd ? MultipartChunkPhase::kLast : MultipartChunkPhase::kMiddle);
-    auto part = detail::MultipartStreamPartAccess::make(currentName_, currentFilename_, currentContentTypeView_, body, phase, currentFilenamePresent_);
+    const auto phase =
+        nextChunkIsFirst_ ? (partEnd ? MultipartChunkPhase::kComplete : MultipartChunkPhase::kFirst)
+                          : (partEnd ? MultipartChunkPhase::kLast : MultipartChunkPhase::kMiddle);
+    auto part = detail::MultipartStreamPartAccess::make(currentName_, currentFilename_,
+        currentContentTypeView_, body, phase, currentFilenamePresent_);
     nextChunkIsFirst_ = false;
     return part;
 }
@@ -318,15 +328,18 @@ MultipartStreamPart MultipartParser::makePart(std::string_view body, bool partEn
 MultipartPollResult MultipartParser::readBodyChunk() {
     for (;;) {
         const auto buffer = bufferView();
-        const auto delimiter = detail::httpFindMultipartBodyDelimiter(buffer, boundary_, input_.eof());
+        const auto delimiter =
+            detail::httpFindMultipartBodyDelimiter(buffer, boundary_, input_.eof());
         const auto* partDelimiter = delimiter.part();
         const auto* closeDelimiter = delimiter.close();
         if (partDelimiter != nullptr || closeDelimiter != nullptr) {
-            const auto delimiterLineBytes = partDelimiter != nullptr ? partDelimiter->lineBytes() : closeDelimiter->lineBytes();
+            const auto delimiterLineBytes =
+                partDelimiter != nullptr ? partDelimiter->lineBytes() : closeDelimiter->lineBytes();
             if (delimiterLineBytes > kMaxMultipartDelimiterLineBytes) {
                 return fail(MultipartParseError::kDelimiterLineTooLarge);
             }
-            const auto delimiterOffset = partDelimiter != nullptr ? partDelimiter->offset() : closeDelimiter->offset();
+            const auto delimiterOffset =
+                partDelimiter != nullptr ? partDelimiter->offset() : closeDelimiter->offset();
             auto part = makePart(buffer.substr(0, delimiterOffset), true);
             pendingEraseBytes_ = delimiterOffset;
             state_ = ProgressState::kBoundary;

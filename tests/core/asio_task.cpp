@@ -16,14 +16,11 @@ concept PubliclyAdaptableTask = requires(ruvia::Task<T> task) {
 };
 
 template <typename T>
-concept AdaptableTaskLvalue = requires(ruvia::Task<T>& task) {
-    ruvia::asAwaitable(task);
-};
+concept AdaptableTaskLvalue = requires(ruvia::Task<T>& task) { ruvia::asAwaitable(task); };
 
 template <typename T>
-concept InternallyAdaptableTask = requires(ruvia::Task<T> task) {
-    ruvia::detail::taskAsAwaitable(std::move(task));
-};
+concept InternallyAdaptableTask =
+    requires(ruvia::Task<T> task) { ruvia::detail::taskAsAwaitable(std::move(task)); };
 
 struct ThrowingMove final {
     ThrowingMove() = default;
@@ -38,7 +35,9 @@ static_assert(!ruvia::detail::AsioTaskResult<ThrowingMove>);
 static_assert(!InternallyAdaptableTask<ThrowingMove>);
 static_assert(!AdaptableTaskLvalue<int>);
 static_assert(!AdaptableTaskLvalue<void>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::EventLoop&>().start(std::declval<ruvia::Task<int>>())), ruvia::RootTask<int>>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::EventLoop&>().start(
+                               std::declval<ruvia::Task<int>>())),
+    ruvia::RootTask<int>>);
 
 ruvia::Task<std::unique_ptr<int>> makeValue(ruvia::WorkerHandle worker) {
     if (!worker.isCurrent()) {
@@ -97,7 +96,8 @@ int main() {
         } catch (const std::runtime_error& error) {
             failureObserved = std::string_view(error.what()) == "root task failure";
         }
-        valid = sameLoopGuardHeld && result != nullptr && *result == 42 && voidCompleted && failureObserved;
+        valid = sameLoopGuardHeld && result != nullptr && *result == 42 && voidCompleted &&
+                failureObserved;
     } catch (...) {
         valid = false;
     }

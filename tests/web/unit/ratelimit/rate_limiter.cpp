@@ -45,7 +45,8 @@ RateLimitRule ruleWith(std::size_t maxRequests, bool failClosed = true) {
     return RateLimitRule{
         .maxRequests = maxRequests,
         .window = std::chrono::seconds(60),
-        .overflowPolicy = failClosed ? RateLimitOverflowPolicy::kDeny : RateLimitOverflowPolicy::kAllow,
+        .overflowPolicy =
+            failClosed ? RateLimitOverflowPolicy::kDeny : RateLimitOverflowPolicy::kAllow,
     };
 }
 
@@ -112,7 +113,8 @@ RUVIA_TEST(rate_limiter_route_scope_independent_of_default_rule) {
     const RateLimitRule routeRule = ruleWith(1);
     const std::uintptr_t routeScope = 0xABCD;  // distinct from the default-rule scope
     RUVIA_CHECK(rateLimitAllowed(limiter.allowDefault("ip")));
-    RUVIA_CHECK(rateLimitAllowed(limiter.allowRoute(routeScope, "ip", routeRule)));  // separate scope/budget
+    RUVIA_CHECK(rateLimitAllowed(
+        limiter.allowRoute(routeScope, "ip", routeRule)));  // separate scope/budget
     RUVIA_CHECK(!rateLimitAllowed(limiter.allowDefault("ip")));
     RUVIA_CHECK(!rateLimitAllowed(limiter.allowRoute(routeScope, "ip", routeRule)));
 }
@@ -138,8 +140,9 @@ RUVIA_TEST(rate_limiter_route_enforced_when_default_rule_disabled) {
     RUVIA_CHECK(rateLimitAllowed(limiter.allowDefault("ip")));  // default off -> always allowed
     RUVIA_CHECK(rateLimitAllowed(limiter.allowDefault("ip")));
     const RateLimitRule routeRule = ruleWith(1);
-    RUVIA_CHECK(rateLimitAllowed(limiter.allowRoute(0x1234, "ip", routeRule)));   // route budget: 1
-    RUVIA_CHECK(!rateLimitAllowed(limiter.allowRoute(0x1234, "ip", routeRule)));  // route still enforced
+    RUVIA_CHECK(rateLimitAllowed(limiter.allowRoute(0x1234, "ip", routeRule)));  // route budget: 1
+    RUVIA_CHECK(
+        !rateLimitAllowed(limiter.allowRoute(0x1234, "ip", routeRule)));  // route still enforced
 }
 
 RUVIA_TEST(rate_limiter_oversized_key_follows_fail_closed) {

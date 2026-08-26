@@ -16,9 +16,7 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
             if (const auto* failure = readResult.failure()) {
                 transport_.abort();
                 (void)protocol_.abort();
-                throw std::system_error(
-                    failure->errorCode(),
-                    "failed to read websocket bytes");
+                throw std::system_error(failure->errorCode(), "failed to read websocket bytes");
             }
             if (readResult.end() != nullptr) {
                 // EOF is an abnormal WebSocket close when no peer Close was
@@ -36,8 +34,7 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
         }
 
         if (const auto* message = event->message()) {
-            co_return WebSocketMessageAccess::make(
-                message->opcode(), message->payload());
+            co_return WebSocketMessageAccess::make(message->opcode(), message->payload());
         }
         if (event->ping() != nullptr) {
             co_await flushProtocolOutputExclusive();

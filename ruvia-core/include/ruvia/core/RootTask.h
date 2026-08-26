@@ -24,7 +24,8 @@ using EventLoopFailureSink = std::function<void(std::exception_ptr)>;
 class RootTaskStateBase {
 public:
     RootTaskStateBase(WorkerHandle worker, EventLoopFailureSink failureSink)
-        : worker_(std::move(worker)), failureSink_(std::move(failureSink)) {}
+        : worker_(std::move(worker)),
+          failureSink_(std::move(failureSink)) {}
 
     RootTaskStateBase(const RootTaskStateBase&) = delete;
     RootTaskStateBase& operator=(const RootTaskStateBase&) = delete;

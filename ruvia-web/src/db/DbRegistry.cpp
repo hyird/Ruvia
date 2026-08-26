@@ -30,13 +30,15 @@ namespace {
 
 Task<void> connectPool(detail::DbPoolRef pool) {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         co_await (*client)->connect();
         co_return;
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         co_await (*client)->connect();
         co_return;
     }
@@ -46,13 +48,15 @@ Task<void> connectPool(detail::DbPoolRef pool) {
 
 void closePool(detail::DbPoolRef pool) noexcept {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         (*client)->closeNow();
         return;
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         (*client)->closeNow();
     }
 #endif
@@ -60,13 +64,15 @@ void closePool(detail::DbPoolRef pool) noexcept {
 
 void scanPool(detail::DbPoolRef pool, std::chrono::steady_clock::time_point now) noexcept {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         (*client)->scanDeadlines(now);
         return;
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         (*client)->scanDeadlines(now);
     }
 #endif
@@ -74,12 +80,14 @@ void scanPool(detail::DbPoolRef pool, std::chrono::steady_clock::time_point now)
 
 [[nodiscard]] bool poolNeedsDeadlineScan(detail::DbPoolRef pool) noexcept {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         return (*client)->needsDeadlineScan();
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         return (*client)->needsDeadlineScan();
     }
 #endif
@@ -88,7 +96,8 @@ void scanPool(detail::DbPoolRef pool, std::chrono::steady_clock::time_point now)
 
 }  // namespace
 
-detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const detail::DbDefinition> databases, const WorkerHandle* worker)
+detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource,
+    std::span<const detail::DbDefinition> databases, const WorkerHandle* worker)
     : resource_(detail::pmrResourceOrDefault(resource)),
       clients_(resource_),
       aliasIndex_(resource_) {
@@ -97,7 +106,9 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_res
         if (definition.alias.empty()) {
             throw std::invalid_argument("database alias must not be empty");
         }
-        if (std::ranges::any_of(clients_, [&definition](const Entry& entry) { return std::string_view(entry.alias) == std::string_view(definition.alias); })) {
+        if (std::ranges::any_of(clients_, [&definition](const Entry& entry) {
+                return std::string_view(entry.alias) == std::string_view(definition.alias);
+            })) {
             throw std::invalid_argument("duplicate database alias");
         }
 
@@ -109,14 +120,16 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_res
                 throw std::invalid_argument("database driver must be selected");
             case DbDriver::kMariaDb:
 #ifdef RUVIA_ENABLE_MARIADB
-                owner = detail::makePmrObject<MariaDbPool>(resource_, ioContext, std::move(config), resource_, worker);
+                owner = detail::makePmrObject<MariaDbPool>(
+                    resource_, ioContext, std::move(config), resource_, worker);
                 break;
 #else
                 throw std::invalid_argument("MariaDB support is not enabled");
 #endif
             case DbDriver::kPostgreSql:
 #ifdef RUVIA_ENABLE_POSTGRESQL
-                owner = detail::makePmrObject<PostgreSqlPool>(resource_, ioContext, std::move(config), resource_, worker);
+                owner = detail::makePmrObject<PostgreSqlPool>(
+                    resource_, ioContext, std::move(config), resource_, worker);
                 break;
 #else
                 throw std::invalid_argument("PostgreSQL support is not enabled");
@@ -132,7 +145,8 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_res
     for (std::size_t index = 0; index < aliasIndex_.size(); ++index) {
         aliasIndex_[index] = index;
     }
-    std::ranges::sort(aliasIndex_, {}, [this](std::size_t index) -> std::string_view { return clients_[index].alias; });
+    std::ranges::sort(aliasIndex_, {},
+        [this](std::size_t index) -> std::string_view { return clients_[index].alias; });
 }
 
 detail::DbRegistry::~DbRegistry() = default;
@@ -162,28 +176,27 @@ void detail::DbRegistry::scanDeadlines() noexcept {
 }
 
 bool detail::DbRegistry::needsDeadlineScan() const noexcept {
-    return std::ranges::any_of(clients_, [](const Entry& entry) { return poolNeedsDeadlineScan(poolRef(entry.client)); });
+    return std::ranges::any_of(
+        clients_, [](const Entry& entry) { return poolNeedsDeadlineScan(poolRef(entry.client)); });
 }
 
-DbHandle detail::DbRegistry::get(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
+DbHandle detail::DbRegistry::get(
+    std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
     if (!defaultClientIndex_.has_value()) {
         throw DbError(
-            DbError::Code::kNotConfigured,
-            std::nullopt,
-            "default database is not configured");
+            DbError::Code::kNotConfigured, std::nullopt, "default database is not configured");
     }
     return DbHandle(poolRef(clients_[*defaultClientIndex_].client), resource, operationScope);
 }
 
-DbHandle detail::DbRegistry::get(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
-    const auto match = std::ranges::lower_bound(aliasIndex_, alias, {}, [this](std::size_t index) -> std::string_view { return clients_[index].alias; });
+DbHandle detail::DbRegistry::get(std::string_view alias, std::pmr::memory_resource* resource,
+    ScopedOperationScope& operationScope) const {
+    const auto match = std::ranges::lower_bound(aliasIndex_, alias, {},
+        [this](std::size_t index) -> std::string_view { return clients_[index].alias; });
     if (match != aliasIndex_.end() && std::string_view(clients_[*match].alias) == alias) {
         return DbHandle(poolRef(clients_[*match].client), resource, operationScope);
     }
-    throw DbError(
-        DbError::Code::kNotConfigured,
-        std::nullopt,
-        "database is not configured");
+    throw DbError(DbError::Code::kNotConfigured, std::nullopt, "database is not configured");
 }
 
 }  // namespace ruvia

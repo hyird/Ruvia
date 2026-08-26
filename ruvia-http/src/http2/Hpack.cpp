@@ -21,16 +21,32 @@ void HpackDecoder::setMaxDynamicTableSize(std::size_t bytes) {
     impl_->decoder.setMaxDynamicTableSize(bytes);
 }
 
-HpackDecodeResult HpackDecoder::decodeWithCallback(std::string_view block, void* target, HeaderCallback callback) {
+HpackDecodeResult HpackDecoder::decodeWithCallback(
+    std::string_view block, void* target, HeaderCallback callback) {
     const auto result = impl_->decoder.decode(block, target, callback);
     const auto* failure = result.failure();
-    return HpackDecodeResult(failure == nullptr ? std::nullopt : std::optional<HpackDecodeError>(static_cast<HpackDecodeError>(failure->error())));
+    return HpackDecodeResult(
+        failure == nullptr
+            ? std::nullopt
+            : std::optional<HpackDecodeError>(static_cast<HpackDecodeError>(failure->error())));
 }
 
-void HpackEncoder::encodeIndexed(std::pmr::string& output, std::uint32_t index) { detail::HpackEncoder::encodeIndexed(output, index); }
-void HpackEncoder::encodeDynamicTableSizeUpdate(std::pmr::string& output, std::uint32_t maximum) { detail::HpackEncoder::encodeDynamicTableSizeUpdate(output, maximum); }
-void HpackEncoder::encodeHeader(std::pmr::string& output, std::string_view name, std::string_view value) { detail::HpackEncoder::encodeHeader(output, name, value); }
-void HpackEncoder::encodeHeaderWithNameIndex(std::pmr::string& output, std::uint32_t nameIndex, std::string_view value, HpackHeaderWithNameIndexOptions options) { detail::HpackEncoder::encodeHeaderWithNameIndex(output, nameIndex, value, options.neverIndexed); }
-void HpackEncoder::encodeStatus(std::pmr::string& output, HttpStatusCode status) { detail::HpackEncoder::encodeStatus(output, status); }
+void HpackEncoder::encodeIndexed(std::pmr::string& output, std::uint32_t index) {
+    detail::HpackEncoder::encodeIndexed(output, index);
+}
+void HpackEncoder::encodeDynamicTableSizeUpdate(std::pmr::string& output, std::uint32_t maximum) {
+    detail::HpackEncoder::encodeDynamicTableSizeUpdate(output, maximum);
+}
+void HpackEncoder::encodeHeader(
+    std::pmr::string& output, std::string_view name, std::string_view value) {
+    detail::HpackEncoder::encodeHeader(output, name, value);
+}
+void HpackEncoder::encodeHeaderWithNameIndex(std::pmr::string& output, std::uint32_t nameIndex,
+    std::string_view value, HpackHeaderWithNameIndexOptions options) {
+    detail::HpackEncoder::encodeHeaderWithNameIndex(output, nameIndex, value, options.neverIndexed);
+}
+void HpackEncoder::encodeStatus(std::pmr::string& output, HttpStatusCode status) {
+    detail::HpackEncoder::encodeStatus(output, status);
+}
 
 }  // namespace ruvia

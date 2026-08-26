@@ -38,11 +38,13 @@ enum class SecurityHeaderConflictPolicy : std::uint8_t {
 };
 
 struct SecurityHeadersConfig final {
-    DefaultSecurityHeaderPolicy contentTypeOptionsHeader = DefaultSecurityHeaderPolicy::kEmitDefault;
+    DefaultSecurityHeaderPolicy contentTypeOptionsHeader =
+        DefaultSecurityHeaderPolicy::kEmitDefault;
     DefaultSecurityHeaderPolicy frameOptionsHeader = DefaultSecurityHeaderPolicy::kEmitDefault;
     // Emitted only for requests received over TLS. Plain HTTP responses must
     // never carry Strict-Transport-Security.
-    DefaultSecurityHeaderPolicy strictTransportSecurityHeader = DefaultSecurityHeaderPolicy::kEmitDefault;
+    DefaultSecurityHeaderPolicy strictTransportSecurityHeader =
+        DefaultSecurityHeaderPolicy::kEmitDefault;
     XssProtectionHeaderPolicy xssProtectionHeader = XssProtectionHeaderPolicy::kEmitDisabled;
 
     std::string contentSecurityPolicy{"default-src 'self'"};

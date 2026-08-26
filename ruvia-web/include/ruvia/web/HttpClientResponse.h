@@ -79,16 +79,16 @@ public:
     [[nodiscard]] std::optional<std::string_view> header(std::string_view) const&& = delete;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const& noexcept;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view) const&& = delete;
-    [[nodiscard]] HttpClientResponseBody& body() & noexcept { return body_; }
+    [[nodiscard]] HttpClientResponseBody& body() & noexcept {
+        return body_;
+    }
     [[nodiscard]] const HttpClientResponseBody& body() const& = delete;
     [[nodiscard]] HttpClientResponseBody& body() && = delete;
 
 private:
     friend class detail::HttpClientPool;
 
-    HttpClientResponse(
-        std::pmr::memory_resource* resource,
-        const WorkerHandle& worker,
+    HttpClientResponse(std::pmr::memory_resource* resource, const WorkerHandle& worker,
         detail::HttpClientPool& pool);
     HttpClientResponse(detail::HttpClientResponseState* state, bool retain) noexcept;
     void release() noexcept;

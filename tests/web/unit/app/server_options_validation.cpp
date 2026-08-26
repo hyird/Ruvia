@@ -48,8 +48,8 @@ private:
     bool deallocatedAfterRelease_{false};
 };
 
-using ruvia::detail::HttpServerOptions;
 using ruvia::detail::HttpServerListenerDefinition;
+using ruvia::detail::HttpServerOptions;
 using ruvia::detail::validateHttpServerListener;
 using ruvia::detail::validateHttpServerOptions;
 
@@ -70,7 +70,8 @@ bool throwsInvalid(Fn&& fn) {
     }
 }
 
-ruvia::TlsConfig tlsConfig(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::string privateKeyPassword = {}) {
+ruvia::TlsConfig tlsConfig(std::filesystem::path certificateChainFile,
+    std::filesystem::path privateKeyFile, std::string privateKeyPassword = {}) {
     return {
         .certificateChainFile = std::move(certificateChainFile),
         .privateKeyFile = std::move(privateKeyFile),
@@ -81,21 +82,31 @@ ruvia::TlsConfig tlsConfig(std::filesystem::path certificateChainFile, std::file
 }  // namespace
 
 RUVIA_TEST(validate_server_options_accepts_defaults) {
-    static_assert(std::same_as<decltype(HttpServerOptions{}.idleTimeout), std::optional<std::chrono::milliseconds>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.requestHeaderTimeout), std::optional<std::chrono::milliseconds>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.requestBodyTimeout), std::optional<std::chrono::milliseconds>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.writeTimeout), std::optional<std::chrono::milliseconds>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.maxConnections), std::optional<std::size_t>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.maxRequestsPerConnection), std::optional<std::size_t>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.maxStreamBodyBytes), std::optional<std::size_t>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.defaultRateLimitPerWorker), std::optional<ruvia::RateLimitRule>>);
-    static_assert(std::same_as<decltype(HttpServerOptions{}.rateLimitCapacityPerWorker), std::size_t>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.idleTimeout),
+        std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.requestHeaderTimeout),
+        std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.requestBodyTimeout),
+        std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.writeTimeout),
+        std::optional<std::chrono::milliseconds>>);
+    static_assert(
+        std::same_as<decltype(HttpServerOptions{}.maxConnections), std::optional<std::size_t>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.maxRequestsPerConnection),
+        std::optional<std::size_t>>);
+    static_assert(
+        std::same_as<decltype(HttpServerOptions{}.maxStreamBodyBytes), std::optional<std::size_t>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.defaultRateLimitPerWorker),
+        std::optional<ruvia::RateLimitRule>>);
+    static_assert(
+        std::same_as<decltype(HttpServerOptions{}.rateLimitCapacityPerWorker), std::size_t>);
     RUVIA_CHECK(!HttpServerOptions{}.maxStreamBodyBytes.has_value());
     RUVIA_CHECK(!HttpServerOptions{}.compression.has_value());
     RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.minBytes, std::size_t{1024});
     RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.syncBytes, std::size_t{64} * 1024);
     RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.maxBytes, std::size_t{64} * 1024 * 1024);
-    RUVIA_CHECK_EQ(HttpServerOptions{}.rateLimitCapacityPerWorker, ruvia::kDefaultRateLimitCapacityPerWorker);
+    RUVIA_CHECK_EQ(
+        HttpServerOptions{}.rateLimitCapacityPerWorker, ruvia::kDefaultRateLimitCapacityPerWorker);
     // An unconfigured server is bounded by default against connection floods.
     RUVIA_CHECK(HttpServerOptions{}.maxConnections.has_value());
     RUVIA_CHECK_EQ(*HttpServerOptions{}.maxConnections, std::size_t{1024});
@@ -119,7 +130,8 @@ RUVIA_TEST(validate_server_options_rejects_invalid_compression_thresholds) {
     options.compression = ruvia::CompressionConfig{.minBytes = 1024, .syncBytes = 512};
     RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
 
-    options.compression = ruvia::CompressionConfig{.minBytes = 1024, .syncBytes = 4096, .maxBytes = 2048};
+    options.compression =
+        ruvia::CompressionConfig{.minBytes = 1024, .syncBytes = 4096, .maxBytes = 2048};
     RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
 
     options.compression = ruvia::CompressionConfig{};
@@ -157,13 +169,10 @@ RUVIA_TEST(validate_server_options_owns_document_root_runtime_policy) {
     RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerOptions(options); }));
 
     options.documentRoot = HttpServerOptions::DocumentRoot::refreshing(
-        root,
-        {.refreshInterval = std::chrono::milliseconds(1)},
-        {.gzip = true, .minBytes = 0});
+        root, {.refreshInterval = std::chrono::milliseconds(1)}, {.gzip = true, .minBytes = 0});
     RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
 
-    options.documentRoot = HttpServerOptions::DocumentRoot::refreshing(
-        root,
+    options.documentRoot = HttpServerOptions::DocumentRoot::refreshing(root,
         {.refreshInterval = std::chrono::milliseconds(1)},
         {.gzip = true, .minBytes = 1024, .maxBytes = 512});
     RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
@@ -295,7 +304,8 @@ RUVIA_TEST(validate_server_options_enforces_nested_tls_material) {
 
     {
         auto tls = validTls();
-        tls.clientCertificates.emplace(std::pmr::get_default_resource(), ruvia::TlsClientCertificateRequirement::kOptional);
+        tls.clientCertificates.emplace(
+            std::pmr::get_default_resource(), ruvia::TlsClientCertificateRequirement::kOptional);
         auto listener = makeListener(std::move(tls));
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerListener(listener); }));
     }
@@ -350,9 +360,13 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({}); }));
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = {}, .http = 8080}); }));
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "127.0.0.1", .http = 0}); }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "127.0.0.1", .http = 8080, .https = 8080}); }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "127.0.0.1", .http = 8080, .autoHttpsRedirect = true}); }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "127.0.0.1", .https = 8443}); }));
+    RUVIA_CHECK(throwsInvalid(
+        [] { ruvia::app().listen({.address = "127.0.0.1", .http = 8080, .https = 8080}); }));
+    RUVIA_CHECK(throwsInvalid([] {
+        ruvia::app().listen({.address = "127.0.0.1", .http = 8080, .autoHttpsRedirect = true});
+    }));
+    RUVIA_CHECK(
+        throwsInvalid([] { ruvia::app().listen({.address = "127.0.0.1", .https = 8443}); }));
     RUVIA_CHECK(throwsInvalid([] {
         ruvia::app().listen({
             .address = "127.0.0.1",
@@ -367,7 +381,10 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
             .tls = {.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"},
         });
     }));
-    RUVIA_CHECK(throwsInvalid([] { ruvia::app().server({.processSignalHandlers = static_cast<ruvia::ProcessSignalHandlerPolicy>(0xFF)}); }));
+    RUVIA_CHECK(throwsInvalid([] {
+        ruvia::app().server(
+            {.processSignalHandlers = static_cast<ruvia::ProcessSignalHandlerPolicy>(0xFF)});
+    }));
 }
 
 RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {
@@ -376,17 +393,23 @@ RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {
             ruvia::app().listen({
                 .address = "127.0.0.1",
                 .https = 8443,
-                .tls = {
-                    .certificateChainFile = "cert.pem",
-                    .privateKeyFile = "key.pem",
-                    .sni = std::move(sni),
-                },
+                .tls =
+                    {
+                        .certificateChainFile = "cert.pem",
+                        .privateKeyFile = "key.pem",
+                        .sni = std::move(sni),
+                    },
             });
         });
     };
-    RUVIA_CHECK(rejects({{.host = {}, .certificateChainFile = "other.pem", .privateKeyFile = "other.key"}}));
-    RUVIA_CHECK(rejects({{.host = "example.com:443", .certificateChainFile = "other.pem", .privateKeyFile = "other.key"}}));
-    RUVIA_CHECK(rejects({{.host = "127.0.0.1", .certificateChainFile = "other.pem", .privateKeyFile = "other.key"}}));
+    RUVIA_CHECK(rejects(
+        {{.host = {}, .certificateChainFile = "other.pem", .privateKeyFile = "other.key"}}));
+    RUVIA_CHECK(rejects({{.host = "example.com:443",
+        .certificateChainFile = "other.pem",
+        .privateKeyFile = "other.key"}}));
+    RUVIA_CHECK(rejects({{.host = "127.0.0.1",
+        .certificateChainFile = "other.pem",
+        .privateKeyFile = "other.key"}}));
     RUVIA_CHECK(rejects({
         {.host = "Example.com", .certificateChainFile = "other.pem", .privateKeyFile = "other.key"},
         {.host = "example.COM", .certificateChainFile = "third.pem", .privateKeyFile = "third.key"},
@@ -399,7 +422,8 @@ RUVIA_TEST(tls_identity_owns_password_independently_of_caller_resource) {
     std::optional<ruvia::TlsConfig> identity;
     {
         const std::pmr::string password(expected, &callerResource);
-        identity.emplace(tlsConfig("cert.pem", "key.pem", std::string(password.data(), password.size())));
+        identity.emplace(
+            tlsConfig("cert.pem", "key.pem", std::string(password.data(), password.size())));
     }
     callerResource.release();
     RUVIA_CHECK_EQ(identity->privateKeyPassword, std::string_view(expected));
@@ -412,7 +436,8 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
     {
         auto state = std::make_shared<int>(1);
         accessState = state;
-        ruvia::AccessLogCallback callback([state](const ruvia::AccessLogRecord&) noexcept { (void)state; });
+        ruvia::AccessLogCallback callback(
+            [state](const ruvia::AccessLogRecord&) noexcept { (void)state; });
         auto copy = callback;
         state.reset();
         RUVIA_CHECK(!accessState.expired());
@@ -424,7 +449,8 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
     {
         auto state = std::make_shared<int>(1);
         failureState = state;
-        ruvia::ConnectionFailureCallback callback([state](const ruvia::ConnectionFailureRecord&) noexcept { (void)state; });
+        ruvia::ConnectionFailureCallback callback(
+            [state](const ruvia::ConnectionFailureRecord&) noexcept { (void)state; });
         state.reset();
         RUVIA_CHECK(!failureState.expired());
     }
@@ -434,10 +460,11 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
     {
         auto state = std::make_shared<int>(1);
         errorState = state;
-        ruvia::HttpErrorHandler callback([state](ruvia::Context&, ruvia::HttpErrorInfo) -> ruvia::Task<ruvia::HttpResponse> {
-            (void)state;
-            co_return ruvia::HttpResponse{};
-        });
+        ruvia::HttpErrorHandler callback(
+            [state](ruvia::Context&, ruvia::HttpErrorInfo) -> ruvia::Task<ruvia::HttpResponse> {
+                (void)state;
+                co_return ruvia::HttpResponse{};
+            });
         state.reset();
         RUVIA_CHECK(!errorState.expired());
     }
@@ -447,10 +474,11 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
     {
         auto state = std::make_shared<int>(1);
         notFoundState = state;
-        ruvia::HttpNotFoundHandler callback([state](ruvia::Context&) -> ruvia::Task<ruvia::HttpResponse> {
-            (void)state;
-            co_return ruvia::HttpResponse{};
-        });
+        ruvia::HttpNotFoundHandler callback(
+            [state](ruvia::Context&) -> ruvia::Task<ruvia::HttpResponse> {
+                (void)state;
+                co_return ruvia::HttpResponse{};
+            });
         state.reset();
         RUVIA_CHECK(!notFoundState.expired());
     }

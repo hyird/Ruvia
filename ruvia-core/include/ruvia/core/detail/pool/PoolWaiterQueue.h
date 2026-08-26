@@ -77,7 +77,8 @@ private:
     friend class PoolWaiter;
     friend class PoolLeaseScheduler;
 
-    using Value = std::variant<PoolWaiterAcquired, PoolWaiterTimedOut, PoolWaiterClosed, PoolWaiterCancelled>;
+    using Value =
+        std::variant<PoolWaiterAcquired, PoolWaiterTimedOut, PoolWaiterClosed, PoolWaiterCancelled>;
 
     template <typename Alternative>
     explicit constexpr PoolWaiterResult(Alternative alternative) noexcept
@@ -112,8 +113,10 @@ struct PoolWaiterQueued final {};
 // resumes the coroutine, so callers never coordinate external readiness flags.
 class PoolWaiter final {
 public:
-    explicit PoolWaiter(std::chrono::steady_clock::time_point deadline, std::uint64_t id = 0) noexcept
-        : deadline_(deadline), id_(id) {}
+    explicit PoolWaiter(
+        std::chrono::steady_clock::time_point deadline, std::uint64_t id = 0) noexcept
+        : deadline_(deadline),
+          id_(id) {}
 
     PoolWaiter(const PoolWaiter&) = delete;
     PoolWaiter& operator=(const PoolWaiter&) = delete;
@@ -256,12 +259,10 @@ public:
     // Commit cancellation while still inside a stop callback, but let the
     // caller resume the coroutine only after that callback has returned.
     [[nodiscard]] bool commitCancellation(
-        std::uint64_t id,
-        std::coroutine_handle<>& continuation) noexcept {
+        std::uint64_t id, std::coroutine_handle<>& continuation) noexcept {
         continuation = {};
         auto* waiter = find(id);
-        return waiter != nullptr &&
-            commitCancellation(*waiter, continuation);
+        return waiter != nullptr && commitCancellation(*waiter, continuation);
     }
 
     [[nodiscard]] bool expire(std::uint64_t id) noexcept {
@@ -340,8 +341,7 @@ public:
 
 private:
     [[nodiscard]] bool commitCancellation(
-        PoolWaiter& waiter,
-        std::coroutine_handle<>& continuation) noexcept {
+        PoolWaiter& waiter, std::coroutine_handle<>& continuation) noexcept {
         continuation = {};
         if (!std::holds_alternative<PoolWaiterQueued>(waiter.state_)) {
             return false;

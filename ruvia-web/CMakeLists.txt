@@ -31,6 +31,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientHttp2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/WebSocketClient.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextCookies.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextConnInfo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextData.cpp

@@ -10,7 +10,9 @@ namespace ruvia::detail {
 
 struct CorsOptions final {
     explicit CorsOptions(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : origin(resource), requestHeaders(resource), exposeHeaders(resource) {}
+        : origin(resource),
+          requestHeaders(resource),
+          exposeHeaders(resource) {}
 
     CorsOriginMode originMode{CorsOriginMode::kAny};
     std::pmr::string origin;
@@ -20,6 +22,7 @@ struct CorsOptions final {
     std::optional<std::chrono::seconds> maxAge;
 };
 
-[[nodiscard]] CorsOptions makeCorsOptions(const CorsConfig& config, std::pmr::memory_resource* resource);
+[[nodiscard]] CorsOptions makeCorsOptions(
+    const CorsConfig& config, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

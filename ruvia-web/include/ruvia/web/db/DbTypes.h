@@ -61,12 +61,8 @@ public:
         kClosing,
     };
 
-    DbError(
-        Code code,
-        std::optional<DbDriver> driver,
-        std::string message,
-        std::optional<std::int64_t> nativeCode = std::nullopt,
-        std::string sqlState = {},
+    DbError(Code code, std::optional<DbDriver> driver, std::string message,
+        std::optional<std::int64_t> nativeCode = std::nullopt, std::string sqlState = {},
         std::string constraintName = {})
         : std::runtime_error(std::move(message)),
           code_(code),
@@ -134,7 +130,8 @@ public:
     };
 
     DbConversionError(Code code, std::string message)
-        : std::runtime_error(std::move(message)), code_(code) {}
+        : std::runtime_error(std::move(message)),
+          code_(code) {}
 
     [[nodiscard]] Code code() const noexcept {
         return code_;
@@ -146,7 +143,8 @@ private:
 
 class DbValue final {
 private:
-    using Storage = std::variant<std::monostate, BorrowedText, std::pmr::string, std::int64_t, std::uint64_t, double, bool>;
+    using Storage = std::variant<std::monostate, BorrowedText, std::pmr::string, std::int64_t,
+        std::uint64_t, double, bool>;
 
 public:
     DbValue(std::nullptr_t);
@@ -170,7 +168,8 @@ public:
     DbValue& operator=(DbValue&&) = delete;
 
     template <typename T>
-        requires(std::is_integral_v<std::remove_cvref_t<T>> && !std::is_same_v<std::remove_cvref_t<T>, bool>)
+        requires(std::is_integral_v<std::remove_cvref_t<T>> &&
+                 !std::is_same_v<std::remove_cvref_t<T>, bool>)
     DbValue(T value)
         : storage_(makeIntegerStorage(value)) {}
 
@@ -219,13 +218,10 @@ public:
     [[nodiscard]] std::optional<std::string_view> value() const&& = delete;
 
     template <typename T>
-        requires(
-            std::is_same_v<T, std::remove_cv_t<T>> &&
-            (std::is_same_v<T, bool> ||
-             (std::is_integral_v<T> && !std::is_same_v<T, char>) ||
-             std::is_floating_point_v<T> ||
-             std::is_same_v<T, std::string> ||
-             std::is_same_v<T, std::string_view>))
+        requires(std::is_same_v<T, std::remove_cv_t<T>> &&
+                 (std::is_same_v<T, bool> || (std::is_integral_v<T> && !std::is_same_v<T, char>) ||
+                     std::is_floating_point_v<T> || std::is_same_v<T, std::string> ||
+                     std::is_same_v<T, std::string_view>))
     [[nodiscard]] std::optional<T> as() const& {
         const auto source = value();
         if (!source) {
@@ -243,18 +239,16 @@ public:
                 return false;
             }
             throw DbConversionError(
-                DbConversionError::Code::kInvalidFormat,
-                "database field is not a boolean");
+                DbConversionError::Code::kInvalidFormat, "database field is not a boolean");
         } else {
             T converted{};
             const auto* first = source->data();
             const auto* last = first + source->size();
             const auto [end, error] = std::from_chars(first, last, converted);
             if (error != std::errc{} || end != last) {
-                throw DbConversionError(
-                    error == std::errc::result_out_of_range
-                        ? DbConversionError::Code::kOutOfRange
-                        : DbConversionError::Code::kInvalidFormat,
+                throw DbConversionError(error == std::errc::result_out_of_range
+                                            ? DbConversionError::Code::kOutOfRange
+                                            : DbConversionError::Code::kInvalidFormat,
                     "database field has an invalid numeric value");
             }
             return converted;
@@ -262,13 +256,11 @@ public:
     }
 
     template <typename T>
-        requires(
-            std::is_same_v<T, std::remove_cv_t<T>> &&
-            (std::is_same_v<T, bool> ||
-             (std::is_integral_v<T> && !std::is_same_v<T, char>) ||
-             std::is_floating_point_v<T> ||
-             std::is_same_v<T, std::string> ||
-             std::is_same_v<T, std::string_view>))
+        requires(std::is_same_v<T, std::remove_cv_t<T>> &&
+                    (std::is_same_v<T, bool> ||
+                        (std::is_integral_v<T> && !std::is_same_v<T, char>) ||
+                        std::is_floating_point_v<T> || std::is_same_v<T, std::string> ||
+                        std::is_same_v<T, std::string_view>))
     [[nodiscard]] std::optional<T> as() const&& = delete;
 
 private:
@@ -280,7 +272,8 @@ private:
     DbField(std::nullptr_t, std::pmr::memory_resource* resource);
     DbField(std::string_view value, std::pmr::memory_resource* resource);
     DbField(BorrowedTag, std::string_view value, std::pmr::memory_resource* resource);
-    [[nodiscard]] static DbField borrowed(std::string_view value, std::pmr::memory_resource* resource);
+    [[nodiscard]] static DbField borrowed(
+        std::string_view value, std::pmr::memory_resource* resource);
 
     std::pmr::memory_resource* resource_;
     Storage storage_;
@@ -317,7 +310,8 @@ private:
     friend struct detail::DbResultAccess;
 
     explicit DbRow(std::pmr::memory_resource* resource = nullptr);
-    DbRow(const DbField* fields, std::size_t size, const std::pmr::string* columnNames, std::size_t columnCount, std::pmr::memory_resource* resource);
+    DbRow(const DbField* fields, std::size_t size, const std::pmr::string* columnNames,
+        std::size_t columnCount, std::pmr::memory_resource* resource);
     [[nodiscard]] OwnedFields& ownedFields() noexcept;
     [[nodiscard]] OwnedColumnNames& ownedColumnNames() noexcept;
     [[nodiscard]] std::span<const std::pmr::string> columnNames() const noexcept;

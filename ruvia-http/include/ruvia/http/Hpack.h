@@ -27,12 +27,17 @@ enum class HpackDecodeError : std::uint8_t {
 
 class HpackDecodeResult final {
 public:
-    [[nodiscard]] constexpr bool decoded() const noexcept { return !error_.has_value(); }
-    [[nodiscard]] constexpr std::optional<HpackDecodeError> error() const noexcept { return error_; }
+    [[nodiscard]] constexpr bool decoded() const noexcept {
+        return !error_.has_value();
+    }
+    [[nodiscard]] constexpr std::optional<HpackDecodeError> error() const noexcept {
+        return error_;
+    }
 
 private:
     friend class HpackDecoder;
-    explicit constexpr HpackDecodeResult(std::optional<HpackDecodeError> error) noexcept : error_(error) {}
+    explicit constexpr HpackDecodeResult(std::optional<HpackDecodeError> error) noexcept
+        : error_(error) {}
     std::optional<HpackDecodeError> error_;
 };
 
@@ -61,7 +66,8 @@ public:
         // addressof(callback) directly would produce a function pointer when a
         // free function is supplied, which cannot be represented by void*.
         std::exception_ptr callbackFailure;
-        auto invocation = [&callback, &callbackFailure](std::string_view name, std::string_view value) {
+        auto invocation = [&callback, &callbackFailure](
+                              std::string_view name, std::string_view value) {
             if (callbackFailure) {
                 return true;
             }
@@ -76,9 +82,10 @@ public:
         };
         using Invocation = decltype(invocation);
         try {
-            auto result = decodeWithCallback(block, std::addressof(invocation), [](void* target, std::string_view name, std::string_view value) {
-                return std::invoke(*static_cast<Invocation*>(target), name, value);
-            });
+            auto result = decodeWithCallback(block, std::addressof(invocation),
+                [](void* target, std::string_view name, std::string_view value) {
+                    return std::invoke(*static_cast<Invocation*>(target), name, value);
+                });
             if (callbackFailure) {
                 std::rethrow_exception(callbackFailure);
             }
@@ -97,7 +104,8 @@ public:
 
 private:
     using HeaderCallback = bool (*)(void*, std::string_view, std::string_view);
-    [[nodiscard]] HpackDecodeResult decodeWithCallback(std::string_view block, void* target, HeaderCallback callback);
+    [[nodiscard]] HpackDecodeResult decodeWithCallback(
+        std::string_view block, void* target, HeaderCallback callback);
 
     class Impl;
     std::unique_ptr<Impl> impl_;
@@ -111,8 +119,10 @@ class HpackEncoder final {
 public:
     static void encodeIndexed(std::pmr::string& output, std::uint32_t index);
     static void encodeDynamicTableSizeUpdate(std::pmr::string& output, std::uint32_t maximum);
-    static void encodeHeader(std::pmr::string& output, std::string_view name, std::string_view value);
-    static void encodeHeaderWithNameIndex(std::pmr::string& output, std::uint32_t nameIndex, std::string_view value, HpackHeaderWithNameIndexOptions options = {});
+    static void encodeHeader(
+        std::pmr::string& output, std::string_view name, std::string_view value);
+    static void encodeHeaderWithNameIndex(std::pmr::string& output, std::uint32_t nameIndex,
+        std::string_view value, HpackHeaderWithNameIndexOptions options = {});
     static void encodeStatus(std::pmr::string& output, HttpStatusCode status);
 };
 

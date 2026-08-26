@@ -18,7 +18,8 @@
 namespace ruvia {
 namespace {
 
-inline constexpr std::size_t kAllowHeaderMethodSlots = static_cast<std::size_t>(HttpKnownMethod::kOptions) + 1;
+inline constexpr std::size_t kAllowHeaderMethodSlots =
+    static_cast<std::size_t>(HttpKnownMethod::kOptions) + 1;
 
 void appendHeaderValueLiteral(char*& cursor, std::string_view value) noexcept {
     std::memcpy(cursor, value.data(), value.size());
@@ -33,7 +34,8 @@ void appendHeaderValueUnsigned(char*& cursor, char* end, std::uint64_t value) {
     cursor = ptr;
 }
 
-void writeContentRangeHeaderValue(HttpResponseHeader& header, std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
+void writeContentRangeHeaderValue(
+    HttpResponseHeader& header, std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
     if (length == 0) {
         throw std::logic_error("file response byte range length must not be zero");
     }
@@ -65,7 +67,8 @@ void writeContentRangeUnsatisfiedHeaderValue(HttpResponseHeader& header, std::ui
 // the exact wire tokens of any others the resource supports. RFC 9110 10.2.1
 // requires Allow to list every supported method, and an extension method has no
 // bit to occupy, so it has to travel alongside the mask rather than inside it.
-[[nodiscard]] std::size_t allowHeaderValueSize(std::uint32_t methodMask, std::span<const std::string_view> extensionMethods) noexcept {
+[[nodiscard]] std::size_t allowHeaderValueSize(
+    std::uint32_t methodMask, std::span<const std::string_view> extensionMethods) noexcept {
     std::size_t size = 0;
     std::size_t count = 0;
     for (std::size_t i = 0; i < kAllowHeaderMethodSlots; ++i) {
@@ -82,7 +85,8 @@ void writeContentRangeUnsatisfiedHeaderValue(HttpResponseHeader& header, std::ui
     return count > 1 ? size + (count - 1) * 2 : size;
 }
 
-void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask, std::span<const std::string_view> extensionMethods) {
+void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask,
+    std::span<const std::string_view> extensionMethods) {
     auto* cursor = detail::responseHeaderValueBegin(header);
     auto* const end = detail::responseHeaderValueEnd(header);
     bool first = true;
@@ -110,8 +114,10 @@ void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask,
 
 }  // namespace
 
-void HttpResponse::setAllowHeader(std::uint32_t methodMask, std::span<const std::string_view> extensionMethods) {
-    auto& header = prepareHeaderValueStorage("Allow", allowHeaderValueSize(methodMask, extensionMethods), detail::kResponseHeaderAllow);
+void HttpResponse::setAllowHeader(
+    std::uint32_t methodMask, std::span<const std::string_view> extensionMethods) {
+    auto& header = prepareHeaderValueStorage(
+        "Allow", allowHeaderValueSize(methodMask, extensionMethods), detail::kResponseHeaderAllow);
     writeAllowHeaderValue(header, methodMask, extensionMethods);
 }
 
@@ -123,14 +129,19 @@ void HttpResponse::setContentRange(std::uint64_t offset, std::uint64_t length, s
         throw std::logic_error("file response byte range is outside the representation");
     }
     const auto endOffset = offset + length - 1;
-    const auto valueSize = std::string_view("bytes ").size() + detail::httpUnsignedDecimalSize(offset) + 1 + detail::httpUnsignedDecimalSize(endOffset) + 1 + detail::httpUnsignedDecimalSize(size);
-    auto& header = prepareHeaderValueStorage("Content-Range", valueSize, detail::kResponseHeaderContentRange);
+    const auto valueSize =
+        std::string_view("bytes ").size() + detail::httpUnsignedDecimalSize(offset) + 1 +
+        detail::httpUnsignedDecimalSize(endOffset) + 1 + detail::httpUnsignedDecimalSize(size);
+    auto& header =
+        prepareHeaderValueStorage("Content-Range", valueSize, detail::kResponseHeaderContentRange);
     writeContentRangeHeaderValue(header, offset, length, size);
 }
 
 void HttpResponse::setContentRangeUnsatisfied(std::uint64_t size) {
-    const auto valueSize = std::string_view("bytes */").size() + detail::httpUnsignedDecimalSize(size);
-    auto& header = prepareHeaderValueStorage("Content-Range", valueSize, detail::kResponseHeaderContentRange);
+    const auto valueSize =
+        std::string_view("bytes */").size() + detail::httpUnsignedDecimalSize(size);
+    auto& header =
+        prepareHeaderValueStorage("Content-Range", valueSize, detail::kResponseHeaderContentRange);
     writeContentRangeUnsatisfiedHeaderValue(header, size);
 }
 

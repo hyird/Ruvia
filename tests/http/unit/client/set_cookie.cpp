@@ -17,12 +17,12 @@
 namespace {
 
 template <typename Input>
-concept CanParseSetCookie = requires(Input&& input) {
-    ruvia::parseSetCookie(std::forward<Input>(input));
-};
+concept CanParseSetCookie =
+    requires(Input&& input) { ruvia::parseSetCookie(std::forward<Input>(input)); };
 
 template <typename T>
-concept HasSetCookiePublicField = requires(T& cookie) { cookie.name = std::string_view{}; } ||
+concept HasSetCookiePublicField =
+    requires(T& cookie) { cookie.name = std::string_view{}; } ||
     requires(T& cookie) { cookie.value = std::string_view{}; } ||
     requires(T& cookie) { cookie.path = std::string_view{}; } ||
     requires(T& cookie) { cookie.domain = std::string_view{}; } ||
@@ -40,15 +40,21 @@ static_assert(!CanParseSetCookie<std::string>);
 static_assert(!CanParseSetCookie<const std::string>);
 static_assert(!CanParseSetCookie<std::pmr::string>);
 static_assert(std::same_as<std::underlying_type_t<ruvia::HttpSetCookieAttribute>, std::uint8_t>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().name()), std::string_view>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().maxAgeSeconds()), std::optional<std::int64_t>>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().has(ruvia::HttpSetCookieAttribute::kSecure)), bool>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().name()),
+    std::string_view>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().maxAgeSeconds()),
+        std::optional<std::int64_t>>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().has(
+                               ruvia::HttpSetCookieAttribute::kSecure)),
+    bool>);
 static_assert(!HasSetCookiePublicField<ruvia::HttpSetCookieView>);
 
 }  // namespace
 
 RUVIA_TEST(set_cookie_parser_exposes_client_storage_fields) {
-    const auto parsed = ruvia::parseSetCookie("sid=abc; Path=/api; Domain=.example.com; Max-Age=60; Secure; HttpOnly");
+    const auto parsed = ruvia::parseSetCookie(
+        "sid=abc; Path=/api; Domain=.example.com; Max-Age=60; Secure; HttpOnly");
     RUVIA_CHECK(parsed.has_value());
     RUVIA_CHECK(parsed->name() == "sid");
     RUVIA_CHECK(parsed->value() == "abc");
@@ -106,16 +112,14 @@ RUVIA_TEST(set_cookie_parser_ignores_oversized_attribute_value) {
 }
 
 RUVIA_TEST(set_cookie_parser_tracks_storage_security_attributes) {
-    const auto parsed = ruvia::parseSetCookie(
-        "sid=abc; Path=relative; SameSite=None");
+    const auto parsed = ruvia::parseSetCookie("sid=abc; Path=relative; SameSite=None");
     RUVIA_CHECK(parsed.has_value());
     if (!parsed) return;
     RUVIA_CHECK(parsed->has(ruvia::HttpSetCookieAttribute::kPath));
     RUVIA_CHECK(parsed->path() == "relative");
     RUVIA_CHECK(parsed->has(ruvia::HttpSetCookieAttribute::kSameSiteNone));
 
-    const auto overridden = ruvia::parseSetCookie(
-        "sid=abc; SameSite=None; SameSite=Lax");
+    const auto overridden = ruvia::parseSetCookie("sid=abc; SameSite=None; SameSite=Lax");
     RUVIA_CHECK(overridden.has_value());
     if (!overridden) return;
     RUVIA_CHECK(!overridden->has(ruvia::HttpSetCookieAttribute::kSameSiteNone));
@@ -134,44 +138,41 @@ RUVIA_TEST(set_cookie_parser_treats_empty_domain_as_host_only) {
     RUVIA_CHECK(parsed->domain().empty());
     RUVIA_CHECK(parsed->path() == "/api");
 
-    const auto overridesEarlierDomain = ruvia::parseSetCookie(
-        "sid=abc; Domain=example.com; Domain=");
+    const auto overridesEarlierDomain =
+        ruvia::parseSetCookie("sid=abc; Domain=example.com; Domain=");
     RUVIA_CHECK(overridesEarlierDomain.has_value());
     RUVIA_CHECK(overridesEarlierDomain->domain().empty());
 }
 
 RUVIA_TEST(set_cookie_parser_saturates_max_age_overflow) {
-    const auto positive = ruvia::parseSetCookie(
-        "sid=abc; Max-Age=999999999999999999999999999999999999");
+    const auto positive =
+        ruvia::parseSetCookie("sid=abc; Max-Age=999999999999999999999999999999999999");
     RUVIA_CHECK(positive.has_value());
     RUVIA_CHECK(positive->maxAgeSeconds() ==
-        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(400)).count());
+                std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(400)).count());
 
-    const auto negative = ruvia::parseSetCookie(
-        "sid=abc; Max-Age=-999999999999999999999999999999999999");
+    const auto negative =
+        ruvia::parseSetCookie("sid=abc; Max-Age=-999999999999999999999999999999999999");
     RUVIA_CHECK(negative.has_value());
     RUVIA_CHECK(negative->maxAgeSeconds() == std::numeric_limits<std::int64_t>::min());
 }
 
 RUVIA_TEST(set_cookie_parser_ignores_invalid_later_expires_attribute) {
-    const auto parsed = ruvia::parseSetCookie(
-        "sid=abc; Expires=Sun, 06 Nov 1994 08:49:37 GMT; Expires=not-a-date");
+    const auto parsed =
+        ruvia::parseSetCookie("sid=abc; Expires=Sun, 06 Nov 1994 08:49:37 GMT; Expires=not-a-date");
     RUVIA_CHECK(parsed.has_value());
     RUVIA_CHECK(parsed->expires().has_value());
 }
 
 RUVIA_TEST(set_cookie_parser_uses_cookie_date_token_grammar) {
-    const auto hyphenated = ruvia::parseSetCookie(
-        "sid=abc; Expires=Wed, 09-Jun-2021 10:18:14 GMT");
+    const auto hyphenated = ruvia::parseSetCookie("sid=abc; Expires=Wed, 09-Jun-2021 10:18:14 GMT");
     RUVIA_CHECK(hyphenated.has_value());
     if (!hyphenated) return;
-    RUVIA_CHECK(hyphenated->expires() ==
-        ruvia::parseHttpDate("Wed, 09 Jun 2021 10:18:14 GMT"));
+    RUVIA_CHECK(hyphenated->expires() == ruvia::parseHttpDate("Wed, 09 Jun 2021 10:18:14 GMT"));
 
-    const auto shortYear = ruvia::parseSetCookie(
-        "sid=abc; Expires=Thursday, 01-Jan-70 00:00:00 GMT");
+    const auto shortYear =
+        ruvia::parseSetCookie("sid=abc; Expires=Thursday, 01-Jan-70 00:00:00 GMT");
     RUVIA_CHECK(shortYear.has_value());
     if (!shortYear) return;
-    RUVIA_CHECK(shortYear->expires() ==
-        ruvia::parseHttpDate("Thu, 01 Jan 1970 00:00:00 GMT"));
+    RUVIA_CHECK(shortYear->expires() == ruvia::parseHttpDate("Thu, 01 Jan 1970 00:00:00 GMT"));
 }

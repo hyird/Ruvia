@@ -37,13 +37,14 @@ public:
     // Starts the clock. `worker` must outlive this object; the session that owns
     // the request guarantees that.
     void arm(const WorkerHandle& worker, std::chrono::milliseconds deadline) {
-        WorkerHandleAccess::scheduleTimer(worker, timer_, workerTimerDeadlineAfter(deadline), [this](WorkerTimerOutcome outcome) {
-            if (outcome != WorkerTimerOutcome::kExpired) {
-                return;
-            }
-            exceeded_ = true;
-            source_.requestStop();
-        });
+        WorkerHandleAccess::scheduleTimer(
+            worker, timer_, workerTimerDeadlineAfter(deadline), [this](WorkerTimerOutcome outcome) {
+                if (outcome != WorkerTimerOutcome::kExpired) {
+                    return;
+                }
+                exceeded_ = true;
+                source_.requestStop();
+            });
     }
 
     // Held by value and handed out by reference: ContextServices stores the
@@ -74,8 +75,12 @@ private:
 
 // The strictest of the deployment's handler deadline and the route's own, with
 // 0/absent meaning "not declared". A route may only tighten, never extend.
-[[nodiscard]] inline std::chrono::milliseconds effectiveHandlerDeadline(const std::optional<std::chrono::milliseconds>& appDeadline, std::int64_t routeDeadlineMs) noexcept {
-    const auto route = routeDeadlineMs > 0 ? std::optional<std::chrono::milliseconds>(std::chrono::milliseconds(routeDeadlineMs)) : std::nullopt;
+[[nodiscard]] inline std::chrono::milliseconds effectiveHandlerDeadline(
+    const std::optional<std::chrono::milliseconds>& appDeadline,
+    std::int64_t routeDeadlineMs) noexcept {
+    const auto route = routeDeadlineMs > 0 ? std::optional<std::chrono::milliseconds>(
+                                                 std::chrono::milliseconds(routeDeadlineMs))
+                                           : std::nullopt;
     if (!appDeadline.has_value()) {
         return route.value_or(std::chrono::milliseconds::zero());
     }

@@ -62,7 +62,8 @@ public:
     // single missed field would leak one request's decoded headers / routing / body
     // into the next reused slot -- a cross-request data-disclosure risk not worth taking
     // for a micro-optimisation off the measured hot path.
-    [[nodiscard]] Http2StreamState* create(std::uint32_t streamId, std::int32_t peerInitialWindowSize) & {
+    [[nodiscard]] Http2StreamState* create(
+        std::uint32_t streamId, std::int32_t peerInitialWindowSize) & {
         if (auto* existing = find(streamId); existing != nullptr) {
             return existing;
         }
@@ -154,16 +155,17 @@ public:
                 return;
             }
             const auto current = static_cast<std::int64_t>(stream.sendWindow());
-            if (delta > static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)()) - current || delta < static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::min)()) - current) {
+            if (delta > static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)()) -
+                            current ||
+                delta < static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::min)()) -
+                            current) {
                 fits = false;
             }
         });
         if (!fits) {
             return false;
         }
-        forEach([delta](Http2StreamState& stream) noexcept {
-            (void)stream.addSendWindow(delta);
-        });
+        forEach([delta](Http2StreamState& stream) noexcept { (void)stream.addSendWindow(delta); });
         return true;
     }
 
@@ -174,7 +176,8 @@ private:
     // for the connection's whole lifetime, so the two slots put ~2.6 KB into
     // every connection. Deeper multiplexing spills to the pmr overflow path.
     static constexpr std::size_t kInlineCapacity = 2;
-    using OverflowStream = std::unique_ptr<Http2StreamState, HttpPmrObjectDeleter<Http2StreamState>>;
+    using OverflowStream =
+        std::unique_ptr<Http2StreamState, HttpPmrObjectDeleter<Http2StreamState>>;
 
     class SnapshotIterationGuard final {
     public:
@@ -232,11 +235,13 @@ private:
     bool overflowNeedsCompact_{false};
 };
 
-[[nodiscard]] inline bool http2IsIdleStream(std::uint32_t streamId, std::uint32_t lastStreamId) noexcept {
+[[nodiscard]] inline bool http2IsIdleStream(
+    std::uint32_t streamId, std::uint32_t lastStreamId) noexcept {
     return streamId > lastStreamId || (streamId & 1U) == 0;
 }
 
-inline bool http2ApplyStreamSendWindowDelta(Http2StreamTable& streams, std::int64_t delta) noexcept {
+inline bool http2ApplyStreamSendWindowDelta(
+    Http2StreamTable& streams, std::int64_t delta) noexcept {
     return streams.applySendWindowDelta(delta);
 }
 

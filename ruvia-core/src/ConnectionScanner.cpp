@@ -11,16 +11,20 @@ namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] std::int64_t steadyNowMs() noexcept {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch())
+        .count();
 }
 
 void validateScannerTimeout(const std::optional<std::chrono::milliseconds>& timeout) {
     if (timeout.has_value() && timeout->count() <= 0) {
-        throw std::invalid_argument("configured connection scanner timeouts must be greater than zero");
+        throw std::invalid_argument(
+            "configured connection scanner timeouts must be greater than zero");
     }
 }
 
-[[nodiscard]] bool timeoutExpired(const std::optional<std::chrono::milliseconds>& timeout, std::int64_t inactiveMs) noexcept {
+[[nodiscard]] bool timeoutExpired(
+    const std::optional<std::chrono::milliseconds>& timeout, std::int64_t inactiveMs) noexcept {
     return timeout.has_value() && inactiveMs >= timeout->count();
 }
 
@@ -68,7 +72,8 @@ std::int64_t ConnectionScanner::Entry::lastActiveMs() const noexcept {
     return lastActiveMs_;
 }
 
-void ConnectionScanner::Entry::registerPeriodicCheck(PeriodicCheckRegistration& registration, void* target, PeriodicCheck tick) noexcept {
+void ConnectionScanner::Entry::registerPeriodicCheck(
+    PeriodicCheckRegistration& registration, void* target, PeriodicCheck tick) noexcept {
     registration.reset();
     if (target == nullptr || tick == nullptr) {
         return;
@@ -87,7 +92,8 @@ void ConnectionScanner::Entry::registerPeriodicCheck(PeriodicCheckRegistration& 
     }
 }
 
-void ConnectionScanner::Entry::removePeriodicCheck(PeriodicCheckRegistration& registration) noexcept {
+void ConnectionScanner::Entry::removePeriodicCheck(
+    PeriodicCheckRegistration& registration) noexcept {
     if (registration.entry_ != this) {
         return;
     }
@@ -134,7 +140,8 @@ void ConnectionScanner::Entry::runPeriodicChecks(std::int64_t now) noexcept {
     }
 }
 
-ConnectionScanner::Guard::Guard(ConnectionScanner* scanner, Entry& entry, asio::ip::tcp::socket& socket)
+ConnectionScanner::Guard::Guard(
+    ConnectionScanner* scanner, Entry& entry, asio::ip::tcp::socket& socket)
     : entry_(scanner != nullptr ? &entry : nullptr) {
     if (scanner != nullptr) {
         scanner->registerEntry(*entry_, socket);
@@ -194,7 +201,8 @@ void ConnectionScanner::stop() noexcept {
     timer_.cancel();
 }
 
-void ConnectionScanner::registerWorkerMaintenance(WorkerMaintenanceRegistration& registration, void* target, WorkerMaintenanceCheck check) noexcept {
+void ConnectionScanner::registerWorkerMaintenance(WorkerMaintenanceRegistration& registration,
+    void* target, WorkerMaintenanceCheck check) noexcept {
     registration.reset();
     if (target == nullptr || check == nullptr) {
         return;
@@ -219,7 +227,8 @@ void ConnectionScanner::registerEntry(Entry& entry, asio::ip::tcp::socket& socke
     entry.prev_ = &sentinel_;
     sentinel_.next_->prev_ = &entry;
     sentinel_.next_ = &entry;
-    for (auto* registration = entry.periodicChecks_; registration != nullptr; registration = registration->next_) {
+    for (auto* registration = entry.periodicChecks_; registration != nullptr;
+        registration = registration->next_) {
         periodicCheckAdded();
     }
 }
@@ -270,7 +279,8 @@ void ConnectionScanner::periodicCheckRemoved() noexcept {
     }
 }
 
-void ConnectionScanner::removeWorkerMaintenance(WorkerMaintenanceRegistration& registration) noexcept {
+void ConnectionScanner::removeWorkerMaintenance(
+    WorkerMaintenanceRegistration& registration) noexcept {
     if (registration.scanner_ != this) {
         return;
     }
@@ -306,7 +316,9 @@ void ConnectionScanner::detachWorkerMaintenance() noexcept {
 }
 
 bool ConnectionScanner::hasScanningWork() const noexcept {
-    return options_.idleTimeout.has_value() || options_.initialReadTimeout.has_value() || options_.payloadReadTimeout.has_value() || options_.writeTimeout.has_value() || workerMaintenance_ != nullptr || periodicCheckCount_ != 0;
+    return options_.idleTimeout.has_value() || options_.initialReadTimeout.has_value() ||
+           options_.payloadReadTimeout.has_value() || options_.writeTimeout.has_value() ||
+           workerMaintenance_ != nullptr || periodicCheckCount_ != 0;
 }
 
 void ConnectionScanner::schedule() {
@@ -314,16 +326,17 @@ void ConnectionScanner::schedule() {
         return;
     }
 
-    WorkerHandleAccess::scheduleTimer(worker_, timer_, workerTimerDeadlineAfter(options_.scanInterval), [this](WorkerTimerOutcome outcome) {
-        if (outcome == WorkerTimerOutcome::kCancelled || !running_) {
-            return;
-        }
+    WorkerHandleAccess::scheduleTimer(worker_, timer_,
+        workerTimerDeadlineAfter(options_.scanInterval), [this](WorkerTimerOutcome outcome) {
+            if (outcome == WorkerTimerOutcome::kCancelled || !running_) {
+                return;
+            }
 
-        if (hasScanningWork()) {
-            scan();
-        }
-        schedule();
-    });
+            if (hasScanningWork()) {
+                scan();
+            }
+            schedule();
+        });
 }
 
 void ConnectionScanner::scan() noexcept {

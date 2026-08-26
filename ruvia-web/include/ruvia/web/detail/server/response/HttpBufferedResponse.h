@@ -30,7 +30,8 @@ public:
         return HttpResponseCodingPolicy(HttpResponseCodingPolicyDisabled{});
     }
 
-    [[nodiscard]] static HttpResponseCodingPolicy selected(HttpResponseCodingSelection selection) noexcept {
+    [[nodiscard]] static HttpResponseCodingPolicy selected(
+        HttpResponseCodingSelection selection) noexcept {
         return HttpResponseCodingPolicy(selection);
     }
 
@@ -63,7 +64,8 @@ private:
     explicit HttpResponseCodingPolicy(HttpResponseCodingPolicyDisabled disabled) noexcept
         : value_(disabled) {}
 
-    explicit HttpResponseCodingPolicy(HttpResponseCodingSelection selection, bool negotiationFailed = false) noexcept
+    explicit HttpResponseCodingPolicy(
+        HttpResponseCodingSelection selection, bool negotiationFailed = false) noexcept
         : value_(selection),
           negotiationFailed_(negotiationFailed) {}
 
@@ -87,10 +89,14 @@ public:
     const HttpResponseCompressionResult& compressionResult() const&& = delete;
 
 private:
-    friend HttpBufferedResponsePreparation prepareBufferedHttpResponse(const HttpRequest&, const HttpResponseCodingPolicy&, HttpResponse&, const HttpServerOptions&);
-    friend Task<HttpBufferedResponsePreparation> prepareBufferedHttpResponseAsync(const HttpRequest&, const HttpResponseCodingPolicy&, HttpResponse&, const HttpServerOptions&, const WorkerHandle&);
+    friend HttpBufferedResponsePreparation prepareBufferedHttpResponse(const HttpRequest&,
+        const HttpResponseCodingPolicy&, HttpResponse&, const HttpServerOptions&);
+    friend Task<HttpBufferedResponsePreparation> prepareBufferedHttpResponseAsync(
+        const HttpRequest&, const HttpResponseCodingPolicy&, HttpResponse&,
+        const HttpServerOptions&, const WorkerHandle&);
 
-    HttpBufferedResponsePreparation(HttpBufferedResponseWritePlan writePlan, HttpResponseCompressionResult compressionResult) noexcept
+    HttpBufferedResponsePreparation(HttpBufferedResponseWritePlan writePlan,
+        HttpResponseCompressionResult compressionResult) noexcept
         : writePlan_(writePlan),
           compressionResult_(compressionResult) {}
 
@@ -98,7 +104,8 @@ private:
     HttpResponseCompressionResult compressionResult_;
 };
 
-[[nodiscard]] inline HttpResponseCodingQualities httpResponseCodingQualitiesFor(const HttpRequest& request) noexcept {
+[[nodiscard]] inline HttpResponseCodingQualities httpResponseCodingQualitiesFor(
+    const HttpRequest& request) noexcept {
     HttpResponseCodingQualities qualities;
     for (const auto& header : request.headers()) {
         if (httpAsciiEqualsIgnoreCase(header.name(), "Accept-Encoding")) {
@@ -108,7 +115,8 @@ private:
     return qualities;
 }
 
-[[nodiscard]] inline HttpResponseCodingSelectionResult httpResponseCodingFor(const HttpRequest& request) noexcept {
+[[nodiscard]] inline HttpResponseCodingSelectionResult httpResponseCodingFor(
+    const HttpRequest& request) noexcept {
     return HttpResponseCodingSelection::select(httpResponseCodingQualitiesFor(request));
 }
 
@@ -117,10 +125,8 @@ private:
 // incompressible media, or an existing file body can leave the response as
 // identity. If the client explicitly excluded identity, that policy fallback
 // is a 406 outcome; an encoder failure is surfaced separately as a 500.
-[[nodiscard]] inline bool httpResponseNeedsNotAcceptable(
-    const HttpResponseCodingPolicy& policy,
-    const HttpRequest& request,
-    const HttpResponse& response) noexcept {
+[[nodiscard]] inline bool httpResponseNeedsNotAcceptable(const HttpResponseCodingPolicy& policy,
+    const HttpRequest& request, const HttpResponse& response) noexcept {
     const auto* selection = policy.selection();
     if (selection == nullptr) {
         return false;
@@ -132,23 +138,24 @@ private:
         // handler's final status is known.
         return httpResponseBodyPlan(request.knownMethod(), response.status()).statusAllowsBody();
     }
-    return httpResponseCodingFallbackForbidden(
-        *selection,
-        request.knownMethod(),
-        response);
+    return httpResponseCodingFallbackForbidden(*selection, request.knownMethod(), response);
 }
 
 [[nodiscard]] inline std::optional<HttpErrorInfo> httpBufferedResponsePreparationError(
-    const HttpResponseCodingPolicy& policy,
-    const HttpRequest& request,
-    const HttpResponse& response,
-    const HttpResponseCompressionResult& compressionResult) noexcept {
+    const HttpResponseCodingPolicy& policy, const HttpRequest& request,
+    const HttpResponse& response, const HttpResponseCompressionResult& compressionResult) noexcept {
     const auto* selection = policy.selection();
-    if (selection != nullptr && compressionResult.failed() && selection->coding() != HttpContentCoding::kIdentity && !selection->identityAccepted() && httpResponseBodyPlan(request.knownMethod(), response.status()).statusAllowsBody()) {
-        return HttpErrorInfo({.status = http_status::kInternalServerError, .code = "response_compression_failed", .message = "response compression failed"});
+    if (selection != nullptr && compressionResult.failed() &&
+        selection->coding() != HttpContentCoding::kIdentity && !selection->identityAccepted() &&
+        httpResponseBodyPlan(request.knownMethod(), response.status()).statusAllowsBody()) {
+        return HttpErrorInfo({.status = http_status::kInternalServerError,
+            .code = "response_compression_failed",
+            .message = "response compression failed"});
     }
     if (httpResponseNeedsNotAcceptable(policy, request, response)) {
-        return HttpErrorInfo({.status = http_status::kNotAcceptable, .code = "not_acceptable", .message = "no acceptable response content coding"});
+        return HttpErrorInfo({.status = http_status::kNotAcceptable,
+            .code = "not_acceptable",
+            .message = "no acceptable response content coding"});
     }
     return std::nullopt;
 }
@@ -157,7 +164,9 @@ private:
 // neither driver may re-plan after Web compression/CORS has finalized the
 // response representation. A disabled policy is reserved for a terminal
 // response that must not be transformed again.
-[[nodiscard]] inline HttpBufferedResponsePreparation prepareBufferedHttpResponse(const HttpRequest& request, const HttpResponseCodingPolicy& policy, HttpResponse& response, const HttpServerOptions& options) {
+[[nodiscard]] inline HttpBufferedResponsePreparation prepareBufferedHttpResponse(
+    const HttpRequest& request, const HttpResponseCodingPolicy& policy, HttpResponse& response,
+    const HttpServerOptions& options) {
     materializeResponseBody(response);
     if (options.cors.has_value()) {
         applyCorsHeaders(request, response, *options.cors);
@@ -165,17 +174,21 @@ private:
     auto compressionResult = HttpResponseCompressionResult::makeNotApplicable();
     if (options.compression.has_value()) {
         if (const auto* selection = policy.selection()) {
-            compressionResult = applyResponseCompression(*selection, request.knownMethod(), response, *options.compression);
+            compressionResult = applyResponseCompression(
+                *selection, request.knownMethod(), response, *options.compression);
         }
     }
-    return HttpBufferedResponsePreparation(httpBufferedResponseWritePlan(request.knownMethod(), response), compressionResult);
+    return HttpBufferedResponsePreparation(
+        httpBufferedResponseWritePlan(request.knownMethod(), response), compressionResult);
 }
 
 // Runtime preparation preserves the synchronous fast path for small in-memory
 // responses and offloads larger eligible bodies through the configured bounded
 // pool. Tests and non-runtime consumers can keep using the synchronous helper
 // above when no worker resumption boundary exists.
-[[nodiscard]] inline Task<HttpBufferedResponsePreparation> prepareBufferedHttpResponseAsync(const HttpRequest& request, const HttpResponseCodingPolicy& policy, HttpResponse& response, const HttpServerOptions& options, const WorkerHandle& worker) {
+[[nodiscard]] inline Task<HttpBufferedResponsePreparation> prepareBufferedHttpResponseAsync(
+    const HttpRequest& request, const HttpResponseCodingPolicy& policy, HttpResponse& response,
+    const HttpServerOptions& options, const WorkerHandle& worker) {
     materializeResponseBody(response);
     if (options.cors.has_value()) {
         applyCorsHeaders(request, response, *options.cors);
@@ -183,16 +196,13 @@ private:
     auto compressionResult = HttpResponseCompressionResult::makeNotApplicable();
     if (options.compression.has_value()) {
         if (const auto* selection = policy.selection()) {
-            compressionResult = co_await applyResponseCompressionAsync(
-                *selection,
-                request.knownMethod(),
-                response,
-                *options.compression,
-                options.blockingPool,
-                worker);
+            compressionResult =
+                co_await applyResponseCompressionAsync(*selection, request.knownMethod(), response,
+                    *options.compression, options.blockingPool, worker);
         }
     }
-    co_return HttpBufferedResponsePreparation(httpBufferedResponseWritePlan(request.knownMethod(), response), compressionResult);
+    co_return HttpBufferedResponsePreparation(
+        httpBufferedResponseWritePlan(request.knownMethod(), response), compressionResult);
 }
 
 }  // namespace ruvia::detail

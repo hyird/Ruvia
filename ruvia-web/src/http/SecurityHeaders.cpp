@@ -72,9 +72,11 @@ void validateSecurityHeadersConfig(const SecurityHeadersConfig& config) {
 }
 
 template <typename Target>
-void applySecurityHeadersTo(Target& target, const SecurityHeadersConfig& options, bool secureTransport) {
+void applySecurityHeadersTo(
+    Target& target, const SecurityHeadersConfig& options, bool secureTransport) {
     const auto replaceExisting = replacesExistingSecurityHeader(options.existingHeaders);
-    const auto setHeader = [&target, replaceExisting](std::string_view name, std::string_view value, bool skipEmpty) {
+    const auto setHeader = [&target, replaceExisting](
+                               std::string_view name, std::string_view value, bool skipEmpty) {
         if (skipEmpty && value.empty()) {
             return;
         }
@@ -84,8 +86,10 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersConfig& options
         target.header(name, value);
     };
 
-    const auto setSecureTransportHeader = [&setHeader, secureTransport](std::string_view name, std::string_view value, bool skipEmpty) {
-        if (!secureTransport && detail::httpAsciiEqualsIgnoreCase(name, "Strict-Transport-Security")) {
+    const auto setSecureTransportHeader = [&setHeader, secureTransport](std::string_view name,
+                                              std::string_view value, bool skipEmpty) {
+        if (!secureTransport &&
+            detail::httpAsciiEqualsIgnoreCase(name, "Strict-Transport-Security")) {
             return;
         }
         setHeader(name, value, skipEmpty);
@@ -142,7 +146,8 @@ Task<void> SecurityHeadersMiddleware::handle(Context& context, Next& next) {
     const bool secureTransport = connection.scheme() == HttpScheme::kHttps;
     applySecurityHeadersTo(context, config_, secureTransport);
     co_await next();
-    applySecurityHeadersTo(detail::ContextAccess::responseStorage(context), config_, secureTransport);
+    applySecurityHeadersTo(
+        detail::ContextAccess::responseStorage(context), config_, secureTransport);
 }
 
 }  // namespace ruvia

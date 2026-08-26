@@ -28,9 +28,12 @@ Task<std::size_t> RedisPool::acquire(const OperationTimeout& timeout, StopToken 
     if (stopToken.stoppable() && (worker_ == nullptr || !worker_->valid())) {
         throw std::logic_error("cancellable redis operation requires a valid worker");
     }
-    PoolWaiterResult result = worker_ != nullptr
-        ? co_await scheduler_.acquire(timeout.constrainedBy(config_.acquireTimeout).remaining(), std::move(stopToken), *worker_)
-        : co_await scheduler_.acquire(timeout.constrainedBy(config_.acquireTimeout).remaining());
+    PoolWaiterResult result =
+        worker_ != nullptr
+            ? co_await scheduler_.acquire(timeout.constrainedBy(config_.acquireTimeout).remaining(),
+                  std::move(stopToken), *worker_)
+            : co_await scheduler_.acquire(
+                  timeout.constrainedBy(config_.acquireTimeout).remaining());
     if (result.timedOut() != nullptr) {
         throw RedisError(RedisError::Code::kTimeout, "redis connection pool acquire timed out");
     }
@@ -50,7 +53,8 @@ Task<std::size_t> RedisPool::acquire(const OperationTimeout& timeout, StopToken 
 
 void RedisPool::release(std::size_t index) noexcept {
     const auto status = scheduler_.release(index);
-    if (status == PoolLeaseReleaseStatus::kInvalidSlot || status == PoolLeaseReleaseStatus::kAlreadyReleased) {
+    if (status == PoolLeaseReleaseStatus::kInvalidSlot ||
+        status == PoolLeaseReleaseStatus::kAlreadyReleased) {
         std::terminate();
     }
 }

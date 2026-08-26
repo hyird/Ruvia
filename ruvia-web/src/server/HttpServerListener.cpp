@@ -7,8 +7,7 @@ namespace ruvia::detail {
 namespace {
 
 HttpServerListenerDefinition::TlsIdentity cloneTlsIdentity(
-    const HttpServerListenerDefinition::TlsIdentity& source,
-    std::pmr::memory_resource* resource) {
+    const HttpServerListenerDefinition::TlsIdentity& source, std::pmr::memory_resource* resource) {
     HttpServerListenerDefinition::TlsIdentity result(resource);
     result.certificateChainFile = source.certificateChainFile;
     result.privateKeyFile = source.privateKeyFile;
@@ -17,12 +16,12 @@ HttpServerListenerDefinition::TlsIdentity cloneTlsIdentity(
 }
 
 HttpServerListenerDefinition::Tls cloneTls(
-    const HttpServerListenerDefinition::Tls& source,
-    std::pmr::memory_resource* resource) {
+    const HttpServerListenerDefinition::Tls& source, std::pmr::memory_resource* resource) {
     HttpServerListenerDefinition::Tls result(resource);
     result.identity = cloneTlsIdentity(source.identity, resource);
     if (source.clientCertificates.has_value()) {
-        auto& policy = result.clientCertificates.emplace(resource, source.clientCertificates->requirement);
+        auto& policy =
+            result.clientCertificates.emplace(resource, source.clientCertificates->requirement);
         policy.verifyFile = source.clientCertificates->verifyFile;
     }
     result.sniIdentities.reserve(source.sniIdentities.size());
@@ -35,10 +34,10 @@ HttpServerListenerDefinition::Tls cloneTls(
 }
 
 HttpServerListenerDefinition::Transport cloneTransport(
-    const HttpServerListenerDefinition::Transport& source,
-    std::pmr::memory_resource* resource) {
+    const HttpServerListenerDefinition::Transport& source, std::pmr::memory_resource* resource) {
     return std::visit(
-        [resource]<typename Transport>(const Transport& transport) -> HttpServerListenerDefinition::Transport {
+        [resource]<typename Transport>(
+            const Transport& transport) -> HttpServerListenerDefinition::Transport {
             if constexpr (std::is_same_v<Transport, HttpServerListenerDefinition::Tls>) {
                 return cloneTls(transport, resource);
             } else {
@@ -50,10 +49,8 @@ HttpServerListenerDefinition::Transport cloneTransport(
 
 }  // namespace
 
-HttpServerListener::HttpServerListener(
-    asio::io_context& ioContext,
-    const HttpServerListenerDefinition& definition,
-    std::pmr::memory_resource* resource)
+HttpServerListener::HttpServerListener(asio::io_context& ioContext,
+    const HttpServerListenerDefinition& definition, std::pmr::memory_resource* resource)
     : acceptor(ioContext),
       endpoint(definition.endpoint),
       transport(cloneTransport(definition.transport, resource)),

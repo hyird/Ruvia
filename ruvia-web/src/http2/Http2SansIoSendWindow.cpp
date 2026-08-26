@@ -5,7 +5,8 @@
 
 namespace ruvia::detail {
 
-Task<Http2SendWindowWaitResult> awaitHttp2SendWindow(Http2Connection& connection, std::uint32_t streamId, Http2SansIoStreamSignal* signal) {
+Task<Http2SendWindowWaitResult> awaitHttp2SendWindow(
+    Http2Connection& connection, std::uint32_t streamId, Http2SansIoStreamSignal* signal) {
     for (;;) {
         auto* stream = connection.stream(streamId);
         if (stream == nullptr || stream->isAborted() || signal == nullptr || signal->terminated()) {

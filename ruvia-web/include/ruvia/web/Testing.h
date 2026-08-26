@@ -140,7 +140,8 @@ public:
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
     std::optional<std::string_view> header(std::string_view) const&& = delete;
 
-    [[nodiscard]] const std::vector<std::pair<std::string, std::string>>& headers() const& noexcept {
+    [[nodiscard]] const std::vector<std::pair<std::string, std::string>>& headers()
+        const& noexcept {
         return headers_;
     }
     const std::vector<std::pair<std::string, std::string>>& headers() const&& = delete;

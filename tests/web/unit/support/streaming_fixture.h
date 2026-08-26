@@ -33,16 +33,22 @@
 namespace streaming_test {
 
 template <typename Text>
-concept AcceptsSseData = requires(Text&& text) { ruvia::SseMessage{.data = std::forward<Text>(text)}; };
+concept AcceptsSseData =
+    requires(Text&& text) { ruvia::SseMessage{.data = std::forward<Text>(text)}; };
 
 template <typename Text>
-concept AcceptsSseEvent = requires(Text&& text) { ruvia::SseMessage{.event = std::forward<Text>(text)}; };
+concept AcceptsSseEvent =
+    requires(Text&& text) { ruvia::SseMessage{.event = std::forward<Text>(text)}; };
 
 template <typename Text>
 concept AcceptsSseId = requires(Text&& text) { ruvia::SseMessage{.id = std::forward<Text>(text)}; };
 
 template <typename Text>
-concept AcceptsAnySseTextAssignment = requires(ruvia::SseMessage& message, Text&& text) { message.data = std::forward<Text>(text); } || requires(ruvia::SseMessage& message, Text&& text) { message.event = std::forward<Text>(text); } || requires(ruvia::SseMessage& message, Text&& text) { message.id = std::forward<Text>(text); };
+concept AcceptsAnySseTextAssignment = requires(ruvia::SseMessage& message, Text&& text) {
+    message.data = std::forward<Text>(text);
+} || requires(ruvia::SseMessage& message, Text&& text) {
+    message.event = std::forward<Text>(text);
+} || requires(ruvia::SseMessage& message, Text&& text) { message.id = std::forward<Text>(text); };
 
 template <typename Text>
 concept AcceptsAllSseTextAssignments = requires(ruvia::SseMessage& message, Text&& text) {
@@ -76,7 +82,8 @@ static_assert(AcceptsAllSseTextAssignments<std::string&>);
 static_assert(AcceptsAllSseTextAssignments<std::pmr::string&>);
 static_assert(AcceptsAllSseTextAssignments<std::string_view>);
 static_assert(std::is_aggregate_v<ruvia::SseMessage>);
-static_assert(std::same_as<decltype(ruvia::SseMessage::retry), std::optional<std::chrono::milliseconds>>);
+static_assert(
+    std::same_as<decltype(ruvia::SseMessage::retry), std::optional<std::chrono::milliseconds>>);
 constexpr ruvia::SseMessage kLiteralSseMessage{.data = "data", .event = "event", .id = "id"};
 static_assert(kLiteralSseMessage.data->view() == "data");
 static_assert(kLiteralSseMessage.event == "event");
@@ -148,11 +155,13 @@ inline ruvia::Task<void> endStream(void* target, std::span<const ruvia::HttpHead
     co_return;
 }
 
-inline ruvia::Task<ruvia::TimerSleepResult> sleepStream(void*, std::chrono::milliseconds, const ruvia::StopToken&) {
+inline ruvia::Task<ruvia::TimerSleepResult> sleepStream(
+    void*, std::chrono::milliseconds, const ruvia::StopToken&) {
     co_return ruvia::TimerSleepResult::kElapsed;
 }
 
-inline void bindContext(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
+inline void bindContext(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {
+}
 inline void releaseContext(void*) noexcept {}
 
 inline bool committed(void*) noexcept {
@@ -168,7 +177,8 @@ inline ruvia::HttpResponse unusedStreamingHead(ruvia::Context&) {
 }
 
 inline ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
-    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(&sink, &writeChunk, &endStream, &sleepStream, &bindContext, &releaseContext, &committed, &aborted);
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(&sink, &writeChunk, &endStream,
+        &sleepStream, &bindContext, &releaseContext, &committed, &aborted);
 }
 
 inline ruvia::Task<void> writeLines(ruvia::ResponseStreamWriter& writer) {
@@ -188,7 +198,8 @@ inline ruvia::ScopedOperation<void> makeExpiredWrite(CaptureStreamSink& sink) {
     return writer.write(std::string("must-not-run"));
 }
 
-inline ruvia::Task<void> awaitExpiredWrite(ruvia::ScopedOperation<void>& operation, bool& rejected) {
+inline ruvia::Task<void> awaitExpiredWrite(
+    ruvia::ScopedOperation<void>& operation, bool& rejected) {
     try {
         co_await std::move(operation);
     } catch (const std::logic_error&) {
@@ -204,7 +215,8 @@ inline ruvia::Task<std::optional<ruvia::WebSocketMessage>> readSocket(void*) {
     co_return std::nullopt;
 }
 
-inline ruvia::Task<void> writeSocket(void* target, ruvia::WebSocketOpcode, std::string_view payload) {
+inline ruvia::Task<void> writeSocket(
+    void* target, ruvia::WebSocketOpcode, std::string_view payload) {
     static_cast<CaptureWebSocket*>(target)->writes.emplace_back(payload);
     co_return;
 }
@@ -214,7 +226,8 @@ inline ruvia::Task<void> closeSocket(void*, ruvia::WebSocketCloseOptions) {
 }
 
 inline ruvia::ScopedOperation<void> makeExpiredWebSocketWrite(CaptureWebSocket& capture) {
-    auto socket = ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
+    auto socket =
+        ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
     return socket.text(std::string("expired-payload"));
 }
 
@@ -234,7 +247,8 @@ inline ruvia::ScopedOperation<std::optional<std::string_view>> makeExpiredBodyRe
     return binding.facade().read();
 }
 
-inline ruvia::Task<void> awaitExpiredBodyRead(ruvia::ScopedOperation<std::optional<std::string_view>>& operation, bool& rejected) {
+inline ruvia::Task<void> awaitExpiredBodyRead(
+    ruvia::ScopedOperation<std::optional<std::string_view>>& operation, bool& rejected) {
     try {
         (void)co_await std::move(operation);
     } catch (const std::logic_error&) {
@@ -243,7 +257,9 @@ inline ruvia::Task<void> awaitExpiredBodyRead(ruvia::ScopedOperation<std::option
 }
 
 inline ruvia::Task<void> endWithTrailers(ruvia::ResponseStreamWriter& writer) {
-    const std::array<ruvia::HttpHeaderView, 2> trailers{ruvia::HttpHeaderView{"Digest", "sha-256=value"}, ruvia::HttpHeaderView{"Server-Timing", "db;dur=7"}};
+    const std::array<ruvia::HttpHeaderView, 2> trailers{
+        ruvia::HttpHeaderView{"Digest", "sha-256=value"},
+        ruvia::HttpHeaderView{"Server-Timing", "db;dur=7"}};
     co_await writer.end(trailers);
 }
 
@@ -333,7 +349,8 @@ inline ruvia::Task<void> endSuspendedStream(void* target, std::span<const ruvia:
 }
 
 inline ruvia::ResponseStreamWriter makeSuspendedWriter(SuspendedStreamSink& sink) noexcept {
-    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(&sink, &writeSuspendedStream, &endSuspendedStream, &sleepStream, &bindContext, &releaseContext, &committed, &aborted);
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(&sink, &writeSuspendedStream,
+        &endSuspendedStream, &sleepStream, &bindContext, &releaseContext, &committed, &aborted);
 }
 
 inline ruvia::Task<void> completeBodyRead(ruvia::BodyReader& reader, bool& completed) {
@@ -349,12 +366,14 @@ inline ruvia::Task<void> rejectConcurrentBodyRead(ruvia::BodyReader& reader, boo
     }
 }
 
-inline ruvia::Task<void> completeStreamWrite(ruvia::ResponseStreamWriter& writer, std::string_view chunk, bool& completed) {
+inline ruvia::Task<void> completeStreamWrite(
+    ruvia::ResponseStreamWriter& writer, std::string_view chunk, bool& completed) {
     co_await writer.write(chunk);
     completed = true;
 }
 
-inline ruvia::Task<void> rejectConcurrentStreamWrite(ruvia::ResponseStreamWriter& writer, bool& rejected) {
+inline ruvia::Task<void> rejectConcurrentStreamWrite(
+    ruvia::ResponseStreamWriter& writer, bool& rejected) {
     try {
         co_await writer.write("overlap");
     } catch (const std::logic_error&) {
@@ -362,7 +381,8 @@ inline ruvia::Task<void> rejectConcurrentStreamWrite(ruvia::ResponseStreamWriter
     }
 }
 
-inline ruvia::Task<void> rejectConcurrentStreamEnd(ruvia::ResponseStreamWriter& writer, bool& rejected) {
+inline ruvia::Task<void> rejectConcurrentStreamEnd(
+    ruvia::ResponseStreamWriter& writer, bool& rejected) {
     try {
         co_await writer.end();
     } catch (const std::logic_error&) {
@@ -370,7 +390,8 @@ inline ruvia::Task<void> rejectConcurrentStreamEnd(ruvia::ResponseStreamWriter& 
     }
 }
 
-inline ruvia::Task<void> observeStreamWriteFailure(ruvia::ResponseStreamWriter& writer, bool& failed) {
+inline ruvia::Task<void> observeStreamWriteFailure(
+    ruvia::ResponseStreamWriter& writer, bool& failed) {
     try {
         co_await writer.write("failed");
     } catch (const std::runtime_error&) {

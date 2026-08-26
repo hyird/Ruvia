@@ -32,13 +32,15 @@ public:
     explicit HttpInterimResponseHeaderValidator(HttpFieldListRole role) noexcept
         : role_(role) {}
 
-    [[nodiscard]] HttpInterimResponseHeaderValidationStatus validate(std::string_view name, std::string_view value) noexcept {
+    [[nodiscard]] HttpInterimResponseHeaderValidationStatus validate(
+        std::string_view name, std::string_view value) noexcept {
         if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value)) {
             return HttpInterimResponseHeaderValidationStatus::kInvalidHeader;
         }
 
         const auto knownBit = classifyResponseHeaderName(name);
-        if (knownBit == kResponseHeaderContentEncoding && !isValidHttpContentEncodingFieldValue(value, role_)) {
+        if (knownBit == kResponseHeaderContentEncoding &&
+            !isValidHttpContentEncodingFieldValue(value, role_)) {
             return HttpInterimResponseHeaderValidationStatus::kInvalidHeader;
         }
         if (knownBit == kResponseHeaderContentType && !isValidHttpContentTypeFieldValue(value)) {
@@ -53,7 +55,8 @@ public:
         if (httpAsciiEqualsIgnoreCase(name, "Trailer")) {
             return HttpInterimResponseHeaderValidationStatus::kTrailerForbidden;
         }
-        if (knownBit != 0 && (knownBits_ & knownBit) != 0 && responseHeaderAppendForbidden(knownBit)) {
+        if (knownBit != 0 && (knownBits_ & knownBit) != 0 &&
+            responseHeaderAppendForbidden(knownBit)) {
             return HttpInterimResponseHeaderValidationStatus::kRepeatedSingleton;
         }
         knownBits_ |= knownBit;
@@ -70,7 +73,8 @@ private:
 // an interim response also cannot have the trailer section advertised by
 // Trailer. Version-specific connection fields are checked by the HTTP/1 and
 // HTTP/2 writers after this common pass.
-[[nodiscard]] inline HttpInterimResponseHeaderValidationStatus validateHttpInterimResponseHeaders(const HttpInterimResponseHead& response) noexcept {
+[[nodiscard]] inline HttpInterimResponseHeaderValidationStatus validateHttpInterimResponseHeaders(
+    const HttpInterimResponseHead& response) noexcept {
     HttpInterimResponseHeaderValidator validator(HttpFieldListRole::kSender);
     for (const auto& header : response.headers()) {
         const auto status = validator.validate(header.name(), header.value());

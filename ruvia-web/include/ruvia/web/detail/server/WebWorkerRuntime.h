@@ -38,9 +38,13 @@ class WebWorkerDispatch;
 
 class WebWorkerRuntime final {
 public:
-    WebWorkerRuntime(std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes, WorkerCapabilityDefinitions capabilities = {}, HttpServerOptions options = {});
-    WebWorkerRuntime(HttpServerListenerDefinition listener, const RouteTable& routes, WorkerCapabilityDefinitions capabilities = {}, HttpServerOptions options = {});
-    WebWorkerRuntime(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, WorkerCapabilityDefinitions capabilities = {}, HttpServerOptions options = {});
+    WebWorkerRuntime(std::span<const HttpServerListenerDefinition> listeners,
+        const RouteTable& routes, WorkerCapabilityDefinitions capabilities = {},
+        HttpServerOptions options = {});
+    WebWorkerRuntime(HttpServerListenerDefinition listener, const RouteTable& routes,
+        WorkerCapabilityDefinitions capabilities = {}, HttpServerOptions options = {});
+    WebWorkerRuntime(asio::ip::tcp::endpoint endpoint, const RouteTable& routes,
+        WorkerCapabilityDefinitions capabilities = {}, HttpServerOptions options = {});
     ~WebWorkerRuntime();
 
     WebWorkerRuntime(const WebWorkerRuntime&) = delete;
@@ -72,7 +76,9 @@ private:
     using DocumentRootPtr = std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>>;
     using ListenerPtr = std::unique_ptr<HttpServerListener, PmrObjectDeleter<HttpServerListener>>;
 
-    WebWorkerRuntime(ValidatedOptionsTag, std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions);
+    WebWorkerRuntime(ValidatedOptionsTag, std::span<const HttpServerListenerDefinition> listeners,
+        const RouteTable& routes, WorkerCapabilityDefinitions capabilities,
+        HttpServerOptions validatedOptions);
 
     void configureAcceptor(HttpServerListener& listener);
     void configureTlsContext(HttpServerListener& listener);
@@ -85,9 +91,11 @@ private:
     Task<void> acceptLoop(HttpServerListener& listener);
     Task<void> handleSession(HttpServerListener& listener, AcceptedConnectionLease connection);
     template <typename Stream>
-    Task<void> handleStreamSession(HttpServerListener& listener, Stream& stream, asio::ip::tcp::socket& socket, ContextServices services);
+    Task<void> handleStreamSession(HttpServerListener& listener, Stream& stream,
+        asio::ip::tcp::socket& socket, ContextServices services);
     template <typename Stream>
-    Task<void> handleHttp2Session(Stream& stream, asio::ip::tcp::socket& socket, ContextServices services, std::string_view initialBytes = {});
+    Task<void> handleHttp2Session(Stream& stream, asio::ip::tcp::socket& socket,
+        ContextServices services, std::string_view initialBytes = {});
     asio::io_context ioContext_;
     asio::steady_timer serveGate_;
     WorkerRuntimeContext workerRuntime_;

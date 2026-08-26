@@ -16,13 +16,15 @@ public:
 
     [[nodiscard]] bool start() noexcept {
         auto expected = State::kReady;
-        return state_.compare_exchange_strong(expected, State::kRunning, std::memory_order_acq_rel, std::memory_order_acquire);
+        return state_.compare_exchange_strong(
+            expected, State::kRunning, std::memory_order_acq_rel, std::memory_order_acquire);
     }
 
     [[nodiscard]] bool requestStop() noexcept {
         auto observed = state_.load(std::memory_order_acquire);
         while (observed == State::kReady || observed == State::kRunning) {
-            if (state_.compare_exchange_weak(observed, State::kStopping, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            if (state_.compare_exchange_weak(observed, State::kStopping, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
                 return true;
             }
         }
@@ -31,7 +33,8 @@ public:
 
     void completeStop() noexcept {
         auto expected = State::kStopping;
-        (void)state_.compare_exchange_strong(expected, State::kStopped, std::memory_order_acq_rel, std::memory_order_acquire);
+        (void)state_.compare_exchange_strong(
+            expected, State::kStopped, std::memory_order_acq_rel, std::memory_order_acquire);
     }
 
     [[nodiscard]] State state() const noexcept {

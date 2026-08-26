@@ -23,11 +23,15 @@ namespace ruvia::detail {
 
 inline void validateStaticRootOptions(const StaticRootOptions& options) {
     (void)staticRootServesDotfiles(options.dotfiles);
-    if (!ruvia::isValidHttpHeaderValue(options.cacheControl) || (!options.defaultContentType.empty() && !ruvia::detail::isValidHttpContentTypeFieldValue(options.defaultContentType))) {
+    if (!ruvia::isValidHttpHeaderValue(options.cacheControl) ||
+        (!options.defaultContentType.empty() &&
+            !ruvia::detail::isValidHttpContentTypeFieldValue(options.defaultContentType))) {
         throw std::invalid_argument("invalid static file header value");
     }
     for (const auto& mime : options.mimeTypes) {
-        if (!ruvia::detail::isValidStaticFileExtension(mime.extension) || mime.contentType.empty() || !ruvia::detail::isValidHttpContentTypeFieldValue(mime.contentType)) {
+        if (!ruvia::detail::isValidStaticFileExtension(mime.extension) ||
+            mime.contentType.empty() ||
+            !ruvia::detail::isValidHttpContentTypeFieldValue(mime.contentType)) {
             throw std::invalid_argument("invalid static file mime type");
         }
     }
@@ -51,7 +55,9 @@ inline void validateStaticRootOptions(const StaticRootOptions& options) {
         default:
             throw std::invalid_argument("invalid static file type mode");
     }
-    if (options.indexFile.find('/') != std::string_view::npos || options.indexFile.find('\\') != std::string_view::npos || options.indexFile == "." || options.indexFile == "..") {
+    if (options.indexFile.find('/') != std::string_view::npos ||
+        options.indexFile.find('\\') != std::string_view::npos || options.indexFile == "." ||
+        options.indexFile == "..") {
         throw std::invalid_argument("invalid static file index name");
     }
 }

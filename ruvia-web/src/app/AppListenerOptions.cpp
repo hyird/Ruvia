@@ -13,7 +13,8 @@ namespace ruvia::detail {
 namespace {
 
 template <typename NativeChar>
-void assignTlsFileNameFromNative(std::pmr::string& output, std::basic_string_view<NativeChar> native) {
+void assignTlsFileNameFromNative(
+    std::pmr::string& output, std::basic_string_view<NativeChar> native) {
     if constexpr (std::is_same_v<NativeChar, char>) {
         output.assign(native.data(), native.size());
     } else {
@@ -28,13 +29,15 @@ void assignTlsFileName(std::pmr::string& output, const std::filesystem::path& pa
 
 }  // namespace
 
-HttpServerListenerDefinition::Tls makeTlsOptions(const TlsConfig& config, std::pmr::memory_resource* resource) {
+HttpServerListenerDefinition::Tls makeTlsOptions(
+    const TlsConfig& config, std::pmr::memory_resource* resource) {
     HttpServerListenerDefinition::Tls tls(resource);
     assignTlsFileName(tls.identity.certificateChainFile, config.certificateChainFile);
     assignTlsFileName(tls.identity.privateKeyFile, config.privateKeyFile);
     tls.identity.privateKeyPassword = config.privateKeyPassword;
     if (config.clientCertificates.verifyFile.has_value()) {
-        auto& policy = tls.clientCertificates.emplace(resource, config.clientCertificates.requirement);
+        auto& policy =
+            tls.clientCertificates.emplace(resource, config.clientCertificates.requirement);
         assignTlsFileName(policy.verifyFile, *config.clientCertificates.verifyFile);
     }
     tls.sniIdentities.reserve(config.sni.size());

@@ -14,8 +14,8 @@ namespace {
 
 using ruvia::detail::PoolWaiter;
 using ruvia::detail::PoolWaiterAcquired;
-using ruvia::detail::PoolWaiterClosed;
 using ruvia::detail::PoolWaiterCancelled;
+using ruvia::detail::PoolWaiterClosed;
 using ruvia::detail::PoolWaiterQueue;
 using ruvia::detail::PoolWaiterResult;
 using ruvia::detail::PoolWaiterTimedOut;
@@ -26,17 +26,26 @@ using Clock = std::chrono::steady_clock;
 constexpr Clock::time_point kNever = Clock::time_point::max();
 
 template <typename T>
-concept HasAnyRvaluePoolWaiterAccessor = requires(T&& result) { std::move(result).acquired(); } || requires(T&& result) { std::move(result).timedOut(); } || requires(T&& result) { std::move(result).closed(); } || requires(T&& result) { std::move(result).cancelled(); };
+concept HasAnyRvaluePoolWaiterAccessor = requires(T&& result) { std::move(result).acquired(); } ||
+                                         requires(T&& result) { std::move(result).timedOut(); } ||
+                                         requires(T&& result) { std::move(result).closed(); } ||
+                                         requires(T&& result) { std::move(result).cancelled(); };
 
 static_assert(!std::default_initializable<PoolWaiter>);
 static_assert(!std::default_initializable<PoolWaiterResult>);
 static_assert(!HasAnyRvaluePoolWaiterAccessor<PoolWaiterResult>);
-static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().acquired()), const PoolWaiterAcquired*>);
-static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().timedOut()), const PoolWaiterTimedOut*>);
-static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().closed()), const PoolWaiterClosed*>);
-static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().cancelled()), const PoolWaiterCancelled*>);
-static_assert(std::same_as<decltype(std::declval<PoolWaiter&>().await_resume()), const PoolWaiterResult&>);
-static_assert(std::same_as<decltype(&PoolWaiterQueue::closeAll), void (PoolWaiterQueue::*)() noexcept>);
+static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().acquired()),
+    const PoolWaiterAcquired*>);
+static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().timedOut()),
+    const PoolWaiterTimedOut*>);
+static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().closed()),
+    const PoolWaiterClosed*>);
+static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().cancelled()),
+    const PoolWaiterCancelled*>);
+static_assert(
+    std::same_as<decltype(std::declval<PoolWaiter&>().await_resume()), const PoolWaiterResult&>);
+static_assert(
+    std::same_as<decltype(&PoolWaiterQueue::closeAll), void (PoolWaiterQueue::*)() noexcept>);
 
 class WaiterProbeTask final {
 public:
@@ -82,7 +91,8 @@ WaiterProbeTask observeWaiterCompletion(PoolWaiter& waiter, const PoolWaiterResu
     observed = &(co_await waiter);
 }
 
-WaiterProbeTask observeWaiterThenTryResumeNext(PoolWaiter& waiter, PoolWaiterQueue& queue, const PoolWaiterResult*& observed, bool& resumedAnotherWaiter) {
+WaiterProbeTask observeWaiterThenTryResumeNext(PoolWaiter& waiter, PoolWaiterQueue& queue,
+    const PoolWaiterResult*& observed, bool& resumedAnotherWaiter) {
     observed = &(co_await waiter);
     resumedAnotherWaiter = queue.resumeNext(999);
 }
@@ -158,8 +168,9 @@ RUVIA_TEST(pool_waiter_queue_remove_unlinks_middle_and_is_idempotent) {
     RUVIA_CHECK_EQ(waiters[0].await_resume().acquired()->index(), std::size_t{10});
     RUVIA_CHECK(queue.resumeNext(11));
     RUVIA_CHECK(waiters[2].await_resume().acquired() != nullptr);
-    RUVIA_CHECK_EQ(waiters[2].await_resume().acquired()->index(), std::size_t{11});  // w2 follows w0, w1 skipped
-    RUVIA_CHECK(!waiters[1].await_ready());                                          // removed waiter never completes
+    RUVIA_CHECK_EQ(waiters[2].await_resume().acquired()->index(),
+        std::size_t{11});                    // w2 follows w0, w1 skipped
+    RUVIA_CHECK(!waiters[1].await_ready());  // removed waiter never completes
     RUVIA_CHECK(queue.empty());
 }
 
@@ -168,7 +179,8 @@ RUVIA_TEST(pool_waiter_queue_remove_tail_repoints_tail_for_next_enqueue) {
     // enqueue links the new waiter off the removed (detached) node, so it is never
     // reachable from head_ and never resumed -- a permanently hung pool acquirer.
     PoolWaiterQueue queue;
-    std::array<PoolWaiter, 4> waiters{PoolWaiter(kNever), PoolWaiter(kNever), PoolWaiter(kNever), PoolWaiter(kNever)};
+    std::array<PoolWaiter, 4> waiters{
+        PoolWaiter(kNever), PoolWaiter(kNever), PoolWaiter(kNever), PoolWaiter(kNever)};
     for (int i = 0; i < 3; ++i) {
         queue.enqueue(waiters[i]);
     }
@@ -182,8 +194,9 @@ RUVIA_TEST(pool_waiter_queue_remove_tail_repoints_tail_for_next_enqueue) {
     RUVIA_CHECK(queue.resumeNext(21));
     RUVIA_CHECK_EQ(waiters[1].await_resume().acquired()->index(), std::size_t{21});
     RUVIA_CHECK(queue.resumeNext(22));
-    RUVIA_CHECK_EQ(waiters[3].await_resume().acquired()->index(), std::size_t{22});  // reachable only via a correct new tail
-    RUVIA_CHECK(!waiters[2].await_ready());                                          // removed tail never completes
+    RUVIA_CHECK_EQ(waiters[3].await_resume().acquired()->index(),
+        std::size_t{22});                    // reachable only via a correct new tail
+    RUVIA_CHECK(!waiters[2].await_ready());  // removed tail never completes
     RUVIA_CHECK(queue.empty());
 }
 
@@ -221,7 +234,8 @@ RUVIA_TEST(pool_waiter_queue_close_all_wakes_with_closed_result) {
     }
     const PoolWaiterResult* observed[2] = {nullptr, nullptr};
     bool resumedAnotherWaiter = true;
-    auto firstProbe = observeWaiterThenTryResumeNext(waiters[0], queue, observed[0], resumedAnotherWaiter);
+    auto firstProbe =
+        observeWaiterThenTryResumeNext(waiters[0], queue, observed[0], resumedAnotherWaiter);
     auto secondProbe = observeWaiterCompletion(waiters[1], observed[1]);
     firstProbe.start();
     secondProbe.start();

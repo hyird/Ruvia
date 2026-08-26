@@ -37,7 +37,8 @@ public:
     void reset() noexcept;
 
 private:
-    explicit EventLoopStopRegistration(std::shared_ptr<detail::WorkerShutdownListener> listener) noexcept;
+    explicit EventLoopStopRegistration(
+        std::shared_ptr<detail::WorkerShutdownListener> listener) noexcept;
 
     std::shared_ptr<detail::WorkerShutdownListener> listener_;
     friend class EventLoop;
@@ -77,19 +78,19 @@ public:
         const auto boundExecutor = executor();
         auto posted = post([task = std::move(task), completion, boundExecutor]() mutable {
             try {
-                detail::asyncStartTask(
-                    std::move(task),
-                    asio::bind_executor(boundExecutor, [completion](detail::TaskCompletionResult<T> result) mutable {
-                        if (const auto* failure = result.failure()) {
-                            completion->completeFailure(failure->exception());
-                            return;
-                        }
-                        if constexpr (std::is_void_v<T>) {
-                            completion->completeValue();
-                        } else {
-                            completion->completeValue(std::move(*result.success()).takeValue());
-                        }
-                    }));
+                detail::asyncStartTask(std::move(task),
+                    asio::bind_executor(boundExecutor,
+                        [completion](detail::TaskCompletionResult<T> result) mutable {
+                            if (const auto* failure = result.failure()) {
+                                completion->completeFailure(failure->exception());
+                                return;
+                            }
+                            if constexpr (std::is_void_v<T>) {
+                                completion->completeValue();
+                            } else {
+                                completion->completeValue(std::move(*result.success()).takeValue());
+                            }
+                        }));
             } catch (...) {
                 completion->completeFailure(std::current_exception());
             }
@@ -111,7 +112,8 @@ public:
 
 private:
     explicit EventLoop(std::shared_ptr<detail::EventLoopState> state) noexcept;
-    [[nodiscard]] EventLoopStopRegistration registerStopCallback(MoveOnlyFunction<void()> callback) const;
+    [[nodiscard]] EventLoopStopRegistration registerStopCallback(
+        MoveOnlyFunction<void()> callback) const;
     [[nodiscard]] detail::EventLoopFailureSink failureSink() const;
 
     std::shared_ptr<detail::EventLoopState> state_;

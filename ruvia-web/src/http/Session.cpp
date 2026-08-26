@@ -85,7 +85,8 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     co_await next();
 
     const auto& state = detail::SessionAccess::state(c);
-    if (state.untouched() != nullptr || state.unrecognized() != nullptr || state.loaded() != nullptr) {
+    if (state.untouched() != nullptr || state.unrecognized() != nullptr ||
+        state.loaded() != nullptr) {
         co_return;
     }
 
@@ -99,7 +100,8 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
             (void)(co_await c.redis(config_.redisAlias).del(key));
         }
         auto& response = detail::ContextAccess::responseStorage(c);
-        detail::appendExpiredSessionCookieHeader(response, c.resource(), config_.cookieName, secure);
+        detail::appendExpiredSessionCookieHeader(
+            response, c.resource(), config_.cookieName, secure);
         co_return;
     }
 
@@ -124,7 +126,9 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
         const auto tokenResult = detail::generateSecureToken(idBuffer);
         const auto* token = tokenResult.ready();
         if (token == nullptr) {
-            c.respond(c.error({.status = ruvia::http_status::kInternalServerError, .code = "secure_random_failed", .message = "secure token generation failed"}));
+            c.respond(c.error({.status = ruvia::http_status::kInternalServerError,
+                .code = "secure_random_failed",
+                .message = "secure token generation failed"}));
             co_return;
         }
         existingId = token->value();
@@ -155,7 +159,8 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
             }
             case detail::SessionCommitStep::kPublishCurrentCookie: {
                 auto& response = detail::ContextAccess::responseStorage(c);
-                detail::appendSessionCookieHeader(response, c.resource(), config_.cookieName, existingId, secure);
+                detail::appendSessionCookieHeader(
+                    response, c.resource(), config_.cookieName, existingId, secure);
                 break;
             }
         }

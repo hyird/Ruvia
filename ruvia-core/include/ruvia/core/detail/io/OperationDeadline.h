@@ -114,7 +114,8 @@ public:
     // Apply an additional relative limit without losing an existing absolute
     // deadline. This lets a sub-operation honor both its own timeout and the
     // total timeout of its parent operation.
-    [[nodiscard]] OperationTimeout constrainedBy(std::optional<std::chrono::milliseconds> timeout) const noexcept {
+    [[nodiscard]] OperationTimeout constrainedBy(
+        std::optional<std::chrono::milliseconds> timeout) const noexcept {
         OperationTimeout constrained(timeout);
         if (!deadline_.has_value()) {
             return constrained;

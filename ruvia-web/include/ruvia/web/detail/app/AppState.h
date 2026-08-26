@@ -73,14 +73,26 @@ struct AppDocumentRootConfig final {
 };
 
 struct AppListenerConfig final {
-    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerListenerDefinition::PlainHttp)
-        : address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerListenerDefinition::PlainHttp>) {}
+    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress,
+        std::uint16_t configuredPort, HttpServerListenerDefinition::PlainHttp)
+        : address(configuredAddress, resource),
+          port(configuredPort),
+          transport(std::in_place_type<HttpServerListenerDefinition::PlainHttp>) {}
 
-    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerListenerDefinition::Tls configuredTransport)
-        : address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerListenerDefinition::Tls>, std::move(configuredTransport)) {}
+    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress,
+        std::uint16_t configuredPort, HttpServerListenerDefinition::Tls configuredTransport)
+        : address(configuredAddress, resource),
+          port(configuredPort),
+          transport(std::in_place_type<HttpServerListenerDefinition::Tls>,
+              std::move(configuredTransport)) {}
 
-    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress, std::uint16_t configuredPort, HttpServerListenerDefinition::RedirectHttpToHttps configuredTransport)
-        : address(configuredAddress, resource), port(configuredPort), transport(std::in_place_type<HttpServerListenerDefinition::RedirectHttpToHttps>, configuredTransport) {}
+    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress,
+        std::uint16_t configuredPort,
+        HttpServerListenerDefinition::RedirectHttpToHttps configuredTransport)
+        : address(configuredAddress, resource),
+          port(configuredPort),
+          transport(std::in_place_type<HttpServerListenerDefinition::RedirectHttpToHttps>,
+              configuredTransport) {}
 
     std::pmr::string address;
     std::uint16_t port;
@@ -100,8 +112,10 @@ struct AppState final {
     std::optional<AppDocumentRootConfig> documentRootConfig;
     HttpErrorHandler errorHandler{nullptr};
     HttpNotFoundHandler notFoundHandler{nullptr};
-    std::pmr::vector<std::pair<std::pmr::string, HttpErrorHandler>> prefixErrorHandlers{appResource()};
-    std::pmr::vector<std::pair<std::pmr::string, HttpNotFoundHandler>> prefixNotFoundHandlers{appResource()};
+    std::pmr::vector<std::pair<std::pmr::string, HttpErrorHandler>> prefixErrorHandlers{
+        appResource()};
+    std::pmr::vector<std::pair<std::pmr::string, HttpNotFoundHandler>> prefixNotFoundHandlers{
+        appResource()};
     std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewares{appResource()};
     std::pmr::vector<WorkerStateDefinition> workerStates{appResource()};
     std::optional<BlockingPoolOptions> blockingPool{std::in_place};

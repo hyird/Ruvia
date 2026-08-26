@@ -21,34 +21,43 @@ namespace ruvia::detail {
 struct Http1ClientRequestPrepareResultAccess final {
     [[nodiscard]] static Http1ClientExchangeState exchangeState(HttpKnownMethod method,
         HttpConnectionOptions connectionOptions, Http1ClosePolicy closePolicy,
-        Http1ClientInitialContentState contentState, std::pmr::string offeredUpgradeProtocols) noexcept {
+        Http1ClientInitialContentState contentState,
+        std::pmr::string offeredUpgradeProtocols) noexcept {
         return Http1ClientExchangeState(method, connectionOptions, closePolicy, contentState,
             std::move(offeredUpgradeProtocols));
     }
 
-    [[nodiscard]] static constexpr Http1ClientRequestPrepareResult bufferTooSmall(std::size_t requiredHeadBytes) noexcept {
+    [[nodiscard]] static constexpr Http1ClientRequestPrepareResult bufferTooSmall(
+        std::size_t requiredHeadBytes) noexcept {
         return Http1ClientRequestPrepareResult(Http1ClientRequestBufferTooSmall(requiredHeadBytes));
     }
 
-    [[nodiscard]] static constexpr Http1ClientRequestPrepareResult failure(Http1ClientRequestPrepareError error) noexcept {
+    [[nodiscard]] static constexpr Http1ClientRequestPrepareResult failure(
+        Http1ClientRequestPrepareError error) noexcept {
         return Http1ClientRequestPrepareResult(Http1ClientRequestPrepareFailure(error));
     }
 
-    [[nodiscard]] static Http1ClientRequestPrepareResult preparedWithoutContent(std::string_view head, Http1ClientExchangeState exchangeState) noexcept {
+    [[nodiscard]] static Http1ClientRequestPrepareResult preparedWithoutContent(
+        std::string_view head, Http1ClientExchangeState exchangeState) noexcept {
         return Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest(head,
-            Http1ClientRequestContentPlan(Http1ClientRequestWithoutContent()), std::move(exchangeState)));
+            Http1ClientRequestContentPlan(Http1ClientRequestWithoutContent()),
+            std::move(exchangeState)));
     }
 
-    [[nodiscard]] static Http1ClientRequestPrepareResult preparedImmediateContent(std::string_view head,
-        std::string_view contentBytes, Http1ClientExchangeState exchangeState) noexcept {
+    [[nodiscard]] static Http1ClientRequestPrepareResult preparedImmediateContent(
+        std::string_view head, std::string_view contentBytes,
+        Http1ClientExchangeState exchangeState) noexcept {
         return Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest(head,
-            Http1ClientRequestContentPlan(Http1ClientImmediateRequestContent(contentBytes)), std::move(exchangeState)));
+            Http1ClientRequestContentPlan(Http1ClientImmediateRequestContent(contentBytes)),
+            std::move(exchangeState)));
     }
 
-    [[nodiscard]] static Http1ClientRequestPrepareResult preparedContinueGatedContent(std::string_view head,
-        std::string_view contentBytes, Http1ClientExchangeState exchangeState) noexcept {
+    [[nodiscard]] static Http1ClientRequestPrepareResult preparedContinueGatedContent(
+        std::string_view head, std::string_view contentBytes,
+        Http1ClientExchangeState exchangeState) noexcept {
         return Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest(head,
-            Http1ClientRequestContentPlan(Http1ClientContinueGatedRequestContent(contentBytes)), std::move(exchangeState)));
+            Http1ClientRequestContentPlan(Http1ClientContinueGatedRequestContent(contentBytes)),
+            std::move(exchangeState)));
     }
 };
 
@@ -64,7 +73,9 @@ constexpr std::string_view kExpectPrefix = "Expect: ";
 constexpr std::string_view kConnectionClose = "Connection: close\r\n";
 
 [[nodiscard]] std::size_t authorityLength(const HttpOriginView& origin, bool forcePort) noexcept {
-    return origin.host().size() + ((forcePort || !detail::httpOriginUsesDefaultPort(origin)) ? 1 + decimalDigits(origin.port()) : 0);
+    return origin.host().size() + ((forcePort || !detail::httpOriginUsesDefaultPort(origin))
+                                          ? 1 + decimalDigits(origin.port())
+                                          : 0);
 }
 
 void appendView(char*& cursor, std::string_view value) noexcept {
@@ -78,7 +89,8 @@ void appendUnsigned(char*& cursor, std::size_t value) noexcept {
     std::array<char, 32> digits;
     const auto [end, ec] = std::to_chars(digits.data(), digits.data() + digits.size(), value);
     if (ec == std::errc{}) {
-        appendView(cursor, std::string_view(digits.data(), static_cast<std::size_t>(end - digits.data())));
+        appendView(
+            cursor, std::string_view(digits.data(), static_cast<std::size_t>(end - digits.data())));
     }
 }
 
@@ -108,8 +120,8 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     return false;
 }
 
-[[nodiscard]] std::pmr::string ownOfferedUpgradeProtocols(std::span<const HttpHeaderView> headers,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] std::pmr::string ownOfferedUpgradeProtocols(
+    std::span<const HttpHeaderView> headers, std::pmr::memory_resource* resource) {
     std::pmr::string result(resource);
     for (const auto& header : headers) {
         if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
@@ -136,31 +148,60 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
         return detail::Http1ClientRequestPrepareResultAccess::failure(error);
     }
     const bool expectContinue = policy.expectation == HttpClientRequestExpectation::kContinue;
-    const auto contentIndication = explicitContent && !contentBytes->value().empty() ? HttpRequestContentIndication::kWillFollow : HttpRequestContentIndication::kNoContent;
+    const auto contentIndication = explicitContent && !contentBytes->value().empty()
+                                       ? HttpRequestContentIndication::kWillFollow
+                                       : HttpRequestContentIndication::kNoContent;
     if (!httpClientExpectationIsValid(expectContinue, contentIndication)) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kExpectationWithoutContent);
+        return detail::Http1ClientRequestPrepareResultAccess::failure(
+            Http1ClientRequestPrepareError::kExpectationWithoutContent);
     }
     if (explicitContent) {
         const auto contentSemantics = detail::httpRequestContentSemantics(method);
         if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden) {
-            return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kContentForbiddenForMethod);
+            return detail::Http1ClientRequestPrepareResultAccess::failure(
+                Http1ClientRequestPrepareError::kContentForbiddenForMethod);
         }
-        if (contentSemantics == detail::HttpRequestContentSemantics::kContentTypeRequired && !headerFacts.hasContentType) {
-            return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
+        if (contentSemantics == detail::HttpRequestContentSemantics::kContentTypeRequired &&
+            !headerFacts.hasContentType) {
+            return detail::Http1ClientRequestPrepareResultAccess::failure(
+                Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
         }
     }
 
-    const bool generateConnectionClose = policy.closePolicy == Http1ClosePolicy::kCloseAfterResponse && !headerFacts.connectionOptions.close();
-    const auto effectiveClosePolicy = headerFacts.connectionOptions.close() || generateConnectionClose ? Http1ClosePolicy::kCloseAfterResponse : Http1ClosePolicy::kAllowReuse;
-    const std::size_t generatedFields = 1 + (explicitContent ? 1 : 0) + (expectContinue ? 1 : 0) + (generateConnectionClose ? 1 : 0);
+    const bool generateConnectionClose =
+        policy.closePolicy == Http1ClosePolicy::kCloseAfterResponse &&
+        !headerFacts.connectionOptions.close();
+    const auto effectiveClosePolicy =
+        headerFacts.connectionOptions.close() || generateConnectionClose
+            ? Http1ClosePolicy::kCloseAfterResponse
+            : Http1ClosePolicy::kAllowReuse;
+    const std::size_t generatedFields = 1 + (explicitContent ? 1 : 0) + (expectContinue ? 1 : 0) +
+                                        (generateConnectionClose ? 1 : 0);
     if (headers.size() > kMaxHttpHeaderFields - generatedFields) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kTooManyHeaders);
+        return detail::Http1ClientRequestPrepareResultAccess::failure(
+            Http1ClientRequestPrepareError::kTooManyHeaders);
     }
 
     const std::size_t targetBytes = connect ? authorityLength(origin, true) : target.size();
     std::size_t headBytes = 0;
-    if (!addHeadBytes(headBytes, method.size()) || !addHeadBytes(headBytes, 1) || !addHeadBytes(headBytes, targetBytes) || !addHeadBytes(headBytes, kHttp11RequestLineSuffix.size()) || !addHeadBytes(headBytes, kHostPrefix.size()) || !addHeadBytes(headBytes, authorityLength(origin, false)) || !addHeadBytes(headBytes, kCrlf.size()) || !addHeadBytes(headBytes, headerFacts.wireBytes) || (explicitContent && (!addHeadBytes(headBytes, kContentLengthPrefix.size()) || !addHeadBytes(headBytes, decimalDigits(contentBytes->value().size())) || !addHeadBytes(headBytes, kCrlf.size()))) || (expectContinue && (!addHeadBytes(headBytes, kExpectPrefix.size()) || !addHeadBytes(headBytes, detail::kHttpContinueExpectationToken.size()) || !addHeadBytes(headBytes, kCrlf.size()))) || (generateConnectionClose && !addHeadBytes(headBytes, kConnectionClose.size())) || !addHeadBytes(headBytes, kCrlf.size())) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kHeaderTooLarge);
+    if (!addHeadBytes(headBytes, method.size()) || !addHeadBytes(headBytes, 1) ||
+        !addHeadBytes(headBytes, targetBytes) ||
+        !addHeadBytes(headBytes, kHttp11RequestLineSuffix.size()) ||
+        !addHeadBytes(headBytes, kHostPrefix.size()) ||
+        !addHeadBytes(headBytes, authorityLength(origin, false)) ||
+        !addHeadBytes(headBytes, kCrlf.size()) || !addHeadBytes(headBytes, headerFacts.wireBytes) ||
+        (explicitContent &&
+            (!addHeadBytes(headBytes, kContentLengthPrefix.size()) ||
+                !addHeadBytes(headBytes, decimalDigits(contentBytes->value().size())) ||
+                !addHeadBytes(headBytes, kCrlf.size()))) ||
+        (expectContinue &&
+            (!addHeadBytes(headBytes, kExpectPrefix.size()) ||
+                !addHeadBytes(headBytes, detail::kHttpContinueExpectationToken.size()) ||
+                !addHeadBytes(headBytes, kCrlf.size()))) ||
+        (generateConnectionClose && !addHeadBytes(headBytes, kConnectionClose.size())) ||
+        !addHeadBytes(headBytes, kCrlf.size())) {
+        return detail::Http1ClientRequestPrepareResultAccess::failure(
+            Http1ClientRequestPrepareError::kHeaderTooLarge);
     }
     if (headBuffer.size() < headBytes) {
         return detail::Http1ClientRequestPrepareResultAccess::bufferTooSmall(headBytes);
@@ -170,8 +211,8 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     // fixed-size value. Own it before mutating the caller's output buffer so an
     // allocation failure leaves request preparation transactional.
     auto offeredUpgradeProtocols = headerFacts.upgradeProtocols.hasProtocol()
-        ? ownOfferedUpgradeProtocols(headers, resource)
-        : std::pmr::string(resource);
+                                       ? ownOfferedUpgradeProtocols(headers, resource)
+                                       : std::pmr::string(resource);
 
     char* cursor = headBuffer.data();
     appendView(cursor, method);
@@ -202,28 +243,31 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     appendView(cursor, kCrlf);
 
     const auto contentState = expectContinue
-        ? detail::Http1ClientInitialContentState::kAwaitingContinue
-        : (explicitContent && !contentBytes->value().empty()
-                  ? detail::Http1ClientInitialContentState::kPending
-                  : detail::Http1ClientInitialContentState::kComplete);
+                                  ? detail::Http1ClientInitialContentState::kAwaitingContinue
+                                  : (explicitContent && !contentBytes->value().empty()
+                                            ? detail::Http1ClientInitialContentState::kPending
+                                            : detail::Http1ClientInitialContentState::kComplete);
     auto exchangeState = detail::Http1ClientRequestPrepareResultAccess::exchangeState(
-        connect ? HttpKnownMethod::kConnect : classifyHttpMethod(method), headerFacts.connectionOptions,
-        effectiveClosePolicy, contentState, std::move(offeredUpgradeProtocols));
+        connect ? HttpKnownMethod::kConnect : classifyHttpMethod(method),
+        headerFacts.connectionOptions, effectiveClosePolicy, contentState,
+        std::move(offeredUpgradeProtocols));
     const auto head = std::string_view(headBuffer.data(), headBytes);
     if (!explicitContent) {
-        return detail::Http1ClientRequestPrepareResultAccess::preparedWithoutContent(head, std::move(exchangeState));
+        return detail::Http1ClientRequestPrepareResultAccess::preparedWithoutContent(
+            head, std::move(exchangeState));
     }
     if (expectContinue) {
-        return detail::Http1ClientRequestPrepareResultAccess::preparedContinueGatedContent(head,
-            contentBytes->value(), std::move(exchangeState));
+        return detail::Http1ClientRequestPrepareResultAccess::preparedContinueGatedContent(
+            head, contentBytes->value(), std::move(exchangeState));
     }
-    return detail::Http1ClientRequestPrepareResultAccess::preparedImmediateContent(head,
-        contentBytes->value(), std::move(exchangeState));
+    return detail::Http1ClientRequestPrepareResultAccess::preparedImmediateContent(
+        head, contentBytes->value(), std::move(exchangeState));
 }
 
 }  // namespace
 
-std::string_view http1ClientRequestPrepareErrorMessage(Http1ClientRequestPrepareError error) noexcept {
+std::string_view http1ClientRequestPrepareErrorMessage(
+    Http1ClientRequestPrepareError error) noexcept {
     switch (error) {
         case Http1ClientRequestPrepareError::kInvalidMethod:
             return "invalid HTTP/1 client request method";
@@ -279,33 +323,40 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOrig
     const HttpClientRequestView& request, std::span<char> headBuffer,
     Http1ClientRequestWirePolicy policy) const {
     if (!isValidHttp1ClosePolicy(policy.closePolicy)) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidClosePolicy);
+        return detail::Http1ClientRequestPrepareResultAccess::failure(
+            Http1ClientRequestPrepareError::kInvalidClosePolicy);
     }
     if (!isValidHttpMethodToken(request.method)) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidMethod);
+        return detail::Http1ClientRequestPrepareResultAccess::failure(
+            Http1ClientRequestPrepareError::kInvalidMethod);
     }
     if (request.method == "CONNECT") {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kConnectRequiresDedicatedEntry);
+        return detail::Http1ClientRequestPrepareResultAccess::failure(
+            Http1ClientRequestPrepareError::kConnectRequiresDedicatedEntry);
     }
-    if (!detail::isValidOriginOrAsteriskFormTarget(classifyHttpMethod(request.method), request.target)) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidTarget);
+    if (!detail::isValidOriginOrAsteriskFormTarget(
+            classifyHttpMethod(request.method), request.target)) {
+        return detail::Http1ClientRequestPrepareResultAccess::failure(
+            Http1ClientRequestPrepareError::kInvalidTarget);
     }
     return prepareRequest(origin, request.method, request.target, false,
-        static_cast<std::span<const HttpHeaderView>>(request.headers), request.content, headBuffer, policy,
-        resource_);
+        static_cast<std::span<const HttpHeaderView>>(request.headers), request.content, headBuffer,
+        policy, resource_);
 }
 
-Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(const HttpOriginView& tunnelOrigin,
-    std::span<const HttpHeaderView> headers, std::span<char> headBuffer,
-    Http1ClientRequestWirePolicy policy) const {
+Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(
+    const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers,
+    std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const {
     if (!isValidHttp1ClosePolicy(policy.closePolicy)) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidClosePolicy);
+        return detail::Http1ClientRequestPrepareResultAccess::failure(
+            Http1ClientRequestPrepareError::kInvalidClosePolicy);
     }
     if (tunnelOrigin.port() == 0) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidConnectOrigin);
+        return detail::Http1ClientRequestPrepareResultAccess::failure(
+            Http1ClientRequestPrepareError::kInvalidConnectOrigin);
     }
-    return prepareRequest(tunnelOrigin, "CONNECT", {}, true, headers, HttpClientRequestContentView::none(),
-        headBuffer, policy, resource_);
+    return prepareRequest(tunnelOrigin, "CONNECT", {}, true, headers,
+        HttpClientRequestContentView::none(), headBuffer, policy, resource_);
 }
 
 }  // namespace ruvia

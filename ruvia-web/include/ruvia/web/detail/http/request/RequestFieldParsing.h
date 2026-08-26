@@ -18,7 +18,8 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline std::size_t delimitedFieldCount(std::string_view input, char delimiter) noexcept {
+[[nodiscard]] inline std::size_t delimitedFieldCount(
+    std::string_view input, char delimiter) noexcept {
     if (input.empty()) {
         return 0;
     }
@@ -48,13 +49,16 @@ inline constexpr std::size_t kMaxParsedFieldReserve = 4096;
 
 inline void appendLowerAscii(std::pmr::string& output, std::string_view input) {
     for (const char ch : input) {
-        output.push_back(static_cast<char>(detail::httpAsciiToLower(static_cast<unsigned char>(ch))));
+        output.push_back(
+            static_cast<char>(detail::httpAsciiToLower(static_cast<unsigned char>(ch))));
     }
 }
 
-[[nodiscard]] inline bool assignUrlDecodedOrCopy(std::pmr::string& output, std::string_view input, detail::UrlDecodeMode mode) {
+[[nodiscard]] inline bool assignUrlDecodedOrCopy(
+    std::pmr::string& output, std::string_view input, detail::UrlDecodeMode mode) {
     if (detail::hasUrlEncoding(input, mode)) {
-        auto decoded = detail::decodeUrlComponent(input, {.mode = mode, .resource = output.get_allocator().resource()});
+        auto decoded = detail::decodeUrlComponent(
+            input, {.mode = mode, .resource = output.get_allocator().resource()});
         if (decoded.has_value()) {
             output = std::move(*decoded);
             return true;
@@ -69,11 +73,13 @@ inline void appendLowerAscii(std::pmr::string& output, std::string_view input) {
     return value;
 }
 
-[[nodiscard]] inline std::string_view pairNameAt(const std::pmr::vector<std::pmr::string>& storage, std::size_t index) noexcept {
+[[nodiscard]] inline std::string_view pairNameAt(
+    const std::pmr::vector<std::pmr::string>& storage, std::size_t index) noexcept {
     return storedStringView(storage[index * 2]);
 }
 
-[[nodiscard]] inline std::pmr::vector<std::size_t> sortedPairOrder(const std::pmr::vector<std::pmr::string>& storage, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::pmr::vector<std::size_t> sortedPairOrder(
+    const std::pmr::vector<std::pmr::string>& storage, std::pmr::memory_resource* resource) {
     std::pmr::vector<std::size_t> order(resource);
     const auto count = storage.size() / 2;
     order.reserve(count);

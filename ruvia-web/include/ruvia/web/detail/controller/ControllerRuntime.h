@@ -51,32 +51,47 @@ class ControllerRegistrationAccess final {
         }
     }
 
-    [[nodiscard]] static ControllerRouteBuilder createRouteGroup(Router& router, std::string_view prefix, MiddlewareList middlewares) {
+    [[nodiscard]] static ControllerRouteBuilder createRouteGroup(
+        Router& router, std::string_view prefix, MiddlewareList middlewares) {
         return ControllerRouteBuilder(router, prefix, std::move(middlewares));
     }
 
-    [[nodiscard]] static ControllerRouteBuilder createRouteGroup(const ControllerRouteBuilder& scope, std::string_view prefix, MiddlewareList middlewares) {
+    [[nodiscard]] static ControllerRouteBuilder createRouteGroup(
+        const ControllerRouteBuilder& scope, std::string_view prefix, MiddlewareList middlewares) {
         return scope.createScope(prefix, std::move(middlewares));
     }
 
-    static void addRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method, std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> middlewares) {
+    static void addRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method,
+        std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode,
+        std::span<const ControllerMiddlewareDescriptor> middlewares) {
         scope.registerRoute(method, path, std::move(handler), bodyMode, middlewares);
     }
 
-    static void addExtensionMethodRoute(const ControllerRouteBuilder& scope, std::string_view methodToken, std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> middlewares) {
-        scope.registerExtensionMethodRoute(methodToken, path, std::move(handler), bodyMode, middlewares);
+    static void addExtensionMethodRoute(const ControllerRouteBuilder& scope,
+        std::string_view methodToken, std::string_view path, ControllerRouteHandler handler,
+        RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> middlewares) {
+        scope.registerExtensionMethodRoute(
+            methodToken, path, std::move(handler), bodyMode, middlewares);
     }
 
-    static void addResponseStreamRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares) {
+    static void addResponseStreamRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method,
+        std::string_view path, ControllerRouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> middlewares) {
         scope.registerResponseStreamRoute(method, path, std::move(handler), middlewares);
     }
 
-    static void addSseRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares) {
+    static void addSseRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method,
+        std::string_view path, ControllerRouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> middlewares) {
         scope.registerSseRoute(method, path, std::move(handler), middlewares);
     }
 
-    static void addWebSocketRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares, WebSocketRouteConfig webSocketConfig = {}) {
-        scope.registerWebSocketRoute(method, path, std::move(handler), middlewares, std::move(webSocketConfig));
+    static void addWebSocketRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method,
+        std::string_view path, ControllerRouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> middlewares,
+        WebSocketRouteConfig webSocketConfig = {}) {
+        scope.registerWebSocketRoute(
+            method, path, std::move(handler), middlewares, std::move(webSocketConfig));
     }
 
     template <Task<HttpResponse> (ControllerT::*Handler)(Context&)>
@@ -130,15 +145,15 @@ template <ValidationTarget Target>
     } else if constexpr (Target == ValidationTarget::kCookie) {
         detail::throwInvalidCookie();
     } else {
-        static_assert(alwaysFalse<std::integral_constant<ValidationTarget, Target>>, "unsupported validator target");
+        static_assert(alwaysFalse<std::integral_constant<ValidationTarget, Target>>,
+            "unsupported validator target");
     }
 }
 
 template <ValidationTarget Target, typename BodyT>
 [[nodiscard]] BodyT parseValidatedFields(Context& c, const RequestNameValueList& fields) {
     static_assert(FormBody<BodyT>::value, "field validator body type must use RUVIA_REQUEST_MODEL");
-    auto parsed = detail::ModelParseAccess::parseFormFieldsPartial<BodyT>(
-        fields, c.resource());
+    auto parsed = detail::ModelParseAccess::parseFormFieldsPartial<BodyT>(fields, c.resource());
     if (!parsed) {
         throwInvalidValidationTarget<Target>();
     }
@@ -148,21 +163,23 @@ template <ValidationTarget Target, typename BodyT>
 template <ValidationTarget Target, typename BodyT>
 [[nodiscard]] Task<BodyT> parseValidatedBody(Context& c) {
     if constexpr (Target == ValidationTarget::kJson) {
-        if (!detail::contentTypeMatches(c.req().header("Content-Type").value_or(std::string_view{}), "application/json")) {
+        if (!detail::contentTypeMatches(
+                c.req().header("Content-Type").value_or(std::string_view{}), "application/json")) {
             detail::throwInvalidJsonContentType();
         }
         const auto requestBody = co_await c.req().text();
-        auto parsed = detail::ModelParseAccess::parseJsonBorrowedPartial<BodyT>(
-            requestBody, c.resource());
+        auto parsed =
+            detail::ModelParseAccess::parseJsonBorrowedPartial<BodyT>(requestBody, c.resource());
         if (!parsed) detail::throwInvalidJsonBody();
         co_return std::move(*parsed);
     } else if constexpr (Target == ValidationTarget::kForm) {
-        if (!detail::contentTypeMatches(c.req().header("Content-Type").value_or(std::string_view{}), "application/x-www-form-urlencoded")) {
+        if (!detail::contentTypeMatches(c.req().header("Content-Type").value_or(std::string_view{}),
+                "application/x-www-form-urlencoded")) {
             detail::throwInvalidFormContentType();
         }
         const auto requestBody = co_await c.req().text();
-        auto parsed = detail::ModelParseAccess::parseFormBorrowedPartial<BodyT>(
-            requestBody, c.resource());
+        auto parsed =
+            detail::ModelParseAccess::parseFormBorrowedPartial<BodyT>(requestBody, c.resource());
         if (!parsed) detail::throwInvalidFormBody();
         co_return std::move(*parsed);
     } else if constexpr (Target == ValidationTarget::kQuery) {
@@ -202,14 +219,17 @@ void registerControllerInstance(Router& router, ControllerStore& controllerLifet
 
 template <typename ControllerT>
 [[nodiscard]] bool registerController() {
-    static_assert(std::is_base_of_v<Controller<ControllerT>, ControllerT>, "controller must derive from ruvia::Controller<ControllerT>");
+    static_assert(std::is_base_of_v<Controller<ControllerT>, ControllerT>,
+        "controller must derive from ruvia::Controller<ControllerT>");
     static_assert(std::is_final_v<ControllerT>, "controller must be final");
-    static_assert(std::is_default_constructible_v<ControllerT>, "controller must be default constructible");
+    static_assert(
+        std::is_default_constructible_v<ControllerT>, "controller must be default constructible");
 
     return addControllerRegistrar(&registerControllerInstance<ControllerT>);
 }
 
-inline void registerControllers(Router& router, ControllerStore& controllerLifetimes, std::span<const ControllerRegistrar> registrars) {
+inline void registerControllers(Router& router, ControllerStore& controllerLifetimes,
+    std::span<const ControllerRegistrar> registrars) {
     runControllerRegistrars(router, controllerLifetimes, registrars);
 }
 

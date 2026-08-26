@@ -57,16 +57,27 @@ public:
     template <typename T, typename Factory>
     [[nodiscard]] static WorkerStateDefinition make(Factory&& factory) {
         using Stored = std::decay_t<Factory>;
-        static_assert(std::is_invocable_v<Stored&>, "worker state factory must be invocable with no arguments");
-        static_assert(std::is_constructible_v<T, std::invoke_result_t<Stored&>>, "worker state factory must return a value that constructs T");
+        static_assert(std::is_invocable_v<Stored&>,
+            "worker state factory must be invocable with no arguments");
+        static_assert(std::is_constructible_v<T, std::invoke_result_t<Stored&>>,
+            "worker state factory must return a value that constructs T");
         WorkerStateDefinition definition;
         definition.typeKey_ = workerStateTypeKey<T>();
-        definition.factory_ = constructPmrObject<Stored>(processResource(), std::forward<Factory>(factory));
+        definition.factory_ =
+            constructPmrObject<Stored>(processResource(), std::forward<Factory>(factory));
         // Named apart from the enclosing `factory` parameter: these lambdas are
         // captureless and receive the erased pointer, not that object.
-        definition.destroyFactory_ = [](void* storedFactory) noexcept { destroyPmrObject(static_cast<Stored*>(storedFactory), processResource()); };
-        definition.createInstance_ = [](void* storedFactory, std::pmr::memory_resource* resource) -> void* { return constructPmrObject<T>(resource, (*static_cast<Stored*>(storedFactory))()); };
-        definition.destroyInstance_ = [](void* instance, std::pmr::memory_resource* resource) noexcept { destroyPmrObject(static_cast<T*>(instance), resource); };
+        definition.destroyFactory_ = [](void* storedFactory) noexcept {
+            destroyPmrObject(static_cast<Stored*>(storedFactory), processResource());
+        };
+        definition.createInstance_ = [](void* storedFactory,
+                                         std::pmr::memory_resource* resource) -> void* {
+            return constructPmrObject<T>(resource, (*static_cast<Stored*>(storedFactory))());
+        };
+        definition.destroyInstance_ = [](void* instance,
+                                          std::pmr::memory_resource* resource) noexcept {
+            destroyPmrObject(static_cast<T*>(instance), resource);
+        };
         return definition;
     }
 
@@ -97,7 +108,8 @@ private:
 // read-only afterwards.
 class WorkerStateRegistry final {
 public:
-    WorkerStateRegistry(std::pmr::memory_resource* resource, std::span<const WorkerStateDefinition> definitions)
+    WorkerStateRegistry(
+        std::pmr::memory_resource* resource, std::span<const WorkerStateDefinition> definitions)
         : resource_(resource),
           definitions_(definitions),
           entries_(resource) {}
@@ -120,7 +132,9 @@ public:
         entries_.reserve(definitions_.size());
         try {
             for (const auto& definition : definitions_) {
-                entries_.push_back(Entry{definition.typeKey_, definition.createInstance_(definition.factory_, resource_), definition.destroyInstance_});
+                entries_.push_back(Entry{definition.typeKey_,
+                    definition.createInstance_(definition.factory_, resource_),
+                    definition.destroyInstance_});
             }
         } catch (...) {
             destroyEntries();

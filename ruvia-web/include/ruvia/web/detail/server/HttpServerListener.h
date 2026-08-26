@@ -19,7 +19,9 @@ namespace ruvia::detail {
 struct HttpServerListenerDefinition final {
     struct TlsIdentity final {
         explicit TlsIdentity(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-            : certificateChainFile(resource), privateKeyFile(resource), privateKeyPassword(resource) {}
+            : certificateChainFile(resource),
+              privateKeyFile(resource),
+              privateKeyPassword(resource) {}
 
         std::pmr::string certificateChainFile;
         std::pmr::string privateKeyFile;
@@ -29,8 +31,10 @@ struct HttpServerListenerDefinition final {
     struct TlsClientCertificatePolicy final {
         explicit TlsClientCertificatePolicy(
             std::pmr::memory_resource* resource = std::pmr::get_default_resource(),
-            TlsClientCertificateRequirement configuredRequirement = TlsClientCertificateRequirement::kOptional)
-            : verifyFile(resource), requirement(configuredRequirement) {}
+            TlsClientCertificateRequirement configuredRequirement =
+                TlsClientCertificateRequirement::kOptional)
+            : verifyFile(resource),
+              requirement(configuredRequirement) {}
 
         std::pmr::string verifyFile;
         TlsClientCertificateRequirement requirement{TlsClientCertificateRequirement::kOptional};
@@ -38,15 +42,18 @@ struct HttpServerListenerDefinition final {
 
     struct Tls final {
         struct SniIdentity final {
-            explicit SniIdentity(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-                : host(resource), identity(resource) {}
+            explicit SniIdentity(
+                std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+                : host(resource),
+                  identity(resource) {}
 
             std::pmr::string host;
             TlsIdentity identity;
         };
 
         explicit Tls(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-            : identity(resource), sniIdentities(resource) {}
+            : identity(resource),
+              sniIdentities(resource) {}
 
         TlsIdentity identity;
         std::optional<TlsClientCertificatePolicy> clientCertificates;
@@ -61,8 +68,10 @@ struct HttpServerListenerDefinition final {
 
     using Transport = std::variant<PlainHttp, Tls, RedirectHttpToHttps>;
 
-    HttpServerListenerDefinition(asio::ip::tcp::endpoint configuredEndpoint, Transport configuredTransport = PlainHttp{})
-        : endpoint(std::move(configuredEndpoint)), transport(std::move(configuredTransport)) {}
+    HttpServerListenerDefinition(
+        asio::ip::tcp::endpoint configuredEndpoint, Transport configuredTransport = PlainHttp{})
+        : endpoint(std::move(configuredEndpoint)),
+          transport(std::move(configuredTransport)) {}
 
     asio::ip::tcp::endpoint endpoint;
     Transport transport;
@@ -73,9 +82,7 @@ using SniContextLookup = std::pmr::vector<std::pair<std::pmr::string, asio::ssl:
 
 class HttpServerListener final {
 public:
-    HttpServerListener(
-        asio::io_context& ioContext,
-        const HttpServerListenerDefinition& definition,
+    HttpServerListener(asio::io_context& ioContext, const HttpServerListenerDefinition& definition,
         std::pmr::memory_resource* resource);
 
     HttpServerListener(const HttpServerListener&) = delete;
@@ -88,7 +95,8 @@ public:
     }
     const HttpServerListenerDefinition::Tls* tls() const&& = delete;
 
-    [[nodiscard]] const HttpServerListenerDefinition::RedirectHttpToHttps* redirect() const& noexcept {
+    [[nodiscard]] const HttpServerListenerDefinition::RedirectHttpToHttps* redirect()
+        const& noexcept {
         return std::get_if<HttpServerListenerDefinition::RedirectHttpToHttps>(&transport);
     }
     const HttpServerListenerDefinition::RedirectHttpToHttps* redirect() const&& = delete;

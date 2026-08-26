@@ -67,26 +67,33 @@ public:
 
 private:
     friend struct detail::WebSocketHandshakeValidationResultAccess;
-    friend WebSocketHandshakeValidationResult validateWebSocketHandshake(const HttpRequest&, const Http1RequestBodyPlan&) noexcept;
+    friend WebSocketHandshakeValidationResult validateWebSocketHandshake(
+        const HttpRequest&, const Http1RequestBodyPlan&) noexcept;
 
     using Value = std::variant<WebSocketHandshakeAccepted, WebSocketHandshakeFailure>;
 
-    explicit constexpr WebSocketHandshakeValidationResult(WebSocketHandshakeAccepted accepted) noexcept
+    explicit constexpr WebSocketHandshakeValidationResult(
+        WebSocketHandshakeAccepted accepted) noexcept
         : value_(accepted) {}
 
-    explicit constexpr WebSocketHandshakeValidationResult(WebSocketHandshakeFailure failure) noexcept
+    explicit constexpr WebSocketHandshakeValidationResult(
+        WebSocketHandshakeFailure failure) noexcept
         : value_(failure) {}
 
     [[nodiscard]] static constexpr WebSocketHandshakeValidationResult makeAccepted() noexcept {
         return WebSocketHandshakeValidationResult(WebSocketHandshakeAccepted());
     }
 
-    [[nodiscard]] static constexpr WebSocketHandshakeValidationResult makeInvalidRequest() noexcept {
-        return WebSocketHandshakeValidationResult(WebSocketHandshakeFailure(WebSocketHandshakeFailure::Kind::kInvalidRequest));
+    [[nodiscard]] static constexpr WebSocketHandshakeValidationResult
+    makeInvalidRequest() noexcept {
+        return WebSocketHandshakeValidationResult(
+            WebSocketHandshakeFailure(WebSocketHandshakeFailure::Kind::kInvalidRequest));
     }
 
-    [[nodiscard]] static constexpr WebSocketHandshakeValidationResult makeUnsupportedVersion() noexcept {
-        return WebSocketHandshakeValidationResult(WebSocketHandshakeFailure(WebSocketHandshakeFailure::Kind::kUnsupportedVersion));
+    [[nodiscard]] static constexpr WebSocketHandshakeValidationResult
+    makeUnsupportedVersion() noexcept {
+        return WebSocketHandshakeValidationResult(
+            WebSocketHandshakeFailure(WebSocketHandshakeFailure::Kind::kUnsupportedVersion));
     }
 
     Value value_;
@@ -95,8 +102,7 @@ private:
 // Validates an RFC 6455 HTTP/1.1 opening handshake, including the parser-owned
 // request-body framing plan. It does not create or write a response.
 [[nodiscard]] WebSocketHandshakeValidationResult validateWebSocketHandshake(
-    const HttpRequest& request,
-    const Http1RequestBodyPlan& bodyPlan) noexcept;
+    const HttpRequest& request, const Http1RequestBodyPlan& bodyPlan) noexcept;
 
 // Owned HTTP/1.1 101 response plan. forEachResponsePart emits stable views for
 // scatter-gather I/O; compression() configures the subsequent WebSocket driver
@@ -119,7 +125,8 @@ public:
 
     template <typename Visitor>
     void forEachResponsePart(Visitor&& visitor) const& {
-        visitor(std::string_view(kSwitchingProtocolsPrefix.data(), kSwitchingProtocolsPrefix.size()));
+        visitor(
+            std::string_view(kSwitchingProtocolsPrefix.data(), kSwitchingProtocolsPrefix.size()));
         visitor(std::string_view(accept_.data(), accept_.size()));
         visitor(kCrlf);
         if (!subprotocol_.empty()) {
@@ -140,7 +147,8 @@ public:
     void forEachResponsePart(Visitor&&) const&& = delete;
 
 private:
-    friend WebSocketServerHandshake makeWebSocketServerHandshake(const HttpRequest&, WebSocketServerHandshakeOptions);
+    friend WebSocketServerHandshake makeWebSocketServerHandshake(
+        const HttpRequest&, WebSocketServerHandshakeOptions);
 
     inline static constexpr auto kSwitchingProtocolsPrefix = [] {
         constexpr std::string_view protocol = "HTTP/1.1 ";
@@ -151,7 +159,8 @@ private:
             "Upgrade: websocket\r\n"
             "Connection: Upgrade\r\n"
             "Sec-WebSocket-Accept: ";
-        std::array<char, protocol.size() + status.size() + 1 + reason.size() + suffix.size()> result{};
+        std::array<char, protocol.size() + status.size() + 1 + reason.size() + suffix.size()>
+            result{};
         std::size_t cursor = 0;
         const auto append = [&result, &cursor](std::string_view part) {
             for (const char value : part) {
@@ -169,7 +178,8 @@ private:
     inline static constexpr std::string_view kExtensionsHeaderPrefix = "Sec-WebSocket-Extensions: ";
     inline static constexpr std::string_view kCrlf = "\r\n";
 
-    WebSocketServerHandshake(std::array<char, 28> accept, std::pmr::string subprotocol, WebSocketCompression compression) noexcept
+    WebSocketServerHandshake(std::array<char, 28> accept, std::pmr::string subprotocol,
+        WebSocketCompression compression) noexcept
         : accept_(accept),
           subprotocol_(std::move(subprotocol)),
           compression_(compression) {}
@@ -183,7 +193,6 @@ private:
 // is copied into the requested resource; the response plan borrows no request
 // or server-preference storage.
 [[nodiscard]] WebSocketServerHandshake makeWebSocketServerHandshake(
-    const HttpRequest& request,
-    WebSocketServerHandshakeOptions options = {});
+    const HttpRequest& request, WebSocketServerHandshakeOptions options = {});
 
 }  // namespace ruvia

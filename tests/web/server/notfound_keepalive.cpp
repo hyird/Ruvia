@@ -29,8 +29,11 @@
 namespace {
 
 template <typename Handler>
-void registerRoute(ruvia::detail::RouterImpl& router, ruvia::HttpKnownMethod method, std::string_view path, Handler& handler) {
-    router.registerRoute(method, std::pmr::string(path, std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(handler), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+void registerRoute(ruvia::detail::RouterImpl& router, ruvia::HttpKnownMethod method,
+    std::string_view path, Handler& handler) {
+    router.registerRoute(method, std::pmr::string(path, std::pmr::get_default_resource()),
+        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(handler),
+        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
 }
 
 // Read one response head and return its start line (e.g. "HTTP/1.1 404 ...").
@@ -40,13 +43,16 @@ void registerRoute(ruvia::detail::RouterImpl& router, ruvia::HttpKnownMethod met
     if (ec) {
         return {};
     }
-    return std::string(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + std::min<std::size_t>(buffer.size(), 15));
+    return std::string(asio::buffers_begin(buffer.data()),
+        asio::buffers_begin(buffer.data()) + std::min<std::size_t>(buffer.size(), 15));
 }
 
 // Send one bodyless request, then a second on the same connection, and require
 // both to be answered with the expected status -- i.e. the connection was kept
 // alive across the first response.
-[[nodiscard]] int expectKeepAlive(asio::io_context& ctx, const asio::ip::tcp::endpoint& endpoint, std::string_view firstRequest, std::string_view secondRequest, std::string_view status, int errBase) {
+[[nodiscard]] int expectKeepAlive(asio::io_context& ctx, const asio::ip::tcp::endpoint& endpoint,
+    std::string_view firstRequest, std::string_view secondRequest, std::string_view status,
+    int errBase) {
     asio::ip::tcp::socket sock(ctx);
     std::error_code ec;
     sock.connect(endpoint, ec);
@@ -70,7 +76,9 @@ void registerRoute(ruvia::detail::RouterImpl& router, ruvia::HttpKnownMethod met
 int main() {
     ruvia::detail::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
-    auto handler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> { co_return c.text("ok"); };
+    auto handler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {
+        co_return c.text("ok");
+    };
     auto identityForbiddenHandler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {
         auto response = c.text("identity is not an acceptable representation");
         response.header("Cache-Control", "no-transform");
@@ -82,19 +90,24 @@ int main() {
         co_return c.body(nullptr);
     };
     registerRoute(routerImpl, ruvia::HttpKnownMethod::kGet, "/only", handler);
-    registerRoute(routerImpl, ruvia::HttpKnownMethod::kGet, "/identity-forbidden", identityForbiddenHandler);
+    registerRoute(
+        routerImpl, ruvia::HttpKnownMethod::kGet, "/identity-forbidden", identityForbiddenHandler);
     registerRoute(routerImpl, ruvia::HttpKnownMethod::kGet, "/empty", noContentHandler);
     routerImpl.finalize();
 
     ruvia::detail::HttpServerOptions options;
 
-    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
+    ruvia::detail::WebWorkerRuntime server(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(),
+        {}, options);
     server.start();
     const auto endpoint = server.localEndpoint();
     asio::io_context ctx;
 
     // 404 (no such path) keeps a bodyless connection alive.
-    if (const int rc = expectKeepAlive(ctx, endpoint, "GET /missing-one HTTP/1.1\r\nHost: localhost\r\n\r\n", "GET /missing-two HTTP/1.1\r\nHost: localhost\r\n\r\n", "HTTP/1.1 404", 1)) {
+    if (const int rc =
+            expectKeepAlive(ctx, endpoint, "GET /missing-one HTTP/1.1\r\nHost: localhost\r\n\r\n",
+                "GET /missing-two HTTP/1.1\r\nHost: localhost\r\n\r\n", "HTTP/1.1 404", 1)) {
         std::fputs("bodyless 404 did not keep the connection alive\n", stderr);
         server.stop();
         server.join();
@@ -102,7 +115,9 @@ int main() {
     }
 
     // 405 (path exists, wrong method) does the same.
-    if (const int rc = expectKeepAlive(ctx, endpoint, "DELETE /only HTTP/1.1\r\nHost: localhost\r\n\r\n", "PUT /only HTTP/1.1\r\nHost: localhost\r\n\r\n", "HTTP/1.1 405", 4)) {
+    if (const int rc =
+            expectKeepAlive(ctx, endpoint, "DELETE /only HTTP/1.1\r\nHost: localhost\r\n\r\n",
+                "PUT /only HTTP/1.1\r\nHost: localhost\r\n\r\n", "HTTP/1.1 405", 4)) {
         std::fputs("bodyless 405 did not keep the connection alive\n", stderr);
         server.stop();
         server.join();
@@ -127,7 +142,10 @@ int main() {
             server.join();
             return 10;
         }
-        asio::write(sock, asio::buffer(std::string_view("GET /missing-after-empty HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+        asio::write(sock,
+            asio::buffer(
+                std::string_view("GET /missing-after-empty HTTP/1.1\r\nHost: localhost\r\n\r\n")),
+            ec);
         if (ec || !readResponseHead(sock, ec).starts_with("HTTP/1.1 404")) {
             std::fputs("connection was not reusable after bodyless negotiated response\n", stderr);
             server.stop();
@@ -145,9 +163,8 @@ int main() {
         std::error_code ec;
         sock.connect(endpoint, ec);
         asio::write(sock,
-            asio::buffer(std::string_view(
-                "GET /identity-forbidden HTTP/1.1\r\nHost: localhost\r\n"
-                "Accept-Encoding: gzip, identity;q=0\r\n\r\n")),
+            asio::buffer(std::string_view("GET /identity-forbidden HTTP/1.1\r\nHost: localhost\r\n"
+                                          "Accept-Encoding: gzip, identity;q=0\r\n\r\n")),
             ec);
         if (!readResponseHead(sock, ec).starts_with("HTTP/1.1 406")) {
             std::fputs("forbidden identity fallback was not converted to 406\n", stderr);

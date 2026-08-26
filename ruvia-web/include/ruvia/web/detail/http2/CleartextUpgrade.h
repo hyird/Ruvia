@@ -27,7 +27,8 @@ enum class CleartextHttp2DispatchResult { kContinueHttp1, kContinueReadLoop, kSe
 // Runtime policy for bytes that reached the HTTP/1 parser but do not look like
 // an HTTP request line. A real HTTP-version token receives the protocol error;
 // obvious non-HTTP traffic is dropped without reflecting an error response.
-[[nodiscard]] inline bool shouldDropInvalidCleartextHttp1Input(std::string_view buffer, Http1ServerRequestParseFailureSource failureSource) noexcept {
+[[nodiscard]] inline bool shouldDropInvalidCleartextHttp1Input(
+    std::string_view buffer, Http1ServerRequestParseFailureSource failureSource) noexcept {
     if (failureSource != Http1ServerRequestParseFailureSource::kRequestLine) {
         return false;
     }
@@ -50,13 +51,15 @@ enum class CleartextHttp2DispatchResult { kContinueHttp1, kContinueReadLoop, kSe
     return !version.starts_with("HTTP/");
 }
 
-[[nodiscard]] inline CleartextHttp2Probe probeCleartextHttp2Preface(std::string_view current, bool autoHttpsEnabled) noexcept {
+[[nodiscard]] inline CleartextHttp2Probe probeCleartextHttp2Preface(
+    std::string_view current, bool autoHttpsEnabled) noexcept {
     if (autoHttpsEnabled || current.empty()) {
         return CleartextHttp2Probe::kHttp1;
     }
 
     if (current.starts_with(kHttp2ClientPreface) || kHttp2ClientPreface.starts_with(current)) {
-        return current.size() >= kHttp2ClientPreface.size() ? CleartextHttp2Probe::kCompletePreface : CleartextHttp2Probe::kNeedMorePreface;
+        return current.size() >= kHttp2ClientPreface.size() ? CleartextHttp2Probe::kCompletePreface
+                                                            : CleartextHttp2Probe::kNeedMorePreface;
     }
 
     if (current.starts_with("PRI ")) {
@@ -68,13 +71,19 @@ enum class CleartextHttp2DispatchResult { kContinueHttp1, kContinueReadLoop, kSe
 // Entry point for a direct HTTP/2 connection (TLS ALPN h2, or a cleartext client
 // preface). Runs the sans-I/O session (the coroutine Http2ServerSession is replaced).
 template <typename Stream>
-Task<void> runHttp2ServerSession(Http2ServerSessionSetup<Stream> setup, std::string_view initialBytes = {}) {
+Task<void> runHttp2ServerSession(
+    Http2ServerSessionSetup<Stream> setup, std::string_view initialBytes = {}) {
     (void)setup.socket;  // the sans-I/O session needs only the (possibly TLS) setup.stream
-    co_await runHttp2SansIoSession(setup.stream, setup.routes, setup.memory, Http2SansIoSessionContext(setup.services, setup.options, setup.scannerEntry, setup.workerState), initialBytes);
+    co_await runHttp2SansIoSession(setup.stream, setup.routes, setup.memory,
+        Http2SansIoSessionContext(
+            setup.services, setup.options, setup.scannerEntry, setup.workerState),
+        initialBytes);
 }
 
 template <typename Stream>
-Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(Http2ServerSessionSetup<Stream> setup, std::pmr::string& readBuffer, std::size_t& usedBytes, bool autoHttpsEnabled) {
+Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
+    Http2ServerSessionSetup<Stream> setup, std::pmr::string& readBuffer, std::size_t& usedBytes,
+    bool autoHttpsEnabled) {
     const auto current = std::string_view(readBuffer.data(), usedBytes);
     switch (probeCleartextHttp2Preface(current, autoHttpsEnabled)) {
         case CleartextHttp2Probe::kHttp1:
@@ -84,7 +93,12 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(Http2ServerSess
             co_return CleartextHttp2DispatchResult::kSessionFinished;
         case CleartextHttp2Probe::kNeedMorePreface: {
             setup.scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
-            auto readCompletion = co_await asyncAsio<std::size_t>([&setup, &readBuffer, usedBytes](auto handler) mutable { setup.stream.async_read_some(asio::buffer(readBuffer.data() + usedBytes, readBuffer.size() - usedBytes), std::move(handler)); });
+            auto readCompletion = co_await asyncAsio<std::size_t>(
+                [&setup, &readBuffer, usedBytes](auto handler) mutable {
+                    setup.stream.async_read_some(
+                        asio::buffer(readBuffer.data() + usedBytes, readBuffer.size() - usedBytes),
+                        std::move(handler));
+                });
             const auto ec = readCompletion.errorCode();
             const auto bytesRead = readCompletion.result();
             if (ec) {

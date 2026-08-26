@@ -28,7 +28,8 @@ using ruvia::detail::setResponseBodyStaticView;
 using ruvia::detail::setResponseBorrowedFileBody;
 using ruvia::detail::setResponseFileBody;
 
-static_assert(std::is_same_v<decltype(responseBody(std::declval<const HttpResponse&>())), const HttpResponseBody&>);
+static_assert(std::is_same_v<decltype(responseBody(std::declval<const HttpResponse&>())),
+    const HttpResponseBody&>);
 static_assert(!std::is_copy_constructible_v<HttpResponseBody>);
 static_assert(std::is_nothrow_move_constructible_v<HttpResponseBody>);
 static_assert(!std::is_move_assignable_v<HttpResponseBody>);
@@ -41,13 +42,25 @@ static_assert(!std::is_default_constructible_v<ruvia::detail::HttpBorrowedRespon
 static_assert(!std::is_default_constructible_v<ruvia::detail::ResponseFileBody>);
 
 template <typename T>
-concept ExposesAnyRvalueResponseBodyBorrow = requires(T&& value) { std::move(value).empty(); } || requires(T&& value) { std::move(value).borrowedBytes(); } || requires(T&& value) { std::move(value).staticBytes(); } || requires(T&& value) { std::move(value).ownedBytes(); } || requires(T&& value) { std::move(value).ownedFile(); } || requires(T&& value) { std::move(value).borrowedFile(); } || requires(T&& value) { std::move(value).bytes(); } || requires(T&& value) { std::move(value).file(); } || requires(T&& value) { std::move(value).nativePathCStr(); };
+concept ExposesAnyRvalueResponseBodyBorrow =
+    requires(T&& value) { std::move(value).empty(); } ||
+    requires(T&& value) { std::move(value).borrowedBytes(); } ||
+    requires(T&& value) { std::move(value).staticBytes(); } ||
+    requires(T&& value) { std::move(value).ownedBytes(); } ||
+    requires(T&& value) { std::move(value).ownedFile(); } ||
+    requires(T&& value) { std::move(value).borrowedFile(); } ||
+    requires(T&& value) { std::move(value).bytes(); } ||
+    requires(T&& value) { std::move(value).file(); } ||
+    requires(T&& value) { std::move(value).nativePathCStr(); };
 
 template <typename T>
-concept ExposesRvalueResponseBodyAccess = requires(T&& response) { responseBody(std::move(response)); } || requires(T&& response) { ruvia::detail::HttpResponseBodyAccess::body(std::move(response)); };
+concept ExposesRvalueResponseBodyAccess = requires(T&& response) {
+    responseBody(std::move(response));
+} || requires(T&& response) { ruvia::detail::HttpResponseBodyAccess::body(std::move(response)); };
 
 template <typename T>
-concept ExposesRvalueResponseFileIdentityWords = requires(T&& identity) { std::move(identity).words(); };
+concept ExposesRvalueResponseFileIdentityWords =
+    requires(T&& identity) { std::move(identity).words(); };
 
 static_assert(!ExposesAnyRvalueResponseBodyBorrow<HttpResponseBody>);
 static_assert(!ExposesAnyRvalueResponseBodyBorrow<ruvia::detail::HttpOwnedResponseBytes>);
@@ -56,7 +69,12 @@ static_assert(!ExposesRvalueResponseBodyAccess<HttpResponse>);
 static_assert(!ExposesRvalueResponseFileIdentityWords<ruvia::detail::ResponseFileIdentity>);
 
 [[nodiscard]] std::size_t activeAlternativeCount(const HttpResponseBody& body) noexcept {
-    return static_cast<std::size_t>(body.empty() != nullptr) + static_cast<std::size_t>(body.borrowedBytes() != nullptr) + static_cast<std::size_t>(body.staticBytes() != nullptr) + static_cast<std::size_t>(body.ownedBytes() != nullptr) + static_cast<std::size_t>(body.ownedFile() != nullptr) + static_cast<std::size_t>(body.borrowedFile() != nullptr);
+    return static_cast<std::size_t>(body.empty() != nullptr) +
+           static_cast<std::size_t>(body.borrowedBytes() != nullptr) +
+           static_cast<std::size_t>(body.staticBytes() != nullptr) +
+           static_cast<std::size_t>(body.ownedBytes() != nullptr) +
+           static_cast<std::size_t>(body.ownedFile() != nullptr) +
+           static_cast<std::size_t>(body.borrowedFile() != nullptr);
 }
 
 template <typename Function>
@@ -180,8 +198,11 @@ RUVIA_TEST(response_body_file_transition_validates_before_replacement) {
     HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.body("preserved");
 
-    RUVIA_CHECK(throwsInvalidArgument([&] { setResponseFileBody(response, std::filesystem::path{}, 10); }));
-    RUVIA_CHECK(throwsInvalidArgument([&] { setResponseFileBody(response, std::filesystem::path("invalid-range.bin"), 10, 8, 3); }));
+    RUVIA_CHECK(
+        throwsInvalidArgument([&] { setResponseFileBody(response, std::filesystem::path{}, 10); }));
+    RUVIA_CHECK(throwsInvalidArgument([&] {
+        setResponseFileBody(response, std::filesystem::path("invalid-range.bin"), 10, 8, 3);
+    }));
     RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
     RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("preserved"));
 }

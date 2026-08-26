@@ -27,7 +27,9 @@ using ruvia::detail::parseRequestTarget;
 using ruvia::detail::RequestTargetView;
 
 template <typename Input>
-concept AcceptsTemporaryRequestTargetInput = requires(Input&& input, RequestTargetView& output) { parseRequestTarget(HttpKnownMethod::kGet, std::forward<Input>(input), output); };
+concept AcceptsTemporaryRequestTargetInput = requires(Input&& input, RequestTargetView& output) {
+    parseRequestTarget(HttpKnownMethod::kGet, std::forward<Input>(input), output);
+};
 
 static_assert(!AcceptsTemporaryRequestTargetInput<std::string>);
 static_assert(!AcceptsTemporaryRequestTargetInput<const std::string>);
@@ -111,10 +113,11 @@ RUVIA_TEST(host_header_rejects_invalid) {
     RUVIA_CHECK(!isValidHostHeader("[::::]"));               // not a valid IPv6 literal
     RUVIA_CHECK(!isValidHostHeader("[1:2:3:4:5:6:7:8:9]"));  // too many 16-bit groups
     RUVIA_CHECK(!isValidHostHeader("[::ffff:999.0.2.128]"));
-    RUVIA_CHECK(!isValidHostHeader("[::ffff:192.168.001.1]"));  // IPv4 dec-octet has no leading zero
-    RUVIA_CHECK(!isValidHostHeader("[v.future]"));              // missing version hex digit
-    RUVIA_CHECK(!isValidHostHeader("[v1.]"));                   // empty future address
-    RUVIA_CHECK(!isValidHostHeader("[v1.a%20b]"));              // pct-encoding is not IPvFuture grammar
+    RUVIA_CHECK(
+        !isValidHostHeader("[::ffff:192.168.001.1]"));  // IPv4 dec-octet has no leading zero
+    RUVIA_CHECK(!isValidHostHeader("[v.future]"));      // missing version hex digit
+    RUVIA_CHECK(!isValidHostHeader("[v1.]"));           // empty future address
+    RUVIA_CHECK(!isValidHostHeader("[v1.a%20b]"));      // pct-encoding is not IPvFuture grammar
     // A zone/scope id is valid to getaddrinfo but not a legal URI host: it must
     // be rejected so a scoped address can never slip into host matching.
     RUVIA_CHECK(!isValidHostHeader("[fe80::1%eth0]"));
@@ -171,17 +174,20 @@ RUVIA_TEST(authority_matches_host_ports_and_case) {
     RUVIA_CHECK(authorityMatchesHost("example.com", "example.com:80", 80));
     RUVIA_CHECK(authorityMatchesHost("example.com:", "example.com", 80));
     RUVIA_CHECK(authorityMatchesHost("exa%6dple.com", "example.com:", 80));
-    RUVIA_CHECK(authorityMatchesHost("EXAMPLE.com", "example.COM", 80));  // host is case-insensitive
-    RUVIA_CHECK(authorityMatchesHost("[::1]:443", "[::1]", 443));         // IPv6 default port
+    RUVIA_CHECK(
+        authorityMatchesHost("EXAMPLE.com", "example.COM", 80));   // host is case-insensitive
+    RUVIA_CHECK(authorityMatchesHost("[::1]:443", "[::1]", 443));  // IPv6 default port
     RUVIA_CHECK(authorityMatchesHost("[v1.future]:", "[V1.FUTURE]", 80));
     RUVIA_CHECK(authorityMatchesHost("example.com", "example.com:", 0));
     RUVIA_CHECK(authorityMatchesHost("example.com:21", "example.com:21", 0));
 }
 
 RUVIA_TEST(authority_matches_host_rejects_mismatches) {
-    RUVIA_CHECK(!authorityMatchesHost("example.com:8080", "example.com", 80));     // port mismatch vs default
-    RUVIA_CHECK(!authorityMatchesHost("example.com", "other.com", 80));            // host mismatch
-    RUVIA_CHECK(!authorityMatchesHost("example.com:8080", "example.com:80", 80));  // explicit port mismatch
+    RUVIA_CHECK(
+        !authorityMatchesHost("example.com:8080", "example.com", 80));   // port mismatch vs default
+    RUVIA_CHECK(!authorityMatchesHost("example.com", "other.com", 80));  // host mismatch
+    RUVIA_CHECK(
+        !authorityMatchesHost("example.com:8080", "example.com:80", 80));  // explicit port mismatch
     RUVIA_CHECK(!authorityMatchesHost("evil.com", "example.com", 80));
     RUVIA_CHECK(!authorityMatchesHost("example.com", "example.com:0", 0));
     RUVIA_CHECK(!authorityMatchesHost("example.com", "example.com:21", 0));
@@ -242,7 +248,8 @@ RUVIA_TEST(parse_request_target_absolute_form) {
     RUVIA_CHECK_EQ(out.defaultPort, std::uint16_t{0});
     RUVIA_CHECK(out.form == HttpRequestTargetForm::kAbsolute);
 
-    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "custom://user:secret@example.com/resource", out));
+    RUVIA_CHECK(parseRequestTarget(
+        HttpKnownMethod::kGet, "custom://user:secret@example.com/resource", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("/resource"));
     // RFC 9112 section 3.2 excludes userinfo from the effective Host value.
     RUVIA_CHECK_EQ(out.authority, std::string_view("example.com"));
@@ -331,15 +338,19 @@ RUVIA_TEST(parse_request_target_asterisk_and_rejections) {
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "*", out));
     // Empty, control/whitespace bytes and fragments are rejected.
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "", out));
-    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/pa th", out));                        // space
-    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/path#frag", out));                    // '#' fragment
-    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad\\path", out));                    // backslash
-    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, std::string_view("/a\r\nb", 5), out));  // CRLF
-    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad%zz", out));                       // malformed pct-encoded
-    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad%", out));                         // truncated pct-encoded
-    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad%2", out));                        // truncated pct-encoded
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/pa th", out));      // space
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/path#frag", out));  // '#' fragment
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad\\path", out));  // backslash
+    RUVIA_CHECK(
+        !parseRequestTarget(HttpKnownMethod::kGet, std::string_view("/a\r\nb", 5), out));  // CRLF
+    RUVIA_CHECK(
+        !parseRequestTarget(HttpKnownMethod::kGet, "/bad%zz", out));        // malformed pct-encoded
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad%", out));  // truncated pct-encoded
+    RUVIA_CHECK(
+        !parseRequestTarget(HttpKnownMethod::kGet, "/bad%2", out));  // truncated pct-encoded
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/raw{brace}", out));
-    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, std::string_view("/caf\xC3\xA9", 6), out));
+    RUVIA_CHECK(
+        !parseRequestTarget(HttpKnownMethod::kGet, std::string_view("/caf\xC3\xA9", 6), out));
     RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "/ok%2F?q=%7B%7D", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("/ok%2F"));
     RUVIA_CHECK_EQ(out.query, std::string_view("q=%7B%7D"));
@@ -354,20 +365,23 @@ RUVIA_TEST(request_target_bytes_reject_smuggling_and_control_chars) {
     RUVIA_CHECK(isValidRequestTargetBytes("/a/b/c"));
     RUVIA_CHECK(isValidRequestTargetBytes("http://[::1]/x?y=1"));
 
-    RUVIA_CHECK(!isValidRequestTargetBytes(""));                            // empty is never a valid target
-    RUVIA_CHECK(!isValidRequestTargetBytes("/a b"));                        // raw space (0x20) splits the request line
-    RUVIA_CHECK(!isValidRequestTargetBytes("/a\tb"));                       // HTAB is a control char
-    RUVIA_CHECK(!isValidRequestTargetBytes("/a\rb"));                       // CR -- header/line injection
-    RUVIA_CHECK(!isValidRequestTargetBytes("/a\nb"));                       // LF -- request smuggling
+    RUVIA_CHECK(!isValidRequestTargetBytes(""));       // empty is never a valid target
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a b"));   // raw space (0x20) splits the request line
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a\tb"));  // HTAB is a control char
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a\rb"));  // CR -- header/line injection
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a\nb"));  // LF -- request smuggling
     RUVIA_CHECK(!isValidRequestTargetBytes(std::string_view("/a\0b", 4)));  // NUL
+    RUVIA_CHECK(!isValidRequestTargetBytes(
+        "/a\x7f"
+        "b"));  // DEL (0x7F); split literal so 'b' is not eaten by the hex escape
     RUVIA_CHECK(
-        !isValidRequestTargetBytes("/a\x7f"
-                                   "b"));                    // DEL (0x7F); split literal so 'b' is not eaten by the hex escape
-    RUVIA_CHECK(!isValidRequestTargetBytes("/page#frag"));   // '#' -- fragment must not reach the origin
-    RUVIA_CHECK(!isValidRequestTargetBytes("/a\\b"));        // backslash -- path-normalization confusion
-    RUVIA_CHECK(!isValidRequestTargetBytes("/raw{brace}"));  // not in the RFC 3986 URI character set
+        !isValidRequestTargetBytes("/page#frag"));     // '#' -- fragment must not reach the origin
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a\\b"));  // backslash -- path-normalization confusion
+    RUVIA_CHECK(
+        !isValidRequestTargetBytes("/raw{brace}"));  // not in the RFC 3986 URI character set
     RUVIA_CHECK(!isValidRequestTargetBytes("/raw|pipe"));
-    RUVIA_CHECK(!isValidRequestTargetBytes(std::string_view("/caf\xC3\xA9", 6)));  // raw UTF-8 must be encoded
+    RUVIA_CHECK(!isValidRequestTargetBytes(
+        std::string_view("/caf\xC3\xA9", 6)));  // raw UTF-8 must be encoded
 }
 
 RUVIA_TEST(request_target_bytes_validate_percent_encoding) {
@@ -399,7 +413,8 @@ RUVIA_TEST(origin_form_target_shape) {
     RUVIA_CHECK(!isValidOriginFormTarget("*/"));          // '*' is valid only as the whole target
     RUVIA_CHECK(!isValidOriginFormTarget("/bad path"));   // inherits byte validation (raw space)
     RUVIA_CHECK(!isValidOriginFormTarget("/x#y"));        // inherits fragment rejection
-    RUVIA_CHECK(!isValidOriginFormTarget("/[x]"));        // brackets belong only to an IP-literal authority
-    RUVIA_CHECK(!isValidOriginFormTarget("/?q={x}"));     // braces must be percent-encoded
+    RUVIA_CHECK(
+        !isValidOriginFormTarget("/[x]"));  // brackets belong only to an IP-literal authority
+    RUVIA_CHECK(!isValidOriginFormTarget("/?q={x}"));  // braces must be percent-encoded
     RUVIA_CHECK(isValidOriginFormTarget("/!$&'()*+,-._~:@/x?y=/?:@"));
 }

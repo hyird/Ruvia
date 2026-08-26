@@ -12,14 +12,20 @@ namespace ruvia::detail {
 enum class HttpTeFieldValidationMode { kRecipient, kClientCapability };
 
 [[nodiscard]] inline bool httpIsClientSupportedTeTransferCoding(std::string_view coding) noexcept {
-    return httpAsciiEqualsIgnoreCase(coding, "gzip") || httpAsciiEqualsIgnoreCase(coding, "x-gzip") || httpAsciiEqualsIgnoreCase(coding, "deflate");
+    return httpAsciiEqualsIgnoreCase(coding, "gzip") ||
+           httpAsciiEqualsIgnoreCase(coding, "x-gzip") ||
+           httpAsciiEqualsIgnoreCase(coding, "deflate");
 }
 
 [[nodiscard]] inline bool httpTeCodingAllowsOnlyQualityParameter(std::string_view coding) noexcept {
-    return httpAsciiEqualsIgnoreCase(coding, "compress") || httpAsciiEqualsIgnoreCase(coding, "gzip") || httpAsciiEqualsIgnoreCase(coding, "x-gzip") || httpAsciiEqualsIgnoreCase(coding, "deflate");
+    return httpAsciiEqualsIgnoreCase(coding, "compress") ||
+           httpAsciiEqualsIgnoreCase(coding, "gzip") ||
+           httpAsciiEqualsIgnoreCase(coding, "x-gzip") ||
+           httpAsciiEqualsIgnoreCase(coding, "deflate");
 }
 
-[[nodiscard]] inline bool httpTeParametersAreValid(std::string_view item, HttpTeFieldValidationMode mode, bool onlyQualityParameter) noexcept {
+[[nodiscard]] inline bool httpTeParametersAreValid(
+    std::string_view item, HttpTeFieldValidationMode mode, bool onlyQualityParameter) noexcept {
     auto start = httpFindUnquotedDelimiter(item, 0, ';');
     if (start >= item.size()) {
         return true;
@@ -40,7 +46,8 @@ enum class HttpTeFieldValidationMode { kRecipient, kClientCapability };
         const auto name = httpTrimOws(rawName);
         const auto value = httpTrimOws(rawValue);
         if (httpAsciiEqualsIgnoreCase(name, "q")) {
-            if (qualitySeen || rawName != name || rawValue != value || httpParseQualityValue(value) < 0) {
+            if (qualitySeen || rawName != name || rawValue != value ||
+                httpParseQualityValue(value) < 0) {
                 return false;
             }
             qualitySeen = true;
@@ -57,7 +64,8 @@ enum class HttpTeFieldValidationMode { kRecipient, kClientCapability };
     return true;
 }
 
-[[nodiscard]] inline bool isValidHttpTeFieldItem(std::string_view item, HttpTeFieldValidationMode mode) noexcept {
+[[nodiscard]] inline bool isValidHttpTeFieldItem(
+    std::string_view item, HttpTeFieldValidationMode mode) noexcept {
     std::string_view coding;
     bool hasParameters = false;
     if (!httpParseTransferCodingSyntax(item, coding, hasParameters)) {
@@ -69,13 +77,15 @@ enum class HttpTeFieldValidationMode { kRecipient, kClientCapability };
     if (httpAsciiEqualsIgnoreCase(coding, "chunked")) {
         return false;
     }
-    if (mode == HttpTeFieldValidationMode::kClientCapability && !httpIsClientSupportedTeTransferCoding(coding)) {
+    if (mode == HttpTeFieldValidationMode::kClientCapability &&
+        !httpIsClientSupportedTeTransferCoding(coding)) {
         return false;
     }
     return httpTeParametersAreValid(item, mode, httpTeCodingAllowsOnlyQualityParameter(coding));
 }
 
-[[nodiscard]] inline bool isValidHttpTeFieldValue(std::string_view value, HttpTeFieldValidationMode mode) noexcept {
+[[nodiscard]] inline bool isValidHttpTeFieldValue(
+    std::string_view value, HttpTeFieldValidationMode mode) noexcept {
     // RFC 9112 section 7.4 explicitly permits an empty TE field. It advertises
     // no optional transfer coding; chunked remains implicitly acceptable.
     if (httpTrimOws(value).empty()) {
@@ -84,14 +94,15 @@ enum class HttpTeFieldValidationMode { kRecipient, kClientCapability };
 
     bool valid = true;
     bool sawItem = false;
-    httpVisitCommaSeparatedQuotedItems(value, [&valid, &sawItem, mode](std::string_view item) noexcept {
-        sawItem = true;
-        if (!isValidHttpTeFieldItem(item, mode)) {
-            valid = false;
-            return false;
-        }
-        return true;
-    });
+    httpVisitCommaSeparatedQuotedItems(
+        value, [&valid, &sawItem, mode](std::string_view item) noexcept {
+            sawItem = true;
+            if (!isValidHttpTeFieldItem(item, mode)) {
+                valid = false;
+                return false;
+            }
+            return true;
+        });
     return valid && sawItem;
 }
 

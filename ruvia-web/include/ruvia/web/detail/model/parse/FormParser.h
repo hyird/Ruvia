@@ -63,7 +63,8 @@ template <typename NumberT>
             return std::nullopt;
         }
     } else {
-        const auto [ptr, ec] = std::from_chars(decoded.data(), decoded.data() + decoded.size(), parsed);
+        const auto [ptr, ec] =
+            std::from_chars(decoded.data(), decoded.data() + decoded.size(), parsed);
         if (ec != std::errc{} || ptr != decoded.data() + decoded.size()) {
             return std::nullopt;
         }
@@ -72,18 +73,16 @@ template <typename NumberT>
 }
 
 template <typename T>
-[[nodiscard]] std::optional<T> parseFormValue(
-    ResolvedPmrResourceTag,
-    std::string_view input,
-    FormValueEncoding encoding,
-    std::pmr::memory_resource* resource,
+[[nodiscard]] std::optional<T> parseFormValue(ResolvedPmrResourceTag, std::string_view input,
+    FormValueEncoding encoding, std::pmr::memory_resource* resource,
     ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) {
     using FieldT = std::remove_cvref_t<T>;
 
     std::optional<std::pmr::string> decodedStorage;
     auto decoded = input;
     if (encoding == FormValueEncoding::kUrlEncoded && hasFormEncoding(input)) {
-        decodedStorage = decodeUrlComponent(input, {.mode = UrlDecodeMode::kForm, .resource = resource});
+        decodedStorage =
+            decodeUrlComponent(input, {.mode = UrlDecodeMode::kForm, .resource = resource});
         if (!decodedStorage.has_value()) {
             return std::nullopt;
         }
@@ -126,12 +125,11 @@ template <typename T>
 }
 
 template <typename T>
-[[nodiscard]] std::optional<T> parseFormValue(
-    std::string_view input,
-    FormValueEncoding encoding,
+[[nodiscard]] std::optional<T> parseFormValue(std::string_view input, FormValueEncoding encoding,
     std::pmr::memory_resource* resource,
     ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) {
-    return parseFormValue<T>(ResolvedPmrResourceTag{}, input, encoding, pmrResourceOrDefault(resource), stringStorage);
+    return parseFormValue<T>(
+        ResolvedPmrResourceTag{}, input, encoding, pmrResourceOrDefault(resource), stringStorage);
 }
 
 }  // namespace ruvia::detail

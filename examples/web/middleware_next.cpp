@@ -7,7 +7,8 @@
 #include <utility>
 
 template <typename T>
-concept HasStorableNextAwaiter = requires(T& next) { requires std::is_move_constructible_v<decltype(next().operator co_await())>; };
+concept HasStorableNextAwaiter = requires(
+    T& next) { requires std::is_move_constructible_v<decltype(next().operator co_await())>; };
 
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
@@ -26,7 +27,8 @@ public:
     }
 };
 
-class ReusedNextAwaitableMiddleware final : public ruvia::Middleware<ReusedNextAwaitableMiddleware> {
+class ReusedNextAwaitableMiddleware final
+    : public ruvia::Middleware<ReusedNextAwaitableMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
         auto downstream = next();
@@ -53,6 +55,7 @@ private:
 int main() {
     ruvia::app()
         .listen({.address = "0.0.0.0", .http = 8089})
-        .server({.workerCount = 1, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .server({.workerCount = 1,
+            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
         .run();
 }

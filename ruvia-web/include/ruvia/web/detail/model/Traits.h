@@ -93,8 +93,9 @@ template <typename T>
 struct ResponseModel<T, void> : std::true_type {};
 
 template <typename T>
-struct RuviaRequestModelFieldTraits
-    : std::bool_constant<isRuviaString<T> || isRuviaScalar<T> || JsonBody<std::remove_cvref_t<T>>::value> {};
+struct RuviaRequestModelFieldTraits : std::bool_constant<isRuviaString<T> || isRuviaScalar<T> ||
+                                                         JsonBody<std::remove_cvref_t<T>>::value> {
+};
 
 template <typename ValueT>
 struct RuviaRequestModelFieldTraits<std::pmr::vector<ValueT>>
@@ -105,7 +106,8 @@ struct RuviaRequestModelFieldTraits<BoxedArray<ValueT>>
     : RuviaRequestModelFieldTraits<std::remove_cvref_t<ValueT>> {};
 
 template <typename T>
-inline constexpr bool isRequestModelField = RuviaRequestModelFieldTraits<std::remove_cvref_t<T>>::value;
+inline constexpr bool isRequestModelField =
+    RuviaRequestModelFieldTraits<std::remove_cvref_t<T>>::value;
 
 template <typename T>
 inline constexpr bool isRequestModel = JsonBody<std::remove_cvref_t<T>>::value;
@@ -126,7 +128,8 @@ struct RuviaResponseModelFieldTraits<BoxedArray<ValueT>>
     : RuviaResponseModelFieldTraits<std::remove_cvref_t<ValueT>> {};
 
 template <typename T>
-inline constexpr bool isResponseModelField = RuviaResponseModelFieldTraits<std::remove_cvref_t<T>>::value;
+inline constexpr bool isResponseModelField =
+    RuviaResponseModelFieldTraits<std::remove_cvref_t<T>>::value;
 
 template <typename T>
 [[nodiscard]] T makeRequestValue(ResolvedPmrResourceTag, std::pmr::memory_resource* resource) {
@@ -147,7 +150,8 @@ template <typename T>
 
 template <typename T>
 [[nodiscard]] T makeRequestValue(std::pmr::memory_resource* resource) {
-    if constexpr (isRuviaString<T> || isRuviaArray<T> || isRuviaBoxedArray<T> || isRequestModel<T> || isResponseModel<T>) {
+    if constexpr (isRuviaString<T> || isRuviaArray<T> || isRuviaBoxedArray<T> ||
+                  isRequestModel<T> || isResponseModel<T>) {
         return makeRequestValue<T>(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource));
     } else {
         (void)resource;
