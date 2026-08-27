@@ -73,9 +73,11 @@ public:
     const HttpClientResponseHeaderRepeated* repeated() const&& = delete;
 
 private:
-    friend HttpClientResponseHeaderLookupResult lookupUniqueHttpClientResponseHeader(const HttpClientResponseHead&, std::string_view) noexcept;
+    friend HttpClientResponseHeaderLookupResult lookupUniqueHttpClientResponseHeader(
+        const HttpClientResponseHead&, std::string_view) noexcept;
 
-    using Value = std::variant<HttpClientResponseHeaderAbsent, HttpClientResponseHeaderFound, HttpClientResponseHeaderRepeated>;
+    using Value = std::variant<HttpClientResponseHeaderAbsent, HttpClientResponseHeaderFound,
+        HttpClientResponseHeaderRepeated>;
 
     template <typename Result>
     explicit constexpr HttpClientResponseHeaderLookupResult(Result result) noexcept
@@ -85,7 +87,8 @@ private:
         return HttpClientResponseHeaderLookupResult(HttpClientResponseHeaderAbsent());
     }
 
-    [[nodiscard]] static constexpr HttpClientResponseHeaderLookupResult makeFound(std::string_view value) noexcept {
+    [[nodiscard]] static constexpr HttpClientResponseHeaderLookupResult makeFound(
+        std::string_view value) noexcept {
         return HttpClientResponseHeaderLookupResult(HttpClientResponseHeaderFound(value));
     }
 
@@ -96,8 +99,10 @@ private:
     Value value_;
 };
 
-[[nodiscard]] HttpClientResponseHeaderLookupResult lookupUniqueHttpClientResponseHeader(const HttpClientResponseHead& head, std::string_view name) noexcept;
-[[nodiscard]] HttpClientResponseHeaderLookupResult lookupUniqueHttpClientResponseHeader(const HttpClientResponseHead&& head, std::string_view name) = delete;
+[[nodiscard]] HttpClientResponseHeaderLookupResult lookupUniqueHttpClientResponseHeader(
+    const HttpClientResponseHead& head, std::string_view name) noexcept;
+[[nodiscard]] HttpClientResponseHeaderLookupResult lookupUniqueHttpClientResponseHeader(
+    const HttpClientResponseHead&& head, std::string_view name) = delete;
 
 enum class HttpClientRedirectContentDisposition : std::uint8_t {
     kPreserve,
@@ -125,20 +130,25 @@ public:
     }
     std::string_view method() const&& = delete;
 
-    [[nodiscard]] constexpr HttpClientRedirectContentDisposition contentDisposition() const noexcept {
+    [[nodiscard]] constexpr HttpClientRedirectContentDisposition contentDisposition()
+        const noexcept {
         return contentDisposition_;
     }
 
 private:
-    friend HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequestView&, HttpClientRedirectRequestPlanOptions);
+    friend HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
+        const HttpClientRequestView&, HttpClientRedirectRequestPlanOptions);
 
-    HttpClientRedirectRequestPlan(std::string_view method, HttpClientRedirectContentDisposition contentDisposition, std::pmr::memory_resource* resource);
+    HttpClientRedirectRequestPlan(std::string_view method,
+        HttpClientRedirectContentDisposition contentDisposition,
+        std::pmr::memory_resource* resource);
 
     std::pmr::string method_;
     HttpClientRedirectContentDisposition contentDisposition_;
 };
 
-[[nodiscard]] HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequestView& request, HttpClientRedirectRequestPlanOptions options);
+[[nodiscard]] HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
+    const HttpClientRequestView& request, HttpClientRedirectRequestPlanOptions options);
 
 // This classification has no alternative-specific payload, so an enum is the
 // complete result rather than a status coupled to unrelated fields.
@@ -148,7 +158,8 @@ enum class HttpClientOriginAuthorityStatus : std::uint8_t {
     kInvalidAuthority,
 };
 
-[[nodiscard]] HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(const HttpOriginView& origin, std::string_view authority) noexcept;
+[[nodiscard]] HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(
+    const HttpOriginView& origin, std::string_view authority) noexcept;
 
 enum class HttpClientRedirectResolutionError : std::uint8_t {
     kInvalidCurrentTarget,
@@ -212,7 +223,8 @@ public:
 private:
     friend class HttpClientRedirectResolutionResult;
 
-    HttpClientResolvedRedirect(HttpScheme scheme, std::pmr::string host, std::uint16_t port, std::pmr::string target, bool crossOrigin) noexcept
+    HttpClientResolvedRedirect(HttpScheme scheme, std::pmr::string host, std::uint16_t port,
+        std::pmr::string target, bool crossOrigin) noexcept
         : scheme_(scheme),
           host_(std::move(host)),
           port_(port),
@@ -235,7 +247,8 @@ public:
 private:
     friend class HttpClientRedirectResolutionResult;
 
-    explicit constexpr HttpClientRedirectResolutionFailure(HttpClientRedirectResolutionError error) noexcept
+    explicit constexpr HttpClientRedirectResolutionFailure(
+        HttpClientRedirectResolutionError error) noexcept
         : error_(error) {}
 
     HttpClientRedirectResolutionError error_;
@@ -249,7 +262,8 @@ private:
 class HttpClientRedirectResolutionResult final {
 public:
     HttpClientRedirectResolutionResult(const HttpClientRedirectResolutionResult&) = delete;
-    HttpClientRedirectResolutionResult& operator=(const HttpClientRedirectResolutionResult&) = delete;
+    HttpClientRedirectResolutionResult& operator=(
+        const HttpClientRedirectResolutionResult&) = delete;
     HttpClientRedirectResolutionResult(HttpClientRedirectResolutionResult&&) noexcept = default;
     HttpClientRedirectResolutionResult& operator=(HttpClientRedirectResolutionResult&&) = delete;
 
@@ -264,27 +278,34 @@ public:
     const HttpClientRedirectResolutionFailure* failure() const&& = delete;
 
 private:
-    friend HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOriginView&, HttpClientRedirectTargetOptions);
+    friend HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(
+        const HttpOriginView&, HttpClientRedirectTargetOptions);
 
     using Value = std::variant<HttpClientResolvedRedirect, HttpClientRedirectResolutionFailure>;
 
     explicit HttpClientRedirectResolutionResult(HttpClientResolvedRedirect resolved) noexcept
         : value_(std::move(resolved)) {}
 
-    explicit constexpr HttpClientRedirectResolutionResult(HttpClientRedirectResolutionFailure failure) noexcept
+    explicit constexpr HttpClientRedirectResolutionResult(
+        HttpClientRedirectResolutionFailure failure) noexcept
         : value_(failure) {}
 
-    [[nodiscard]] static HttpClientRedirectResolutionResult makeResolved(HttpScheme scheme, std::pmr::string host, std::uint16_t port, std::pmr::string target, bool crossOrigin) noexcept {
-        return HttpClientRedirectResolutionResult(HttpClientResolvedRedirect(scheme, std::move(host), port, std::move(target), crossOrigin));
+    [[nodiscard]] static HttpClientRedirectResolutionResult makeResolved(HttpScheme scheme,
+        std::pmr::string host, std::uint16_t port, std::pmr::string target,
+        bool crossOrigin) noexcept {
+        return HttpClientRedirectResolutionResult(HttpClientResolvedRedirect(
+            scheme, std::move(host), port, std::move(target), crossOrigin));
     }
 
-    [[nodiscard]] static constexpr HttpClientRedirectResolutionResult makeFailure(HttpClientRedirectResolutionError error) noexcept {
+    [[nodiscard]] static constexpr HttpClientRedirectResolutionResult makeFailure(
+        HttpClientRedirectResolutionError error) noexcept {
         return HttpClientRedirectResolutionResult(HttpClientRedirectResolutionFailure(error));
     }
 
     Value value_;
 };
 
-[[nodiscard]] HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOriginView& origin, HttpClientRedirectTargetOptions options);
+[[nodiscard]] HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(
+    const HttpOriginView& origin, HttpClientRedirectTargetOptions options);
 
 }  // namespace ruvia

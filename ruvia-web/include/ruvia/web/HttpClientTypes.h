@@ -48,7 +48,8 @@ struct HttpClientConfig final {
     std::optional<std::chrono::milliseconds> acquireTimeout{5000};
     std::size_t maxResponseBytes{16 * 1024 * 1024};
     HttpClientProtocol protocol{HttpClientProtocol::kNegotiate};
-    HttpClientTlsPeerVerificationPolicy tlsPeerVerification{HttpClientTlsPeerVerificationPolicy::kVerify};
+    HttpClientTlsPeerVerificationPolicy tlsPeerVerification{
+        HttpClientTlsPeerVerificationPolicy::kVerify};
     TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
     TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kEnable};
     HttpClientReceivedCookiePolicy receivedCookies{HttpClientReceivedCookiePolicy::kIgnore};
@@ -79,9 +80,12 @@ public:
     };
 
     HttpClientError(Code code, std::string message)
-        : std::runtime_error(std::move(message)), code_(code) {}
+        : std::runtime_error(std::move(message)),
+          code_(code) {}
 
-    [[nodiscard]] Code code() const noexcept { return code_; }
+    [[nodiscard]] Code code() const noexcept {
+        return code_;
+    }
 
 private:
     Code code_;

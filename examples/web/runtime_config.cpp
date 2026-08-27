@@ -56,7 +56,9 @@ int main() {
     app.loadDotenv();
     app.use<GlobalHeaderMiddleware>();
 
-    const auto httpPort = app.env().get<std::uint16_t>("RUVIA_HTTP_PORT").value_or(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8087));
+    const auto httpPort = app.env()
+                              .get<std::uint16_t>("RUVIA_HTTP_PORT")
+                              .value_or(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8087));
     app.server({
         .workerCount = app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
         .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,
@@ -69,19 +71,21 @@ int main() {
         .maxRequestsPerConnection = 1000,
         .maxBufferedBodyBytes = 16 * 1024 * 1024,
         .maxWebSocketMessageBytes = 16 * 1024 * 1024,
-        .memoryPool = {
-            .requestInitialBufferBytes = 4096,
-        },
+        .memoryPool =
+            {
+                .requestInitialBufferBytes = 4096,
+            },
     });
     if (app.env().get<bool>("RUVIA_GZIP").value_or(false)) {
         app.compression({});
     }
     if (app.env().get<bool>("RUVIA_CORS").value_or(false)) {
         app.cors({
-            .requestHeaders = {
-                .mode = ruvia::CorsRequestHeadersMode::kFixed,
-                .names = {"content-type", "authorization"},
-            },
+            .requestHeaders =
+                {
+                    .mode = ruvia::CorsRequestHeadersMode::kFixed,
+                    .names = {"content-type", "authorization"},
+                },
             .maxAge = std::chrono::seconds(600),
         });
     }
@@ -95,11 +99,12 @@ int main() {
             .address = "0.0.0.0",
             .http = httpPort,
             .https = app.env().get<std::uint16_t>("RUVIA_HTTPS_PORT").value_or(8443),
-            .tls = {
-                .certificateChainFile = cert,
-                .privateKeyFile = key,
-                .privateKeyPassword = password,
-            },
+            .tls =
+                {
+                    .certificateChainFile = cert,
+                    .privateKeyFile = key,
+                    .privateKeyPassword = password,
+                },
             .autoHttpsRedirect = app.env().get<bool>("RUVIA_AUTO_HTTPS").value_or(false),
         };
         const auto verifyFile = pathOrEmpty(app.env().get("RUVIA_TLS_VERIFY_FILE"));

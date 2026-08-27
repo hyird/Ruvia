@@ -59,13 +59,22 @@ public:
     RUVIA_GET("/deadline", deadline, ruvia::Deadline<100>);
     // Unparameterized and parameterized entries in ONE list: both are types, so
     // the typename pack takes them together and a bare name needs no braces.
-    RUVIA_POST("/mixed", mixed, ConfiguredByType<2>, PlainMiddleware, ruvia::BodyLimit<32>, ruvia::RateLimit<10, 1000>);
+    RUVIA_POST("/mixed", mixed, ConfiguredByType<2>, PlainMiddleware, ruvia::BodyLimit<32>,
+        ruvia::RateLimit<10, 1000>);
     RUVIA_ROUTES_END
 private:
-    ruvia::Task<ruvia::HttpResponse> one(ruvia::Context& c) { co_return c.text("one"); }
-    ruvia::Task<ruvia::HttpResponse> two(ruvia::Context& c) { co_return c.text("two"); }
-    ruvia::Task<ruvia::HttpResponse> limited(ruvia::Context& c) { co_return c.text("limited"); }
-    ruvia::Task<ruvia::HttpResponse> deadline(ruvia::Context& c) { co_return c.text("deadline"); }
+    ruvia::Task<ruvia::HttpResponse> one(ruvia::Context& c) {
+        co_return c.text("one");
+    }
+    ruvia::Task<ruvia::HttpResponse> two(ruvia::Context& c) {
+        co_return c.text("two");
+    }
+    ruvia::Task<ruvia::HttpResponse> limited(ruvia::Context& c) {
+        co_return c.text("limited");
+    }
+    ruvia::Task<ruvia::HttpResponse> deadline(ruvia::Context& c) {
+        co_return c.text("deadline");
+    }
 
     ruvia::Task<ruvia::HttpResponse> small(ruvia::Context& c) {
         const auto body = co_await c.req().text();
@@ -93,7 +102,8 @@ RUVIA_TEST(route_middleware_carries_its_configuration_in_the_type) {
     // its argument list -- but pasting __VA_ARGS__ back into the template
     // argument list rejoins them, which is why no wrapper type is needed.
     const auto two = app.request(ruvia::TestRequest::get("/route-config/two"));
-    RUVIA_CHECK_EQ(two.header("X-Config-Pair").value_or(std::string_view{}), std::string_view("ok"));
+    RUVIA_CHECK_EQ(
+        two.header("X-Config-Pair").value_or(std::string_view{}), std::string_view("ok"));
 }
 
 RUVIA_TEST(route_rate_limit_is_configured_without_a_generated_type) {
@@ -107,25 +117,29 @@ RUVIA_TEST(route_rate_limit_is_configured_without_a_generated_type) {
     }
     const auto rejected = app.request(ruvia::TestRequest::get("/route-config/limited"));
     RUVIA_CHECK_EQ(rejected.status(), ruvia::http_status::kTooManyRequests);
-    RUVIA_CHECK_EQ(rejected.header("X-RateLimit-Limit").value_or(std::string_view{}), std::string_view("10"));
+    RUVIA_CHECK_EQ(
+        rejected.header("X-RateLimit-Limit").value_or(std::string_view{}), std::string_view("10"));
 }
 
 RUVIA_TEST(route_body_limit_is_declared_through_the_type) {
     ruvia::TestApp app;
 
     // Within the route's ceiling.
-    const auto small = app.request(ruvia::TestRequest::post("/route-config/small").body("0123456789"));
+    const auto small =
+        app.request(ruvia::TestRequest::post("/route-config/small").body("0123456789"));
     RUVIA_CHECK_EQ(small.status(), ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(small.body(), std::string_view("0123456789"));
 
     // A sibling route without the declaration keeps the app-wide ceiling, so
     // the same body that the limited route would reject is fine here.
     const auto oversizeForRoute = std::string(64, 'x');
-    const auto unlimited = app.request(ruvia::TestRequest::post("/route-config/default").body(oversizeForRoute));
+    const auto unlimited =
+        app.request(ruvia::TestRequest::post("/route-config/default").body(oversizeForRoute));
     RUVIA_CHECK_EQ(unlimited.status(), ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(unlimited.body().size(), std::size_t{64});
 
-    const auto rejected = app.request(ruvia::TestRequest::post("/route-config/small").body(oversizeForRoute));
+    const auto rejected =
+        app.request(ruvia::TestRequest::post("/route-config/small").body(oversizeForRoute));
     RUVIA_CHECK_EQ(rejected.status(), ruvia::http_status::kContentTooLarge);
 }
 
@@ -147,5 +161,6 @@ RUVIA_TEST(route_middleware_list_mixes_bare_and_parameterized_types) {
     RUVIA_CHECK_EQ(response.body(), std::string_view("mixed"));
     // The bare entry ran alongside the parameterized ones.
     RUVIA_CHECK_EQ(response.header("X-Plain").value_or(std::string_view{}), std::string_view("on"));
-    RUVIA_CHECK_EQ(response.header("X-Config").value_or(std::string_view{}), std::string_view("two"));
+    RUVIA_CHECK_EQ(
+        response.header("X-Config").value_or(std::string_view{}), std::string_view("two"));
 }

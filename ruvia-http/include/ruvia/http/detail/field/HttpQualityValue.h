@@ -52,7 +52,8 @@ namespace ruvia::detail {
         }
         const auto rawName = part.substr(0, equals);
         const auto rawValue = part.substr(equals + 1);
-        return !rawName.empty() && !rawValue.empty() && rawName == httpTrimOws(rawName) && rawValue == httpTrimOws(rawValue);
+        return !rawName.empty() && !rawValue.empty() && rawName == httpTrimOws(rawName) &&
+               rawValue == httpTrimOws(rawValue);
     });
 }
 
@@ -67,22 +68,25 @@ namespace ruvia::detail {
     int quality = 1000;
     bool qualitySeen = false;
     bool valid = true;
-    httpVisitSemicolonParametersQuoted(value, [&quality, &qualitySeen, &valid](std::string_view name, std::string_view parameter) noexcept {
-        if (httpAsciiEqualsIgnoreCase(name, "q")) {
-            if (qualitySeen) {
-                valid = false;
-                return false;
+    httpVisitSemicolonParametersQuoted(
+        value, [&quality, &qualitySeen, &valid](
+                   std::string_view name, std::string_view parameter) noexcept {
+            if (httpAsciiEqualsIgnoreCase(name, "q")) {
+                if (qualitySeen) {
+                    valid = false;
+                    return false;
+                }
+                qualitySeen = true;
+                const auto parsed = httpParseQualityValue(parameter);
+                quality = parsed < 0 ? 0 : parsed;
             }
-            qualitySeen = true;
-            const auto parsed = httpParseQualityValue(parameter);
-            quality = parsed < 0 ? 0 : parsed;
-        }
-        return true;
-    });
+            return true;
+        });
     return valid ? quality : 0;
 }
 
-[[nodiscard]] inline std::string_view httpHeaderTokenBeforeParameters(std::string_view value) noexcept {
+[[nodiscard]] inline std::string_view httpHeaderTokenBeforeParameters(
+    std::string_view value) noexcept {
     const auto semicolon = value.find(';');
     return httpTrimOws(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
 }

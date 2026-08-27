@@ -33,7 +33,8 @@ inline constexpr std::size_t kMaxPatternMatchSteps = 1'000'000;
 // negateClass flag (applied once in matchPatternAtom). Treating a leading '^' as
 // negation here as well would double-negate a class whose first literal member is
 // itself a caret (e.g. "[^^]"), so any '^' in the body is an ordinary member.
-[[nodiscard]] constexpr bool matchPatternClass(std::string_view pattern, std::size_t begin, std::size_t end, char value) noexcept {
+[[nodiscard]] constexpr bool matchPatternClass(
+    std::string_view pattern, std::size_t begin, std::size_t end, char value) noexcept {
     bool matched = false;
     for (std::size_t i = begin; i < end;) {
         char first = pattern[i++];
@@ -63,7 +64,8 @@ inline constexpr std::size_t kMaxPatternMatchSteps = 1'000'000;
     return matched;
 }
 
-[[nodiscard]] constexpr bool matchPatternAtom(std::string_view pattern, const PatternAtom& atom, char value) noexcept {
+[[nodiscard]] constexpr bool matchPatternAtom(
+    std::string_view pattern, const PatternAtom& atom, char value) noexcept {
     switch (atom.kind) {
         case PatternAtomKind::kLiteral:
             return value == atom.literal;
@@ -84,7 +86,9 @@ inline constexpr std::size_t kMaxPatternMatchSteps = 1'000'000;
 }
 
 template <std::size_t Capacity>
-[[nodiscard]] constexpr bool matchPatternPlanFrom(const PatternPlan<Capacity>& plan, std::string_view pattern, std::string_view value, std::size_t atomIndex, std::size_t valueIndex, std::size_t& budget) noexcept {
+[[nodiscard]] constexpr bool matchPatternPlanFrom(const PatternPlan<Capacity>& plan,
+    std::string_view pattern, std::string_view value, std::size_t atomIndex, std::size_t valueIndex,
+    std::size_t& budget) noexcept {
     if (budget == 0) {
         return false;  // step budget exhausted -> bound catastrophic backtracking
     }
@@ -94,7 +98,10 @@ template <std::size_t Capacity>
     }
 
     const auto& atom = plan.atoms[atomIndex];
-    const std::size_t minCount = atom.quantifier == PatternQuantifier::kOne || atom.quantifier == PatternQuantifier::kOneOrMore ? 1 : 0;
+    const std::size_t minCount = atom.quantifier == PatternQuantifier::kOne ||
+                                         atom.quantifier == PatternQuantifier::kOneOrMore
+                                     ? 1
+                                     : 0;
     // Bound the greedy scan at the most this quantifier can consume. kOne/kZeroOrOne
     // take at most one character, so scanning the whole matching run and discarding
     // all but one is wasted O(L) work -- and it is repeated at every backtrack
@@ -103,9 +110,13 @@ template <std::size_t Capacity>
     // makes each fixed atom O(1), so per-call scan cost stays within the
     // budget-charged recursion; the variable quantifiers already spawn ~L recursions
     // for an L-char scan and so remain bounded.
-    const std::size_t scanLimit = atom.quantifier == PatternQuantifier::kOne || atom.quantifier == PatternQuantifier::kZeroOrOne ? std::size_t{1} : value.size();
+    const std::size_t scanLimit = atom.quantifier == PatternQuantifier::kOne ||
+                                          atom.quantifier == PatternQuantifier::kZeroOrOne
+                                      ? std::size_t{1}
+                                      : value.size();
     std::size_t maxCount = 0;
-    while (maxCount < scanLimit && valueIndex + maxCount < value.size() && matchPatternAtom(pattern, atom, value[valueIndex + maxCount])) {
+    while (maxCount < scanLimit && valueIndex + maxCount < value.size() &&
+           matchPatternAtom(pattern, atom, value[valueIndex + maxCount])) {
         ++maxCount;
     }
 

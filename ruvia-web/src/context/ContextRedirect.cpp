@@ -21,7 +21,8 @@ struct RedirectAuthoritySpan {
 };
 
 [[nodiscard]] bool isValidPercentEscape(std::string_view value, std::size_t index) noexcept {
-    return index + 2 < value.size() && detail::decodeHexNibble(value[index + 1]) >= 0 && detail::decodeHexNibble(value[index + 2]) >= 0;
+    return index + 2 < value.size() && detail::decodeHexNibble(value[index + 1]) >= 0 &&
+           detail::decodeHexNibble(value[index + 2]) >= 0;
 }
 
 [[nodiscard]] bool isUriSchemeFirst(unsigned char ch) noexcept {
@@ -32,7 +33,8 @@ struct RedirectAuthoritySpan {
     return isUriSchemeFirst(ch) || (ch >= '0' && ch <= '9') || ch == '+' || ch == '-' || ch == '.';
 }
 
-[[nodiscard]] std::size_t findRedirectAuthorityEnd(std::string_view location, std::size_t begin) noexcept {
+[[nodiscard]] std::size_t findRedirectAuthorityEnd(
+    std::string_view location, std::size_t begin) noexcept {
     for (std::size_t i = begin; i < location.size(); ++i) {
         switch (location[i]) {
             case '/':
@@ -58,7 +60,8 @@ struct RedirectAuthoritySpan {
         if (ch == ':') {
             const auto begin = i + 3;
             if (begin <= location.size() && location[i + 1] == '/' && location[i + 2] == '/') {
-                return RedirectAuthoritySpan{begin, findRedirectAuthorityEnd(location, begin), true};
+                return RedirectAuthoritySpan{
+                    begin, findRedirectAuthorityEnd(location, begin), true};
             }
             return {};
         }
@@ -69,7 +72,8 @@ struct RedirectAuthoritySpan {
     return {};
 }
 
-[[nodiscard]] bool isIpLiteralBracketDelimiter(std::string_view location, std::size_t index, RedirectAuthoritySpan authority) noexcept {
+[[nodiscard]] bool isIpLiteralBracketDelimiter(
+    std::string_view location, std::size_t index, RedirectAuthoritySpan authority) noexcept {
     if (!authority.present || index < authority.begin || index >= authority.end) {
         return false;
     }
@@ -101,7 +105,8 @@ struct RedirectAuthoritySpan {
     return false;
 }
 
-[[nodiscard]] bool encodeUriKeepsByte(unsigned char ch, std::string_view location, std::size_t index, RedirectAuthoritySpan authority) noexcept;
+[[nodiscard]] bool encodeUriKeepsByte(unsigned char ch, std::string_view location,
+    std::size_t index, RedirectAuthoritySpan authority) noexcept;
 
 [[nodiscard]] bool redirectLocationNeedsEncoding(std::string_view location) noexcept {
     const auto authority = findRedirectAuthority(location);
@@ -121,7 +126,8 @@ struct RedirectAuthoritySpan {
     return false;
 }
 
-[[nodiscard]] bool encodeUriKeepsByte(unsigned char ch, std::string_view location, std::size_t index, RedirectAuthoritySpan authority) noexcept {
+[[nodiscard]] bool encodeUriKeepsByte(unsigned char ch, std::string_view location,
+    std::size_t index, RedirectAuthoritySpan authority) noexcept {
     if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
         return true;
     }
@@ -163,7 +169,8 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
     output.push_back(detail::upperHexDigit(ch & 0x0F));
 }
 
-[[nodiscard]] std::pmr::string encodeRedirectLocation(std::string_view location, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::pmr::string encodeRedirectLocation(
+    std::string_view location, std::pmr::memory_resource* resource) {
     std::pmr::string encoded(resource);
     encoded.reserve(location.size());
     const auto authority = findRedirectAuthority(location);
@@ -194,7 +201,9 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
 }
 
 [[nodiscard]] bool isRedirectStatus(HttpStatusCode statusCode) noexcept {
-    return statusCode == http_status::kMovedPermanently || statusCode == http_status::kFound || statusCode == http_status::kSeeOther || statusCode == http_status::kTemporaryRedirect || statusCode == http_status::kPermanentRedirect;
+    return statusCode == http_status::kMovedPermanently || statusCode == http_status::kFound ||
+           statusCode == http_status::kSeeOther || statusCode == http_status::kTemporaryRedirect ||
+           statusCode == http_status::kPermanentRedirect;
 }
 
 }  // namespace

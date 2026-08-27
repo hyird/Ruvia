@@ -82,16 +82,19 @@ RUVIA_TEST(vary_existing_wildcard_is_not_combined_with_field_names) {
 RUVIA_TEST(vary_add_preserves_repeated_field_lines_in_combined_order) {
     auto response = makeResponse();
     response.header("Vary", "Origin");
-    response.header("Vary", "Accept-Language", HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
+    response.header("Vary", "Accept-Language",
+        HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
 
     addVaryToken(response, "Accept-Encoding");
-    RUVIA_CHECK_EQ(response.header("Vary"), std::string_view("Origin, Accept-Language, Accept-Encoding"));
+    RUVIA_CHECK_EQ(
+        response.header("Vary"), std::string_view("Origin, Accept-Language, Accept-Encoding"));
 }
 
 RUVIA_TEST(vary_add_dedups_against_later_repeated_field_line) {
     auto response = makeResponse();
     response.header("Vary", "Origin");
-    response.header("Vary", "Accept-Encoding", HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
+    response.header("Vary", "Accept-Encoding",
+        HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
 
     addVaryToken(response, "accept-encoding");
     RUVIA_CHECK_EQ(response.headers().size(), std::size_t{2});
@@ -102,7 +105,8 @@ RUVIA_TEST(vary_add_dedups_against_later_repeated_field_line) {
 RUVIA_TEST(vary_wildcard_in_later_repeated_field_line_dominates) {
     auto response = makeResponse();
     response.header("Vary", "Origin");
-    response.header("Vary", "*", HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
+    response.header(
+        "Vary", "*", HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
 
     addVaryToken(response, "Accept-Encoding");
     RUVIA_CHECK_EQ(response.headers().size(), std::size_t{2});

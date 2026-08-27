@@ -25,10 +25,7 @@ void StreamBodyReader<Stream>::compactPending() {
     const auto removed = pendingCompactUntil_;
     const auto remaining = buffer_.size() - pendingCompactUntil_;
     if (remaining > 0) {
-        std::memmove(
-            buffer_.data(),
-            buffer_.data() + pendingCompactUntil_,
-            remaining);
+        std::memmove(buffer_.data(), buffer_.data() + pendingCompactUntil_, remaining);
     }
     buffer_.resize(buffer_.size() - removed);
     pendingCompactUntil_ = 0;
@@ -41,15 +38,15 @@ std::string_view StreamBodyReader<Stream>::initialPipelineRemainder() const noex
         return {};
     }
     if (bodyPlan_.chunked() != nullptr) {
-        return initialBodyAndPipeline_.substr(std::min(readCursor_, initialBodyAndPipeline_.size()));
+        return initialBodyAndPipeline_.substr(
+            std::min(readCursor_, initialBodyAndPipeline_.size()));
     }
     const auto* knownLength = bodyPlan_.knownLength();
     if (knownLength == nullptr) {
         return initialBodyAndPipeline_;
     }
-    const auto initialBodyBytes = std::min(
-        knownLength->contentLength(),
-        initialBodyAndPipeline_.size());
+    const auto initialBodyBytes =
+        std::min(knownLength->contentLength(), initialBodyAndPipeline_.size());
     return initialBodyAndPipeline_.substr(initialBodyBytes);
 }
 
@@ -74,7 +71,8 @@ void StreamBodyReader<Stream>::materializeInitialRemainder() {
     if (initialBodyAndPipeline_.empty()) {
         return;
     }
-    buffer_.assign(initialBodyAndPipeline_.data() + readCursor_, initialBodyAndPipeline_.size() - readCursor_);
+    buffer_.assign(
+        initialBodyAndPipeline_.data() + readCursor_, initialBodyAndPipeline_.size() - readCursor_);
     initialBodyAndPipeline_ = {};
     readCursor_ = 0;
     pendingCompactUntil_ = 0;

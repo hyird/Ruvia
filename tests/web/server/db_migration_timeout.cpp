@@ -52,17 +52,19 @@ constexpr auto kBudget = std::chrono::seconds(10);
 
 int main() {
     asio::io_context ioContext(1);
-    asio::ip::tcp::acceptor acceptor(ioContext, asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    asio::ip::tcp::acceptor acceptor(
+        ioContext, asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const auto port = acceptor.local_endpoint().port();
 
-    static const std::array migrations{
-        ruvia::DbMigration{{.id = "001_never_runs", .sql = "CREATE TABLE IF NOT EXISTS ruvia_timeout_probe (id INT PRIMARY KEY)"}}};
+    static const std::array migrations{ruvia::DbMigration{{.id = "001_never_runs",
+        .sql = "CREATE TABLE IF NOT EXISTS ruvia_timeout_probe (id INT PRIMARY KEY)"}}};
 
     const auto start = std::chrono::steady_clock::now();
     bool threw = false;
     std::string message;
     try {
-        (void)ruvia::DbMigrator::migrate(silentBackendConfig(port), std::span<const ruvia::DbMigration>(migrations));
+        (void)ruvia::DbMigrator::migrate(
+            silentBackendConfig(port), std::span<const ruvia::DbMigration>(migrations));
     } catch (const std::exception& error) {
         threw = true;
         message = error.what();
@@ -75,9 +77,11 @@ int main() {
         return 1;
     }
     if (elapsed > kBudget) {
-        std::fprintf(stderr, "migrate() honoured its connect timeout only after %lldms: %s\n", static_cast<long long>(elapsedMs), message.c_str());
+        std::fprintf(stderr, "migrate() honoured its connect timeout only after %lldms: %s\n",
+            static_cast<long long>(elapsedMs), message.c_str());
         return 1;
     }
-    std::printf("migration timed out after %lldms: %s\n", static_cast<long long>(elapsedMs), message.c_str());
+    std::printf("migration timed out after %lldms: %s\n", static_cast<long long>(elapsedMs),
+        message.c_str());
     return 0;
 }

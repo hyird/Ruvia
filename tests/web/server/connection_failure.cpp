@@ -61,7 +61,8 @@ struct FailureObservation final {
     }
 };
 
-[[nodiscard]] std::string readHead(asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
+[[nodiscard]] std::string readHead(
+    asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
     const std::size_t n = asio::read_until(socket, buffer, "\r\n\r\n", ec);
     if (ec) {
         return {};
@@ -78,14 +79,20 @@ int main() {
     auto& impl = ruvia::detail::RouterImpl::from(router);
     std::pmr::string failingPath("/boom", std::pmr::get_default_resource());
     std::pmr::string healthyPath("/fine", std::pmr::get_default_resource());
-    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(failingPath), ruvia::detail::RouteStreamHandler(nullptr, &failingStreamHandler), {}, {});
-    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(healthyPath), ruvia::detail::RouteStreamHandler(nullptr, &healthyStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(failingPath),
+        ruvia::detail::RouteStreamHandler(nullptr, &failingStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(healthyPath),
+        ruvia::detail::RouteStreamHandler(nullptr, &healthyStreamHandler), {}, {});
     impl.finalize();
 
     FailureObservation observation;
     ruvia::detail::HttpServerOptions options;
-    options.connectionFailure.callback = ruvia::detail::CallbackAccess::bind<void(const ruvia::ConnectionFailureRecord&) noexcept>(observation);
-    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
+    options.connectionFailure.callback =
+        ruvia::detail::CallbackAccess::bind<void(const ruvia::ConnectionFailureRecord&) noexcept>(
+            observation);
+    ruvia::detail::WebWorkerRuntime server(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {},
+        options);
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -105,7 +112,8 @@ int main() {
         asio::ip::tcp::socket sock(ctx);
         sock.connect(endpoint, ec);
         asio::streambuf buffer;
-        asio::write(sock, asio::buffer(std::string_view("GET /boom HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+        asio::write(sock,
+            asio::buffer(std::string_view("GET /boom HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
         const auto head = readHead(sock, buffer, ec);
         if (!head.starts_with("HTTP/1.1 200")) {
             fail(1, "the failing stream route did not commit its head first");
@@ -122,7 +130,8 @@ int main() {
         asio::ip::tcp::socket sock(ctx);
         sock.connect(endpoint, ec);
         asio::streambuf buffer;
-        asio::write(sock, asio::buffer(std::string_view("GET /fine HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+        asio::write(sock,
+            asio::buffer(std::string_view("GET /fine HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
         const auto head = readHead(sock, buffer, ec);
         if (!head.starts_with("HTTP/1.1 200")) {
             fail(2, "the server stopped serving after a connection failure");

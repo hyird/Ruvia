@@ -24,11 +24,17 @@ public:
     HttpClientRequestStorage& appendHeader(std::string_view name, std::string_view value);
     HttpClientRequestStorage& setBody(std::string_view body);
 
-    [[nodiscard]] std::string_view method() const& noexcept { return method_; }
+    [[nodiscard]] std::string_view method() const& noexcept {
+        return method_;
+    }
     [[nodiscard]] std::string_view method() const&& = delete;
-    [[nodiscard]] std::string_view target() const& noexcept { return target_; }
+    [[nodiscard]] std::string_view target() const& noexcept {
+        return target_;
+    }
     [[nodiscard]] std::string_view target() const&& = delete;
-    [[nodiscard]] std::string_view body() const& noexcept { return body_; }
+    [[nodiscard]] std::string_view body() const& noexcept {
+        return body_;
+    }
     [[nodiscard]] std::string_view body() const&& = delete;
 
 private:
@@ -38,15 +44,14 @@ private:
 
     struct Header final {
         Header(std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
-            : name(name, resource), value(value, resource) {}
+            : name(name, resource),
+              value(value, resource) {}
         std::pmr::string name;
         std::pmr::string value;
     };
 
     HttpClientRequestStorage(
-        std::string_view method,
-        std::string_view target,
-        std::pmr::memory_resource* resource);
+        std::string_view method, std::string_view target, std::pmr::memory_resource* resource);
 
     std::pmr::string method_;
     std::pmr::string target_;

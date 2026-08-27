@@ -8,7 +8,9 @@
 
 namespace ruvia::detail {
 
-WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit, WebSocketCompression compression, WsConnectionRole role, WsMaskKeyGenerator maskKeyGenerator, void* maskKeyContext)
+WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit,
+    WebSocketCompression compression, WsConnectionRole role, WsMaskKeyGenerator maskKeyGenerator,
+    void* maskKeyContext)
     : input_(&input),
       messageLimit_(messageLimit),
       outBuffer_(input.get_allocator().resource()),
@@ -31,10 +33,15 @@ WsOutputPlan WsConnection::outputPlan() const& noexcept {
     // untouched until destruction, but make discarded bytes unreachable from the
     // protocol driver once transport termination has become authoritative.
     if (closePhase_ == ClosePhase::kTransportEndReady || closePhase_ == ClosePhase::kClosed) {
-        return WsOutputPlan({}, closePhase_ == ClosePhase::kTransportEndReady ? WsTransportDisposition::kEndTransport : WsTransportDisposition::kKeepOpen);
+        return WsOutputPlan({}, closePhase_ == ClosePhase::kTransportEndReady
+                                    ? WsTransportDisposition::kEndTransport
+                                    : WsTransportDisposition::kKeepOpen);
     }
-    const auto bytes = std::string_view(outBuffer_.data() + outOffset_, outBuffer_.size() - outOffset_);
-    const auto disposition = closePhase_ == ClosePhase::kFinalCloseQueued ? WsTransportDisposition::kEndTransport : WsTransportDisposition::kKeepOpen;
+    const auto bytes =
+        std::string_view(outBuffer_.data() + outOffset_, outBuffer_.size() - outOffset_);
+    const auto disposition = closePhase_ == ClosePhase::kFinalCloseQueued
+                                 ? WsTransportDisposition::kEndTransport
+                                 : WsTransportDisposition::kKeepOpen;
     return WsOutputPlan(bytes, disposition);
 }
 
@@ -99,8 +106,7 @@ void WsConnection::appendFrame(WebSocketOpcode opcode, std::string_view payload,
     if (!payload.empty() && !outBuffer_.empty()) {
         const auto payloadAddress = reinterpret_cast<std::uintptr_t>(payload.data());
         const auto bufferAddress = reinterpret_cast<std::uintptr_t>(outBuffer_.data());
-        if (payloadAddress >= bufferAddress &&
-            payloadAddress - bufferAddress < outBuffer_.size()) {
+        if (payloadAddress >= bufferAddress && payloadAddress - bufferAddress < outBuffer_.size()) {
             // outputPlan() exposes a borrowed view. Copy only for this aliasing
             // case so reserve() below cannot invalidate its own append source.
             ownedPayload.assign(payload);
@@ -113,7 +119,8 @@ void WsConnection::appendFrame(WebSocketOpcode opcode, std::string_view payload,
     if (masked && !maskKeyGenerator_(maskKeyContext_, mask)) {
         throw std::runtime_error("failed to generate WebSocket client mask key");
     }
-    const auto headerSize = encodeWebSocketFrameHeader(header, opcode, payload.size(), rsv1, masked);
+    const auto headerSize =
+        encodeWebSocketFrameHeader(header, opcode, payload.size(), rsv1, masked);
     const auto maskSize = masked ? mask.size() : std::size_t{0};
     if (headerSize > outBuffer_.max_size() - outBuffer_.size() ||
         maskSize > outBuffer_.max_size() - outBuffer_.size() - headerSize ||
@@ -182,7 +189,8 @@ WsFrameSubmitStatus WsConnection::submitFrame(WebSocketOpcode opcode, std::strin
     bool rsv1 = false;
     if (dataFrame && deflate_.has_value()) {
         outboundDeflated_.clear();
-        if (deflate_->compress(payload, outboundDeflated_) && outboundDeflated_.size() < payload.size()) {
+        if (deflate_->compress(payload, outboundDeflated_) &&
+            outboundDeflated_.size() < payload.size()) {
             payload = outboundDeflated_;
             rsv1 = true;
         }
@@ -235,7 +243,8 @@ std::optional<WsEvent> WsConnection::poll() & {
 
 std::optional<WsEvent> WsConnection::pollImpl() & {
     inboundInflated_.clear();
-    if (closePhase_ == ClosePhase::kFinalCloseQueued || closePhase_ == ClosePhase::kTransportEndReady || closePhase_ == ClosePhase::kClosed) {
+    if (closePhase_ == ClosePhase::kFinalCloseQueued ||
+        closePhase_ == ClosePhase::kTransportEndReady || closePhase_ == ClosePhase::kClosed) {
         return WsEvent::makeTransportEnd();
     }
 
@@ -246,7 +255,8 @@ std::optional<WsEvent> WsConnection::pollImpl() & {
     };
 
     for (;;) {
-        const auto read = webSocketTryReadFrame(*input_, inputOffset_, pendingCompactUntil_, messageLimit_, deflate_.has_value(), role_ == WsConnectionRole::kServer);
+        const auto read = webSocketTryReadFrame(*input_, inputOffset_, pendingCompactUntil_,
+            messageLimit_, deflate_.has_value(), role_ == WsConnectionRole::kServer);
         if (read.needInput() != nullptr) {
             return std::nullopt;
         }
@@ -306,7 +316,9 @@ std::optional<WsEvent> WsConnection::pollImpl() & {
         // still here. Inheriting them would make the next message's UTF-8 check read
         // the concatenation, and would charge its decompression-bomb limit for both.
         inboundInflated_.clear();
-        const auto inflateResult = deflate_.has_value() ? deflate_->decompress(message.payload(), inboundInflated_, messageLimit_) : WebSocketInflateResult::kError;
+        const auto inflateResult = deflate_.has_value() ? deflate_->decompress(message.payload(),
+                                                              inboundInflated_, messageLimit_)
+                                                        : WebSocketInflateResult::kError;
         if (inflateResult == WebSocketInflateResult::kTooLarge) {
             return protocolFailureEvent(WebSocketProtocolFailure::kMessageTooLarge);
         }

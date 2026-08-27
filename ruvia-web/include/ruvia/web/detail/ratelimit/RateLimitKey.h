@@ -22,7 +22,8 @@ inline constexpr std::size_t kRateLimitKeyBufferBytes = 19;
 // allocation-free "v6/<16 hex>" token (distinct from any IPv4 dotted string) and
 // returned; pass-through cases return the input verbatim. Kept out of RateLimiter.h
 // so that lightweight, widely-included header does not gain an asio dependency.
-[[nodiscard]] inline std::string_view rateLimitKeyFor(std::string_view remoteAddress, char (&buffer)[kRateLimitKeyBufferBytes]) noexcept {
+[[nodiscard]] inline std::string_view rateLimitKeyFor(
+    std::string_view remoteAddress, char (&buffer)[kRateLimitKeyBufferBytes]) noexcept {
     if (remoteAddress.find(':') == std::string_view::npos) {
         return remoteAddress;  // no ':' -> IPv4 or empty; already a per-host key
     }

@@ -15,7 +15,8 @@ namespace ruvia {
 namespace detail {
 namespace {
 
-[[nodiscard]] std::span<const std::pmr::string> redisArgSpan(const std::pmr::vector<std::pmr::string>& args) noexcept {
+[[nodiscard]] std::span<const std::pmr::string> redisArgSpan(
+    const std::pmr::vector<std::pmr::string>& args) noexcept {
     return args;
 }
 
@@ -23,12 +24,14 @@ namespace {
 
 static_assert(workerCancellationPostIsInline<RedisOperationCancellationMailbox>);
 
-Task<RedisValue> RedisPool::executeOwned(std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource, OperationOptions options) {
+Task<RedisValue> RedisPool::executeOwned(std::pmr::vector<std::pmr::string> args,
+    std::pmr::memory_resource* resource, OperationOptions options) {
     return executeWithTimeoutImpl(std::move(args), std::move(options), resource);
 }
 
 template <typename ArgSource>
-Task<RedisValue> RedisPool::executeWithTimeoutImpl(ArgSource args, OperationOptions options, std::pmr::memory_resource* resource) {
+Task<RedisValue> RedisPool::executeWithTimeoutImpl(
+    ArgSource args, OperationOptions options, std::pmr::memory_resource* resource) {
     const OperationTimeout operationTimeout(options.timeout);
     const auto index = co_await acquire(operationTimeout, options.stopToken);
     ConnectionGuard guard(*this, index);
@@ -44,8 +47,8 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(ArgSource args, OperationOpti
         cancellationId = nextCancellationId();
         connection.cancellationId = cancellationId;
         options.stopToken.registerCallback(
-            stopRegistration,
-            WorkerCancellationPost<RedisOperationCancellationMailbox>(cancellationMailbox_, cancellationId));
+            stopRegistration, WorkerCancellationPost<RedisOperationCancellationMailbox>(
+                                  cancellationMailbox_, cancellationId));
     }
     if (options.stopToken.stopRequested()) {
         cancelOperationById(cancellationId);
@@ -88,7 +91,8 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(ArgSource args, OperationOpti
 }
 
 template <typename CommandSource>
-Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(CommandSource commands, OperationOptions options, std::pmr::memory_resource* resource) {
+Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
+    CommandSource commands, OperationOptions options, std::pmr::memory_resource* resource) {
     const auto resolved = detail::pmrResourceOrDefault(resource);
     std::pmr::vector<RedisValue> replies(resolved);
     replies.reserve(commands.size());
@@ -111,8 +115,8 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(CommandSource 
         cancellationId = nextCancellationId();
         connection.cancellationId = cancellationId;
         options.stopToken.registerCallback(
-            stopRegistration,
-            WorkerCancellationPost<RedisOperationCancellationMailbox>(cancellationMailbox_, cancellationId));
+            stopRegistration, WorkerCancellationPost<RedisOperationCancellationMailbox>(
+                                  cancellationMailbox_, cancellationId));
     }
     if (options.stopToken.stopRequested()) {
         cancelOperationById(cancellationId);
@@ -200,11 +204,15 @@ void RedisPool::throwIfAborted(const Connection& connection) const {
     }
 }
 
-Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(std::span<const RedisPipeline::Command> commands, OperationOptions options, std::pmr::memory_resource* resource) {
+Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(
+    std::span<const RedisPipeline::Command> commands, OperationOptions options,
+    std::pmr::memory_resource* resource) {
     return executePipelineImpl(commands, std::move(options), resource);
 }
 
-Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(std::span<const RedisCommandArgsView> commands, OperationOptions options, std::pmr::memory_resource* resource) {
+Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(
+    std::span<const RedisCommandArgsView> commands, OperationOptions options,
+    std::pmr::memory_resource* resource) {
     return executePipelineImpl(commands, std::move(options), resource);
 }
 

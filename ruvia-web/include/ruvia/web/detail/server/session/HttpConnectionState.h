@@ -75,11 +75,14 @@ private:
     std::size_t freeCount_{0};
 };
 
-void compactConnectionReadBuffer(std::pmr::string& readBuffer, std::size_t& usedBytes, std::size_t consumedBytes) noexcept;
-void installConnectionReadBufferPipeline(std::pmr::string& readBuffer, std::size_t& usedBytes, std::string_view pipeline);
+void compactConnectionReadBuffer(
+    std::pmr::string& readBuffer, std::size_t& usedBytes, std::size_t consumedBytes) noexcept;
+void installConnectionReadBufferPipeline(
+    std::pmr::string& readBuffer, std::size_t& usedBytes, std::string_view pipeline);
 // Installing a handed-over pipeline can grow the read buffer, so this is the one
 // buffer-completion step that may allocate.
-void applyReusableHttp1RequestBufferCompletion(const Http1RequestBufferCompletion& completion, std::pmr::string& readBuffer, std::size_t& usedBytes);
+void applyReusableHttp1RequestBufferCompletion(const Http1RequestBufferCompletion& completion,
+    std::pmr::string& readBuffer, std::size_t& usedBytes);
 void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes);
 void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes);
 

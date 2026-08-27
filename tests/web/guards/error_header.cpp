@@ -5,7 +5,8 @@
 
 template <typename Issues>
 concept AcceptsRvalueHttpErrorInfoIssues = requires(Issues&& issues) {
-    ruvia::HttpErrorInfo({.status = ruvia::http_status::kBadRequest, .validationIssues = std::forward<Issues>(issues)});
+    ruvia::HttpErrorInfo({.status = ruvia::http_status::kBadRequest,
+        .validationIssues = std::forward<Issues>(issues)});
 };
 
 static_assert(sizeof(ruvia::ValidationIssue) > 0);

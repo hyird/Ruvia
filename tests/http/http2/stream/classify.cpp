@@ -22,9 +22,12 @@ bool rejectHeader(void*, std::string_view, std::string_view) {
 RUVIA_TEST(classify_header_decode_result) {
     HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     // A clean decode is OK.
-    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode({}, nullptr, nullptr)) == HeaderDecodeStatus::kOk);
+    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode({}, nullptr, nullptr)) ==
+                HeaderDecodeStatus::kOk);
     // A header-validation callback rejection is a protocol error.
-    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode(std::string_view("\x82", 1), nullptr, &rejectHeader)) == HeaderDecodeStatus::kProtocolError);
+    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode(std::string_view("\x82", 1), nullptr,
+                    &rejectHeader)) == HeaderDecodeStatus::kProtocolError);
     // Any HPACK decoding fault is a compression error (RFC 7541 4.1).
-    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode(std::string_view("\x80", 1), nullptr, nullptr)) == HeaderDecodeStatus::kCompressionError);
+    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode(std::string_view("\x80", 1), nullptr,
+                    nullptr)) == HeaderDecodeStatus::kCompressionError);
 }

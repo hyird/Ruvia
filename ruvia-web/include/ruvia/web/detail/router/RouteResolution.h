@@ -102,7 +102,8 @@ public:
     RouteResolution() noexcept
         : value_(RouteNotFound{}) {}
 
-    [[nodiscard]] static RouteResolution resolved(const RouteEntry& route, RouteMatch match = {}) noexcept {
+    [[nodiscard]] static RouteResolution resolved(
+        const RouteEntry& route, RouteMatch match = {}) noexcept {
         return RouteResolution(ResolvedRoute(route, std::move(match)));
     }
 
@@ -110,7 +111,8 @@ public:
     // that has extension-method routes. `resourceExists` carries that fact
     // separately, ensuring an extension-only path answers 405 with an Allow
     // built from its tokens instead of collapsing to 404.
-    [[nodiscard]] static RouteResolution methodNotAllowed(std::uint32_t allowedMethods, bool resourceExists = false) noexcept {
+    [[nodiscard]] static RouteResolution methodNotAllowed(
+        std::uint32_t allowedMethods, bool resourceExists = false) noexcept {
         if (allowedMethods == 0 && !resourceExists) {
             return RouteResolution();
         }

@@ -35,8 +35,10 @@ inline std::tm httpUtcTm(std::time_t time) noexcept {
 // English names regardless of the process locale, so this is the single owner of
 // HTTP date formatting for both the response Date header and Last-Modified.
 inline std::size_t httpWriteImfFixdate(char* out, const std::tm& utc) noexcept {
-    static constexpr std::array<std::string_view, 7> dayNames{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-    static constexpr std::array<std::string_view, 12> monthNames{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    static constexpr std::array<std::string_view, 7> dayNames{
+        "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    static constexpr std::array<std::string_view, 12> monthNames{
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
     const auto wday = (utc.tm_wday >= 0 && utc.tm_wday < 7) ? utc.tm_wday : 0;
     const auto mon = (utc.tm_mon >= 0 && utc.tm_mon < 12) ? utc.tm_mon : 0;

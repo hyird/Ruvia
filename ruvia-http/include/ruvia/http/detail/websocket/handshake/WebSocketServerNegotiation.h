@@ -42,14 +42,17 @@ public:
     }
 
 private:
-    friend WebSocketServerNegotiation makeWebSocketServerNegotiation(const HttpRequest&, WebSocketServerNegotiationOptions);
+    friend WebSocketServerNegotiation makeWebSocketServerNegotiation(
+        const HttpRequest&, WebSocketServerNegotiationOptions);
 
-    WebSocketServerNegotiation(std::string_view subprotocol, WebSocketCompression compression, std::pmr::memory_resource* resource);
+    WebSocketServerNegotiation(std::string_view subprotocol, WebSocketCompression compression,
+        std::pmr::memory_resource* resource);
 
     std::pmr::string subprotocol_;
     WebSocketCompression compression_;
 };
 
-[[nodiscard]] WebSocketServerNegotiation makeWebSocketServerNegotiation(const HttpRequest& request, WebSocketServerNegotiationOptions options = {});
+[[nodiscard]] WebSocketServerNegotiation makeWebSocketServerNegotiation(
+    const HttpRequest& request, WebSocketServerNegotiationOptions options = {});
 
 }  // namespace ruvia::detail

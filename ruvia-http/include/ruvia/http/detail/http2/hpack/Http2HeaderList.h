@@ -46,7 +46,8 @@ public:
     }
 
     void swap(Http2HeaderList& other) noexcept {
-        if (overflowStorage_.get_allocator().resource() != other.overflowStorage_.get_allocator().resource()) {
+        if (overflowStorage_.get_allocator().resource() !=
+            other.overflowStorage_.get_allocator().resource()) {
             std::terminate();
         }
         using std::swap;
@@ -60,11 +61,14 @@ public:
     }
 
     [[nodiscard]] Checkpoint checkpoint() const noexcept {
-        return Checkpoint{storageSize_, overflowStorage_.size(), overflowFields_.size(), count_, usingOverflowStorage_};
+        return Checkpoint{storageSize_, overflowStorage_.size(), overflowFields_.size(), count_,
+            usingOverflowStorage_};
     }
 
     void rollback(Checkpoint checkpoint) noexcept {
-        if (checkpoint.storageSize > storageSize_ || checkpoint.overflowStorageSize > overflowStorage_.size() || checkpoint.overflowFieldCount > overflowFields_.size() || checkpoint.count > count_) {
+        if (checkpoint.storageSize > storageSize_ ||
+            checkpoint.overflowStorageSize > overflowStorage_.size() ||
+            checkpoint.overflowFieldCount > overflowFields_.size() || checkpoint.count > count_) {
             std::terminate();
         }
         overflowStorage_.resize(checkpoint.overflowStorageSize);
@@ -75,13 +79,21 @@ public:
     }
 
     [[nodiscard]] Http2StoredHeaderView at(std::size_t index) const& noexcept {
-        const auto& field = index < kInlineHeaderFields ? inlineFields_[index] : overflowFields_[index - kInlineHeaderFields];
-        return Http2StoredHeaderView{.name = view(field.nameOffset, field.nameSize), .value = view(field.valueOffset, field.valueSize), .kind = field.kind};
+        const auto& field = index < kInlineHeaderFields
+                                ? inlineFields_[index]
+                                : overflowFields_[index - kInlineHeaderFields];
+        return Http2StoredHeaderView{.name = view(field.nameOffset, field.nameSize),
+            .value = view(field.valueOffset, field.valueSize),
+            .kind = field.kind};
     }
     [[nodiscard]] Http2StoredHeaderView at(std::size_t) const&& = delete;
 
-    [[nodiscard]] bool append(std::string_view name, std::string_view value, RequestHeaderKind kind) {
-        if (full() || name.size() > kMaxStoredHeaderViewSize || value.size() > kMaxStoredHeaderViewSize || storageSize_ > kMaxStoredHeaderViewSize - name.size() || storageSize_ + name.size() > kMaxStoredHeaderViewSize - value.size()) {
+    [[nodiscard]] bool append(
+        std::string_view name, std::string_view value, RequestHeaderKind kind) {
+        if (full() || name.size() > kMaxStoredHeaderViewSize ||
+            value.size() > kMaxStoredHeaderViewSize ||
+            storageSize_ > kMaxStoredHeaderViewSize - name.size() ||
+            storageSize_ + name.size() > kMaxStoredHeaderViewSize - value.size()) {
             return false;
         }
 
@@ -95,7 +107,11 @@ public:
         const auto valueOffset = static_cast<std::uint32_t>(storageSize_);
         appendBytes(value);
 
-        const auto field = HeaderField{.nameOffset = nameOffset, .nameSize = static_cast<std::uint32_t>(name.size()), .valueOffset = valueOffset, .valueSize = static_cast<std::uint32_t>(value.size()), .kind = kind};
+        const auto field = HeaderField{.nameOffset = nameOffset,
+            .nameSize = static_cast<std::uint32_t>(name.size()),
+            .valueOffset = valueOffset,
+            .valueSize = static_cast<std::uint32_t>(value.size()),
+            .kind = kind};
 
         if (count_ < kInlineHeaderFields) {
             inlineFields_[count_] = field;
@@ -116,7 +132,8 @@ private:
 
     static constexpr std::size_t kInlineHeaderFields = 16;
     static constexpr std::size_t kInlineHeaderStorageBytes = 512;
-    static constexpr std::size_t kMaxStoredHeaderViewSize = static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
+    static constexpr std::size_t kMaxStoredHeaderViewSize =
+        static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
 
     struct HeaderField final {
         std::uint32_t nameOffset{0};

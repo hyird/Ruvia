@@ -129,7 +129,8 @@ public:
 
     [[nodiscard]] DbMigrationReport migrate(std::span<const DbMigration> migrations) const;
 
-    [[nodiscard]] static DbMigrationReport migrate(const DbConfig& config, std::span<const DbMigration> migrations, DbMigratorOptions options = {});
+    [[nodiscard]] static DbMigrationReport migrate(const DbConfig& config,
+        std::span<const DbMigration> migrations, DbMigratorOptions options = {});
 
 private:
     DbConfig config_;

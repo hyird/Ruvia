@@ -88,7 +88,8 @@ private:
         if (overflowOffset_ == overflowChunks_.size()) {
             overflowChunks_.clear();
             overflowOffset_ = 0;
-        } else if (overflowOffset_ >= kHttp2WebRetainedBodyChunkCapacity && overflowOffset_ * 2 >= overflowChunks_.size()) {
+        } else if (overflowOffset_ >= kHttp2WebRetainedBodyChunkCapacity &&
+                   overflowOffset_ * 2 >= overflowChunks_.size()) {
             const auto remaining = overflowChunks_.size() - overflowOffset_;
             for (std::size_t i = 0; i < remaining; ++i) {
                 overflowChunks_[i] = std::move(overflowChunks_[overflowOffset_ + i]);
@@ -96,7 +97,8 @@ private:
             overflowChunks_.resize(remaining);
             overflowOffset_ = 0;
         }
-        if (!overflowChunks_.empty() || overflowChunks_.capacity() <= kHttp2WebRetainedBodyChunkCapacity) {
+        if (!overflowChunks_.empty() ||
+            overflowChunks_.capacity() <= kHttp2WebRetainedBodyChunkCapacity) {
             return;
         }
         std::pmr::vector<std::pmr::string> empty(overflowChunks_.get_allocator());
@@ -140,7 +142,8 @@ public:
     }
     const HttpRequestBodyFailure* protocolFailure() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2RequestBodyBacklogOverflow* backlogOverflow() const& noexcept {
+    [[nodiscard]] constexpr const Http2RequestBodyBacklogOverflow* backlogOverflow()
+        const& noexcept {
         return state_ == State::kBacklogOverflow ? &value_.backlogOverflow : nullptr;
     }
     const Http2RequestBodyBacklogOverflow* backlogOverflow() const&& = delete;
@@ -178,7 +181,8 @@ private:
         return Http2RequestBodyStoreResult(Http2RequestBodyStored());
     }
 
-    [[nodiscard]] static constexpr Http2RequestBodyStoreResult makeProtocolFailure(HttpRequestBodyFailure failure) noexcept {
+    [[nodiscard]] static constexpr Http2RequestBodyStoreResult makeProtocolFailure(
+        HttpRequestBodyFailure failure) noexcept {
         return Http2RequestBodyStoreResult(failure);
     }
 
@@ -198,8 +202,10 @@ public:
     explicit Http2BufferedRequestBody(std::pmr::memory_resource* resource) noexcept
         : bytes_(pmrResourceOrDefault(resource)) {}
 
-    [[nodiscard]] Http2RequestBodyStoreResult store(std::string_view data, ProtocolByteLimit totalLimit) {
-        if (const auto failure = httpRequestBodyAdditionFailure(receivedBytes_, data.size(), totalLimit)) {
+    [[nodiscard]] Http2RequestBodyStoreResult store(
+        std::string_view data, ProtocolByteLimit totalLimit) {
+        if (const auto failure =
+                httpRequestBodyAdditionFailure(receivedBytes_, data.size(), totalLimit)) {
             return Http2RequestBodyStoreResult::makeProtocolFailure(*failure);
         }
         receivedBytes_ += data.size();
@@ -228,11 +234,14 @@ public:
     explicit Http2StreamingRequestBody(std::pmr::memory_resource* resource) noexcept
         : queue_(pmrResourceOrDefault(resource)) {}
 
-    [[nodiscard]] Http2RequestBodyStoreResult store(std::string_view data, ProtocolByteLimit totalLimit, std::size_t backlogLimit) {
-        if (const auto failure = httpRequestBodyAdditionFailure(receivedBytes_, data.size(), totalLimit)) {
+    [[nodiscard]] Http2RequestBodyStoreResult store(
+        std::string_view data, ProtocolByteLimit totalLimit, std::size_t backlogLimit) {
+        if (const auto failure =
+                httpRequestBodyAdditionFailure(receivedBytes_, data.size(), totalLimit)) {
             return Http2RequestBodyStoreResult::makeProtocolFailure(*failure);
         }
-        if (queue_.queuedBytes() > backlogLimit || data.size() > backlogLimit - queue_.queuedBytes()) {
+        if (queue_.queuedBytes() > backlogLimit ||
+            data.size() > backlogLimit - queue_.queuedBytes()) {
             return Http2RequestBodyStoreResult::makeBacklogOverflow();
         }
         receivedBytes_ += data.size();
@@ -265,7 +274,9 @@ private:
 class Http2RequestBodyRuntime final {
 public:
     [[nodiscard]] RequestBodyMode mode() const noexcept {
-        return std::holds_alternative<Http2BufferedRequestBody>(storage_) ? RequestBodyMode::kBuffered : RequestBodyMode::kStream;
+        return std::holds_alternative<Http2BufferedRequestBody>(storage_)
+                   ? RequestBodyMode::kBuffered
+                   : RequestBodyMode::kStream;
     }
 
     [[nodiscard]] Http2BufferedRequestBody* buffered() & noexcept {
@@ -288,11 +299,13 @@ public:
     }
     const Http2StreamingRequestBody* streaming() const&& = delete;
 
-    [[nodiscard]] Http2RequestBodyStoreResult store(std::string_view data, ProtocolByteLimit totalLimit, std::size_t streamingBacklogLimit) {
+    [[nodiscard]] Http2RequestBodyStoreResult store(
+        std::string_view data, ProtocolByteLimit totalLimit, std::size_t streamingBacklogLimit) {
         if (auto* value = buffered()) {
             return value->store(data, totalLimit);
         }
-        return std::get<Http2StreamingRequestBody>(storage_).store(data, totalLimit, streamingBacklogLimit);
+        return std::get<Http2StreamingRequestBody>(storage_).store(
+            data, totalLimit, streamingBacklogLimit);
     }
 
     [[nodiscard]] std::size_t receivedBytes() const noexcept {
@@ -310,7 +323,8 @@ private:
     Http2RequestBodyRuntime(RequestBodyMode mode, std::pmr::memory_resource* resource) noexcept
         : storage_(makeStorage(mode, resource)) {}
 
-    [[nodiscard]] static Storage makeStorage(RequestBodyMode mode, std::pmr::memory_resource* resource) noexcept {
+    [[nodiscard]] static Storage makeStorage(
+        RequestBodyMode mode, std::pmr::memory_resource* resource) noexcept {
         if (mode == RequestBodyMode::kBuffered) {
             return Storage(std::in_place_type<Http2BufferedRequestBody>, resource);
         }

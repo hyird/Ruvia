@@ -48,6 +48,7 @@ struct RequestHeaderFacts final {
 
 // Validate every field and collect the facts the encoder needs. Returns false
 // with `error` set on the first field that cannot be sent.
-[[nodiscard]] bool analyzeHeaders(std::span<const HttpHeaderView> headers, RequestHeaderFacts& facts, Http1ClientRequestPrepareError& error) noexcept;
+[[nodiscard]] bool analyzeHeaders(std::span<const HttpHeaderView> headers,
+    RequestHeaderFacts& facts, Http1ClientRequestPrepareError& error) noexcept;
 
 }  // namespace ruvia

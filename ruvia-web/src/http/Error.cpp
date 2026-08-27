@@ -16,18 +16,15 @@
 namespace ruvia {
 namespace {
 
-RUVIA_RESPONSE_MODEL(HttpValidationIssueResponseModel,
-    RUVIA_REQUIRED_FIELD(field, ruvia::String),
-    RUVIA_REQUIRED_FIELD(code, ruvia::String),
-    RUVIA_REQUIRED_FIELD(message, ruvia::String));
+RUVIA_RESPONSE_MODEL(HttpValidationIssueResponseModel, RUVIA_REQUIRED_FIELD(field, ruvia::String),
+    RUVIA_REQUIRED_FIELD(code, ruvia::String), RUVIA_REQUIRED_FIELD(message, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(HttpErrorResponseModel,
-    RUVIA_REQUIRED_FIELD(error, ruvia::String),
-    RUVIA_REQUIRED_FIELD(code, ruvia::String),
-    RUVIA_REQUIRED_FIELD(message, ruvia::String),
+RUVIA_RESPONSE_MODEL(HttpErrorResponseModel, RUVIA_REQUIRED_FIELD(error, ruvia::String),
+    RUVIA_REQUIRED_FIELD(code, ruvia::String), RUVIA_REQUIRED_FIELD(message, ruvia::String),
     RUVIA_OPTIONAL_FIELD(details, ruvia::Array<HttpValidationIssueResponseModel>));
 
-[[nodiscard]] std::pmr::string serializeErrorResponse(HttpErrorInfo error, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::pmr::string serializeErrorResponse(
+    HttpErrorInfo error, std::pmr::memory_resource* resource) {
     HttpErrorResponseModel model({.resource = resource});
     model.set<"error">(error.statusText())
         .set<"code">(error.code())
@@ -115,14 +112,16 @@ const char* HttpError::what() const noexcept {
 }
 
 HttpErrorInfo HttpError::info() const& noexcept {
-    return HttpErrorInfo({.status = status_, .code = code_, .message = message_, .statusText = statusText_});
+    return HttpErrorInfo(
+        {.status = status_, .code = code_, .message = message_, .statusText = statusText_});
 }
 
 std::string_view defaultErrorCode(HttpStatusCode status) noexcept {
     return defaultErrorCodeValue(status);
 }
 
-HttpResponse detail::makeDefaultErrorResponse(std::pmr::memory_resource* resource, HttpErrorInfo error) {
+HttpResponse detail::makeDefaultErrorResponse(
+    std::pmr::memory_resource* resource, HttpErrorInfo error) {
     error = normalizeHttpErrorInfo(error);
 
     HttpResponse response({.resource = resource});
@@ -139,7 +138,8 @@ HttpResponse detail::makeDefaultErrorResponse(std::pmr::memory_resource* resourc
 // is none. A handler that throws is answered with the default response too:
 // transport output stays deterministic and no exception detail reaches the
 // client.
-Task<HttpResponse> detail::invokeErrorHandler(Context& context, HttpErrorInfo error, HttpErrorHandlerRef handler) {
+Task<HttpResponse> detail::invokeErrorHandler(
+    Context& context, HttpErrorInfo error, HttpErrorHandlerRef handler) {
     error = normalizeHttpErrorInfo(error);
 
     if (handler != nullptr) {
@@ -150,9 +150,15 @@ Task<HttpResponse> detail::invokeErrorHandler(Context& context, HttpErrorInfo er
         } catch (const std::exception&) {
             // The error handler itself threw; keep transport output deterministic
             // and avoid echoing exception detail to the client.
-            co_return makeDefaultErrorResponse(context.resource(), HttpErrorInfo({.status = ruvia::http_status::kInternalServerError, .code = "error_handler_failed", .message = "error handler failed"}));
+            co_return makeDefaultErrorResponse(context.resource(),
+                HttpErrorInfo({.status = ruvia::http_status::kInternalServerError,
+                    .code = "error_handler_failed",
+                    .message = "error handler failed"}));
         } catch (...) {
-            co_return makeDefaultErrorResponse(context.resource(), HttpErrorInfo({.status = ruvia::http_status::kInternalServerError, .code = "error_handler_failed", .message = "error handler failed"}));
+            co_return makeDefaultErrorResponse(context.resource(),
+                HttpErrorInfo({.status = ruvia::http_status::kInternalServerError,
+                    .code = "error_handler_failed",
+                    .message = "error handler failed"}));
         }
     }
 

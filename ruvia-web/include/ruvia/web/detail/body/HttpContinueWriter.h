@@ -22,7 +22,10 @@ Task<void> writeHttp1Continue(Stream& stream) {
         throw std::logic_error("failed to prepare HTTP/1 interim Continue response");
     }
 
-    const auto writeCompletion = co_await asyncAsio([&stream, head = prepared->head()](auto handler) mutable { asio::async_write(stream, asio::buffer(head), std::move(handler)); });
+    const auto writeCompletion =
+        co_await asyncAsio([&stream, head = prepared->head()](auto handler) mutable {
+            asio::async_write(stream, asio::buffer(head), std::move(handler));
+        });
     const auto ec = writeCompletion.errorCode();
     if (ec) {
         throw std::system_error(ec, "failed to write HTTP/1 interim Continue response");

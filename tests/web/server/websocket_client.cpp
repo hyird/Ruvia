@@ -35,8 +35,12 @@ public:
         if (thread_.joinable()) thread_.join();
     }
 
-    [[nodiscard]] std::uint16_t port() const { return acceptor_.local_endpoint().port(); }
-    [[nodiscard]] bool receivedText() const noexcept { return receivedText_; }
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+    [[nodiscard]] bool receivedText() const noexcept {
+        return receivedText_;
+    }
 
 private:
     static std::string header(std::string_view request, std::string_view name) {
@@ -46,7 +50,8 @@ private:
             if (end == cursor || end == std::string_view::npos) break;
             const auto line = request.substr(cursor, end - cursor);
             const auto colon = line.find(':');
-            if (colon != std::string_view::npos && ruvia::detail::httpAsciiEqualsIgnoreCase(line.substr(0, colon), name)) {
+            if (colon != std::string_view::npos &&
+                ruvia::detail::httpAsciiEqualsIgnoreCase(line.substr(0, colon), name)) {
                 return std::string(ruvia::detail::httpTrimOws(line.substr(colon + 1)));
             }
             cursor = end + 2;
@@ -57,17 +62,22 @@ private:
     static std::string readClientFrame(asio::ip::tcp::socket& socket, std::uint8_t expectedOpcode) {
         std::array<unsigned char, 2> head{};
         asio::read(socket, asio::buffer(head));
-        if ((head[0] & 0x0FU) != expectedOpcode || (head[1] & 0x80U) == 0 || (head[1] & 0x7FU) > 125) return {};
+        if ((head[0] & 0x0FU) != expectedOpcode || (head[1] & 0x80U) == 0 ||
+            (head[1] & 0x7FU) > 125)
+            return {};
         const auto size = static_cast<std::size_t>(head[1] & 0x7FU);
         std::array<unsigned char, 4> mask{};
         asio::read(socket, asio::buffer(mask));
         std::string payload(size, '\0');
         if (size != 0) asio::read(socket, asio::buffer(payload));
-        for (std::size_t i = 0; i < size; ++i) payload[i] = static_cast<char>(static_cast<unsigned char>(payload[i]) ^ mask[i % mask.size()]);
+        for (std::size_t i = 0; i < size; ++i)
+            payload[i] =
+                static_cast<char>(static_cast<unsigned char>(payload[i]) ^ mask[i % mask.size()]);
         return payload;
     }
 
-    static void writeServerFrame(asio::ip::tcp::socket& socket, std::uint8_t opcode, std::string_view payload) {
+    static void writeServerFrame(
+        asio::ip::tcp::socket& socket, std::uint8_t opcode, std::string_view payload) {
         std::string frame;
         frame.push_back(static_cast<char>(0x80U | opcode));
         frame.push_back(static_cast<char>(payload.size()));
@@ -81,12 +91,17 @@ private:
             acceptor_.accept(socket);
             asio::streambuf buffer;
             asio::read_until(socket, buffer, "\r\n\r\n");
-            std::string request(asio::buffers_begin(buffer.data()), asio::buffers_end(buffer.data()));
+            std::string request(
+                asio::buffers_begin(buffer.data()), asio::buffers_end(buffer.data()));
             const auto key = header(request, "Sec-WebSocket-Key");
-            if (key.empty() || !ruvia::detail::httpHasToken(header(request, "Upgrade"), "websocket")) return;
+            if (key.empty() ||
+                !ruvia::detail::httpHasToken(header(request, "Upgrade"), "websocket"))
+                return;
             ruvia::detail::WebSocketAcceptKey accept{};
             ruvia::detail::encodeWebSocketAccept(accept, key);
-            std::string response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ";
+            std::string response =
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: "
+                "Upgrade\r\nSec-WebSocket-Accept: ";
             response.append(accept.data(), accept.size());
             response += "\r\nSec-WebSocket-Protocol: chat\r\n\r\n";
             asio::write(socket, asio::buffer(response));
@@ -107,7 +122,9 @@ private:
 
 ruvia::Task<int> exercise(ruvia::WebSocketClient& client, ruvia::WorkerId expectedWorker) {
     co_await client.connect();
-    if (!client.connected() || !client.worker().isCurrent() || client.worker().id() != expectedWorker || client.subprotocol() != "chat") co_return 1;
+    if (!client.connected() || !client.worker().isCurrent() ||
+        client.worker().id() != expectedWorker || client.subprotocol() != "chat")
+        co_return 1;
     co_await client.text("hello");
     const auto message = co_await client.read();
     if (!message.has_value() || !message->text() || message->payload() != "world") co_return 2;
@@ -123,20 +140,24 @@ int main() {
         ruvia::EventLoopPool loops({.loopCount = 1});
         auto loop = loops.loop(0);
         ruvia::WebSocketClient client(loop, {
-            .scheme = ruvia::WebSocketScheme::kWs,
-            .host = "127.0.0.1",
-            .port = origin.port(),
-            .target = "/events",
-            .subprotocols = "chat, superchat",
-        });
+                                                .scheme = ruvia::WebSocketScheme::kWs,
+                                                .host = "127.0.0.1",
+                                                .port = origin.port(),
+                                                .target = "/events",
+                                                .subprotocols = "chat, superchat",
+                                            });
         loops.start();
         std::promise<int> completion;
         auto future = completion.get_future();
         const auto posted = loop.post([&] {
-            ruvia::detail::asyncStartTask(exercise(client, loop.id()), asio::bind_executor(loop.executor(), [&completion](ruvia::detail::TaskCompletionResult<int> result) {
-                if (auto* success = result.success()) completion.set_value(std::move(*success).takeValue());
-                else completion.set_exception(result.failure()->exception());
-            }));
+            ruvia::detail::asyncStartTask(exercise(client, loop.id()),
+                asio::bind_executor(loop.executor(),
+                    [&completion](ruvia::detail::TaskCompletionResult<int> result) {
+                        if (auto* success = result.success())
+                            completion.set_value(std::move(*success).takeValue());
+                        else
+                            completion.set_exception(result.failure()->exception());
+                    }));
         });
         if (!posted.accepted()) return 2;
         const auto result = future.get();

@@ -22,7 +22,9 @@ struct RedisDefinition;
 // Owns the database and Redis registries attached to one HTTP server worker.
 class WorkerDataState final {
 public:
-    WorkerDataState(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, ConnectionScanner& scanner);
+    WorkerDataState(asio::io_context& ioContext, const WorkerHandle& worker,
+        std::pmr::memory_resource* resource, std::span<const DbDefinition> databases,
+        std::span<const RedisDefinition> redis, ConnectionScanner& scanner);
     ~WorkerDataState();
 
     WorkerDataState(const WorkerDataState&) = delete;

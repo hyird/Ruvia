@@ -54,15 +54,19 @@ std::string_view jwtAlgorithmName(JwtAlgorithm algorithm) {
     return {};
 }
 
-std::pmr::string jwtHmacSign(JwtAlgorithm algorithm, std::string_view secret, std::string_view data, std::pmr::memory_resource* resource) {
+std::pmr::string jwtHmacSign(JwtAlgorithm algorithm, std::string_view secret, std::string_view data,
+    std::pmr::memory_resource* resource) {
     validateSecret(secret);
     validateHmacData(data);
     unsigned int length = 0;
     std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-    if (HMAC(digestFor(algorithm), secret.data(), static_cast<int>(secret.size()), reinterpret_cast<const unsigned char*>(data.data()), data.size(), digest.data(), &length) == nullptr) {
+    if (HMAC(digestFor(algorithm), secret.data(), static_cast<int>(secret.size()),
+            reinterpret_cast<const unsigned char*>(data.data()), data.size(), digest.data(),
+            &length) == nullptr) {
         throw std::runtime_error("JWT HMAC signing failed");
     }
-    return jwtBase64UrlEncode(std::string_view(reinterpret_cast<const char*>(digest.data()), length), resource);
+    return jwtBase64UrlEncode(
+        std::string_view(reinterpret_cast<const char*>(digest.data()), length), resource);
 }
 
 bool jwtConstantTimeEquals(std::string_view left, std::string_view right) noexcept {

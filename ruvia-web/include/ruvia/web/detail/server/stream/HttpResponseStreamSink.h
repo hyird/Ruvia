@@ -35,7 +35,10 @@ namespace ruvia::detail {
 template <typename Stream, typename ScannerEntry>
 class ResponseStreamSink final {
 public:
-    ResponseStreamSink(Stream& stream, WorkerMemory& memory, ResponseHeadBuffer& head, ScannerEntry& scannerEntry, const WorkerHandle& worker, ResponseStreamKind kind, Http1ResponseStreamPlan plan, HttpResponseCodingSelection responseCoding, HttpResponseCodingAvailability responseCodingAvailability) noexcept
+    ResponseStreamSink(Stream& stream, WorkerMemory& memory, ResponseHeadBuffer& head,
+        ScannerEntry& scannerEntry, const WorkerHandle& worker, ResponseStreamKind kind,
+        Http1ResponseStreamPlan plan, HttpResponseCodingSelection responseCoding,
+        HttpResponseCodingAvailability responseCodingAvailability) noexcept
         : stream_(stream),
           head_(head),
           trailers_(memory.resource()),
@@ -46,7 +49,9 @@ public:
           connectionPlan_(plan.requestConnectionPlan().requireClose()),
           compression_(memory.resource(), responseCoding, responseCodingAvailability) {}
 
-    ResponseStreamSink(Stream&, WorkerMemory&, ResponseHeadBuffer&, ScannerEntry&, WorkerHandle&&, ResponseStreamKind, Http1ResponseStreamPlan, HttpResponseCodingSelection, HttpResponseCodingAvailability) = delete;
+    ResponseStreamSink(Stream&, WorkerMemory&, ResponseHeadBuffer&, ScannerEntry&, WorkerHandle&&,
+        ResponseStreamKind, Http1ResponseStreamPlan, HttpResponseCodingSelection,
+        HttpResponseCodingAvailability) = delete;
 
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
@@ -70,9 +75,11 @@ public:
     template <typename Sink>
     friend Task<void> responseStreamEndThunk(void*, std::span<const HttpHeaderView>);
     template <typename Sink>
-    friend Task<TimerSleepResult> responseStreamSleepThunk(void*, std::chrono::milliseconds, const StopToken&);
+    friend Task<TimerSleepResult> responseStreamSleepThunk(
+        void*, std::chrono::milliseconds, const StopToken&);
     template <typename Sink>
-    friend void responseStreamBindContextThunk(void*, Context*, ResponseStreamState::StreamingHeadThunk);
+    friend void responseStreamBindContextThunk(
+        void*, Context*, ResponseStreamState::StreamingHeadThunk);
     template <typename Sink>
     friend void responseStreamReleaseContextThunk(void*) noexcept;
 
@@ -96,16 +103,20 @@ private:
         try {
             auto response = state_.streamingHead();
             compression_.prepare(plan_.requestMethod(), response, kind_);
-            auto prepareResult = prepareHttp1ResponseStreamHead(std::move(response), kind_, plan_, trailerIntent);
+            auto prepareResult =
+                prepareHttp1ResponseStreamHead(std::move(response), kind_, plan_, trailerIntent);
             if (const auto* failure = prepareResult.failure()) {
                 throw failure->exception();
             }
             auto* prepared = prepareResult.prepared();
             if (prepared == nullptr) {
-                throw std::logic_error("HTTP/1 stream preparation returned no terminal alternative");
+                throw std::logic_error(
+                    "HTTP/1 stream preparation returned no terminal alternative");
             }
             auto streamHead = std::move(*prepared);
-            if (trailerIntent == ResponseTrailerIntent::kPresent && streamHead.commitPlan().trailerFraming() != ResponseStreamTrailerFraming::kHttp1Chunked) {
+            if (trailerIntent == ResponseTrailerIntent::kPresent &&
+                streamHead.commitPlan().trailerFraming() !=
+                    ResponseStreamTrailerFraming::kHttp1Chunked) {
                 throw std::logic_error("response framing does not support trailers");
             }
             compression_.activate(streamHead.commitPlan().bodyPlan());
@@ -126,7 +137,10 @@ private:
             }
             throw;
         }
-        const auto writeCompletion = co_await asyncAsio([this, headView = head_.view()](auto handler) mutable { asio::async_write(stream_, asio::buffer(headView), std::move(handler)); });
+        const auto writeCompletion =
+            co_await asyncAsio([this, headView = head_.view()](auto handler) mutable {
+                asio::async_write(stream_, asio::buffer(headView), std::move(handler));
+            });
         const auto ec = writeCompletion.errorCode();
         if (ec) {
             state_.markAborted();
@@ -183,7 +197,9 @@ private:
         if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {
             // No chunk framing: write the raw body bytes. The connection close
             // (forced once the stream ends) is what delimits the message.
-            const auto writeCompletion = co_await asyncAsio([this, chunk](auto handler) mutable { asio::async_write(stream_, asio::buffer(chunk), std::move(handler)); });
+            const auto writeCompletion = co_await asyncAsio([this, chunk](auto handler) mutable {
+                asio::async_write(stream_, asio::buffer(chunk), std::move(handler));
+            });
             const auto rawEc = writeCompletion.errorCode();
             if (rawEc) {
                 state_.markAborted();
@@ -194,8 +210,11 @@ private:
         }
 
         const Http1ChunkHeader chunkHeader(chunk.size());
-        const std::array<asio::const_buffer, 3> buffers{asio::buffer(chunkHeader.view()), asio::buffer(chunk), asio::buffer(kHttp1ChunkDataTerminator)};
-        const auto writeCompletion = co_await asyncAsio([this, &buffers](auto handler) mutable { asio::async_write(stream_, buffers, std::move(handler)); });
+        const std::array<asio::const_buffer, 3> buffers{asio::buffer(chunkHeader.view()),
+            asio::buffer(chunk), asio::buffer(kHttp1ChunkDataTerminator)};
+        const auto writeCompletion = co_await asyncAsio([this, &buffers](auto handler) mutable {
+            asio::async_write(stream_, buffers, std::move(handler));
+        });
         const auto writeEc = writeCompletion.errorCode();
         if (writeEc) {
             state_.markAborted();
@@ -229,7 +248,8 @@ private:
         if (compression_.active()) {
             if (compression_.finish() != HttpContentEncodeStep::kFinished) {
                 state_.markAborted();
-                throw std::runtime_error("HTTP response stream content encoding finalization failed");
+                throw std::runtime_error(
+                    "HTTP response stream content encoding finalization failed");
             }
             co_await writeEncoded(compression_.output());
         }
@@ -241,8 +261,11 @@ private:
 
         // The protocol primitive owns the last-chunk and trailer-section delimiters;
         // this runtime layer only submits their byte views to the socket.
-        const std::array<asio::const_buffer, 3> buffers{asio::buffer(kHttp1LastChunkPrefix), asio::buffer(trailers_), asio::buffer(kHttp1TrailerSectionTerminator)};
-        const auto writeCompletion = co_await asyncAsio([this, &buffers](auto handler) mutable { asio::async_write(stream_, buffers, std::move(handler)); });
+        const std::array<asio::const_buffer, 3> buffers{asio::buffer(kHttp1LastChunkPrefix),
+            asio::buffer(trailers_), asio::buffer(kHttp1TrailerSectionTerminator)};
+        const auto writeCompletion = co_await asyncAsio([this, &buffers](auto handler) mutable {
+            asio::async_write(stream_, buffers, std::move(handler));
+        });
         const auto ec = writeCompletion.errorCode();
         if (ec) {
             state_.markAborted();

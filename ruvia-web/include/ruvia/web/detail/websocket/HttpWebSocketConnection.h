@@ -37,7 +37,11 @@ namespace ruvia::detail {
 template <typename Transport>
 class WebSocketConnection final {
 public:
-    WebSocketConnection(Transport transport, const WorkerHandle& worker, ConnectionScanner::Entry& scannerEntry, WebSocketLifecycleOptions lifecycleOptions, ProtocolByteLimit messageLimit, std::pmr::memory_resource* resource, std::string_view initialBytes = {}, WebSocketCompression compression = WebSocketCompression::kDisabled)
+    WebSocketConnection(Transport transport, const WorkerHandle& worker,
+        ConnectionScanner::Entry& scannerEntry, WebSocketLifecycleOptions lifecycleOptions,
+        ProtocolByteLimit messageLimit, std::pmr::memory_resource* resource,
+        std::string_view initialBytes = {},
+        WebSocketCompression compression = WebSocketCompression::kDisabled)
         : transport_(std::move(transport)),
           scannerEntry_(scannerEntry),
           lifecycleOptions_(lifecycleOptions),
@@ -46,10 +50,13 @@ public:
           backgroundWriteSignal_(worker),
           readerDoneSignal_(worker) {
         buffer_.append(initialBytes.data(), initialBytes.size());
-        scannerEntry_.registerPeriodicCheck(periodicCheck_, this, &WebSocketConnection::heartbeatTickThunk);
+        scannerEntry_.registerPeriodicCheck(
+            periodicCheck_, this, &WebSocketConnection::heartbeatTickThunk);
     }
 
-    WebSocketConnection(Transport, WorkerHandle&&, ConnectionScanner::Entry&, WebSocketLifecycleOptions, ProtocolByteLimit, std::pmr::memory_resource*, std::string_view = {}, WebSocketCompression = WebSocketCompression::kDisabled) = delete;
+    WebSocketConnection(Transport, WorkerHandle&&, ConnectionScanner::Entry&,
+        WebSocketLifecycleOptions, ProtocolByteLimit, std::pmr::memory_resource*,
+        std::string_view = {}, WebSocketCompression = WebSocketCompression::kDisabled) = delete;
 
     ~WebSocketConnection() = default;
 
@@ -82,7 +89,8 @@ private:
 
     class WriteGuard final {
     public:
-        WriteGuard(WebSocketConnection& connection, WritePhase phase, WriteClaim claim = WriteClaim::kAcquire)
+        WriteGuard(WebSocketConnection& connection, WritePhase phase,
+            WriteClaim claim = WriteClaim::kAcquire)
             : connection_(connection),
               phase_(phase) {
             if (phase_ == WritePhase::kIdle) {

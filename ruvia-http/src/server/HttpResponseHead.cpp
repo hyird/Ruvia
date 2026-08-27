@@ -101,26 +101,34 @@ void addResponseHeadBytes(std::size_t& total, std::size_t bytes) {
     return digits;
 }
 
-[[nodiscard]] bool isValidHttp1EmittedResponseHeader(std::string_view name, std::string_view value, std::uint32_t knownBit, bool trailerHeaderAllowed) noexcept {
+[[nodiscard]] bool isValidHttp1EmittedResponseHeader(std::string_view name, std::string_view value,
+    std::uint32_t knownBit, bool trailerHeaderAllowed) noexcept {
     if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value)) {
         return false;
     }
     if (knownBit == kResponseHeaderContentType && !isValidHttpContentTypeFieldValue(value)) {
         return false;
     }
-    if (knownBit == kResponseHeaderContentEncoding && !isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kSender)) {
+    if (knownBit == kResponseHeaderContentEncoding &&
+        !isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kSender)) {
         return false;
     }
     if (httpAsciiEqualsIgnoreCase(name, "Trailer")) {
-        return isValidHttpResponseTrailerFieldValue(value, HttpFieldListRole::kSender) && (trailerHeaderAllowed || httpTrimOws(value).empty());
+        return isValidHttpResponseTrailerFieldValue(value, HttpFieldListRole::kSender) &&
+               (trailerHeaderAllowed || httpTrimOws(value).empty());
     }
     if (httpAsciiEqualsIgnoreCase(name, "Connection")) {
         HttpConnectionOptions options;
-        return options.parseField(value, HttpFieldListRole::kSender, [](std::string_view option) noexcept { return !httpConnectionOptionConflictsWithManagedField(option); }) == HttpFieldListParseStatus::kOk;
+        return options.parseField(
+                   value, HttpFieldListRole::kSender, [](std::string_view option) noexcept {
+                       return !httpConnectionOptionConflictsWithManagedField(option);
+                   }) == HttpFieldListParseStatus::kOk;
     }
     if (httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
         HttpUpgradeProtocols protocols;
-        return protocols.parseField(value, HttpFieldListRole::kSender, [](const HttpUpgradeProtocol&) noexcept { return true; }) == HttpFieldListParseStatus::kOk;
+        return protocols.parseField(value, HttpFieldListRole::kSender,
+                   [](const HttpUpgradeProtocol&) noexcept { return true; }) ==
+               HttpFieldListParseStatus::kOk;
     }
     if (httpAsciiEqualsIgnoreCase(name, "TE")) {
         return false;
@@ -129,8 +137,11 @@ void addResponseHeadBytes(std::size_t& total, std::size_t bytes) {
 }
 
 template <typename Sink>
-void emitResponseHead(const HttpResponse& response, Sink& sink, HttpStatusCode responseStatus, std::string_view reasonPhrase, std::string_view dateHeader, ResponseHeadFlags flags) {
-    sink.append(flags.protocolVersion == HttpProtocolVersion::kHttp10 ? std::string_view("HTTP/1.0 ") : std::string_view("HTTP/1.1 "));
+void emitResponseHead(const HttpResponse& response, Sink& sink, HttpStatusCode responseStatus,
+    std::string_view reasonPhrase, std::string_view dateHeader, ResponseHeadFlags flags) {
+    sink.append(flags.protocolVersion == HttpProtocolVersion::kHttp10
+                    ? std::string_view("HTTP/1.0 ")
+                    : std::string_view("HTTP/1.1 "));
     const auto statusToken = httpStatusCodeToken(responseStatus);
     sink.append(httpStatusCodeTokenView(statusToken));
     // RFC 9112 requires this SP even when the optional reason phrase is empty.
@@ -144,7 +155,8 @@ void emitResponseHead(const HttpResponse& response, Sink& sink, HttpStatusCode r
         // cannot override canonical chunked framing, invent Transfer-Encoding on
         // an HTTP/1.0 response, or attach Content-Length to a body-open
         // close-delimited stream.
-        if (knownBit == kResponseHeaderTransferEncoding || knownBit == kResponseHeaderContentLength) {
+        if (knownBit == kResponseHeaderTransferEncoding ||
+            knownBit == kResponseHeaderContentLength) {
             continue;
         }
         sink.append(header.name());
@@ -170,34 +182,51 @@ void emitResponseHead(const HttpResponse& response, Sink& sink, HttpStatusCode r
 
 }  // namespace
 
-void appendResponseHead(const HttpResponse& response, ResponseHeadBuffer& head, const Http1ResponseHeadPlan& plan) {
+void appendResponseHead(
+    const HttpResponse& response, ResponseHeadBuffer& head, const Http1ResponseHeadPlan& plan) {
     const auto bodyPlan = plan.bodyPlan();
     if (response.status() != bodyPlan.responseStatus()) {
         throw std::invalid_argument("HTTP/1 response plan status does not match response");
     }
     const auto* buffered = plan.buffered();
     const auto* knownLengthStream = plan.knownLengthStream();
-    if (buffered != nullptr && buffered->contentLength() != bodyPlan.bufferedRepresentationLength(response)) {
+    if (buffered != nullptr &&
+        buffered->contentLength() != bodyPlan.bufferedRepresentationLength(response)) {
         throw std::invalid_argument("HTTP/1 response plan representation does not match response");
     }
     const auto responseStatus = bodyPlan.responseStatus();
     const auto policy = bodyPlan.policy();
-    const bool chunkedPayloadPlan = plan.chunkedStream() != nullptr && policy.transferEncodingAllowed() && !bodyPlan.bodySuppressed();
+    const bool chunkedPayloadPlan = plan.chunkedStream() != nullptr &&
+                                    policy.transferEncodingAllowed() && !bodyPlan.bodySuppressed();
     if (chunkedPayloadPlan && plan.protocolVersion() == HttpProtocolVersion::kHttp10) {
         throw std::invalid_argument("HTTP/1.0 response cannot use chunked Transfer-Encoding");
     }
     const bool emitChunkedTransferEncoding = chunkedPayloadPlan;
-    const bool autoContentLengthOwnedByWriter = policy.autoContentLengthAllowed() && !emitChunkedTransferEncoding && (buffered != nullptr || knownLengthStream != nullptr || !policy.bodyAllowed());
-    const bool explicitContentLengthAllowed = policy.explicitContentLengthAllowed() && !emitChunkedTransferEncoding && !autoContentLengthOwnedByWriter && (plan.closeDelimitedStream() == nullptr || bodyPlan.bodySuppressed());
+    const bool autoContentLengthOwnedByWriter =
+        policy.autoContentLengthAllowed() && !emitChunkedTransferEncoding &&
+        (buffered != nullptr || knownLengthStream != nullptr || !policy.bodyAllowed());
+    const bool explicitContentLengthAllowed =
+        policy.explicitContentLengthAllowed() && !emitChunkedTransferEncoding &&
+        !autoContentLengthOwnedByWriter &&
+        (plan.closeDelimitedStream() == nullptr || bodyPlan.bodySuppressed());
     const auto knownBits = responseKnownHeaderBits(response);
-    const auto declaredContentLength = explicitContentLengthAllowed && (knownBits & kResponseHeaderContentLength) != 0 ? explicitContentLength(response) : std::nullopt;
+    const auto declaredContentLength =
+        explicitContentLengthAllowed && (knownBits & kResponseHeaderContentLength) != 0
+            ? explicitContentLength(response)
+            : std::nullopt;
     const ResponseHeadFlags flags{.protocolVersion = plan.protocolVersion(),
         .emitChunkedTransferEncoding = emitChunkedTransferEncoding,
         .emitContentLength = autoContentLengthOwnedByWriter || declaredContentLength.has_value(),
         // Buffered HEAD metadata retains the selected representation length.
         // A status-level no-content policy that still owns framing (205) is
         // canonicalized to zero for both buffered and streaming heads.
-        .canonicalContentLength = declaredContentLength.value_or(policy.bodyAllowed() ? (buffered != nullptr ? buffered->contentLength() : (knownLengthStream != nullptr ? knownLengthStream->contentLength() : std::uint64_t{0})) : std::uint64_t{0})};
+        .canonicalContentLength = declaredContentLength.value_or(
+            policy.bodyAllowed()
+                ? (buffered != nullptr
+                          ? buffered->contentLength()
+                          : (knownLengthStream != nullptr ? knownLengthStream->contentLength()
+                                                          : std::uint64_t{0}))
+                : std::uint64_t{0})};
 
     const auto reasonPhrase = httpReasonPhrase(responseStatus);
     const auto dateHeader = cachedDateHeader();
@@ -213,10 +242,12 @@ void appendResponseHead(const HttpResponse& response, ResponseHeadBuffer& head, 
     std::size_t fieldCount = 0;
     for (const auto& header : response.headers()) {
         const auto knownBit = responseHeaderKnownBit(header);
-        if (knownBit == kResponseHeaderTransferEncoding || knownBit == kResponseHeaderContentLength) {
+        if (knownBit == kResponseHeaderTransferEncoding ||
+            knownBit == kResponseHeaderContentLength) {
             continue;
         }
-        if (!isValidHttp1EmittedResponseHeader(header.name(), header.value(), knownBit, emitChunkedTransferEncoding)) {
+        if (!isValidHttp1EmittedResponseHeader(
+                header.name(), header.value(), knownBit, emitChunkedTransferEncoding)) {
             throw std::invalid_argument("invalid HTTP response header");
         }
         ++fieldCount;

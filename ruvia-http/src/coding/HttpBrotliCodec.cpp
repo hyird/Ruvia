@@ -31,9 +31,11 @@ namespace {
 
 }  // namespace
 
-ContentDecodeAttempt decodeBrotliContent(std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
+ContentDecodeAttempt decodeBrotliContent(
+    std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    auto* state = BrotliDecoderCreateInstance(&pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource());
+    auto* state = BrotliDecoderCreateInstance(
+        &pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource());
     if (state == nullptr) {
         return HttpContentDecodeError::kDecoderFailure;
     }
@@ -51,29 +53,38 @@ ContentDecodeAttempt decodeBrotliContent(std::string_view input, std::size_t max
         const auto beforeInput = availableInput;
         auto* nextOutput = buffer;
         std::size_t availableOutput = sizeof(buffer);
-        const auto result = BrotliDecoderDecompressStream(state, &availableInput, &nextInput, &availableOutput, &nextOutput, nullptr);
+        const auto result = BrotliDecoderDecompressStream(
+            state, &availableInput, &nextInput, &availableOutput, &nextOutput, nullptr);
         const auto produced = sizeof(buffer) - availableOutput;
-        if (!appendDecodedBytes(output, reinterpret_cast<const char*>(buffer), produced, maxDecodedBytes)) {
+        if (!appendDecodedBytes(
+                output, reinterpret_cast<const char*>(buffer), produced, maxDecodedBytes)) {
             return HttpContentDecodeError::kDecodedSizeExceeded;
         }
         if (result == BROTLI_DECODER_RESULT_SUCCESS) {
             // RFC 7932 defines one Brotli stream. Its decoder deliberately does
             // not over-consume, so remaining bytes are not part of this content.
-            return availableInput == 0 ? ContentDecodeAttempt(std::move(output)) : ContentDecodeAttempt(HttpContentDecodeError::kInvalidContent);
+            return availableInput == 0
+                       ? ContentDecodeAttempt(std::move(output))
+                       : ContentDecodeAttempt(HttpContentDecodeError::kInvalidContent);
         }
         if (result == BROTLI_DECODER_RESULT_ERROR) {
-            return brotliAllocationFailure(BrotliDecoderGetErrorCode(state)) ? HttpContentDecodeError::kDecoderFailure : HttpContentDecodeError::kInvalidContent;
+            return brotliAllocationFailure(BrotliDecoderGetErrorCode(state))
+                       ? HttpContentDecodeError::kDecoderFailure
+                       : HttpContentDecodeError::kInvalidContent;
         }
         const bool progressed = produced != 0 || availableInput != beforeInput;
-        if (!progressed || (result == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT && availableInput == 0)) {
+        if (!progressed ||
+            (result == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT && availableInput == 0)) {
             return HttpContentDecodeError::kInvalidContent;
         }
     }
 }
 
-ContentEncodeAttempt encodeBrotliContent(std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
+ContentEncodeAttempt encodeBrotliContent(
+    std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    auto* state = BrotliEncoderCreateInstance(&pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource());
+    auto* state = BrotliEncoderCreateInstance(
+        &pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource());
     if (state == nullptr) {
         return HttpContentEncodeError::kEncoderFailure;
     }
@@ -94,7 +105,8 @@ ContentEncodeAttempt encodeBrotliContent(std::string_view input, std::size_t max
         const auto beforeInput = availableInput;
         std::size_t availableOutput = sizeof(buffer);
         auto* nextOutput = buffer;
-        if (BrotliEncoderCompressStream(state, BROTLI_OPERATION_FINISH, &availableInput, &nextInput, &availableOutput, &nextOutput, nullptr) != BROTLI_TRUE) {
+        if (BrotliEncoderCompressStream(state, BROTLI_OPERATION_FINISH, &availableInput, &nextInput,
+                &availableOutput, &nextOutput, nullptr) != BROTLI_TRUE) {
             return HttpContentEncodeError::kEncoderFailure;
         }
         const auto produced = sizeof(buffer) - availableOutput;

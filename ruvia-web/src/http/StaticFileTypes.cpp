@@ -44,7 +44,8 @@ inline constexpr std::string_view kDefaultStaticFileTypes[] = {
     "xsl",
 };
 
-const StaticMimeType* findStaticMimeType(const std::vector<StaticMimeType>& mimeTypes, std::string_view extension) noexcept {
+const StaticMimeType* findStaticMimeType(
+    const std::vector<StaticMimeType>& mimeTypes, std::string_view extension) noexcept {
     if (mimeTypes.size() <= kStaticRootLinearLookupLimit) {
         for (const auto& mime : mimeTypes) {
             if (mime.extension == extension) {
@@ -54,7 +55,8 @@ const StaticMimeType* findStaticMimeType(const std::vector<StaticMimeType>& mime
         return nullptr;
     }
 
-    const auto iter = std::ranges::lower_bound(mimeTypes, extension, std::ranges::less{}, [](const StaticMimeType& mime) noexcept { return std::string_view(mime.extension); });
+    const auto iter = std::ranges::lower_bound(mimeTypes, extension, std::ranges::less{},
+        [](const StaticMimeType& mime) noexcept { return std::string_view(mime.extension); });
     if (iter == mimeTypes.end() || std::string_view(iter->extension) != extension) {
         return nullptr;
     }
@@ -66,7 +68,8 @@ const StaticMimeType* findStaticMimeType(const std::vector<StaticMimeType>& mime
 namespace detail {
 
 bool isValidStaticFileExtension(std::string_view extension) noexcept {
-    if (extension.empty() || extension.find('/') != std::string_view::npos || extension.find('\\') != std::string_view::npos) {
+    if (extension.empty() || extension.find('/') != std::string_view::npos ||
+        extension.find('\\') != std::string_view::npos) {
         return false;
     }
     if (extension == "." || extension == "..") {
@@ -89,7 +92,9 @@ void normalizeMimeTypes(std::vector<StaticMimeType>& mimeTypes) {
             }
         }
     }
-    std::ranges::sort(mimeTypes, [](const StaticMimeType& left, const StaticMimeType& right) { return left.extension < right.extension; });
+    std::ranges::sort(mimeTypes, [](const StaticMimeType& left, const StaticMimeType& right) {
+        return left.extension < right.extension;
+    });
 }
 
 void normalizeFileTypes(std::vector<std::string>& fileTypes) {
@@ -123,13 +128,16 @@ bool fileTypeAllowed(std::string_view extension, const StaticRootOptions& option
     return std::ranges::binary_search(extensions, value);
 }
 
-std::pmr::string contentTypeFor(const std::filesystem::path& path, std::string_view extension, const StaticRootOptions& options, std::pmr::memory_resource* resource) {
-    if (const auto* const mime = findStaticMimeType(options.mimeTypes, extension); mime != nullptr) {
+std::pmr::string contentTypeFor(const std::filesystem::path& path, std::string_view extension,
+    const StaticRootOptions& options, std::pmr::memory_resource* resource) {
+    if (const auto* const mime = findStaticMimeType(options.mimeTypes, extension);
+        mime != nullptr) {
         return std::pmr::string(mime->contentType, resource);
     }
 
     const auto guessed = detail::guessStaticFileContentType(path);
-    if (guessed != std::string_view("application/octet-stream") || options.defaultContentType.empty()) {
+    if (guessed != std::string_view("application/octet-stream") ||
+        options.defaultContentType.empty()) {
         return std::pmr::string(guessed, resource);
     }
     return std::pmr::string(options.defaultContentType, resource);

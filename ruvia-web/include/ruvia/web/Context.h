@@ -111,22 +111,30 @@ struct FileResponseOptions final {
     BorrowedText contentType{};
 };
 
-class Context final : public detail::BlockingCapability<Context>, public detail::WorkerStateCapability<Context> {
+class Context final : public detail::BlockingCapability<Context>,
+                      public detail::WorkerStateCapability<Context> {
 private:
     friend class ContextRequest;
     friend struct detail::ContextAccess;
     friend ConnInfo getConnInfo(const Context& context) noexcept;
     friend struct detail::SessionAccess;
     template <typename T>
-    friend detail::RequestBindingHandle<T> detail::bindValidatedModel(Context& context, const T& model);
+    friend detail::RequestBindingHandle<T> detail::bindValidatedModel(
+        Context& context, const T& model);
     template <typename T>
-    friend detail::RequestBindingHandle<T> detail::bindValidatedJsonModel(Context& context, const T& model, std::string_view rawJson);
+    friend detail::RequestBindingHandle<T> detail::bindValidatedJsonModel(
+        Context& context, const T& model, std::string_view rawJson);
 
-    Context(RequestMemory& memory, const HttpRequest& request, detail::ContextServices services) noexcept;
+    Context(RequestMemory& memory, const HttpRequest& request,
+        detail::ContextServices services) noexcept;
 
-    Context(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, const std::string_view* paramNames, const std::string_view* paramValues, std::size_t paramCount, std::uintptr_t routeRateLimitScope, detail::ContextServices services) noexcept;
+    Context(RequestMemory& memory, const HttpRequest& request, std::string_view routePath,
+        const std::string_view* paramNames, const std::string_view* paramValues,
+        std::size_t paramCount, std::uintptr_t routeRateLimitScope,
+        detail::ContextServices services) noexcept;
 
-    [[nodiscard]] HttpResponse staticFile(const StaticRoot& root, StaticFileResponseOptions options, detail::StaticFileSelectionMode mode) const;
+    [[nodiscard]] HttpResponse staticFile(const StaticRoot& root, StaticFileResponseOptions options,
+        detail::StaticFileSelectionMode mode) const;
 
 public:
     using HeaderOptions = HttpResponse::HeaderOptions;
@@ -242,7 +250,8 @@ public:
     // std::invalid_argument for an unregistered pattern or a value-count
     // mismatch, and std::logic_error when the context carries no route table
     // (for example a hand-built test context).
-    [[nodiscard]] std::pmr::string urlFor(std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
+    [[nodiscard]] std::pmr::string urlFor(
+        std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
@@ -333,7 +342,8 @@ public:
 
     [[nodiscard]] HttpResponse file(FileResponseOptions options) const;
 
-    [[nodiscard]] HttpResponse staticFile(const StaticRoot& root, StaticFileResponseOptions options) const;
+    [[nodiscard]] HttpResponse staticFile(
+        const StaticRoot& root, StaticFileResponseOptions options) const;
 
     [[nodiscard]] HttpResponse error(HttpErrorInfoOptions options) const;
 
@@ -346,13 +356,15 @@ private:
     [[nodiscard]] Task<std::string_view> requestBody() const;
     Task<void> requestDiscardBody() const;
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> requestMultipart() const;
-    [[nodiscard]] Task<ContextRequest::RequestFormData> parseRequestBody(ContextRequest::ParseBodyOptions options) const;
+    [[nodiscard]] Task<ContextRequest::RequestFormData> parseRequestBody(
+        ContextRequest::ParseBodyOptions options) const;
     [[nodiscard]] BodyReader& requestBodyReader() const;
     [[nodiscard]] MultipartReader requestMultipartReader() const;
     [[nodiscard]] std::optional<std::string_view> routeParam(std::string_view name) const;
     void ensureRouteParams() const;
     [[nodiscard]] bool requestAccepts(std::string_view mediaType) const noexcept;
-    [[nodiscard]] std::optional<std::string_view> requestNegotiate(ContextRequest::Negotiable field, std::span<const std::string_view> supported) const noexcept;
+    [[nodiscard]] std::optional<std::string_view> requestNegotiate(ContextRequest::Negotiable field,
+        std::span<const std::string_view> supported) const noexcept;
     void ensureRequestQuery() const;
     [[nodiscard]] std::optional<std::string_view> requestQuery(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& requestQuery() const;
@@ -425,7 +437,8 @@ private:
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
     detail::ContextRequestBodySource requestBodySource_;
-    using RequestStorageOwner = std::unique_ptr<detail::ContextRequestStorage, detail::PmrObjectDeleter<detail::ContextRequestStorage>>;
+    using RequestStorageOwner = std::unique_ptr<detail::ContextRequestStorage,
+        detail::PmrObjectDeleter<detail::ContextRequestStorage>>;
     // One typed arena allocation owns all lazy request caches. It is destroyed
     // after response/session state borrowers but before RequestMemory releases
     // their backing arena.
@@ -450,7 +463,8 @@ RequestBindingHandle<T> bindValidatedModel(Context& context, const T& model) {
 }
 
 template <typename T>
-RequestBindingHandle<T> bindValidatedJsonModel(Context& context, const T& model, std::string_view rawJson) {
+RequestBindingHandle<T> bindValidatedJsonModel(
+    Context& context, const T& model, std::string_view rawJson) {
     return context.requestBindings_.bindValidated(model, rawJson);
 }
 

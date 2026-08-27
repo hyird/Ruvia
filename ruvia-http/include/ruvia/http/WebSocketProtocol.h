@@ -5,7 +5,13 @@
 
 namespace ruvia {
 
-enum class WebSocketOpcode : std::uint8_t { kText = 0x1, kBinary = 0x2, kClose = 0x8, kPing = 0x9, kPong = 0xA };
+enum class WebSocketOpcode : std::uint8_t {
+    kText = 0x1,
+    kBinary = 0x2,
+    kClose = 0x8,
+    kPing = 0x9,
+    kPong = 0xA
+};
 // One negotiated permessage-deflate outcome. Keeping the echoed
 // server_max_window_bits alternative explicit prevents response metadata and
 // frame compression from being configured independently.
@@ -16,14 +22,16 @@ enum class WebSocketCompression : std::uint8_t {
 };
 
 namespace detail {
-[[nodiscard]] constexpr std::string_view webSocketCompressionExtension(WebSocketCompression compression) noexcept {
+[[nodiscard]] constexpr std::string_view webSocketCompressionExtension(
+    WebSocketCompression compression) noexcept {
     switch (compression) {
         case WebSocketCompression::kDisabled:
             return {};
         case WebSocketCompression::kPermessageDeflate:
             return "permessage-deflate; server_no_context_takeover; client_no_context_takeover";
         case WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits:
-            return "permessage-deflate; server_no_context_takeover; client_no_context_takeover; server_max_window_bits=15";
+            return "permessage-deflate; server_no_context_takeover; client_no_context_takeover; "
+                   "server_max_window_bits=15";
     }
     return {};
 }

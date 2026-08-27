@@ -19,7 +19,8 @@ namespace {
     // mysql_real_escape_string may expand every input byte to two output
     // bytes, and its input/output lengths are both unsigned long. Check both
     // bounds before doing the multiplication or passing the input to C.
-    if (valueSize > (std::numeric_limits<unsigned long>::max)() / 2 || valueSize > ((std::numeric_limits<std::size_t>::max)() - 2) / 2) {
+    if (valueSize > (std::numeric_limits<unsigned long>::max)() / 2 ||
+        valueSize > ((std::numeric_limits<std::size_t>::max)() - 2) / 2) {
         throw std::length_error("MariaDB string parameter is too large");
     }
     return valueSize * 2 + 2;
@@ -33,7 +34,8 @@ void appendStringLiteral(st_mysql& connection, std::pmr::string& output, std::st
     output.push_back('\'');
     const auto offset = output.size();
     output.resize(offset + literalSizeHint - 1);
-    const auto length = mysql_real_escape_string(&connection, output.data() + offset, value.empty() ? "" : value.data(), static_cast<unsigned long>(value.size()));
+    const auto length = mysql_real_escape_string(&connection, output.data() + offset,
+        value.empty() ? "" : value.data(), static_cast<unsigned long>(value.size()));
     output.resize(offset + length);
     output.push_back('\'');
 }
@@ -86,7 +88,8 @@ void validateMariaDbSqlLength(std::size_t length) {
     }
 }
 
-DbError mysqlError(const st_mysql& connection, std::string_view operation, DbError::Code errorCode) {
+DbError mysqlError(
+    const st_mysql& connection, std::string_view operation, DbError::Code errorCode) {
     auto* mutableConnection = const_cast<st_mysql*>(&connection);
     const auto* message = mysql_error(mutableConnection);
     const auto code = mysql_errno(mutableConnection);
@@ -107,10 +110,7 @@ DbError mysqlError(const st_mysql& connection, std::string_view operation, DbErr
         error.append(": ");
         error.append(message);
     }
-    return DbError(
-        errorCode,
-        DbDriver::kMariaDb,
-        std::string(error),
+    return DbError(errorCode, DbDriver::kMariaDb, std::string(error),
         code == 0 ? std::nullopt : std::optional<std::int64_t>(code),
         state == nullptr ? std::string{} : std::string(state));
 }
@@ -119,7 +119,8 @@ void freeStoredResult(void* result) noexcept {
     mysql_free_result(static_cast<st_mysql_res*>(result));
 }
 
-std::pmr::string interpolateSql(st_mysql& connection, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource) {
+std::pmr::string interpolateSql(st_mysql& connection, std::string_view sql,
+    std::span<const DbValue> params, std::pmr::memory_resource* resource) {
     validateMariaDbSqlLength(sql.size());
     std::pmr::string output(pmrResourceOrDefault(resource));
     std::size_t sizeHint = sql.size();

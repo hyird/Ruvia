@@ -23,8 +23,10 @@ RUVIA_TEST(model_ascii_equals_ignore_case_folds_only_letters) {
     RUVIA_CHECK(!httpAsciiEqualsIgnoreCase("@", "`"));
 
     // High (non-ASCII) bytes are compared exactly, never folded.
-    RUVIA_CHECK(httpAsciiEqualsIgnoreCase(std::string_view("\xC3\xA9", 2), std::string_view("\xC3\xA9", 2)));
-    RUVIA_CHECK(!httpAsciiEqualsIgnoreCase(std::string_view("\xC3\xA9", 2), std::string_view("\xC3\x89", 2)));
+    RUVIA_CHECK(httpAsciiEqualsIgnoreCase(
+        std::string_view("\xC3\xA9", 2), std::string_view("\xC3\xA9", 2)));
+    RUVIA_CHECK(!httpAsciiEqualsIgnoreCase(
+        std::string_view("\xC3\xA9", 2), std::string_view("\xC3\x89", 2)));
 }
 
 RUVIA_TEST(content_type_matches_ignoring_parameters) {
@@ -35,12 +37,13 @@ RUVIA_TEST(content_type_matches_ignoring_parameters) {
     RUVIA_CHECK(contentTypeMatches("application/json ; charset=utf-8", "application/json"));
     // The media type is matched case-insensitively.
     RUVIA_CHECK(contentTypeMatches("APPLICATION/JSON", "application/json"));
-    RUVIA_CHECK(contentTypeMatches("application/x-www-form-urlencoded", "application/x-www-form-urlencoded"));
+    RUVIA_CHECK(contentTypeMatches(
+        "application/x-www-form-urlencoded", "application/x-www-form-urlencoded"));
 }
 
 RUVIA_TEST(content_type_matches_rejects_mismatches) {
     RUVIA_CHECK(!contentTypeMatches("text/html", "application/json"));
-    RUVIA_CHECK(!contentTypeMatches("", "application/json"));                   // empty content type
+    RUVIA_CHECK(!contentTypeMatches("", "application/json"));  // empty content type
     RUVIA_CHECK(!contentTypeMatches("application/jsonx", "application/json"));  // exact, not prefix
     RUVIA_CHECK(!contentTypeMatches("application/json", "application/jsonx"));
 }

@@ -32,7 +32,9 @@ namespace {
 constexpr std::uint8_t kMaxHttp2InterimResponses = 8;
 
 struct Http2ResponseDecodeContext final {
-    explicit Http2ResponseDecodeContext(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction* transaction, std::pmr::memory_resource* resource) noexcept
+    explicit Http2ResponseDecodeContext(Http2StreamState& stream,
+        Http2StreamHeaderDecodeTransaction* transaction,
+        std::pmr::memory_resource* resource) noexcept
         : base(stream, transaction),
           interimHeaders(HttpFieldListRole::kRecipient),
           informationalFields(resource) {}
@@ -60,7 +62,8 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
             return false;
         }
         int parsedStatus = 0;
-        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsedStatus);
+        const auto [ptr, ec] =
+            std::from_chars(value.data(), value.data() + value.size(), parsedStatus);
         if (value.size() != 3 || ec != std::errc{} || ptr != value.data() + value.size()) {
             return false;
         }
@@ -81,30 +84,37 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
     if (context->status->isInformational()) {
         // Interim fields are validated but not stored. The shared incremental
         // validator keeps receive acceptance identical to both response writers.
-        if (context->interimHeaders.validate(name, value) != HttpInterimResponseHeaderValidationStatus::kOk) {
+        if (context->interimHeaders.validate(name, value) !=
+            HttpInterimResponseHeaderValidationStatus::kOk) {
             return false;
         }
-        context->informationalFields.push_back(HttpClientResponseHeaderAccess::make(name, value, context->informationalFields.get_allocator().resource()));
+        context->informationalFields.push_back(HttpClientResponseHeaderAccess::make(
+            name, value, context->informationalFields.get_allocator().resource()));
         return true;
     }
     const auto kind = classifyRequestHeader(name);
     const auto responseKnownBit = classifyResponseHeaderName(name);
-    const auto responseContentSemantics = httpResponseContentSemantics(stream.requestKnownMethod(), *context->status);
-    const bool successfulConnect = responseContentSemantics == HttpResponseContentSemantics::kConnectTunnel;
+    const auto responseContentSemantics =
+        httpResponseContentSemantics(stream.requestKnownMethod(), *context->status);
+    const bool successfulConnect =
+        responseContentSemantics == HttpResponseContentSemantics::kConnectTunnel;
     if (responseKnownBit == kResponseHeaderContentLength && successfulConnect) {
         // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
         // response. It describes neither HTTP content nor the following tunnel DATA.
         return true;
     }
     if (responseKnownBit == kResponseHeaderContentType) {
-        if (!isValidHttpContentTypeFieldValue(value) || !stream.markSingletonResponseHeader(responseKnownBit)) {
+        if (!isValidHttpContentTypeFieldValue(value) ||
+            !stream.markSingletonResponseHeader(responseKnownBit)) {
             return false;
         }
     }
-    if (responseKnownBit == kResponseHeaderContentEncoding && !isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kRecipient)) {
+    if (responseKnownBit == kResponseHeaderContentEncoding &&
+        !isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kRecipient)) {
         return false;
     }
-    if (name == "trailer" && !isValidHttpResponseTrailerFieldValue(value, HttpFieldListRole::kRecipient)) {
+    if (name == "trailer" &&
+        !isValidHttpResponseTrailerFieldValue(value, HttpFieldListRole::kRecipient)) {
         return false;
     }
     if (responseKnownBit == kResponseHeaderContentLength) {
@@ -133,13 +143,22 @@ bool http2OnDecodedResponseTrailer(void* target, std::string_view name, std::str
     // rules. In particular, Accept-Ranges and ETag are explicitly trailer-safe,
     // while response controls such as Date and Location are not.
     return context.acceptRegularField() && http2IsValidDecodedResponseHeader(name, value) &&
-        !isForbiddenResponseTrailerName(name) && context.stream.appendRemoteHeader(name, value, classifyRequestHeader(name));
+           !isForbiddenResponseTrailerName(name) &&
+           context.stream.appendRemoteHeader(name, value, classifyRequestHeader(name));
 }
 
-HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction) {
+HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream,
+    Http2StreamHeaderDecodeTransaction& streamTransaction,
+    HpackDecoder::DecodeTransaction& hpackTransaction) {
     Http2ResponseDecodeContext context{stream, &streamTransaction, resource_};
-    const auto result = decoder_.decode(stream.remoteHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedResponseHeader(target, name, value); }, hpackTransaction);
-    if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
+    const auto result = decoder_.decode(
+        stream.remoteHeaderBlock(), &context,
+        [](void* target, std::string_view name, std::string_view value) {
+            return http2OnDecodedResponseHeader(target, name, value);
+        },
+        hpackTransaction);
+    if (const auto status = http2ClassifyHeaderDecodeResult(result);
+        status != HeaderDecodeStatus::kOk) {
         return status;
     }
     if (!context.status) {
@@ -156,7 +175,8 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
             return HeaderDecodeStatus::kProtocolError;
         }
         reserveEventSlots(1);
-        auto head = HttpClientResponseHeadAccess::make(*context.status, HttpProtocolVersion::kHttp2, resource_);
+        auto head = HttpClientResponseHeadAccess::make(
+            *context.status, HttpProtocolVersion::kHttp2, resource_);
         auto& headers = HttpClientResponseHeadAccess::headers(head);
         headers.reserve(context.informationalFields.size());
         for (auto& field : context.informationalFields) {
@@ -173,17 +193,21 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
     if (!stream.setResponseStatus(*context.status)) {
         return HeaderDecodeStatus::kProtocolError;
     }
-    const auto contentSemantics = httpResponseContentSemantics(stream.requestKnownMethod(), *context.status);
+    const auto contentSemantics =
+        httpResponseContentSemantics(stream.requestKnownMethod(), *context.status);
     // RFC 9110 section 15.3.6 gives 205 an ordinary, zero-length content
     // phase (unlike HEAD/204/304 representation metadata), but forbids a
     // server from generating any content. Bind that semantic limit into the
     // same byte-accounting state that validates DATA and Content-Length. A
     // successful CONNECT takes precedence because its following bytes are a
     // tunnel, not response content.
-    if (*context.status == http_status::kResetContent && contentSemantics != HttpResponseContentSemantics::kConnectTunnel && !stream.declareRemoteContentLength(0)) {
+    if (*context.status == http_status::kResetContent &&
+        contentSemantics != HttpResponseContentSemantics::kConnectTunnel &&
+        !stream.declareRemoteContentLength(0)) {
         return HeaderDecodeStatus::kProtocolError;
     }
-    if (contentSemantics == HttpResponseContentSemantics::kWithoutContent && !stream.selectRemoteContentMetadataOnly()) {
+    if (contentSemantics == HttpResponseContentSemantics::kWithoutContent &&
+        !stream.selectRemoteContentMetadataOnly()) {
         return HeaderDecodeStatus::kProtocolError;
     }
     if (stream.tunnel().pending() != nullptr) {

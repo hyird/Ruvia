@@ -15,10 +15,11 @@ public:
         .subprotocols = "chat.v1",
         .lifecycle =
             {
-                .heartbeat = {
-                    .pingInterval = std::chrono::seconds(30),
-                    .pongTimeout = std::chrono::seconds(10),
-                },
+                .heartbeat =
+                    {
+                        .pingInterval = std::chrono::seconds(30),
+                        .pongTimeout = std::chrono::seconds(10),
+                    },
                 .closeHandshakeTimeout = std::chrono::seconds(5),
             },
     };

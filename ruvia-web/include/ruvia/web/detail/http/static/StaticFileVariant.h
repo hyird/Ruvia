@@ -25,11 +25,13 @@ namespace ruvia {
 // accepts.
 class StaticFileRepresentation final {
 public:
-    StaticFileRepresentation(detail::StaticRootEntryView entry, HttpContentCoding contentCoding) noexcept
+    StaticFileRepresentation(
+        detail::StaticRootEntryView entry, HttpContentCoding contentCoding) noexcept
         : entry_(entry),
           contentCoding_(contentCoding) {}
 
-    StaticFileRepresentation(detail::StaticRootEntryView entry, detail::StaticRootMemoryVariantView memoryVariant, HttpContentCoding contentCoding) noexcept
+    StaticFileRepresentation(detail::StaticRootEntryView entry,
+        detail::StaticRootMemoryVariantView memoryVariant, HttpContentCoding contentCoding) noexcept
         : entry_(entry),
           memoryVariant_(memoryVariant),
           contentCoding_(contentCoding) {}
@@ -57,6 +59,9 @@ private:
 // ties resolve br > zstd > gzip. The served bytes are the variant's, so its
 // size/etag/modified describe the wire representation; the caller keeps the
 // original Content-Type. Index lookups only (no per-request filesystem stat).
-[[nodiscard]] std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const StaticRoot& root, std::string_view relative, const HttpRequest& request, std::pmr::memory_resource* resource, detail::StaticRootEntryView identity, detail::StaticFileSelectionMode mode = detail::StaticFileSelectionMode::kIdentityOnly);
+[[nodiscard]] std::optional<StaticFileRepresentation> selectStaticFileRepresentation(
+    const StaticRoot& root, std::string_view relative, const HttpRequest& request,
+    std::pmr::memory_resource* resource, detail::StaticRootEntryView identity,
+    detail::StaticFileSelectionMode mode = detail::StaticFileSelectionMode::kIdentityOnly);
 
 }  // namespace ruvia

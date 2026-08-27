@@ -25,7 +25,9 @@ inline constexpr std::size_t kChunkedEncodedBufferBytes = kMaxHttpHeaderBytes;
 template <typename Stream>
 class StreamBodyReader final {
 public:
-    StreamBodyReader(Stream& stream, std::pmr::polymorphic_allocator<char> allocator, std::string_view initialBodyAndPipeline, Http1RequestBodyPlan bodyPlan, ProtocolByteLimit bodyLimit, ConnectionScanner::Entry& scannerEntry);
+    StreamBodyReader(Stream& stream, std::pmr::polymorphic_allocator<char> allocator,
+        std::string_view initialBodyAndPipeline, Http1RequestBodyPlan bodyPlan,
+        ProtocolByteLimit bodyLimit, ConnectionScanner::Entry& scannerEntry);
     ~StreamBodyReader() = default;
 
     StreamBodyReader(const StreamBodyReader&) = delete;
@@ -61,7 +63,8 @@ private:
     Stream& stream_;
     std::pmr::string buffer_;
     std::pmr::string transferOutput_;
-    std::unique_ptr<TransferCodingDecoder, PmrObjectDeleter<TransferCodingDecoder>> transferDecoder_;
+    std::unique_ptr<TransferCodingDecoder, PmrObjectDeleter<TransferCodingDecoder>>
+        transferDecoder_;
     std::string_view transferInput_;
     std::string_view initialBodyAndPipeline_;
     Http1RequestBodyPlan bodyPlan_;

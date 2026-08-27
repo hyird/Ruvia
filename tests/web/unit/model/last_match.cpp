@@ -5,7 +5,8 @@
 
 RUVIA_TEST(model_factory_materializes_before_publication) {
     std::pmr::monotonic_buffer_resource modelResource;
-    const auto parsed = ruvia::fromJson<AccessorSurfaceRequest>(R"({"message":"ready"})", {.resource = &modelResource});
+    const auto parsed = ruvia::fromJson<AccessorSurfaceRequest>(
+        R"({"message":"ready"})", {.resource = &modelResource});
     RUVIA_CHECK(parsed.has_value());
     if (parsed.has_value()) {
         const AccessorSurfaceRequest& model = *parsed;
@@ -14,18 +15,25 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
             RUVIA_CHECK_EQ(model.get<"message">()->view(), std::string_view("ready"));
             RUVIA_CHECK(model.get<"message">()->resource() == &modelResource);
         }
-        RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(model) == ruvia::detail::ModelFieldState::kParsed);
+        RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(model) ==
+                    ruvia::detail::ModelFieldState::kParsed);
     }
 
-    RUVIA_CHECK(!ruvia::fromJson<AccessorSurfaceRequest>(R"({"message":42})", {.resource = std::pmr::get_default_resource()}).has_value());
-    const auto invalidField = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<AccessorSurfaceRequest>(R"({"message":42})", std::pmr::get_default_resource());
+    RUVIA_CHECK(!ruvia::fromJson<AccessorSurfaceRequest>(
+        R"({"message":42})", {.resource = std::pmr::get_default_resource()})
+            .has_value());
+    const auto invalidField =
+        ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<AccessorSurfaceRequest>(
+            R"({"message":42})", std::pmr::get_default_resource());
     RUVIA_CHECK(invalidField.has_value());
     if (invalidField.has_value()) {
         RUVIA_CHECK(!invalidField->get<"message">().has_value());
-        RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(*invalidField) == ruvia::detail::ModelFieldState::kInvalidType);
+        RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(*invalidField) ==
+                    ruvia::detail::ModelFieldState::kInvalidType);
     }
 
-    const auto malformed = ruvia::fromJson<AccessorSurfaceRequest>(R"({"message":"incomplete")", {.resource = &modelResource});
+    const auto malformed = ruvia::fromJson<AccessorSurfaceRequest>(
+        R"({"message":"incomplete")", {.resource = &modelResource});
     RUVIA_CHECK(!malformed.has_value());
 
     AccessorSurfaceResponse response({.resource = &modelResource});
@@ -58,14 +66,19 @@ RUVIA_TEST(request_and_response_models_support_nested_arrays_and_optional_fields
 
     NestedResponseEnvelope response({.resource = &resource});
     response.ensure<"primary">().set<"id">(ruvia::UInt32{1});
-    response.ensure<"items">().emplace_back(ruvia::ModelOptions{.resource = &resource}).set<"id">(ruvia::UInt32{2}).set<"label">("two");
+    response.ensure<"items">()
+        .emplace_back(ruvia::ModelOptions{.resource = &resource})
+        .set<"id">(ruvia::UInt32{2})
+        .set<"label">("two");
     response.ensure<"tags">().emplace_back("a", ruvia::ModelOptions{.resource = &resource});
     response.ensure<"tags">().emplace_back("b", ruvia::ModelOptions{.resource = &resource});
-    RUVIA_CHECK_EQ(std::string(ruvia::toJson(response, {.resource = &resource})), std::string(R"({"primary":{"id":1},"items":[{"id":2,"label":"two"}],"tags":["a","b"]})"));
+    RUVIA_CHECK_EQ(std::string(ruvia::toJson(response, {.resource = &resource})),
+        std::string(R"({"primary":{"id":1},"items":[{"id":2,"label":"two"}],"tags":["a","b"]})"));
 }
 
 RUVIA_TEST(form_object_get_uses_last_match) {
-    auto form = ruvia::FormObject::parse("name=first&other=x&name=second", {.resource = std::pmr::get_default_resource()});
+    auto form = ruvia::FormObject::parse(
+        "name=first&other=x&name=second", {.resource = std::pmr::get_default_resource()});
     RUVIA_CHECK(form.has_value());
 
     const auto value = form->get<ruvia::String>("name");
@@ -74,7 +87,8 @@ RUVIA_TEST(form_object_get_uses_last_match) {
 }
 
 RUVIA_TEST(form_object_get_uses_last_match_after_invalid_duplicate) {
-    auto form = ruvia::FormObject::parse("age=nope&other=x&age=42", {.resource = std::pmr::get_default_resource()});
+    auto form = ruvia::FormObject::parse(
+        "age=nope&other=x&age=42", {.resource = std::pmr::get_default_resource()});
     RUVIA_CHECK(form.has_value());
 
     const auto value = form->get<ruvia::Int32>("age");
@@ -83,7 +97,8 @@ RUVIA_TEST(form_object_get_uses_last_match_after_invalid_duplicate) {
 }
 
 RUVIA_TEST(json_object_get_uses_last_match) {
-    auto json = ruvia::JsonObject::parse(R"({"name":"first","other":"x","name":"second"})", {.resource = std::pmr::get_default_resource()});
+    auto json = ruvia::JsonObject::parse(R"({"name":"first","other":"x","name":"second"})",
+        {.resource = std::pmr::get_default_resource()});
     RUVIA_CHECK(json.has_value());
 
     const auto value = json->get<ruvia::String>("name");

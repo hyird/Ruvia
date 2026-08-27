@@ -20,6 +20,8 @@ void normalizeFileTypes(std::vector<std::string>& fileTypes);
 
 [[nodiscard]] bool fileTypeAllowed(std::string_view extension, const StaticRootOptions& options);
 
-[[nodiscard]] std::pmr::string contentTypeFor(const std::filesystem::path& path, std::string_view extension, const StaticRootOptions& options, std::pmr::memory_resource* resource);
+[[nodiscard]] std::pmr::string contentTypeFor(const std::filesystem::path& path,
+    std::string_view extension, const StaticRootOptions& options,
+    std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

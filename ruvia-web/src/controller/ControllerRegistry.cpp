@@ -16,7 +16,9 @@ struct ControllerLifetime final {
     std::pmr::memory_resource* resource{nullptr};
 
     ControllerLifetime() noexcept = default;
-    ControllerLifetime(void* targetValue, void (*destroyValue)(void*, std::pmr::memory_resource*) noexcept, std::pmr::memory_resource* resourceValue) noexcept
+    ControllerLifetime(void* targetValue,
+        void (*destroyValue)(void*, std::pmr::memory_resource*) noexcept,
+        std::pmr::memory_resource* resourceValue) noexcept
         : target(targetValue),
           destroy(destroyValue),
           resource(resourceValue) {}
@@ -92,7 +94,8 @@ std::size_t ControllerStore::size() const noexcept {
     return state_->lifetimes.size();
 }
 
-void ControllerStore::addLifetime(void* target, Destroy destroy, std::pmr::memory_resource* resource) {
+void ControllerStore::addLifetime(
+    void* target, Destroy destroy, std::pmr::memory_resource* resource) {
     state_->lifetimes.emplace_back(target, destroy, resource);
 }
 
@@ -103,7 +106,9 @@ bool addControllerRegistrar(ControllerRegistrar registrar) {
     auto& state = controllerRegistry();
     std::lock_guard lock(state.mutex);
     if (state.sealed) {
-        throw std::logic_error("controller registration is sealed; load every controller module before App::run() or TestApp::request()");
+        throw std::logic_error(
+            "controller registration is sealed; load every controller module before App::run() or "
+            "TestApp::request()");
     }
     for (const auto existing : state.registrars) {
         if (existing == registrar) {
@@ -123,7 +128,8 @@ std::pmr::vector<ControllerRegistrar> sealControllerRegistrars() {
     return registrars;
 }
 
-void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes, std::span<const ControllerRegistrar> registrars) {
+void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes,
+    std::span<const ControllerRegistrar> registrars) {
     controllerLifetimes.reserve(controllerLifetimes.size() + registrars.size());
     for (const auto registrar : registrars) {
         registrar(router, controllerLifetimes);

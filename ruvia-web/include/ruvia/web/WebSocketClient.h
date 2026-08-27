@@ -38,7 +38,8 @@ struct WebSocketClientConfig final {
     std::optional<std::chrono::milliseconds> readTimeout{};
     std::optional<std::chrono::milliseconds> writeTimeout{30000};
     std::optional<std::chrono::milliseconds> closeHandshakeTimeout{5000};
-    HttpClientTlsPeerVerificationPolicy tlsPeerVerification{HttpClientTlsPeerVerificationPolicy::kVerify};
+    HttpClientTlsPeerVerificationPolicy tlsPeerVerification{
+        HttpClientTlsPeerVerificationPolicy::kVerify};
     TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
     TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kEnable};
     std::string caFile{};
@@ -66,9 +67,12 @@ public:
     };
 
     WebSocketClientError(Code code, std::string message)
-        : std::runtime_error(std::move(message)), code_(code) {}
+        : std::runtime_error(std::move(message)),
+          code_(code) {}
 
-    [[nodiscard]] Code code() const noexcept { return code_; }
+    [[nodiscard]] Code code() const noexcept {
+        return code_;
+    }
 
 private:
     Code code_;
@@ -94,7 +98,8 @@ public:
 
 private:
     friend class detail::WebSocketClientState;
-    WebSocketClientHandle(std::shared_ptr<detail::WebSocketClientState> state, detail::ScopedOperationScope& scope, OperationOptions options) noexcept;
+    WebSocketClientHandle(std::shared_ptr<detail::WebSocketClientState> state,
+        detail::ScopedOperationScope& scope, OperationOptions options) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
     std::shared_ptr<detail::WebSocketClientState> state_;
@@ -126,7 +131,9 @@ public:
     // Immediate lifecycle shutdown, matching HttpClient::close(). Graceful RFC
     // 6455 close uses the typed overload above: co_await client.close({...}).
     void close() noexcept;
-    void abort() noexcept { close(); }
+    void abort() noexcept {
+        close();
+    }
 
     [[nodiscard]] bool connected() const;
     [[nodiscard]] std::string_view subprotocol() const&;

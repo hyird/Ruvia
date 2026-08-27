@@ -27,13 +27,18 @@ bool rejects(const ruvia::CookieOptions& options) {
 }
 
 template <typename Text>
-concept CookiePathAccepts = requires(ruvia::CookieOptions& options, Text&& text) { options.path = std::forward<Text>(text); };
+concept CookiePathAccepts = requires(
+    ruvia::CookieOptions& options, Text&& text) { options.path = std::forward<Text>(text); };
 
 template <typename Text>
-concept CookieDomainAccepts = requires(ruvia::CookieOptions& options, Text&& text) { options.domain = std::forward<Text>(text); };
+concept CookieDomainAccepts = requires(
+    ruvia::CookieOptions& options, Text&& text) { options.domain = std::forward<Text>(text); };
 
 template <typename Name, typename Value, typename Options>
-concept CanConstructSetCookiePlan = requires(Name&& name, Value&& value, Options&& options) { ruvia::detail::SetCookiePlan(std::forward<Name>(name), std::forward<Value>(value), std::forward<Options>(options)); };
+concept CanConstructSetCookiePlan = requires(Name&& name, Value&& value, Options&& options) {
+    ruvia::detail::SetCookiePlan(
+        std::forward<Name>(name), std::forward<Value>(value), std::forward<Options>(options));
+};
 
 template <typename T>
 concept HasCookieHttpOnlyBoolean = requires(T& options) { options.httpOnly = true; };
@@ -58,13 +63,18 @@ static_assert(!CookiePathAccepts<std::pmr::string>);
 static_assert(!CookieDomainAccepts<std::pmr::string>);
 static_assert(CanConstructSetCookiePlan<std::string&, const std::string&, ruvia::CookieOptions&>);
 static_assert(!CanConstructSetCookiePlan<std::string, std::string_view, ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<std::string_view, const std::string, ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<std::pmr::string, std::string_view, ruvia::CookieOptions&>);
+static_assert(
+    !CanConstructSetCookiePlan<std::string_view, const std::string, ruvia::CookieOptions&>);
+static_assert(
+    !CanConstructSetCookiePlan<std::pmr::string, std::string_view, ruvia::CookieOptions&>);
 static_assert(!CanConstructSetCookiePlan<std::string_view, std::string_view, ruvia::CookieOptions>);
-static_assert(!CanConstructSetCookiePlan<std::string_view, std::string_view, const ruvia::CookieOptions>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.httpOnly), ruvia::CookieAttributePolicy>);
+static_assert(
+    !CanConstructSetCookiePlan<std::string_view, std::string_view, const ruvia::CookieOptions>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.httpOnly), ruvia::CookieAttributePolicy>);
 static_assert(std::same_as<decltype(ruvia::CookieOptions{}.secure), ruvia::CookieAttributePolicy>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.partitioned), ruvia::CookieAttributePolicy>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.partitioned), ruvia::CookieAttributePolicy>);
 static_assert(!HasCookieHttpOnlyBoolean<ruvia::CookieOptions>);
 static_assert(!HasCookieSecureBoolean<ruvia::CookieOptions>);
 static_assert(!HasCookiePartitionedBoolean<ruvia::CookieOptions>);
@@ -86,10 +96,14 @@ static_assert(kLiteralCookieOptions.domain.view() == "example.com");
 static_assert(kLiteralCookieOptions.path == "/app");
 static_assert("example.com" == kLiteralCookieOptions.domain);
 
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.sameSite), std::optional<ruvia::CookieSameSite>>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.priority), std::optional<ruvia::CookiePriority>>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.prefix), std::optional<ruvia::CookiePrefix>>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.maxAge), std::optional<std::chrono::seconds>>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.sameSite), std::optional<ruvia::CookieSameSite>>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.priority), std::optional<ruvia::CookiePriority>>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.prefix), std::optional<ruvia::CookiePrefix>>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.maxAge), std::optional<std::chrono::seconds>>);
 
 RUVIA_TEST(cookie_borrowed_text_accepts_stable_string_owners) {
     const std::string path = "/account";
@@ -136,9 +150,12 @@ RUVIA_TEST(cookie_samesite_enum_maps_to_wire_tokens) {
     RUVIA_CHECK(!rejects(none));
 
     RUVIA_CHECK(!ruvia::CookieOptions{}.sameSite.has_value());
-    RUVIA_CHECK_EQ(ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kStrict), std::string_view("Strict"));
-    RUVIA_CHECK_EQ(ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kLax), std::string_view("Lax"));
-    RUVIA_CHECK_EQ(ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kNone), std::string_view("None"));
+    RUVIA_CHECK_EQ(ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kStrict),
+        std::string_view("Strict"));
+    RUVIA_CHECK_EQ(
+        ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kLax), std::string_view("Lax"));
+    RUVIA_CHECK_EQ(
+        ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kNone), std::string_view("None"));
 }
 
 RUVIA_TEST(cookie_samesite_none_requires_secure) {
@@ -175,7 +192,7 @@ RUVIA_TEST(cookie_path_octets_follow_set_cookie_grammar) {
     RUVIA_CHECK(isValidCookieAttribute("/path/to"));
     RUVIA_CHECK(isValidCookieAttribute("example.com"));
     RUVIA_CHECK(isValidCookieAttribute(""));
-    RUVIA_CHECK(!isValidCookieAttribute("a;b"));                        // ';' would inject another attribute
+    RUVIA_CHECK(!isValidCookieAttribute("a;b"));  // ';' would inject another attribute
     RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\rb", 3)));  // CR (header injection)
     RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\nb", 3)));  // LF
     RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\0b", 3)));  // NUL
@@ -237,7 +254,8 @@ RUVIA_TEST(cookie_priority_enum_maps_to_wire_tokens) {
 }
 
 RUVIA_TEST(cookie_validation_rejects_injection_and_bad_options) {
-    const auto rejectsCookie = [](std::string_view name, std::string_view value, const ruvia::CookieOptions& options) {
+    const auto rejectsCookie = [](std::string_view name, std::string_view value,
+                                   const ruvia::CookieOptions& options) {
         try {
             ruvia::detail::validateCookie(name, value, options);
             return false;

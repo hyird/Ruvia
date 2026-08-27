@@ -15,8 +15,7 @@
 namespace ruvia::detail {
 
 struct AppWorkerSlot final {
-    AppWorkerSlot(
-        ControllerStore configuredControllers,
+    AppWorkerSlot(ControllerStore configuredControllers,
         std::unique_ptr<Router, PmrObjectDeleter<Router>> configuredRouter,
         std::unique_ptr<WebWorkerRuntime, PmrObjectDeleter<WebWorkerRuntime>> configuredRuntime)
         : controllers(std::move(configuredControllers)),

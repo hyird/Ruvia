@@ -61,7 +61,8 @@ void clearRemainingPostgreSqlResults(PGconn* connection) noexcept {
     return status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK || status == PGRES_EMPTY_QUERY;
 }
 
-void materializeBorrowedResult(DbRows& output, PGresult& result, std::pmr::memory_resource* resource) {
+void materializeBorrowedResult(
+    DbRows& output, PGresult& result, std::pmr::memory_resource* resource) {
     const auto rowCount = static_cast<std::size_t>(PQntuples(&result));
     const auto fieldCount = static_cast<std::size_t>(PQnfields(&result));
     auto& rows = DbResultAccess::rows(output);
@@ -82,18 +83,18 @@ void materializeBorrowedResult(DbRows& output, PGresult& result, std::pmr::memor
                 fields.push_back(DbResultAccess::nullField(resource));
                 continue;
             }
-            fields.push_back(DbResultAccess::borrowedField(std::string_view(PQgetvalue(&result, rowIndex, fieldIndex), static_cast<std::size_t>(PQgetlength(&result, rowIndex, fieldIndex))), resource));
+            fields.push_back(DbResultAccess::borrowedField(
+                std::string_view(PQgetvalue(&result, rowIndex, fieldIndex),
+                    static_cast<std::size_t>(PQgetlength(&result, rowIndex, fieldIndex))),
+                resource));
         }
-        rows.push_back(DbResultAccess::borrowedRow(
-            fields.data() + rowStart,
-            fieldCount,
-            columnNames.data(),
-            columnNames.size(),
-            resource));
+        rows.push_back(DbResultAccess::borrowedRow(fields.data() + rowStart, fieldCount,
+            columnNames.data(), columnNames.size(), resource));
     }
 }
 
-[[nodiscard]] DbRow materializeOwnedSingleRow(PGresult& result, std::pmr::memory_resource* resource) {
+[[nodiscard]] DbRow materializeOwnedSingleRow(
+    PGresult& result, std::pmr::memory_resource* resource) {
     auto row = DbResultAccess::ownedRow(resource);
     auto& fields = DbResultAccess::ownedFields(row);
     auto& columnNames = DbResultAccess::ownedColumnNames(row);
@@ -107,22 +108,29 @@ void materializeBorrowedResult(DbRows& output, PGresult& result, std::pmr::memor
             fields.push_back(DbResultAccess::nullField(resource));
             continue;
         }
-        fields.push_back(DbResultAccess::ownedField(std::string_view(PQgetvalue(&result, 0, fieldIndex), static_cast<std::size_t>(PQgetlength(&result, 0, fieldIndex))), resource));
+        fields.push_back(DbResultAccess::ownedField(
+            std::string_view(PQgetvalue(&result, 0, fieldIndex),
+                static_cast<std::size_t>(PQgetlength(&result, 0, fieldIndex))),
+            resource));
     }
     return row;
 }
 
 }  // namespace
 
-Task<DbRows> PostgreSqlPool::query(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, OperationOptions options) {
+Task<DbRows> PostgreSqlPool::query(std::pmr::string sql, std::pmr::vector<DbValue> params,
+    std::pmr::memory_resource* resource, OperationOptions options) {
     return executeDbQuery(*this, std::move(sql), std::move(params), resource, std::move(options));
 }
 
-Task<DbExecResult> PostgreSqlPool::execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, OperationOptions options) {
+Task<DbExecResult> PostgreSqlPool::execute(std::pmr::string sql, std::pmr::vector<DbValue> params,
+    std::pmr::memory_resource* resource, OperationOptions options) {
     return executeDbCommand(*this, std::move(sql), std::move(params), resource, std::move(options));
 }
 
-Task<DbRows> PostgreSqlPool::queryOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout) {
+Task<DbRows> PostgreSqlPool::queryOnSlot(ConnectionSlot& slot, const std::pmr::string& sql,
+    std::span<const DbValue> params, std::pmr::memory_resource* resource,
+    const OperationTimeout& operationTimeout) {
     throwIfCancelled(slot);
     if (!slot.connected) {
         co_await connectUnlocked(slot, operationTimeout);
@@ -140,11 +148,8 @@ Task<DbRows> PostgreSqlPool::queryOnSlot(ConnectionSlot& slot, const std::pmr::s
         }
         const auto status = PQresultStatus(result.get());
         if (!successfulResultStatus(status)) {
-            auto error = postgreSqlError(
-                *slot.connection,
-                "PostgreSQL query",
-                DbError::Code::kStatementFailed,
-                result.get());
+            auto error = postgreSqlError(*slot.connection, "PostgreSQL query",
+                DbError::Code::kStatementFailed, result.get());
             result.reset();
             clearRemainingPostgreSqlResults(slot.connection);
             throw error;
@@ -153,9 +158,7 @@ Task<DbRows> PostgreSqlPool::queryOnSlot(ConnectionSlot& slot, const std::pmr::s
         if (status == PGRES_TUPLES_OK) {
             if (retainedTupleResult) {
                 result.reset();
-                throw DbError(
-                    DbError::Code::kProtocolError,
-                    DbDriver::kPostgreSql,
+                throw DbError(DbError::Code::kProtocolError, DbDriver::kPostgreSql,
                     "PostgreSQL returned multiple tuple results");
             }
             materializeBorrowedResult(output, *result, resource);
@@ -169,7 +172,9 @@ Task<DbRows> PostgreSqlPool::queryOnSlot(ConnectionSlot& slot, const std::pmr::s
     co_return output;
 }
 
-Task<DbExecResult> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource*, const OperationTimeout& operationTimeout) {
+Task<DbExecResult> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql,
+    std::span<const DbValue> params, std::pmr::memory_resource*,
+    const OperationTimeout& operationTimeout) {
     throwIfCancelled(slot);
     if (!slot.connected) {
         co_await connectUnlocked(slot, operationTimeout);
@@ -186,11 +191,8 @@ Task<DbExecResult> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std
         }
         const auto status = PQresultStatus(result.get());
         if (!successfulResultStatus(status)) {
-            auto error = postgreSqlError(
-                *slot.connection,
-                "PostgreSQL execute",
-                DbError::Code::kStatementFailed,
-                result.get());
+            auto error = postgreSqlError(*slot.connection, "PostgreSQL execute",
+                DbError::Code::kStatementFailed, result.get());
             result.reset();
             clearRemainingPostgreSqlResults(slot.connection);
             throw error;
@@ -205,7 +207,8 @@ Task<DbExecResult> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std
     co_return DbResultAccess::makeExecResult(affectedRows);
 }
 
-Task<DbStreamResult> PostgreSqlPool::stream(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, OperationOptions options) {
+Task<DbStreamResult> PostgreSqlPool::stream(std::pmr::string sql, std::pmr::vector<DbValue> params,
+    std::pmr::memory_resource* resource, OperationOptions options) {
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
@@ -229,7 +232,8 @@ Task<DbStreamResult> PostgreSqlPool::stream(std::pmr::string sql, std::pmr::vect
     }
 }
 
-Task<std::optional<DbRow>> PostgreSqlPool::readStreamRow(std::size_t slotIndex, void*, std::pmr::memory_resource* resource, const OperationOptions& options) {
+Task<std::optional<DbRow>> PostgreSqlPool::readStreamRow(std::size_t slotIndex, void*,
+    std::pmr::memory_resource* resource, const OperationOptions& options) {
     if (slotIndex >= slots_.size()) {
         co_return std::nullopt;
     }
@@ -238,7 +242,8 @@ Task<std::optional<DbRow>> PostgreSqlPool::readStreamRow(std::size_t slotIndex, 
     bool slotReleased = false;
     try {
         throwIfCancelled(slot);
-        const OperationTimeout deadline = OperationTimeout(options.timeout).constrainedBy(config_.queryTimeout);
+        const OperationTimeout deadline =
+            OperationTimeout(options.timeout).constrainedBy(config_.queryTimeout);
         co_await waitUntilResultReady(slot, deadline);
         PostgreSqlResultOwner result(PQgetResult(slot.connection));
         if (result.get() == nullptr) {
@@ -252,7 +257,8 @@ Task<std::optional<DbRow>> PostgreSqlPool::readStreamRow(std::size_t slotIndex, 
             auto row = materializeOwnedSingleRow(*result, resource);
             co_return row;
         }
-        if (status == PGRES_TUPLES_OK || status == PGRES_COMMAND_OK || status == PGRES_EMPTY_QUERY) {
+        if (status == PGRES_TUPLES_OK || status == PGRES_COMMAND_OK ||
+            status == PGRES_EMPTY_QUERY) {
             result.reset();
             while (true) {
                 PostgreSqlResultOwner remaining(PQgetResult(slot.connection));
@@ -261,11 +267,8 @@ Task<std::optional<DbRow>> PostgreSqlPool::readStreamRow(std::size_t slotIndex, 
                 }
                 const auto remainingStatus = PQresultStatus(remaining.get());
                 if (!successfulResultStatus(remainingStatus)) {
-                    auto error = postgreSqlError(
-                        *slot.connection,
-                        "PostgreSQL stream",
-                        DbError::Code::kStatementFailed,
-                        remaining.get());
+                    auto error = postgreSqlError(*slot.connection, "PostgreSQL stream",
+                        DbError::Code::kStatementFailed, remaining.get());
                     throw error;
                 }
             }
@@ -278,10 +281,7 @@ Task<std::optional<DbRow>> PostgreSqlPool::readStreamRow(std::size_t slotIndex, 
             co_return std::nullopt;
         }
         auto error = postgreSqlError(
-            *slot.connection,
-            "PostgreSQL stream",
-            DbError::Code::kStatementFailed,
-            result.get());
+            *slot.connection, "PostgreSQL stream", DbError::Code::kStatementFailed, result.get());
         throw error;
     } catch (...) {
         if (!slotReleased) {
@@ -293,7 +293,8 @@ Task<std::optional<DbRow>> PostgreSqlPool::readStreamRow(std::size_t slotIndex, 
     }
 }
 
-Task<void> PostgreSqlPool::closeStream(std::size_t slot, void*, std::pmr::memory_resource*, const OperationOptions& options) {
+Task<void> PostgreSqlPool::closeStream(
+    std::size_t slot, void*, std::pmr::memory_resource*, const OperationOptions& options) {
     if (slot < slots_.size()) {
         DbSlotCancellationGuard cancellation(*this, slot, options.stopToken);
         // Abandoning a libpq single-row result still requires draining the whole
@@ -302,7 +303,8 @@ Task<void> PostgreSqlPool::closeStream(std::size_t slot, void*, std::pmr::memory
         cancellation.finish();
         releaseSlot(slot);
         if (options.stopToken.stopRequested()) {
-            throw DbError(DbError::Code::kCancelled, DbDriver::kPostgreSql, "database operation cancelled");
+            throw DbError(
+                DbError::Code::kCancelled, DbDriver::kPostgreSql, "database operation cancelled");
         }
     }
     co_return;
@@ -316,20 +318,28 @@ void PostgreSqlPool::abortStream(std::size_t slot, void*) noexcept {
     releaseSlot(slot);
 }
 
-Task<void> PostgreSqlPool::executeControl(ConnectionSlot& slot, std::string_view sql, std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout) {
+Task<void> PostgreSqlPool::executeControl(ConnectionSlot& slot, std::string_view sql,
+    std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout) {
     const std::pmr::string command(sql, resource_);
     (void)co_await executeOnSlot(slot, command, {}, resource, operationTimeout);
 }
 
-Task<DbRows> PostgreSqlPool::queryOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const OperationOptions& options) {
-    return queryOnDbTransactionSlot(*this, slot, std::move(sql), std::move(params), resource, options);
+Task<DbRows> PostgreSqlPool::queryOnTransactionSlot(std::size_t slot, std::pmr::string sql,
+    std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
+    const OperationOptions& options) {
+    return queryOnDbTransactionSlot(
+        *this, slot, std::move(sql), std::move(params), resource, options);
 }
 
-Task<DbExecResult> PostgreSqlPool::executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const OperationOptions& options) {
-    return executeOnDbTransactionSlot(*this, slot, std::move(sql), std::move(params), resource, options);
+Task<DbExecResult> PostgreSqlPool::executeOnTransactionSlot(std::size_t slot, std::pmr::string sql,
+    std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
+    const OperationOptions& options) {
+    return executeOnDbTransactionSlot(
+        *this, slot, std::move(sql), std::move(params), resource, options);
 }
 
-Task<DbTransaction> PostgreSqlPool::beginTransaction(std::pmr::memory_resource* resource, OperationOptions options) {
+Task<DbTransaction> PostgreSqlPool::beginTransaction(
+    std::pmr::memory_resource* resource, OperationOptions options) {
     const OperationTimeout operationTimeout(options.timeout);
     const auto slotIndex = co_await acquireSlot(operationTimeout, options.stopToken);
     DbSlotCancellationGuard cancellation(*this, slotIndex, options.stopToken);
@@ -349,11 +359,13 @@ Task<DbTransaction> PostgreSqlPool::beginTransaction(std::pmr::memory_resource* 
     co_return DbTransaction(DbPoolRef{this}, slotIndex, resource, std::move(options));
 }
 
-Task<void> PostgreSqlPool::commitTransaction(std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options) {
+Task<void> PostgreSqlPool::commitTransaction(
+    std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options) {
     return finishDbTransaction(*this, slot, "COMMIT", resource, options);
 }
 
-Task<void> PostgreSqlPool::rollbackTransaction(std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options) {
+Task<void> PostgreSqlPool::rollbackTransaction(
+    std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options) {
     return finishDbTransaction(*this, slot, "ROLLBACK", resource, options);
 }
 

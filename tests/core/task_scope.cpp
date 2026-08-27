@@ -20,13 +20,18 @@ static_assert(!std::is_move_assignable_v<ruvia::Task<void>>);
 static_assert(std::is_move_constructible_v<ruvia::Task<int>>);
 static_assert(!std::is_move_assignable_v<ruvia::Task<int>>);
 static_assert(std::is_aggregate_v<ruvia::TaskScopeOptions>);
-static_assert(std::same_as<decltype(ruvia::TaskScopeOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(
+    std::same_as<decltype(ruvia::TaskScopeOptions{}.resource), std::pmr::memory_resource*>);
 static_assert(std::is_constructible_v<ruvia::TaskScope, const ruvia::WorkerHandle&>);
-static_assert(std::is_constructible_v<ruvia::TaskScope, const ruvia::WorkerHandle&, ruvia::TaskScopeOptions>);
-static_assert(!std::is_constructible_v<ruvia::TaskScope, const ruvia::WorkerHandle&, std::pmr::memory_resource*>);
+static_assert(
+    std::is_constructible_v<ruvia::TaskScope, const ruvia::WorkerHandle&, ruvia::TaskScopeOptions>);
+static_assert(!std::is_constructible_v<ruvia::TaskScope, const ruvia::WorkerHandle&,
+    std::pmr::memory_resource*>);
 static_assert(!std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&>);
-static_assert(!std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&, ruvia::TaskScopeOptions>);
-static_assert(!std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&, std::pmr::memory_resource*>);
+static_assert(
+    !std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&, ruvia::TaskScopeOptions>);
+static_assert(
+    !std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&, std::pmr::memory_resource*>);
 
 namespace {
 
@@ -132,7 +137,8 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     try {
         co_await scope.join();
     } catch (const std::runtime_error& error) {
-        success = calls == 1 && scope.size() == 0 && scope.stopRequested() && std::string_view(error.what()) == "child failed";
+        success = calls == 1 && scope.size() == 0 && scope.stopRequested() &&
+                  std::string_view(error.what()) == "child failed";
     }
 }
 
@@ -154,7 +160,8 @@ int main() {
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     bool success = false;
 
-    asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exercise(worker, success)), asio::detached);
+    asio::co_spawn(
+        ioContext, ruvia::detail::taskAsAwaitable(exercise(worker, success)), asio::detached);
     ioContext.run();
     dispatcher->close();
     return success ? 0 : 1;

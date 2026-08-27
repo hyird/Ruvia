@@ -44,11 +44,8 @@
 
 namespace ruvia::detail {
 
-Http2SansIoSessionEngine::Http2SansIoSessionEngine(
-    asio::any_io_executor executor,
-    asio::ip::tcp::socket& socket,
-    const RouteTable& routes,
-    WorkerMemory& worker,
+Http2SansIoSessionEngine::Http2SansIoSessionEngine(asio::any_io_executor executor,
+    asio::ip::tcp::socket& socket, const RouteTable& routes, WorkerMemory& worker,
     Http2SansIoSessionContext session)
     : executor_(std::move(executor)),
       socket_(&socket),
@@ -123,8 +120,8 @@ bool Http2SansIoSessionEngine::workerRunning() const noexcept {
 }
 
 void Http2SansIoSessionEngine::setInactivityPhase() noexcept {
-    session_.scannerEntry().setPhase(http2SansIoInactivityPhase(
-        connection_.headerBlockInProgress(), streamRuntimes_.size()));
+    session_.scannerEntry().setPhase(
+        http2SansIoInactivityPhase(connection_.headerBlockInProgress(), streamRuntimes_.size()));
 }
 
 void Http2SansIoSessionEngine::touchActivity() noexcept {
@@ -149,7 +146,8 @@ void Http2SansIoSessionEngine::terminate(std::error_code error) noexcept {
     writeSignal_.notify();
 }
 
-void Http2SansIoSessionEngine::resetStreamNoThrow(std::uint32_t streamId, Http2ErrorCode error) noexcept {
+void Http2SansIoSessionEngine::resetStreamNoThrow(
+    std::uint32_t streamId, Http2ErrorCode error) noexcept {
     try {
         (void)connection_.submitReset(streamId, error);
     } catch (...) {
@@ -177,8 +175,8 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
 
     std::array<std::byte, kRequestArenaStackBytes> arenaBlock;
     std::optional<RequestMemory> requestMemoryStorage;
-    RequestMemory& requestMemory = emplaceRequestMemory(
-        requestMemoryStorage, *worker_, std::span<std::byte>(arenaBlock));
+    RequestMemory& requestMemory =
+        emplaceRequestMemory(requestMemoryStorage, *worker_, std::span<std::byte>(arenaBlock));
     auto* streamState = connection_.stream(streamId);
     if (streamState == nullptr) {
         co_return;
@@ -205,20 +203,14 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         co_return;
     }
     HttpRequest request = HttpRequestAccess::make();
-    const auto requestBuild = Http2RequestBuilder::build(
-        *streamState,
-        request,
-        requestMemory.resource(),
-        bufferedBody == nullptr ? std::string_view{} : bufferedBody->bytes());
+    const auto requestBuild =
+        Http2RequestBuilder::build(*streamState, request, requestMemory.resource(),
+            bufferedBody == nullptr ? std::string_view{} : bufferedBody->bytes());
     if (const auto* failure = requestBuild.failure()) {
-        auto response = co_await routes_->handleError(
-            request,
-            requestMemory,
+        auto response = co_await routes_->handleError(request, requestMemory,
             copyHttpProtocolErrorInfo(requestMemory.resource(), failure->protocolError()),
             baseServices);
-        (void)co_await bufferedResponseWriter_.write(
-            streamId,
-            response,
+        (void)co_await bufferedResponseWriter_.write(streamId, response,
             httpBufferedResponseWritePlan(streamState->requestKnownMethod(), response));
         co_return;
     }
@@ -237,7 +229,9 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         // rejecting here would make those responses incorrectly become 406.
         responseCodingPolicy = HttpResponseCodingPolicy::noAcceptableCoding();
     }
-    const auto responseCodingAvailability = options.compression.has_value() ? HttpResponseCodingAvailability::kIdentityAndCompression : HttpResponseCodingAvailability::kIdentityOnly;
+    const auto responseCodingAvailability =
+        options.compression.has_value() ? HttpResponseCodingAvailability::kIdentityAndCompression
+                                        : HttpResponseCodingAvailability::kIdentityOnly;
     auto requestServices = baseServices;
     do {
         const auto& resolution = selectedRoute->resolution();
@@ -247,20 +241,21 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         // connection each get their own clock. It happens before every
         // server-layer rejection below: custom onError/middleware is a handler
         // too and must see the request stop token.
-        const auto handlerDeadline = effectiveHandlerDeadline(options.deadline ? std::optional{options.deadline->handler} : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
+        const auto handlerDeadline = effectiveHandlerDeadline(
+            options.deadline ? std::optional{options.deadline->handler} : std::nullopt,
+            resolved != nullptr ? resolved->route().deadlineMs() : 0);
         if (handlerDeadline > std::chrono::milliseconds::zero()) {
-            selectedRoute->armDeadline(baseServices.worker(), baseServices.stopToken(), handlerDeadline);
-            requestServices = baseServices.withStopToken(selectedRoute->deadline()->token()).withRequestDeadline(selectedRoute->deadline());
+            selectedRoute->armDeadline(
+                baseServices.worker(), baseServices.stopToken(), handlerDeadline);
+            requestServices = baseServices.withStopToken(selectedRoute->deadline()->token())
+                                  .withRequestDeadline(selectedRoute->deadline());
         }
 
         const auto expectationPlan =
             streamState->expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
         if (const auto* rejection = expectationPlan.rejection()) {
-            response = co_await routes_->handleError(
-                request,
-                requestMemory,
-                copyHttpProtocolErrorInfo(
-                    requestMemory.resource(), rejection->protocolError()),
+            response = co_await routes_->handleError(request, requestMemory,
+                copyHttpProtocolErrorInfo(requestMemory.resource(), rejection->protocolError()),
                 requestServices);
             break;
         }
@@ -268,8 +263,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         // Resolved per request: one HTTP/2 connection multiplexes many, each
         // carrying its own forwarding headers.
         const auto clientAddress = baseServices.resolveConnInfo(request).client().address();
-        const auto appRateLimit =
-            decideRequestRateLimit(baseServices.rateLimiter(), clientAddress);
+        const auto appRateLimit = decideRequestRateLimit(baseServices.rateLimiter(), clientAddress);
         if (const auto* rejection = appRateLimit.rejection()) {
             response = co_await routes_->handleError(
                 request, requestMemory, rateLimitRejectionError(), requestServices);
@@ -279,11 +273,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         std::optional<BodyReaderBinding<Http2SansIoRequestBodyReader>> bodyReaderStorage;
         if (streamingBody != nullptr && streamState->tunnel().pending() == nullptr) {
             bodyReaderStorage.emplace(
-                connection_,
-                streamId,
-                streamingBody->queue(),
-                *streamSignal,
-                writeSignal_);
+                connection_, streamId, streamingBody->queue(), *streamSignal, writeSignal_);
         }
         auto dispatchServices = requestServices;
         if (bodyReaderStorage) {
@@ -299,9 +289,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
             // Streaming routes commit before a buffered response status can be
             // inspected. WebSocket Extended CONNECT does not select an HTTP
             // response representation.
-            response = co_await routes_->handleError(
-                request,
-                requestMemory,
+            response = co_await routes_->handleError(request, requestMemory,
                 HttpErrorInfo({
                     .status = ruvia::http_status::kNotAcceptable,
                     .code = "not_acceptable",
@@ -311,8 +299,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
             break;
         }
         if (webSocketEndpoint != nullptr) {
-            const auto handshakeValidation =
-                validateHttp2WebSocketHandshake(*streamState, request);
+            const auto handshakeValidation = validateHttp2WebSocketHandshake(*streamState, request);
             if (handshakeValidation.accepted() != nullptr) {
                 if (streamingBody == nullptr) {
                     resetStreamNoThrow(streamId, Http2ErrorCode::kInternalError);
@@ -324,55 +311,37 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 std::optional<WsConnection> webSocketConnection;
                 auto upgradeAndRun = [&](Context& context) -> Task<void> {
                     auto negotiation = makeWebSocketServerNegotiation(
-                        request,
-                        {.supportedSubprotocols = webSocketEndpoint->subprotocols(), .resource = requestMemory.resource()});
-                    const auto handshakeResult = connection_.submitWebSocketHandshake(
-                        streamId, std::move(negotiation));
+                        request, {.supportedSubprotocols = webSocketEndpoint->subprotocols(),
+                                     .resource = requestMemory.resource()});
+                    const auto handshakeResult =
+                        connection_.submitWebSocketHandshake(streamId, std::move(negotiation));
                     const auto* submittedHandshake = handshakeResult.submitted();
                     if (submittedHandshake == nullptr) {
                         co_return;
                     }
                     wakeWriter();
                     webSocketConnection.emplace(
-                        WsTransport(
-                            connection_,
-                            streamId,
-                            streamingBody->queue(),
-                            *streamSignal,
-                            writeSignal_,
-                            executor_),
-                        baseServices.worker(),
-                        scannerEntry,
-                        webSocketEndpoint->lifecycle(),
+                        WsTransport(connection_, streamId, streamingBody->queue(), *streamSignal,
+                            writeSignal_, executor_),
+                        baseServices.worker(), scannerEntry, webSocketEndpoint->lifecycle(),
                         ProtocolByteLimit::limited(options.maxWebSocketMessageBytes),
-                        requestMemory.resource(),
-                        std::string_view{},
+                        requestMemory.resource(), std::string_view{},
                         submittedHandshake->compression());
                     co_await invokeWebSocketHandler(
-                        *webSocketConnection,
-                        scannerEntry,
-                        webSocketEndpoint->handler(),
-                        context);
+                        *webSocketConnection, scannerEntry, webSocketEndpoint->handler(), context);
                 };
                 const auto terminal = makeCallableRef<void, Context&>(upgradeAndRun);
                 std::optional<HttpResponse> buffered;
                 std::exception_ptr exception;
                 try {
                     buffered = co_await routes_->dispatchWebSocket(
-                        request,
-                        *resolved,
-                        requestMemory,
-                        terminal,
-                        dispatchServices);
+                        request, *resolved, requestMemory, terminal, dispatchServices);
                 } catch (...) {
                     exception = std::current_exception();
                 }
                 if (webSocketConnection.has_value()) {
                     co_await finishWebSocketSession(
-                        *webSocketConnection,
-                        exception,
-                        options.connectionFailure,
-                        remoteAddress_);
+                        *webSocketConnection, exception, options.connectionFailure, remoteAddress_);
                     co_return;
                 }
                 if (exception != nullptr) {
@@ -386,36 +355,19 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
             }
             const auto* failure = handshakeValidation.failure();
             if (failure == nullptr) {
-                throw std::logic_error(
-                    "HTTP/2 WebSocket validation returned no outcome");
+                throw std::logic_error("HTTP/2 WebSocket validation returned no outcome");
             }
-            response = co_await routes_->handleError(
-                request,
-                requestMemory,
-                copyHttpProtocolErrorInfo(
-                    requestMemory.resource(), failure->protocolError()),
+            response = co_await routes_->handleError(request, requestMemory,
+                copyHttpProtocolErrorInfo(requestMemory.resource(), failure->protocolError()),
                 requestServices);
             failure->applyRequiredResponseHeaders(response);
         } else if (responseStreamEndpoint != nullptr) {
-            Http2SansIoResponseStreamSink sink(
-                connection_,
-                streamId,
-                responseStreamEndpoint->kind(),
-                baseServices.worker(),
-                writeSignal_,
-                *streamSignal,
-                workerResource(),
-                request.knownMethod(),
-                *responseCodingPolicy.selection(),
+            Http2SansIoResponseStreamSink sink(connection_, streamId,
+                responseStreamEndpoint->kind(), baseServices.worker(), writeSignal_, *streamSignal,
+                workerResource(), request.knownMethod(), *responseCodingPolicy.selection(),
                 responseCodingAvailability);
-            auto result = co_await dispatchResponseStreamWith(
-                sink,
-                *routes_,
-                request,
-                *resolved,
-                requestMemory,
-                dispatchServices,
-                [this, streamId]() noexcept {
+            auto result = co_await dispatchResponseStreamWith(sink, *routes_, request, *resolved,
+                requestMemory, dispatchServices, [this, streamId]() noexcept {
                     auto* stream = connection_.stream(streamId);
                     return stream == nullptr || stream->isAborted();
                 });
@@ -426,14 +378,10 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 if (const auto* failed = result.failedAfterCommit()) {
                     resetStreamNoThrow(streamId, Http2ErrorCode::kInternalError);
                     wakeWriter();
-                    options.connectionFailure.invoke(
-                        remoteAddress_, failed->exception());
+                    options.connectionFailure.invoke(remoteAddress_, failed->exception());
                 }
-                recordHttpAccess(
-                    options.accessLog,
-                    request,
-                    baseServices.resolveConnInfo(request).client().address(),
-                    *committedStatus,
+                recordHttpAccess(options.accessLog, request,
+                    baseServices.resolveConnInfo(request).client().address(), *committedStatus,
                     requestStart);
                 co_return;
             }
@@ -446,43 +394,38 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                     "response stream dispatch returned no HTTP/2 terminal alternative");
             }
         } else {
-            response = co_await routes_->dispatchBufferedResponse(
-                request,
-                resolution,
-                requestMemory,
-                options.documentRoot.binding(),
-                dispatchServices,
-                baseServices.precompressedStaticFiles() ? StaticFileSelectionMode::kPrecompressed : StaticFileSelectionMode::kIdentityOnly);
+            response = co_await routes_->dispatchBufferedResponse(request, resolution,
+                requestMemory, options.documentRoot.binding(), dispatchServices,
+                baseServices.precompressedStaticFiles() ? StaticFileSelectionMode::kPrecompressed
+                                                        : StaticFileSelectionMode::kIdentityOnly);
         }
 
     } while (false);
 
-    auto preparation = co_await prepareBufferedHttpResponseAsync(request, responseCodingPolicy, response, options, baseServices.worker());
-    if (const auto error = httpBufferedResponsePreparationError(responseCodingPolicy, request, response, preparation.compressionResult())) {
-        response = co_await routes_->handleError(
-            request,
-            requestMemory,
-            *error,
-            requestServices);
-        preparation = co_await prepareBufferedHttpResponseAsync(request, responseCodingPolicy, response, options, baseServices.worker());
-        if (httpBufferedResponsePreparationError(responseCodingPolicy, request, response, preparation.compressionResult()).has_value()) {
+    auto preparation = co_await prepareBufferedHttpResponseAsync(
+        request, responseCodingPolicy, response, options, baseServices.worker());
+    if (const auto error = httpBufferedResponsePreparationError(
+            responseCodingPolicy, request, response, preparation.compressionResult())) {
+        response = co_await routes_->handleError(request, requestMemory, *error, requestServices);
+        preparation = co_await prepareBufferedHttpResponseAsync(
+            request, responseCodingPolicy, response, options, baseServices.worker());
+        if (httpBufferedResponsePreparationError(
+                responseCodingPolicy, request, response, preparation.compressionResult())
+                .has_value()) {
             // The negotiated coding could not be installed even on the
             // generated terminal error. This is an explicit terminal error
             // representation, not a silent identity fallback of the original
             // application response.
             responseCodingPolicy = HttpResponseCodingPolicy::disabled();
-            preparation = co_await prepareBufferedHttpResponseAsync(request, responseCodingPolicy, response, options, baseServices.worker());
+            preparation = co_await prepareBufferedHttpResponseAsync(
+                request, responseCodingPolicy, response, options, baseServices.worker());
         }
     }
     const auto writePlan = preparation.writePlan();
-    const auto result =
-        co_await bufferedResponseWriter_.write(streamId, response, writePlan);
+    const auto result = co_await bufferedResponseWriter_.write(streamId, response, writePlan);
     if (const auto committedStatus = result.committedStatus()) {
-        recordHttpAccess(
-            options.accessLog,
-            request,
-            baseServices.resolveConnInfo(request).client().address(),
-            *committedStatus,
+        recordHttpAccess(options.accessLog, request,
+            baseServices.resolveConnInfo(request).client().address(), *committedStatus,
             requestStart);
     }
 }
@@ -504,8 +447,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOne(std::uint32_t streamId) {
 }
 
 bool Http2SansIoSessionEngine::admitStream(std::uint32_t streamId) {
-    auto* signal =
-        streamRuntimes_.beginDispatch(streamId, session_.services().worker());
+    auto* signal = streamRuntimes_.beginDispatch(streamId, session_.services().worker());
     if (signal == nullptr) {
         return false;
     }
@@ -516,15 +458,11 @@ bool Http2SansIoSessionEngine::admitStream(std::uint32_t streamId) {
         pinned = true;
         ++activeHandlerTasks_;
         counted = true;
-        asio::co_spawn(
-            executor_,
-            taskAsAwaitable(dispatchOne(streamId)),
+        asio::co_spawn(executor_, taskAsAwaitable(dispatchOne(streamId)),
             asio::bind_allocator(
-                asio::recycling_allocator<void>(),
-                [this](std::exception_ptr exception) noexcept {
+                asio::recycling_allocator<void>(), [this](std::exception_ptr exception) noexcept {
                     if (exception != nullptr) {
-                        terminate(
-                            std::make_error_code(std::errc::operation_canceled));
+                        terminate(std::make_error_code(std::errc::operation_canceled));
                     }
                     --activeHandlerTasks_;
                     if (activeHandlerTasks_ == 0) {
@@ -547,12 +485,10 @@ bool Http2SansIoSessionEngine::admitStream(std::uint32_t streamId) {
 
 void Http2SansIoSessionEngine::drainEvents() {
     const auto& options = session_.options();
-    std::array<std::uint32_t, Http2LocalSettings::kMaxConcurrentStreams>
-        copiedBodyStreams{};
+    std::array<std::uint32_t, Http2LocalSettings::kMaxConcurrentStreams> copiedBodyStreams{};
     std::size_t copiedBodyStreamCount = 0;
     const auto markBufferedBodyCopied = [&](std::uint32_t streamId) {
-        const auto copied =
-            std::span(copiedBodyStreams).first(copiedBodyStreamCount);
+        const auto copied = std::span(copiedBodyStreams).first(copiedBodyStreamCount);
         if (std::ranges::find(copied, streamId) == copied.end()) {
             if (copiedBodyStreamCount == copiedBodyStreams.size()) {
                 return false;
@@ -562,8 +498,7 @@ void Http2SansIoSessionEngine::drainEvents() {
         return true;
     };
     const auto unmarkBufferedBodyCopied = [&](std::uint32_t streamId) {
-        const auto copied =
-            std::span(copiedBodyStreams).first(copiedBodyStreamCount);
+        const auto copied = std::span(copiedBodyStreams).first(copiedBodyStreamCount);
         const auto found = std::ranges::find(copied, streamId);
         if (found == copied.end()) {
             return;
@@ -620,12 +555,10 @@ void Http2SansIoSessionEngine::drainEvents() {
         }
         const bool connectRequest = streamState->tunnel().pending() != nullptr;
         const auto* selectedRoute = streamRuntime->selectedRoute();
-        const bool streamingBody =
-            !connectRequest && selectedRoute != nullptr &&
-            selectedRoute->body().streaming() != nullptr &&
-            streamState->remoteReceive().contentOpen() != nullptr;
-        if (expectationPlan.rejection() != nullptr || connectRequest ||
-            streamingBody) {
+        const bool streamingBody = !connectRequest && selectedRoute != nullptr &&
+                                   selectedRoute->body().streaming() != nullptr &&
+                                   streamState->remoteReceive().contentOpen() != nullptr;
+        if (expectationPlan.rejection() != nullptr || connectRequest || streamingBody) {
             if (!admitStream(streamId)) {
                 resetEventStream(streamId, Http2ErrorCode::kInternalError);
             }
@@ -648,20 +581,16 @@ void Http2SansIoSessionEngine::drainEvents() {
         }
         auto& requestBody = selectedRoute->body();
         const auto* resolvedRoute = selectedRoute->resolution().resolved();
-        const auto totalLimit = requestBodyByteLimit(
-            requestBody.mode(),
-            options.maxStreamBodyBytes,
+        const auto totalLimit = requestBodyByteLimit(requestBody.mode(), options.maxStreamBodyBytes,
             options.maxBufferedBodyBytes,
             resolvedRoute != nullptr ? resolvedRoute->route().maxRequestBodyBytes() : 0);
-        const auto stored = requestBody.store(
-            bodyChunk->bytes(), totalLimit, options.maxBufferedBodyBytes);
+        const auto stored =
+            requestBody.store(bodyChunk->bytes(), totalLimit, options.maxBufferedBodyBytes);
         if (stored.stored() == nullptr) {
-            const bool knownRejection = stored.protocolFailure() != nullptr ||
-                                        stored.backlogOverflow() != nullptr;
-            resetEventStream(
-                streamId,
-                knownRejection ? Http2ErrorCode::kCancel
-                               : Http2ErrorCode::kInternalError);
+            const bool knownRejection =
+                stored.protocolFailure() != nullptr || stored.backlogOverflow() != nullptr;
+            resetEventStream(streamId,
+                knownRejection ? Http2ErrorCode::kCancel : Http2ErrorCode::kInternalError);
             return;
         }
         if (requestBody.streaming() != nullptr) {
@@ -679,8 +608,7 @@ void Http2SansIoSessionEngine::drainEvents() {
         const auto streamId = tunnelData->streamId();
         auto* streamState = connection_.stream(streamId);
         auto* streamRuntime = streamRuntimes_.find(streamId);
-        auto* signal =
-            streamRuntime != nullptr ? streamRuntime->signal() : nullptr;
+        auto* signal = streamRuntime != nullptr ? streamRuntime->signal() : nullptr;
         if (streamState == nullptr || streamRuntime == nullptr || signal == nullptr) {
             if (streamState != nullptr) {
                 resetEventStream(streamId, Http2ErrorCode::kInternalError);
@@ -722,8 +650,7 @@ void Http2SansIoSessionEngine::drainEvents() {
         const auto streamId = streamClosed->streamId();
         unmarkBufferedBodyCopied(streamId);
         auto* streamRuntime = streamRuntimes_.find(streamId);
-        auto* signal =
-            streamRuntime != nullptr ? streamRuntime->signal() : nullptr;
+        auto* signal = streamRuntime != nullptr ? streamRuntime->signal() : nullptr;
         if (signal != nullptr) {
             signal->wake();
         } else {

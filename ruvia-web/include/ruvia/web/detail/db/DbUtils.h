@@ -29,15 +29,18 @@ inline void appendDbNumber(std::pmr::string& output, double value) {
     // not valid SQL numeric literals and would be spliced unquoted into the
     // statement. Reject them up front with a clear error instead of letting the
     // server fail on malformed SQL.
-    appendHttpFormattedFiniteNumber(output, value, "database double value must be finite", "database double value cannot be formatted");
+    appendHttpFormattedFiniteNumber(output, value, "database double value must be finite",
+        "database double value cannot be formatted");
 }
 
-[[nodiscard]] inline DbValue cloneDbValueForResource(const DbValue& value, std::pmr::memory_resource* resolvedResource) {
+[[nodiscard]] inline DbValue cloneDbValueForResource(
+    const DbValue& value, std::pmr::memory_resource* resolvedResource) {
     switch (DbValueAccess::type(value)) {
         case DbValueType::kNull:
             return DbValue(nullptr);
         case DbValueType::kString:
-            return DbValueAccess::ownedString(std::pmr::string(DbValueAccess::text(value), resolvedResource));
+            return DbValueAccess::ownedString(
+                std::pmr::string(DbValueAccess::text(value), resolvedResource));
         case DbValueType::kSigned:
             return DbValue(DbValueAccess::signedValue(value));
         case DbValueType::kUnsigned:
@@ -50,7 +53,8 @@ inline void appendDbNumber(std::pmr::string& output, double value) {
     return DbValue(nullptr);
 }
 
-[[nodiscard]] inline std::pmr::vector<DbValue> cloneDbValues(std::span<const DbValue> values, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::pmr::vector<DbValue> cloneDbValues(
+    std::span<const DbValue> values, std::pmr::memory_resource* resource) {
     auto* resolved = pmrResourceOrDefault(resource);
     std::pmr::vector<DbValue> output(resolved);
     output.reserve(values.size());

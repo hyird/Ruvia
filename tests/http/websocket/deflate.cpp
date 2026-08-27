@@ -46,7 +46,8 @@ bool roundTrips(WebSocketDeflate& codec, std::string_view message) {
         return false;
     }
     std::pmr::string restored(std::pmr::get_default_resource());
-    if (codec.decompress(compressed, restored, ProtocolByteLimit::unlimited()) != WebSocketInflateResult::kOk) {
+    if (codec.decompress(compressed, restored, ProtocolByteLimit::unlimited()) !=
+        WebSocketInflateResult::kOk) {
         return false;
     }
     return std::string_view(restored.data(), restored.size()) == message;
@@ -84,10 +85,12 @@ RUVIA_TEST(websocket_deflate_inflate_respects_max_bytes) {
     RUVIA_CHECK(codec.compress(std::string(10000, 'a'), compressed));  // tiny compressed form
     // Decompressing a bomb under a small cap must be refused, not expanded.
     std::pmr::string restored(std::pmr::get_default_resource());
-    RUVIA_CHECK(codec.decompress(compressed, restored, ProtocolByteLimit::limited(100)) == WebSocketInflateResult::kTooLarge);
+    RUVIA_CHECK(codec.decompress(compressed, restored, ProtocolByteLimit::limited(100)) ==
+                WebSocketInflateResult::kTooLarge);
     // With a sufficient cap the same payload inflates fully.
     std::pmr::string ok(std::pmr::get_default_resource());
-    RUVIA_CHECK(codec.decompress(compressed, ok, ProtocolByteLimit::limited(10000)) == WebSocketInflateResult::kOk);
+    RUVIA_CHECK(codec.decompress(compressed, ok, ProtocolByteLimit::limited(10000)) ==
+                WebSocketInflateResult::kOk);
     RUVIA_CHECK_EQ(ok.size(), std::size_t{10000});
 }
 
@@ -130,7 +133,8 @@ RUVIA_TEST(websocket_deflate_offer_accepts_server_max_window_bits_15) {
     const auto bare = negotiateDeflate("permessage-deflate; client_max_window_bits");
     RUVIA_CHECK(bare == WebSocketCompression::kPermessageDeflate);
     // A smaller pinned window cannot be honored (we never shrink our compressor).
-    RUVIA_CHECK(negotiateDeflate("permessage-deflate; server_max_window_bits=14") == WebSocketCompression::kDisabled);
+    RUVIA_CHECK(negotiateDeflate("permessage-deflate; server_max_window_bits=14") ==
+                WebSocketCompression::kDisabled);
     // A later offer that permits 15 wins over an earlier too-small one.
     const auto second = negotiateDeflate(
         "permessage-deflate; server_max_window_bits=10, permessage-deflate; "
@@ -166,7 +170,8 @@ RUVIA_TEST(websocket_deflate_offer_rejects_malformed_parameters) {
                        "server_max_window_bits=15"));
 
     // Quoted-pairs are decoded before the numeric range check.
-    RUVIA_CHECK(negotiateDeflate("permessage-deflate; server_max_window_bits=\"1\\5\"") == WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits);
+    RUVIA_CHECK(negotiateDeflate("permessage-deflate; server_max_window_bits=\"1\\5\"") ==
+                WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits);
 
     // A malformed offer does not poison the comma list: a later conforming
     // offer remains independently negotiable.
@@ -206,11 +211,13 @@ RUVIA_TEST(websocket_deflate_offer_spans_multiple_extension_lines) {
 
     // permessage-deflate on the FIRST line, an unrelated extension on the second:
     // previously the last line was the only one read, so this was missed.
-    RUVIA_CHECK(webSocketDeflateNegotiated(negotiateLines({"permessage-deflate", "x-unknown; a=1"})));
+    RUVIA_CHECK(
+        webSocketDeflateNegotiated(negotiateLines({"permessage-deflate", "x-unknown; a=1"})));
     // On the second line it still works (the old last-line behavior is preserved).
     RUVIA_CHECK(webSocketDeflateNegotiated(negotiateLines({"x-unknown", "permessage-deflate"})));
     // A per-line server_max_window_bits=15 is honored wherever the line sits.
-    RUVIA_CHECK(negotiateLines({"x-unknown", "permessage-deflate; server_max_window_bits=15"}) == WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits);
+    RUVIA_CHECK(negotiateLines({"x-unknown", "permessage-deflate; server_max_window_bits=15"}) ==
+                WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits);
     // No permessage-deflate on any line -> not enabled.
     RUVIA_CHECK(negotiateLines({"x-unknown", "y-unknown"}) == WebSocketCompression::kDisabled);
 }
@@ -219,7 +226,8 @@ RUVIA_TEST(websocket_deflate_rejects_corrupt_input) {
     WebSocketDeflate codec;
     std::pmr::string restored(std::pmr::get_default_resource());
     // Random bytes are not a valid raw-DEFLATE block; inflate must report an error.
-    const auto result = codec.decompress("\xff\xff\xff\xff\xff\xff", restored, ProtocolByteLimit::unlimited());
+    const auto result =
+        codec.decompress("\xff\xff\xff\xff\xff\xff", restored, ProtocolByteLimit::unlimited());
     RUVIA_CHECK(result == WebSocketInflateResult::kError);
 
     // 03 00 is a complete raw-DEFLATE empty stream (BFINAL=1). A WebSocket
@@ -227,8 +235,10 @@ RUVIA_TEST(websocket_deflate_rejects_corrupt_input) {
     // a Z_SYNC_FLUSH stream; accepting this would also let zlib ignore bytes
     // appended after the early stream end.
     std::pmr::string finalStreamOutput(std::pmr::get_default_resource());
-    RUVIA_CHECK(codec.decompress(std::string_view("\x03\x00", 2), finalStreamOutput, ProtocolByteLimit::unlimited()) == WebSocketInflateResult::kError);
+    RUVIA_CHECK(codec.decompress(std::string_view("\x03\x00", 2), finalStreamOutput,
+                    ProtocolByteLimit::unlimited()) == WebSocketInflateResult::kError);
 
     std::pmr::string trailingOutput(std::pmr::get_default_resource());
-    RUVIA_CHECK(codec.decompress(std::string_view("\x03\x00junk", 6), trailingOutput, ProtocolByteLimit::unlimited()) == WebSocketInflateResult::kError);
+    RUVIA_CHECK(codec.decompress(std::string_view("\x03\x00junk", 6), trailingOutput,
+                    ProtocolByteLimit::unlimited()) == WebSocketInflateResult::kError);
 }

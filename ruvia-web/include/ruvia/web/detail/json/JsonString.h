@@ -46,7 +46,8 @@ namespace ruvia::detail {
 // no UTF-16 surrogate code points (ED A0-BF), nothing above U+10FFFF (F4 90-.., F5+),
 // and no stray/truncated continuation bytes. RFC 8259 §8.1 requires JSON to be UTF-8,
 // so a string carrying anything else is rejected rather than passed through verbatim.
-[[nodiscard]] inline std::size_t jsonUtf8SequenceLength(std::string_view input, std::size_t i) noexcept {
+[[nodiscard]] inline std::size_t jsonUtf8SequenceLength(
+    std::string_view input, std::size_t i) noexcept {
     const auto isCont = [](unsigned char b) noexcept { return (b & 0xC0U) == 0x80U; };
     const auto b0 = static_cast<unsigned char>(input[i]);
     if (b0 >= 0xC2 && b0 <= 0xDF) {
@@ -61,7 +62,9 @@ namespace ruvia::detail {
         if (!isCont(b2)) {
             return 0;
         }
-        if (b0 == 0xE0 ? (b1 < 0xA0 || b1 > 0xBF) : b0 == 0xED ? (b1 < 0x80 || b1 > 0x9F) : !isCont(b1)) {
+        if (b0 == 0xE0   ? (b1 < 0xA0 || b1 > 0xBF)
+            : b0 == 0xED ? (b1 < 0x80 || b1 > 0x9F)
+                         : !isCont(b1)) {
             return 0;
         }
         return 3;
@@ -76,7 +79,9 @@ namespace ruvia::detail {
         if (!isCont(b2) || !isCont(b3)) {
             return 0;
         }
-        if (b0 == 0xF0 ? (b1 < 0x90 || b1 > 0xBF) : b0 == 0xF4 ? (b1 < 0x80 || b1 > 0x8F) : !isCont(b1)) {
+        if (b0 == 0xF0   ? (b1 < 0x90 || b1 > 0xBF)
+            : b0 == 0xF4 ? (b1 < 0x80 || b1 > 0x8F)
+                         : !isCont(b1)) {
             return 0;
         }
         return 4;
@@ -110,7 +115,8 @@ private:
 // Scans one JSON string and commits the input cursor only after the closing
 // quote and all encoded bytes have been validated. The token owns both pieces
 // of scan state, so callers cannot observe a raw view without its encoding.
-[[nodiscard]] inline std::optional<JsonStringToken> parseJsonString(std::string_view& input) noexcept {
+[[nodiscard]] inline std::optional<JsonStringToken> parseJsonString(
+    std::string_view& input) noexcept {
     auto remaining = input;
     skipJsonWhitespace(remaining);
     if (remaining.empty() || remaining.front() != '"') {
@@ -132,7 +138,8 @@ private:
                 return std::nullopt;
             }
             const char escape = remaining[i + 1];
-            if (escape == '"' || escape == '\\' || escape == '/' || escape == 'b' || escape == 'f' || escape == 'n' || escape == 'r' || escape == 't') {
+            if (escape == '"' || escape == '\\' || escape == '/' || escape == 'b' ||
+                escape == 'f' || escape == 'n' || escape == 'r' || escape == 't') {
                 i += 2;
                 continue;
             }
@@ -143,7 +150,9 @@ private:
                 }
                 if (isJsonHighSurrogate(codeUnit)) {
                     std::uint32_t low = 0;
-                    if (i + 11 >= remaining.size() || remaining[i + 6] != '\\' || remaining[i + 7] != 'u' || !readJsonHex4(remaining.substr(i + 8), low) || !isJsonLowSurrogate(low)) {
+                    if (i + 11 >= remaining.size() || remaining[i + 6] != '\\' ||
+                        remaining[i + 7] != 'u' || !readJsonHex4(remaining.substr(i + 8), low) ||
+                        !isJsonLowSurrogate(low)) {
                         return std::nullopt;
                     }
                     i += 12;
@@ -203,7 +212,8 @@ void appendUtf8(OutputT& output, std::uint32_t codePoint) {
 // Returns the complete decoded string or no value for malformed escape/UTF-8
 // input. Mutable caller storage is intentionally not accepted: a failure must
 // never expose the prefix produced before the malformed byte sequence.
-[[nodiscard]] inline std::optional<std::pmr::string> decodeJsonString(std::string_view input, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::optional<std::pmr::string> decodeJsonString(
+    std::string_view input, std::pmr::memory_resource* resource) {
     std::pmr::string output(pmrResourceOrDefault(resource));
     output.reserve(input.size());
     for (std::size_t i = 0; i < input.size(); ++i) {

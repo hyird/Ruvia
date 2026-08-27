@@ -122,7 +122,8 @@ template <typename Dependency, typename T>
 using ApiGuardDependent = std::conditional_t<(sizeof(Dependency) > 0), T, T>;
 
 template <typename T>
-concept HasLegacyResponseBodyCopy = requires(T& response) { response.setBodyCopy(std::string_view{}); };
+concept HasLegacyResponseBodyCopy =
+    requires(T& response) { response.setBodyCopy(std::string_view{}); };
 
 static_assert(ruvia::detail::httpBorrowedCStringView(nullptr).empty());
 // One shared type now backs every borrowed-text field, so a null C string
@@ -137,18 +138,32 @@ struct MatchAnyHeaderToken final {
 };
 
 template <typename Input>
-concept AcceptsAnyBorrowedHttpSubviewInput = requires(Input&& input) { ruvia::detail::httpTrimOws(std::forward<Input>(input)); } || requires(Input&& input) { ruvia::detail::httpTrimQuotes(std::forward<Input>(input)); } || requires(Input&& input) { ruvia::detail::httpFindHeaderToken(std::forward<Input>(input), MatchAnyHeaderToken{}); } || requires(Input&& input) { ruvia::detail::httpHeaderTokenBeforeParameters(std::forward<Input>(input)); } || requires(Input&& input) { ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input)); } || requires(Input&& input) { ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input)); } || requires(const ruvia::HttpRequest& request, Input&& input) { ruvia::detail::chooseWebSocketSubprotocol(request, std::forward<Input>(input)); };
+concept AcceptsAnyBorrowedHttpSubviewInput =
+    requires(Input&& input) { ruvia::detail::httpTrimOws(std::forward<Input>(input)); } ||
+    requires(Input&& input) { ruvia::detail::httpTrimQuotes(std::forward<Input>(input)); } ||
+    requires(Input&& input) {
+        ruvia::detail::httpFindHeaderToken(std::forward<Input>(input), MatchAnyHeaderToken{});
+    } || requires(Input&& input) {
+        ruvia::detail::httpHeaderTokenBeforeParameters(std::forward<Input>(input));
+    } || requires(Input&& input) {
+        ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input));
+    } || requires(Input&& input) {
+        ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input));
+    } || requires(const ruvia::HttpRequest& request, Input&& input) {
+        ruvia::detail::chooseWebSocketSubprotocol(request, std::forward<Input>(input));
+    };
 
 template <typename Input>
-concept AcceptsAllBorrowedHttpSubviewInputs = requires(const ruvia::HttpRequest& request, Input&& input) {
-    ruvia::detail::httpTrimOws(std::forward<Input>(input));
-    ruvia::detail::httpTrimQuotes(std::forward<Input>(input));
-    ruvia::detail::httpFindHeaderToken(std::forward<Input>(input), MatchAnyHeaderToken{});
-    ruvia::detail::httpHeaderTokenBeforeParameters(std::forward<Input>(input));
-    ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input));
-    ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input));
-    ruvia::detail::chooseWebSocketSubprotocol(request, std::forward<Input>(input));
-};
+concept AcceptsAllBorrowedHttpSubviewInputs =
+    requires(const ruvia::HttpRequest& request, Input&& input) {
+        ruvia::detail::httpTrimOws(std::forward<Input>(input));
+        ruvia::detail::httpTrimQuotes(std::forward<Input>(input));
+        ruvia::detail::httpFindHeaderToken(std::forward<Input>(input), MatchAnyHeaderToken{});
+        ruvia::detail::httpHeaderTokenBeforeParameters(std::forward<Input>(input));
+        ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input));
+        ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input));
+        ruvia::detail::chooseWebSocketSubprotocol(request, std::forward<Input>(input));
+    };
 
 static_assert(!AcceptsAnyBorrowedHttpSubviewInput<std::string>);
 static_assert(!AcceptsAnyBorrowedHttpSubviewInput<const std::string>);
@@ -158,19 +173,46 @@ static_assert(AcceptsAllBorrowedHttpSubviewInputs<std::pmr::string&>);
 static_assert(AcceptsAllBorrowedHttpSubviewInputs<std::string_view>);
 
 template <typename Input>
-concept AcceptsAnyBorrowedHttpParserOutputInput = requires(Input&& input, ruvia::detail::HttpMediaTypeParts& mediaType) { ruvia::detail::httpParseMediaTypeParts(std::forward<Input>(input), false, mediaType); } || requires(Input&& input, ruvia::detail::HttpMediaTypeParts& mediaType) { ruvia::detail::httpParseMediaType(std::forward<Input>(input), false, mediaType); } || requires(Input&& input, std::string_view& first, std::string_view& second) { ruvia::detail::httpParseMimeParameter(std::forward<Input>(input), first, second); } || requires(Input&& input, std::string_view& first, bool& flag) { ruvia::detail::httpParseTransferCodingSyntax(std::forward<Input>(input), first, flag); } || requires(Input&& input, ruvia::detail::HttpUpgradeProtocol& protocol) { ruvia::detail::httpParseUpgradeProtocol(std::forward<Input>(input), protocol); } || requires(Input&& input, const ruvia::detail::Http2FrameHeader& frame, std::string_view& first) { ruvia::detail::http2StripPadAndPriority(frame, std::forward<Input>(input), false, first); } || requires(Input&& input, const ruvia::detail::Http2FrameHeader& frame, std::string_view& first) { ruvia::detail::http2DecodeHeadersPayload(frame, std::forward<Input>(input), first); } || requires(Input&& input, const ruvia::detail::Http2FrameHeader& frame, std::string_view& first) { ruvia::detail::http2DecodeDataPayload(frame, std::forward<Input>(input), first); };
+concept AcceptsAnyBorrowedHttpParserOutputInput =
+    requires(Input&& input, ruvia::detail::HttpMediaTypeParts& mediaType) {
+        ruvia::detail::httpParseMediaTypeParts(std::forward<Input>(input), false, mediaType);
+    } ||
+    requires(Input&& input, ruvia::detail::HttpMediaTypeParts& mediaType) {
+        ruvia::detail::httpParseMediaType(std::forward<Input>(input), false, mediaType);
+    } ||
+    requires(Input&& input, std::string_view& first, std::string_view& second) {
+        ruvia::detail::httpParseMimeParameter(std::forward<Input>(input), first, second);
+    } ||
+    requires(Input&& input, std::string_view& first, bool& flag) {
+        ruvia::detail::httpParseTransferCodingSyntax(std::forward<Input>(input), first, flag);
+    } ||
+    requires(Input&& input, ruvia::detail::HttpUpgradeProtocol& protocol) {
+        ruvia::detail::httpParseUpgradeProtocol(std::forward<Input>(input), protocol);
+    } ||
+    requires(Input&& input, const ruvia::detail::Http2FrameHeader& frame, std::string_view& first) {
+        ruvia::detail::http2StripPadAndPriority(frame, std::forward<Input>(input), false, first);
+    } ||
+    requires(Input&& input, const ruvia::detail::Http2FrameHeader& frame, std::string_view& first) {
+        ruvia::detail::http2DecodeHeadersPayload(frame, std::forward<Input>(input), first);
+    } ||
+    requires(Input&& input, const ruvia::detail::Http2FrameHeader& frame, std::string_view& first) {
+        ruvia::detail::http2DecodeDataPayload(frame, std::forward<Input>(input), first);
+    };
 
 template <typename Input>
-concept AcceptsAllBorrowedHttpParserOutputInputs = requires(Input&& input, ruvia::detail::HttpMediaTypeParts& mediaType, std::string_view& first, std::string_view& second, bool& flag, ruvia::detail::HttpUpgradeProtocol& protocol, const ruvia::detail::Http2FrameHeader& frame) {
-    ruvia::detail::httpParseMediaTypeParts(std::forward<Input>(input), false, mediaType);
-    ruvia::detail::httpParseMediaType(std::forward<Input>(input), false, mediaType);
-    ruvia::detail::httpParseMimeParameter(std::forward<Input>(input), first, second);
-    ruvia::detail::httpParseTransferCodingSyntax(std::forward<Input>(input), first, flag);
-    ruvia::detail::httpParseUpgradeProtocol(std::forward<Input>(input), protocol);
-    ruvia::detail::http2StripPadAndPriority(frame, std::forward<Input>(input), false, first);
-    ruvia::detail::http2DecodeHeadersPayload(frame, std::forward<Input>(input), first);
-    ruvia::detail::http2DecodeDataPayload(frame, std::forward<Input>(input), first);
-};
+concept AcceptsAllBorrowedHttpParserOutputInputs =
+    requires(Input&& input, ruvia::detail::HttpMediaTypeParts& mediaType, std::string_view& first,
+        std::string_view& second, bool& flag, ruvia::detail::HttpUpgradeProtocol& protocol,
+        const ruvia::detail::Http2FrameHeader& frame) {
+        ruvia::detail::httpParseMediaTypeParts(std::forward<Input>(input), false, mediaType);
+        ruvia::detail::httpParseMediaType(std::forward<Input>(input), false, mediaType);
+        ruvia::detail::httpParseMimeParameter(std::forward<Input>(input), first, second);
+        ruvia::detail::httpParseTransferCodingSyntax(std::forward<Input>(input), first, flag);
+        ruvia::detail::httpParseUpgradeProtocol(std::forward<Input>(input), protocol);
+        ruvia::detail::http2StripPadAndPriority(frame, std::forward<Input>(input), false, first);
+        ruvia::detail::http2DecodeHeadersPayload(frame, std::forward<Input>(input), first);
+        ruvia::detail::http2DecodeDataPayload(frame, std::forward<Input>(input), first);
+    };
 
 static_assert(!AcceptsAnyBorrowedHttpParserOutputInput<std::string>);
 static_assert(!AcceptsAnyBorrowedHttpParserOutputInput<const std::string>);
@@ -180,16 +222,22 @@ static_assert(AcceptsAllBorrowedHttpParserOutputInputs<std::pmr::string&>);
 static_assert(AcceptsAllBorrowedHttpParserOutputInputs<std::string_view>);
 
 template <typename Text>
-concept AcceptsSseData = requires(Text&& text) { ruvia::SseMessage{.data = std::forward<Text>(text)}; };
+concept AcceptsSseData =
+    requires(Text&& text) { ruvia::SseMessage{.data = std::forward<Text>(text)}; };
 
 template <typename Text>
-concept AcceptsSseEvent = requires(Text&& text) { ruvia::SseMessage{.event = std::forward<Text>(text)}; };
+concept AcceptsSseEvent =
+    requires(Text&& text) { ruvia::SseMessage{.event = std::forward<Text>(text)}; };
 
 template <typename Text>
 concept AcceptsSseId = requires(Text&& text) { ruvia::SseMessage{.id = std::forward<Text>(text)}; };
 
 template <typename Text>
-concept AcceptsAnySseTextAssignment = requires(ruvia::SseMessage& message, Text&& text) { message.data = std::forward<Text>(text); } || requires(ruvia::SseMessage& message, Text&& text) { message.event = std::forward<Text>(text); } || requires(ruvia::SseMessage& message, Text&& text) { message.id = std::forward<Text>(text); };
+concept AcceptsAnySseTextAssignment = requires(ruvia::SseMessage& message, Text&& text) {
+    message.data = std::forward<Text>(text);
+} || requires(ruvia::SseMessage& message, Text&& text) {
+    message.event = std::forward<Text>(text);
+} || requires(ruvia::SseMessage& message, Text&& text) { message.id = std::forward<Text>(text); };
 
 template <typename Delay>
 concept AcceptsSseRetry = requires(Delay delay) { ruvia::SseMessage{.retry = delay}; };
@@ -202,9 +250,8 @@ concept AcceptsAllSseTextAssignments = requires(ruvia::SseMessage& message, Text
 };
 
 template <typename Message>
-concept HasPositionalSseFormatResource = requires(const Message& message, std::pmr::memory_resource* resource) {
-    ruvia::formatSseMessage(message, resource);
-};
+concept HasPositionalSseFormatResource = requires(const Message& message,
+    std::pmr::memory_resource* resource) { ruvia::formatSseMessage(message, resource); };
 
 static_assert(!AcceptsSseData<std::string>);
 static_assert(!AcceptsSseData<const std::string>);
@@ -231,12 +278,16 @@ static_assert(AcceptsAllSseTextAssignments<std::string&>);
 static_assert(AcceptsAllSseTextAssignments<std::pmr::string&>);
 static_assert(AcceptsAllSseTextAssignments<std::string_view>);
 static_assert(std::is_aggregate_v<ruvia::SseMessage>);
-static_assert(std::same_as<decltype(ruvia::SseMessage::retry), std::optional<std::chrono::milliseconds>>);
+static_assert(
+    std::same_as<decltype(ruvia::SseMessage::retry), std::optional<std::chrono::milliseconds>>);
 static_assert(AcceptsSseRetry<std::chrono::milliseconds>);
 static_assert(!AcceptsSseRetry<std::uint32_t>);
 static_assert(std::is_aggregate_v<ruvia::SseFormatOptions>);
-static_assert(std::same_as<decltype(ruvia::SseFormatOptions{}.resource), std::pmr::memory_resource*>);
-static_assert(std::same_as<decltype(ruvia::formatSseMessage(ruvia::SseMessage{}, ruvia::SseFormatOptions{})), std::pmr::string>);
+static_assert(
+    std::same_as<decltype(ruvia::SseFormatOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(
+    std::same_as<decltype(ruvia::formatSseMessage(ruvia::SseMessage{}, ruvia::SseFormatOptions{})),
+        std::pmr::string>);
 static_assert(!HasPositionalSseFormatResource<ruvia::SseMessage>);
 constexpr ruvia::SseMessage kLiteralSseMessage{.data = "data", .event = "event", .id = "id"};
 static_assert(kLiteralSseMessage.data->view() == "data");
@@ -253,30 +304,42 @@ template <typename T>
 concept HasAmbiguousQueryLookup = requires(const T& request) { request.query(std::string_view{}); };
 
 template <typename T>
-concept HasHttp2ConnectionPositionalResourceFactory = requires(std::pmr::memory_resource* resource) {
-    T::server(resource);
-} || requires(std::pmr::memory_resource* resource) {
-    T::client(resource);
-};
+concept HasHttp2ConnectionPositionalResourceFactory =
+    requires(std::pmr::memory_resource* resource) { T::server(resource); } ||
+    requires(std::pmr::memory_resource* resource) { T::client(resource); };
 
 static_assert(!HasAmbiguousQueryLookup<ruvia::HttpRequest>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpRequest&>().lastRawQueryValue(std::string_view{})), std::optional<std::string_view>>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::HttpRequest&>().lastRawQueryValue(
+                               std::string_view{})),
+    std::optional<std::string_view>>);
 static_assert(!std::copy_constructible<ruvia::Http2Connection>);
 static_assert(std::move_constructible<ruvia::Http2Connection>);
-static_assert(!std::constructible_from<ruvia::Http2Connection, std::pmr::memory_resource*, ruvia::Http2Role>);
+static_assert(
+    !std::constructible_from<ruvia::Http2Connection, std::pmr::memory_resource*, ruvia::Http2Role>);
 static_assert(std::is_aggregate_v<ruvia::Http2ConnectionOptions>);
-static_assert(std::same_as<decltype(ruvia::Http2ConnectionOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(
+    std::same_as<decltype(ruvia::Http2ConnectionOptions{}.resource), std::pmr::memory_resource*>);
 static_assert(std::same_as<decltype(ruvia::Http2Connection::server()), ruvia::Http2Connection>);
 static_assert(std::same_as<decltype(ruvia::Http2Connection::client()), ruvia::Http2Connection>);
-static_assert(std::same_as<decltype(ruvia::Http2Connection::server(ruvia::Http2ConnectionOptions{})), ruvia::Http2Connection>);
-static_assert(std::same_as<decltype(ruvia::Http2Connection::client(ruvia::Http2ConnectionOptions{})), ruvia::Http2Connection>);
+static_assert(
+    std::same_as<decltype(ruvia::Http2Connection::server(ruvia::Http2ConnectionOptions{})),
+        ruvia::Http2Connection>);
+static_assert(
+    std::same_as<decltype(ruvia::Http2Connection::client(ruvia::Http2ConnectionOptions{})),
+        ruvia::Http2Connection>);
 static_assert(!HasHttp2ConnectionPositionalResourceFactory<ruvia::Http2Connection>);
 static_assert(std::is_aggregate_v<ruvia::Http2RegularRequestHeadView>);
 static_assert(std::is_aggregate_v<ruvia::Http2ConnectRequestHeadView>);
 static_assert(std::is_aggregate_v<ruvia::Http2ExtendedConnectRequestHeadView>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::Http2RequestHeadEvent&>().expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject)), ruvia::HttpServerExpectationPlan>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::Http2ResponseHeadEvent&>().head()), const ruvia::HttpClientResponseHead&>);
-static_assert(std::same_as<decltype(std::declval<ruvia::Http2MessageBodyChunkEvent&>().takeCredit()), ruvia::Http2ReceivedDataCredit>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::Http2RequestHeadEvent&>().expectationPlan(
+                     ruvia::HttpUnsupportedExpectationPolicy::kReject)),
+        ruvia::HttpServerExpectationPlan>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::Http2ResponseHeadEvent&>().head()),
+    const ruvia::HttpClientResponseHead&>);
+static_assert(
+    std::same_as<decltype(std::declval<ruvia::Http2MessageBodyChunkEvent&>().takeCredit()),
+        ruvia::Http2ReceivedDataCredit>);
 static_assert(std::move_constructible<ruvia::Http2RequestHeadEvent>);
 static_assert(!std::copy_constructible<ruvia::Http2RequestHeadEvent>);
 static_assert(std::move_constructible<ruvia::Http2ReceivedDataCredit>);
@@ -294,25 +357,30 @@ concept HasPublicHttp2BeginConnection = requires(T& connection) { connection.beg
 
 template <typename T>
 concept HasLegacyHttp2RequestSubmission = requires(T& connection) {
-    connection.submitRegularRequestHead("GET", "https", "example.test", "/", std::span<const ruvia::HttpHeaderView>{}, ruvia::Http2RequestContent::none());
+    connection.submitRegularRequestHead("GET", "https", "example.test", "/",
+        std::span<const ruvia::HttpHeaderView>{}, ruvia::Http2RequestContent::none());
 };
 
 template <typename T>
-concept HasTypedHttp2RequestSubmission = requires(T& connection,
-    const ruvia::Http2RegularRequestHeadView& regular,
-    const ruvia::Http2ConnectRequestHeadView& connect,
-    const ruvia::Http2ExtendedConnectRequestHeadView& extended) {
-    { connection.submitRequestHead(regular) } -> std::same_as<ruvia::Http2RequestHeadSubmitResult>;
-    { connection.submitRequestHead(connect) } -> std::same_as<ruvia::Http2RequestHeadSubmitResult>;
-    { connection.submitRequestHead(extended) } -> std::same_as<ruvia::Http2RequestHeadSubmitResult>;
-};
+concept HasTypedHttp2RequestSubmission =
+    requires(T& connection, const ruvia::Http2RegularRequestHeadView& regular,
+        const ruvia::Http2ConnectRequestHeadView& connect,
+        const ruvia::Http2ExtendedConnectRequestHeadView& extended) {
+        {
+            connection.submitRequestHead(regular)
+        } -> std::same_as<ruvia::Http2RequestHeadSubmitResult>;
+        {
+            connection.submitRequestHead(connect)
+        } -> std::same_as<ruvia::Http2RequestHeadSubmitResult>;
+        {
+            connection.submitRequestHead(extended)
+        } -> std::same_as<ruvia::Http2RequestHeadSubmitResult>;
+    };
 
 template <typename T>
 concept HasBareHttp2ServerRequestRelease = requires(T& connection) {
     connection.releaseServerRequest(std::uint32_t{1});
-} || requires(T& connection) {
-    connection.release(std::uint32_t{1});
-};
+} || requires(T& connection) { connection.release(std::uint32_t{1}); };
 
 static_assert(!AcceptsTemporaryHttp2Feed<ruvia::Http2Connection>);
 static_assert(!HasPublicHttp2EventKind<ruvia::Http2Event>);
@@ -323,41 +391,50 @@ static_assert(!HasBareHttp2ServerRequestRelease<ruvia::Http2Connection>);
 static_assert(!std::copy_constructible<ruvia::HpackDecoder>);
 static_assert(std::move_constructible<ruvia::HpackDecoder>);
 static_assert(std::is_aggregate_v<ruvia::HpackDecoderOptions>);
-static_assert(std::same_as<decltype(ruvia::HpackDecoderOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(
+    std::same_as<decltype(ruvia::HpackDecoderOptions{}.resource), std::pmr::memory_resource*>);
 static_assert(!std::constructible_from<ruvia::HpackDecoder, std::pmr::memory_resource*>);
 static_assert(std::constructible_from<ruvia::HpackDecoder, ruvia::HpackDecoderOptions>);
 static_assert(std::is_aggregate_v<ruvia::HpackHeaderWithNameIndexOptions>);
 static_assert(std::same_as<decltype(ruvia::HpackHeaderWithNameIndexOptions{}.neverIndexed), bool>);
 
 template <typename T>
-concept HasPositionalHpackHeaderWithNameIndexFlag = requires(std::pmr::string& output, std::uint32_t index, std::string_view value) {
-    T::encodeHeaderWithNameIndex(output, index, value, true);
-};
+concept HasPositionalHpackHeaderWithNameIndexFlag =
+    requires(std::pmr::string& output, std::uint32_t index, std::string_view value) {
+        T::encodeHeaderWithNameIndex(output, index, value, true);
+    };
 
 static_assert(!HasPositionalHpackHeaderWithNameIndexFlag<ruvia::HpackEncoder>);
 
 template <typename T>
 concept HasRawHpackCallback = requires(T& decoder) {
-    decoder.decode(std::string_view{}, nullptr, static_cast<bool (*)(void*, std::string_view, std::string_view)>(nullptr));
+    decoder.decode(std::string_view{}, nullptr,
+        static_cast<bool (*)(void*, std::string_view, std::string_view)>(nullptr));
 };
 
 static_assert(!HasRawHpackCallback<ruvia::HpackDecoder>);
 
-inline bool hpackFunctionCallback(std::string_view, std::string_view) { return true; }
+inline bool hpackFunctionCallback(std::string_view, std::string_view) {
+    return true;
+}
 static_assert(requires(ruvia::HpackDecoder& decoder) {
-    { decoder.decode(std::string_view{}, hpackFunctionCallback) } -> std::same_as<ruvia::HpackDecodeResult>;
+    {
+        decoder.decode(std::string_view{}, hpackFunctionCallback)
+    } -> std::same_as<ruvia::HpackDecodeResult>;
 });
 static_assert(!std::copy_constructible<ruvia::WebSocketServerConnection>);
 static_assert(std::move_constructible<ruvia::WebSocketServerConnection>);
 static_assert(std::is_aggregate_v<ruvia::WebSocketServerConnectionOptions>);
-static_assert(std::same_as<decltype(ruvia::WebSocketServerConnectionOptions{}.resource), std::pmr::memory_resource*>);
-static_assert(std::same_as<decltype(ruvia::WebSocketServerConnectionOptions{}.messageLimit), ruvia::ProtocolByteLimit>);
-static_assert(std::same_as<decltype(ruvia::WebSocketServerConnectionOptions{}.compression), ruvia::WebSocketCompression>);
+static_assert(std::same_as<decltype(ruvia::WebSocketServerConnectionOptions{}.resource),
+    std::pmr::memory_resource*>);
+static_assert(std::same_as<decltype(ruvia::WebSocketServerConnectionOptions{}.messageLimit),
+    ruvia::ProtocolByteLimit>);
+static_assert(std::same_as<decltype(ruvia::WebSocketServerConnectionOptions{}.compression),
+    ruvia::WebSocketCompression>);
 
 template <typename T>
-concept HasPositionalWebSocketServerConnectionResource = requires(std::pmr::memory_resource* resource) {
-    T(resource);
-};
+concept HasPositionalWebSocketServerConnectionResource =
+    requires(std::pmr::memory_resource* resource) { T(resource); };
 
 static_assert(!HasPositionalWebSocketServerConnectionResource<ruvia::WebSocketServerConnection>);
 
@@ -374,16 +451,22 @@ template <typename T>
 concept ExposesRvalueHttp1ChunkHeaderView = requires(T&& header) { std::move(header).view(); };
 
 template <typename T>
-concept ExposesRvalueResponseHeadBufferStorage = requires(T&& buffer) { std::move(buffer).view(); } || requires(T&& buffer) { std::move(buffer).stackCursor(std::size_t{}); };
+concept ExposesRvalueResponseHeadBufferStorage = requires(T&& buffer) {
+    std::move(buffer).view();
+} || requires(T&& buffer) { std::move(buffer).stackCursor(std::size_t{}); };
 
 template <typename T>
 concept ExposesRvalueHttp2OutputBuffer = requires(T&& output) { std::move(output).pending(); };
 
 template <typename T>
-concept ExposesRvalueHttp2ConnectionStorage = requires(T&& connection) { std::move(connection).pendingOutput(); } || requires(T&& connection) { std::move(connection).takeDrainedDataStreams(); } || requires(T&& connection) { std::move(connection).stream(std::uint32_t{}); };
+concept ExposesRvalueHttp2ConnectionStorage =
+    requires(T&& connection) { std::move(connection).pendingOutput(); } ||
+    requires(T&& connection) { std::move(connection).takeDrainedDataStreams(); } ||
+    requires(T&& connection) { std::move(connection).stream(std::uint32_t{}); };
 
 template <typename T>
-concept ExposesRvalueEncodedClosePayloadBytes = requires(T&& payload) { std::move(payload).bytes(); };
+concept ExposesRvalueEncodedClosePayloadBytes =
+    requires(T&& payload) { std::move(payload).bytes(); };
 
 static_assert(!ExposesRvalueHttp1ChunkHeaderView<ruvia::detail::Http1ChunkHeader>);
 static_assert(!ExposesRvalueResponseHeadBufferStorage<ruvia::detail::ResponseHeadBuffer>);
@@ -392,25 +475,61 @@ static_assert(!ExposesRvalueHttp2ConnectionStorage<ruvia::detail::Http2Connectio
 static_assert(!ExposesRvalueEncodedClosePayloadBytes<ruvia::detail::WebSocketEncodedClosePayload>);
 
 template <typename T>
-concept ExposesRvalueHttp2HeaderListStorage = requires(T&& list) { std::move(list).at(std::size_t{}); };
+concept ExposesRvalueHttp2HeaderListStorage =
+    requires(T&& list) { std::move(list).at(std::size_t{}); };
 
 template <typename T>
-concept ExposesRvalueHttp2StreamRequestDataStorage = requires(T&& data) { std::move(data).method(); } || requires(T&& data) { std::move(data).scheme(); } || requires(T&& data) { std::move(data).authority(); } || requires(T&& data) { std::move(data).path(); } || requires(T&& data) { std::move(data).protocol(); } || requires(T&& data) { std::move(data).cookie(); } || requires(T&& data) { std::move(data).headerAt(std::size_t{}); };
+concept ExposesRvalueHttp2StreamRequestDataStorage =
+    requires(T&& data) { std::move(data).method(); } ||
+    requires(T&& data) { std::move(data).scheme(); } ||
+    requires(T&& data) { std::move(data).authority(); } ||
+    requires(T&& data) { std::move(data).path(); } ||
+    requires(T&& data) { std::move(data).protocol(); } ||
+    requires(T&& data) { std::move(data).cookie(); } ||
+    requires(T&& data) { std::move(data).headerAt(std::size_t{}); };
 
 template <typename T>
-concept ExposesRvalueHttp2StreamRequestStateStorage = requires(T&& state) { std::move(state).responseStatus(); };
+concept ExposesRvalueHttp2StreamRequestStateStorage =
+    requires(T&& state) { std::move(state).responseStatus(); };
 
 template <typename T>
-concept ExposesRvalueHttp2StreamHeaderBlocksStorage = requires(T&& blocks) { std::move(blocks).request(); } || requires(const T&& blocks) { std::move(blocks).request(); } || requires(T&& blocks) { std::move(blocks).response(); } || requires(const T&& blocks) { std::move(blocks).response(); };
+concept ExposesRvalueHttp2StreamHeaderBlocksStorage =
+    requires(T&& blocks) { std::move(blocks).request(); } ||
+    requires(const T&& blocks) { std::move(blocks).request(); } ||
+    requires(T&& blocks) { std::move(blocks).response(); } ||
+    requires(const T&& blocks) { std::move(blocks).response(); };
 
 template <typename T>
-concept ExposesRvalueHttp2StreamLifecycleStorage = requires(T&& lifecycle) { std::move(lifecycle).localSend(); } || requires(T&& lifecycle) { std::move(lifecycle).remoteReceive(); };
+concept ExposesRvalueHttp2StreamLifecycleStorage = requires(T&& lifecycle) {
+    std::move(lifecycle).localSend();
+} || requires(T&& lifecycle) { std::move(lifecycle).remoteReceive(); };
 
 template <typename T>
-concept ExposesRvalueHttp2StreamStateStorage = requires(T&& stream) { std::move(stream).receiveWindowCredit(); } || requires(T&& stream) { std::move(stream).remoteHeaderBlock(); } || requires(const T&& stream) { std::move(stream).remoteHeaderBlock(); } || requires(T&& stream) { std::move(stream).localHeaderBlock(); } || requires(const T&& stream) { std::move(stream).localHeaderBlock(); } || requires(T&& stream) { std::move(stream).remoteContent(); } || requires(T&& stream) { std::move(stream).localContent(); } || requires(T&& stream) { std::move(stream).localSend(); } || requires(T&& stream) { std::move(stream).remoteReceive(); } || requires(T&& stream) { std::move(stream).requestMethod(); } || requires(T&& stream) { std::move(stream).requestAuthority(); } || requires(T&& stream) { std::move(stream).requestPath(); } || requires(T&& stream) { std::move(stream).requestProtocol(); } || requires(T&& stream) { std::move(stream).requestCookie(); } || requires(T&& stream) { std::move(stream).remoteHeaderAt(std::size_t{}); } || requires(T&& stream) { std::move(stream).requestScheme(); } || requires(T&& stream) { std::move(stream).tunnel(); } || requires(T&& stream) { std::move(stream).responseStatus(); };
+concept ExposesRvalueHttp2StreamStateStorage =
+    requires(T&& stream) { std::move(stream).receiveWindowCredit(); } ||
+    requires(T&& stream) { std::move(stream).remoteHeaderBlock(); } ||
+    requires(const T&& stream) { std::move(stream).remoteHeaderBlock(); } ||
+    requires(T&& stream) { std::move(stream).localHeaderBlock(); } ||
+    requires(const T&& stream) { std::move(stream).localHeaderBlock(); } ||
+    requires(T&& stream) { std::move(stream).remoteContent(); } ||
+    requires(T&& stream) { std::move(stream).localContent(); } ||
+    requires(T&& stream) { std::move(stream).localSend(); } ||
+    requires(T&& stream) { std::move(stream).remoteReceive(); } ||
+    requires(T&& stream) { std::move(stream).requestMethod(); } ||
+    requires(T&& stream) { std::move(stream).requestAuthority(); } ||
+    requires(T&& stream) { std::move(stream).requestPath(); } ||
+    requires(T&& stream) { std::move(stream).requestProtocol(); } ||
+    requires(T&& stream) { std::move(stream).requestCookie(); } ||
+    requires(T&& stream) { std::move(stream).remoteHeaderAt(std::size_t{}); } ||
+    requires(T&& stream) { std::move(stream).requestScheme(); } ||
+    requires(T&& stream) { std::move(stream).tunnel(); } ||
+    requires(T&& stream) { std::move(stream).responseStatus(); };
 
 template <typename T>
-concept ExposesRvalueHttp2StreamTableStorage = requires(T&& table) { std::move(table).find(std::uint32_t{}); } || requires(const T&& table) { std::move(table).find(std::uint32_t{}); } || requires(T&& table) { std::move(table).create(std::uint32_t{}, std::int32_t{}); };
+concept ExposesRvalueHttp2StreamTableStorage =
+    requires(T&& table) { std::move(table).find(std::uint32_t{}); } || requires(const T&& table) {
+        std::move(table).find(std::uint32_t{});
+    } || requires(T&& table) { std::move(table).create(std::uint32_t{}, std::int32_t{}); };
 
 static_assert(!ExposesRvalueHttp2HeaderListStorage<ruvia::detail::Http2HeaderList>);
 static_assert(!ExposesRvalueHttp2StreamRequestDataStorage<ruvia::detail::Http2StreamRequestData>);
@@ -421,43 +540,62 @@ static_assert(!ExposesRvalueHttp2StreamStateStorage<ruvia::detail::Http2StreamSt
 static_assert(!ExposesRvalueHttp2StreamTableStorage<ruvia::detail::Http2StreamTable>);
 
 template <typename T>
-concept ExposesRvalueMultipartInputStorage = requires(T&& input) { std::move(input).borrowed(); } || requires(T&& input) { std::move(input).streamingOpen(); } || requires(T&& input) { std::move(input).streamingEof(); } || requires(T&& input) { std::move(input).view(); };
+concept ExposesRvalueMultipartInputStorage =
+    requires(T&& input) { std::move(input).borrowed(); } ||
+    requires(T&& input) { std::move(input).streamingOpen(); } ||
+    requires(T&& input) { std::move(input).streamingEof(); } ||
+    requires(T&& input) { std::move(input).view(); };
 
 template <typename T>
-concept ExposesRvalueWsConnectionStorage = requires(T&& connection) { std::move(connection).poll(); } || requires(T&& connection) { std::move(connection).outputPlan(); };
+concept ExposesRvalueWsConnectionStorage = requires(T&& connection) {
+    std::move(connection).poll();
+} || requires(T&& connection) { std::move(connection).outputPlan(); };
 
 static_assert(!ExposesRvalueMultipartInputStorage<ruvia::detail::MultipartInputLifecycle>);
 static_assert(!ExposesRvalueWsConnectionStorage<ruvia::detail::WsConnection>);
 
 template <typename Input>
-concept AcceptsHttp1BorrowedParseInput = requires(const ruvia::Http1RequestParser& parser, Input&& input) { parser.parse(std::forward<Input>(input)); };
+concept AcceptsHttp1BorrowedParseInput = requires(const ruvia::Http1RequestParser& parser,
+    Input&& input) { parser.parse(std::forward<Input>(input)); };
 
 template <typename Input>
-concept AcceptsHttp2BorrowedFeedInput = requires(ruvia::detail::Http2Connection& connection, Input&& input) { connection.feed(std::forward<Input>(input)); };
+concept AcceptsHttp2BorrowedFeedInput = requires(ruvia::detail::Http2Connection& connection,
+    Input&& input) { connection.feed(std::forward<Input>(input)); };
 
 template <typename Input>
-concept AcceptsHttp1ChunkBorrowedInput = requires(ruvia::detail::Http1ChunkedBodyDecoder& decoder, Input&& input) { decoder.decode(std::forward<Input>(input)); };
+concept AcceptsHttp1ChunkBorrowedInput = requires(ruvia::detail::Http1ChunkedBodyDecoder& decoder,
+    Input&& input) { decoder.decode(std::forward<Input>(input)); };
 
 template <typename Input>
-concept AcceptsMultipartBorrowedInput = requires(Input&& input) { ruvia::parseMultipartBody(std::forward<Input>(input), {.boundary = ruvia::MultipartBoundary("x")}); };
-
-template <typename T>
-concept HasPositionalMultipartParserConstructor = requires(std::pmr::memory_resource* resource) {
-    T(ruvia::MultipartBoundary("x"), resource);
+concept AcceptsMultipartBorrowedInput = requires(Input&& input) {
+    ruvia::parseMultipartBody(
+        std::forward<Input>(input), {.boundary = ruvia::MultipartBoundary("x")});
 };
 
 template <typename T>
-concept HasPositionalMultipartBodyParse = requires(ApiGuardDependent<T, std::string_view> body, ApiGuardDependent<T, ruvia::MultipartBoundary> boundary, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::parseMultipartBody(body, boundary);
-} || requires(ApiGuardDependent<T, std::string_view> body, ApiGuardDependent<T, ruvia::MultipartBoundary> boundary, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::parseMultipartBody(body, boundary, resource);
-};
-
-template <typename Input>
-concept AcceptsSetCookieBorrowedInput = requires(Input&& input) { ruvia::parseSetCookie(std::forward<Input>(input)); };
+concept HasPositionalMultipartParserConstructor =
+    requires(std::pmr::memory_resource* resource) { T(ruvia::MultipartBoundary("x"), resource); };
 
 template <typename T>
-concept HasSetCookiePublicField = requires(T& cookie) { cookie.name = std::string_view{}; } ||
+concept HasPositionalMultipartBodyParse =
+    requires(ApiGuardDependent<T, std::string_view> body,
+        ApiGuardDependent<T, ruvia::MultipartBoundary> boundary,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::parseMultipartBody(body, boundary);
+    } ||
+    requires(ApiGuardDependent<T, std::string_view> body,
+        ApiGuardDependent<T, ruvia::MultipartBoundary> boundary,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::parseMultipartBody(body, boundary, resource);
+    };
+
+template <typename Input>
+concept AcceptsSetCookieBorrowedInput =
+    requires(Input&& input) { ruvia::parseSetCookie(std::forward<Input>(input)); };
+
+template <typename T>
+concept HasSetCookiePublicField =
+    requires(T& cookie) { cookie.name = std::string_view{}; } ||
     requires(T& cookie) { cookie.value = std::string_view{}; } ||
     requires(T& cookie) { cookie.path = std::string_view{}; } ||
     requires(T& cookie) { cookie.domain = std::string_view{}; } ||
@@ -469,44 +607,92 @@ concept HasSetCookiePublicField = requires(T& cookie) { cookie.name = std::strin
 
 template <typename Input>
 concept AcceptsCopiedMultipartMetadata = requires(Input&& input) {
-    ruvia::detail::MultipartPartAccess::make(std::forward<Input>(input), {}, {}, {}, std::pmr::get_default_resource());
-    ruvia::detail::MultipartPartAccess::make({}, std::forward<Input>(input), {}, {}, std::pmr::get_default_resource());
-    ruvia::detail::MultipartPartAccess::makeDecoded(std::forward<Input>(input), {}, {}, {}, std::pmr::get_default_resource());
-    ruvia::detail::MultipartPartAccess::makeDecoded({}, std::forward<Input>(input), {}, {}, std::pmr::get_default_resource());
+    ruvia::detail::MultipartPartAccess::make(
+        std::forward<Input>(input), {}, {}, {}, std::pmr::get_default_resource());
+    ruvia::detail::MultipartPartAccess::make(
+        {}, std::forward<Input>(input), {}, {}, std::pmr::get_default_resource());
+    ruvia::detail::MultipartPartAccess::makeDecoded(
+        std::forward<Input>(input), {}, {}, {}, std::pmr::get_default_resource());
+    ruvia::detail::MultipartPartAccess::makeDecoded(
+        {}, std::forward<Input>(input), {}, {}, std::pmr::get_default_resource());
 };
 
 template <typename Input>
-concept AcceptsAnyBufferedMultipartBorrow = requires(Input&& input) { ruvia::detail::MultipartPartAccess::make({}, {}, std::forward<Input>(input), {}, std::pmr::get_default_resource()); } || requires(Input&& input) { ruvia::detail::MultipartPartAccess::make({}, {}, {}, std::forward<Input>(input), std::pmr::get_default_resource()); } || requires(Input&& input) { ruvia::detail::MultipartPartAccess::makeDecoded({}, {}, std::forward<Input>(input), {}, std::pmr::get_default_resource()); } || requires(Input&& input) { ruvia::detail::MultipartPartAccess::makeDecoded({}, {}, {}, std::forward<Input>(input), std::pmr::get_default_resource()); };
+concept AcceptsAnyBufferedMultipartBorrow = requires(Input&& input) {
+    ruvia::detail::MultipartPartAccess::make(
+        {}, {}, std::forward<Input>(input), {}, std::pmr::get_default_resource());
+} || requires(Input&& input) {
+    ruvia::detail::MultipartPartAccess::make(
+        {}, {}, {}, std::forward<Input>(input), std::pmr::get_default_resource());
+} || requires(Input&& input) {
+    ruvia::detail::MultipartPartAccess::makeDecoded(
+        {}, {}, std::forward<Input>(input), {}, std::pmr::get_default_resource());
+} || requires(Input&& input) {
+    ruvia::detail::MultipartPartAccess::makeDecoded(
+        {}, {}, {}, std::forward<Input>(input), std::pmr::get_default_resource());
+};
 
 template <typename Input>
-concept AcceptsAnyStreamMultipartBorrow = requires(Input&& input) { ruvia::detail::MultipartStreamPartAccess::make(std::forward<Input>(input), {}, {}, {}, ruvia::MultipartChunkPhase::kComplete); } || requires(Input&& input) { ruvia::detail::MultipartStreamPartAccess::make({}, std::forward<Input>(input), {}, {}, ruvia::MultipartChunkPhase::kComplete); } || requires(Input&& input) { ruvia::detail::MultipartStreamPartAccess::make({}, {}, std::forward<Input>(input), {}, ruvia::MultipartChunkPhase::kComplete); } || requires(Input&& input) { ruvia::detail::MultipartStreamPartAccess::make({}, {}, {}, std::forward<Input>(input), ruvia::MultipartChunkPhase::kComplete); };
+concept AcceptsAnyStreamMultipartBorrow = requires(Input&& input) {
+    ruvia::detail::MultipartStreamPartAccess::make(
+        std::forward<Input>(input), {}, {}, {}, ruvia::MultipartChunkPhase::kComplete);
+} || requires(Input&& input) {
+    ruvia::detail::MultipartStreamPartAccess::make(
+        {}, std::forward<Input>(input), {}, {}, ruvia::MultipartChunkPhase::kComplete);
+} || requires(Input&& input) {
+    ruvia::detail::MultipartStreamPartAccess::make(
+        {}, {}, std::forward<Input>(input), {}, ruvia::MultipartChunkPhase::kComplete);
+} || requires(Input&& input) {
+    ruvia::detail::MultipartStreamPartAccess::make(
+        {}, {}, {}, std::forward<Input>(input), ruvia::MultipartChunkPhase::kComplete);
+};
 
 template <typename Input>
-concept AcceptsAuthorityBorrowedInput = requires(Input&& input) { ruvia::detail::parseHttpAuthority(std::forward<Input>(input)); };
+concept AcceptsAuthorityBorrowedInput =
+    requires(Input&& input) { ruvia::detail::parseHttpAuthority(std::forward<Input>(input)); };
 
 template <typename Input>
-concept AcceptsRequestTargetBorrowedInput = requires(Input&& input, ruvia::detail::RequestTargetView& output) { ruvia::detail::parseRequestTarget(ruvia::HttpKnownMethod::kGet, std::forward<Input>(input), output); };
+concept AcceptsRequestTargetBorrowedInput =
+    requires(Input&& input, ruvia::detail::RequestTargetView& output) {
+        ruvia::detail::parseRequestTarget(
+            ruvia::HttpKnownMethod::kGet, std::forward<Input>(input), output);
+    };
 
 template <typename Input>
-concept AcceptsFirstHttp2PayloadPart = requires(Input&& input) { ruvia::detail::http2SliceTwoPartPayload(std::forward<Input>(input), std::string_view{}, 0, 0); };
+concept AcceptsFirstHttp2PayloadPart = requires(Input&& input) {
+    ruvia::detail::http2SliceTwoPartPayload(std::forward<Input>(input), std::string_view{}, 0, 0);
+};
 
 template <typename Input>
-concept AcceptsSecondHttp2PayloadPart = requires(Input&& input) { ruvia::detail::http2SliceTwoPartPayload(std::string_view{}, std::forward<Input>(input), 0, 0); };
+concept AcceptsSecondHttp2PayloadPart = requires(Input&& input) {
+    ruvia::detail::http2SliceTwoPartPayload(std::string_view{}, std::forward<Input>(input), 0, 0);
+};
 
 template <typename Input>
-concept AcceptsUrlValueBorrowedInput = requires(Input&& input) { ruvia::detail::findUrlEncodedValue(std::forward<Input>(input), "name", ruvia::detail::UrlDecodeMode::kForm); };
+concept AcceptsUrlValueBorrowedInput = requires(Input&& input) {
+    ruvia::detail::findUrlEncodedValue(
+        std::forward<Input>(input), "name", ruvia::detail::UrlDecodeMode::kForm);
+};
 
 template <typename Input>
-concept AcceptsParameterBorrowedInput = requires(Input&& input) { ruvia::detail::httpFindSemicolonParameter(std::forward<Input>(input), "name"); };
+concept AcceptsParameterBorrowedInput = requires(Input&& input) {
+    ruvia::detail::httpFindSemicolonParameter(std::forward<Input>(input), "name");
+};
 
 template <typename Input>
-concept AcceptsServerMessageBorrowedInput = requires(const ruvia::detail::Http1ServerRequestParser& parser, Input&& input) { parser.parseMessage(std::forward<Input>(input)); };
+concept AcceptsServerMessageBorrowedInput =
+    requires(const ruvia::detail::Http1ServerRequestParser& parser, Input&& input) {
+        parser.parseMessage(std::forward<Input>(input));
+    };
 
 template <typename Input>
-concept AcceptsHeaderSliceBorrowedInput = requires(const ruvia::detail::HttpHeaderSlice& slice, Input&& input) { slice.bind(std::forward<Input>(input)); };
+concept AcceptsHeaderSliceBorrowedInput = requires(const ruvia::detail::HttpHeaderSlice& slice,
+    Input&& input) { slice.bind(std::forward<Input>(input)); };
 
 template <typename Input>
-concept AcceptsMultipartHeaderBorrowedInput = requires(Input&& input) { ruvia::detail::httpHeaderValueInBlock(std::forward<Input>(input), "content-type"); };
+concept AcceptsMultipartHeaderBorrowedInput = requires(Input&& input) {
+    ruvia::detail::httpHeaderValueInBlock(std::forward<Input>(input), "content-type");
+};
 
 static_assert(ruvia::detail::kIsHttpOwningCharString<std::string>);
 static_assert(ruvia::detail::kIsHttpOwningCharString<std::pmr::string>);
@@ -536,9 +722,14 @@ static_assert(!AcceptsSetCookieBorrowedInput<std::string>);
 static_assert(!AcceptsSetCookieBorrowedInput<const std::string>);
 static_assert(!AcceptsSetCookieBorrowedInput<std::pmr::string>);
 static_assert(std::same_as<std::underlying_type_t<ruvia::HttpSetCookieAttribute>, std::uint8_t>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().name()), std::string_view>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().maxAgeSeconds()), std::optional<std::int64_t>>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().has(ruvia::HttpSetCookieAttribute::kSecure)), bool>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().name()),
+    std::string_view>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().maxAgeSeconds()),
+        std::optional<std::int64_t>>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().has(
+                               ruvia::HttpSetCookieAttribute::kSecure)),
+    bool>);
 static_assert(!HasSetCookiePublicField<ruvia::HttpSetCookieView>);
 static_assert(AcceptsCopiedMultipartMetadata<std::string>);
 static_assert(AcceptsCopiedMultipartMetadata<std::pmr::string>);
@@ -593,23 +784,39 @@ static_assert(AcceptsMultipartHeaderBorrowedInput<std::string&>);
 static_assert(!AcceptsMultipartHeaderBorrowedInput<std::string>);
 static_assert(!AcceptsMultipartHeaderBorrowedInput<std::pmr::string>);
 static_assert(std::default_initializable<ruvia::detail::Http2LocalConnectionState>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2LocalConnectionState&>().open()), const ruvia::detail::Http2LocalConnectionOpen*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2LocalConnectionState&>().gracefulDrain()), const ruvia::detail::Http2LocalConnectionGracefulDrain*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2LocalConnectionState&>().fatalFailure()), const ruvia::detail::Http2LocalConnectionFatalFailure*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http2LocalConnectionState&>().open()),
+        const ruvia::detail::Http2LocalConnectionOpen*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2LocalConnectionState&>().gracefulDrain()),
+    const ruvia::detail::Http2LocalConnectionGracefulDrain*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2LocalConnectionState&>().fatalFailure()),
+    const ruvia::detail::Http2LocalConnectionFatalFailure*>);
 
 template <typename T>
-concept HasLegacyResponseBodyView = requires(T& response) { response.setBodyView(std::string_view{}); };
+concept HasLegacyResponseBodyView =
+    requires(T& response) { response.setBodyView(std::string_view{}); };
 
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpRequest&>().header(std::string_view{})), std::optional<std::string_view>>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpResponse&>().header(std::string_view{})), std::optional<std::string_view>>);
-static_assert(std::constructible_from<ruvia::HttpHeaderView, const std::string&, const std::string&>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::HttpRequest&>().header(std::string_view{})),
+        std::optional<std::string_view>>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::HttpResponse&>().header(std::string_view{})),
+        std::optional<std::string_view>>);
+static_assert(
+    std::constructible_from<ruvia::HttpHeaderView, const std::string&, const std::string&>);
 static_assert(!std::constructible_from<ruvia::HttpHeaderView, std::string&&, std::string_view>);
 static_assert(!std::constructible_from<ruvia::HttpHeaderView, std::string_view, std::string&&>);
 static_assert(!std::constructible_from<ruvia::HttpHeaderView, std::string&&, std::string&&>);
-static_assert(!std::constructible_from<ruvia::HttpHeaderView, const std::string&&, std::string_view>);
-static_assert(!std::constructible_from<ruvia::HttpHeaderView, std::string_view, const std::string&&>);
-static_assert(!std::constructible_from<ruvia::HttpHeaderView, std::pmr::string&&, std::string_view>);
-static_assert(!std::constructible_from<ruvia::HttpHeaderView, std::string_view, const std::pmr::string&&>);
+static_assert(
+    !std::constructible_from<ruvia::HttpHeaderView, const std::string&&, std::string_view>);
+static_assert(
+    !std::constructible_from<ruvia::HttpHeaderView, std::string_view, const std::string&&>);
+static_assert(
+    !std::constructible_from<ruvia::HttpHeaderView, std::pmr::string&&, std::string_view>);
+static_assert(
+    !std::constructible_from<ruvia::HttpHeaderView, std::string_view, const std::pmr::string&&>);
 
 template <typename T>
 concept HasHttp2EventError = requires(const T& event) {
@@ -617,25 +824,42 @@ concept HasHttp2EventError = requires(const T& event) {
 };
 
 template <typename T>
-concept ExposesAnyRvalueSansIoEventBorrow = requires(T&& event) { std::move(event).messageHead(); } || requires(T&& event) { std::move(event).messageBodyChunk(); } || requires(T&& event) { std::move(event).messageEnd(); } || requires(T&& event) { std::move(event).tunnelData(); } || requires(T&& event) { std::move(event).tunnelEnd(); } || requires(T&& event) { std::move(event).streamClosed(); } || requires(T&& event) { std::move(event).requestUnprocessed(); } || requires(T&& event) { std::move(event).goaway(); } || requires(T&& event) { std::move(event).peerGoaway(); } || requires(T&& event) { std::move(event).message(); } || requires(T&& event) { std::move(event).ping(); } || requires(T&& event) { std::move(event).pong(); } || requires(T&& event) { std::move(event).close(); } || requires(T&& event) { std::move(event).protocolError(); } || requires(T&& event) { std::move(event).transportEnd(); };
+concept ExposesAnyRvalueSansIoEventBorrow =
+    requires(T&& event) { std::move(event).messageHead(); } ||
+    requires(T&& event) { std::move(event).messageBodyChunk(); } ||
+    requires(T&& event) { std::move(event).messageEnd(); } ||
+    requires(T&& event) { std::move(event).tunnelData(); } ||
+    requires(T&& event) { std::move(event).tunnelEnd(); } ||
+    requires(T&& event) { std::move(event).streamClosed(); } ||
+    requires(T&& event) { std::move(event).requestUnprocessed(); } ||
+    requires(T&& event) { std::move(event).goaway(); } ||
+    requires(T&& event) { std::move(event).peerGoaway(); } ||
+    requires(T&& event) { std::move(event).message(); } ||
+    requires(T&& event) { std::move(event).ping(); } ||
+    requires(T&& event) { std::move(event).pong(); } ||
+    requires(T&& event) { std::move(event).close(); } ||
+    requires(T&& event) { std::move(event).protocolError(); } ||
+    requires(T&& event) { std::move(event).transportEnd(); };
 
 template <typename T>
-concept HasSharedCacheFreshnessPolicy = requires(const T& directives) { directives.sharedFreshnessLifetime(); };
+concept HasSharedCacheFreshnessPolicy =
+    requires(const T& directives) { directives.sharedFreshnessLifetime(); };
 
 template <typename T>
 concept HasAnyCacheControlBooleanField = requires(T& directives) { directives.noStore; } ||
-    requires(T& directives) { directives.noCache; } ||
-    requires(T& directives) { directives.noTransform; } ||
-    requires(T& directives) { directives.mustRevalidate; } ||
-    requires(T& directives) { directives.proxyRevalidate; } ||
-    requires(T& directives) { directives.isPrivate; } ||
-    requires(T& directives) { directives.isPublic; } ||
-    requires(T& directives) { directives.immutable; } ||
-    requires(T& directives) { directives.onlyIfCached; } ||
-    requires(T& directives) { directives.maxStaleAny; };
+                                         requires(T& directives) { directives.noCache; } ||
+                                         requires(T& directives) { directives.noTransform; } ||
+                                         requires(T& directives) { directives.mustRevalidate; } ||
+                                         requires(T& directives) { directives.proxyRevalidate; } ||
+                                         requires(T& directives) { directives.isPrivate; } ||
+                                         requires(T& directives) { directives.isPublic; } ||
+                                         requires(T& directives) { directives.immutable; } ||
+                                         requires(T& directives) { directives.onlyIfCached; } ||
+                                         requires(T& directives) { directives.maxStaleAny; };
 
 template <typename T>
-concept HasAnyCacheControlDeltaSecondsField = requires(T& directives) { directives.maxAge; } ||
+concept HasAnyCacheControlDeltaSecondsField =
+    requires(T& directives) { directives.maxAge; } ||
     requires(T& directives) { directives.maxStale; } ||
     requires(T& directives) { directives.minFresh; } ||
     requires(T& directives) { directives.sMaxAge; } ||
@@ -655,17 +879,25 @@ template <typename T>
 concept ExposesRvalueDecodeFailure = requires(const T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept HasPositionalHttpContentDecode = requires(ApiGuardDependent<T, std::string_view> input, ApiGuardDependent<T, std::size_t> maxDecodedBytes, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, input, maxDecodedBytes);
-} || requires(ApiGuardDependent<T, std::string_view> input, ApiGuardDependent<T, std::size_t> maxDecodedBytes, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, input, maxDecodedBytes, resource);
-};
+concept HasPositionalHttpContentDecode =
+    requires(ApiGuardDependent<T, std::string_view> input,
+        ApiGuardDependent<T, std::size_t> maxDecodedBytes,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, input, maxDecodedBytes);
+    } ||
+    requires(ApiGuardDependent<T, std::string_view> input,
+        ApiGuardDependent<T, std::size_t> maxDecodedBytes,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, input, maxDecodedBytes, resource);
+    };
 
 template <typename T>
 concept HasRawContentDecodeError = requires(const T& result) { result.error(); };
 
 template <typename T>
-concept ExposesRvalueHttp2RequestBuildAlternative = requires(const T&& result) { std::move(result).built(); } || requires(const T&& result) { std::move(result).failure(); };
+concept ExposesRvalueHttp2RequestBuildAlternative = requires(const T&& result) {
+    std::move(result).built();
+} || requires(const T&& result) { std::move(result).failure(); };
 
 template <typename T>
 concept ExposesRvalueEncodedContent = requires(T&& result) { std::move(result).encoded(); };
@@ -674,50 +906,98 @@ template <typename T>
 concept ExposesRvalueEncodeFailure = requires(const T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept HasPositionalHttpContentEncode = requires(ApiGuardDependent<T, std::string_view> input, ApiGuardDependent<T, std::size_t> maxEncodedBytes, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, input, maxEncodedBytes);
-} || requires(ApiGuardDependent<T, std::string_view> input, ApiGuardDependent<T, std::size_t> maxEncodedBytes, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, input, maxEncodedBytes, resource);
-};
+concept HasPositionalHttpContentEncode =
+    requires(ApiGuardDependent<T, std::string_view> input,
+        ApiGuardDependent<T, std::size_t> maxEncodedBytes,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, input, maxEncodedBytes);
+    } ||
+    requires(ApiGuardDependent<T, std::string_view> input,
+        ApiGuardDependent<T, std::size_t> maxEncodedBytes,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, input, maxEncodedBytes, resource);
+    };
 
 template <typename T>
 concept ExposesRvalueContentCoding = requires(const T&& result) { std::move(result).coding(); };
 
 template <typename T>
-concept ExposesAnyRvalueWebSocketFrameReadAccessor = requires(T&& result) { std::move(result).needInput(); } || requires(T&& result) { std::move(result).frame(); } || requires(T&& result) { std::move(result).failure(); };
+concept ExposesAnyRvalueWebSocketFrameReadAccessor =
+    requires(T&& result) { std::move(result).needInput(); } || requires(T&& result) {
+        std::move(result).frame();
+    } || requires(T&& result) { std::move(result).failure(); };
 
 template <typename String>
-concept AcceptsAnyTemporaryWebSocketFramePayload = requires(String&& payload) { ruvia::detail::WebSocketFrameView::text(std::move(payload), true); } || requires(String&& payload) { ruvia::detail::WebSocketFrameView::binary(std::move(payload), true); } || requires(String&& payload) { ruvia::detail::WebSocketFrameView::continuation(std::move(payload), true); } || requires(String&& payload) { ruvia::detail::WebSocketFrameView::close(std::move(payload)); } || requires(String&& payload) { ruvia::detail::WebSocketFrameView::ping(std::move(payload)); } || requires(String&& payload) { ruvia::detail::WebSocketFrameView::pong(std::move(payload)); };
+concept AcceptsAnyTemporaryWebSocketFramePayload = requires(String&& payload) {
+    ruvia::detail::WebSocketFrameView::text(std::move(payload), true);
+} || requires(String&& payload) {
+    ruvia::detail::WebSocketFrameView::binary(std::move(payload), true);
+} || requires(String&& payload) {
+    ruvia::detail::WebSocketFrameView::continuation(std::move(payload), true);
+} || requires(String&& payload) {
+    ruvia::detail::WebSocketFrameView::close(std::move(payload));
+} || requires(String&& payload) {
+    ruvia::detail::WebSocketFrameView::ping(std::move(payload));
+} || requires(String&& payload) { ruvia::detail::WebSocketFrameView::pong(std::move(payload)); };
 
 template <typename Payload>
-concept AcceptsWebSocketMessagePayload = requires(Payload&& payload) { ruvia::detail::WebSocketMessageAccess::make(ruvia::WebSocketOpcode::kText, std::forward<Payload>(payload)); };
+concept AcceptsWebSocketMessagePayload = requires(Payload&& payload) {
+    ruvia::detail::WebSocketMessageAccess::make(
+        ruvia::WebSocketOpcode::kText, std::forward<Payload>(payload));
+};
 
 template <typename T>
-concept ExposesAnyRvalueWebSocketInboundAccessor = requires(T&& result) { std::move(result).continueReading(); } || requires(T&& result) { std::move(result).controlFrame(); } || requires(T&& result) { std::move(result).message(); } || requires(T&& result) { std::move(result).failure(); };
+concept ExposesAnyRvalueWebSocketInboundAccessor =
+    requires(T&& result) { std::move(result).continueReading(); } ||
+    requires(T&& result) { std::move(result).controlFrame(); } ||
+    requires(T&& result) { std::move(result).message(); } ||
+    requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept ExposesRvalueWebSocketInboundMessageMember = requires(T&& message) { std::move(message).message(); };
+concept ExposesRvalueWebSocketInboundMessageMember =
+    requires(T&& message) { std::move(message).message(); };
 
 template <typename T>
-concept ExposesAnyRvalueHttpOperationResultAccessor = requires(T&& result) { std::move(result).committed(); } || requires(T&& result) { std::move(result).prepared(); } || requires(T&& result) { std::move(result).submitted(); } || requires(T&& result) { std::move(result).applied(); } || requires(T&& result) { std::move(result).initialWindowChange(); } || requires(T&& result) { std::move(result).plan(); } || requires(T&& result) { std::move(result).section(); } || requires(T&& result) { std::move(result).failure(); };
+concept ExposesAnyRvalueHttpOperationResultAccessor =
+    requires(T&& result) { std::move(result).committed(); } ||
+    requires(T&& result) { std::move(result).prepared(); } ||
+    requires(T&& result) { std::move(result).submitted(); } ||
+    requires(T&& result) { std::move(result).applied(); } ||
+    requires(T&& result) { std::move(result).initialWindowChange(); } ||
+    requires(T&& result) { std::move(result).plan(); } ||
+    requires(T&& result) { std::move(result).section(); } ||
+    requires(T&& result) { std::move(result).failure(); };
 
-static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http1FinalResponseCommitResult>);
-static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::PreparedHttp1ResponseStreamResult>);
-static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
-static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http2RequestHeadSubmitResult>);
-static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
-static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http2StreamingResponseHeadSubmitResult>);
-static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http2PeerSettingApplyResult>);
-static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http2ResponseHeadPlanResult>);
-static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http1FinalResponseControlPlanResult>);
-static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http2FinalResponseControlPlanResult>);
-static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::HttpResponseTrailerSectionResult>);
+static_assert(
+    !ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http1FinalResponseCommitResult>);
+static_assert(
+    !ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::PreparedHttp1ResponseStreamResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
+static_assert(
+    !ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http2RequestHeadSubmitResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::Http2StreamingResponseHeadSubmitResult>);
+static_assert(
+    !ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http2PeerSettingApplyResult>);
+static_assert(
+    !ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::Http2ResponseHeadPlanResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::Http1FinalResponseControlPlanResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::Http2FinalResponseControlPlanResult>);
+static_assert(
+    !ExposesAnyRvalueHttpOperationResultAccessor<ruvia::detail::HttpResponseTrailerSectionResult>);
 
 template <typename T>
-concept ExposesRvalueUnsupportedContentCoding = requires(const T&& result) { std::move(result).unsupported(); };
+concept ExposesRvalueUnsupportedContentCoding =
+    requires(const T&& result) { std::move(result).unsupported(); };
 
 template <typename T>
-concept ExposesRvalueInvalidContentCoding = requires(const T&& result) { std::move(result).invalid(); };
+concept ExposesRvalueInvalidContentCoding =
+    requires(const T&& result) { std::move(result).invalid(); };
 
 template <typename T>
 concept HasContentLengthPresent = requires(const T& state) { state.present(); };
@@ -736,7 +1016,10 @@ template <typename T>
 concept ExposesRvalueNonChunked = requires(const T&& value) { std::move(value).nonChunked(); };
 
 template <typename Output>
-concept AcceptsUrlDecodeOutputParameter = requires(Output& output) { ruvia::detail::decodeUrlComponent(std::string_view{}, output, ruvia::detail::UrlDecodeMode::kPercent); };
+concept AcceptsUrlDecodeOutputParameter = requires(Output& output) {
+    ruvia::detail::decodeUrlComponent(
+        std::string_view{}, output, ruvia::detail::UrlDecodeMode::kPercent);
+};
 
 template <typename Mode>
 concept HasPositionalUrlDecodeOptions = requires(Mode mode, std::pmr::memory_resource* resource) {
@@ -778,16 +1061,26 @@ concept HasResponseHeadFailureContract = requires(const T& failure) {
 };
 
 template <typename Connection>
-concept AcceptsUnpreparedBufferedResponseHead = requires(Connection& connection, const ruvia::HttpResponse& response) { connection.submitResponseHead(std::uint32_t{}, response); };
+concept AcceptsUnpreparedBufferedResponseHead =
+    requires(Connection& connection, const ruvia::HttpResponse& response) {
+        connection.submitResponseHead(std::uint32_t{}, response);
+    };
 
 template <typename Connection>
-concept AcceptsStagedResponseTrailerSection = requires(Connection& connection, std::span<const ruvia::HttpHeaderView> trailers) { connection.submitResponseTrailerSection(std::uint32_t{}, trailers); };
+concept AcceptsStagedResponseTrailerSection =
+    requires(Connection& connection, std::span<const ruvia::HttpHeaderView> trailers) {
+        connection.submitResponseTrailerSection(std::uint32_t{}, trailers);
+    };
 
 template <typename Connection>
-concept AcceptsImplicitResponseFinish = requires(Connection& connection) { connection.finishResponse(std::uint32_t{}); };
+concept AcceptsImplicitResponseFinish =
+    requires(Connection& connection) { connection.finishResponse(std::uint32_t{}); };
 
 template <typename Connection>
-concept AcceptsRawResponseTrailerFinish = requires(Connection& connection, std::span<const ruvia::HttpHeaderView> trailers) { connection.finishResponse(std::uint32_t{}, trailers); };
+concept AcceptsRawResponseTrailerFinish =
+    requires(Connection& connection, std::span<const ruvia::HttpHeaderView> trailers) {
+        connection.finishResponse(std::uint32_t{}, trailers);
+    };
 
 template <typename Headers>
 concept AcceptsResponseTrailerRange = requires(Headers&& headers) {
@@ -812,10 +1105,16 @@ template <typename HeaderBlocks>
 concept HasStagedResponseTrailers = requires(HeaderBlocks& blocks) { blocks.responseTrailers(); };
 
 template <typename BodyPlan>
-concept AcceptsLooseResponseStreamBodyPlan = requires(BodyPlan bodyPlan) { ruvia::detail::httpResponseStreamCommitPlan(ruvia::detail::ResponseStreamFraming::kHttp1Chunked, bodyPlan, ruvia::detail::ResponseTrailerIntent::kNone); };
+concept AcceptsLooseResponseStreamBodyPlan = requires(BodyPlan bodyPlan) {
+    ruvia::detail::httpResponseStreamCommitPlan(ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
+        bodyPlan, ruvia::detail::ResponseTrailerIntent::kNone);
+};
 
 template <typename BodyPlan>
-concept AcceptsLooseBufferedResponseBodyPlan = requires(BodyPlan bodyPlan, const ruvia::HttpResponse& response) { ruvia::detail::httpBufferedResponseWritePlan(bodyPlan, response); };
+concept AcceptsLooseBufferedResponseBodyPlan =
+    requires(BodyPlan bodyPlan, const ruvia::HttpResponse& response) {
+        ruvia::detail::httpBufferedResponseWritePlan(bodyPlan, response);
+    };
 
 template <typename T>
 concept HasPeerSettingStatusField = requires(const T& result) { result.status; };
@@ -863,22 +1162,27 @@ concept HasWsReason = requires(const T& event) {
 };
 
 template <typename T>
-concept HasWsSubmitMessageAlias = requires(T& connection) { connection.submitMessage(ruvia::WebSocketOpcode::kText, std::string_view{}); };
+concept HasWsSubmitMessageAlias = requires(
+    T& connection) { connection.submitMessage(ruvia::WebSocketOpcode::kText, std::string_view{}); };
 
 template <typename T>
-concept HasWsSubmitPingAlias = requires(T& connection) { connection.submitPing(std::string_view{}); };
+concept HasWsSubmitPingAlias =
+    requires(T& connection) { connection.submitPing(std::string_view{}); };
 
 template <typename T>
-concept HasWsSubmitPongAlias = requires(T& connection) { connection.submitPong(std::string_view{}); };
+concept HasWsSubmitPongAlias =
+    requires(T& connection) { connection.submitPong(std::string_view{}); };
 
 template <typename T>
-concept HasWsApplicationFrameStateSideChannel = requires(const T& connection) { connection.acceptsApplicationFrames(); };
+concept HasWsApplicationFrameStateSideChannel =
+    requires(const T& connection) { connection.acceptsApplicationFrames(); };
 
 template <typename T>
 concept HasWsEndsTransportAlias = requires(const T& plan) { plan.endsTransport(); };
 
 template <typename T>
-concept HasWsTransportEndPendingSideChannel = requires(const T& connection) { connection.transportEndPending(); };
+concept HasWsTransportEndPendingSideChannel =
+    requires(const T& connection) { connection.transportEndPending(); };
 
 template <typename T>
 concept HasWsClosedStateSideChannel = requires(const T& connection) { connection.closed(); };
@@ -897,10 +1201,13 @@ concept HasWebSocketHandshakeErrorAccessor = requires(const T& value) {
 };
 
 template <typename T>
-concept ExposesRvalueWebSocketHandshakeValidationAlternative = requires(const T&& result) { std::move(result).accepted(); } || requires(const T&& result) { std::move(result).failure(); };
+concept ExposesRvalueWebSocketHandshakeValidationAlternative = requires(const T&& result) {
+    std::move(result).accepted();
+} || requires(const T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept AppliesRequiredWebSocketResponseHeaders = requires(const T& failure, ruvia::HttpResponse& response) { failure.applyRequiredResponseHeaders(response); };
+concept AppliesRequiredWebSocketResponseHeaders = requires(const T& failure,
+    ruvia::HttpResponse& response) { failure.applyRequiredResponseHeaders(response); };
 
 template <typename T>
 concept HasLooseWebSocketNegotiationFields = requires(T& value) {
@@ -921,15 +1228,17 @@ concept HasFallibleWebSocketDeflateState = requires(const T& value) {
 };
 
 template <typename T>
-concept ExposesRvalueWebSocketServerSubprotocol = requires(T&& negotiation) { std::move(negotiation).subprotocol(); };
+concept ExposesRvalueWebSocketServerSubprotocol =
+    requires(T&& negotiation) { std::move(negotiation).subprotocol(); };
 
 template <typename T>
-concept AcceptsRvalueWebSocketResponsePartVisitor = requires(T&& handshake) {
-    std::move(handshake).forEachResponsePart([](std::string_view) {});
+concept AcceptsRvalueWebSocketResponsePartVisitor =
+    requires(T&& handshake) { std::move(handshake).forEachResponsePart([](std::string_view) {}); };
+
+template <typename T>
+concept AcceptsLooseWebSocketHandshakeSubmit = requires(T& connection) {
+    connection.submitWebSocketHandshake(std::uint32_t{}, std::string_view{}, std::string_view{});
 };
-
-template <typename T>
-concept AcceptsLooseWebSocketHandshakeSubmit = requires(T& connection) { connection.submitWebSocketHandshake(std::uint32_t{}, std::string_view{}, std::string_view{}); };
 
 template <typename T>
 concept HasWsFrameReadStatusField = requires(const T& result) { result.status; };
@@ -950,7 +1259,10 @@ concept HasLooseWebSocketFrameFields = requires(T& frame) {
 };
 
 template <typename T>
-concept AcceptsMutableWebSocketFrameStartDecode = requires(T& frame) { ruvia::detail::decodeWebSocketFrameStart(static_cast<unsigned char>(0x81), static_cast<unsigned char>(0x80), frame, false); };
+concept AcceptsMutableWebSocketFrameStartDecode = requires(T& frame) {
+    ruvia::detail::decodeWebSocketFrameStart(
+        static_cast<unsigned char>(0x81), static_cast<unsigned char>(0x80), frame, false);
+};
 
 template <typename T>
 concept HasWsInboundActionAccessor = requires(const T& result) { result.action(); };
@@ -984,20 +1296,38 @@ concept HasChunkScanError = requires(const T& result) {
 };
 
 template <typename T>
-concept HasAnyRvalueHttpChunkScanAccessor = requires(T&& result) { std::move(result).needMore(); } || requires(T&& result) { std::move(result).complete(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueHttpChunkScanAccessor =
+    requires(T&& result) { std::move(result).needMore(); } || requires(T&& result) {
+        std::move(result).complete();
+    } || requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept HasAnyRvalueHttp1ChunkDecodeAccessor = requires(T&& result) { std::move(result).needMore(); } || requires(T&& result) { std::move(result).bodyChunk(); } || requires(T&& result) { std::move(result).complete(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueHttp1ChunkDecodeAccessor =
+    requires(T&& result) { std::move(result).needMore(); } ||
+    requires(T&& result) { std::move(result).bodyChunk(); } ||
+    requires(T&& result) { std::move(result).complete(); } ||
+    requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept HasAnyRvalueTransferCodingDecodeAccessor = requires(T&& result) { std::move(result).needInput(); } || requires(T&& result) { std::move(result).output(); } || requires(T&& result) { std::move(result).complete(); } || requires(T&& result) { std::move(result).protocolFailure(); } || requires(T&& result) { std::move(result).decoderFailure(); };
+concept HasAnyRvalueTransferCodingDecodeAccessor =
+    requires(T&& result) { std::move(result).needInput(); } ||
+    requires(T&& result) { std::move(result).output(); } ||
+    requires(T&& result) { std::move(result).complete(); } ||
+    requires(T&& result) { std::move(result).protocolFailure(); } ||
+    requires(T&& result) { std::move(result).decoderFailure(); };
 
 template <typename T>
-concept HasAnyRvalueRequestContentDecodeAccessor = requires(T&& result) { std::move(result).decoded(); } || requires(T&& result) { std::move(result).protocolFailure(); } || requires(T&& result) { std::move(result).decoderFailure(); };
+concept HasAnyRvalueRequestContentDecodeAccessor =
+    requires(T&& result) { std::move(result).decoded(); } || requires(T&& result) {
+        std::move(result).protocolFailure();
+    } || requires(T&& result) { std::move(result).decoderFailure(); };
 
 template <typename T>
-concept HasPositionalHttpRequestContentDecode = requires(ApiGuardDependent<T, std::string_view> input, ApiGuardDependent<T, std::size_t> maxDecodedBytes, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::detail::decodeHttpRequestContent(ruvia::HttpContentCoding::kGzip, input, maxDecodedBytes, resource);
+concept HasPositionalHttpRequestContentDecode = requires(
+    ApiGuardDependent<T, std::string_view> input, ApiGuardDependent<T, std::size_t> maxDecodedBytes,
+    ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+    ruvia::detail::decodeHttpRequestContent(
+        ruvia::HttpContentCoding::kGzip, input, maxDecodedBytes, resource);
 };
 
 template <typename T>
@@ -1032,18 +1362,32 @@ template <typename T>
 concept HasHttpClientRedirectStatus = requires(const T& result) { result.status(); };
 
 template <typename T>
-concept HasPositionalHttpClientRedirectRequestPlan = requires(const ruvia::HttpClientRequestView& request, ApiGuardDependent<T, ruvia::HttpStatusCode> status, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::planHttpClientRedirectRequest(request, status);
-} || requires(const ruvia::HttpClientRequestView& request, ApiGuardDependent<T, ruvia::HttpStatusCode> status, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::planHttpClientRedirectRequest(request, status, resource);
-};
+concept HasPositionalHttpClientRedirectRequestPlan =
+    requires(const ruvia::HttpClientRequestView& request,
+        ApiGuardDependent<T, ruvia::HttpStatusCode> status,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::planHttpClientRedirectRequest(request, status);
+    } ||
+    requires(const ruvia::HttpClientRequestView& request,
+        ApiGuardDependent<T, ruvia::HttpStatusCode> status,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::planHttpClientRedirectRequest(request, status, resource);
+    };
 
 template <typename T>
-concept HasPositionalHttpClientRedirectTargetResolution = requires(const ruvia::HttpOriginView& origin, ApiGuardDependent<T, std::string_view> currentTarget, ApiGuardDependent<T, std::string_view> location, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::resolveHttpClientRedirectTarget(origin, currentTarget, location);
-} || requires(const ruvia::HttpOriginView& origin, ApiGuardDependent<T, std::string_view> currentTarget, ApiGuardDependent<T, std::string_view> location, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::resolveHttpClientRedirectTarget(origin, currentTarget, location, resource);
-};
+concept HasPositionalHttpClientRedirectTargetResolution =
+    requires(const ruvia::HttpOriginView& origin,
+        ApiGuardDependent<T, std::string_view> currentTarget,
+        ApiGuardDependent<T, std::string_view> location,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::resolveHttpClientRedirectTarget(origin, currentTarget, location);
+    } ||
+    requires(const ruvia::HttpOriginView& origin,
+        ApiGuardDependent<T, std::string_view> currentTarget,
+        ApiGuardDependent<T, std::string_view> location,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::resolveHttpClientRedirectTarget(origin, currentTarget, location, resource);
+    };
 
 template <typename T>
 concept HasHttpClientRequestContentViewAlternatives = requires(const T& content) {
@@ -1052,37 +1396,48 @@ concept HasHttpClientRequestContentViewAlternatives = requires(const T& content)
 };
 
 template <typename T>
-concept HasAnyRvalueHttpClientRequestContentViewAccessor = requires(T&& content) { std::move(content).withoutContent(); } || requires(T&& content) { std::move(content).borrowedBytes(); };
+concept HasAnyRvalueHttpClientRequestContentViewAccessor = requires(T&& content) {
+    std::move(content).withoutContent();
+} || requires(T&& content) { std::move(content).borrowedBytes(); };
 
 template <typename String>
-concept AcceptsAnyTemporaryHttpClientRequestViewText = requires(String&& value) { ruvia::HttpClientRequestView{.method = std::forward<String>(value)}; } || requires(String&& value) { ruvia::HttpClientRequestView{.target = std::forward<String>(value)}; } || requires(ruvia::HttpClientRequestView& request, String&& value) { request.method = std::forward<String>(value); } || requires(ruvia::HttpClientRequestView& request, String&& value) { request.target = std::forward<String>(value); };
-
-template <typename String>
-concept AcceptsLvalueHttpClientRequestViewText = requires(ruvia::HttpClientRequestView& request, String& value) {
-    ruvia::HttpClientRequestView{.method = value, .target = value};
-    request.method = value;
-    request.target = value;
+concept AcceptsAnyTemporaryHttpClientRequestViewText = requires(String&& value) {
+    ruvia::HttpClientRequestView{.method = std::forward<String>(value)};
+} || requires(String&& value) {
+    ruvia::HttpClientRequestView{.target = std::forward<String>(value)};
+} || requires(ruvia::HttpClientRequestView& request, String&& value) {
+    request.method = std::forward<String>(value);
+} || requires(ruvia::HttpClientRequestView& request, String&& value) {
+    request.target = std::forward<String>(value);
 };
 
 template <typename String>
-concept AcceptsTemporaryHttpOriginHost = requires(String&& value) { ruvia::HttpOriginView::http({.host = std::forward<String>(value)}); };
+concept AcceptsLvalueHttpClientRequestViewText =
+    requires(ruvia::HttpClientRequestView& request, String& value) {
+        ruvia::HttpClientRequestView{.method = value, .target = value};
+        request.method = value;
+        request.target = value;
+    };
 
 template <typename String>
-concept AcceptsLvalueHttpOriginHost = requires(String& value) { ruvia::HttpOriginView::http({.host = value}); };
+concept AcceptsTemporaryHttpOriginHost = requires(
+    String&& value) { ruvia::HttpOriginView::http({.host = std::forward<String>(value)}); };
 
 template <typename String>
-concept AcceptsHttpOriginPositionalFactories = requires(String value) {
-    ruvia::HttpOriginView::http(value);
-} || requires(String value) {
-    ruvia::HttpOriginView::http(value, std::uint16_t{80});
-} || requires(String value) {
-    ruvia::HttpOriginView::https(value);
-} || requires(String value) {
-    ruvia::HttpOriginView::https(value, std::uint16_t{443});
-};
+concept AcceptsLvalueHttpOriginHost =
+    requires(String& value) { ruvia::HttpOriginView::http({.host = value}); };
+
+template <typename String>
+concept AcceptsHttpOriginPositionalFactories =
+    requires(String value) { ruvia::HttpOriginView::http(value); } ||
+    requires(String value) { ruvia::HttpOriginView::http(value, std::uint16_t{80}); } ||
+    requires(String value) { ruvia::HttpOriginView::https(value); } ||
+    requires(String value) { ruvia::HttpOriginView::https(value, std::uint16_t{443}); };
 
 template <typename Headers>
-concept AcceptsHttp1ConnectHeaders = requires(const ruvia::Http1ClientRequestWriter& writer, const ruvia::HttpOriginView& origin, std::array<char, 512>& buffer, Headers&& headers) { writer.prepareConnect(origin, std::forward<Headers>(headers), buffer); };
+concept AcceptsHttp1ConnectHeaders = requires(const ruvia::Http1ClientRequestWriter& writer,
+    const ruvia::HttpOriginView& origin, std::array<char, 512>& buffer,
+    Headers&& headers) { writer.prepareConnect(origin, std::forward<Headers>(headers), buffer); };
 
 template <typename T>
 concept HasStaleHttpClientContentMode = requires(const T& content) { content.mode(); };
@@ -1100,10 +1455,15 @@ concept HasHttp1PreparedContentAlternatives = requires(const T& plan) {
 };
 
 template <typename T>
-concept HasAnyRvalueHttp1ClientRequestContentPlanAccessor = requires(T&& plan) { std::move(plan).withoutContent(); } || requires(T&& plan) { std::move(plan).immediate(); } || requires(T&& plan) { std::move(plan).continueGated(); };
+concept HasAnyRvalueHttp1ClientRequestContentPlanAccessor =
+    requires(T&& plan) { std::move(plan).withoutContent(); } || requires(T&& plan) {
+        std::move(plan).immediate();
+    } || requires(T&& plan) { std::move(plan).continueGated(); };
 
 template <typename T>
-concept HasLegacyHttp1ClientExpectationAlternatives = requires(const T& policy) { policy.noExpectation(); } || requires(const T& policy) { policy.continueExpectation(); };
+concept HasLegacyHttp1ClientExpectationAlternatives = requires(const T& policy) {
+    policy.noExpectation();
+} || requires(const T& policy) { policy.continueExpectation(); };
 
 template <typename T>
 concept HasHttp1ClientExpectation = requires(const T& policy) {
@@ -1121,9 +1481,13 @@ concept HasHttp1PreparedContentBytes = requires(const T& content) {
 template <typename T>
 concept HasHttp1ResponseHeadAlternatives = requires(const T& plan) {
     { plan.buffered() } -> std::same_as<const ruvia::detail::Http1BufferedResponseHead*>;
-    { plan.knownLengthStream() } -> std::same_as<const ruvia::detail::Http1KnownLengthResponseStreamHead*>;
+    {
+        plan.knownLengthStream()
+    } -> std::same_as<const ruvia::detail::Http1KnownLengthResponseStreamHead*>;
     { plan.chunkedStream() } -> std::same_as<const ruvia::detail::Http1ChunkedResponseStreamHead*>;
-    { plan.closeDelimitedStream() } -> std::same_as<const ruvia::detail::Http1CloseDelimitedResponseStreamHead*>;
+    {
+        plan.closeDelimitedStream()
+    } -> std::same_as<const ruvia::detail::Http1CloseDelimitedResponseStreamHead*>;
 };
 
 template <typename T>
@@ -1152,7 +1516,8 @@ template <typename T>
 concept HasStaleHttp1ResponseSignal = requires(const T& plan) { plan.responseSignal(); };
 
 template <typename T>
-concept HasStaleHttp1ResponseHeadScalar = requires(const T& plan) { plan.suppressAutoContentLength(); };
+concept HasStaleHttp1ResponseHeadScalar =
+    requires(const T& plan) { plan.suppressAutoContentLength(); };
 
 template <typename T>
 concept HasHttp1ServerParseAlternatives = requires(const T& state) {
@@ -1164,73 +1529,111 @@ concept HasHttp1ServerParseAlternatives = requires(const T& state) {
 };
 
 template <typename T>
-concept HasAnyRvalueHttp1ServerParseAccessor = requires(T&& state) { std::move(state).needRequestHead(); } || requires(T&& state) { std::move(state).headReady(); } || requires(T&& state) { std::move(state).needRequestBody(); } || requires(T&& state) { std::move(state).messageReady(); } || requires(T&& state) { std::move(state).failure(); };
+concept HasAnyRvalueHttp1ServerParseAccessor =
+    requires(T&& state) { std::move(state).needRequestHead(); } ||
+    requires(T&& state) { std::move(state).headReady(); } ||
+    requires(T&& state) { std::move(state).needRequestBody(); } ||
+    requires(T&& state) { std::move(state).messageReady(); } ||
+    requires(T&& state) { std::move(state).failure(); };
 
 template <typename T>
-concept HasAnyRvalueHttp1RequestParseAccessor = requires(T&& result) { std::move(result).needMore(); } || requires(T&& result) { std::move(result).parsed(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueHttp1RequestParseAccessor =
+    requires(T&& result) { std::move(result).needMore(); } || requires(T&& result) {
+        std::move(result).parsed();
+    } || requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept HasAnyRvalueHttp1ClientResponseParseAccessor = requires(T&& result) { std::move(result).needMore(); } || requires(T&& result) { std::move(result).parsed(); } || requires(const T&& result) { std::move(result).parsed(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueHttp1ClientResponseParseAccessor =
+    requires(T&& result) { std::move(result).needMore(); } ||
+    requires(T&& result) { std::move(result).parsed(); } ||
+    requires(const T&& result) { std::move(result).parsed(); } ||
+    requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept HasAnyRvalueMultipartPollAccessor = requires(T&& result) { std::move(result).needInput(); } || requires(T&& result) { std::move(result).part(); } || requires(T&& result) { std::move(result).done(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueMultipartPollAccessor =
+    requires(T&& result) { std::move(result).needInput(); } ||
+    requires(T&& result) { std::move(result).part(); } ||
+    requires(T&& result) { std::move(result).done(); } ||
+    requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept HasAnyRvalueMultipartDelimiterAccessor = requires(T&& result) { std::move(result).noMatch(); } || requires(T&& result) { std::move(result).needInput(); } || requires(T&& result) { std::move(result).part(); } || requires(T&& result) { std::move(result).close(); };
+concept HasAnyRvalueMultipartDelimiterAccessor =
+    requires(T&& result) { std::move(result).noMatch(); } ||
+    requires(T&& result) { std::move(result).needInput(); } ||
+    requires(T&& result) { std::move(result).part(); } ||
+    requires(T&& result) { std::move(result).close(); };
 
 template <typename T>
-concept HasAnyRvalueMultipartPartHeaderAccessor = requires(T&& result) { std::move(result).headers(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueMultipartPartHeaderAccessor = requires(T&& result) {
+    std::move(result).headers();
+} || requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept HasAnyRvalueMultipartBoundaryAccessor = requires(T&& result) { std::move(result).boundary(); } || requires(T&& result) { std::move(result).notApplicable(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueMultipartBoundaryAccessor =
+    requires(T&& result) { std::move(result).boundary(); } || requires(T&& result) {
+        std::move(result).notApplicable();
+    } || requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept ExposesAnyRvalueMultipartOwnedView = requires(T&& value) { std::move(value).value(); } || requires(T&& value) { std::move(value).name(); } || requires(T&& value) { std::move(value).filename(); };
+concept ExposesAnyRvalueMultipartOwnedView = requires(T&& value) { std::move(value).value(); } ||
+                                             requires(T&& value) { std::move(value).name(); } ||
+                                             requires(T&& value) { std::move(value).filename(); };
 
 template <typename T>
-concept HasAnyRvalueHttp1ClientRequestPrepareAccessor = requires(T&& result) { std::move(result).bufferTooSmall(); } || requires(T&& result) { std::move(result).prepared(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueHttp1ClientRequestPrepareAccessor =
+    requires(T&& result) { std::move(result).bufferTooSmall(); } || requires(T&& result) {
+        std::move(result).prepared();
+    } || requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept HasAnyRvalueHttp1InterimResponsePrepareAccessor = requires(T&& result) { std::move(result).bufferTooSmall(); } || requires(T&& result) { std::move(result).prepared(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueHttp1InterimResponsePrepareAccessor =
+    requires(T&& result) { std::move(result).bufferTooSmall(); } || requires(T&& result) {
+        std::move(result).prepared();
+    } || requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
 concept HasResultKindDiscriminator = requires(const T& result) { result.kind(); };
 
 template <typename T>
-concept HasStaleHttp1ServerParseScalars = requires(const T& state) { state.phase(); } || requires(const T& state) { state.headerBytes; } || requires(const T& state) { state.messageBytes; } || requires(const T& state) { state.requiredTotalBytes; };
+concept HasStaleHttp1ServerParseScalars = requires(const T& state) { state.phase(); } ||
+                                          requires(const T& state) { state.headerBytes; } ||
+                                          requires(const T& state) { state.messageBytes; } ||
+                                          requires(const T& state) { state.requiredTotalBytes; };
 
 template <typename T>
 concept HasLegacyResponseCodingField = requires(T& state) { state.responseCoding.has_value(); };
 
 template <typename T>
-concept HasRawResponseCodingSelector = requires(const T& qualities) {
-    httpSelectResponseCodingFromQualities(qualities);
-};
+concept HasRawResponseCodingSelector =
+    requires(const T& qualities) { httpSelectResponseCodingFromQualities(qualities); };
 
 template <typename T>
-concept HasRawResponseCodingScore = requires(const T& quality) {
-    httpAcceptedEncodingScore(quality);
-};
+concept HasRawResponseCodingScore =
+    requires(const T& quality) { httpAcceptedEncodingScore(quality); };
 
 template <typename T>
-concept HasRawResponseIdentityScore = requires(const T& quality) {
-    httpAcceptedIdentityScore(quality);
-};
+concept HasRawResponseIdentityScore =
+    requires(const T& quality) { httpAcceptedIdentityScore(quality); };
 
 template <typename Selection>
-concept HasTypedResponseCodingSelector = requires(const ruvia::detail::HttpResponseCodingQualities& qualities) {
-    { Selection::select(qualities) } -> std::same_as<ruvia::detail::HttpResponseCodingSelectionResult>;
-};
+concept HasTypedResponseCodingSelector =
+    requires(const ruvia::detail::HttpResponseCodingQualities& qualities) {
+        {
+            Selection::select(qualities)
+        } -> std::same_as<ruvia::detail::HttpResponseCodingSelectionResult>;
+    };
 
 template <typename Selection>
-concept HasResponseCodingAcceptability = requires(const Selection& selection, ruvia::HttpContentCoding coding) {
-    { selection.accepts(coding) } -> std::same_as<bool>;
-};
+concept HasResponseCodingAcceptability =
+    requires(const Selection& selection, ruvia::HttpContentCoding coding) {
+        { selection.accepts(coding) } -> std::same_as<bool>;
+    };
 
 template <typename Selection>
-concept HasLegacyOptionalResponseCodingSelector = requires(const ruvia::detail::HttpResponseCodingQualities& qualities) {
-    { Selection::select(qualities) } -> std::same_as<std::optional<Selection>>;
-};
+concept HasLegacyOptionalResponseCodingSelector =
+    requires(const ruvia::detail::HttpResponseCodingQualities& qualities) {
+        { Selection::select(qualities) } -> std::same_as<std::optional<Selection>>;
+    };
 
 template <typename Result>
 concept HasTypedResponseCodingResult = requires(const Result& result) {
@@ -1239,18 +1642,22 @@ concept HasTypedResponseCodingResult = requires(const Result& result) {
 };
 
 template <typename Candidates>
-concept HasTypedResponseCodingCandidates = requires(Candidates& candidates, ruvia::HttpContentCoding coding) {
-    { Candidates::empty() } -> std::same_as<Candidates>;
-    { Candidates::identityOnly() } -> std::same_as<Candidates>;
-    { Candidates::all() } -> std::same_as<Candidates>;
-    { candidates.include(coding) } -> std::same_as<Candidates&>;
-    { candidates.contains(coding) } -> std::same_as<bool>;
-};
+concept HasTypedResponseCodingCandidates =
+    requires(Candidates& candidates, ruvia::HttpContentCoding coding) {
+        { Candidates::empty() } -> std::same_as<Candidates>;
+        { Candidates::identityOnly() } -> std::same_as<Candidates>;
+        { Candidates::all() } -> std::same_as<Candidates>;
+        { candidates.include(coding) } -> std::same_as<Candidates&>;
+        { candidates.contains(coding) } -> std::same_as<bool>;
+    };
 
 template <typename Selection, typename Candidates>
-concept HasAvailableResponseCodingSelector = requires(const ruvia::detail::HttpResponseCodingQualities& qualities) {
-    { Selection::select(qualities, Candidates::identityOnly()) } -> std::same_as<ruvia::detail::HttpResponseCodingSelectionResult>;
-};
+concept HasAvailableResponseCodingSelector =
+    requires(const ruvia::detail::HttpResponseCodingQualities& qualities) {
+        {
+            Selection::select(qualities, Candidates::identityOnly())
+        } -> std::same_as<ruvia::detail::HttpResponseCodingSelectionResult>;
+    };
 
 template <typename T>
 concept HasStalePreparedStreamPolicy = requires(const T& prepared) { prepared.policy(); };
@@ -1295,7 +1702,8 @@ template <typename T>
 concept HasRawHttp1FinalCommitError = requires(const T& failure) { failure.error(); };
 
 template <typename T>
-concept HasUncheckedPreparedHttp1StreamExtraction = requires(T&& result) { std::move(result).takePrepared(); };
+concept HasUncheckedPreparedHttp1StreamExtraction =
+    requires(T&& result) { std::move(result).takePrepared(); };
 
 template <typename T>
 concept HasHttp2ResponseHeadExecutionPlan = requires(const T& plan) {
@@ -1306,8 +1714,12 @@ concept HasHttp2ResponseHeadExecutionPlan = requires(const T& plan) {
 template <typename T>
 concept HasHttp2RequestContentAlternatives = requires(const T& content) {
     { content.withoutContent() } -> std::same_as<const ruvia::detail::Http2RequestWithoutContent*>;
-    { content.knownLengthContent() } -> std::same_as<const ruvia::detail::Http2KnownLengthRequestContent*>;
-    { content.streamingContent() } -> std::same_as<const ruvia::detail::Http2StreamingRequestContent*>;
+    {
+        content.knownLengthContent()
+    } -> std::same_as<const ruvia::detail::Http2KnownLengthRequestContent*>;
+    {
+        content.streamingContent()
+    } -> std::same_as<const ruvia::detail::Http2StreamingRequestContent*>;
 };
 
 template <typename T>
@@ -1327,7 +1739,11 @@ concept HasHttp2LocalContentAlternatives = requires(const T& content) {
 };
 
 template <typename T>
-concept HasAnyRvalueHttp2LocalContentAccessor = requires(T&& content) { std::move(content).unset(); } || requires(T&& content) { std::move(content).forbidden(); } || requires(T&& content) { std::move(content).unbounded(); } || requires(T&& content) { std::move(content).knownLength(); };
+concept HasAnyRvalueHttp2LocalContentAccessor =
+    requires(T&& content) { std::move(content).unset(); } ||
+    requires(T&& content) { std::move(content).forbidden(); } ||
+    requires(T&& content) { std::move(content).unbounded(); } ||
+    requires(T&& content) { std::move(content).knownLength(); };
 
 template <typename T>
 concept HasStaleHttp2LocalModeAccessor = requires(const T& content) { content.mode(); };
@@ -1349,14 +1765,26 @@ concept HasStaleHttp2StreamLocalContentForwarders = requires(const T& stream) {
 
 template <typename T>
 concept HasHttp2RemoteContentAlternatives = requires(const T& content) {
-    { content.allowedWithoutLength() } -> std::same_as<const ruvia::detail::Http2RemoteContentAllowedWithoutLength*>;
-    { content.allowedKnownLength() } -> std::same_as<const ruvia::detail::Http2RemoteContentAllowedKnownLength*>;
-    { content.metadataOnlyWithoutLength() } -> std::same_as<const ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength*>;
-    { content.metadataOnlyKnownLength() } -> std::same_as<const ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength*>;
+    {
+        content.allowedWithoutLength()
+    } -> std::same_as<const ruvia::detail::Http2RemoteContentAllowedWithoutLength*>;
+    {
+        content.allowedKnownLength()
+    } -> std::same_as<const ruvia::detail::Http2RemoteContentAllowedKnownLength*>;
+    {
+        content.metadataOnlyWithoutLength()
+    } -> std::same_as<const ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength*>;
+    {
+        content.metadataOnlyKnownLength()
+    } -> std::same_as<const ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength*>;
 };
 
 template <typename T>
-concept HasAnyRvalueHttp2RemoteContentAccessor = requires(T&& content) { std::move(content).allowedWithoutLength(); } || requires(T&& content) { std::move(content).allowedKnownLength(); } || requires(T&& content) { std::move(content).metadataOnlyWithoutLength(); } || requires(T&& content) { std::move(content).metadataOnlyKnownLength(); };
+concept HasAnyRvalueHttp2RemoteContentAccessor =
+    requires(T&& content) { std::move(content).allowedWithoutLength(); } ||
+    requires(T&& content) { std::move(content).allowedKnownLength(); } ||
+    requires(T&& content) { std::move(content).metadataOnlyWithoutLength(); } ||
+    requires(T&& content) { std::move(content).metadataOnlyKnownLength(); };
 
 template <typename T>
 concept HasHttp2RemoteDeclaredLength = requires(const T& content) {
@@ -1393,7 +1821,22 @@ concept HasValueSemanticResponseBodyPlan = requires(const T& plan, const T&& tem
 };
 
 template <typename T>
-concept ExposesAnyRvalueHttpProtocolPlanBorrow = requires(T&& value) { std::move(value).ignored(); } || requires(T&& value) { std::move(value).unsatisfiable(); } || requires(T&& value) { std::move(value).resolved(); } || requires(T&& value) { std::move(value).withoutBody(); } || requires(T&& value) { std::move(value).knownLength(); } || requires(T&& value) { std::move(value).chunked(); } || requires(T&& value) { std::move(value).buffered(); } || requires(T&& value) { std::move(value).knownLengthStream(); } || requires(T&& value) { std::move(value).chunkedStream(); } || requires(T&& value) { std::move(value).closeDelimitedStream(); } || requires(T&& value) { std::move(value).knownLengthContent(); } || requires(T&& value) { std::move(value).streamingContent(); } || requires(T&& value) { std::move(value).control(); } || requires(T&& value) { std::move(value).writePlan(); } || requires(T&& value) { std::move(value).headPlan(); };
+concept ExposesAnyRvalueHttpProtocolPlanBorrow =
+    requires(T&& value) { std::move(value).ignored(); } ||
+    requires(T&& value) { std::move(value).unsatisfiable(); } ||
+    requires(T&& value) { std::move(value).resolved(); } ||
+    requires(T&& value) { std::move(value).withoutBody(); } ||
+    requires(T&& value) { std::move(value).knownLength(); } ||
+    requires(T&& value) { std::move(value).chunked(); } ||
+    requires(T&& value) { std::move(value).buffered(); } ||
+    requires(T&& value) { std::move(value).knownLengthStream(); } ||
+    requires(T&& value) { std::move(value).chunkedStream(); } ||
+    requires(T&& value) { std::move(value).closeDelimitedStream(); } ||
+    requires(T&& value) { std::move(value).knownLengthContent(); } ||
+    requires(T&& value) { std::move(value).streamingContent(); } ||
+    requires(T&& value) { std::move(value).control(); } ||
+    requires(T&& value) { std::move(value).writePlan(); } ||
+    requires(T&& value) { std::move(value).headPlan(); };
 
 static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<ruvia::detail::HttpByteRangeResolution>);
 static_assert(std::is_enum_v<ruvia::detail::HttpResponseContentSemantics>);
@@ -1408,19 +1851,33 @@ static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<ruvia::detail::Http1Respon
 static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<ruvia::detail::Http1BufferedResponsePlan>);
 static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<ruvia::detail::Http2RequestContent>);
 static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<ruvia::detail::Http2ResponseHeadPlan>);
-static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<ruvia::detail::Http1FinalResponseControlPlanResult>);
-static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<ruvia::detail::Http2FinalResponseControlPlanResult>);
+static_assert(
+    !ExposesAnyRvalueHttpProtocolPlanBorrow<ruvia::detail::Http1FinalResponseControlPlanResult>);
+static_assert(
+    !ExposesAnyRvalueHttpProtocolPlanBorrow<ruvia::detail::Http2FinalResponseControlPlanResult>);
 static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<ruvia::detail::Http1FinalResponseControl>);
 static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<ruvia::detail::ResponseStreamCommitPlan>);
 
 template <typename T>
-concept ExposesAnyRvalueHttpOperationPayloadBorrow = requires(T&& value) { std::move(value).request(); } || requires(T&& value) { std::move(value).head(); } || requires(const T&& value) { std::move(value).head(); } || requires(T&& value) { std::move(value).response(); } || requires(const T&& value) { std::move(value).response(); } || requires(T&& value) { std::move(value).bodyPlan(); } || requires(T&& value) { std::move(value).plan(); } || requires(T&& value) { std::move(value).contentPlan(); } || requires(T&& value) { std::move(value).responseHeadPlan(); } || requires(T&& value) { std::move(value).commitPlan(); } || requires(T&& value) { std::move(value).negotiation(); };
+concept ExposesAnyRvalueHttpOperationPayloadBorrow =
+    requires(T&& value) { std::move(value).request(); } ||
+    requires(T&& value) { std::move(value).head(); } ||
+    requires(const T&& value) { std::move(value).head(); } ||
+    requires(T&& value) { std::move(value).response(); } ||
+    requires(const T&& value) { std::move(value).response(); } ||
+    requires(T&& value) { std::move(value).bodyPlan(); } ||
+    requires(T&& value) { std::move(value).plan(); } ||
+    requires(T&& value) { std::move(value).contentPlan(); } ||
+    requires(T&& value) { std::move(value).responseHeadPlan(); } ||
+    requires(T&& value) { std::move(value).commitPlan(); } ||
+    requires(T&& value) { std::move(value).negotiation(); };
 
 static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::Http1ParsedRequest>);
 static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::Http1ParsedClientResponseHead>);
 static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::PreparedHttp1ClientRequest>);
 static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::detail::ResponseStreamHead>);
-static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::detail::PreparedHttp1ResponseStream>);
+static_assert(
+    !ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::detail::PreparedHttp1ResponseStream>);
 static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<ruvia::WebSocketServerHandshake>);
 
 template <typename T>
@@ -1461,7 +1918,10 @@ concept HasHttp2TunnelAlternatives = requires(const T& state) {
 };
 
 template <typename T>
-concept HasAnyRvalueHttp2TunnelAccessor = requires(T&& state) { std::move(state).notConnect(); } || requires(T&& state) { std::move(state).pending(); } || requires(T&& state) { std::move(state).open(); } || requires(T&& state) { std::move(state).rejected(); };
+concept HasAnyRvalueHttp2TunnelAccessor = requires(T&& state) { std::move(state).notConnect(); } ||
+                                          requires(T&& state) { std::move(state).pending(); } ||
+                                          requires(T&& state) { std::move(state).open(); } ||
+                                          requires(T&& state) { std::move(state).rejected(); };
 
 template <typename T>
 concept HasHttp2ConnectForm = requires(const T& state) {
@@ -1488,34 +1948,66 @@ concept HasStaleHttp2StreamTunnelForwarders = requires(const T& stream) {
 template <typename T>
 concept HasHttp2LocalSendAlternatives = requires(const T& state) {
     { state.headPending() } -> std::same_as<const ruvia::detail::Http2LocalHeadPending*>;
-    { state.requestContentOpen() } -> std::same_as<const ruvia::detail::Http2LocalRequestContentOpen*>;
-    { state.responseContentOpen() } -> std::same_as<const ruvia::detail::Http2LocalResponseContentOpen*>;
-    { state.responseTrailersOnly() } -> std::same_as<const ruvia::detail::Http2LocalResponseTrailersOnly*>;
+    {
+        state.requestContentOpen()
+    } -> std::same_as<const ruvia::detail::Http2LocalRequestContentOpen*>;
+    {
+        state.responseContentOpen()
+    } -> std::same_as<const ruvia::detail::Http2LocalResponseContentOpen*>;
+    {
+        state.responseTrailersOnly()
+    } -> std::same_as<const ruvia::detail::Http2LocalResponseTrailersOnly*>;
     { state.connectPending() } -> std::same_as<const ruvia::detail::Http2LocalConnectPending*>;
     { state.tunnelOpen() } -> std::same_as<const ruvia::detail::Http2LocalTunnelOpen*>;
     { state.endStreamQueued() } -> std::same_as<const ruvia::detail::Http2LocalEndStreamQueued*>;
-    { state.endStreamCommitted() } -> std::same_as<const ruvia::detail::Http2LocalEndStreamCommitted*>;
+    {
+        state.endStreamCommitted()
+    } -> std::same_as<const ruvia::detail::Http2LocalEndStreamCommitted*>;
     { state.aborted() } -> std::same_as<const ruvia::detail::Http2StreamAborted*>;
 };
 
 template <typename T>
-concept HasAnyRvalueHttp2LocalSendAccessor = requires(T&& state) { std::move(state).headPending(); } || requires(T&& state) { std::move(state).requestContentOpen(); } || requires(T&& state) { std::move(state).responseContentOpen(); } || requires(T&& state) { std::move(state).responseTrailersOnly(); } || requires(T&& state) { std::move(state).connectPending(); } || requires(T&& state) { std::move(state).tunnelOpen(); } || requires(T&& state) { std::move(state).endStreamQueued(); } || requires(T&& state) { std::move(state).endStreamCommitted(); } || requires(T&& state) { std::move(state).aborted(); };
+concept HasAnyRvalueHttp2LocalSendAccessor =
+    requires(T&& state) { std::move(state).headPending(); } ||
+    requires(T&& state) { std::move(state).requestContentOpen(); } ||
+    requires(T&& state) { std::move(state).responseContentOpen(); } ||
+    requires(T&& state) { std::move(state).responseTrailersOnly(); } ||
+    requires(T&& state) { std::move(state).connectPending(); } ||
+    requires(T&& state) { std::move(state).tunnelOpen(); } ||
+    requires(T&& state) { std::move(state).endStreamQueued(); } ||
+    requires(T&& state) { std::move(state).endStreamCommitted(); } ||
+    requires(T&& state) { std::move(state).aborted(); };
 
 template <typename T>
 concept HasHttp2RemoteReceiveAlternatives = requires(const T& state) {
     { state.headPending() } -> std::same_as<const ruvia::detail::Http2RemoteHeadPending*>;
-    { state.headEndStreamPending() } -> std::same_as<const ruvia::detail::Http2RemoteHeadEndStreamPending*>;
+    {
+        state.headEndStreamPending()
+    } -> std::same_as<const ruvia::detail::Http2RemoteHeadEndStreamPending*>;
     { state.contentOpen() } -> std::same_as<const ruvia::detail::Http2RemoteContentOpen*>;
     { state.connectPending() } -> std::same_as<const ruvia::detail::Http2RemoteConnectPending*>;
-    { state.connectPendingEndStream() } -> std::same_as<const ruvia::detail::Http2RemoteConnectPendingEndStream*>;
-    { state.connectRejectedAwaitingEndStream() } -> std::same_as<const ruvia::detail::Http2RemoteConnectRejectedAwaitingEndStream*>;
+    {
+        state.connectPendingEndStream()
+    } -> std::same_as<const ruvia::detail::Http2RemoteConnectPendingEndStream*>;
+    {
+        state.connectRejectedAwaitingEndStream()
+    } -> std::same_as<const ruvia::detail::Http2RemoteConnectRejectedAwaitingEndStream*>;
     { state.tunnelOpen() } -> std::same_as<const ruvia::detail::Http2RemoteTunnelOpen*>;
     { state.endStream() } -> std::same_as<const ruvia::detail::Http2RemoteEndStream*>;
     { state.aborted() } -> std::same_as<const ruvia::detail::Http2RemoteAborted*>;
 };
 
 template <typename T>
-concept HasAnyRvalueHttp2RemoteReceiveAccessor = requires(T&& state) { std::move(state).headPending(); } || requires(T&& state) { std::move(state).headEndStreamPending(); } || requires(T&& state) { std::move(state).contentOpen(); } || requires(T&& state) { std::move(state).connectPending(); } || requires(T&& state) { std::move(state).connectPendingEndStream(); } || requires(T&& state) { std::move(state).connectRejectedAwaitingEndStream(); } || requires(T&& state) { std::move(state).tunnelOpen(); } || requires(T&& state) { std::move(state).endStream(); } || requires(T&& state) { std::move(state).aborted(); };
+concept HasAnyRvalueHttp2RemoteReceiveAccessor =
+    requires(T&& state) { std::move(state).headPending(); } ||
+    requires(T&& state) { std::move(state).headEndStreamPending(); } ||
+    requires(T&& state) { std::move(state).contentOpen(); } ||
+    requires(T&& state) { std::move(state).connectPending(); } ||
+    requires(T&& state) { std::move(state).connectPendingEndStream(); } ||
+    requires(T&& state) { std::move(state).connectRejectedAwaitingEndStream(); } ||
+    requires(T&& state) { std::move(state).tunnelOpen(); } ||
+    requires(T&& state) { std::move(state).endStream(); } ||
+    requires(T&& state) { std::move(state).aborted(); };
 
 template <typename T>
 concept HasStaleHttp2BodyEnded = requires(const T& stream) { stream.bodyEnded(); };
@@ -1559,31 +2051,54 @@ template <typename T>
 concept HasStaleHttp2IsReset = requires(const T& stream) { stream.isReset(); };
 
 template <typename T>
-concept HasStaleHttp2MarkReset = requires(T& stream) { stream.markReset(ruvia::detail::Http2StreamCloseSource::kLocal); };
+concept HasStaleHttp2MarkReset =
+    requires(T& stream) { stream.markReset(ruvia::detail::Http2StreamCloseSource::kLocal); };
 
 template <typename T>
-concept HasStaleHttp2MarkClosed = requires(T& stream) { stream.markClosed(ruvia::detail::Http2StreamCloseSource::kLocal); };
+concept HasStaleHttp2MarkClosed =
+    requires(T& stream) { stream.markClosed(ruvia::detail::Http2StreamCloseSource::kLocal); };
 
 template <typename T>
-concept HasHttp2RemoveAborted = requires(T& table) { table.removeAborted([](const ruvia::detail::Http2StreamState&) noexcept {}); };
+concept HasHttp2RemoveAborted = requires(
+    T& table) { table.removeAborted([](const ruvia::detail::Http2StreamState&) noexcept {}); };
 
 template <typename T>
-concept HasStaleHttp2RemoveReset = requires(T& table) { table.removeReset([](const ruvia::detail::Http2StreamState&) noexcept {}); };
+concept HasStaleHttp2RemoveReset = requires(
+    T& table) { table.removeReset([](const ruvia::detail::Http2StreamState&) noexcept {}); };
 
 using HttpResponseBodySetter = void (ruvia::HttpResponse::*)(std::string_view);
-using HttpResponseHeadersGetter = const ruvia::HttpResponseHeaders& (ruvia::HttpResponse::*)() const& noexcept;
+using HttpResponseHeadersGetter = const ruvia::HttpResponseHeaders& (
+    ruvia::HttpResponse::*)() const& noexcept;
 
 template <typename T>
-concept ExposesAnyRvalueResponseView = requires(T&& value) { std::move(value).headers(); } || requires(T&& value) { std::move(value).header(std::string_view{}); } || requires(T&& value) { std::move(value).begin(); } || requires(T&& value) { std::move(value).end(); } || requires(T&& value) { std::move(value).cbegin(); } || requires(T&& value) { std::move(value).cend(); };
+concept ExposesAnyRvalueResponseView =
+    requires(T&& value) { std::move(value).headers(); } ||
+    requires(T&& value) { std::move(value).header(std::string_view{}); } ||
+    requires(T&& value) { std::move(value).begin(); } ||
+    requires(T&& value) { std::move(value).end(); } ||
+    requires(T&& value) { std::move(value).cbegin(); } ||
+    requires(T&& value) { std::move(value).cend(); };
 
 template <typename T>
-concept ExposesAnyRvalueResponseBodyBorrow = requires(T&& value) { std::move(value).empty(); } || requires(T&& value) { std::move(value).borrowedBytes(); } || requires(T&& value) { std::move(value).staticBytes(); } || requires(T&& value) { std::move(value).ownedBytes(); } || requires(T&& value) { std::move(value).ownedFile(); } || requires(T&& value) { std::move(value).borrowedFile(); } || requires(T&& value) { std::move(value).bytes(); } || requires(T&& value) { std::move(value).file(); } || requires(T&& value) { std::move(value).nativePathCStr(); };
+concept ExposesAnyRvalueResponseBodyBorrow =
+    requires(T&& value) { std::move(value).empty(); } ||
+    requires(T&& value) { std::move(value).borrowedBytes(); } ||
+    requires(T&& value) { std::move(value).staticBytes(); } ||
+    requires(T&& value) { std::move(value).ownedBytes(); } ||
+    requires(T&& value) { std::move(value).ownedFile(); } ||
+    requires(T&& value) { std::move(value).borrowedFile(); } ||
+    requires(T&& value) { std::move(value).bytes(); } ||
+    requires(T&& value) { std::move(value).file(); } ||
+    requires(T&& value) { std::move(value).nativePathCStr(); };
 
 template <typename T>
-concept ExposesRvalueResponseBodyAccess = requires(T&& response) { ruvia::detail::responseBody(std::move(response)); } || requires(T&& response) { ruvia::detail::HttpResponseBodyAccess::body(std::move(response)); };
+concept ExposesRvalueResponseBodyAccess = requires(T&& response) {
+    ruvia::detail::responseBody(std::move(response));
+} || requires(T&& response) { ruvia::detail::HttpResponseBodyAccess::body(std::move(response)); };
 
 template <typename T>
-concept ExposesRvalueResponseFileIdentityWords = requires(T&& identity) { std::move(identity).words(); };
+concept ExposesRvalueResponseFileIdentityWords =
+    requires(T&& identity) { std::move(identity).words(); };
 
 template <typename T>
 concept HasResponseHeaderAppendBoolean = requires(T& options) { options.append = true; };
@@ -1594,7 +2109,8 @@ concept CanBoolInitializeResponseHeaderOptions = requires { T{true}; };
 static_assert(!HasLegacyResponseBodyCopy<ruvia::HttpResponse>);
 static_assert(!HasLegacyResponseBodyView<ruvia::HttpResponse>);
 static_assert(std::is_aggregate_v<ruvia::HttpResponse::Options>);
-static_assert(std::same_as<decltype(ruvia::HttpResponse::Options{}.resource), std::pmr::memory_resource*>);
+static_assert(
+    std::same_as<decltype(ruvia::HttpResponse::Options{}.resource), std::pmr::memory_resource*>);
 static_assert(std::constructible_from<ruvia::HttpResponse>);
 static_assert(std::constructible_from<ruvia::HttpResponse, ruvia::HttpResponse::Options>);
 static_assert(!std::constructible_from<ruvia::HttpResponse, std::pmr::memory_resource*>);
@@ -1602,8 +2118,12 @@ static_assert(!std::is_copy_constructible_v<ruvia::HttpResponse>);
 static_assert(!std::is_copy_assignable_v<ruvia::HttpResponse>);
 static_assert(std::is_nothrow_move_constructible_v<ruvia::HttpResponse>);
 static_assert(std::is_nothrow_move_assignable_v<ruvia::HttpResponse>);
-static_assert(std::same_as<decltype(static_cast<HttpResponseBodySetter>(&ruvia::HttpResponse::body)), HttpResponseBodySetter>);
-static_assert(std::same_as<decltype(static_cast<HttpResponseHeadersGetter>(&ruvia::HttpResponse::headers)), HttpResponseHeadersGetter>);
+static_assert(
+    std::same_as<decltype(static_cast<HttpResponseBodySetter>(&ruvia::HttpResponse::body)),
+        HttpResponseBodySetter>);
+static_assert(
+    std::same_as<decltype(static_cast<HttpResponseHeadersGetter>(&ruvia::HttpResponse::headers)),
+        HttpResponseHeadersGetter>);
 static_assert(!std::default_initializable<ruvia::HttpResponseHeaders>);
 static_assert(!std::constructible_from<ruvia::HttpResponseHeaders, std::pmr::memory_resource*>);
 static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponse>);
@@ -1613,32 +2133,49 @@ static_assert(!ExposesAnyRvalueResponseBodyBorrow<ruvia::detail::HttpOwnedRespon
 static_assert(!ExposesAnyRvalueResponseBodyBorrow<ruvia::detail::HttpOwnedResponseFile>);
 static_assert(!ExposesRvalueResponseFileIdentityWords<ruvia::detail::ResponseFileIdentity>);
 static_assert(!ExposesRvalueResponseBodyAccess<ruvia::HttpResponse>);
-static_assert(std::same_as<decltype(ruvia::HttpResponse::HeaderOptions{}.mode), ruvia::HttpResponseHeaderMode>);
+static_assert(std::same_as<decltype(ruvia::HttpResponse::HeaderOptions{}.mode),
+    ruvia::HttpResponseHeaderMode>);
 static_assert(ruvia::HttpResponse::HeaderOptions{}.mode == ruvia::HttpResponseHeaderMode::kReplace);
 static_assert(std::same_as<std::underlying_type_t<ruvia::HttpResponseHeaderMode>, std::uint8_t>);
 static_assert(!HasResponseHeaderAppendBoolean<ruvia::HttpResponse::HeaderOptions>);
 static_assert(!CanBoolInitializeResponseHeaderOptions<ruvia::HttpResponse::HeaderOptions>);
 static_assert(!HasSharedCacheFreshnessPolicy<ruvia::CacheControl>);
 static_assert(std::same_as<std::underlying_type_t<ruvia::CacheControlDirective>, std::uint16_t>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::CacheControl&>().has(ruvia::CacheControlDirective::kNoTransform)), bool>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::CacheControl&>().sMaxAge()), std::optional<std::uint64_t>>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::CacheControl&>().has(
+                               ruvia::CacheControlDirective::kNoTransform)),
+    bool>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::CacheControl&>().sMaxAge()),
+    std::optional<std::uint64_t>>);
 static_assert(!HasAnyCacheControlBooleanField<ruvia::CacheControl>);
 static_assert(!HasAnyCacheControlDeltaSecondsField<ruvia::CacheControl>);
-static_assert(std::same_as<decltype(std::declval<ruvia::CacheControlFieldParser&>().update(std::string_view{})), void>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::CacheControlFieldParser&>().finish()), ruvia::CacheControl>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.sameSite), std::optional<ruvia::CookieSameSite>>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.priority), std::optional<ruvia::CookiePriority>>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.prefix), std::optional<ruvia::CookiePrefix>>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.maxAge), std::optional<std::chrono::seconds>>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.httpOnly), ruvia::CookieAttributePolicy>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::CacheControlFieldParser&>().update(std::string_view{})), void>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::CacheControlFieldParser&>().finish()),
+    ruvia::CacheControl>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.sameSite), std::optional<ruvia::CookieSameSite>>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.priority), std::optional<ruvia::CookiePriority>>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.prefix), std::optional<ruvia::CookiePrefix>>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.maxAge), std::optional<std::chrono::seconds>>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.httpOnly), ruvia::CookieAttributePolicy>);
 static_assert(std::same_as<decltype(ruvia::CookieOptions{}.secure), ruvia::CookieAttributePolicy>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.partitioned), ruvia::CookieAttributePolicy>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.partitioned), ruvia::CookieAttributePolicy>);
 template <typename Text>
-concept CookiePathAccepts = requires(ruvia::CookieOptions& options, Text&& text) { options.path = std::forward<Text>(text); };
+concept CookiePathAccepts = requires(
+    ruvia::CookieOptions& options, Text&& text) { options.path = std::forward<Text>(text); };
 template <typename Text>
-concept CookieDomainAccepts = requires(ruvia::CookieOptions& options, Text&& text) { options.domain = std::forward<Text>(text); };
+concept CookieDomainAccepts = requires(
+    ruvia::CookieOptions& options, Text&& text) { options.domain = std::forward<Text>(text); };
 template <typename Name, typename Value, typename Options>
-concept CanConstructSetCookiePlan = requires(Name&& name, Value&& value, Options&& options) { ruvia::detail::SetCookiePlan(std::forward<Name>(name), std::forward<Value>(value), std::forward<Options>(options)); };
+concept CanConstructSetCookiePlan = requires(Name&& name, Value&& value, Options&& options) {
+    ruvia::detail::SetCookiePlan(
+        std::forward<Name>(name), std::forward<Value>(value), std::forward<Options>(options));
+};
 template <typename T>
 concept HasCookieHttpOnlyBoolean = requires(T& options) { options.httpOnly = true; };
 template <typename T>
@@ -1657,10 +2194,13 @@ static_assert(!CookiePathAccepts<std::pmr::string>);
 static_assert(!CookieDomainAccepts<std::pmr::string>);
 static_assert(CanConstructSetCookiePlan<std::string&, const std::string&, ruvia::CookieOptions&>);
 static_assert(!CanConstructSetCookiePlan<std::string, std::string_view, ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<std::string_view, const std::string, ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<std::pmr::string, std::string_view, ruvia::CookieOptions&>);
+static_assert(
+    !CanConstructSetCookiePlan<std::string_view, const std::string, ruvia::CookieOptions&>);
+static_assert(
+    !CanConstructSetCookiePlan<std::pmr::string, std::string_view, ruvia::CookieOptions&>);
 static_assert(!CanConstructSetCookiePlan<std::string_view, std::string_view, ruvia::CookieOptions>);
-static_assert(!CanConstructSetCookiePlan<std::string_view, std::string_view, const ruvia::CookieOptions>);
+static_assert(
+    !CanConstructSetCookiePlan<std::string_view, std::string_view, const ruvia::CookieOptions>);
 static_assert(!HasCookieHttpOnlyBoolean<ruvia::CookieOptions>);
 static_assert(!HasCookieSecureBoolean<ruvia::CookieOptions>);
 static_assert(!HasCookiePartitionedBoolean<ruvia::CookieOptions>);
@@ -1674,20 +2214,26 @@ static_assert(HasHttpClientRequestContentViewValue<ruvia::HttpClientRequestBytes
 static_assert(!HasHttpClientRequestContentViewValue<ruvia::HttpClientRequestWithoutContent>);
 static_assert(!std::default_initializable<ruvia::HttpClientRequestContentView>);
 static_assert(std::is_aggregate_v<ruvia::HttpOriginOptions>);
-static_assert(std::same_as<decltype(ruvia::HttpOriginView::http({.host = "example.test"})), ruvia::HttpOriginView>);
-static_assert(std::same_as<decltype(ruvia::HttpOriginView::https({.host = "example.test", .port = std::uint16_t{8443}})), ruvia::HttpOriginView>);
+static_assert(std::same_as<decltype(ruvia::HttpOriginView::http({.host = "example.test"})),
+    ruvia::HttpOriginView>);
+static_assert(std::same_as<decltype(ruvia::HttpOriginView::https(
+                               {.host = "example.test", .port = std::uint16_t{8443}})),
+    ruvia::HttpOriginView>);
 static_assert(!AcceptsHttpOriginPositionalFactories<std::string_view>);
 static_assert(AcceptsLvalueHttpOriginHost<std::string>);
 static_assert(!AcceptsTemporaryHttpOriginHost<std::string>);
 static_assert(!AcceptsTemporaryHttpOriginHost<std::pmr::string>);
-static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientRequestView&>().headers), std::span<const ruvia::HttpHeaderView>>);
+static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientRequestView&>().headers),
+    std::span<const ruvia::HttpHeaderView>>);
 static_assert(!std::default_initializable<ruvia::HttpClientRequestWithoutContent>);
 static_assert(!std::default_initializable<ruvia::HttpClientRequestBytesView>);
 
 static_assert(HasHttp1PreparedContentAlternatives<ruvia::Http1ClientRequestContentPlan>);
 static_assert(std::is_aggregate_v<ruvia::Http1ClientRequestWirePolicy>);
-static_assert(std::same_as<decltype(ruvia::Http1ClientRequestWirePolicy{}.closePolicy), ruvia::Http1ClosePolicy>);
-static_assert(std::same_as<decltype(ruvia::Http1ClientRequestWirePolicy{}.expectation), ruvia::HttpClientRequestExpectation>);
+static_assert(std::same_as<decltype(ruvia::Http1ClientRequestWirePolicy{}.closePolicy),
+    ruvia::Http1ClosePolicy>);
+static_assert(std::same_as<decltype(ruvia::Http1ClientRequestWirePolicy{}.expectation),
+    ruvia::HttpClientRequestExpectation>);
 static_assert(HasHttp1ClientExpectation<ruvia::Http1ClientRequestWirePolicy>);
 static_assert(!HasLegacyHttp1ClientExpectationAlternatives<ruvia::Http1ClientRequestWirePolicy>);
 static_assert(!HasHttp1PreparedContentDisposition<ruvia::Http1ClientRequestContentPlan>);
@@ -1707,7 +2253,8 @@ static_assert(HasHttp1BufferedContentLength<ruvia::detail::Http1KnownLengthRespo
 static_assert(HasHttp1BufferedPlanContract<ruvia::detail::Http1BufferedResponsePlan>);
 static_assert(!HasStaleHttp1BufferedWritePlanForwarder<ruvia::detail::Http1BufferedResponsePlan>);
 static_assert(std::is_trivially_copyable_v<ruvia::detail::Http1BufferedResponsePlan>);
-static_assert(sizeof(ruvia::detail::Http1BufferedResponsePlan) == sizeof(ruvia::detail::Http1ResponseHeadPlan));
+static_assert(sizeof(ruvia::detail::Http1BufferedResponsePlan) ==
+              sizeof(ruvia::detail::Http1ResponseHeadPlan));
 static_assert(!HasStaleHttp1ResponseSignal<ruvia::detail::Http1ServerConnectionPlan>);
 static_assert(!HasStaleHttp1ResponseHeadScalar<ruvia::detail::Http1ResponseHeadPlan>);
 static_assert(!std::default_initializable<ruvia::detail::Http1ServerConnectionPlan>);
@@ -1719,13 +2266,18 @@ static_assert(!std::default_initializable<ruvia::detail::Http1ChunkedResponseStr
 static_assert(!std::default_initializable<ruvia::detail::Http1CloseDelimitedResponseStreamHead>);
 static_assert(!HasStalePreparedStreamPolicy<ruvia::detail::PreparedHttp1ResponseStream>);
 
-static_assert(HasFinalResponseControlResult<ruvia::detail::Http1FinalResponseControlPlanResult, ruvia::detail::Http1FinalResponseControl, ruvia::detail::Http1FinalResponseControlPlanFailure>);
-static_assert(HasFinalResponseControlResult<ruvia::detail::Http2FinalResponseControlPlanResult, ruvia::detail::Http2FinalResponseControl, ruvia::detail::Http2FinalResponseControlPlanFailure>);
+static_assert(HasFinalResponseControlResult<ruvia::detail::Http1FinalResponseControlPlanResult,
+    ruvia::detail::Http1FinalResponseControl, ruvia::detail::Http1FinalResponseControlPlanFailure>);
+static_assert(HasFinalResponseControlResult<ruvia::detail::Http2FinalResponseControlPlanResult,
+    ruvia::detail::Http2FinalResponseControl, ruvia::detail::Http2FinalResponseControlPlanFailure>);
 static_assert(HasHttp1FinalResponseControlFields<ruvia::detail::Http1FinalResponseControl>);
 static_assert(!HasHttp1FinalResponseControlFields<ruvia::detail::Http2FinalResponseControl>);
-static_assert(!HasStaleFinalResponseControlStatus<ruvia::detail::Http1FinalResponseControlPlanResult>);
-static_assert(!HasStaleFinalResponseControlStatus<ruvia::detail::Http2FinalResponseControlPlanResult>);
-static_assert(!HasStaleTopLevelUpgradeProtocols<ruvia::detail::Http1FinalResponseControlPlanResult>);
+static_assert(
+    !HasStaleFinalResponseControlStatus<ruvia::detail::Http1FinalResponseControlPlanResult>);
+static_assert(
+    !HasStaleFinalResponseControlStatus<ruvia::detail::Http2FinalResponseControlPlanResult>);
+static_assert(
+    !HasStaleTopLevelUpgradeProtocols<ruvia::detail::Http1FinalResponseControlPlanResult>);
 static_assert(!std::default_initializable<ruvia::detail::Http1FinalResponseControl>);
 static_assert(!std::default_initializable<ruvia::detail::Http2FinalResponseControl>);
 static_assert(!std::default_initializable<ruvia::detail::Http1FinalResponseControlPlanFailure>);
@@ -1738,11 +2290,14 @@ static_assert(std::is_trivially_copyable_v<ruvia::detail::Http2FinalResponseCont
 static_assert(sizeof(ruvia::detail::Http2FinalResponseControlPlanResult) <= 2);
 static_assert(HasHttp1FinalCommitAlternatives<ruvia::detail::Http1FinalResponseCommitResult>);
 static_assert(HasPreparedHttp1StreamAlternatives<ruvia::detail::PreparedHttp1ResponseStreamResult>);
-static_assert(!HasUncheckedPreparedHttp1StreamExtraction<ruvia::detail::PreparedHttp1ResponseStreamResult>);
+static_assert(
+    !HasUncheckedPreparedHttp1StreamExtraction<ruvia::detail::PreparedHttp1ResponseStreamResult>);
 static_assert(!std::default_initializable<ruvia::detail::Http1FinalResponseCommitFailure>);
 static_assert(std::derived_from<ruvia::detail::Http1FinalResponseCommitError, std::exception>);
 static_assert(!HasRawHttp1FinalCommitError<ruvia::detail::Http1FinalResponseCommitFailure>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http1FinalResponseCommitFailure&>().exception()), ruvia::detail::Http1FinalResponseCommitError>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1FinalResponseCommitFailure&>().exception()),
+    ruvia::detail::Http1FinalResponseCommitError>);
 static_assert(std::is_trivially_copyable_v<ruvia::detail::Http1FinalResponseCommitResult>);
 static_assert(sizeof(ruvia::detail::Http1FinalResponseCommitResult) <= 8);
 static_assert(!std::default_initializable<ruvia::detail::Http1FinalResponseCommitResult>);
@@ -1777,18 +2332,33 @@ static_assert(!std::default_initializable<ruvia::detail::Http2LocalContentForbid
 static_assert(!std::default_initializable<ruvia::detail::Http2LocalContentUnbounded>);
 static_assert(!std::default_initializable<ruvia::detail::Http2LocalContentKnownLength>);
 static_assert(!HasStaleHttp2StreamLocalContentForwarders<ruvia::detail::Http2StreamState>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamState&>().localContent()), const ruvia::detail::Http2LocalContentState&>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamState&>().responseStatus()), const ruvia::HttpStatusCode*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2ClosedStreamHistory&>().source(std::uint32_t{})), std::optional<ruvia::detail::Http2StreamCloseSource>>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamState&>().localContent()),
+        const ruvia::detail::Http2LocalContentState&>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamState&>().responseStatus()),
+        const ruvia::HttpStatusCode*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http2ClosedStreamHistory&>().source(
+                     std::uint32_t{})),
+        std::optional<ruvia::detail::Http2StreamCloseSource>>);
 static_assert(!std::default_initializable<ruvia::detail::HpackDecodeResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HpackDecodeResult&>().decoded()), const ruvia::detail::HpackDecoded*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HpackDecodeResult&>().failure()), const ruvia::detail::HpackDecodeFailure*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::HpackDecodeResult&>().decoded()),
+        const ruvia::detail::HpackDecoded*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::HpackDecodeResult&>().failure()),
+        const ruvia::detail::HpackDecodeFailure*>);
 static_assert(!ExposesRvalueDecodedContent<ruvia::detail::HpackDecodeResult>);
 static_assert(!ExposesRvalueDecodeFailure<ruvia::detail::HpackDecodeResult>);
 static_assert(!std::default_initializable<ruvia::Http1RequestParseFailure>);
 static_assert(!HasRawContentDecodeError<ruvia::Http1RequestParseFailure>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::Http1RequestParseFailure&>().protocolError()), ruvia::HttpProtocolError>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http1ServerRequestParseState&>().failure()), const ruvia::detail::Http1ServerRequestParseFailure*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::Http1RequestParseFailure&>().protocolError()),
+        ruvia::HttpProtocolError>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1ServerRequestParseState&>().failure()),
+    const ruvia::detail::Http1ServerRequestParseFailure*>);
 static_assert(HasHttp1ServerParseAlternatives<ruvia::detail::Http1ServerRequestParseState>);
 static_assert(!HasAnyRvalueHttp1ServerParseAccessor<ruvia::detail::Http1ServerRequestParseState>);
 static_assert(!HasStaleHttp1ServerParseScalars<ruvia::detail::Http1ServerRequestParseState>);
@@ -1804,8 +2374,12 @@ static_assert(!std::default_initializable<ruvia::detail::HttpResponseCodingSelec
 static_assert(HasTypedResponseCodingResult<ruvia::detail::HttpResponseCodingSelectionResult>);
 static_assert(!std::default_initializable<ruvia::detail::HttpResponseCodingCandidates>);
 static_assert(HasTypedResponseCodingCandidates<ruvia::detail::HttpResponseCodingCandidates>);
-static_assert(HasAvailableResponseCodingSelector<ruvia::detail::HttpResponseCodingSelection, ruvia::detail::HttpResponseCodingCandidates>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http1ServerRequestParseState&>().responseCodingSelection()), ruvia::detail::HttpResponseCodingSelectionResult>);
+static_assert(HasAvailableResponseCodingSelector<ruvia::detail::HttpResponseCodingSelection,
+    ruvia::detail::HttpResponseCodingCandidates>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http1ServerRequestParseState&>()
+                         .responseCodingSelection()),
+        ruvia::detail::HttpResponseCodingSelectionResult>);
 static_assert(HasHttp2RemoteContentAlternatives<ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasAnyRvalueHttp2RemoteContentAccessor<ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasStaleHttp2RemoteContentTuple<ruvia::detail::Http2RemoteContentState>);
@@ -1813,35 +2387,51 @@ static_assert(!HasHttp2RemoteDeclaredLength<ruvia::detail::Http2RemoteContentSta
 static_assert(!HasHttp2RemoteReceivedBytes<ruvia::detail::Http2RemoteContentState>);
 static_assert(HasHttp2RemoteReceivedBytes<ruvia::detail::Http2RemoteContentAllowedWithoutLength>);
 static_assert(HasHttp2RemoteReceivedBytes<ruvia::detail::Http2RemoteContentAllowedKnownLength>);
-static_assert(!HasHttp2RemoteReceivedBytes<ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength>);
-static_assert(!HasHttp2RemoteReceivedBytes<ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength>);
+static_assert(
+    !HasHttp2RemoteReceivedBytes<ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength>);
+static_assert(
+    !HasHttp2RemoteReceivedBytes<ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength>);
 static_assert(!HasHttp2RemoteDeclaredLength<ruvia::detail::Http2RemoteContentAllowedWithoutLength>);
 static_assert(HasHttp2RemoteDeclaredLength<ruvia::detail::Http2RemoteContentAllowedKnownLength>);
-static_assert(!HasHttp2RemoteDeclaredLength<ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength>);
-static_assert(HasHttp2RemoteDeclaredLength<ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength>);
+static_assert(
+    !HasHttp2RemoteDeclaredLength<ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength>);
+static_assert(
+    HasHttp2RemoteDeclaredLength<ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength>);
 static_assert(std::default_initializable<ruvia::detail::Http2RemoteContentState>);
 static_assert(!std::default_initializable<ruvia::detail::Http2RemoteContentAllowedWithoutLength>);
 static_assert(!std::default_initializable<ruvia::detail::Http2RemoteContentAllowedKnownLength>);
-static_assert(!std::default_initializable<ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength>);
-static_assert(!std::default_initializable<ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength>);
+static_assert(
+    !std::default_initializable<ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength>);
+static_assert(
+    !std::default_initializable<ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength>);
 static_assert(!HasStaleHttp2RemoteCheckAcceptSplit<ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasStaleHttp2StreamRemoteContentForwarders<ruvia::detail::Http2StreamState>);
 static_assert(!HasStaleHttp2WebRuntimeState<ruvia::detail::Http2StreamState>);
 static_assert(HasHttp2ReceiveDataRelease<ruvia::detail::Http2Connection>);
 static_assert(!HasStaleHttp2ReceiveDeferral<ruvia::detail::Http2Connection>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamState&>().remoteContent()), const ruvia::detail::Http2RemoteContentState&>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamState&>().remoteContent()),
+        const ruvia::detail::Http2RemoteContentState&>);
 static_assert(std::is_enum_v<ruvia::detail::HttpResponseContentSemantics>);
 static_assert(sizeof(ruvia::detail::HttpResponseContentSemantics) == 1);
 static_assert(std::is_enum_v<ruvia::detail::HttpRequestContentSemantics>);
 static_assert(sizeof(ruvia::detail::HttpRequestContentSemantics) == 1);
-static_assert(ruvia::httpClientExpectationIsValid(false, ruvia::HttpRequestContentIndication::kNoContent));
-static_assert(!ruvia::httpClientExpectationIsValid(true, ruvia::HttpRequestContentIndication::kNoContent));
-static_assert(ruvia::httpClientExpectationIsValid(true, ruvia::HttpRequestContentIndication::kWillFollow));
-static_assert(ruvia::detail::httpRequestContentSemantics("TRACE") == ruvia::detail::HttpRequestContentSemantics::kForbidden);
-static_assert(ruvia::detail::httpRequestContentSemantics("CONNECT") == ruvia::detail::HttpRequestContentSemantics::kForbidden);
-static_assert(ruvia::detail::httpRequestContentSemantics("trace") == ruvia::detail::HttpRequestContentSemantics::kNoAdditionalRequirements);
-static_assert(ruvia::detail::httpRequestContentSemantics("OPTIONS") == ruvia::detail::HttpRequestContentSemantics::kContentTypeRequired);
-static_assert(ruvia::detail::httpRequestContentSemantics("POST") == ruvia::detail::HttpRequestContentSemantics::kNoAdditionalRequirements);
+static_assert(
+    ruvia::httpClientExpectationIsValid(false, ruvia::HttpRequestContentIndication::kNoContent));
+static_assert(
+    !ruvia::httpClientExpectationIsValid(true, ruvia::HttpRequestContentIndication::kNoContent));
+static_assert(
+    ruvia::httpClientExpectationIsValid(true, ruvia::HttpRequestContentIndication::kWillFollow));
+static_assert(ruvia::detail::httpRequestContentSemantics("TRACE") ==
+              ruvia::detail::HttpRequestContentSemantics::kForbidden);
+static_assert(ruvia::detail::httpRequestContentSemantics("CONNECT") ==
+              ruvia::detail::HttpRequestContentSemantics::kForbidden);
+static_assert(ruvia::detail::httpRequestContentSemantics("trace") ==
+              ruvia::detail::HttpRequestContentSemantics::kNoAdditionalRequirements);
+static_assert(ruvia::detail::httpRequestContentSemantics("OPTIONS") ==
+              ruvia::detail::HttpRequestContentSemantics::kContentTypeRequired);
+static_assert(ruvia::detail::httpRequestContentSemantics("POST") ==
+              ruvia::detail::HttpRequestContentSemantics::kNoAdditionalRequirements);
 static_assert(std::is_trivially_copyable_v<ruvia::detail::HttpResponseBodyPlan>);
 static_assert(sizeof(ruvia::detail::HttpResponseBodyPlan) <= 12);
 static_assert(HasHttp2TunnelAlternatives<ruvia::detail::Http2TunnelState>);
@@ -1858,7 +2448,9 @@ static_assert(!std::default_initializable<ruvia::detail::Http2ConnectPending>);
 static_assert(!std::default_initializable<ruvia::detail::Http2TunnelOpen>);
 static_assert(!std::default_initializable<ruvia::detail::Http2ConnectRejected>);
 static_assert(!HasStaleHttp2StreamTunnelForwarders<ruvia::detail::Http2StreamState>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamState&>().tunnel()), const ruvia::detail::Http2TunnelState&>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamState&>().tunnel()),
+        const ruvia::detail::Http2TunnelState&>);
 static_assert(HasHttp2LocalSendAlternatives<ruvia::detail::Http2LocalSendState>);
 static_assert(!HasAnyRvalueHttp2LocalSendAccessor<ruvia::detail::Http2LocalSendState>);
 static_assert(!HasStaleHttp2LocalSendProduct<ruvia::detail::Http2LocalSendState>);
@@ -1872,7 +2464,8 @@ static_assert(!std::default_initializable<ruvia::detail::Http2LocalTunnelOpen>);
 static_assert(!std::default_initializable<ruvia::detail::Http2LocalEndStreamQueued>);
 static_assert(!std::default_initializable<ruvia::detail::Http2LocalEndStreamCommitted>);
 static_assert(!std::default_initializable<ruvia::detail::Http2StreamAborted>);
-static_assert(!std::constructible_from<ruvia::detail::Http2StreamAborted, ruvia::detail::Http2StreamCloseSource>);
+static_assert(!std::constructible_from<ruvia::detail::Http2StreamAborted,
+    ruvia::detail::Http2StreamCloseSource>);
 static_assert(!HasHttp2LocalCloseSource<ruvia::detail::Http2LocalSendState>);
 static_assert(!HasHttp2LocalCloseSource<ruvia::detail::Http2LocalEndStreamCommitted>);
 static_assert(HasHttp2LocalCloseSource<ruvia::detail::Http2StreamAborted>);
@@ -1883,7 +2476,9 @@ static_assert(!HasStaleHttp2MarkReset<ruvia::detail::Http2StreamState>);
 static_assert(!HasStaleHttp2MarkClosed<ruvia::detail::Http2StreamState>);
 static_assert(HasHttp2RemoveAborted<ruvia::detail::Http2StreamTable>);
 static_assert(!HasStaleHttp2RemoveReset<ruvia::detail::Http2StreamTable>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamState&>().localSend()), const ruvia::detail::Http2LocalSendState&>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamState&>().localSend()),
+        const ruvia::detail::Http2LocalSendState&>);
 static_assert(HasHttp2RemoteReceiveAlternatives<ruvia::detail::Http2RemoteReceiveState>);
 static_assert(!HasAnyRvalueHttp2RemoteReceiveAccessor<ruvia::detail::Http2RemoteReceiveState>);
 static_assert(!std::default_initializable<ruvia::detail::Http2RemoteReceiveState>);
@@ -1892,14 +2487,17 @@ static_assert(!std::default_initializable<ruvia::detail::Http2RemoteHeadEndStrea
 static_assert(!std::default_initializable<ruvia::detail::Http2RemoteContentOpen>);
 static_assert(!std::default_initializable<ruvia::detail::Http2RemoteConnectPending>);
 static_assert(!std::default_initializable<ruvia::detail::Http2RemoteConnectPendingEndStream>);
-static_assert(!std::default_initializable<ruvia::detail::Http2RemoteConnectRejectedAwaitingEndStream>);
+static_assert(
+    !std::default_initializable<ruvia::detail::Http2RemoteConnectRejectedAwaitingEndStream>);
 static_assert(!std::default_initializable<ruvia::detail::Http2RemoteTunnelOpen>);
 static_assert(!std::default_initializable<ruvia::detail::Http2RemoteEndStream>);
 static_assert(!std::default_initializable<ruvia::detail::Http2RemoteAborted>);
 static_assert(!HasStaleHttp2BodyEnded<ruvia::detail::Http2StreamState>);
 static_assert(!HasStaleHttp2PeerEndStream<ruvia::detail::Http2StreamState>);
 static_assert(!HasStaleHttp2HeadersDecoded<ruvia::detail::Http2StreamState>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamState&>().remoteReceive()), const ruvia::detail::Http2RemoteReceiveState&>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamState&>().remoteReceive()),
+        const ruvia::detail::Http2RemoteReceiveState&>);
 
 template <typename T>
 concept HasHttp1RequestBodyPlanAlternatives = requires(const T& plan) {
@@ -1925,11 +2523,16 @@ concept HasHttp1RequestPlanTransferCodings = requires(const T& framing) {
 
 template <typename T>
 concept HasTypedHttpServerExpectationPlan = requires(const T& state) {
-    { state.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject) } -> std::same_as<ruvia::HttpServerExpectationPlan>;
+    {
+        state.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject)
+    } -> std::same_as<ruvia::HttpServerExpectationPlan>;
 };
 
 template <typename T>
-concept ExposesRvalueHttpServerExpectationAlternative = requires(T&& plan) { std::move(plan).noAction(); } || requires(T&& plan) { std::move(plan).sendContinue(); } || requires(T&& plan) { std::move(plan).rejection(); };
+concept ExposesRvalueHttpServerExpectationAlternative =
+    requires(T&& plan) { std::move(plan).noAction(); } || requires(T&& plan) {
+        std::move(plan).sendContinue();
+    } || requires(T&& plan) { std::move(plan).rejection(); };
 
 template <typename T>
 concept HasHttpServerExpectationAlternatives = requires(const T& plan) {
@@ -1952,24 +2555,36 @@ static_assert(!HasHttp1RequestPlanTransferCodings<ruvia::Http1RequestBodyPlan>);
 static_assert(HasHttp1RequestPlanContentLength<ruvia::Http1KnownLengthRequestBody>);
 static_assert(!HasHttp1RequestPlanContentLength<ruvia::Http1ChunkedRequestBody>);
 static_assert(HasHttp1RequestPlanTransferCodings<ruvia::Http1ChunkedRequestBody>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::Http1RequestBodyPlan&>().expectations()), ruvia::HttpRequestExpectations>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::Http1RequestBodyPlan&&>().expectations()), ruvia::HttpRequestExpectations>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::Http1RequestBodyPlan&>().expectations()),
+        ruvia::HttpRequestExpectations>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::Http1RequestBodyPlan&&>().expectations()),
+        ruvia::HttpRequestExpectations>);
 static_assert(!HasHttp1RequestPlanTransferCodings<ruvia::Http1KnownLengthRequestBody>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::PreparedHttp1ClientRequest&>().exchangeState()), ruvia::Http1ClientExchangeState>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::PreparedHttp1ClientRequest&>().exchangeState()),
+        ruvia::Http1ClientExchangeState>);
 static_assert(std::move_constructible<ruvia::Http1ClientExchangeState>);
 static_assert(!std::copy_constructible<ruvia::Http1ClientExchangeState>);
-static_assert(std::constructible_from<ruvia::Http1ClientResponseParser, ruvia::Http1ClientExchangeState&&>);
-static_assert(std::constructible_from<ruvia::Http1ClientResponseParser, ruvia::Http1ClientExchangeState&&, ruvia::Http1ClientResponseParser::Options>);
-static_assert(!std::constructible_from<ruvia::Http1ClientResponseParser, ruvia::Http1ClientExchangeState&&, std::pmr::memory_resource*>);
-static_assert(!std::constructible_from<ruvia::Http1ClientResponseParser, ruvia::Http1ClientExchangeState&>);
-static_assert(!std::constructible_from<ruvia::Http1ClientResponseParser, const ruvia::PreparedHttp1ClientRequest&>);
+static_assert(
+    std::constructible_from<ruvia::Http1ClientResponseParser, ruvia::Http1ClientExchangeState&&>);
+static_assert(std::constructible_from<ruvia::Http1ClientResponseParser,
+    ruvia::Http1ClientExchangeState&&, ruvia::Http1ClientResponseParser::Options>);
+static_assert(!std::constructible_from<ruvia::Http1ClientResponseParser,
+    ruvia::Http1ClientExchangeState&&, std::pmr::memory_resource*>);
+static_assert(
+    !std::constructible_from<ruvia::Http1ClientResponseParser, ruvia::Http1ClientExchangeState&>);
+static_assert(!std::constructible_from<ruvia::Http1ClientResponseParser,
+    const ruvia::PreparedHttp1ClientRequest&>);
 static_assert(std::is_trivially_copyable_v<ruvia::detail::HttpUpgradeProtocols>);
 static_assert(sizeof(ruvia::detail::HttpUpgradeProtocols) == 1);
 static_assert(std::is_trivially_copyable_v<ruvia::detail::HttpConnectionOptions>);
 static_assert(sizeof(ruvia::detail::HttpConnectionOptions) == 1);
 static_assert(!HasPublicHttp1RequestBodyPlanFactories<ruvia::Http1RequestBodyPlan>);
 static_assert(!std::default_initializable<ruvia::Http1RequestBodyPlan>);
-static_assert(!std::constructible_from<ruvia::Http1RequestBodyPlan, ruvia::HttpRequestExpectations>);
+static_assert(
+    !std::constructible_from<ruvia::Http1RequestBodyPlan, ruvia::HttpRequestExpectations>);
 static_assert(!std::default_initializable<ruvia::Http1RequestWithoutBody>);
 static_assert(!std::default_initializable<ruvia::Http1KnownLengthRequestBody>);
 static_assert(!std::default_initializable<ruvia::Http1ChunkedRequestBody>);
@@ -1983,24 +2598,41 @@ static_assert(!std::default_initializable<ruvia::HttpServerExpectationPlan>);
 static_assert(!std::default_initializable<ruvia::HttpNoServerExpectationAction>);
 static_assert(!std::default_initializable<ruvia::HttpSendContinue>);
 static_assert(!std::default_initializable<ruvia::HttpUnsupportedExpectationRejection>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpUnsupportedExpectationRejection&>().protocolError()), ruvia::HttpProtocolError>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::HttpUnsupportedExpectationRejection&>().protocolError()),
+    ruvia::HttpProtocolError>);
 static_assert(!std::default_initializable<ruvia::detail::HttpRequestBodyFailure>);
-static_assert(std::same_as<decltype(ruvia::detail::HttpRequestBodyFailure::tooLarge()), ruvia::detail::HttpRequestBodyFailure>);
-static_assert(std::same_as<decltype(ruvia::detail::HttpRequestBodyFailure::incomplete()), ruvia::detail::HttpRequestBodyFailure>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpRequestBodyFailure&>().protocolError()), ruvia::HttpProtocolError>);
-static_assert(std::same_as<decltype(ruvia::detail::httpRequestBodySizeFailure(std::size_t{}, ruvia::ProtocolByteLimit::unlimited())), std::optional<ruvia::detail::HttpRequestBodyFailure>>);
-static_assert(std::same_as<decltype(ruvia::detail::httpRequestBodyAdditionFailure(std::size_t{}, std::size_t{}, ruvia::ProtocolByteLimit::unlimited())), std::optional<ruvia::detail::HttpRequestBodyFailure>>);
+static_assert(std::same_as<decltype(ruvia::detail::HttpRequestBodyFailure::tooLarge()),
+    ruvia::detail::HttpRequestBodyFailure>);
+static_assert(std::same_as<decltype(ruvia::detail::HttpRequestBodyFailure::incomplete()),
+    ruvia::detail::HttpRequestBodyFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpRequestBodyFailure&>().protocolError()),
+    ruvia::HttpProtocolError>);
+static_assert(std::same_as<decltype(ruvia::detail::httpRequestBodySizeFailure(
+                               std::size_t{}, ruvia::ProtocolByteLimit::unlimited())),
+    std::optional<ruvia::detail::HttpRequestBodyFailure>>);
+static_assert(std::same_as<decltype(ruvia::detail::httpRequestBodyAdditionFailure(std::size_t{},
+                               std::size_t{}, ruvia::ProtocolByteLimit::unlimited())),
+    std::optional<ruvia::detail::HttpRequestBodyFailure>>);
 static_assert(!std::default_initializable<ruvia::detail::Http2RequestBuildResult>);
 static_assert(!std::default_initializable<ruvia::detail::Http2RequestBuilt>);
 static_assert(!std::default_initializable<ruvia::detail::Http2RequestBuildFailure>);
 static_assert(!ExposesRvalueHttp2RequestBuildAlternative<ruvia::detail::Http2RequestBuildResult>);
 static_assert(!HasRawContentDecodeError<ruvia::detail::Http2RequestBuildFailure>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2RequestBuildResult&>().built()), const ruvia::detail::Http2RequestBuilt*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2RequestBuildResult&>().failure()), const ruvia::detail::Http2RequestBuildFailure*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2RequestBuildFailure&>().protocolError()), ruvia::HttpProtocolError>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http2RequestBuildResult&>().built()),
+        const ruvia::detail::Http2RequestBuilt*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http2RequestBuildResult&>().failure()),
+        const ruvia::detail::Http2RequestBuildFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2RequestBuildFailure&>().protocolError()),
+    ruvia::HttpProtocolError>);
 static_assert(std::is_enum_v<ruvia::detail::Http1ClientRequestContentPhase>);
 static_assert(sizeof(ruvia::detail::Http1ClientRequestContentPhase) == 1);
-static_assert(ruvia::detail::Http1ClientRequestContentPhase::kContentCompleteAwaitingContinue != ruvia::detail::Http1ClientRequestContentPhase::kContinueReceivedContentComplete);
+static_assert(ruvia::detail::Http1ClientRequestContentPhase::kContentCompleteAwaitingContinue !=
+              ruvia::detail::Http1ClientRequestContentPhase::kContinueReceivedContentComplete);
 
 template <typename T>
 concept HasHttp1ClientResponsePlanAlternatives = requires(const T& plan) {
@@ -2012,7 +2644,9 @@ concept HasHttp1ClientResponsePlanAlternatives = requires(const T& plan) {
     { plan.closeDelimited() } -> std::same_as<const ruvia::Http1ClientCloseDelimitedResponse*>;
     { plan.connectTunnel() } -> std::same_as<const ruvia::Http1ClientConnectTunnel*>;
     { plan.protocolUpgrade() } -> std::same_as<const ruvia::Http1ClientProtocolUpgrade*>;
-    { plan.requestContentSignal() } -> std::same_as<std::optional<ruvia::HttpClientRequestContentSignal>>;
+    {
+        plan.requestContentSignal()
+    } -> std::same_as<std::optional<ruvia::HttpClientRequestContentSignal>>;
 };
 
 template <typename T>
@@ -2023,16 +2657,33 @@ concept HasHttp1ClientZeroContentFraming = requires(const T& plan) {
 };
 
 template <typename T>
-concept HasAnyRvalueHttp1ClientResponsePlanAccessor = requires(T&& plan) { std::move(plan).informational(); } || requires(T&& plan) { std::move(plan).withoutContent(); } || requires(T&& plan) { std::move(plan).zeroContent(); } || requires(T&& plan) { std::move(plan).knownLength(); } || requires(T&& plan) { std::move(plan).chunked(); } || requires(T&& plan) { std::move(plan).closeDelimited(); } || requires(T&& plan) { std::move(plan).connectTunnel(); } || requires(T&& plan) { std::move(plan).protocolUpgrade(); };
+concept HasAnyRvalueHttp1ClientResponsePlanAccessor =
+    requires(T&& plan) { std::move(plan).informational(); } ||
+    requires(T&& plan) { std::move(plan).withoutContent(); } ||
+    requires(T&& plan) { std::move(plan).zeroContent(); } ||
+    requires(T&& plan) { std::move(plan).knownLength(); } ||
+    requires(T&& plan) { std::move(plan).chunked(); } ||
+    requires(T&& plan) { std::move(plan).closeDelimited(); } ||
+    requires(T&& plan) { std::move(plan).connectTunnel(); } ||
+    requires(T&& plan) { std::move(plan).protocolUpgrade(); };
 
 template <typename T>
-concept HasAnyRvalueHttpClientHeaderLookupAccessor = requires(T&& result) { std::move(result).absent(); } || requires(T&& result) { std::move(result).found(); } || requires(T&& result) { std::move(result).repeated(); };
+concept HasAnyRvalueHttpClientHeaderLookupAccessor =
+    requires(T&& result) { std::move(result).absent(); } || requires(T&& result) {
+        std::move(result).found();
+    } || requires(T&& result) { std::move(result).repeated(); };
 
 template <typename T>
-concept HasAnyRvalueHttpClientRedirectTargetAccessor = requires(T&& result) { std::move(result).target(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueHttpClientRedirectTargetAccessor = requires(T&& result) {
+    std::move(result).target();
+} || requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept ExposesAnyRvalueHttpClientOwnedView = requires(T&& value) { std::move(value).name(); } || requires(T&& value) { std::move(value).value(); } || requires(T&& value) { std::move(value).headers(); } || requires(T&& value) { std::move(value).body(); } || requires(T&& value) { std::move(value).method(); };
+concept ExposesAnyRvalueHttpClientOwnedView = requires(T&& value) { std::move(value).name(); } ||
+                                              requires(T&& value) { std::move(value).value(); } ||
+                                              requires(T&& value) { std::move(value).headers(); } ||
+                                              requires(T&& value) { std::move(value).body(); } ||
+                                              requires(T&& value) { std::move(value).method(); };
 
 template <typename T>
 concept HasHttpClientResponseBody = requires(const T& head) {
@@ -2040,13 +2691,16 @@ concept HasHttpClientResponseBody = requires(const T& head) {
 };
 
 template <typename T>
-concept AcceptsTemporaryHttpClientResponseHeaderLookup = requires(T&& response) { ruvia::lookupUniqueHttpClientResponseHeader(std::move(response), std::string_view{}); };
+concept AcceptsTemporaryHttpClientResponseHeaderLookup = requires(T&& response) {
+    ruvia::lookupUniqueHttpClientResponseHeader(std::move(response), std::string_view{});
+};
 
 template <typename T>
 concept HasHttp1ClientResponseMode = requires(const T& plan) { plan.mode(); };
 
 template <typename T>
-concept HasHttp1ClientResponseConnectionAccessor = requires(const T& plan) { plan.connectionDisposition(); };
+concept HasHttp1ClientResponseConnectionAccessor =
+    requires(const T& plan) { plan.connectionDisposition(); };
 
 template <typename T>
 concept HasHttp1ClientResponseContentLength = requires(const T& framing) {
@@ -2090,25 +2744,42 @@ static_assert(!std::default_initializable<ruvia::Http1ClientCloseDelimitedRespon
 static_assert(!std::default_initializable<ruvia::Http1ClientConnectTunnel>);
 static_assert(!std::default_initializable<ruvia::Http1ClientProtocolUpgrade>);
 
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().nextEvent()), std::optional<ruvia::detail::Http2Event>>);
+static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().nextEvent()),
+    std::optional<ruvia::detail::Http2Event>>);
 static_assert(!std::default_initializable<ruvia::detail::Http2Event>);
 static_assert(!ExposesAnyRvalueSansIoEventBorrow<ruvia::detail::Http2Event>);
 static_assert(!ExposesAnyRvalueSansIoEventBorrow<ruvia::detail::Http2GoawayEvent>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2Event&>().streamClosed()), const ruvia::detail::Http2StreamClosedEvent*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2Event&>().goaway()), const ruvia::detail::Http2GoawayEvent*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http2Event&>().streamClosed()),
+        const ruvia::detail::Http2StreamClosedEvent*>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2Event&>().goaway()),
+    const ruvia::detail::Http2GoawayEvent*>);
 static_assert(HasHttp2EventError<ruvia::detail::Http2StreamClosedEvent>);
 static_assert(HasHttp2EventError<ruvia::detail::Http2GoawayEvent>);
 static_assert(!HasHttp2EventError<ruvia::detail::Http2RequestUnprocessedEvent>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().feed(std::string_view{})), ruvia::detail::Http2FeedResult>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().consumeOutput(std::size_t{})), ruvia::detail::Http2OutputConsumeStatus>);
+static_assert(
+    std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().feed(std::string_view{})),
+        ruvia::detail::Http2FeedResult>);
+static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().consumeOutput(
+                               std::size_t{})),
+    ruvia::detail::Http2OutputConsumeStatus>);
 static_assert(std::is_enum_v<ruvia::detail::Http2FeedResult>);
 static_assert(!HasFeedStatusField<ruvia::detail::Http2FeedResult>);
 static_assert(!HasFeedConsumedField<ruvia::detail::Http2FeedResult>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2PeerSettings&>().apply(ruvia::detail::Http2SettingId::kHeaderTableSize, std::uint32_t{})), ruvia::detail::Http2PeerSettingApplyResult>);
+static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2PeerSettings&>().apply(
+                               ruvia::detail::Http2SettingId::kHeaderTableSize, std::uint32_t{})),
+    ruvia::detail::Http2PeerSettingApplyResult>);
 static_assert(!std::default_initializable<ruvia::detail::Http2PeerSettingApplyResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2PeerSettingApplyResult&>().applied()), const ruvia::detail::Http2PeerSettingApplied*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2PeerSettingApplyResult&>().initialWindowChange()), const ruvia::detail::Http2PeerInitialWindowChange*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2PeerSettingApplyResult&>().failure()), const ruvia::detail::Http2PeerSettingFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2PeerSettingApplyResult&>().applied()),
+    const ruvia::detail::Http2PeerSettingApplied*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http2PeerSettingApplyResult&>()
+                         .initialWindowChange()),
+        const ruvia::detail::Http2PeerInitialWindowChange*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2PeerSettingApplyResult&>().failure()),
+    const ruvia::detail::Http2PeerSettingFailure*>);
 static_assert(!HasPeerSettingStatusField<ruvia::detail::Http2PeerSettingApplyResult>);
 static_assert(!HasPeerSettingChangedField<ruvia::detail::Http2PeerSettingApplyResult>);
 static_assert(!HasPeerSettingDeltaField<ruvia::detail::Http2PeerSettingApplyResult>);
@@ -2122,12 +2793,21 @@ static_assert(!HasPeerSettingDeltaAccessor<ruvia::detail::Http2PeerSettingFailur
 static_assert(HasPeerSettingErrorAccessor<ruvia::detail::Http2PeerSettingFailure>);
 static_assert(!std::default_initializable<ruvia::detail::Http2PeerSettingApplied>);
 static_assert(!std::constructible_from<ruvia::detail::Http2PeerInitialWindowChange, std::int64_t>);
-static_assert(!std::constructible_from<ruvia::detail::Http2PeerSettingFailure, ruvia::detail::Http2PeerSettingError>);
-static_assert(std::same_as<decltype(ruvia::detail::resolveHttpByteRange(std::string_view{}, std::uint64_t{})), ruvia::detail::HttpByteRangeResolution>);
+static_assert(!std::constructible_from<ruvia::detail::Http2PeerSettingFailure,
+    ruvia::detail::Http2PeerSettingError>);
+static_assert(
+    std::same_as<decltype(ruvia::detail::resolveHttpByteRange(std::string_view{}, std::uint64_t{})),
+        ruvia::detail::HttpByteRangeResolution>);
 static_assert(!std::default_initializable<ruvia::detail::HttpByteRangeResolution>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpByteRangeResolution&>().ignored()), const ruvia::detail::HttpByteRangeIgnored*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpByteRangeResolution&>().unsatisfiable()), const ruvia::detail::HttpByteRangeUnsatisfiable*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpByteRangeResolution&>().resolved()), const ruvia::detail::HttpResolvedByteRange*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::HttpByteRangeResolution&>().ignored()),
+        const ruvia::detail::HttpByteRangeIgnored*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpByteRangeResolution&>().unsatisfiable()),
+    const ruvia::detail::HttpByteRangeUnsatisfiable*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::HttpByteRangeResolution&>().resolved()),
+        const ruvia::detail::HttpResolvedByteRange*>);
 static_assert(!HasByteRangeOutcomeField<ruvia::detail::HttpByteRangeResolution>);
 static_assert(!HasByteRangePayloadField<ruvia::detail::HttpByteRangeResolution>);
 static_assert(!HasByteRangeOffsetAccessor<ruvia::detail::HttpByteRangeResolution>);
@@ -2139,10 +2819,15 @@ static_assert(HasByteRangeLengthAccessor<ruvia::detail::HttpResolvedByteRange>);
 static_assert(!std::default_initializable<ruvia::detail::HttpByteRangeIgnored>);
 static_assert(!std::default_initializable<ruvia::detail::HttpByteRangeUnsatisfiable>);
 static_assert(!std::default_initializable<ruvia::detail::HttpResolvedByteRange>);
-static_assert(!std::constructible_from<ruvia::detail::HttpResolvedByteRange, std::uint64_t, std::uint64_t>);
+static_assert(
+    !std::constructible_from<ruvia::detail::HttpResolvedByteRange, std::uint64_t, std::uint64_t>);
 static_assert(!std::default_initializable<ruvia::detail::Http2RequestHeadSubmitResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2RequestHeadSubmitResult&>().submitted()), const ruvia::detail::Http2SubmittedRequestHead*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2RequestHeadSubmitResult&>().failure()), const ruvia::detail::Http2RequestHeadSubmitFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2RequestHeadSubmitResult&>().submitted()),
+    const ruvia::detail::Http2SubmittedRequestHead*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2RequestHeadSubmitResult&>().failure()),
+    const ruvia::detail::Http2RequestHeadSubmitFailure*>);
 static_assert(!HasRequestHeadStatusAccessor<ruvia::detail::Http2RequestHeadSubmitResult>);
 static_assert(!HasRequestHeadAcceptedAccessor<ruvia::detail::Http2RequestHeadSubmitResult>);
 static_assert(!HasRequestHeadStreamIdAccessor<ruvia::detail::Http2RequestHeadSubmitResult>);
@@ -2150,9 +2835,16 @@ static_assert(!std::constructible_from<ruvia::detail::Http2SubmittedRequestHead,
 static_assert(HasRequestHeadStreamIdAccessor<ruvia::detail::Http2SubmittedRequestHead>);
 static_assert(!HasRequestHeadErrorAccessor<ruvia::detail::Http2SubmittedRequestHead>);
 static_assert(HasRequestHeadErrorAccessor<ruvia::detail::Http2RequestHeadSubmitFailure>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().submitResponseHead(std::uint32_t{}, std::declval<const ruvia::HttpResponse&>(), std::declval<ruvia::detail::HttpBufferedResponseWritePlan>())), ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
+static_assert(
+    std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().submitResponseHead(
+                     std::uint32_t{}, std::declval<const ruvia::HttpResponse&>(),
+                     std::declval<ruvia::detail::HttpBufferedResponseWritePlan>())),
+        ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
 static_assert(!AcceptsUnpreparedBufferedResponseHead<ruvia::detail::Http2Connection>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().finishResponse(std::uint32_t{}, std::declval<const ruvia::detail::HttpResponseTrailerSection&>())), ruvia::detail::Http2FinishSubmitStatus>);
+static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().finishResponse(
+                               std::uint32_t{},
+                               std::declval<const ruvia::detail::HttpResponseTrailerSection&>())),
+    ruvia::detail::Http2FinishSubmitStatus>);
 static_assert(!AcceptsStagedResponseTrailerSection<ruvia::detail::Http2Connection>);
 static_assert(!AcceptsImplicitResponseFinish<ruvia::detail::Http2Connection>);
 static_assert(!AcceptsRawResponseTrailerFinish<ruvia::detail::Http2Connection>);
@@ -2168,34 +2860,65 @@ static_assert(AcceptsValidatedResponseTrailerRange<const ResponseTrailerHeaderAr
 static_assert(!AcceptsValidatedResponseTrailerRange<ResponseTrailerHeaderArray>);
 static_assert(!AcceptsValidatedResponseTrailerRange<ResponseTrailerHeaderVector>);
 static_assert(AcceptsValidatedResponseTrailerRange<std::span<const ruvia::HttpHeaderView>>);
-static_assert(HasResponseTrailerSectionAlternatives<ruvia::detail::HttpResponseTrailerSectionResult>);
+static_assert(
+    HasResponseTrailerSectionAlternatives<ruvia::detail::HttpResponseTrailerSectionResult>);
 static_assert(!std::default_initializable<ruvia::detail::HttpResponseTrailerSection>);
 static_assert(!std::default_initializable<ruvia::detail::HttpResponseTrailerSectionFailure>);
 static_assert(!std::default_initializable<ruvia::detail::HttpResponseTrailerSectionResult>);
 static_assert(std::derived_from<ruvia::detail::HttpResponseTrailerSectionError, std::exception>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpResponseTrailerSectionFailure&>().exception()), ruvia::detail::HttpResponseTrailerSectionError>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpResponseTrailerSectionFailure&>().exception()),
+    ruvia::detail::HttpResponseTrailerSectionError>);
 static_assert(!HasStagedResponseTrailerBlock<ruvia::detail::Http2StreamState>);
 static_assert(!HasStagedResponseTrailers<ruvia::detail::Http2StreamHeaderBlocks>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().submitStreamingResponseHead(std::uint32_t{}, std::declval<ruvia::HttpResponse>(), ruvia::detail::ResponseStreamKind::kGeneric, ruvia::detail::ResponseTrailerIntent::kNone)), ruvia::detail::Http2StreamingResponseHeadSubmitResult>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::Http2Connection&>().submitStreamingResponseHead(
+        std::uint32_t{}, std::declval<ruvia::HttpResponse>(),
+        ruvia::detail::ResponseStreamKind::kGeneric, ruvia::detail::ResponseTrailerIntent::kNone)),
+    ruvia::detail::Http2StreamingResponseHeadSubmitResult>);
 static_assert(!std::default_initializable<ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
 static_assert(!std::default_initializable<ruvia::detail::Http2StreamingResponseHeadSubmitResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2BufferedResponseHeadSubmitResult&>().submitted()), const ruvia::detail::HttpBufferedResponseWritePlan*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2StreamingResponseHeadSubmitResult&>().submitted()), const ruvia::detail::ResponseStreamCommitPlan*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2BufferedResponseHeadSubmitResult&>().failure()), const ruvia::detail::Http2ResponseHeadSubmitFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2BufferedResponseHeadSubmitResult&>()
+            .submitted()),
+    const ruvia::detail::HttpBufferedResponseWritePlan*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2StreamingResponseHeadSubmitResult&>()
+            .submitted()),
+    const ruvia::detail::ResponseStreamCommitPlan*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2BufferedResponseHeadSubmitResult&>().failure()),
+    const ruvia::detail::Http2ResponseHeadSubmitFailure*>);
 static_assert(!HasResponseHeadStatusAccessor<ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
-static_assert(!HasResponseHeadAcceptedAccessor<ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
+static_assert(
+    !HasResponseHeadAcceptedAccessor<ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
 static_assert(!HasResponseHeadPlanAccessor<ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
 static_assert(!HasResponseHeadErrorAccessor<ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
-using ResponseStreamCommitPlanner = ruvia::detail::ResponseStreamCommitPlan (*)(ruvia::detail::ResponseStreamFraming, ruvia::HttpKnownMethod, ruvia::HttpStatusCode, ruvia::detail::ResponseTrailerIntent) noexcept;
-using ResponseStreamHeadPreparer = ruvia::detail::ResponseStreamHead (*)(ruvia::HttpResponse, ruvia::detail::ResponseStreamKind, ruvia::detail::ResponseStreamCommitPlan);
-using BufferedResponseWritePlanner = ruvia::detail::HttpBufferedResponseWritePlan (*)(ruvia::HttpKnownMethod, const ruvia::HttpResponse&) noexcept;
-static_assert(std::same_as<decltype(&ruvia::detail::httpBufferedResponseWritePlan), BufferedResponseWritePlanner>);
-static_assert(std::same_as<decltype(&ruvia::detail::httpResponseStreamCommitPlan), ResponseStreamCommitPlanner>);
-static_assert(std::same_as<decltype(&ruvia::detail::prepareResponseStreamHead), ResponseStreamHeadPreparer>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::ResponseStreamCommitPlan&>().responseStatus()), ruvia::HttpStatusCode>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::ResponseStreamCommitPlan&>().framing()), ruvia::detail::ResponseStreamFraming>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpResponseBodyPlan&>().responseStatus()), ruvia::HttpStatusCode>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpBufferedResponseWritePlan&>().responseStatus()), ruvia::HttpStatusCode>);
+using ResponseStreamCommitPlanner = ruvia::detail::ResponseStreamCommitPlan (*)(
+    ruvia::detail::ResponseStreamFraming, ruvia::HttpKnownMethod, ruvia::HttpStatusCode,
+    ruvia::detail::ResponseTrailerIntent) noexcept;
+using ResponseStreamHeadPreparer = ruvia::detail::ResponseStreamHead (*)(ruvia::HttpResponse,
+    ruvia::detail::ResponseStreamKind, ruvia::detail::ResponseStreamCommitPlan);
+using BufferedResponseWritePlanner = ruvia::detail::HttpBufferedResponseWritePlan (*)(
+    ruvia::HttpKnownMethod, const ruvia::HttpResponse&) noexcept;
+static_assert(std::same_as<decltype(&ruvia::detail::httpBufferedResponseWritePlan),
+    BufferedResponseWritePlanner>);
+static_assert(std::same_as<decltype(&ruvia::detail::httpResponseStreamCommitPlan),
+    ResponseStreamCommitPlanner>);
+static_assert(
+    std::same_as<decltype(&ruvia::detail::prepareResponseStreamHead), ResponseStreamHeadPreparer>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseStreamCommitPlan&>().responseStatus()),
+    ruvia::HttpStatusCode>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::ResponseStreamCommitPlan&>().framing()),
+        ruvia::detail::ResponseStreamFraming>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpResponseBodyPlan&>().responseStatus()),
+    ruvia::HttpStatusCode>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpBufferedResponseWritePlan&>().responseStatus()),
+    ruvia::HttpStatusCode>);
 template <typename Plan>
 concept HasValueSemanticResponseWritePolicy = requires(const Plan& plan) {
     { plan.policy() } -> std::same_as<ruvia::detail::ResponseWritePolicy>;
@@ -2203,7 +2926,11 @@ concept HasValueSemanticResponseWritePolicy = requires(const Plan& plan) {
     { std::move(plan).policy() } -> std::same_as<ruvia::detail::ResponseWritePolicy>;
 };
 template <typename Policy>
-concept ExposesAnyRvalueResponseWritePolicyAlternative = requires(const Policy&& policy) { std::move(policy).normal(); } || requires(const Policy&& policy) { std::move(policy).bodyForbidden(); } || requires(const Policy&& policy) { std::move(policy).zeroLength(); } || requires(const Policy&& policy) { std::move(policy).notModified(); };
+concept ExposesAnyRvalueResponseWritePolicyAlternative =
+    requires(const Policy&& policy) { std::move(policy).normal(); } ||
+    requires(const Policy&& policy) { std::move(policy).bodyForbidden(); } ||
+    requires(const Policy&& policy) { std::move(policy).zeroLength(); } ||
+    requires(const Policy&& policy) { std::move(policy).notModified(); };
 template <typename Policy>
 concept HasLegacyResponseWritePolicyFactory = requires { Policy::zeroLengthContent(); };
 static_assert(!std::default_initializable<ruvia::detail::ResponseWritePolicy>);
@@ -2213,10 +2940,18 @@ static_assert(!std::default_initializable<ruvia::detail::ResponseZeroLengthWrite
 static_assert(!std::default_initializable<ruvia::detail::ResponseNotModifiedWrite>);
 static_assert(!ExposesAnyRvalueResponseWritePolicyAlternative<ruvia::detail::ResponseWritePolicy>);
 static_assert(!HasLegacyResponseWritePolicyFactory<ruvia::detail::ResponseWritePolicy>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().normal()), const ruvia::detail::ResponseNormalWrite*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().bodyForbidden()), const ruvia::detail::ResponseBodyForbiddenWrite*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().zeroLength()), const ruvia::detail::ResponseZeroLengthWrite*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().notModified()), const ruvia::detail::ResponseNotModifiedWrite*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().normal()),
+        const ruvia::detail::ResponseNormalWrite*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().bodyForbidden()),
+    const ruvia::detail::ResponseBodyForbiddenWrite*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().zeroLength()),
+        const ruvia::detail::ResponseZeroLengthWrite*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().notModified()),
+        const ruvia::detail::ResponseNotModifiedWrite*>);
 static_assert(sizeof(ruvia::detail::ResponseWritePolicy) <= 2);
 static_assert(HasValueSemanticResponseWritePolicy<ruvia::detail::HttpResponseBodyPlan>);
 static_assert(HasValueSemanticResponseWritePolicy<ruvia::detail::HttpBufferedResponseWritePlan>);
@@ -2228,52 +2963,90 @@ static_assert(!std::derived_from<ruvia::detail::Http2ResponseHeadSubmitError, st
 static_assert(std::is_trivially_copyable_v<ruvia::detail::Http2ResponseHeadSubmitFailure>);
 static_assert(sizeof(ruvia::detail::Http2ResponseHeadSubmitFailure) <= 1);
 static_assert(!HasResponseHeadPlanAccessor<ruvia::detail::Http2ResponseHeadSubmitFailure>);
-static_assert(!std::constructible_from<ruvia::detail::Http2ResponseHeadSubmitFailure, ruvia::detail::Http2ResponseHeadSubmitError>);
-using WebSocketServerNegotiator = ruvia::detail::WebSocketServerNegotiation (*)(const ruvia::HttpRequest&, ruvia::detail::WebSocketServerNegotiationOptions);
-using WebSocketServerHandshakeFactory = ruvia::WebSocketServerHandshake (*)(const ruvia::HttpRequest&, ruvia::WebSocketServerHandshakeOptions);
-using WebSocketHandshakeValidator = ruvia::WebSocketHandshakeValidationResult (*)(const ruvia::HttpRequest&, const ruvia::Http1RequestBodyPlan&) noexcept;
-using Http2WebSocketHandshakeValidator = ruvia::WebSocketHandshakeValidationResult (*)(const ruvia::detail::Http2StreamState&, const ruvia::HttpRequest&) noexcept;
+static_assert(!std::constructible_from<ruvia::detail::Http2ResponseHeadSubmitFailure,
+    ruvia::detail::Http2ResponseHeadSubmitError>);
+using WebSocketServerNegotiator = ruvia::detail::WebSocketServerNegotiation (*)(
+    const ruvia::HttpRequest&, ruvia::detail::WebSocketServerNegotiationOptions);
+using WebSocketServerHandshakeFactory = ruvia::WebSocketServerHandshake (*)(
+    const ruvia::HttpRequest&, ruvia::WebSocketServerHandshakeOptions);
+using WebSocketHandshakeValidator = ruvia::WebSocketHandshakeValidationResult (*)(
+    const ruvia::HttpRequest&, const ruvia::Http1RequestBodyPlan&) noexcept;
+using Http2WebSocketHandshakeValidator = ruvia::WebSocketHandshakeValidationResult (*)(
+    const ruvia::detail::Http2StreamState&, const ruvia::HttpRequest&) noexcept;
 using WebSocketHandshakeFieldValidator = bool (*)(const ruvia::HttpRequest&) noexcept;
-using WebSocketClientOfferHeaderValidator = bool (*)(std::span<const ruvia::HttpHeaderView>) noexcept;
+using WebSocketClientOfferHeaderValidator = bool (*)(
+    std::span<const ruvia::HttpHeaderView>) noexcept;
 
 template <typename T>
-concept HasPositionalWebSocketServerNegotiationFactory = requires(const ruvia::HttpRequest& request, ApiGuardDependent<T, std::string_view> supportedSubprotocols, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::detail::makeWebSocketServerNegotiation(request, supportedSubprotocols);
-} || requires(const ruvia::HttpRequest& request, ApiGuardDependent<T, std::string_view> supportedSubprotocols, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::detail::makeWebSocketServerNegotiation(request, supportedSubprotocols, resource);
-};
+concept HasPositionalWebSocketServerNegotiationFactory =
+    requires(const ruvia::HttpRequest& request,
+        ApiGuardDependent<T, std::string_view> supportedSubprotocols,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::detail::makeWebSocketServerNegotiation(request, supportedSubprotocols);
+    } ||
+    requires(const ruvia::HttpRequest& request,
+        ApiGuardDependent<T, std::string_view> supportedSubprotocols,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::detail::makeWebSocketServerNegotiation(request, supportedSubprotocols, resource);
+    };
 
 template <typename T>
-concept HasPositionalWebSocketServerHandshakeFactory = requires(const ruvia::HttpRequest& request, ApiGuardDependent<T, std::string_view> supportedSubprotocols, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::makeWebSocketServerHandshake(request, supportedSubprotocols);
-} || requires(const ruvia::HttpRequest& request, ApiGuardDependent<T, std::string_view> supportedSubprotocols, ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
-    ruvia::makeWebSocketServerHandshake(request, supportedSubprotocols, resource);
-};
+concept HasPositionalWebSocketServerHandshakeFactory =
+    requires(const ruvia::HttpRequest& request,
+        ApiGuardDependent<T, std::string_view> supportedSubprotocols,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::makeWebSocketServerHandshake(request, supportedSubprotocols);
+    } ||
+    requires(const ruvia::HttpRequest& request,
+        ApiGuardDependent<T, std::string_view> supportedSubprotocols,
+        ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
+        ruvia::makeWebSocketServerHandshake(request, supportedSubprotocols, resource);
+    };
 
-static_assert(std::same_as<decltype(&ruvia::detail::makeWebSocketServerNegotiation), WebSocketServerNegotiator>);
-static_assert(std::same_as<decltype(&ruvia::makeWebSocketServerHandshake), WebSocketServerHandshakeFactory>);
+static_assert(std::same_as<decltype(&ruvia::detail::makeWebSocketServerNegotiation),
+    WebSocketServerNegotiator>);
+static_assert(
+    std::same_as<decltype(&ruvia::makeWebSocketServerHandshake), WebSocketServerHandshakeFactory>);
 static_assert(std::is_aggregate_v<ruvia::detail::WebSocketServerNegotiationOptions>);
 static_assert(std::is_aggregate_v<ruvia::WebSocketServerHandshakeOptions>);
-static_assert(std::same_as<decltype(ruvia::detail::WebSocketServerNegotiationOptions{}.supportedSubprotocols), std::string_view>);
-static_assert(std::same_as<decltype(ruvia::detail::WebSocketServerNegotiationOptions{}.resource), std::pmr::memory_resource*>);
-static_assert(std::same_as<decltype(ruvia::WebSocketServerHandshakeOptions{}.supportedSubprotocols), std::string_view>);
-static_assert(std::same_as<decltype(ruvia::WebSocketServerHandshakeOptions{}.resource), std::pmr::memory_resource*>);
-static_assert(!HasPositionalWebSocketServerNegotiationFactory<ruvia::detail::WebSocketServerNegotiation>);
+static_assert(
+    std::same_as<decltype(ruvia::detail::WebSocketServerNegotiationOptions{}.supportedSubprotocols),
+        std::string_view>);
+static_assert(std::same_as<decltype(ruvia::detail::WebSocketServerNegotiationOptions{}.resource),
+    std::pmr::memory_resource*>);
+static_assert(std::same_as<decltype(ruvia::WebSocketServerHandshakeOptions{}.supportedSubprotocols),
+    std::string_view>);
+static_assert(std::same_as<decltype(ruvia::WebSocketServerHandshakeOptions{}.resource),
+    std::pmr::memory_resource*>);
+static_assert(
+    !HasPositionalWebSocketServerNegotiationFactory<ruvia::detail::WebSocketServerNegotiation>);
 static_assert(!HasPositionalWebSocketServerHandshakeFactory<ruvia::WebSocketServerHandshake>);
-static_assert(std::same_as<decltype(&ruvia::validateWebSocketHandshake), WebSocketHandshakeValidator>);
-static_assert(std::same_as<decltype(&ruvia::detail::validateHttp2WebSocketHandshake), Http2WebSocketHandshakeValidator>);
-static_assert(std::same_as<decltype(&ruvia::detail::webSocketSubprotocolOffersValid), WebSocketHandshakeFieldValidator>);
-static_assert(std::same_as<decltype(&ruvia::detail::webSocketExtensionOffersValid), WebSocketHandshakeFieldValidator>);
-static_assert(std::same_as<decltype(&ruvia::detail::webSocketClientOfferHeadersValid), WebSocketClientOfferHeaderValidator>);
+static_assert(
+    std::same_as<decltype(&ruvia::validateWebSocketHandshake), WebSocketHandshakeValidator>);
+static_assert(std::same_as<decltype(&ruvia::detail::validateHttp2WebSocketHandshake),
+    Http2WebSocketHandshakeValidator>);
+static_assert(std::same_as<decltype(&ruvia::detail::webSocketSubprotocolOffersValid),
+    WebSocketHandshakeFieldValidator>);
+static_assert(std::same_as<decltype(&ruvia::detail::webSocketExtensionOffersValid),
+    WebSocketHandshakeFieldValidator>);
+static_assert(std::same_as<decltype(&ruvia::detail::webSocketClientOfferHeadersValid),
+    WebSocketClientOfferHeaderValidator>);
 static_assert(!std::default_initializable<ruvia::WebSocketHandshakeAccepted>);
 static_assert(!std::default_initializable<ruvia::WebSocketHandshakeFailure>);
 static_assert(!std::default_initializable<ruvia::WebSocketHandshakeValidationResult>);
-static_assert(!ExposesRvalueWebSocketHandshakeValidationAlternative<ruvia::WebSocketHandshakeValidationResult>);
+static_assert(!ExposesRvalueWebSocketHandshakeValidationAlternative<
+    ruvia::WebSocketHandshakeValidationResult>);
 static_assert(!HasRawContentDecodeError<ruvia::WebSocketHandshakeFailure>);
 static_assert(AppliesRequiredWebSocketResponseHeaders<ruvia::WebSocketHandshakeFailure>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketHandshakeValidationResult&>().accepted()), const ruvia::WebSocketHandshakeAccepted*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketHandshakeValidationResult&>().failure()), const ruvia::WebSocketHandshakeFailure*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketHandshakeFailure&>().protocolError()), ruvia::HttpProtocolError>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::WebSocketHandshakeValidationResult&>().accepted()),
+    const ruvia::WebSocketHandshakeAccepted*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::WebSocketHandshakeValidationResult&>().failure()),
+    const ruvia::WebSocketHandshakeFailure*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::WebSocketHandshakeFailure&>().protocolError()),
+        ruvia::HttpProtocolError>);
 static_assert(std::is_enum_v<ruvia::WebSocketCompression>);
 static_assert(!std::constructible_from<ruvia::WebSocketCompression, bool>);
 static_assert(!HasLooseWebSocketDeflateFields<ruvia::WebSocketCompression>);
@@ -2283,35 +3056,64 @@ static_assert(!std::default_initializable<ruvia::detail::WebSocketServerNegotiat
 static_assert(!std::copy_constructible<ruvia::detail::WebSocketServerNegotiation>);
 static_assert(std::move_constructible<ruvia::detail::WebSocketServerNegotiation>);
 static_assert(!ExposesRvalueWebSocketServerSubprotocol<ruvia::detail::WebSocketServerNegotiation>);
-static_assert(!std::constructible_from<ruvia::detail::WebSocketServerNegotiation, std::string_view, ruvia::WebSocketCompression>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketServerNegotiation&>().subprotocol()), std::string_view>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketServerNegotiation&>().compression()), ruvia::WebSocketCompression>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketServerNegotiation&>().extensions()), std::string_view>);
+static_assert(!std::constructible_from<ruvia::detail::WebSocketServerNegotiation, std::string_view,
+    ruvia::WebSocketCompression>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketServerNegotiation&>().subprotocol()),
+    std::string_view>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketServerNegotiation&>().compression()),
+    ruvia::WebSocketCompression>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketServerNegotiation&>().extensions()),
+    std::string_view>);
 static_assert(!std::default_initializable<ruvia::WebSocketServerHandshake>);
 static_assert(!std::copy_constructible<ruvia::WebSocketServerHandshake>);
 static_assert(std::move_constructible<ruvia::WebSocketServerHandshake>);
 static_assert(!ExposesRvalueWebSocketServerSubprotocol<ruvia::WebSocketServerHandshake>);
 static_assert(!AcceptsRvalueWebSocketResponsePartVisitor<ruvia::WebSocketServerHandshake>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketServerHandshake&>().subprotocol()), std::string_view>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketServerHandshake&>().compression()), ruvia::WebSocketCompression>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::WebSocketServerHandshake&>().subprotocol()),
+        std::string_view>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::WebSocketServerHandshake&>().compression()),
+        ruvia::WebSocketCompression>);
 static_assert(!HasWebSocketNegotiationAccessor<ruvia::WebSocketServerHandshake>);
 static_assert(!HasLooseWebSocketNegotiationFields<ruvia::WebSocketServerHandshake>);
 static_assert(!std::default_initializable<ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
 static_assert(!std::copy_constructible<ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
 static_assert(std::move_constructible<ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2WebSocketHandshakeSubmitResult&>().submitted()), const ruvia::detail::WebSocketServerNegotiation*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http2WebSocketHandshakeSubmitResult&>().failure()), const ruvia::detail::Http2WebSocketHandshakeSubmitFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2WebSocketHandshakeSubmitResult&>().submitted()),
+    const ruvia::detail::WebSocketServerNegotiation*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2WebSocketHandshakeSubmitResult&>().failure()),
+    const ruvia::detail::Http2WebSocketHandshakeSubmitFailure*>);
 static_assert(!HasWebSocketNegotiationAccessor<ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
-static_assert(HasWebSocketHandshakeErrorAccessor<ruvia::detail::Http2WebSocketHandshakeSubmitFailure>);
-static_assert(!HasWebSocketNegotiationAccessor<ruvia::detail::Http2WebSocketHandshakeSubmitFailure>);
-static_assert(!std::constructible_from<ruvia::detail::Http2WebSocketHandshakeSubmitFailure, ruvia::detail::Http2WebSocketHandshakeSubmitError>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().submitWebSocketHandshake(std::uint32_t{}, std::declval<ruvia::detail::WebSocketServerNegotiation>())), ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
+static_assert(
+    HasWebSocketHandshakeErrorAccessor<ruvia::detail::Http2WebSocketHandshakeSubmitFailure>);
+static_assert(
+    !HasWebSocketNegotiationAccessor<ruvia::detail::Http2WebSocketHandshakeSubmitFailure>);
+static_assert(!std::constructible_from<ruvia::detail::Http2WebSocketHandshakeSubmitFailure,
+    ruvia::detail::Http2WebSocketHandshakeSubmitError>);
+static_assert(
+    std::same_as<decltype(std::declval<ruvia::detail::Http2Connection&>().submitWebSocketHandshake(
+                     std::uint32_t{}, std::declval<ruvia::detail::WebSocketServerNegotiation>())),
+        ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
 static_assert(!AcceptsLooseWebSocketHandshakeSubmit<ruvia::detail::Http2Connection>);
-static_assert(!std::constructible_from<ruvia::detail::WsConnection, std::pmr::string&, std::size_t, bool>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::WsConnection&>().poll()), std::optional<ruvia::detail::WsEvent>>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::WsConnection&>().submitFrame(ruvia::WebSocketOpcode::kText, std::string_view{})), ruvia::detail::WsFrameSubmitStatus>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::WsConnection&>().submitClose(std::uint16_t{}, std::string_view{})), ruvia::detail::WsCloseSubmitStatus>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::WsConnection&>().consumeOutput(std::size_t{})), ruvia::detail::WsOutputConsumeStatus>);
+static_assert(
+    !std::constructible_from<ruvia::detail::WsConnection, std::pmr::string&, std::size_t, bool>);
+static_assert(std::same_as<decltype(std::declval<ruvia::detail::WsConnection&>().poll()),
+    std::optional<ruvia::detail::WsEvent>>);
+static_assert(std::same_as<decltype(std::declval<ruvia::detail::WsConnection&>().submitFrame(
+                               ruvia::WebSocketOpcode::kText, std::string_view{})),
+    ruvia::detail::WsFrameSubmitStatus>);
+static_assert(std::same_as<decltype(std::declval<ruvia::detail::WsConnection&>().submitClose(
+                               std::uint16_t{}, std::string_view{})),
+    ruvia::detail::WsCloseSubmitStatus>);
+static_assert(std::same_as<decltype(std::declval<ruvia::detail::WsConnection&>().consumeOutput(
+                               std::size_t{})),
+    ruvia::detail::WsOutputConsumeStatus>);
 static_assert(!std::convertible_to<ruvia::detail::WsOutputConsumeStatus, bool>);
 static_assert(!HasWsSubmitMessageAlias<ruvia::detail::WsConnection>);
 static_assert(!HasWsSubmitPingAlias<ruvia::detail::WsConnection>);
@@ -2321,20 +3123,35 @@ static_assert(!HasWsEndsTransportAlias<ruvia::detail::WsOutputPlan>);
 static_assert(!HasWsTransportEndPendingSideChannel<ruvia::detail::WsConnection>);
 static_assert(!HasWsClosedStateSideChannel<ruvia::detail::WsConnection>);
 static_assert(!HasWsClosePhaseSideChannel<ruvia::detail::WsConnection>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WsConnection&>().livenessMode()), ruvia::detail::WsLivenessMode>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::WsConnection&>().abort()), ruvia::detail::WsAbortDisposition>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WsOutputPlan&>().disposition()), ruvia::detail::WsTransportDisposition>);
-static_assert(std::same_as<decltype(ruvia::detail::encodeWebSocketClosePayload(std::uint16_t{}, std::string_view{})), ruvia::detail::WebSocketClosePayloadEncodeResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketClosePayloadEncodeResult&>().encoded()), const ruvia::detail::WebSocketEncodedClosePayload*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketClosePayloadEncodeResult&>().failure()), const ruvia::detail::WebSocketClosePayloadEncodeFailure*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::WsConnection&>().livenessMode()),
+        ruvia::detail::WsLivenessMode>);
+static_assert(std::same_as<decltype(std::declval<ruvia::detail::WsConnection&>().abort()),
+    ruvia::detail::WsAbortDisposition>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::WsOutputPlan&>().disposition()),
+        ruvia::detail::WsTransportDisposition>);
+static_assert(std::same_as<decltype(ruvia::detail::encodeWebSocketClosePayload(
+                               std::uint16_t{}, std::string_view{})),
+    ruvia::detail::WebSocketClosePayloadEncodeResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketClosePayloadEncodeResult&>().encoded()),
+    const ruvia::detail::WebSocketEncodedClosePayload*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketClosePayloadEncodeResult&>().failure()),
+    const ruvia::detail::WebSocketClosePayloadEncodeFailure*>);
 static_assert(!ExposesRvalueEncodedContent<ruvia::detail::WebSocketClosePayloadEncodeResult>);
 static_assert(!ExposesRvalueEncodeFailure<ruvia::detail::WebSocketClosePayloadEncodeResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketEncodedClosePayload&>().bytes()), std::string_view>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketEncodedClosePayload&>().bytes()),
+    std::string_view>);
 static_assert(!std::default_initializable<ruvia::detail::WebSocketClosePayloadEncodeResult>);
 static_assert(!std::default_initializable<ruvia::detail::WsEvent>);
 static_assert(!ExposesAnyRvalueSansIoEventBorrow<ruvia::detail::WsEvent>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WsEvent&>().message()), const ruvia::detail::WsMessageEvent*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WsEvent&>().close()), const ruvia::detail::WsCloseEvent*>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WsEvent&>().message()),
+    const ruvia::detail::WsMessageEvent*>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WsEvent&>().close()),
+    const ruvia::detail::WsCloseEvent*>);
 static_assert(!HasWsCloseCode<ruvia::detail::WsMessageEvent>);
 static_assert(HasWsCloseCode<ruvia::detail::WsCloseEvent>);
 static_assert(HasWsCloseCode<ruvia::detail::WsProtocolErrorEvent>);
@@ -2346,11 +3163,21 @@ static_assert(!std::default_initializable<ruvia::detail::WebSocketFrameView>);
 static_assert(!HasLooseWebSocketFrameFields<ruvia::detail::WebSocketFrameStart>);
 static_assert(!HasLooseWebSocketFrameFields<ruvia::detail::WebSocketFrameView>);
 static_assert(!AcceptsMutableWebSocketFrameStartDecode<ruvia::detail::WebSocketFrameStart>);
-static_assert(std::same_as<decltype(ruvia::detail::decodeWebSocketFrameStart(static_cast<unsigned char>(0x81), static_cast<unsigned char>(0x80), false)), std::optional<ruvia::detail::WebSocketFrameStart>>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketFrameView&>().kind()), ruvia::detail::WebSocketFrameKind>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketFrameView&>().payload()), std::string_view>);
-static_assert(std::same_as<decltype(ruvia::detail::WebSocketFrameView::continuation(std::string_view{}, false)), ruvia::detail::WebSocketFrameView>);
-static_assert(std::same_as<decltype(ruvia::detail::WebSocketFrameView::close(std::string_view{})), std::optional<ruvia::detail::WebSocketFrameView>>);
+static_assert(
+    std::same_as<decltype(ruvia::detail::decodeWebSocketFrameStart(
+                     static_cast<unsigned char>(0x81), static_cast<unsigned char>(0x80), false)),
+        std::optional<ruvia::detail::WebSocketFrameStart>>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::WebSocketFrameView&>().kind()),
+        ruvia::detail::WebSocketFrameKind>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::WebSocketFrameView&>().payload()),
+        std::string_view>);
+static_assert(std::same_as<decltype(ruvia::detail::WebSocketFrameView::continuation(
+                               std::string_view{}, false)),
+    ruvia::detail::WebSocketFrameView>);
+static_assert(std::same_as<decltype(ruvia::detail::WebSocketFrameView::close(std::string_view{})),
+    std::optional<ruvia::detail::WebSocketFrameView>>);
 static_assert(!AcceptsAnyTemporaryWebSocketFramePayload<std::string>);
 static_assert(!AcceptsAnyTemporaryWebSocketFramePayload<std::pmr::string>);
 static_assert(AcceptsWebSocketMessagePayload<std::string&>);
@@ -2359,9 +3186,15 @@ static_assert(AcceptsWebSocketMessagePayload<std::string_view>);
 static_assert(!AcceptsWebSocketMessagePayload<std::string>);
 static_assert(!AcceptsWebSocketMessagePayload<const std::string>);
 static_assert(!AcceptsWebSocketMessagePayload<std::pmr::string>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketFrameReadResult&>().needInput()), const ruvia::detail::WebSocketFrameNeedInput*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketFrameReadResult&>().frame()), const ruvia::detail::WebSocketFrameView*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketFrameReadResult&>().failure()), const ruvia::detail::WebSocketFrameReadFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketFrameReadResult&>().needInput()),
+    const ruvia::detail::WebSocketFrameNeedInput*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::WebSocketFrameReadResult&>().frame()),
+        const ruvia::detail::WebSocketFrameView*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::WebSocketFrameReadResult&>().failure()),
+        const ruvia::detail::WebSocketFrameReadFailure*>);
 static_assert(!HasWsFrameReadStatusField<ruvia::detail::WebSocketFrameReadResult>);
 static_assert(!HasWsRequiredBytesField<ruvia::detail::WebSocketFrameReadResult>);
 static_assert(!HasWsCleanEofAllowedField<ruvia::detail::WebSocketFrameReadResult>);
@@ -2369,36 +3202,62 @@ static_assert(!HasWsProtocolFailure<ruvia::detail::WebSocketFrameReadResult>);
 static_assert(!ExposesAnyRvalueWebSocketFrameReadAccessor<ruvia::detail::WebSocketFrameReadResult>);
 static_assert(HasWsProtocolFailure<ruvia::detail::WebSocketFrameReadFailure>);
 static_assert(!std::default_initializable<ruvia::detail::WebSocketInboundResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketInboundResult&>().continueReading()), const ruvia::detail::WebSocketInboundContinue*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketInboundResult&>().controlFrame()), const ruvia::detail::WebSocketInboundControlFrame*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketInboundResult&>().message()), const ruvia::detail::WebSocketInboundMessage*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketInboundResult&>().failure()), const ruvia::detail::WebSocketInboundFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketInboundResult&>().continueReading()),
+    const ruvia::detail::WebSocketInboundContinue*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketInboundResult&>().controlFrame()),
+    const ruvia::detail::WebSocketInboundControlFrame*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::WebSocketInboundResult&>().message()),
+        const ruvia::detail::WebSocketInboundMessage*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::WebSocketInboundResult&>().failure()),
+        const ruvia::detail::WebSocketInboundFailure*>);
 static_assert(!HasWsInboundActionAccessor<ruvia::detail::WebSocketInboundResult>);
 static_assert(!HasWsProtocolFailure<ruvia::detail::WebSocketInboundResult>);
 static_assert(!ExposesAnyRvalueWebSocketInboundAccessor<ruvia::detail::WebSocketInboundResult>);
 static_assert(!ExposesRvalueWebSocketInboundMessageMember<ruvia::detail::WebSocketInboundMessage>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().opcode()), ruvia::WebSocketOpcode>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().encoding()), ruvia::detail::WebSocketInboundContentEncoding>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().opcode()),
+    ruvia::WebSocketOpcode>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().encoding()),
+    ruvia::detail::WebSocketInboundContentEncoding>);
 static_assert(HasWsProtocolFailure<ruvia::detail::WebSocketInboundFailure>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http1ChunkedBodyDecoder&>().decode(std::string_view{})), ruvia::detail::Http1ChunkDecodeResult>);
+static_assert(std::same_as<decltype(std::declval<ruvia::detail::Http1ChunkedBodyDecoder&>().decode(
+                               std::string_view{})),
+    ruvia::detail::Http1ChunkDecodeResult>);
 static_assert(std::default_initializable<ruvia::ProtocolByteLimit>);
 static_assert(!std::constructible_from<ruvia::ProtocolByteLimit, std::size_t>);
-static_assert(std::same_as<decltype(ruvia::ProtocolByteLimit::limited(std::size_t{1})), ruvia::ProtocolByteLimit>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::ProtocolByteLimit&>().maximum()), std::optional<std::size_t>>);
+static_assert(std::same_as<decltype(ruvia::ProtocolByteLimit::limited(std::size_t{1})),
+    ruvia::ProtocolByteLimit>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::ProtocolByteLimit&>().maximum()),
+    std::optional<std::size_t>>);
 static_assert(!std::default_initializable<ruvia::detail::Http1ChunkDecodeResult>);
 static_assert(!HasAnyRvalueHttp1ChunkDecodeAccessor<ruvia::detail::Http1ChunkDecodeResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http1ChunkDecodeResult&>().bodyChunk()), const ruvia::detail::Http1ChunkDecodeBodyChunk*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http1ChunkDecodeResult&>().bodyChunk()),
+        const ruvia::detail::Http1ChunkDecodeBodyChunk*>);
 static_assert(HasConsumedBytes<ruvia::detail::Http1ChunkDecodeNeedMore>);
 static_assert(HasConsumedBytes<ruvia::detail::Http1ChunkDecodeBodyChunk>);
 static_assert(HasConsumedBytes<ruvia::detail::Http1ChunkDecodeComplete>);
 static_assert(HasConsumedBytes<ruvia::detail::Http1ChunkDecodeFailure>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http1ChunkDecodeResult&>().failure()), const ruvia::detail::Http1ChunkDecodeFailure*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::Http1ChunkDecodeResult&>().failure()),
+        const ruvia::detail::Http1ChunkDecodeFailure*>);
 static_assert(HasProtocolError<ruvia::detail::Http1ChunkDecodeFailure>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::Http1ChunkDecodeFailure&>().protocolError()), ruvia::HttpProtocolError>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::TransferCodingDecoder&>().decode(std::string_view{}, std::span<char>{})), ruvia::detail::TransferCodingDecodeResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1ChunkDecodeFailure&>().protocolError()),
+    ruvia::HttpProtocolError>);
+static_assert(std::same_as<decltype(std::declval<ruvia::detail::TransferCodingDecoder&>().decode(
+                               std::string_view{}, std::span<char>{})),
+    ruvia::detail::TransferCodingDecodeResult>);
 static_assert(!std::default_initializable<ruvia::detail::TransferCodingDecodeResult>);
 static_assert(!HasAnyRvalueTransferCodingDecodeAccessor<ruvia::detail::TransferCodingDecodeResult>);
-static_assert(std::same_as<decltype(std::declval<ruvia::detail::TransferCodingDecoder&>().finishInput()), ruvia::detail::TransferCodingDecodeResult>);
+static_assert(
+    std::same_as<decltype(std::declval<ruvia::detail::TransferCodingDecoder&>().finishInput()),
+        ruvia::detail::TransferCodingDecodeResult>);
 static_assert(HasConsumedBytes<ruvia::detail::TransferCodingDecodeNeedInput>);
 static_assert(HasConsumedBytes<ruvia::detail::TransferCodingDecodeOutput>);
 static_assert(HasConsumedBytes<ruvia::detail::TransferCodingDecodeComplete>);
@@ -2408,8 +3267,12 @@ static_assert(HasTransferOutputBytes<ruvia::detail::TransferCodingDecodeOutput>)
 static_assert(!HasTransferOutputBytes<ruvia::detail::TransferCodingDecodeProtocolFailure>);
 static_assert(!HasTransferDecodeError<ruvia::detail::TransferCodingDecodeProtocolFailure>);
 static_assert(HasProtocolError<ruvia::detail::TransferCodingDecodeProtocolFailure>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::TransferCodingDecodeProtocolFailure&>().protocolError()), ruvia::HttpProtocolError>);
-static_assert(std::same_as<decltype(ruvia::detail::scanHttpChunkedBody(std::string_view{})), ruvia::detail::HttpChunkScanResult>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::TransferCodingDecodeProtocolFailure&>()
+                         .protocolError()),
+        ruvia::HttpProtocolError>);
+static_assert(std::same_as<decltype(ruvia::detail::scanHttpChunkedBody(std::string_view{})),
+    ruvia::detail::HttpChunkScanResult>);
 static_assert(!std::default_initializable<ruvia::detail::HttpChunkScanResult>);
 static_assert(!HasAnyRvalueHttpChunkScanAccessor<ruvia::detail::HttpChunkScanResult>);
 static_assert(!HasConsumedBytes<ruvia::detail::HttpChunkScanNeedMore>);
@@ -2417,7 +3280,8 @@ static_assert(HasConsumedBytes<ruvia::detail::HttpChunkScanComplete>);
 static_assert(!HasConsumedBytes<ruvia::detail::HttpChunkScanFailure>);
 static_assert(!HasChunkScanError<ruvia::detail::HttpChunkScanComplete>);
 static_assert(HasChunkScanError<ruvia::detail::HttpChunkScanFailure>);
-static_assert(std::same_as<decltype(std::declval<ruvia::MultipartParser&>().poll()), ruvia::MultipartPollResult>);
+static_assert(std::same_as<decltype(std::declval<ruvia::MultipartParser&>().poll()),
+    ruvia::MultipartPollResult>);
 static_assert(!std::is_copy_constructible_v<ruvia::MultipartParser>);
 static_assert(!std::is_copy_assignable_v<ruvia::MultipartParser>);
 static_assert(!std::is_move_constructible_v<ruvia::MultipartParser>);
@@ -2425,8 +3289,10 @@ static_assert(!std::is_move_assignable_v<ruvia::MultipartParser>);
 static_assert(!std::default_initializable<ruvia::MultipartPollResult>);
 static_assert(!HasMultipartStatus<ruvia::MultipartPollResult>);
 static_assert(!HasAnyRvalueMultipartPollAccessor<ruvia::MultipartPollResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartPollResult&>().part()), const ruvia::MultipartStreamPart*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartPollResult&>().failure()), const ruvia::MultipartPollFailure*>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartPollResult&>().part()),
+    const ruvia::MultipartStreamPart*>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartPollResult&>().failure()),
+    const ruvia::MultipartPollFailure*>);
 static_assert(!HasMultipartParseError<ruvia::MultipartPollNeedInput>);
 static_assert(!HasMultipartParseError<ruvia::MultipartStreamPart>);
 static_assert(!HasMultipartParseError<ruvia::MultipartPollDone>);
@@ -2434,15 +3300,24 @@ static_assert(!HasMultipartParseError<ruvia::MultipartPollFailure>);
 static_assert(HasMultipartProtocolError<ruvia::MultipartPollFailure>);
 static_assert(std::is_aggregate_v<ruvia::MultipartParseOptions>);
 static_assert(!std::default_initializable<ruvia::MultipartParseOptions>);
-static_assert(std::same_as<decltype(std::declval<ruvia::MultipartParseOptions&>().boundary), ruvia::MultipartBoundary>);
-static_assert(std::same_as<decltype(ruvia::MultipartParseOptions{.boundary = ruvia::MultipartBoundary("x")}.resource), std::pmr::memory_resource*>);
+static_assert(std::same_as<decltype(std::declval<ruvia::MultipartParseOptions&>().boundary),
+    ruvia::MultipartBoundary>);
+static_assert(std::same_as<
+    decltype(ruvia::MultipartParseOptions{.boundary = ruvia::MultipartBoundary("x")}.resource),
+    std::pmr::memory_resource*>);
 static_assert(std::constructible_from<ruvia::MultipartParser, ruvia::MultipartParseOptions>);
 static_assert(!HasPositionalMultipartParserConstructor<ruvia::MultipartParser>);
-static_assert(std::same_as<decltype(ruvia::parseMultipartBody(std::string_view{}, ruvia::MultipartParseOptions{.boundary = ruvia::MultipartBoundary("x")})), ruvia::MultipartBodyParseResult>);
+static_assert(
+    std::same_as<decltype(ruvia::parseMultipartBody(std::string_view{},
+                     ruvia::MultipartParseOptions{.boundary = ruvia::MultipartBoundary("x")})),
+        ruvia::MultipartBodyParseResult>);
 static_assert(!HasPositionalMultipartBodyParse<ruvia::MultipartBodyParseResult>);
 static_assert(!std::default_initializable<ruvia::MultipartBodyParseResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartBodyParseResult&>().body()), const ruvia::MultipartBody*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartBodyParseResult&>().failure()), const ruvia::MultipartBodyParseFailure*>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartBodyParseResult&>().body()),
+    const ruvia::MultipartBody*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::MultipartBodyParseResult&>().failure()),
+        const ruvia::MultipartBodyParseFailure*>);
 static_assert(!HasMultipartParseError<ruvia::MultipartBodyParseFailure>);
 static_assert(HasMultipartProtocolError<ruvia::MultipartBodyParseFailure>);
 static_assert(!std::default_initializable<ruvia::detail::HttpMultipartDelimiterResult>);
@@ -2456,19 +3331,27 @@ static_assert(HasMultipartLineBytes<ruvia::detail::HttpMultipartCloseDelimiter>)
 static_assert(!std::default_initializable<ruvia::MultipartBoundaryParseResult>);
 static_assert(!HasMultipartStatus<ruvia::MultipartBoundaryParseResult>);
 static_assert(!HasAnyRvalueMultipartBoundaryAccessor<ruvia::MultipartBoundaryParseResult>);
-static_assert(std::same_as<decltype(ruvia::parseMultipartBoundary(std::string_view{})), ruvia::MultipartBoundaryParseResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartBoundaryParseResult&>().notApplicable()), const ruvia::MultipartBoundaryNotApplicable*>);
+static_assert(std::same_as<decltype(ruvia::parseMultipartBoundary(std::string_view{})),
+    ruvia::MultipartBoundaryParseResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::MultipartBoundaryParseResult&>().notApplicable()),
+    const ruvia::MultipartBoundaryNotApplicable*>);
 static_assert(!ExposesAnyRvalueMultipartOwnedView<ruvia::MultipartBoundary>);
 static_assert(!ExposesAnyRvalueMultipartOwnedView<ruvia::MultipartPart>);
 static_assert(!HasMultipartParseError<ruvia::MultipartBoundaryParseFailure>);
 static_assert(HasMultipartProtocolError<ruvia::MultipartBoundaryParseFailure>);
 static_assert(!std::default_initializable<ruvia::detail::HttpMultipartPartHeaderParseResult>);
-static_assert(!HasAnyRvalueMultipartPartHeaderAccessor<ruvia::detail::HttpMultipartPartHeaderParseResult>);
+static_assert(
+    !HasAnyRvalueMultipartPartHeaderAccessor<ruvia::detail::HttpMultipartPartHeaderParseResult>);
 static_assert(HasMultipartParseError<ruvia::detail::HttpMultipartPartHeaderParseFailure>);
-static_assert(std::same_as<decltype(ruvia::lookupUniqueHttpClientResponseHeader(std::declval<const ruvia::HttpClientResponseHead&>(), std::string_view{})), ruvia::HttpClientResponseHeaderLookupResult>);
+static_assert(
+    std::same_as<decltype(ruvia::lookupUniqueHttpClientResponseHeader(
+                     std::declval<const ruvia::HttpClientResponseHead&>(), std::string_view{})),
+        ruvia::HttpClientResponseHeaderLookupResult>);
 static_assert(!std::default_initializable<ruvia::HttpClientResponseHeaderLookupResult>);
 static_assert(std::move_constructible<ruvia::HttpClientResponseHead>);
-static_assert(!std::assignable_from<ruvia::HttpClientResponseHead&, ruvia::HttpClientResponseHead&&>);
+static_assert(
+    !std::assignable_from<ruvia::HttpClientResponseHead&, ruvia::HttpClientResponseHead&&>);
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<ruvia::HttpClientResponseHeader>);
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<ruvia::HttpClientResponseHead>);
 static_assert(!HasHttpClientResponseBody<ruvia::HttpClientResponseHead>);
@@ -2476,18 +3359,23 @@ static_assert(!ExposesAnyRvalueHttpClientOwnedView<ruvia::Http1ClientChunkedResp
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<ruvia::Http1ClientCloseDelimitedResponse>);
 static_assert(!AcceptsTemporaryHttpClientResponseHeaderLookup<ruvia::HttpClientResponseHead>);
 static_assert(std::move_constructible<ruvia::Http1ParsedClientResponseHead>);
-static_assert(!std::assignable_from<ruvia::Http1ParsedClientResponseHead&, ruvia::Http1ParsedClientResponseHead&&>);
+static_assert(!std::assignable_from<ruvia::Http1ParsedClientResponseHead&,
+    ruvia::Http1ParsedClientResponseHead&&>);
 static_assert(std::move_constructible<ruvia::Http1ClientResponseParseResult>);
-static_assert(!std::assignable_from<ruvia::Http1ClientResponseParseResult&, ruvia::Http1ClientResponseParseResult&&>);
+static_assert(!std::assignable_from<ruvia::Http1ClientResponseParseResult&,
+    ruvia::Http1ClientResponseParseResult&&>);
 static_assert(!HasAnyRvalueHttp1RequestParseAccessor<ruvia::Http1RequestParseResult>);
 static_assert(!HasResultKindDiscriminator<ruvia::Http1RequestParseResult>);
 static_assert(!HasAnyRvalueHttp1ClientResponseParseAccessor<ruvia::Http1ClientResponseParseResult>);
 static_assert(!HasResultKindDiscriminator<ruvia::Http1ClientResponseParseResult>);
-static_assert(!HasAnyRvalueHttp1ClientRequestPrepareAccessor<ruvia::Http1ClientRequestPrepareResult>);
+static_assert(
+    !HasAnyRvalueHttp1ClientRequestPrepareAccessor<ruvia::Http1ClientRequestPrepareResult>);
 static_assert(!HasResultKindDiscriminator<ruvia::Http1ClientRequestPrepareResult>);
-static_assert(!HasAnyRvalueHttp1InterimResponsePrepareAccessor<ruvia::Http1InterimResponsePrepareResult>);
+static_assert(
+    !HasAnyRvalueHttp1InterimResponsePrepareAccessor<ruvia::Http1InterimResponsePrepareResult>);
 static_assert(!HasResultKindDiscriminator<ruvia::Http1InterimResponsePrepareResult>);
-static_assert(!HasAnyRvalueHttpClientRequestContentViewAccessor<ruvia::HttpClientRequestContentView>);
+static_assert(
+    !HasAnyRvalueHttpClientRequestContentViewAccessor<ruvia::HttpClientRequestContentView>);
 static_assert(!AcceptsAnyTemporaryHttpClientRequestViewText<std::string>);
 static_assert(!AcceptsAnyTemporaryHttpClientRequestViewText<const std::string>);
 static_assert(!AcceptsAnyTemporaryHttpClientRequestViewText<std::pmr::string>);
@@ -2499,31 +3387,52 @@ static_assert(AcceptsHttp1ConnectHeaders<std::vector<ruvia::HttpHeaderView>>);
 static_assert(AcceptsHttp1ConnectHeaders<const std::vector<ruvia::HttpHeaderView>>);
 static_assert(AcceptsHttp1ConnectHeaders<std::array<ruvia::HttpHeaderView, 1>>);
 static_assert(AcceptsHttp1ConnectHeaders<const std::array<ruvia::HttpHeaderView, 1>>);
-constexpr ruvia::HttpClientRequestView kLiteralHttpClientRequestView{.method = "POST", .target = "/items"};
+constexpr ruvia::HttpClientRequestView kLiteralHttpClientRequestView{
+    .method = "POST", .target = "/items"};
 static_assert(kLiteralHttpClientRequestView.method.view() == "POST");
 static_assert(kLiteralHttpClientRequestView.target.view() == "/items");
-static_assert(!HasAnyRvalueHttp1ClientRequestContentPlanAccessor<ruvia::Http1ClientRequestContentPlan>);
+static_assert(
+    !HasAnyRvalueHttp1ClientRequestContentPlanAccessor<ruvia::Http1ClientRequestContentPlan>);
 static_assert(!HasAnyRvalueHttp1ClientResponsePlanAccessor<ruvia::Http1ClientResponsePlan>);
-static_assert(!HasAnyRvalueHttpClientHeaderLookupAccessor<ruvia::HttpClientResponseHeaderLookupResult>);
+static_assert(
+    !HasAnyRvalueHttpClientHeaderLookupAccessor<ruvia::HttpClientResponseHeaderLookupResult>);
 static_assert(!HasHttpClientRedirectStatus<ruvia::HttpClientResponseHeaderLookupResult>);
-static_assert(std::same_as<decltype(ruvia::planHttpClientRedirectRequest(std::declval<const ruvia::HttpClientRequestView&>(), ruvia::HttpClientRedirectRequestPlanOptions{.status = ruvia::http_status::kTemporaryRedirect})), ruvia::HttpClientRedirectRequestPlan>);
+static_assert(std::same_as<decltype(ruvia::planHttpClientRedirectRequest(
+                               std::declval<const ruvia::HttpClientRequestView&>(),
+                               ruvia::HttpClientRedirectRequestPlanOptions{
+                                   .status = ruvia::http_status::kTemporaryRedirect})),
+    ruvia::HttpClientRedirectRequestPlan>);
 static_assert(std::is_aggregate_v<ruvia::HttpClientRedirectRequestPlanOptions>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientRedirectRequestPlanOptions&>().status), ruvia::HttpStatusCode>);
-static_assert(std::same_as<decltype(ruvia::HttpClientRedirectRequestPlanOptions{.status = ruvia::http_status::kFound}.resource), std::pmr::memory_resource*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::HttpClientRedirectRequestPlanOptions&>().status),
+    ruvia::HttpStatusCode>);
+static_assert(std::same_as<decltype(ruvia::HttpClientRedirectRequestPlanOptions{
+                               .status = ruvia::http_status::kFound}
+                                   .resource),
+    std::pmr::memory_resource*>);
 static_assert(!std::copy_constructible<ruvia::HttpClientRedirectRequestPlan>);
 static_assert(std::move_constructible<ruvia::HttpClientRedirectRequestPlan>);
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<ruvia::HttpClientRedirectRequestPlan>);
-static_assert(std::same_as<decltype(ruvia::resolveHttpClientRedirectTarget(std::declval<const ruvia::HttpOriginView&>(), ruvia::HttpClientRedirectTargetOptions{.currentTarget = "/", .location = "/next"})), ruvia::HttpClientRedirectResolutionResult>);
+static_assert(std::same_as<
+    decltype(ruvia::resolveHttpClientRedirectTarget(std::declval<const ruvia::HttpOriginView&>(),
+        ruvia::HttpClientRedirectTargetOptions{.currentTarget = "/", .location = "/next"})),
+    ruvia::HttpClientRedirectResolutionResult>);
 static_assert(std::is_aggregate_v<ruvia::HttpClientRedirectTargetOptions>);
-static_assert(std::same_as<decltype(ruvia::HttpClientRedirectTargetOptions{}.currentTarget), std::string_view>);
-static_assert(std::same_as<decltype(ruvia::HttpClientRedirectTargetOptions{}.location), std::string_view>);
-static_assert(std::same_as<decltype(ruvia::HttpClientRedirectTargetOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(std::same_as<decltype(ruvia::HttpClientRedirectTargetOptions{}.currentTarget),
+    std::string_view>);
+static_assert(
+    std::same_as<decltype(ruvia::HttpClientRedirectTargetOptions{}.location), std::string_view>);
+static_assert(std::same_as<decltype(ruvia::HttpClientRedirectTargetOptions{}.resource),
+    std::pmr::memory_resource*>);
 static_assert(!HasPositionalHttpClientRedirectRequestPlan<ruvia::HttpClientRedirectRequestPlan>);
-static_assert(!HasPositionalHttpClientRedirectTargetResolution<ruvia::HttpClientRedirectResolutionResult>);
+static_assert(
+    !HasPositionalHttpClientRedirectTargetResolution<ruvia::HttpClientRedirectResolutionResult>);
 static_assert(!HasHttpClientHeaderValue<ruvia::HttpClientResponseHeaderAbsent>);
 static_assert(HasHttpClientHeaderValue<ruvia::HttpClientResponseHeaderFound>);
 static_assert(!HasHttpClientHeaderValue<ruvia::HttpClientResponseHeaderRepeated>);
-static_assert(std::same_as<decltype(ruvia::detail::responseBody(std::declval<const ruvia::HttpResponse&>())), const ruvia::detail::HttpResponseBody&>);
+static_assert(
+    std::same_as<decltype(ruvia::detail::responseBody(std::declval<const ruvia::HttpResponse&>())),
+        const ruvia::detail::HttpResponseBody&>);
 static_assert(!std::copy_constructible<ruvia::detail::HttpResponseBody>);
 static_assert(std::is_nothrow_move_constructible_v<ruvia::detail::HttpResponseBody>);
 static_assert(!std::is_move_assignable_v<ruvia::detail::HttpResponseBody>);
@@ -2535,16 +3444,23 @@ static_assert(!std::default_initializable<ruvia::detail::HttpOwnedResponseFile>)
 static_assert(!std::default_initializable<ruvia::detail::HttpBorrowedResponseFile>);
 static_assert(!std::default_initializable<ruvia::detail::ResponseFileBody>);
 static_assert(!std::default_initializable<ruvia::HttpContentCodingFieldResult>);
-static_assert(ruvia::HttpUnsupportedContentCoding::status() == ruvia::http_status::kUnsupportedMediaType);
+static_assert(
+    ruvia::HttpUnsupportedContentCoding::status() == ruvia::http_status::kUnsupportedMediaType);
 static_assert(ruvia::HttpInvalidContentCodingField::status() == ruvia::http_status::kBadRequest);
-static_assert(ruvia::detail::httpSupportedRequestContentCodings() == std::string_view("gzip, br, zstd"));
+static_assert(
+    ruvia::detail::httpSupportedRequestContentCodings() == std::string_view("gzip, br, zstd"));
 static_assert(!ExposesRvalueContentCoding<ruvia::HttpContentCodingFieldResult>);
 static_assert(!ExposesRvalueUnsupportedContentCoding<ruvia::HttpContentCodingFieldResult>);
 static_assert(!ExposesRvalueInvalidContentCoding<ruvia::HttpContentCodingFieldResult>);
-static_assert(std::same_as<decltype(ruvia::parseHttpContentCoding(std::string_view{})), ruvia::HttpContentCodingFieldResult>);
-static_assert(std::same_as<decltype(ruvia::detail::httpClientResponseContentCoding(std::declval<const ruvia::HttpClientResponseHead&>())), ruvia::HttpContentCodingFieldResult>);
+static_assert(std::same_as<decltype(ruvia::parseHttpContentCoding(std::string_view{})),
+    ruvia::HttpContentCodingFieldResult>);
+static_assert(std::same_as<decltype(ruvia::detail::httpClientResponseContentCoding(
+                               std::declval<const ruvia::HttpClientResponseHead&>())),
+    ruvia::HttpContentCodingFieldResult>);
 static_assert(!HasContentLengthPresent<ruvia::detail::HttpContentLengthState>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpContentLengthState&>().value()), std::optional<std::size_t>>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::HttpContentLengthState&>().value()),
+        std::optional<std::size_t>>);
 static_assert(!HasStaleTransferEncodingAccessors<ruvia::detail::HttpTransferEncodingState>);
 static_assert(!std::default_initializable<ruvia::detail::HttpTransferEncodingValue>);
 static_assert(!std::default_initializable<ruvia::detail::HttpNonChunkedTransferEncoding>);
@@ -2553,52 +3469,96 @@ static_assert(HasHttp1RequestPlanTransferCodings<ruvia::detail::HttpNonChunkedTr
 static_assert(HasHttp1RequestPlanTransferCodings<ruvia::detail::HttpFinalChunkedTransferEncoding>);
 static_assert(!ExposesRvalueFinalChunked<ruvia::detail::HttpTransferEncodingValue>);
 static_assert(!ExposesRvalueNonChunked<ruvia::detail::HttpTransferEncodingValue>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpTransferEncodingState&>().value()), std::optional<ruvia::detail::HttpTransferEncodingValue>>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::HttpTransferEncodingState&>().value()),
+        std::optional<ruvia::detail::HttpTransferEncodingValue>>);
 static_assert(!std::default_initializable<ruvia::HttpContentDecodeResult>);
 static_assert(!std::default_initializable<ruvia::detail::HttpRequestContentDecodeResult>);
 static_assert(!std::copy_constructible<ruvia::detail::HttpRequestContentDecodeResult>);
 static_assert(std::move_constructible<ruvia::detail::HttpRequestContentDecodeResult>);
 static_assert(!std::is_move_assignable_v<ruvia::detail::HttpRequestContentDecodeResult>);
 static_assert(!ExposesRvalueDecodedContent<ruvia::detail::HttpRequestContentDecodeResult>);
-static_assert(!HasAnyRvalueRequestContentDecodeAccessor<ruvia::detail::HttpRequestContentDecodeResult>);
+static_assert(
+    !HasAnyRvalueRequestContentDecodeAccessor<ruvia::detail::HttpRequestContentDecodeResult>);
 static_assert(!HasRawContentDecodeError<ruvia::detail::HttpRequestContentDecodeProtocolFailure>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpRequestContentDecodeProtocolFailure&>().protocolError()), ruvia::HttpProtocolError>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpRequestContentDecodeResult&>().protocolFailure()), const ruvia::detail::HttpRequestContentDecodeProtocolFailure*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::HttpRequestContentDecodeResult&>().decoderFailure()), const ruvia::detail::HttpRequestContentDecoderFailure*>);
-static_assert(std::same_as<decltype(ruvia::detail::decodeHttpRequestContent(ruvia::HttpContentCoding::kGzip, std::string_view{}, ruvia::HttpContentDecodeOptions{.maxDecodedBytes = 0, .resource = nullptr})), ruvia::detail::HttpRequestContentDecodeResult>);
-static_assert(!HasPositionalHttpRequestContentDecode<ruvia::detail::HttpRequestContentDecodeResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpRequestContentDecodeProtocolFailure&>()
+            .protocolError()),
+    ruvia::HttpProtocolError>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::HttpRequestContentDecodeResult&>()
+                         .protocolFailure()),
+        const ruvia::detail::HttpRequestContentDecodeProtocolFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpRequestContentDecodeResult&>().decoderFailure()),
+    const ruvia::detail::HttpRequestContentDecoderFailure*>);
+static_assert(
+    std::same_as<decltype(ruvia::detail::decodeHttpRequestContent(ruvia::HttpContentCoding::kGzip,
+                     std::string_view{},
+                     ruvia::HttpContentDecodeOptions{.maxDecodedBytes = 0, .resource = nullptr})),
+        ruvia::detail::HttpRequestContentDecodeResult>);
+static_assert(
+    !HasPositionalHttpRequestContentDecode<ruvia::detail::HttpRequestContentDecodeResult>);
 static_assert(!std::copy_constructible<ruvia::HttpContentDecodeResult>);
 static_assert(std::move_constructible<ruvia::HttpContentDecodeResult>);
 static_assert(!std::is_move_assignable_v<ruvia::HttpContentDecodeResult>);
 static_assert(!ExposesRvalueDecodedContent<ruvia::HttpContentDecodeResult>);
 static_assert(!ExposesRvalueDecodeFailure<ruvia::HttpContentDecodeResult>);
-static_assert(std::same_as<decltype(std::declval<ruvia::HttpContentDecodeResult&>().decoded()), ruvia::HttpDecodedContent*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpContentDecodeResult&>().failure()), const ruvia::HttpContentDecodeFailure*>);
-static_assert(std::same_as<decltype(ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, std::string_view{}, ruvia::HttpContentDecodeOptions{.maxDecodedBytes = 0, .resource = nullptr})), ruvia::HttpContentDecodeResult>);
+static_assert(std::same_as<decltype(std::declval<ruvia::HttpContentDecodeResult&>().decoded()),
+    ruvia::HttpDecodedContent*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::HttpContentDecodeResult&>().failure()),
+        const ruvia::HttpContentDecodeFailure*>);
+static_assert(
+    std::same_as<decltype(ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip,
+                     std::string_view{},
+                     ruvia::HttpContentDecodeOptions{.maxDecodedBytes = 0, .resource = nullptr})),
+        ruvia::HttpContentDecodeResult>);
 static_assert(std::is_aggregate_v<ruvia::HttpContentDecodeOptions>);
-static_assert(std::same_as<decltype(ruvia::HttpContentDecodeOptions{}.maxDecodedBytes), std::size_t>);
-static_assert(std::same_as<decltype(ruvia::HttpContentDecodeOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(
+    std::same_as<decltype(ruvia::HttpContentDecodeOptions{}.maxDecodedBytes), std::size_t>);
+static_assert(
+    std::same_as<decltype(ruvia::HttpContentDecodeOptions{}.resource), std::pmr::memory_resource*>);
 static_assert(!HasPositionalHttpContentDecode<ruvia::HttpContentDecodeResult>);
-static_assert(std::same_as<decltype(ruvia::detail::decodeHttpClientResponseContentEncoding(std::declval<const ruvia::HttpClientResponseHead&>(), std::string_view{}, std::size_t{}, std::declval<std::pmr::memory_resource*>())), ruvia::HttpContentDecodeResult>);
+static_assert(
+    std::same_as<decltype(ruvia::detail::decodeHttpClientResponseContentEncoding(
+                     std::declval<const ruvia::HttpClientResponseHead&>(), std::string_view{},
+                     std::size_t{}, std::declval<std::pmr::memory_resource*>())),
+        ruvia::HttpContentDecodeResult>);
 static_assert(!std::default_initializable<ruvia::HttpContentEncodeResult>);
 static_assert(!std::copy_constructible<ruvia::HttpContentEncodeResult>);
 static_assert(std::move_constructible<ruvia::HttpContentEncodeResult>);
 static_assert(!std::is_move_assignable_v<ruvia::HttpContentEncodeResult>);
 static_assert(!ExposesRvalueEncodedContent<ruvia::HttpContentEncodeResult>);
 static_assert(!ExposesRvalueEncodeFailure<ruvia::HttpContentEncodeResult>);
-static_assert(std::same_as<decltype(std::declval<ruvia::HttpContentEncodeResult&>().encoded()), ruvia::HttpEncodedContent*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpContentEncodeResult&>().failure()), const ruvia::HttpContentEncodeFailure*>);
-static_assert(std::same_as<decltype(ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, std::string_view{}, ruvia::HttpContentEncodeOptions{.maxEncodedBytes = 0, .resource = nullptr})), ruvia::HttpContentEncodeResult>);
+static_assert(std::same_as<decltype(std::declval<ruvia::HttpContentEncodeResult&>().encoded()),
+    ruvia::HttpEncodedContent*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::HttpContentEncodeResult&>().failure()),
+        const ruvia::HttpContentEncodeFailure*>);
+static_assert(
+    std::same_as<decltype(ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip,
+                     std::string_view{},
+                     ruvia::HttpContentEncodeOptions{.maxEncodedBytes = 0, .resource = nullptr})),
+        ruvia::HttpContentEncodeResult>);
 static_assert(std::is_aggregate_v<ruvia::HttpContentEncodeOptions>);
-static_assert(std::same_as<decltype(ruvia::HttpContentEncodeOptions{}.maxEncodedBytes), std::size_t>);
-static_assert(std::same_as<decltype(ruvia::HttpContentEncodeOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(
+    std::same_as<decltype(ruvia::HttpContentEncodeOptions{}.maxEncodedBytes), std::size_t>);
+static_assert(
+    std::same_as<decltype(ruvia::HttpContentEncodeOptions{}.resource), std::pmr::memory_resource*>);
 static_assert(!HasPositionalHttpContentEncode<ruvia::HttpContentEncodeResult>);
 static_assert(!AcceptsUrlDecodeOutputParameter<std::pmr::string>);
 static_assert(!HasPositionalUrlDecodeOptions<ruvia::detail::UrlDecodeMode>);
 static_assert(std::is_aggregate_v<ruvia::detail::UrlDecodeOptions>);
-static_assert(std::same_as<decltype(ruvia::detail::UrlDecodeOptions{}.mode), ruvia::detail::UrlDecodeMode>);
-static_assert(std::same_as<decltype(ruvia::detail::UrlDecodeOptions{}.resource), std::pmr::memory_resource*>);
-static_assert(std::same_as<decltype(ruvia::detail::decodeUrlComponent(std::string_view{}, ruvia::detail::UrlDecodeOptions{.mode = ruvia::detail::UrlDecodeMode::kPercent, .resource = nullptr})), std::optional<std::pmr::string>>);
+static_assert(
+    std::same_as<decltype(ruvia::detail::UrlDecodeOptions{}.mode), ruvia::detail::UrlDecodeMode>);
+static_assert(
+    std::same_as<decltype(ruvia::detail::UrlDecodeOptions{}.resource), std::pmr::memory_resource*>);
+static_assert(
+    std::same_as<decltype(ruvia::detail::decodeUrlComponent(std::string_view{},
+                     ruvia::detail::UrlDecodeOptions{
+                         .mode = ruvia::detail::UrlDecodeMode::kPercent, .resource = nullptr})),
+        std::optional<std::pmr::string>>);
 
 int main() {
     return 0;

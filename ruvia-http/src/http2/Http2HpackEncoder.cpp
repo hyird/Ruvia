@@ -18,7 +18,8 @@ void validateHpackStringLength(std::string_view value) {
 
 }  // namespace
 
-void HpackEncoder::encodeInteger(std::pmr::string& out, std::uint8_t firstByteMask, std::uint8_t prefixBits, std::uint32_t value) {
+void HpackEncoder::encodeInteger(std::pmr::string& out, std::uint8_t firstByteMask,
+    std::uint8_t prefixBits, std::uint32_t value) {
     const auto prefixMax = static_cast<std::uint32_t>((1U << prefixBits) - 1U);
     if (value < prefixMax) {
         out.push_back(static_cast<char>(firstByteMask | static_cast<std::uint8_t>(value)));
@@ -49,7 +50,8 @@ void HpackEncoder::encodeDynamicTableSizeUpdate(std::pmr::string& out, std::uint
     encodeInteger(out, 0x20, 5, maximum);
 }
 
-void HpackEncoder::encodeHeader(std::pmr::string& out, std::string_view name, std::string_view value) {
+void HpackEncoder::encodeHeader(
+    std::pmr::string& out, std::string_view name, std::string_view value) {
     // Validate both literals before static-table matching or writing the field
     // prefix. A string_view can be larger than HPACK's uint32 length domain, and
     // rejecting it here keeps the output unchanged when the input is invalid.
@@ -70,14 +72,17 @@ void HpackEncoder::encodeHeader(std::pmr::string& out, std::string_view name, st
         encodeHeaderWithNameIndex(out, nameIndex, value, neverIndexed);
         return;
     }
-    encodeInteger(out, neverIndexed ? kHpackLiteralNeverIndexed : kHpackLiteralWithoutIndexing, 4, 0);
+    encodeInteger(
+        out, neverIndexed ? kHpackLiteralNeverIndexed : kHpackLiteralWithoutIndexing, 4, 0);
     encodeString(out, name);
     encodeString(out, value);
 }
 
-void HpackEncoder::encodeHeaderWithNameIndex(std::pmr::string& out, std::uint32_t nameIndex, std::string_view value, bool neverIndexed) {
+void HpackEncoder::encodeHeaderWithNameIndex(
+    std::pmr::string& out, std::uint32_t nameIndex, std::string_view value, bool neverIndexed) {
     validateHpackStringLength(value);
-    encodeInteger(out, neverIndexed ? kHpackLiteralNeverIndexed : kHpackLiteralWithoutIndexing, 4, nameIndex);
+    encodeInteger(
+        out, neverIndexed ? kHpackLiteralNeverIndexed : kHpackLiteralWithoutIndexing, 4, nameIndex);
     encodeString(out, value);
 }
 

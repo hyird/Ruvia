@@ -19,7 +19,7 @@ class io_context;
 namespace ruvia {
 class BlockingPool;
 class Env;
-}
+}  // namespace ruvia
 
 namespace ruvia::detail {
 
@@ -53,13 +53,9 @@ struct WorkerCapabilityOptions final {
 // boundary; none of these registries is process-global or shared by workers.
 class WorkerCapabilities final {
 public:
-    WorkerCapabilities(
-        asio::io_context& ioContext,
-        const WorkerHandle& worker,
-        std::pmr::memory_resource* resource,
-        WorkerCapabilityDefinitions definitions,
-        WorkerCapabilityOptions options,
-        ConnectionScanner& scanner);
+    WorkerCapabilities(asio::io_context& ioContext, const WorkerHandle& worker,
+        std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions,
+        WorkerCapabilityOptions options, ConnectionScanner& scanner);
 
     WorkerCapabilities(const WorkerCapabilities&) = delete;
     WorkerCapabilities& operator=(const WorkerCapabilities&) = delete;

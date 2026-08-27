@@ -17,7 +17,8 @@
 namespace ruvia::detail {
 
 struct Http2HeaderDecodeContext final {
-    explicit Http2HeaderDecodeContext(Http2StreamState& streamValue, Http2StreamHeaderDecodeTransaction* transactionValue = nullptr) noexcept
+    explicit Http2HeaderDecodeContext(Http2StreamState& streamValue,
+        Http2StreamHeaderDecodeTransaction* transactionValue = nullptr) noexcept
         : stream(streamValue),
           transaction(transactionValue) {}
 
@@ -50,25 +51,29 @@ struct Http2HeaderDecodeContext final {
 // authority information (RFC 9113 section 8.3.1). A direct HTTP/2 sender may
 // still convey the target URI authority separately via :authority; when present,
 // callers validate it with http2IsValidRequestAuthority().
-[[nodiscard]] inline bool http2RegularRequestRequiresAuthority(std::string_view scheme, std::string_view path) noexcept {
+[[nodiscard]] inline bool http2RegularRequestRequiresAuthority(
+    std::string_view scheme, std::string_view path) noexcept {
     return path != "*" && http2IsHttpRequestScheme(scheme);
 }
 
-[[nodiscard]] inline bool http2IsValidRegularRequestPath(HttpKnownMethod method, std::string_view scheme, std::string_view path) noexcept {
+[[nodiscard]] inline bool http2IsValidRegularRequestPath(
+    HttpKnownMethod method, std::string_view scheme, std::string_view path) noexcept {
     if (path.empty()) {
         return !http2IsHttpRequestScheme(scheme);
     }
     return isValidOriginOrAsteriskFormTarget(method, path);
 }
 
-[[nodiscard]] inline bool http2IsValidExtendedConnectPath(std::string_view scheme, std::string_view path) noexcept {
+[[nodiscard]] inline bool http2IsValidExtendedConnectPath(
+    std::string_view scheme, std::string_view path) noexcept {
     if (path.empty()) {
         return !http2IsHttpRequestScheme(scheme);
     }
     return isValidOriginFormTarget(path);
 }
 
-[[nodiscard]] inline bool http2IsValidRequestAuthority(std::string_view scheme, std::string_view authority) noexcept {
+[[nodiscard]] inline bool http2IsValidRequestAuthority(
+    std::string_view scheme, std::string_view authority) noexcept {
     if (http2IsHttpRequestScheme(scheme)) {
         // HTTP(S) URI authority is mandatory even though an empty Host field is
         // valid HTTP/1 wire syntax for target URIs of other schemes.
@@ -77,11 +82,13 @@ struct Http2HeaderDecodeContext final {
     return isValidUriAuthority(authority);
 }
 
-[[nodiscard]] inline bool http2AccumulateHeaderListBytes(Http2HeaderDecodeContext& context, std::string_view name, std::string_view value) noexcept {
+[[nodiscard]] inline bool http2AccumulateHeaderListBytes(
+    Http2HeaderDecodeContext& context, std::string_view name, std::string_view value) noexcept {
     return context.decodedHeaderListSize.add(name, value);
 }
 
-[[nodiscard]] inline bool http2AppendCookieHeaderValue(Http2StreamState& stream, std::string_view value) {
+[[nodiscard]] inline bool http2AppendCookieHeaderValue(
+    Http2StreamState& stream, std::string_view value) {
     if (!stream.appendRequestCookieHeaderValue(value, stream.hasCookie())) {
         return false;
     }
@@ -89,7 +96,8 @@ struct Http2HeaderDecodeContext final {
     return true;
 }
 
-[[nodiscard]] inline bool http2OnDecodedInitialHeader(Http2HeaderDecodeContext& context, std::string_view name, std::string_view value) {
+[[nodiscard]] inline bool http2OnDecodedInitialHeader(
+    Http2HeaderDecodeContext& context, std::string_view name, std::string_view value) {
     if (!http2AccumulateHeaderListBytes(context, name, value)) {
         return false;
     }
@@ -149,14 +157,19 @@ struct Http2HeaderDecodeContext final {
     }
     stream.markRegularHeaderSeen();
     const auto kind = classifyRequestHeader(name);
-    if ((kind == RequestHeaderKind::kOrigin && !isValidHttpOriginFieldValue(value)) || (kind == RequestHeaderKind::kAccessControlRequestMethod && !isValidHttpCorsRequestMethod(value)) || (kind == RequestHeaderKind::kAccessControlRequestHeaders && !isValidHttpCorsRequestHeaderNames(value))) {
+    if ((kind == RequestHeaderKind::kOrigin && !isValidHttpOriginFieldValue(value)) ||
+        (kind == RequestHeaderKind::kAccessControlRequestMethod &&
+            !isValidHttpCorsRequestMethod(value)) ||
+        (kind == RequestHeaderKind::kAccessControlRequestHeaders &&
+            !isValidHttpCorsRequestHeaderNames(value))) {
         return false;
     }
     if (kind == RequestHeaderKind::kHost) {
         if (stream.hasHost() || !isValidHostHeader(value)) {
             return false;
         }
-        if (stream.hasAuthority() && !authorityMatchesHost(stream.requestAuthority(), value, stream.schemeDefaultPort())) {
+        if (stream.hasAuthority() &&
+            !authorityMatchesHost(stream.requestAuthority(), value, stream.schemeDefaultPort())) {
             return false;
         }
         stream.markHost();
@@ -177,13 +190,16 @@ struct Http2HeaderDecodeContext final {
             return false;
         }
     }
-    if (kind == RequestHeaderKind::kContentEncoding && !isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kRecipient)) {
+    if (kind == RequestHeaderKind::kContentEncoding &&
+        !isValidHttpContentEncodingFieldValue(value, HttpFieldListRole::kRecipient)) {
         return false;
     }
-    if (name == "trailer" && !isValidHttpRequestTrailerFieldValue(value, HttpFieldListRole::kRecipient)) {
+    if (name == "trailer" &&
+        !isValidHttpRequestTrailerFieldValue(value, HttpFieldListRole::kRecipient)) {
         return false;
     }
-    if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0 && kind != RequestHeaderKind::kContentLength) {
+    if (const auto singletonBit = singletonRequestHeaderBit(kind);
+        singletonBit != 0 && kind != RequestHeaderKind::kContentLength) {
         if (!stream.markSingletonRequestHeader(singletonBit)) {
             return false;
         }
@@ -200,12 +216,14 @@ struct Http2HeaderDecodeContext final {
     return stream.appendRemoteHeader(name, value, kind);
 }
 
-[[nodiscard]] inline bool http2OnDecodedRequestTrailer(Http2HeaderDecodeContext& context, std::string_view name, std::string_view value) {
+[[nodiscard]] inline bool http2OnDecodedRequestTrailer(
+    Http2HeaderDecodeContext& context, std::string_view name, std::string_view value) {
     if (!http2AccumulateHeaderListBytes(context, name, value)) {
         return false;
     }
 
-    return context.acceptRegularField() && http2IsValidRegularHeader(name, value) && !http2IsForbiddenRequestTrailerHeader(name);
+    return context.acceptRegularField() && http2IsValidRegularHeader(name, value) &&
+           !http2IsForbiddenRequestTrailerHeader(name);
 }
 
 }  // namespace ruvia::detail

@@ -18,6 +18,7 @@ namespace ruvia::detail {
 // known collisions costs nothing here and leaves no judgement call.
 inline constexpr std::size_t kMigrationChecksumSize = 64;
 
-[[nodiscard]] std::pmr::string migrationChecksum(std::string_view sql, std::pmr::memory_resource* resource);
+[[nodiscard]] std::pmr::string migrationChecksum(
+    std::string_view sql, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

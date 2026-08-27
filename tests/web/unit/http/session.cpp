@@ -50,7 +50,8 @@ RUVIA_TEST(session_cookie_append_preserves_existing_set_cookie) {
     auto response = makeResponse();
     response.header("Set-Cookie", "theme=light", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
 
-    ruvia::detail::appendSessionCookieHeader(response, std::pmr::new_delete_resource(), "sid", "abcdef", false);
+    ruvia::detail::appendSessionCookieHeader(
+        response, std::pmr::new_delete_resource(), "sid", "abcdef", false);
 
     const auto& headers = response.headers();
     RUVIA_CHECK_EQ(headers.size(), std::size_t{2});
@@ -65,18 +66,20 @@ RUVIA_TEST(session_cookie_append_preserves_existing_set_cookie) {
 RUVIA_TEST(session_cookie_secure_flag_appended_for_secure_requests) {
     auto response = makeResponse();
 
-    ruvia::detail::appendSessionCookieHeader(response, std::pmr::new_delete_resource(), "sid", "abcdef", true);
+    ruvia::detail::appendSessionCookieHeader(
+        response, std::pmr::new_delete_resource(), "sid", "abcdef", true);
 
     const auto& headers = response.headers();
     RUVIA_CHECK_EQ(headers.size(), std::size_t{1});
     const auto it = headers.begin();
     RUVIA_CHECK_EQ(it->name(), std::string_view("Set-Cookie"));
-    RUVIA_CHECK_EQ(it->value(), std::string_view("sid=abcdef; Path=/; HttpOnly; Secure; SameSite=Lax"));
+    RUVIA_CHECK_EQ(
+        it->value(), std::string_view("sid=abcdef; Path=/; HttpOnly; Secure; SameSite=Lax"));
 }
 
 RUVIA_TEST(session_persistence_plan_persists_replacement_before_deleting_old_id) {
-    using ruvia::detail::SessionPersistenceStep;
     using ruvia::detail::sessionPersistencePlan;
+    using ruvia::detail::SessionPersistenceStep;
 
     const auto fresh = sessionPersistencePlan("newid", {});
     RUVIA_CHECK_EQ(fresh.count, std::size_t{1});
@@ -96,8 +99,8 @@ RUVIA_TEST(session_persistence_plan_persists_replacement_before_deleting_old_id)
 }
 
 RUVIA_TEST(session_commit_plan_publishes_new_cookie_after_storage_succeeds) {
-    using ruvia::detail::SessionCommitStep;
     using ruvia::detail::sessionCommitPlan;
+    using ruvia::detail::SessionCommitStep;
 
     const auto fresh = sessionCommitPlan("newid", {}, true);
     RUVIA_CHECK_EQ(fresh.count, std::size_t{2});
@@ -276,13 +279,15 @@ RUVIA_TEST(session_id_validation_accepts_only_lowercase_hex) {
     // chars, and lowercase hex only (the shape generateSessionId produces).
     RUVIA_CHECK(isValidSessionId("deadbeef"));
     RUVIA_CHECK(isValidSessionId("0123456789abcdef"));
-    RUVIA_CHECK(isValidSessionId(std::string_view(std::string(128, 'a'))));  // exactly 128 is allowed
+    RUVIA_CHECK(
+        isValidSessionId(std::string_view(std::string(128, 'a'))));  // exactly 128 is allowed
 
-    RUVIA_CHECK(!isValidSessionId(""));                                       // empty
-    RUVIA_CHECK(!isValidSessionId(std::string_view(std::string(129, 'a'))));  // one past the max length
-    RUVIA_CHECK(!isValidSessionId("DEADBEEF"));                               // uppercase hex is rejected
-    RUVIA_CHECK(!isValidSessionId("deadbeeg"));                               // 'g' is not a hex digit
-    RUVIA_CHECK(!isValidSessionId("dead beef"));                              // space
-    RUVIA_CHECK(!isValidSessionId("../../etc"));                              // path-traversal shape can never validate
-    RUVIA_CHECK(!isValidSessionId(std::string_view("dead\0beef", 9)));        // embedded NUL
+    RUVIA_CHECK(!isValidSessionId(""));  // empty
+    RUVIA_CHECK(
+        !isValidSessionId(std::string_view(std::string(129, 'a'))));  // one past the max length
+    RUVIA_CHECK(!isValidSessionId("DEADBEEF"));                       // uppercase hex is rejected
+    RUVIA_CHECK(!isValidSessionId("deadbeeg"));                       // 'g' is not a hex digit
+    RUVIA_CHECK(!isValidSessionId("dead beef"));                      // space
+    RUVIA_CHECK(!isValidSessionId("../../etc"));  // path-traversal shape can never validate
+    RUVIA_CHECK(!isValidSessionId(std::string_view("dead\0beef", 9)));  // embedded NUL
 }

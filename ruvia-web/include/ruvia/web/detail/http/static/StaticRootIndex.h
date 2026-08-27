@@ -139,7 +139,9 @@ public:
 private:
     friend class StaticRootEntryView;
 
-    StaticRootMemoryVariantView(HttpContentCoding contentCoding, std::string_view bytes, std::uint64_t modifiedToken, std::time_t modifiedSeconds, std::string_view etag, std::string_view lastModified) noexcept
+    StaticRootMemoryVariantView(HttpContentCoding contentCoding, std::string_view bytes,
+        std::uint64_t modifiedToken, std::time_t modifiedSeconds, std::string_view etag,
+        std::string_view lastModified) noexcept
         : contentCoding_(contentCoding),
           bytes_(bytes),
           modifiedToken_(modifiedToken),
@@ -201,18 +203,15 @@ public:
         return responseValidators_;
     }
 
-    [[nodiscard]] std::optional<StaticRootMemoryVariantView> memoryVariant(HttpContentCoding coding) const noexcept {
+    [[nodiscard]] std::optional<StaticRootMemoryVariantView> memoryVariant(
+        HttpContentCoding coding) const noexcept {
         if (memoryVariants_ == nullptr) {
             return std::nullopt;
         }
         for (const auto& variant : *memoryVariants_) {
             if (variant.contentCoding == coding) {
-                return StaticRootMemoryVariantView(
-                    variant.contentCoding,
-                    variant.bytes,
-                    variant.modifiedToken,
-                    variant.modifiedSeconds,
-                    variant.etag,
+                return StaticRootMemoryVariantView(variant.contentCoding, variant.bytes,
+                    variant.modifiedToken, variant.modifiedSeconds, variant.etag,
                     variant.lastModified);
             }
         }
@@ -222,7 +221,12 @@ public:
 private:
     friend class StaticRootAccess;
 
-    StaticRootEntryView(const NativePathChar* filePath, std::string_view contentType, std::string_view cacheControl, std::string_view etag, std::string_view lastModified, std::uint64_t size, ResponseFileIdentity identity, std::uint64_t modifiedToken, std::time_t modifiedSeconds, StaticRangeRequestPolicy rangeRequests, StaticResponseValidatorPolicy responseValidators, bool directlyServable, const std::pmr::vector<StaticRootMemoryVariant>* memoryVariants) noexcept
+    StaticRootEntryView(const NativePathChar* filePath, std::string_view contentType,
+        std::string_view cacheControl, std::string_view etag, std::string_view lastModified,
+        std::uint64_t size, ResponseFileIdentity identity, std::uint64_t modifiedToken,
+        std::time_t modifiedSeconds, StaticRangeRequestPolicy rangeRequests,
+        StaticResponseValidatorPolicy responseValidators, bool directlyServable,
+        const std::pmr::vector<StaticRootMemoryVariant>* memoryVariants) noexcept
         : filePath_(filePath),
           contentType_(contentType),
           cacheControl_(cacheControl),
@@ -256,16 +260,21 @@ class StaticRootAccess final {
 public:
     [[nodiscard]] static std::string_view indexFile(const StaticRoot& root) noexcept;
     [[nodiscard]] static bool hasDirectoryIndex(const StaticRoot& root) noexcept;
-    [[nodiscard]] static std::optional<StaticRootEntryView> find(const StaticRoot& root, std::string_view relativePath) noexcept;
-    [[nodiscard]] static std::optional<StaticRootEntryView> findVariant(const StaticRoot& root, std::string_view relativePath) noexcept;
-    [[nodiscard]] static bool isIndexedDirectory(const StaticRoot& root, std::string_view relativePath) noexcept;
+    [[nodiscard]] static std::optional<StaticRootEntryView> find(
+        const StaticRoot& root, std::string_view relativePath) noexcept;
+    [[nodiscard]] static std::optional<StaticRootEntryView> findVariant(
+        const StaticRoot& root, std::string_view relativePath) noexcept;
+    [[nodiscard]] static bool isIndexedDirectory(
+        const StaticRoot& root, std::string_view relativePath) noexcept;
     [[nodiscard]] static StaticRootOptions options(const StaticRoot& root);
     [[nodiscard]] static std::uint64_t fingerprint(const StaticRoot& root) noexcept;
-    [[nodiscard]] static bool sameSnapshot(const StaticRoot& left, const StaticRoot& right) noexcept;
+    [[nodiscard]] static bool sameSnapshot(
+        const StaticRoot& left, const StaticRoot& right) noexcept;
     static void acquireBinding(const StaticRoot& root) noexcept;
     static void releaseBinding(const StaticRoot& root) noexcept;
     [[nodiscard]] static bool hasActiveBindings(const StaticRoot& root) noexcept;
-    static void installPrecompressedVariants(StaticRoot& root, const StaticRoot* previous, const StaticRootPrecompressionOptions& options);
+    static void installPrecompressedVariants(StaticRoot& root, const StaticRoot* previous,
+        const StaticRootPrecompressionOptions& options);
 };
 
 }  // namespace ruvia::detail

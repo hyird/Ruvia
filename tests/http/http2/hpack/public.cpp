@@ -12,7 +12,9 @@ namespace {
 
 class ToggleAllocationResource final : public std::pmr::memory_resource {
 public:
-    void reject(bool value = true) noexcept { reject_ = value; }
+    void reject(bool value = true) noexcept {
+        reject_ = value;
+    }
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {

@@ -13,13 +13,14 @@ DbSlotSocket::DbSlotSocket(asio::io_context& ioContext)
 }
 #endif
 
-DbSlotSocket::DbSlotSocket(DbSlotSocket&& other) noexcept
+      DbSlotSocket::DbSlotSocket(DbSlotSocket && other) noexcept
 #if defined(_WIN32)
     : socket(std::move(other.socket)),
 #else
     : descriptor(std::move(other.descriptor)),
 #endif
-      native(std::exchange(other.native, kInvalidSocket)) {}
+      native(std::exchange(other.native, kInvalidSocket)) {
+}
 
 DbSlotSocket& DbSlotSocket::operator=(DbSlotSocket&& other) noexcept {
     if (this == &other) {
@@ -51,11 +52,7 @@ std::error_code DbSlotSocket::ensureAssigned(NativeSocket fd) noexcept {
     WSAPROTOCOL_INFOW protocolInfo{};
     int protocolInfoSize = static_cast<int>(sizeof(protocolInfo));
     const auto source = static_cast<SOCKET>(fd);
-    if (::getsockopt(
-            source,
-            SOL_SOCKET,
-            SO_PROTOCOL_INFOW,
-            reinterpret_cast<char*>(&protocolInfo),
+    if (::getsockopt(source, SOL_SOCKET, SO_PROTOCOL_INFOW, reinterpret_cast<char*>(&protocolInfo),
             &protocolInfoSize) == SOCKET_ERROR) {
         return std::error_code(WSAGetLastError(), std::system_category());
     }

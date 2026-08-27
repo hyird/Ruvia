@@ -66,7 +66,8 @@ template <typename T>
 
 template <typename T>
 [[nodiscard]] bool isEmptyValue(const T& value) noexcept {
-    if constexpr (detail::isRuviaString<T> || detail::isRuviaArray<T> || detail::isRuviaBoxedArray<T>) {
+    if constexpr (detail::isRuviaString<T> || detail::isRuviaArray<T> ||
+                  detail::isRuviaBoxedArray<T>) {
         return value.empty();
     } else {
         return false;
@@ -96,7 +97,8 @@ template <typename T>
 template <typename T>
 [[nodiscard]] constexpr bool modelHasSizeRule() noexcept {
     using ValueT = std::remove_cvref_t<T>;
-    return detail::isRuviaString<ValueT> || detail::isRuviaArray<ValueT> || detail::isRuviaBoxedArray<ValueT>;
+    return detail::isRuviaString<ValueT> || detail::isRuviaArray<ValueT> ||
+           detail::isRuviaBoxedArray<ValueT>;
 }
 
 template <typename T>

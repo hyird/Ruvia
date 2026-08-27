@@ -41,7 +41,8 @@ private:
     };
 
     [[nodiscard]] static EventLoop requireLoop(EventLoop loop);
-    [[nodiscard]] static std::pmr::vector<DbDefinition> makeDefinitions(const DbConfig& config, std::pmr::memory_resource* resource);
+    [[nodiscard]] static std::pmr::vector<DbDefinition> makeDefinitions(
+        const DbConfig& config, std::pmr::memory_resource* resource);
     [[nodiscard]] static ConnectionScannerOptions scannerOptions();
 
     [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<DbClientState> state);

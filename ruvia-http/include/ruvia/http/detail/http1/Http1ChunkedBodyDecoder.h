@@ -68,9 +68,9 @@ private:
     friend class Http1ChunkDecodeResult;
 
     explicit constexpr Http1ChunkDecodeComplete(
-        std::size_t consumedBytes,
-        std::string_view trailers) noexcept
-        : consumedBytes_(consumedBytes), trailers_(trailers) {}
+        std::size_t consumedBytes, std::string_view trailers) noexcept
+        : consumedBytes_(consumedBytes),
+          trailers_(trailers) {}
 
     std::size_t consumedBytes_;
     std::string_view trailers_;
@@ -95,7 +95,8 @@ public:
             case Http1ChunkDecodeError::kBodyTooLarge:
                 return HttpRequestBodyFailure::tooLarge().protocolError();
             case Http1ChunkDecodeError::kFramingTooLarge:
-                return HttpProtocolError(http_status::kContentTooLarge, "request body framing is too large");
+                return HttpProtocolError(
+                    http_status::kContentTooLarge, "request body framing is too large");
         }
         return HttpProtocolError(http_status::kBadRequest, "invalid chunked request body");
     }
@@ -103,7 +104,8 @@ public:
 private:
     friend class Http1ChunkDecodeResult;
 
-    constexpr Http1ChunkDecodeFailure(std::size_t consumedBytes, Http1ChunkDecodeError error) noexcept
+    constexpr Http1ChunkDecodeFailure(
+        std::size_t consumedBytes, Http1ChunkDecodeError error) noexcept
         : consumedBytes_(consumedBytes),
           error_(error) {}
 
@@ -144,7 +146,8 @@ public:
 private:
     friend class Http1ChunkedBodyDecoder;
 
-    using Value = std::variant<Http1ChunkDecodeNeedMore, Http1ChunkDecodeBodyChunk, Http1ChunkDecodeComplete, Http1ChunkDecodeFailure>;
+    using Value = std::variant<Http1ChunkDecodeNeedMore, Http1ChunkDecodeBodyChunk,
+        Http1ChunkDecodeComplete, Http1ChunkDecodeFailure>;
 
     template <typename Result>
     explicit Http1ChunkDecodeResult(Result result) noexcept
@@ -154,17 +157,18 @@ private:
         return Http1ChunkDecodeResult(Http1ChunkDecodeNeedMore(consumedBytes));
     }
 
-    [[nodiscard]] static Http1ChunkDecodeResult makeBodyChunk(std::size_t consumedBytes, std::string_view bytes) noexcept {
+    [[nodiscard]] static Http1ChunkDecodeResult makeBodyChunk(
+        std::size_t consumedBytes, std::string_view bytes) noexcept {
         return Http1ChunkDecodeResult(Http1ChunkDecodeBodyChunk(consumedBytes, bytes));
     }
 
     [[nodiscard]] static Http1ChunkDecodeResult makeComplete(
-        std::size_t consumedBytes,
-        std::string_view trailers = {}) noexcept {
+        std::size_t consumedBytes, std::string_view trailers = {}) noexcept {
         return Http1ChunkDecodeResult(Http1ChunkDecodeComplete(consumedBytes, trailers));
     }
 
-    [[nodiscard]] static Http1ChunkDecodeResult makeFailure(std::size_t consumedBytes, Http1ChunkDecodeError error) noexcept {
+    [[nodiscard]] static Http1ChunkDecodeResult makeFailure(
+        std::size_t consumedBytes, Http1ChunkDecodeError error) noexcept {
         return Http1ChunkDecodeResult(Http1ChunkDecodeFailure(consumedBytes, error));
     }
 
@@ -201,7 +205,8 @@ public:
                         return fail(cursor, Http1ChunkDecodeError::kFramingTooLarge);
                     }
                     std::size_t chunkSize = 0;
-                    if (!parseHttpChunkSize(available.substr(cursor, lineEnd - cursor), chunkSize)) {
+                    if (!parseHttpChunkSize(
+                            available.substr(cursor, lineEnd - cursor), chunkSize)) {
                         return fail(cursor, Http1ChunkDecodeError::kInvalidFraming);
                     }
                     if (const auto error = accountFraming(lineEnd - cursor + 2)) {
@@ -278,8 +283,7 @@ public:
                     }
                     state_ = ProgressState::kComplete;
                     return Http1ChunkDecodeResult::makeComplete(
-                        cursor + trailerBytes,
-                        trailers.substr(0, trailerEnd));
+                        cursor + trailerBytes, trailers.substr(0, trailerEnd));
                 }
                 case ProgressState::kComplete:
                     return Http1ChunkDecodeResult::makeComplete(cursor);
@@ -305,21 +309,24 @@ private:
     using State = std::variant<ProgressState, Http1ChunkDecodeError>;
 
     [[nodiscard]] std::optional<Http1ChunkDecodeError> accountFraming(std::size_t bytes) noexcept {
-        if (encodedOverheadBytes_ > kMaxHttpHeaderBytes || bytes > kMaxHttpHeaderBytes - encodedOverheadBytes_) {
+        if (encodedOverheadBytes_ > kMaxHttpHeaderBytes ||
+            bytes > kMaxHttpHeaderBytes - encodedOverheadBytes_) {
             return Http1ChunkDecodeError::kFramingTooLarge;
         }
         encodedOverheadBytes_ += bytes;
         return std::nullopt;
     }
 
-    [[nodiscard]] std::optional<Http1ChunkDecodeError> consumeDelimiter(std::string_view available) noexcept {
+    [[nodiscard]] std::optional<Http1ChunkDecodeError> consumeDelimiter(
+        std::string_view available) noexcept {
         if (!available.starts_with("\r\n")) {
             return Http1ChunkDecodeError::kInvalidFraming;
         }
         return accountFraming(2);
     }
 
-    [[nodiscard]] Http1ChunkDecodeResult fail(std::size_t consumedBytes, Http1ChunkDecodeError error) noexcept {
+    [[nodiscard]] Http1ChunkDecodeResult fail(
+        std::size_t consumedBytes, Http1ChunkDecodeError error) noexcept {
         state_ = error;
         return Http1ChunkDecodeResult::makeFailure(consumedBytes, error);
     }

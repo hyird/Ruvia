@@ -42,7 +42,8 @@ static_assert(kHpackHuffmanTree.size <= kHpackHuffmanNodeCapacity);
 
 }  // namespace
 
-HpackDecoder::StepResult HpackDecoder::decodeHuffman(std::string_view encoded, std::pmr::string& output) {
+HpackDecoder::StepResult HpackDecoder::decodeHuffman(
+    std::string_view encoded, std::pmr::string& output) {
     output.clear();
     output.reserve(encoded.size());
     std::int16_t node = 0;

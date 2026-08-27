@@ -30,7 +30,8 @@ Task<std::string_view> ContextRequest::contextTextTask(const Context* context) {
     return context->requestBody();
 }
 
-bool ContextRequest::contextContentTypeMatches(const Context* context, std::string_view expected) noexcept {
+bool ContextRequest::contextContentTypeMatches(
+    const Context* context, std::string_view expected) noexcept {
     return context->requestContentTypeMatches(expected);
 }
 
@@ -38,7 +39,8 @@ std::pmr::memory_resource* ContextRequest::contextResource(const Context* contex
     return context->resource();
 }
 
-detail::ScopedOperationScope& ContextRequest::contextOperationScope(const Context* context) noexcept {
+detail::ScopedOperationScope& ContextRequest::contextOperationScope(
+    const Context* context) noexcept {
     return context->operationScope_;
 }
 
@@ -66,7 +68,8 @@ bool ContextRequest::accepts(std::string_view mediaType) const noexcept {
     return context_->requestAccepts(mediaType);
 }
 
-std::optional<std::string_view> ContextRequest::negotiate(Negotiable field, std::span<const std::string_view> supported) const noexcept {
+std::optional<std::string_view> ContextRequest::negotiate(
+    Negotiable field, std::span<const std::string_view> supported) const noexcept {
     return context_->requestNegotiate(field, supported);
 }
 
@@ -113,7 +116,8 @@ ScopedOperation<std::span<const std::byte>> ContextRequest::bytes() const {
 
 Task<ContextRequest::RequestBlob> ContextRequest::blobTask(const Context* context) {
     auto bytes = co_await bytesTask(context);
-    co_return RequestBlob(bytes, context->requestHeader("Content-Type").value_or(std::string_view{}));
+    co_return RequestBlob(
+        bytes, context->requestHeader("Content-Type").value_or(std::string_view{}));
 }
 
 ScopedOperation<ContextRequest::RequestBlob> ContextRequest::blob() const {
@@ -128,9 +132,11 @@ ScopedOperation<std::pmr::vector<MultipartPart>> ContextRequest::multipart() con
     return detail::makeScopedOperation(context_->operationScope_, context_->requestMultipart());
 }
 
-ScopedOperation<ContextRequest::RequestFormData> ContextRequest::parseBody(ParseBodyOptions options) const {
+ScopedOperation<ContextRequest::RequestFormData> ContextRequest::parseBody(
+    ParseBodyOptions options) const {
     validateParseBodyOptions(options);
-    return detail::makeScopedOperation(context_->operationScope_, context_->parseRequestBody(options));
+    return detail::makeScopedOperation(
+        context_->operationScope_, context_->parseRequestBody(options));
 }
 
 BodyReader& ContextRequest::bodyReader() const {

@@ -37,7 +37,8 @@ class WebWorkerDispatch;
 class WorkerStateRegistry;
 }  // namespace detail
 
-class WebWorkerContext final : public detail::BlockingCapability<WebWorkerContext>, public detail::WorkerStateCapability<WebWorkerContext> {
+class WebWorkerContext final : public detail::BlockingCapability<WebWorkerContext>,
+                               public detail::WorkerStateCapability<WebWorkerContext> {
 public:
     WebWorkerContext(const WebWorkerContext&) = delete;
     WebWorkerContext& operator=(const WebWorkerContext&) = delete;
@@ -63,7 +64,10 @@ public:
 private:
     friend class detail::WebWorkerDispatch;
 
-    WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource, detail::DbRegistry* databases, detail::RedisRegistry* redis, detail::HttpClientRegistry* httpClients, const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool, StopToken stopToken) noexcept;
+    WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource,
+        detail::DbRegistry* databases, detail::RedisRegistry* redis,
+        detail::HttpClientRegistry* httpClients, const detail::WorkerStateRegistry* workerStates,
+        BlockingPool* blockingPool, StopToken stopToken) noexcept;
 
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
     friend class detail::BlockingCapability<WebWorkerContext>;
@@ -110,7 +114,9 @@ public:
     [[nodiscard]] WebWorkerStats stats() const noexcept;
 
     template <typename Fn>
-        requires std::invocable<std::decay_t<Fn>&, WebWorkerContext&> && std::same_as<std::invoke_result_t<std::decay_t<Fn>&, WebWorkerContext&>, Task<void>>
+        requires std::invocable<std::decay_t<Fn>&, WebWorkerContext&> &&
+                 std::same_as<std::invoke_result_t<std::decay_t<Fn>&, WebWorkerContext&>,
+                     Task<void>>
     [[nodiscard]] WebWorkerPostResult post(Fn&& fn) const {
         return postTask(MoveOnlyFunction<Task<void>(WebWorkerContext&)>(std::forward<Fn>(fn)));
     }
@@ -120,7 +126,8 @@ private:
 
     WebWorkerHandle(std::shared_ptr<detail::WebWorkerDispatch> dispatch) noexcept;
 
-    [[nodiscard]] WebWorkerPostResult postTask(MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const;
+    [[nodiscard]] WebWorkerPostResult postTask(
+        MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const;
 
     // The handle owns a stable terminal endpoint. Server shutdown closes it;
     // retaining a handle cannot retain the server or its io_context.

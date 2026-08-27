@@ -23,7 +23,8 @@ using ruvia::detail::makeWebSocketServerNegotiation;
 using ruvia::detail::validateHttp2WebSocketHandshake;
 
 template <typename T>
-concept ExposesRvalueWebSocketServerSubprotocol = requires(T&& negotiation) { std::move(negotiation).subprotocol(); };
+concept ExposesRvalueWebSocketServerSubprotocol =
+    requires(T&& negotiation) { std::move(negotiation).subprotocol(); };
 
 static_assert(!ExposesRvalueWebSocketServerSubprotocol<ruvia::detail::WebSocketServerNegotiation>);
 static_assert(!std::copy_constructible<ruvia::detail::WebSocketServerNegotiation>);
@@ -90,12 +91,14 @@ Http2StreamState makeStream() {
     return Http2StreamState(1, std::pmr::new_delete_resource());
 }
 
-[[nodiscard]] bool acceptsWebSocketHandshake(const Http2StreamState& stream, const HttpRequest& request) {
+[[nodiscard]] bool acceptsWebSocketHandshake(
+    const Http2StreamState& stream, const HttpRequest& request) {
     const auto result = validateHttp2WebSocketHandshake(stream, request);
     return result.accepted() != nullptr;
 }
 
-[[nodiscard]] bool rejectsWebSocketHandshake(const Http2StreamState& stream, const HttpRequest& request) {
+[[nodiscard]] bool rejectsWebSocketHandshake(
+    const Http2StreamState& stream, const HttpRequest& request) {
     const auto result = validateHttp2WebSocketHandshake(stream, request);
     return result.failure() != nullptr;
 }
@@ -105,12 +108,14 @@ Http2StreamState makeStream() {
 RUVIA_TEST(websocket_subprotocol_negotiation) {
     const auto request = requestWithProtocol();
     // Server preference wins: the first supported token the client also offered.
-    const auto preferred = makeWebSocketServerNegotiation(request, {.supportedSubprotocols = "superchat, chat"});
+    const auto preferred =
+        makeWebSocketServerNegotiation(request, {.supportedSubprotocols = "superchat, chat"});
     RUVIA_CHECK_EQ(preferred.subprotocol(), std::string_view("superchat"));
     const auto chat = makeWebSocketServerNegotiation(request, {.supportedSubprotocols = "chat"});
     RUVIA_CHECK_EQ(chat.subprotocol(), std::string_view("chat"));
     // No overlap yields no subprotocol.
-    const auto noOverlap = makeWebSocketServerNegotiation(request, {.supportedSubprotocols = "binary"});
+    const auto noOverlap =
+        makeWebSocketServerNegotiation(request, {.supportedSubprotocols = "binary"});
     RUVIA_CHECK(noOverlap.subprotocol().empty());
 
     // A request offering nothing yields no subprotocol.
@@ -122,7 +127,8 @@ RUVIA_TEST(websocket_subprotocol_negotiation) {
 RUVIA_TEST(websocket_server_negotiation_owns_selected_subprotocol) {
     const auto request = requestWithProtocol();
     std::string supported = "chat";
-    const auto negotiation = makeWebSocketServerNegotiation(request, {.supportedSubprotocols = supported});
+    const auto negotiation =
+        makeWebSocketServerNegotiation(request, {.supportedSubprotocols = supported});
 
     supported.front() = 'X';
 
@@ -136,8 +142,10 @@ RUVIA_TEST(websocket_h1_and_h2_share_compression_negotiation_and_serialization) 
     };
     constexpr Case cases[] = {
         {"", ruvia::WebSocketCompression::kDisabled},
-        {"Sec-WebSocket-Extensions: permessage-deflate\r\n", ruvia::WebSocketCompression::kPermessageDeflate},
-        {"Sec-WebSocket-Extensions: permessage-deflate; server_max_window_bits=15\r\n", ruvia::WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits},
+        {"Sec-WebSocket-Extensions: permessage-deflate\r\n",
+            ruvia::WebSocketCompression::kPermessageDeflate},
+        {"Sec-WebSocket-Extensions: permessage-deflate; server_max_window_bits=15\r\n",
+            ruvia::WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits},
     };
 
     for (const auto& testCase : cases) {
@@ -161,8 +169,10 @@ RUVIA_TEST(websocket_h1_and_h2_share_compression_negotiation_and_serialization) 
 
         std::string response;
         h1.forEachResponsePart([&response](std::string_view part) { response.append(part); });
-        const auto header = std::string("Sec-WebSocket-Extensions: ") + std::string(extension) + "\r\n";
-        RUVIA_CHECK_EQ(response.find("Sec-WebSocket-Extensions:"), extension.empty() ? std::string::npos : response.find(header));
+        const auto header =
+            std::string("Sec-WebSocket-Extensions: ") + std::string(extension) + "\r\n";
+        RUVIA_CHECK_EQ(response.find("Sec-WebSocket-Extensions:"),
+            extension.empty() ? std::string::npos : response.find(header));
     }
 }
 
@@ -226,7 +236,8 @@ RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
     if (const auto* failure = unsupportedVersion.failure()) {
         const auto error = failure->protocolError();
         RUVIA_CHECK_EQ(error.status(), ruvia::http_status::kBadRequest);
-        RUVIA_CHECK_EQ(std::string_view(error.what()), std::string_view("unsupported WebSocket version"));
+        RUVIA_CHECK_EQ(
+            std::string_view(error.what()), std::string_view("unsupported WebSocket version"));
         ruvia::HttpResponse response;
         failure->applyRequiredResponseHeaders(response);
         RUVIA_CHECK_EQ(response.header("Sec-WebSocket-Version"), std::string_view("13"));
@@ -281,7 +292,8 @@ RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
         "Sec-WebSocket-Protocol: chat\r\n"
         "Sec-WebSocket-Extensions: permessage-deflate\r\n"
         "\r\n");
-    const auto negotiation = makeWebSocketServerNegotiation(request, {.supportedSubprotocols = "chat"});
+    const auto negotiation =
+        makeWebSocketServerNegotiation(request, {.supportedSubprotocols = "chat"});
     std::pmr::string block(std::pmr::get_default_resource());
     http2EncodeWebSocketHandshakeHeaders(block, negotiation);
 
@@ -291,7 +303,9 @@ RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
     RUVIA_CHECK(decodeResult.decoded() != nullptr);
     RUVIA_CHECK(hasHeader(fields, ":status", "200"));
     RUVIA_CHECK(hasHeader(fields, "sec-websocket-protocol", "chat"));
-    RUVIA_CHECK(hasHeader(fields, "sec-websocket-extensions", ruvia::detail::webSocketCompressionExtension(ruvia::WebSocketCompression::kPermessageDeflate)));
+    RUVIA_CHECK(hasHeader(fields, "sec-websocket-extensions",
+        ruvia::detail::webSocketCompressionExtension(
+            ruvia::WebSocketCompression::kPermessageDeflate)));
     RUVIA_CHECK(hasHeaderName(fields, "date"));
     RUVIA_CHECK(!hasHeaderName(fields, "server"));
 }
