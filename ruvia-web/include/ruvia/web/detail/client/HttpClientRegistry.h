@@ -292,15 +292,12 @@ public:
         ScopedOperationScope& scope) const;
 
 private:
-    struct Entry final {
-        std::pmr::string alias;
-        std::unique_ptr<HttpClientPool, PmrObjectDeleter<HttpClientPool>> pool;
-    };
+    using PoolOwner = std::unique_ptr<HttpClientPool, PmrObjectDeleter<HttpClientPool>>;
 
-    void add(asio::io_context& ioContext, const WorkerHandle& worker, std::string_view alias,
-        HttpClientConfigStorage config);
+    void add(
+        asio::io_context& ioContext, const WorkerHandle& worker, HttpClientConfigStorage config);
     std::pmr::memory_resource* resource_;
-    std::pmr::vector<Entry> pools_;
+    std::pmr::vector<PoolOwner> pools_;
     NamedCapabilityIndex aliasIndex_;
     bool closing_{false};
 };

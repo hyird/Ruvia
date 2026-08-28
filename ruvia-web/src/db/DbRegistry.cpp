@@ -99,31 +99,31 @@ void scanPool(detail::DbPoolRef pool, std::chrono::steady_clock::time_point now)
 detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource,
     const DbConfig& defaultConfig, const WorkerHandle* worker)
     : resource_(detail::pmrResourceOrDefault(resource)),
-      clients_(resource_),
+      pools_(resource_),
       aliasIndex_(resource_) {
-    clients_.reserve(1);
-    add(ioContext, worker, kDefaultCapabilityAlias, DbConfigStorage(defaultConfig, resource_));
-    aliasIndex_.build(clients_);
+    aliasIndex_.build({kDefaultCapabilityAlias});
+    pools_.reserve(1);
+    add(ioContext, worker, DbConfigStorage(defaultConfig, resource_));
 }
 
 detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource,
     std::span<const detail::DbDefinition> databases, const WorkerHandle* worker)
     : resource_(detail::pmrResourceOrDefault(resource)),
-      clients_(resource_),
+      pools_(resource_),
       aliasIndex_(resource_) {
     validateCapabilityAliases(
         databases, "database alias must not be empty", "duplicate database alias");
-    clients_.reserve(databases.size());
+    aliasIndex_.build(databases);
+    pools_.reserve(databases.size());
     for (const auto& definition : databases) {
-        add(ioContext, worker, definition.alias, DbConfigStorage(definition.config, resource_));
+        add(ioContext, worker, DbConfigStorage(definition.config, resource_));
     }
-    aliasIndex_.build(clients_);
 }
 
 detail::DbRegistry::~DbRegistry() = default;
 
-void detail::DbRegistry::add(asio::io_context& ioContext, const WorkerHandle* worker,
-    std::string_view alias, DbConfigStorage config) {
+void detail::DbRegistry::add(
+    asio::io_context& ioContext, const WorkerHandle* worker, DbConfigStorage config) {
     PoolOwner owner;
     switch (config.driver) {
         case DbDriver::kUnspecified:
@@ -146,53 +146,53 @@ void detail::DbRegistry::add(asio::io_context& ioContext, const WorkerHandle* wo
 #endif
     }
 
-    clients_.push_back(Entry{std::pmr::string(alias, resource_), std::move(owner)});
+    pools_.push_back(std::move(owner));
 }
 
 Task<void> detail::DbRegistry::connect() {
-    for (auto& entry : clients_) {
-        co_await connectPool(poolRef(entry.client));
+    for (auto& pool : pools_) {
+        co_await connectPool(poolRef(pool));
     }
     co_return;
 }
 
 void detail::DbRegistry::closeNow() noexcept {
-    for (auto& entry : clients_) {
-        closePool(poolRef(entry.client));
+    for (auto& pool : pools_) {
+        closePool(poolRef(pool));
     }
 }
 
 bool detail::DbRegistry::empty() const noexcept {
-    return clients_.empty();
+    return pools_.empty();
 }
 
 void detail::DbRegistry::scanDeadlines() noexcept {
     const auto now = std::chrono::steady_clock::now();
-    for (auto& entry : clients_) {
-        scanPool(poolRef(entry.client), now);
+    for (auto& pool : pools_) {
+        scanPool(poolRef(pool), now);
     }
 }
 
 bool detail::DbRegistry::needsDeadlineScan() const noexcept {
     return std::ranges::any_of(
-        clients_, [](const Entry& entry) { return poolNeedsDeadlineScan(poolRef(entry.client)); });
+        pools_, [](const PoolOwner& pool) { return poolNeedsDeadlineScan(poolRef(pool)); });
 }
 
 DbHandle detail::DbRegistry::get(
     std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
-    const auto defaultClientIndex = aliasIndex_.defaultIndex();
-    if (!defaultClientIndex.has_value()) {
+    const auto defaultPoolIndex = aliasIndex_.defaultIndex();
+    if (!defaultPoolIndex.has_value()) {
         throw DbError(
             DbError::Code::kNotConfigured, std::nullopt, "default database is not configured");
     }
-    return DbHandle(poolRef(clients_[*defaultClientIndex].client), resource, operationScope);
+    return DbHandle(poolRef(pools_[*defaultPoolIndex]), resource, operationScope);
 }
 
 DbHandle detail::DbRegistry::get(std::string_view alias, std::pmr::memory_resource* resource,
     ScopedOperationScope& operationScope) const {
     const auto match = aliasIndex_.find(alias);
     if (match.has_value()) {
-        return DbHandle(poolRef(clients_[*match].client), resource, operationScope);
+        return DbHandle(poolRef(pools_[*match]), resource, operationScope);
     }
     throw DbError(DbError::Code::kNotConfigured, std::nullopt, "database is not configured");
 }

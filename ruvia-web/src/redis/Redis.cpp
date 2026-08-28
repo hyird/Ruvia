@@ -15,9 +15,10 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
       pools_(resource_),
       aliasIndex_(resource_) {
     validateCapabilityAliases(redis, "redis alias must not be empty", "duplicate redis alias");
+    aliasIndex_.build(redis);
     pools_.reserve(redis.size());
     for (const auto& definition : redis) {
-        pools_.emplace_back(definition.alias, definition.config, resource_);
+        pools_.emplace_back(definition.config, resource_);
         auto& entry = pools_.back();
         const auto generalSize = entry.config.poolSizePerWorker;
         const auto blockingSize = entry.config.blockingPoolSizePerWorker;
@@ -31,7 +32,6 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
         entry.blocking = makePmrObject<RedisPool>(
             resource_, ioContext, entry.config, std::nullopt, blockingSize, resource_, worker);
     }
-    aliasIndex_.build(pools_);
 }
 
 RedisRegistry::~RedisRegistry() = default;

@@ -145,15 +145,20 @@ RUVIA_TEST(http_client_registry_rejects_alias_set_before_pool_allocation) {
     RUVIA_CHECK_EQ(ownerResource.allocationCount(), std::size_t{0});
 }
 
-RUVIA_TEST(named_capability_index_preserves_entry_order_and_finds_exact_names) {
-    const std::vector<Entry> entries{{"zeta"}, {"default"}, {"alpha"}, {"alpha-long"}};
+RUVIA_TEST(named_capability_index_owns_aliases_and_preserves_registration_indices) {
+    std::vector<Entry> entries{{"zeta"}, {"default"}, {"alpha"}, {"alpha-long"}};
+    const auto entryCount = entries.size();
     ruvia::detail::NamedCapabilityIndex index(std::pmr::new_delete_resource());
     index.build(entries);
+    for (auto& entry : entries) {
+        entry.alias.assign(entry.alias.size(), 'x');
+    }
+    entries.clear();
 
-    RUVIA_CHECK_EQ(index.find("zeta").value_or(entries.size()), std::size_t{0});
-    RUVIA_CHECK_EQ(index.defaultIndex().value_or(entries.size()), std::size_t{1});
-    RUVIA_CHECK_EQ(index.find("alpha").value_or(entries.size()), std::size_t{2});
-    RUVIA_CHECK_EQ(index.find("alpha-long").value_or(entries.size()), std::size_t{3});
+    RUVIA_CHECK_EQ(index.find("zeta").value_or(entryCount), std::size_t{0});
+    RUVIA_CHECK_EQ(index.defaultIndex().value_or(entryCount), std::size_t{1});
+    RUVIA_CHECK_EQ(index.find("alpha").value_or(entryCount), std::size_t{2});
+    RUVIA_CHECK_EQ(index.find("alpha-long").value_or(entryCount), std::size_t{3});
     RUVIA_CHECK(!index.find("alp").has_value());
     RUVIA_CHECK(!index.find("missing").has_value());
 }

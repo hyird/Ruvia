@@ -219,12 +219,9 @@ private:
     using RedisPoolDeleter = PmrObjectDeleter<RedisPool>;
 
     struct Entry final {
-        Entry(std::string_view alias, const RedisConfigStorage& config,
-            std::pmr::memory_resource* resource)
-            : alias(alias, resource),
-              config(config, resource) {}
+        Entry(const RedisConfigStorage& config, std::pmr::memory_resource* resource)
+            : config(config, resource) {}
 
-        std::pmr::string alias;
         // Declared before the pools so their borrowed config reference remains
         // valid through pool destruction. The registry reserves the complete
         // entry set before construction, keeping this address stable at runtime.

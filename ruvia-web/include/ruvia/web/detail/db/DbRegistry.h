@@ -375,16 +375,10 @@ public:
     using PoolOwner = std::variant<std::monostate, PostgreSqlPoolOwner>;
 #endif
 
-    struct Entry {
-        std::pmr::string alias;
-        PoolOwner client;
-    };
-
 private:
-    void add(asio::io_context& ioContext, const WorkerHandle* worker, std::string_view alias,
-        DbConfigStorage config);
+    void add(asio::io_context& ioContext, const WorkerHandle* worker, DbConfigStorage config);
     std::pmr::memory_resource* resource_;
-    std::pmr::vector<Entry> clients_;
+    std::pmr::vector<PoolOwner> pools_;
     NamedCapabilityIndex aliasIndex_;
 };
 
