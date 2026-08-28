@@ -6,11 +6,15 @@
 #include <span>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
-#include "ruvia/web/detail/integration/WorkerDataState.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
+#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 #include "ruvia/web/detail/ratelimit/RateLimiter.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 
 namespace asio {
 class io_context;
@@ -23,12 +27,8 @@ class Env;
 
 namespace ruvia::detail {
 
-class ConnectionScanner;
 class ContextServices;
 class TrustedProxySet;
-struct DbDefinition;
-struct HttpClientDefinition;
-struct RedisDefinition;
 
 struct WorkerCapabilityDefinitions final {
     std::span<const DbDefinition> databases{};
@@ -40,7 +40,7 @@ struct WorkerCapabilityDefinitions final {
 struct WorkerCapabilityOptions final {
     std::optional<RateLimitRule> defaultRateLimit{};
     RouteRateLimitPresence routeRateLimits{RouteRateLimitPresence::kAbsent};
-    std::size_t rateLimitCapacity{0};
+    std::size_t rateLimitCapacity{kDefaultRateLimitCapacityPerWorker};
     std::size_t maxDecodedBodyBytes{kDefaultMaxBufferedBodyBytes};
     BlockingPool* blockingPool{nullptr};
     const Env* env{nullptr};
@@ -67,15 +67,16 @@ public:
     void shutdownWorkerState() noexcept;
 
     [[nodiscard]] ContextServices contextServices() noexcept;
-    [[nodiscard]] DbRegistry& databases() noexcept;
-    [[nodiscard]] RedisRegistry& redis() noexcept;
-    [[nodiscard]] HttpClientRegistry& httpClients() noexcept;
+    [[nodiscard]] WorkerClientRegistryView clientRegistries() noexcept;
     [[nodiscard]] const WorkerStateRegistry& workerStates() const noexcept;
     [[nodiscard]] RateLimiter& rateLimiter() noexcept;
     [[nodiscard]] BlockingPool* blockingPool() const noexcept;
 
 private:
-    WorkerDataState data_;
+    DbRegistry databases_;
+    RedisRegistry redis_;
+    ConnectionScanner::WorkerMaintenanceRegistration databaseDeadlineMaintenance_;
+    ConnectionScanner::WorkerMaintenanceRegistration redisDeadlineMaintenance_;
     HttpClientRegistry httpClients_;
     WorkerStateRegistry workerStates_;
     RateLimiter rateLimiter_;

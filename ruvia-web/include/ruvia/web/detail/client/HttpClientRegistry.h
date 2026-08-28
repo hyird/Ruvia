@@ -18,6 +18,7 @@
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
+#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
@@ -25,7 +26,7 @@
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
-#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
+#include "ruvia/web/detail/integration/NamedCapability.h"
 
 namespace ruvia::detail {
 
@@ -291,19 +292,13 @@ public:
         ScopedOperationScope& scope) const;
 
 private:
-    struct Entry final {
-        std::pmr::string alias;
-        std::unique_ptr<HttpClientPool, PmrObjectDeleter<HttpClientPool>> pool;
-    };
+    using PoolOwner = std::unique_ptr<HttpClientPool, PmrObjectDeleter<HttpClientPool>>;
 
-    void add(asio::io_context& ioContext, const WorkerHandle& worker, std::string_view alias,
-        HttpClientConfigStorage config);
-    void buildAliasIndex();
-
+    void add(
+        asio::io_context& ioContext, const WorkerHandle& worker, HttpClientConfigStorage config);
     std::pmr::memory_resource* resource_;
-    std::pmr::vector<Entry> pools_;
-    std::pmr::vector<std::size_t> aliasIndex_;
-    std::optional<std::size_t> defaultPoolIndex_;
+    std::pmr::vector<PoolOwner> pools_;
+    NamedCapabilityIndex aliasIndex_;
     bool closing_{false};
 };
 

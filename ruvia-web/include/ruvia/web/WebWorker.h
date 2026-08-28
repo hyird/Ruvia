@@ -16,6 +16,7 @@
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/integration/BlockingCapability.h"
+#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 #include "ruvia/web/detail/integration/WorkerStateCapability.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 
@@ -30,9 +31,6 @@
 namespace ruvia {
 
 namespace detail {
-class DbRegistry;
-class HttpClientRegistry;
-class RedisRegistry;
 class WebWorkerDispatch;
 class WorkerStateRegistry;
 }  // namespace detail
@@ -65,9 +63,9 @@ private:
     friend class detail::WebWorkerDispatch;
 
     WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource,
-        detail::DbRegistry* databases, detail::RedisRegistry* redis,
-        detail::HttpClientRegistry* httpClients, const detail::WorkerStateRegistry* workerStates,
-        BlockingPool* blockingPool, StopToken stopToken) noexcept;
+        detail::WorkerClientRegistryView clientRegistries,
+        const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool,
+        StopToken stopToken) noexcept;
 
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
     friend class detail::BlockingCapability<WebWorkerContext>;
@@ -82,9 +80,7 @@ private:
 
     WorkerHandle worker_;
     std::pmr::memory_resource* resource_;
-    [[maybe_unused]] detail::DbRegistry* databases_;
-    [[maybe_unused]] detail::RedisRegistry* redis_;
-    detail::HttpClientRegistry* httpClients_;
+    detail::WorkerClientRegistryView clientRegistries_;
     const detail::WorkerStateRegistry* workerStates_;
     BlockingPool* blockingPool_;
     StopToken stopToken_;

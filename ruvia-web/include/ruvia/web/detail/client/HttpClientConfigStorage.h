@@ -7,6 +7,7 @@
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
+#include "ruvia/web/detail/integration/NamedCapability.h"
 
 namespace ruvia::detail {
 
@@ -119,9 +120,6 @@ private:
     return host;
 }
 
-struct HttpClientDefinition final {
-    std::pmr::string alias;
-    HttpClientConfigStorage config;
-};
+using HttpClientDefinition = NamedCapabilityDefinition<HttpClientConfigStorage>;
 
 }  // namespace ruvia::detail

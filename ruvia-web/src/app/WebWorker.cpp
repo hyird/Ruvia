@@ -3,9 +3,7 @@
 #include <asio/bind_executor.hpp>
 #include <asio/post.hpp>
 
-#include <cstdlib>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -14,21 +12,16 @@
 #include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
 
 namespace ruvia {
 
 WebWorkerContext::WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource,
-    detail::DbRegistry* databases, detail::RedisRegistry* redis,
-    detail::HttpClientRegistry* httpClients, const detail::WorkerStateRegistry* workerStates,
-    BlockingPool* blockingPool, StopToken stopToken) noexcept
+    detail::WorkerClientRegistryView clientRegistries,
+    const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool,
+    StopToken stopToken) noexcept
     : worker_(std::move(worker)),
       resource_(detail::pmrResourceOrDefault(resource)),
-      databases_(databases),
-      redis_(redis),
-      httpClients_(httpClients),
+      clientRegistries_(clientRegistries),
       workerStates_(workerStates),
       blockingPool_(blockingPool),
       stopToken_(std::move(stopToken)) {}
@@ -63,43 +56,29 @@ StopToken WebWorkerContext::stopToken() const noexcept {
 
 #ifdef RUVIA_ENABLE_DATABASE
 DbHandle WebWorkerContext::db() const {
-    return databases_->get(resource_, operationScope_)
-        .withOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+    return clientRegistries_.db(resource_, operationScope_, stopToken_);
 }
 
 DbHandle WebWorkerContext::db(std::string_view alias) const {
-    return databases_->get(alias, resource_, operationScope_)
-        .withOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+    return clientRegistries_.db(alias, resource_, operationScope_, stopToken_);
 }
 #endif
 
 HttpClientHandle WebWorkerContext::httpClient() const {
-    if (httpClients_ == nullptr) {
-        throw HttpClientError(
-            HttpClientError::Code::kNotConfigured, "http client is not configured");
-    }
-    return httpClients_->get(resource_, operationScope_)
-        .withOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+    return clientRegistries_.httpClient(resource_, operationScope_, stopToken_);
 }
 
 HttpClientHandle WebWorkerContext::httpClient(std::string_view alias) const {
-    if (httpClients_ == nullptr) {
-        throw HttpClientError(
-            HttpClientError::Code::kNotConfigured, "http client is not configured");
-    }
-    return httpClients_->get(alias, resource_, operationScope_)
-        .withOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+    return clientRegistries_.httpClient(alias, resource_, operationScope_, stopToken_);
 }
 
 #ifdef RUVIA_ENABLE_REDIS
 RedisHandle WebWorkerContext::redis() const {
-    return redis_->get(resource_, operationScope_)
-        .withOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+    return clientRegistries_.redis(resource_, operationScope_, stopToken_);
 }
 
 RedisHandle WebWorkerContext::redis(std::string_view alias) const {
-    return redis_->get(alias, resource_, operationScope_)
-        .withOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+    return clientRegistries_.redis(alias, resource_, operationScope_, stopToken_);
 }
 #endif
 
@@ -155,9 +134,7 @@ WebWorkerDispatch::WebWorkerDispatch(asio::any_io_executor executor, WorkerHandl
     : executor_(std::move(executor)),
       worker_(std::move(worker)),
       resource_(pmrResourceOrDefault(resource)),
-      databases_(&capabilities.databases()),
-      redis_(&capabilities.redis()),
-      httpClients_(&capabilities.httpClients()),
+      clientRegistries_(capabilities.clientRegistries()),
       workerStates_(&capabilities.workerStates()),
       blockingPool_(capabilities.blockingPool()),
       failed_(std::move(failed)) {}
@@ -218,9 +195,7 @@ void WebWorkerDispatch::retire() noexcept {
     // Remove every callback/pointer into server-owned state before that state is
     // destroyed; terminal queries use only atomics and the stable WorkerHandle.
     failed_ = nullptr;
-    databases_ = nullptr;
-    redis_ = nullptr;
-    httpClients_ = nullptr;
+    clientRegistries_ = {};
     resource_ = nullptr;
     executor_ = asio::any_io_executor{};
 }
@@ -267,8 +242,8 @@ void WebWorkerDispatch::start(Task task) {
 }
 
 ruvia::Task<void> WebWorkerDispatch::run(Task task) {
-    WebWorkerContext context(worker_, resource_, databases_, redis_, httpClients_, workerStates_,
-        blockingPool_, stopSource_.token());
+    WebWorkerContext context(
+        worker_, resource_, clientRegistries_, workerStates_, blockingPool_, stopSource_.token());
     co_await task(context);
 }
 
