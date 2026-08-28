@@ -3106,6 +3106,9 @@ static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientConfig&>().max
 static_assert(!HasAliasedUseHttpClient<ruvia::App>);
 static_assert(!std::is_copy_constructible_v<ruvia::HttpClientResponse>);
 static_assert(std::is_move_constructible_v<ruvia::HttpClientResponse>);
+static_assert(!std::is_move_constructible_v<ruvia::HttpClientResponseBody>);
+static_assert(!std::is_move_assignable_v<ruvia::HttpClientResponseBody>);
+static_assert(!std::is_destructible_v<ruvia::HttpClientResponseBody>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientResponse&>().headers()), std::span<const ruvia::HttpClientResponseHeader>>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientResponse&>().trailers()), std::span<const ruvia::HttpClientResponseHeader>>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientResponse&>().status()), ruvia::HttpStatusCode>);

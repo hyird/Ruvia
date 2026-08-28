@@ -21,13 +21,15 @@ class HttpClientResponseState;
 class ResponseStreamWriter;
 class WorkerHandle;
 
+// A borrow-only facade embedded in HttpClientResponse. It cannot be detached,
+// independently destroyed, or moved away from the response that owns the
+// underlying transport state.
 class HttpClientResponseBody final {
 public:
     HttpClientResponseBody(const HttpClientResponseBody&) = delete;
     HttpClientResponseBody& operator=(const HttpClientResponseBody&) = delete;
-    HttpClientResponseBody(HttpClientResponseBody&& other) noexcept;
-    HttpClientResponseBody& operator=(HttpClientResponseBody&& other) noexcept;
-    ~HttpClientResponseBody();
+    HttpClientResponseBody(HttpClientResponseBody&&) = delete;
+    HttpClientResponseBody& operator=(HttpClientResponseBody&&) = delete;
 
     // The returned view remains valid until the next body operation. A null
     // optional is the only end-of-body signal; an empty data chunk is never
@@ -52,6 +54,8 @@ private:
     friend class HttpClientResponse;
     friend class detail::HttpClientPool;
 
+    ~HttpClientResponseBody();
+
     [[nodiscard]] Task<std::optional<std::string_view>> readTask();
     [[nodiscard]] Task<std::pmr::string> readAllTask(std::size_t maxBytes);
     [[nodiscard]] Task<void> pipeToTask(ResponseStreamWriter& output);
@@ -68,6 +72,8 @@ class HttpClientResponse final {
 public:
     HttpClientResponse(const HttpClientResponse&) = delete;
     HttpClientResponse& operator=(const HttpClientResponse&) = delete;
+    // Body operations borrow the embedded facade. Moving a response while one
+    // is pending is a structured-lifetime violation and terminates.
     HttpClientResponse(HttpClientResponse&& other) noexcept;
     HttpClientResponse& operator=(HttpClientResponse&& other) noexcept;
     ~HttpClientResponse();
@@ -94,6 +100,7 @@ private:
     HttpClientResponse(std::pmr::memory_resource* resource, const WorkerHandle& worker, detail::HttpClientPool& pool);
     HttpClientResponse(std::pmr::memory_resource*, WorkerHandle&&, detail::HttpClientPool&) = delete;
     HttpClientResponse(detail::HttpClientResponseState* state, bool retain) noexcept;
+    [[nodiscard]] static detail::HttpClientResponseState* takeStateForMove(HttpClientResponse& other) noexcept;
     void release() noexcept;
 
     detail::HttpClientResponseState* state_{nullptr};

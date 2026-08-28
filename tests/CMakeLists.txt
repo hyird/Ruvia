@@ -790,6 +790,10 @@ if(RUVIA_BUILD_WEB)
         web/server/worker.cpp LIB ruvia::web TIMEOUT 30)
     ruvia_add_test(ruvia_standalone_http_client
         web/server/standalone_http_client.cpp LIB ruvia::web TIMEOUT 30)
+    add_test(NAME ruvia_standalone_http_client_pending_body_move
+        COMMAND ruvia_standalone_http_client pending-body-move)
+    set_tests_properties(ruvia_standalone_http_client_pending_body_move
+        PROPERTIES WILL_FAIL TRUE TIMEOUT 30)
     ruvia_add_test(ruvia_app_web_worker
         web/server/app_web_worker.cpp LIB ruvia::web TIMEOUT 30)
     ruvia_add_test(ruvia_app_startup_retry

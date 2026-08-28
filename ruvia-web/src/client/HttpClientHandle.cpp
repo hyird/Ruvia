@@ -44,10 +44,20 @@ HttpClientResponse::HttpClientResponse(detail::HttpClientResponseState* state, b
 }
 
 HttpClientResponse::HttpClientResponse(HttpClientResponse&& other) noexcept
-    : state_(std::exchange(other.state_, nullptr)),
+    : state_(takeStateForMove(other)),
       body_(state_),
       consumer_(other.consumer_) {
     other.body_.state_ = nullptr;
+}
+
+detail::HttpClientResponseState* HttpClientResponse::takeStateForMove(HttpClientResponse& other) noexcept {
+    if (other.body_.operationScope_.hasPendingOperations()) {
+        // Body operations are member coroutines and retain the address of the
+        // embedded body facade. Moving its response would leave a cold frame
+        // pointing at the moved-from body.
+        std::terminate();
+    }
+    return std::exchange(other.state_, nullptr);
 }
 
 HttpClientResponse& HttpClientResponse::operator=(HttpClientResponse&& other) noexcept {
@@ -97,25 +107,6 @@ std::span<const HttpClientResponseHeader> HttpClientResponse::headers() const& n
 }
 std::span<const HttpClientResponseHeader> HttpClientResponse::trailers() const& noexcept {
     return state_->trailers;
-}
-
-HttpClientResponseBody::HttpClientResponseBody(HttpClientResponseBody&& other) noexcept
-    : state_(std::exchange(other.state_, nullptr)) {
-    if (other.operationScope_.hasPendingOperations()) {
-        std::terminate();
-    }
-}
-
-HttpClientResponseBody& HttpClientResponseBody::operator=(HttpClientResponseBody&& other) noexcept {
-    if (this == &other) {
-        return *this;
-    }
-    if (operationScope_.hasPendingOperations() || other.operationScope_.hasPendingOperations()) {
-        std::terminate();
-    }
-    state_ = std::exchange(other.state_, nullptr);
-    readActive_ = false;
-    return *this;
 }
 
 HttpClientResponseBody::~HttpClientResponseBody() {
