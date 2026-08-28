@@ -29,6 +29,7 @@ public:
           trailers(resource),
           buffered(resource),
           pending(resource) {}
+    HttpClientResponseState(WorkerHandle&&, std::pmr::memory_resource*) = delete;
 
     WorkerSignal headSignal;
     WorkerSignal dataSignal;

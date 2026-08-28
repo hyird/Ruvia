@@ -129,6 +129,7 @@ public:
           termination_(termination),
           duration_(duration),
           observer_(this, &Http2SansIoSleepAwaiter::notifyTermination) {}
+    Http2SansIoSleepAwaiter(WorkerHandle&&, Http2SansIoTermination&, std::chrono::steady_clock::duration) = delete;
 
     Http2SansIoSleepAwaiter(const WorkerHandle& worker, Http2SansIoTermination& termination, std::chrono::steady_clock::duration duration, StopToken stopToken)
         : worker_(worker),
@@ -144,6 +145,7 @@ public:
               });
           })),
           observer_(this, &Http2SansIoSleepAwaiter::notifyTermination) {}
+    Http2SansIoSleepAwaiter(WorkerHandle&&, Http2SansIoTermination&, std::chrono::steady_clock::duration, StopToken) = delete;
 
     [[nodiscard]] bool await_ready() const noexcept {
         return duration_ <= std::chrono::steady_clock::duration::zero() || termination_.terminated() || stopToken_.stopRequested();

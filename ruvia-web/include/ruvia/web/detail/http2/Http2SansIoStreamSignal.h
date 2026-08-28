@@ -15,7 +15,7 @@ public:
     Http2SansIoStreamSignal(const WorkerHandle& worker, Http2SansIoTermination& termination)
         : signal_(worker),
           termination_(termination) {}
-    Http2SansIoStreamSignal(WorkerHandle&&) = delete;
+    Http2SansIoStreamSignal(WorkerHandle&&, Http2SansIoTermination&) = delete;
 
     void wake() noexcept {
         signal_.notify();

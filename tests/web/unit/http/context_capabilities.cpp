@@ -70,6 +70,15 @@ concept HasWithBodyLoader = requires(const Services& services, ruvia::detail::Re
 template <typename Services>
 concept HasWorkerRefinement = requires(const Services& services, const ruvia::WorkerHandle& worker) { services.withWorker(worker); };
 
+template <typename Services>
+concept AcceptsTemporaryEnv = requires(const Services& services, ruvia::Env&& env) { services.withEnv(std::move(env)); };
+
+template <typename Services>
+concept AcceptsTemporaryRoutes = requires(const Services& services, ruvia::detail::RouteTable&& routes) { services.withRoutes(std::move(routes)); };
+
+template <typename Services>
+concept AcceptsTemporaryWorkerStates = requires(const Services& services, ruvia::detail::WorkerStateRegistry&& states) { services.withWorkerStates(std::move(states)); };
+
 template <typename Access>
 concept MakesContextWithoutServices = requires(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) { Access::make(memory, request); };
 
@@ -86,6 +95,9 @@ static_assert(!HasResponseStreamAccessor<ruvia::detail::ContextServices>);
 static_assert(!HasWithBodyReader<ruvia::detail::ContextServices>);
 static_assert(!HasWithBodyLoader<ruvia::detail::ContextServices>);
 static_assert(!HasWorkerRefinement<ruvia::detail::ContextServices>);
+static_assert(!AcceptsTemporaryEnv<ruvia::detail::ContextServices>);
+static_assert(!AcceptsTemporaryRoutes<ruvia::detail::ContextServices>);
+static_assert(!AcceptsTemporaryWorkerStates<ruvia::detail::ContextServices>);
 static_assert(!std::default_initializable<ruvia::detail::ContextServices>);
 static_assert(!MakesContextWithoutServices<ruvia::detail::ContextAccess>);
 static_assert(!ExposesRvalueRequestBodyAlternative<ruvia::detail::ContextRequestBodySource>);

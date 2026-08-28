@@ -70,6 +70,7 @@ public:
         services.env_ = &value;
         return services;
     }
+    ContextServices withEnv(Env&&) const = delete;
 
     [[nodiscard]] constexpr std::size_t maxDecodedBodyBytes() const noexcept {
         return maxDecodedBodyBytes_;
@@ -173,6 +174,7 @@ public:
         services.routes_ = &value;
         return services;
     }
+    ContextServices withRoutes(RouteTable&&) const = delete;
 
     [[nodiscard]] BlockingPool* blockingPool() const noexcept {
         return blockingPool_;
@@ -209,6 +211,7 @@ public:
         services.workerStates_ = &value;
         return services;
     }
+    ContextServices withWorkerStates(WorkerStateRegistry&&) const = delete;
 
     // Views borrow connection-owned storage and remain valid for every Context
     // created while that connection is dispatched.

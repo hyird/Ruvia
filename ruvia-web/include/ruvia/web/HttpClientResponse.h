@@ -89,6 +89,7 @@ private:
     friend class detail::HttpClientPool;
 
     HttpClientResponse(std::pmr::memory_resource* resource, const WorkerHandle& worker, detail::HttpClientPool& pool);
+    HttpClientResponse(std::pmr::memory_resource*, WorkerHandle&&, detail::HttpClientPool&) = delete;
     HttpClientResponse(detail::HttpClientResponseState* state, bool retain) noexcept;
     void release() noexcept;
 

@@ -62,6 +62,9 @@ private:
     friend class detail::WebWorkerDispatch;
 
     WebWorkerContext(const WorkerHandle& worker, std::pmr::memory_resource* resource, detail::WorkerClientRegistryView clientRegistries, const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool, const StopToken& stopToken) noexcept;
+    WebWorkerContext(WorkerHandle&&, std::pmr::memory_resource*, detail::WorkerClientRegistryView, const detail::WorkerStateRegistry*, BlockingPool*, const StopToken&) = delete;
+    WebWorkerContext(const WorkerHandle&, std::pmr::memory_resource*, detail::WorkerClientRegistryView, const detail::WorkerStateRegistry*, BlockingPool*, StopToken&&) = delete;
+    WebWorkerContext(WorkerHandle&&, std::pmr::memory_resource*, detail::WorkerClientRegistryView, const detail::WorkerStateRegistry*, BlockingPool*, StopToken&&) = delete;
 
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
     friend class detail::BlockingCapability<WebWorkerContext>;
