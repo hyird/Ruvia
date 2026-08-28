@@ -16,7 +16,7 @@
 #include <utility>
 
 template <typename T>
-concept HasRvalueTaskScopeSpawn = requires(T&& scope) { std::move(scope).spawn(ruvia::Task<void>{}); };
+concept HasRvalueTaskScopeSpawn = requires(T&& scope) { std::move(scope).spawn(std::declval<ruvia::Task<void>>()); };
 
 template <typename T>
 concept HasRvalueTaskScopeRequestStop = requires(T&& scope) { std::move(scope).requestStop(); };

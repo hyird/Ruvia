@@ -10,6 +10,7 @@
 
 #include <asio/bind_executor.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/post.hpp>
 #include <asio/read_until.hpp>
 #include <asio/streambuf.hpp>
 #include <asio/write.hpp>
@@ -24,13 +25,17 @@ namespace {
 class OneShotOrigin final {
 public:
     explicit OneShotOrigin(std::string_view body)
-        : body_(body),
-          acceptor_(io_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+        : acceptor_(io_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+          socket_(io_),
+          response_("HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + std::string(body)),
           thread_([this] { serve(); }) {}
 
     ~OneShotOrigin() {
-        std::error_code ignored;
-        acceptor_.close(ignored);
+        asio::post(io_, [this] {
+            std::error_code ignored;
+            acceptor_.close(ignored);
+            socket_.close(ignored);
+        });
         if (thread_.joinable()) {
             thread_.join();
         }
@@ -42,27 +47,25 @@ public:
 
 private:
     void serve() noexcept {
-        try {
-            asio::ip::tcp::socket socket(io_);
-            acceptor_.accept(socket);
-            asio::streambuf request;
-            std::error_code error;
-            (void)asio::read_until(socket, request, "\r\n\r\n", error);
+        acceptor_.async_accept(socket_, [this](std::error_code error) {
             if (error) {
                 return;
             }
-            auto response = std::string("HTTP/1.1 200 OK\r\nContent-Length: ");
-            response += std::to_string(body_.size());
-            response += "\r\nConnection: close\r\n\r\n";
-            response += body_;
-            (void)asio::write(socket, asio::buffer(response), error);
-        } catch (...) {
-        }
+            asio::async_read_until(socket_, request_, "\r\n\r\n", [this](std::error_code readError, std::size_t) {
+                if (readError) {
+                    return;
+                }
+                asio::async_write(socket_, asio::buffer(response_), [](std::error_code, std::size_t) {});
+            });
+        });
+        io_.run();
     }
 
-    std::string body_;
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
+    asio::ip::tcp::socket socket_;
+    asio::streambuf request_;
+    std::string response_;
     std::thread thread_;
 };
 
