@@ -165,11 +165,6 @@ void skipWebSocketExtensionOws(std::string_view value, std::size_t& cursor) noex
 
 }  // namespace
 
-bool isValidWebSocketSubprotocolList(std::string_view protocols) noexcept {
-    WebSocketSubprotocolSet parsed;
-    return parsed.appendList(protocols) && !parsed.empty();
-}
-
 bool webSocketSubprotocolOffersValid(const HttpRequest& request) noexcept {
     return webSocketSubprotocolHeaderOffersValid(request.headers());
 }
@@ -194,15 +189,26 @@ bool webSocketProtocolOffered(const HttpRequest& request, std::string_view proto
 }
 
 std::string_view chooseWebSocketSubprotocol(
-    const HttpRequest& request, std::string_view supported) noexcept {
+    const HttpRequest& request, std::span<const std::string_view> supported) noexcept {
+    WebSocketSubprotocolSet configured;
+    for (const auto protocol : supported) {
+        if (!configured.append(protocol)) {
+            return {};
+        }
+    }
+
     WebSocketSubprotocolSet offered;
     bool present = false;
     if (!appendWebSocketSubprotocolOffers(request.headers(), offered, present) || !present ||
-        offered.empty() || !isValidWebSocketSubprotocolList(supported)) {
+        offered.empty()) {
         return {};
     }
-    return httpFindHeaderToken(
-        supported, [&offered](std::string_view token) noexcept { return offered.contains(token); });
+    for (const auto protocol : supported) {
+        if (offered.contains(protocol)) {
+            return protocol;
+        }
+    }
+    return {};
 }
 
 WebSocketServerNegotiation::WebSocketServerNegotiation(std::string_view subprotocol,

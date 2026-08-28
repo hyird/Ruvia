@@ -135,7 +135,8 @@ static_assert(ruvia::BorrowedText(nullptr).empty());
 static_assert(std::is_same_v<decltype(ruvia::SecurityHeader::name), std::string>);
 static_assert(
     std::is_same_v<decltype(ruvia::SecurityHeadersConfig::contentSecurityPolicy), std::string>);
-static_assert(std::is_same_v<decltype(ruvia::WebSocketRouteConfig::subprotocols), std::string>);
+static_assert(
+    std::is_same_v<decltype(ruvia::WebSocketRouteConfig::subprotocols), std::vector<std::string>>);
 static_assert(std::is_same_v<decltype(ruvia::RedisScanOptions::match), ruvia::BorrowedText>);
 static_assert(std::is_same_v<decltype(ruvia::CookieOptions::path), ruvia::BorrowedText>);
 static_assert(std::is_same_v<decltype(ruvia::HttpClientRequestView::method), ruvia::BorrowedText>);
@@ -1250,22 +1251,9 @@ concept HasWebSocketMessageCanonicalReadAccessors = requires(const T& message) {
 };
 
 template <typename T>
-concept HasWebSocketRouteOwnedText = requires(const T& options) {
-    { (options.subprotocols) } -> std::same_as<const std::string&>;
-};
-
-template <typename T>
 concept HasPositionalWebSocketHeartbeatFactory = requires {
     T::periodic(std::chrono::milliseconds{1});
 } || requires { T::periodic(std::chrono::milliseconds{1}, std::chrono::milliseconds{1}); };
-
-template <typename String>
-concept AcceptsTemporaryWebSocketRouteSubprotocols = requires(ruvia::WebSocketRouteConfig& options,
-    String&& value) { options.subprotocols = std::forward<String>(value); };
-
-template <typename String>
-concept AcceptsLvalueWebSocketRouteSubprotocols =
-    requires(ruvia::WebSocketRouteConfig& options, String& value) { options.subprotocols = value; };
 
 template <typename T>
 concept HasWebSocketPublicCallbackConstructor = requires(void* target, typename T::Read read,
@@ -2903,12 +2891,8 @@ static_assert(std::same_as<decltype(ruvia::WebSocketHeartbeatConfig{
                                .pingInterval = std::chrono::milliseconds{1},
                                .pongTimeout = std::chrono::milliseconds{2}}),
     ruvia::WebSocketHeartbeatConfig>);
-static_assert(HasWebSocketRouteOwnedText<ruvia::WebSocketRouteConfig>);
-static_assert(AcceptsTemporaryWebSocketRouteSubprotocols<std::string>);
-static_assert(AcceptsTemporaryWebSocketRouteSubprotocols<const std::string>);
-static_assert(AcceptsTemporaryWebSocketRouteSubprotocols<std::pmr::string>);
-static_assert(AcceptsLvalueWebSocketRouteSubprotocols<std::string>);
-static_assert(std::same_as<decltype(ruvia::WebSocketRouteConfig{}.subprotocols), std::string>);
+static_assert(
+    std::same_as<decltype(ruvia::WebSocketRouteConfig{}.subprotocols), std::vector<std::string>>);
 static_assert(!HasContextGetIfAlias<ruvia::Context>);
 static_assert(!HasArbitraryContextValueSet<ruvia::Context>);
 static_assert(!HasArbitraryContextValueGet<ruvia::Context>);

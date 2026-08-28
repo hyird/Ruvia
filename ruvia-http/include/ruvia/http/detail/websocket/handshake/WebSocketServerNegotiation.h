@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory_resource>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,7 +12,8 @@
 namespace ruvia::detail {
 
 struct WebSocketServerNegotiationOptions final {
-    std::string_view supportedSubprotocols{};
+    // Server preference order. Every entry must be a nonempty, unique HTTP token.
+    std::span<const std::string_view> supportedSubprotocols{};
     std::pmr::memory_resource* resource{nullptr};
 };
 

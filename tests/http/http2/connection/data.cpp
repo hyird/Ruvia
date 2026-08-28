@@ -1,5 +1,7 @@
 #include "http2_connection_fixture.h"
 
+#include <array>
+
 // Http2Connection: inbound and outbound DATA.
 
 // A DATA frame after the head yields a kMessageBodyChunk carrying the bytes, then
@@ -356,15 +358,16 @@ RUVIA_TEST(http2_connection_websocket_tunnel_handshake_and_data) {
         "Host: example.test\r\n"
         "Sec-WebSocket-Protocol: chat\r\n"
         "\r\n");
+    constexpr std::array<std::string_view, 1> supportedProtocols{"chat"};
     auto negotiation = ruvia::detail::makeWebSocketServerNegotiation(
-        negotiationRequest.request, {.supportedSubprotocols = "chat"});
+        negotiationRequest.request, {.supportedSubprotocols = supportedProtocols});
     const auto handshakeResult = conn.submitWebSocketHandshake(1, std::move(negotiation));
     RUVIA_CHECK(handshakeResult.submitted() != nullptr);
     RUVIA_CHECK(handshakeResult.failure() == nullptr);
     RUVIA_CHECK(handshakeResult.submitted()->subprotocol() == "chat");
 
     auto duplicateNegotiation = ruvia::detail::makeWebSocketServerNegotiation(
-        negotiationRequest.request, {.supportedSubprotocols = "chat"});
+        negotiationRequest.request, {.supportedSubprotocols = supportedProtocols});
     const auto duplicateHandshakeResult =
         conn.submitWebSocketHandshake(1, std::move(duplicateNegotiation));
     RUVIA_CHECK(duplicateHandshakeResult.submitted() == nullptr);
