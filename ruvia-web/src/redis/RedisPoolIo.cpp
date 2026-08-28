@@ -1,21 +1,21 @@
 #include "ruvia/web/redis/Redis.h"
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
-#include "ruvia/web/detail/redis/RedisProtocol.h"
-#include "ruvia/web/detail/redis/RedisUtils.h"
-#include "ruvia/core/detail/io/TcpSocketOptions.h"
+#include <array>
+#include <charconv>
+#include <memory>
+#include <system_error>
+#include <utility>
 
 #include <asio/connect.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/write.hpp>
 #include <hiredis/hiredis.h>
 
-#include <array>
-#include <charconv>
-#include <memory>
-#include <system_error>
-#include <utility>
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/io/TcpSocketOptions.h"
+#include "ruvia/web/detail/redis/RedisProtocol.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "ruvia/web/detail/redis/RedisUtils.h"
 
 namespace ruvia::detail {
 
@@ -31,13 +31,7 @@ void RedisPool::close(Connection& connection) noexcept {
 }
 
 void RedisPool::configureSocket(Connection& connection) noexcept {
-    std::error_code ignored;
-    if (tcpNoDelayEnabled(config_.tcpNoDelay)) {
-        connection.socket.set_option(asio::ip::tcp::no_delay(true), ignored);
-    }
-    if (tcpKeepAliveEnabled(config_.tcpKeepAlive)) {
-        connection.socket.set_option(asio::socket_base::keep_alive(true), ignored);
-    }
+    configureTcpSocketOptions(connection.socket, config_.tcpNoDelay, config_.tcpKeepAlive);
 }
 
 void RedisPool::ensureReader(Connection& connection) {
@@ -235,7 +229,7 @@ Task<void> RedisPool::authenticate(Connection& connection, const OperationTimeou
         connection.writeBuffer.clear();
         connection.writeBuffer.reserve(respCommandSerializedSize(args));
         appendRespCommand(connection.writeBuffer, args);
-        const auto deadline = connectTimeout.constrainedBy(config_.commandTimeout);
+        const auto deadline = connectTimeout.constrainedBy(commandTimeout_);
         const auto writeEc = co_await asyncSocketWrite(connection, deadline);
         if (writeEc) {
             if (writeEc == asio::error::timed_out) {

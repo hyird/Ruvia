@@ -7,6 +7,7 @@
 #include <memory_resource>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 namespace ruvia::detail {
 
@@ -44,7 +45,7 @@ struct StreamingAccess final {
     // Context is incomplete here, and this header is deliberately narrow.
     static void bindContext(ResponseStreamWriter& writer, Context& context, StopToken stopToken,
         ResponseStreamWriter::StreamingHeadThunk streamingHead) {
-        writer.bindContext(context, stopToken, streamingHead);
+        writer.bindContext(context, std::move(stopToken), streamingHead);
     }
 
     static void releaseContext(ResponseStreamWriter& writer) noexcept {

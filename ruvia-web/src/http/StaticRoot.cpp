@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <memory_resource>
+#include <new>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
@@ -45,9 +46,22 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
     return relativeGeneric.starts_with('.') || relativeGeneric.find("/.") != std::string_view::npos;
 }
 
-[[nodiscard]] detail::StaticRootState* makeStaticRootState() {
+[[nodiscard]] detail::StaticRootState* makeStaticRootState(detail::StaticRootConfigStorage config) {
     auto* const resource = detail::processResource();
-    return detail::constructPmrObject<detail::StaticRootState>(resource, resource);
+    if (resource == nullptr) {
+        std::terminate();
+    }
+    return detail::constructPmrObject<detail::StaticRootState>(
+        resource, resource, std::move(config));
+}
+
+[[nodiscard]] std::filesystem::path canonicalStaticRootPath(const std::filesystem::path& root) {
+    std::error_code ec;
+    auto canonicalRoot = std::filesystem::weakly_canonical(root, ec);
+    if (ec || !std::filesystem::is_directory(canonicalRoot, ec)) {
+        throw std::invalid_argument("static file root not found");
+    }
+    return canonicalRoot;
 }
 
 [[nodiscard]] const detail::StaticRootEntry* findStaticRootEntry(
@@ -312,12 +326,17 @@ void hashValue(std::uint64_t& hash, const T& value) noexcept {
 
 }  // namespace
 
+detail::StaticRootConfigStorage detail::StaticRootAccess::copyConfig(
+    const StaticRoot& root, std::pmr::memory_resource* resource) {
+    return StaticRootConfigStorage(root.state_->config, resource);
+}
+
 std::string_view detail::StaticRootAccess::indexFile(const StaticRoot& root) noexcept {
-    return root.state_->indexFile;
+    return root.state_->config.indexFile;
 }
 
 bool detail::StaticRootAccess::hasDirectoryIndex(const StaticRoot& root) noexcept {
-    return !root.state_->indexFile.empty();
+    return !root.state_->config.indexFile.empty();
 }
 
 std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(
@@ -338,9 +357,9 @@ std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::findVariant
         return std::nullopt;
     }
     return detail::StaticRootEntryView(entry->filePath.c_str(), entry->contentType,
-        state.cacheControl, entry->etag, entry->lastModified, entry->size, entry->identity,
-        entry->modifiedToken, entry->modifiedSeconds, state.rangeRequests, state.responseValidators,
-        entry->directlyServable, &entry->memoryVariants);
+        state.config.cacheControl, entry->etag, entry->lastModified, entry->size, entry->identity,
+        entry->modifiedToken, entry->modifiedSeconds, state.config.rangeRequests,
+        state.config.responseValidators, entry->directlyServable, &entry->memoryVariants);
 }
 
 bool detail::StaticRootAccess::isIndexedDirectory(
@@ -349,45 +368,6 @@ bool detail::StaticRootAccess::isIndexedDirectory(
         return false;
     }
     return containsStaticDirectory(root.state_->directories, relativePath);
-}
-
-StaticRootOptions detail::StaticRootAccess::options(const StaticRoot& root) {
-    const auto& state = *root.state_;
-    StaticRootOptions result;
-    result.cacheControl = state.cacheControl;
-    result.indexFile = state.indexFile;
-    result.defaultContentType = state.defaultContentType;
-    result.mimeTypes.reserve(state.mimeTypes.size());
-    for (const auto& mime : state.mimeTypes) {
-        result.mimeTypes.push_back(StaticMimeType{
-            .extension = std::string(mime.extension),
-            .contentType = std::string(mime.contentType),
-        });
-    }
-    switch (state.fileTypeKind) {
-        case StaticFileTypePolicy::Kind::kDefaults:
-            result.fileTypes = {.kind = StaticFileTypePolicy::Kind::kDefaults};
-            break;
-        case StaticFileTypePolicy::Kind::kAll:
-            result.fileTypes = {.kind = StaticFileTypePolicy::Kind::kAll};
-            break;
-        case StaticFileTypePolicy::Kind::kOnly: {
-            std::vector<std::string> extensions;
-            extensions.reserve(state.fileTypeExtensions.size());
-            for (const auto& extension : state.fileTypeExtensions) {
-                extensions.emplace_back(extension);
-            }
-            result.fileTypes = {
-                .kind = StaticFileTypePolicy::Kind::kOnly,
-                .extensions = std::move(extensions),
-            };
-            break;
-        }
-    }
-    result.rangeRequests = state.rangeRequests;
-    result.responseValidators = state.responseValidators;
-    result.dotfiles = state.dotfiles;
-    return result;
 }
 
 std::uint64_t detail::StaticRootAccess::fingerprint(const StaticRoot& root) noexcept {
@@ -432,7 +412,7 @@ void detail::StaticRootAccess::installPrecompressedVariants(
     };
     const auto* previousState = previous == nullptr ? nullptr : previous->state_.get();
     const bool emitResponseValidators =
-        state.responseValidators == StaticResponseValidatorPolicy::kEmit;
+        state.config.responseValidators == StaticResponseValidatorPolicy::kEmit;
 
     for (auto& entry : state.entries) {
         if (!entry.directlyServable || entry.size < options.minBytes ||
@@ -485,17 +465,24 @@ bool detail::StaticRootAccess::sameSnapshot(
     const StaticRoot& left, const StaticRoot& right) noexcept {
     const auto& lhs = *left.state_;
     const auto& rhs = *right.state_;
-    if (lhs.root != rhs.root || lhs.indexFile != rhs.indexFile ||
-        lhs.cacheControl != rhs.cacheControl || lhs.defaultContentType != rhs.defaultContentType ||
-        lhs.fileTypeKind != rhs.fileTypeKind || lhs.rangeRequests != rhs.rangeRequests ||
-        lhs.responseValidators != rhs.responseValidators || lhs.dotfiles != rhs.dotfiles ||
-        lhs.fileTypeExtensions != rhs.fileTypeExtensions || lhs.directories != rhs.directories ||
-        lhs.mimeTypes.size() != rhs.mimeTypes.size() || lhs.entries.size() != rhs.entries.size()) {
+    const auto& lhsConfig = lhs.config;
+    const auto& rhsConfig = rhs.config;
+    if (lhs.root != rhs.root || lhsConfig.indexFile != rhsConfig.indexFile ||
+        lhsConfig.cacheControl != rhsConfig.cacheControl ||
+        lhsConfig.defaultContentType != rhsConfig.defaultContentType ||
+        lhsConfig.fileTypeKind != rhsConfig.fileTypeKind ||
+        lhsConfig.rangeRequests != rhsConfig.rangeRequests ||
+        lhsConfig.responseValidators != rhsConfig.responseValidators ||
+        lhsConfig.dotfiles != rhsConfig.dotfiles ||
+        lhsConfig.fileTypeExtensions != rhsConfig.fileTypeExtensions ||
+        lhs.directories != rhs.directories ||
+        lhsConfig.mimeTypes.size() != rhsConfig.mimeTypes.size() ||
+        lhs.entries.size() != rhs.entries.size()) {
         return false;
     }
-    for (std::size_t i = 0; i < lhs.mimeTypes.size(); ++i) {
-        if (lhs.mimeTypes[i].extension != rhs.mimeTypes[i].extension ||
-            lhs.mimeTypes[i].contentType != rhs.mimeTypes[i].contentType) {
+    for (std::size_t i = 0; i < lhsConfig.mimeTypes.size(); ++i) {
+        if (lhsConfig.mimeTypes[i].extension != rhsConfig.mimeTypes[i].extension ||
+            lhsConfig.mimeTypes[i].contentType != rhsConfig.mimeTypes[i].contentType) {
             return false;
         }
     }
@@ -507,44 +494,89 @@ bool detail::StaticRootAccess::sameSnapshot(
     return true;
 }
 
-StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions options)
-    : state_(makeStaticRootState()) {
-    detail::normalizeMimeTypes(options.mimeTypes);
-    detail::normalizeFileTypes(options.fileTypes.extensions);
-    detail::validateStaticRootOptions(options);
+struct StaticRoot::PreparedConstruction final {
+    std::filesystem::path canonicalRoot;
+    detail::StaticRootConfigStorage config;
+};
 
+StaticRoot::PreparedConstruction StaticRoot::prepareConstruction(
+    const std::filesystem::path& root, StaticRootOptions options) {
+    detail::validateStaticRootOptions(options);
+    return PreparedConstruction{
+        .canonicalRoot = canonicalStaticRootPath(root),
+        .config = detail::storeValidatedStaticRootConfig(options, detail::processResource()),
+    };
+}
+
+StaticRoot::PreparedConstruction StaticRoot::prepareConstruction(
+    const std::filesystem::path& root, const detail::StaticRootConfigStorage& config) {
+    return PreparedConstruction{
+        .canonicalRoot = canonicalStaticRootPath(root),
+        .config = detail::StaticRootConfigStorage(config, detail::processResource()),
+    };
+}
+
+StaticRoot::PreparedConstruction StaticRoot::prepareConstruction(
+    const std::filesystem::path& root, detail::StaticRootConfigStorage&& config) {
+    auto canonicalRoot = canonicalStaticRootPath(root);
+    if (config.cacheControl.get_allocator().resource() != detail::processResource()) {
+        return PreparedConstruction{
+            .canonicalRoot = std::move(canonicalRoot),
+            .config = detail::StaticRootConfigStorage(config, detail::processResource()),
+        };
+    }
+    return PreparedConstruction{
+        .canonicalRoot = std::move(canonicalRoot),
+        .config = std::move(config),
+    };
+}
+
+std::unique_ptr<StaticRoot, detail::PmrObjectDeleter<StaticRoot>>
+detail::StaticRootAccess::construct(
+    std::pmr::memory_resource* objectResource, StaticRoot::PreparedConstruction prepared) {
+    auto* const resource = pmrResourceOrDefault(objectResource);
+    auto* const storage = resource->allocate(sizeof(StaticRoot), alignof(StaticRoot));
+    try {
+        auto* const result = ::new (storage) StaticRoot(std::move(prepared));
+        return std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>>(
+            result, PmrObjectDeleter<StaticRoot>{resource});
+    } catch (...) {
+        resource->deallocate(storage, sizeof(StaticRoot), alignof(StaticRoot));
+        throw;
+    }
+}
+
+std::unique_ptr<StaticRoot, detail::PmrObjectDeleter<StaticRoot>> detail::StaticRootAccess::make(
+    std::pmr::memory_resource* objectResource, const std::filesystem::path& root,
+    const StaticRootConfigStorage& config) {
+    return construct(objectResource, StaticRoot::prepareConstruction(root, config));
+}
+
+std::unique_ptr<StaticRoot, detail::PmrObjectDeleter<StaticRoot>> detail::StaticRootAccess::make(
+    std::pmr::memory_resource* objectResource, const std::filesystem::path& root,
+    StaticRootConfigStorage&& config) {
+    return construct(objectResource, StaticRoot::prepareConstruction(root, std::move(config)));
+}
+
+std::unique_ptr<StaticRoot, detail::PmrObjectDeleter<StaticRoot>> detail::StaticRootAccess::clone(
+    std::pmr::memory_resource* objectResource, const StaticRoot& source) {
+    return make(objectResource, source.path(), source.state_->config);
+}
+
+StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions options)
+    : StaticRoot(prepareConstruction(root, std::move(options))) {}
+
+StaticRoot::StaticRoot(PreparedConstruction prepared)
+    : state_(makeStaticRootState(std::move(prepared.config))) {
+    const auto& canonicalRoot = prepared.canonicalRoot;
     std::error_code ec;
     auto& state = *state_;
-    const auto canonicalRoot = std::filesystem::weakly_canonical(root, ec);
-    if (ec || !std::filesystem::is_directory(canonicalRoot, ec)) {
-        throw std::invalid_argument("static file root not found");
-    }
     detail::assignNativePath(state.root, canonicalRoot);
 
     auto* const upstream = detail::processResource();
-    state.cacheControl = std::move(options.cacheControl);
-    state.indexFile = std::move(options.indexFile);
-    state.defaultContentType = std::move(options.defaultContentType);
-    state.mimeTypes.reserve(options.mimeTypes.size());
-    for (auto& mime : options.mimeTypes) {
-        // Public configuration uses ordinary strings. Rebuild it in the
-        // process-owned PMR storage retained by the immutable index.
-        auto& stored = state.mimeTypes.emplace_back(upstream);
-        stored.extension = mime.extension;
-        stored.contentType = mime.contentType;
-    }
-    state.fileTypeKind = options.fileTypes.kind;
-    if (state.fileTypeKind == StaticFileTypePolicy::Kind::kOnly) {
-        state.fileTypeExtensions.reserve(options.fileTypes.extensions.size());
-        for (const auto& extension : options.fileTypes.extensions) {
-            state.fileTypeExtensions.emplace_back(extension);
-        }
-    }
-    state.rangeRequests = options.rangeRequests;
-    state.responseValidators = options.responseValidators;
-    state.dotfiles = options.dotfiles;
-    const auto serveDotfiles = detail::staticRootServesDotfiles(options.dotfiles);
-    if (!state.indexFile.empty()) {
+    const auto& config = state.config;
+    const auto serveDotfiles = detail::staticRootServesDotfiles(config.dotfiles);
+    if (!config.indexFile.empty()) {
         state.directories.push_back({});
     }
 
@@ -583,7 +615,7 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
             continue;
         }
         if (std::filesystem::is_directory(status)) {
-            if (!state.indexFile.empty()) {
+            if (!config.indexFile.empty()) {
                 state.directories.push_back(std::move(relative));
             }
             continue;
@@ -592,11 +624,11 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
             continue;
         }
         const auto extension = detail::lowerStaticFileExtension(filePath, upstream);
-        const bool directlyServable = detail::fileTypeAllowed(extension, options);
+        const bool directlyServable = detail::fileTypeAllowed(extension, config);
         bool usableAsSidecar = false;
         if (!directlyServable && isPrecompressedSidecarExtension(extension)) {
             usableAsSidecar = detail::fileTypeAllowed(
-                detail::lowerStaticFileExtension(filePath.stem(), upstream), options);
+                detail::lowerStaticFileExtension(filePath.stem(), upstream), config);
         }
         if (!directlyServable && !usableAsSidecar) {
             continue;
@@ -608,11 +640,11 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
                 "snapshot static file root entry", filePath, ec);
         }
         const auto emitResponseValidators =
-            state.responseValidators == StaticResponseValidatorPolicy::kEmit;
+            config.responseValidators == StaticResponseValidatorPolicy::kEmit;
         detail::StaticRootEntry entry(upstream);
         entry.relativePath = std::move(relative);
         detail::assignNativePath(entry.filePath, filePath);
-        entry.contentType = detail::contentTypeFor(filePath, extension, options, upstream);
+        entry.contentType = detail::contentTypeFor(filePath, extension, config, upstream);
         entry.size = snapshot.size;
         entry.identity = snapshot.identity;
         entry.modifiedToken = snapshot.modifiedToken;

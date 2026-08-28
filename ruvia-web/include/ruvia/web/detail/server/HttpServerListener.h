@@ -12,13 +12,17 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/ServerConfig.h"
 
 namespace ruvia::detail {
 
 struct HttpServerListenerDefinition final {
     struct TlsIdentity final {
-        explicit TlsIdentity(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+        explicit TlsIdentity(std::pmr::memory_resource* resource = nullptr)
+            : TlsIdentity(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource)) {}
+
+        TlsIdentity(ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
             : certificateChainFile(resource),
               privateKeyFile(resource),
               privateKeyPassword(resource) {}
@@ -29,10 +33,14 @@ struct HttpServerListenerDefinition final {
     };
 
     struct TlsClientCertificatePolicy final {
-        explicit TlsClientCertificatePolicy(
-            std::pmr::memory_resource* resource = std::pmr::get_default_resource(),
+        explicit TlsClientCertificatePolicy(std::pmr::memory_resource* resource = nullptr,
             TlsClientCertificateRequirement configuredRequirement =
                 TlsClientCertificateRequirement::kOptional)
+            : TlsClientCertificatePolicy(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource),
+                  configuredRequirement) {}
+
+        TlsClientCertificatePolicy(ResolvedPmrResourceTag, std::pmr::memory_resource* resource,
+            TlsClientCertificateRequirement configuredRequirement)
             : verifyFile(resource),
               requirement(configuredRequirement) {}
 
@@ -42,17 +50,22 @@ struct HttpServerListenerDefinition final {
 
     struct Tls final {
         struct SniIdentity final {
-            explicit SniIdentity(
-                std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+            explicit SniIdentity(std::pmr::memory_resource* resource = nullptr)
+                : SniIdentity(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource)) {}
+
+            SniIdentity(ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
                 : host(resource),
-                  identity(resource) {}
+                  identity(ResolvedPmrResourceTag{}, resource) {}
 
             std::pmr::string host;
             TlsIdentity identity;
         };
 
-        explicit Tls(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-            : identity(resource),
+        explicit Tls(std::pmr::memory_resource* resource = nullptr)
+            : Tls(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource)) {}
+
+        Tls(ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+            : identity(ResolvedPmrResourceTag{}, resource),
               sniIdentities(resource) {}
 
         TlsIdentity identity;
@@ -107,6 +120,10 @@ public:
     std::optional<asio::ssl::context> tlsContext;
     SniContextStore sniContexts;
     SniContextLookup sniLookup;
+
+private:
+    HttpServerListener(ResolvedPmrResourceTag, asio::io_context& ioContext,
+        const HttpServerListenerDefinition& definition, std::pmr::memory_resource* resource);
 };
 
 }  // namespace ruvia::detail

@@ -18,22 +18,11 @@ EventLoop HttpClientState::requireLoop(EventLoop loop) {
     return loop;
 }
 
-std::pmr::vector<HttpClientDefinition> HttpClientState::makeDefinitions(
-    const HttpClientConfig& config, std::pmr::memory_resource* resource) {
-    std::pmr::vector<HttpClientDefinition> definitions(resource);
-    definitions.push_back(HttpClientDefinition{
-        std::pmr::string("default", resource),
-        HttpClientConfigStorage(config, resource),
-    });
-    return definitions;
-}
-
-HttpClientState::HttpClientState(EventLoop loop, HttpClientConfig config)
+HttpClientState::HttpClientState(EventLoop loop, const HttpClientConfig& config)
     : loop_(requireLoop(std::move(loop))),
       worker_(loop_.handle()),
       memory_(),
-      definitions_(makeDefinitions(config, memory_.resource())),
-      clients_(loop_.ioContext(), worker_, memory_.resource(), definitions_) {}
+      clients_(loop_.ioContext(), worker_, memory_.resource(), config) {}
 
 HttpClientState::~HttpClientState() {
     if (phase_.load(std::memory_order_acquire) != Phase::kClosed ||
@@ -135,10 +124,9 @@ void HttpClientState::startCloseOnWorker() noexcept {
     closeTaskStarted_ = true;
     try {
         auto state = shared_from_this();
-        asyncStartTask(closeOnWorker(), asio::bind_executor(loop_.executor(),
-                                            [state](TaskCompletionResult<void> result) mutable {
-                                                state->finishClose(std::move(result));
-                                            }));
+        asyncStartTask(closeOnWorker(),
+            asio::bind_executor(loop_.executor(),
+                [state](const TaskCompletionResult<void>& result) { state->finishClose(result); }));
     } catch (...) {
         phase_.store(Phase::kClosed, std::memory_order_release);
         std::terminate();
@@ -149,7 +137,7 @@ Task<void> HttpClientState::closeOnWorker() {
     co_await clients_.join();
 }
 
-void HttpClientState::finishClose(TaskCompletionResult<void> result) {
+void HttpClientState::finishClose(const TaskCompletionResult<void>& result) {
     phase_.store(Phase::kClosed, std::memory_order_release);
     if (const auto* failed = result.failure()) {
         std::rethrow_exception(failed->exception());
@@ -160,8 +148,8 @@ void HttpClientState::finishClose(TaskCompletionResult<void> result) {
 
 namespace ruvia {
 
-HttpClient::HttpClient(EventLoop loop, HttpClientConfig config)
-    : state_(std::make_shared<detail::HttpClientState>(std::move(loop), std::move(config))) {
+HttpClient::HttpClient(EventLoop loop, const HttpClientConfig& config)
+    : state_(std::make_shared<detail::HttpClientState>(std::move(loop), config)) {
     state_->bindStop();
 }
 

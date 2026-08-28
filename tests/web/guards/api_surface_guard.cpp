@@ -154,6 +154,8 @@ static_assert(std::is_aggregate_v<ruvia::SessionConfig>);
 static_assert(std::same_as<decltype(ruvia::SessionConfig{}.redisAlias), std::string>);
 static_assert(std::default_initializable<ruvia::SessionMiddleware>);
 static_assert(std::constructible_from<ruvia::SessionMiddleware, ruvia::SessionConfig>);
+static_assert(!std::copyable<ruvia::SessionMiddleware>);
+static_assert(!std::movable<ruvia::SessionMiddleware>);
 static_assert(!std::constructible_from<ruvia::SessionMiddleware, ruvia::BorrowedText>);
 static_assert(!std::constructible_from<ruvia::SessionMiddleware, const char*>);
 static_assert(std::same_as<decltype(std::declval<ruvia::Context&>().session()), ruvia::Session>);
@@ -3542,6 +3544,8 @@ static_assert(std::is_aggregate_v<ruvia::CsrfProtectionConfig>);
 static_assert(std::same_as<decltype(ruvia::CsrfProtectionConfig{}.cookieName), std::string>);
 static_assert(std::same_as<decltype(ruvia::CsrfProtectionConfig{}.headerName), std::string>);
 static_assert(std::is_constructible_v<ruvia::CsrfProtection, ruvia::CsrfProtectionConfig>);
+static_assert(!std::copyable<ruvia::CsrfProtection>);
+static_assert(!std::movable<ruvia::CsrfProtection>);
 static_assert(!HasCsrfProtectionPositionalConstructor<ruvia::CsrfProtection>);
 static_assert(AcceptsLvalueCsrfProtectionOptionText<std::string>);
 static_assert(AcceptsAnyRvalueCsrfProtectionOptionText<std::string>);
@@ -3747,9 +3751,9 @@ static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientHandle&>
 static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientConfig&>().writeTimeout),
     std::optional<std::chrono::milliseconds>>);
 static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientConfig&>().tlsPeerVerification),
-    ruvia::HttpClientTlsPeerVerificationPolicy>);
-static_assert(ruvia::HttpClientConfig{}.tlsPeerVerification ==
-              ruvia::HttpClientTlsPeerVerificationPolicy::kVerify);
+    ruvia::TlsPeerVerificationPolicy>);
+static_assert(
+    ruvia::HttpClientConfig{}.tlsPeerVerification == ruvia::TlsPeerVerificationPolicy::kVerify);
 static_assert(!HasHttpClientVerifyCertificateBoolean<ruvia::HttpClientConfig>);
 static_assert(HasHttpClientTcpSocketPolicies<ruvia::HttpClientConfig>);
 static_assert(ruvia::HttpClientConfig{}.tcpNoDelay == ruvia::TcpNoDelayPolicy::kEnable);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -58,12 +59,35 @@ struct SessionConfig final {
 
 class SessionMiddleware final : public Middleware<SessionMiddleware> {
 public:
-    explicit SessionMiddleware(SessionConfig config = {});
+    SessionMiddleware();
+    explicit SessionMiddleware(const SessionConfig& config);
+
+    SessionMiddleware(const SessionMiddleware&) = delete;
+    SessionMiddleware& operator=(const SessionMiddleware&) = delete;
+    SessionMiddleware(SessionMiddleware&&) = delete;
+    SessionMiddleware& operator=(SessionMiddleware&&) = delete;
 
     Task<void> handle(Context& c, Next& next);
 
 private:
-    SessionConfig config_;
+    struct ConfigStorage final {
+        ConfigStorage(const SessionConfig& source, std::pmr::memory_resource* resource);
+
+        std::pmr::string redisAlias;
+        std::pmr::string cookieName;
+        std::pmr::string keyPrefix;
+        std::chrono::seconds ttl;
+
+    private:
+        struct ValidatedConfig final {
+            const SessionConfig* source;
+        };
+
+        [[nodiscard]] static ValidatedConfig validate(const SessionConfig& source);
+        ConfigStorage(ValidatedConfig validated, std::pmr::memory_resource* resource);
+    };
+
+    ConfigStorage config_;
 };
 
 }  // namespace ruvia

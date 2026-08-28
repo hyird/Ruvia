@@ -33,7 +33,9 @@ private:
         // MSVC's debug STL allocates an iterator proxy from the container's
         // resource before the string buffer. Let that bookkeeping through so
         // the injected failure lands on the Upgrade character storage itself.
-        if (alignment == alignof(char)) throw std::bad_alloc();
+        if (alignment == alignof(char)) {
+            throw std::bad_alloc();
+        }
         return std::pmr::new_delete_resource()->allocate(bytes, alignment);
     }
     void do_deallocate(void* value, std::size_t bytes, std::size_t alignment) override {

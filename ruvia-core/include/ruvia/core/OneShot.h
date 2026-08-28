@@ -178,7 +178,8 @@ struct OneShotAwaiter final : WorkerSingleWaitAwaiter<T, OneShotState<T>, OneSho
             (void)this->completeStatus(WorkerWaitStatus::kCancelled);
             return true;
         }
-        if (this->timeout() && *this->timeout() <= std::chrono::steady_clock::duration::zero()) {
+        const auto& timeout = this->timeout();
+        if (timeout.has_value() && timeout.value() <= std::chrono::steady_clock::duration::zero()) {
             (void)this->completeStatus(WorkerWaitStatus::kTimedOut);
             return true;
         }
@@ -362,6 +363,9 @@ private:
 };
 
 template <typename T>
+// The value parameter accepts both lvalue handles and rvalue handles before
+// transferring the stable dispatcher endpoint into the one-shot state.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
 [[nodiscard]] auto makeOneShot(WorkerHandle worker, OneShotOptions options = {}) {
     auto* resolved = detail::pmrResourceOrDefault(options.resource);
     std::pmr::polymorphic_allocator<detail::OneShotState<T>> allocator(resolved);

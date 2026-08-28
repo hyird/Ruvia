@@ -31,7 +31,7 @@ WebWorkerContext::WebWorkerContext(WorkerHandle worker, std::pmr::memory_resourc
       httpClients_(httpClients),
       workerStates_(workerStates),
       blockingPool_(blockingPool),
-      stopToken_(stopToken) {}
+      stopToken_(std::move(stopToken)) {}
 
 BlockingPool& WebWorkerContext::blockingPool() const {
     if (blockingPool_ == nullptr) {
@@ -74,17 +74,19 @@ DbHandle WebWorkerContext::db(std::string_view alias) const {
 #endif
 
 HttpClientHandle WebWorkerContext::httpClient() const {
-    if (httpClients_ == nullptr)
+    if (httpClients_ == nullptr) {
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "http client is not configured");
+    }
     return httpClients_->get(resource_, operationScope_)
         .withOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 
 HttpClientHandle WebWorkerContext::httpClient(std::string_view alias) const {
-    if (httpClients_ == nullptr)
+    if (httpClients_ == nullptr) {
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "http client is not configured");
+    }
     return httpClients_->get(alias, resource_, operationScope_)
         .withOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
@@ -243,7 +245,7 @@ void WebWorkerDispatch::start(Task task) {
     try {
         auto operation = run(std::move(task));
         asyncStartTask(std::move(operation),
-            asio::bind_executor(executor_, [this](TaskCompletionResult<void> result) {
+            asio::bind_executor(executor_, [this](const TaskCompletionResult<void>& result) {
                 std::exception_ptr failure;
                 if (const auto* failed = result.failure()) {
                     failedCount_.fetch_add(1, std::memory_order_relaxed);

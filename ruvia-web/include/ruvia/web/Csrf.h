@@ -1,14 +1,12 @@
 #pragma once
 
+#include <memory_resource>
+#include <string>
+
 #include "ruvia/core/Task.h"
-#include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Middleware.h"
 #include "ruvia/web/Next.h"
-
-#include <stdexcept>
-#include <string>
-#include <utility>
 
 namespace ruvia {
 
@@ -27,22 +25,33 @@ struct CsrfProtectionConfig final {
 // and "X-XSRF-TOKEN" and can be rebranded per app.
 class CsrfProtection final : public Middleware<CsrfProtection> {
 public:
-    explicit CsrfProtection(CsrfProtectionConfig config = {})
-        : cookieName_(std::move(config.cookieName)),
-          headerName_(std::move(config.headerName)) {
-        if (!isValidHttpHeaderName(cookieName_)) {
-            throw std::invalid_argument("CSRF cookie name must be a valid HTTP token");
-        }
-        if (!isValidHttpHeaderName(headerName_)) {
-            throw std::invalid_argument("CSRF header name must be a valid HTTP field name");
-        }
-    }
+    CsrfProtection();
+    explicit CsrfProtection(const CsrfProtectionConfig& config);
+
+    CsrfProtection(const CsrfProtection&) = delete;
+    CsrfProtection& operator=(const CsrfProtection&) = delete;
+    CsrfProtection(CsrfProtection&&) = delete;
+    CsrfProtection& operator=(CsrfProtection&&) = delete;
 
     Task<void> handle(Context& c, Next& next);
 
 private:
-    std::string cookieName_;
-    std::string headerName_;
+    struct ConfigStorage final {
+        ConfigStorage(const CsrfProtectionConfig& source, std::pmr::memory_resource* resource);
+
+        std::pmr::string cookieName;
+        std::pmr::string headerName;
+
+    private:
+        struct ValidatedConfig final {
+            const CsrfProtectionConfig* source;
+        };
+
+        [[nodiscard]] static ValidatedConfig validate(const CsrfProtectionConfig& source);
+        ConfigStorage(ValidatedConfig validated, std::pmr::memory_resource* resource);
+    };
+
+    ConfigStorage config_;
 };
 
 }  // namespace ruvia

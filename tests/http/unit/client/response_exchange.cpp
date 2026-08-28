@@ -564,14 +564,17 @@ RUVIA_TEST(http1_client_exchange_state_owns_every_long_lived_response_fact) {
         ruvia::HttpClientRequestView request{.method = method, .target = "/resource"};
         const auto prepared = ruvia::Http1ClientRequestWriter().prepare(
             ruvia::HttpOriginView::https({.host = "example.test"}), request, headWire);
-        if (prepared.prepared() == nullptr)
+        if (prepared.prepared() == nullptr) {
             throw std::runtime_error("HEAD request preparation failed");
+        }
         headExchange.emplace(prepared.prepared()->exchangeState());
     }
     method.assign("GET");
     ruvia::Http1ClientResponseParser headParser(std::move(*headExchange));
     auto headResult = headParser.parse("HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n");
-    if (headResult.parsed() == nullptr) throw std::runtime_error("HEAD response parsing failed");
+    if (headResult.parsed() == nullptr) {
+        throw std::runtime_error("HEAD response parsing failed");
+    }
     RUVIA_CHECK(headResult.parsed()->plan().withoutContent() != nullptr);
 
     std::optional<ruvia::Http1ClientExchangeState> upgradeExchange;
@@ -587,8 +590,9 @@ RUVIA_TEST(http1_client_exchange_state_owns_every_long_lived_response_fact) {
             .method = "GET", .target = "/socket", .headers = headers};
         const auto prepared = ruvia::Http1ClientRequestWriter().prepare(
             ruvia::HttpOriginView::https({.host = "example.test"}), request, upgradeWire);
-        if (prepared.prepared() == nullptr)
+        if (prepared.prepared() == nullptr) {
             throw std::runtime_error("Upgrade request preparation failed");
+        }
         upgradeExchange.emplace(prepared.prepared()->exchangeState());
     }
     connection.assign("close");
@@ -596,7 +600,8 @@ RUVIA_TEST(http1_client_exchange_state_owns_every_long_lived_response_fact) {
     ruvia::Http1ClientResponseParser upgradeParser(std::move(*upgradeExchange));
     auto upgradeResult = upgradeParser.parse(
         "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
-    if (upgradeResult.parsed() == nullptr)
+    if (upgradeResult.parsed() == nullptr) {
         throw std::runtime_error("Upgrade response parsing failed");
+    }
     RUVIA_CHECK(upgradeResult.parsed()->plan().protocolUpgrade() != nullptr);
 }

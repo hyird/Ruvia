@@ -1,9 +1,9 @@
 #include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbUtils.h"
 
-#include <chrono>
 #include <algorithm>
+#include <chrono>
+#include <exception>
 #include <memory>
 #include <memory_resource>
 #include <ranges>
@@ -97,50 +97,68 @@ void scanPool(detail::DbPoolRef pool, std::chrono::steady_clock::time_point now)
 }  // namespace
 
 detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource,
+    const DbConfig& defaultConfig, const WorkerHandle* worker)
+    : resource_(detail::pmrResourceOrDefault(resource)),
+      clients_(resource_),
+      aliasIndex_(resource_) {
+    clients_.reserve(1);
+    add(ioContext, worker, kDefaultDbAlias, DbConfigStorage(defaultConfig, resource_));
+    buildAliasIndex();
+}
+
+detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource,
     std::span<const detail::DbDefinition> databases, const WorkerHandle* worker)
     : resource_(detail::pmrResourceOrDefault(resource)),
       clients_(resource_),
       aliasIndex_(resource_) {
     clients_.reserve(databases.size());
     for (const auto& definition : databases) {
-        if (definition.alias.empty()) {
-            throw std::invalid_argument("database alias must not be empty");
-        }
-        if (std::ranges::any_of(clients_, [&definition](const Entry& entry) {
-                return std::string_view(entry.alias) == std::string_view(definition.alias);
-            })) {
-            throw std::invalid_argument("duplicate database alias");
-        }
-
-        auto config = detail::DbConfigStorage(definition.config, resource_);
-        validateDbConfig(config);
-        PoolOwner owner;
-        switch (definition.config.driver) {
-            case DbDriver::kUnspecified:
-                throw std::invalid_argument("database driver must be selected");
-            case DbDriver::kMariaDb:
-#ifdef RUVIA_ENABLE_MARIADB
-                owner = detail::makePmrObject<MariaDbPool>(
-                    resource_, ioContext, std::move(config), resource_, worker);
-                break;
-#else
-                throw std::invalid_argument("MariaDB support is not enabled");
-#endif
-            case DbDriver::kPostgreSql:
-#ifdef RUVIA_ENABLE_POSTGRESQL
-                owner = detail::makePmrObject<PostgreSqlPool>(
-                    resource_, ioContext, std::move(config), resource_, worker);
-                break;
-#else
-                throw std::invalid_argument("PostgreSQL support is not enabled");
-#endif
-        }
-
-        clients_.push_back(Entry{std::pmr::string(definition.alias, resource_), std::move(owner)});
-        if (std::string_view(clients_.back().alias) == kDefaultDbAlias) {
-            defaultClientIndex_ = clients_.size() - 1;
-        }
+        add(ioContext, worker, definition.alias, DbConfigStorage(definition.config, resource_));
     }
+    buildAliasIndex();
+}
+
+detail::DbRegistry::~DbRegistry() = default;
+
+void detail::DbRegistry::add(asio::io_context& ioContext, const WorkerHandle* worker,
+    std::string_view alias, DbConfigStorage config) {
+    if (alias.empty()) {
+        throw std::invalid_argument("database alias must not be empty");
+    }
+    if (std::ranges::any_of(
+            clients_, [alias](const Entry& entry) { return entry.alias == alias; })) {
+        throw std::invalid_argument("duplicate database alias");
+    }
+
+    PoolOwner owner;
+    switch (config.driver) {
+        case DbDriver::kUnspecified:
+            std::terminate();
+        case DbDriver::kMariaDb:
+#ifdef RUVIA_ENABLE_MARIADB
+            owner = detail::makePmrObject<MariaDbPool>(
+                resource_, ioContext, std::move(config), resource_, worker);
+            break;
+#else
+            std::terminate();
+#endif
+        case DbDriver::kPostgreSql:
+#ifdef RUVIA_ENABLE_POSTGRESQL
+            owner = detail::makePmrObject<PostgreSqlPool>(
+                resource_, ioContext, std::move(config), resource_, worker);
+            break;
+#else
+            std::terminate();
+#endif
+    }
+
+    clients_.push_back(Entry{std::pmr::string(alias, resource_), std::move(owner)});
+    if (std::string_view(clients_.back().alias) == kDefaultDbAlias) {
+        defaultClientIndex_ = clients_.size() - 1;
+    }
+}
+
+void detail::DbRegistry::buildAliasIndex() {
     aliasIndex_.resize(clients_.size());
     for (std::size_t index = 0; index < aliasIndex_.size(); ++index) {
         aliasIndex_[index] = index;
@@ -148,8 +166,6 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_res
     std::ranges::sort(aliasIndex_, {},
         [this](std::size_t index) -> std::string_view { return clients_[index].alias; });
 }
-
-detail::DbRegistry::~DbRegistry() = default;
 
 Task<void> detail::DbRegistry::connect() {
     for (auto& entry : clients_) {

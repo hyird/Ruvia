@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 
 #include <asio/ip/address.hpp>
 #include <asio/ip/tcp.hpp>
@@ -37,7 +38,20 @@ std::uint16_t availablePort() {
 
 int main() {
     auto& app = ruvia::app();
-    app.listen({.address = "not-an-ip-address", .http = availablePort()})
+    const auto failingPort = availablePort();
+    const auto missingCertificate = std::filesystem::temp_directory_path() /
+                                    ("ruvia_missing_certificate_" + std::to_string(failingPort));
+    const auto missingPrivateKey = std::filesystem::temp_directory_path() /
+                                   ("ruvia_missing_private_key_" + std::to_string(failingPort));
+    std::filesystem::remove(missingCertificate);
+    std::filesystem::remove(missingPrivateKey);
+    app.listen({.address = "127.0.0.1",
+                   .https = failingPort,
+                   .tls =
+                       {
+                           .certificateChainFile = missingCertificate,
+                           .privateKeyFile = missingPrivateKey,
+                       }})
         .server({.workerCount = 1,
             .memoryPool = {.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes}});
 

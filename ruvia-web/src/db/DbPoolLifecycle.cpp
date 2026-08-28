@@ -1,5 +1,4 @@
 #include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbSlotSocket.h"
 #include "ruvia/web/detail/db/DbUtils.h"
 
@@ -43,7 +42,6 @@ detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, DbConfigStorage co
       slots_(resource_),
       scheduler_(1, resource_),
       worker_(worker == nullptr ? WorkerHandle{} : *worker) {
-    detail::validateDbConfig(config_);
     if (config_.driver != DbDriver::kMariaDb) {
         throw std::invalid_argument("MariaDB pool requires the MariaDB driver");
     }

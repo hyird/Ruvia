@@ -144,7 +144,7 @@ private:
         if (!std::holds_alternative<PoolWaiterIdle>(state_)) {
             std::terminate();
         }
-        state_.template emplace<PoolWaiterResult>(std::move(result));
+        state_.template emplace<PoolWaiterResult>(result);
     }
 
     void completeAcquired(std::size_t index) noexcept {

@@ -23,7 +23,7 @@ function(_ruvia_assert_ignores _label _pattern _probe)
     endif()
 endfunction()
 
-function(_ruvia_scan_forbidden_product_includes _label)
+function(_ruvia_scan_forbidden_product_dependencies _label)
     cmake_parse_arguments(C "" "" "ROOTS;PATTERNS" ${ARGN})
     set(_source_files)
     foreach(_source_root IN LISTS C_ROOTS)
@@ -65,6 +65,12 @@ set(_http_local_include_pattern
 # public include directory.
 set(_web_local_include_pattern
     [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(ruvia-core|ruvia-http)/]=])
+set(_web_http_pmr_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"]ruvia/http/detail/util/PmrResource\.h[>"]]=])
+set(_web_http_pmr_symbol_pattern
+    [=[httpPmrResourceOrDefault[ \t\r\n]*\(]=])
+set(_web_default_pmr_symbol_pattern
+    [=[std::pmr::get_default_resource[ \t\r\n]*\(]=])
 
 _ruvia_assert_matches(
     core_product
@@ -90,6 +96,18 @@ _ruvia_assert_matches(
     web_local
     "${_web_local_include_pattern}"
     "#include \"../ruvia-http/include/ruvia/http/HttpResponse.h\"")
+_ruvia_assert_matches(
+    web_http_pmr
+    "${_web_http_pmr_include_pattern}"
+    "#include \"ruvia/http/detail/util/PmrResource.h\"")
+_ruvia_assert_matches(
+    web_http_pmr_symbol
+    "${_web_http_pmr_symbol_pattern}"
+    "auto* resource = httpPmrResourceOrDefault(nullptr);")
+_ruvia_assert_matches(
+    web_default_pmr_symbol
+    "${_web_default_pmr_symbol_pattern}"
+    "auto* resource = std::pmr::get_default_resource();")
 
 _ruvia_assert_ignores(
     commented_include
@@ -100,7 +118,7 @@ _ruvia_assert_ignores(
     "${_http_local_include_pattern}"
     "#include \"ruvia-core-extra/fixture.h\"")
 
-_ruvia_scan_forbidden_product_includes(core-product
+_ruvia_scan_forbidden_product_dependencies(core-product
     ROOTS
         "${_ruvia_source_root}/ruvia-core/include"
         "${_ruvia_source_root}/ruvia-core/src"
@@ -108,7 +126,7 @@ _ruvia_scan_forbidden_product_includes(core-product
         "${_core_product_include_pattern}"
         "${_core_local_include_pattern}")
 
-_ruvia_scan_forbidden_product_includes(http-product
+_ruvia_scan_forbidden_product_dependencies(http-product
     ROOTS
         "${_ruvia_source_root}/ruvia-http/include"
         "${_ruvia_source_root}/ruvia-http/src"
@@ -116,12 +134,15 @@ _ruvia_scan_forbidden_product_includes(http-product
         "${_http_product_include_pattern}"
         "${_http_local_include_pattern}")
 
-_ruvia_scan_forbidden_product_includes(web-product
+_ruvia_scan_forbidden_product_dependencies(web-product
     ROOTS
         "${_ruvia_source_root}/ruvia-web/include"
         "${_ruvia_source_root}/ruvia-web/src"
     PATTERNS
-        "${_web_local_include_pattern}")
+        "${_web_local_include_pattern}"
+        "${_web_http_pmr_include_pattern}"
+        "${_web_http_pmr_symbol_pattern}"
+        "${_web_default_pmr_symbol_pattern}")
 
 message(STATUS
     "ruvia_guard_product_layering: core,http,web product include boundaries hold")

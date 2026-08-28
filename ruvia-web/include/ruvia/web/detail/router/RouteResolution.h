@@ -91,7 +91,7 @@ private:
 
     ResolvedRoute(const RouteEntry& route, RouteMatch match) noexcept
         : route_(&route),
-          match_(std::move(match)) {}
+          match_(match) {}
 
     const RouteEntry* route_;
     RouteMatch match_;
@@ -104,7 +104,7 @@ public:
 
     [[nodiscard]] static RouteResolution resolved(
         const RouteEntry& route, RouteMatch match = {}) noexcept {
-        return RouteResolution(ResolvedRoute(route, std::move(match)));
+        return RouteResolution(ResolvedRoute(route, match));
     }
 
     // The mask spans only classified methods, so it can be empty for a resource

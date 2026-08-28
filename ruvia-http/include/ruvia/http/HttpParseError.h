@@ -2,9 +2,11 @@
 
 #include "ruvia/http/HttpProtocolError.h"
 
+#include <cstdint>
+
 namespace ruvia {
 
-enum class HttpParseError {
+enum class HttpParseError : std::uint8_t {
     kHeaderTooLarge,
     kBodyTooLarge,
     kInvalidRequestLine,

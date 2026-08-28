@@ -5,11 +5,12 @@
 #include "ruvia/http/detail/field/HttpQualityValue.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 
+#include <cstdint>
 #include <string_view>
 
 namespace ruvia::detail {
 
-enum class HttpTeFieldValidationMode { kRecipient, kClientCapability };
+enum class HttpTeFieldValidationMode : std::uint8_t { kRecipient, kClientCapability };
 
 [[nodiscard]] inline bool httpIsClientSupportedTeTransferCoding(std::string_view coding) noexcept {
     return httpAsciiEqualsIgnoreCase(coding, "gzip") ||

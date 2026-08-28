@@ -1,15 +1,16 @@
 #pragma once
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/HttpHeader.h"
 #include "ruvia/core/detail/config/ConfigValidation.h"
-#include "ruvia/web/detail/client/HttpClientConfigStorage.h"
-#include "ruvia/core/detail/io/TcpSocketOptions.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/cookie/CookieValidation.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/web/HttpClientTypes.h"
+#include "ruvia/web/detail/client/ClientTransport.h"
 
 namespace ruvia::detail {
 
@@ -19,17 +20,10 @@ inline void validateHttpClientUserAgent(std::string_view userAgent) {
     }
 }
 
-template <typename Config>
-void validateHttpClientConfig(const Config& config) {
+inline void validateHttpClientConfig(const HttpClientConfig& config) {
     const auto scheme = config.scheme;
     const std::string_view host = config.host;
-    const std::uint16_t port = [&]() {
-        if constexpr (requires { config.port.value_or(std::uint16_t{}); }) {
-            return config.port.value_or(scheme == HttpScheme::kHttps ? 443 : 80);
-        } else {
-            return config.port;
-        }
-    }();
+    const auto port = config.port.value_or(scheme == HttpScheme::kHttps ? 443 : 80);
     if (scheme != HttpScheme::kHttp && scheme != HttpScheme::kHttps) {
         throw std::invalid_argument("http client scheme is invalid");
     }
@@ -38,37 +32,25 @@ void validateHttpClientConfig(const Config& config) {
         config.protocol != HttpClientProtocol::kHttp2Only) {
         throw std::invalid_argument("http client protocol is invalid");
     }
-    if (config.tlsPeerVerification != HttpClientTlsPeerVerificationPolicy::kVerify &&
-        config.tlsPeerVerification != HttpClientTlsPeerVerificationPolicy::kSkipVerification) {
-        throw std::invalid_argument("http client TLS peer verification policy is invalid");
-    }
+    validateClientTransportConfig(clientTransportConfigView(config));
     if (config.receivedCookies != HttpClientReceivedCookiePolicy::kIgnore &&
         config.receivedCookies != HttpClientReceivedCookiePolicy::kRetainAndSend) {
         throw std::invalid_argument("http client received cookie policy is invalid");
     }
-    validateTcpNoDelayPolicy(config.tcpNoDelay);
-    validateTcpKeepAlivePolicy(config.tcpKeepAlive);
-    ensureConfigHost(host, "http client host must not be empty", "http client host is invalid",
-        kSeparatedPortHostRules);
+    validateClientOriginHost(
+        host, "http client host must not be empty", "http client host is invalid");
     if (port == 0) {
         throw std::invalid_argument("http client port must be greater than zero");
-    }
-    std::string wireHost;
-    if (host.find(':') != std::string_view::npos) {
-        wireHost.reserve(host.size() + 2);
-        wireHost.push_back('[');
-        wireHost.append(host);
-        wireHost.push_back(']');
-    } else {
-        wireHost.assign(host);
-    }
-    if (!isValidHttpHost(wireHost)) {
-        throw std::invalid_argument("http client host is invalid");
     }
     ensurePositiveSize(
         config.connectionCount, "http client connection count must be greater than zero");
     ensurePositiveSize(config.maxConcurrentHttp2StreamsPerConnection,
         "http client HTTP/2 stream limit per connection must be greater than zero");
+    if (config.maxConcurrentHttp2StreamsPerConnection >
+        std::numeric_limits<std::size_t>::max() / config.connectionCount) {
+        throw std::invalid_argument(
+            "HTTP client connection and HTTP/2 stream capacity is too large");
+    }
     ensurePositiveSize(
         config.maxBufferedRequests, "http client buffered request limit must be greater than zero");
     ensurePositiveSize(config.maxCookies, "http client cookie limit must be greater than zero");
@@ -79,10 +61,6 @@ void validateHttpClientConfig(const Config& config) {
     ensurePositiveOptionalDurations("configured http client timeouts must be greater than zero",
         std::optional{config.connectTimeout}, config.writeTimeout, config.requestTimeout,
         config.acquireTimeout);
-    if ((config.certificateChainFile.empty()) != (config.privateKeyFile.empty())) {
-        throw std::invalid_argument(
-            "http client certificate chain and private key must be configured together");
-    }
     validateHttpClientUserAgent(config.userAgent);
     if (config.cookies.size() > config.maxCookies) {
         throw std::invalid_argument(
@@ -109,27 +87,6 @@ void validateHttpClientConfig(const Config& config) {
         }
         ++cookieBytes;  // Every configured cookie is stored with the default "/" path.
     }
-    if (scheme == HttpScheme::kHttp && config.protocol == HttpClientProtocol::kNegotiate) {
-        return;
-    }
-}
-
-[[nodiscard]] inline std::uint16_t httpClientPort(const HttpClientConfigStorage& config) noexcept {
-    return config.port;
-}
-
-[[nodiscard]] inline std::pmr::string httpClientWireHost(
-    const HttpClientConfigStorage& config, std::pmr::memory_resource* resource) {
-    std::pmr::string host(resource);
-    if (config.host.find(':') != std::string_view::npos) {
-        host.reserve(config.host.size() + 2);
-        host.push_back('[');
-        host.append(config.host);
-        host.push_back(']');
-    } else {
-        host.assign(config.host);
-    }
-    return host;
 }
 
 }  // namespace ruvia::detail

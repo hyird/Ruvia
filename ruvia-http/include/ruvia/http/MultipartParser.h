@@ -178,7 +178,7 @@ private:
         MultipartBoundaryParseFailure>;
 
     explicit MultipartBoundaryParseResult(MultipartBoundary boundary)
-        : value_(std::move(boundary)) {}
+        : value_(boundary) {}
 
     [[nodiscard]] static constexpr MultipartBoundaryParseResult makeNotApplicable() noexcept {
         return MultipartBoundaryParseResult(MultipartBoundaryNotApplicable());
@@ -476,7 +476,7 @@ public:
     void compactConsumedPrefix(std::size_t threshold);
 
 private:
-    static constexpr std::size_t kCompactConsumedPrefixBytes = 64 * 1024;
+    static constexpr std::size_t kCompactConsumedPrefixBytes = std::size_t{64} * 1024;
     using Value = std::variant<MultipartBorrowedInput, MultipartStreamingInputOpen,
         MultipartStreamingInputEof>;
 

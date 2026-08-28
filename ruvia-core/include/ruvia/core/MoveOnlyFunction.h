@@ -77,6 +77,9 @@ public:
         return operations_ != nullptr;
     }
 
+    // The value-parameter signature is part of the erased callable contract;
+    // forwarding it preserves value and reference argument behavior.
+    // NOLINTNEXTLINE(performance-unnecessary-value-param)
     Result operator()(Args... args) {
         if (operations_ == nullptr) {
             std::terminate();

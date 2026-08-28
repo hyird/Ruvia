@@ -1,7 +1,6 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 #include "ruvia/web/detail/app/EnvState.h"
 #include "ruvia/web/detail/app/AppListenerOptions.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
 
 #include <bit>
 #include <cstddef>
@@ -31,17 +30,20 @@ void applyServerConfig(AppState& state, const ServerConfig& config) {
         config.requestBodyTimeout, "configured request body timeout must be greater than zero");
     ensurePositiveOptionalDuration(
         config.writeTimeout, "configured write timeout must be greater than zero");
-    if (config.maxConnectionsPerWorker)
+    if (config.maxConnectionsPerWorker) {
         ensurePositiveSize(*config.maxConnectionsPerWorker,
             "configured connection limit must be greater than zero");
-    if (config.maxRequestsPerConnection)
+    }
+    if (config.maxRequestsPerConnection) {
         ensurePositiveSize(*config.maxRequestsPerConnection,
             "configured requests-per-connection limit must be greater than zero");
+    }
     ensurePositiveSize(
         config.maxBufferedBodyBytes, "buffered body limit must be greater than zero");
-    if (config.maxStreamBodyBytes)
+    if (config.maxStreamBodyBytes) {
         ensurePositiveSize(
             *config.maxStreamBodyBytes, "configured stream body limit must be greater than zero");
+    }
     ensurePositiveSize(
         config.maxWebSocketMessageBytes, "websocket message limit must be greater than zero");
     ensurePositiveSize(config.memoryPool.requestInitialBufferBytes,
@@ -80,9 +82,7 @@ App& App::loadDotenv(const std::filesystem::path& path, DotenvOptions options) {
 App& App::listen(ListenConfig config) {
     return detail::mutateStoppedApp(*this, *state_, "cannot change listeners while app is running",
         [&config](detail::AppState& state) {
-            if (config.address.empty()) {
-                throw std::invalid_argument("listen address must not be empty");
-            }
+            const auto address = detail::normalizeListenAddress(config.address);
             if (!config.http.has_value() && !config.https.has_value()) {
                 throw std::invalid_argument("listen config must enable HTTP, HTTPS, or both");
             }
@@ -97,71 +97,25 @@ App& App::listen(ListenConfig config) {
                     "automatic HTTPS redirect requires both HTTP and HTTPS ports");
             }
 
-            const bool tlsConfigured = !config.tls.certificateChainFile.empty() ||
-                                       !config.tls.privateKeyFile.empty() ||
-                                       !config.tls.privateKeyPassword.empty() ||
-                                       config.tls.clientCertificates.verifyFile.has_value() ||
-                                       config.tls.clientCertificates.requirement !=
-                                           TlsClientCertificateRequirement::kOptional ||
-                                       !config.tls.sni.empty();
-            if (!config.https.has_value()) {
-                if (tlsConfigured) {
-                    throw std::invalid_argument("TLS config requires an HTTPS listen port");
-                }
-            } else {
-                if (config.tls.certificateChainFile.empty()) {
-                    throw std::invalid_argument("TLS certificate chain file must not be empty");
-                }
-                if (config.tls.privateKeyFile.empty()) {
-                    throw std::invalid_argument("TLS private key file must not be empty");
-                }
-                if (config.tls.clientCertificates.verifyFile.has_value()) {
-                    if (config.tls.clientCertificates.verifyFile->empty()) {
-                        throw std::invalid_argument(
-                            "TLS client certificate CA bundle must not be empty");
-                    }
-                    const auto requirement = config.tls.clientCertificates.requirement;
-                    if (requirement != TlsClientCertificateRequirement::kOptional &&
-                        requirement != TlsClientCertificateRequirement::kRequired) {
-                        throw std::invalid_argument(
-                            "TLS client certificate requirement is invalid");
-                    }
-                } else if (config.tls.clientCertificates.requirement !=
-                           TlsClientCertificateRequirement::kOptional) {
-                    throw std::invalid_argument(
-                        "TLS client certificate requirement needs a CA bundle");
-                }
-                for (std::size_t i = 0; i < config.tls.sni.size(); ++i) {
-                    const auto& sni = config.tls.sni[i];
-                    detail::ensureSniHost(
-                        sni.host, "SNI host must not be empty", "SNI host is invalid");
-                    if (sni.certificateChainFile.empty() || sni.privateKeyFile.empty()) {
-                        throw std::invalid_argument(
-                            "SNI TLS identity requires certificate chain and private key files");
-                    }
-                    for (std::size_t j = i + 1; j < config.tls.sni.size(); ++j) {
-                        if (detail::httpAsciiEqualsIgnoreCase(config.tls.sni[j].host, sni.host)) {
-                            throw std::invalid_argument("SNI hosts must be unique");
-                        }
-                    }
-                }
+            if (!config.https.has_value() && detail::hasTlsConfiguration(config.tls)) {
+                throw std::invalid_argument("TLS config requires an HTTPS listen port");
             }
 
             auto* const resource = detail::appResource();
-            std::pmr::vector<detail::AppListenerConfig> replacement(resource);
+            std::pmr::vector<detail::HttpServerListenerDefinition> replacement(resource);
             replacement.reserve(config.http.has_value() && config.https.has_value() ? 2 : 1);
             if (config.http.has_value()) {
+                const auto endpoint = asio::ip::tcp::endpoint(address, *config.http);
                 if (config.autoHttpsRedirect) {
-                    replacement.emplace_back(resource, config.address, *config.http,
+                    replacement.emplace_back(endpoint,
                         detail::HttpServerListenerDefinition::RedirectHttpToHttps{*config.https});
                 } else {
-                    replacement.emplace_back(resource, config.address, *config.http,
-                        detail::HttpServerListenerDefinition::PlainHttp{});
+                    replacement.emplace_back(endpoint);
                 }
             }
             if (config.https.has_value()) {
-                replacement.emplace_back(resource, config.address, *config.https,
-                    detail::makeTlsOptions(config.tls, resource));
+                replacement.emplace_back(asio::ip::tcp::endpoint(address, *config.https),
+                    detail::normalizeTlsOptions(config.tls, resource));
             }
             state.listeners = std::move(replacement);
         });
@@ -170,8 +124,7 @@ App& App::listen(ListenConfig config) {
 App& App::server(ServerConfig config) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot change server config while app is running",
-        [config = std::move(config)](
-            detail::AppState& state) { detail::applyServerConfig(state, config); });
+        [config](detail::AppState& state) { detail::applyServerConfig(state, config); });
 }
 
 App& App::deadline(DeadlineConfig config) {
@@ -210,7 +163,7 @@ App& App::rateLimit(RateLimitConfig config) {
                 throw std::invalid_argument(
                     "rate-limit capacity per worker must be a power of two");
             }
-            state.options.defaultRateLimitPerWorker = std::move(config.rule);
+            state.options.defaultRateLimitPerWorker = config.rule;
             state.options.rateLimitCapacityPerWorker = config.capacityPerWorker;
         });
 }

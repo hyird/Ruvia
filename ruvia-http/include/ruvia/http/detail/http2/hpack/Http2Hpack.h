@@ -19,7 +19,7 @@ struct HpackDecoderOptions final {
 
 class HpackDecodeResult;
 
-enum class HpackDecodeError {
+enum class HpackDecodeError : std::uint8_t {
     kNeedMore,
     kIntegerOverflow,
     kInvalidIndex,

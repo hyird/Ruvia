@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "ruvia/web/detail/db/DbClientState.h"
-#include "ruvia/web/detail/db/DbConfigStorage.h"
 
 namespace ruvia::detail {
 
@@ -16,16 +15,6 @@ EventLoop DbClientState::requireLoop(EventLoop loop) {
         throw std::invalid_argument("database client requires a valid event loop");
     }
     return loop;
-}
-
-std::pmr::vector<DbDefinition> DbClientState::makeDefinitions(
-    const DbConfig& config, std::pmr::memory_resource* resource) {
-    std::pmr::vector<DbDefinition> definitions(resource);
-    definitions.push_back(DbDefinition{
-        std::pmr::string("default", resource),
-        DbConfigStorage(config, resource),
-    });
-    return definitions;
 }
 
 ConnectionScannerOptions DbClientState::scannerOptions() {
@@ -38,13 +27,12 @@ ConnectionScannerOptions DbClientState::scannerOptions() {
     };
 }
 
-DbClientState::DbClientState(EventLoop loop, DbConfig config)
+DbClientState::DbClientState(EventLoop loop, const DbConfig& config)
     : loop_(requireLoop(std::move(loop))),
       worker_(loop_.handle()),
       memory_(),
-      definitions_(makeDefinitions(config, memory_.resource())),
       scanner_(worker_, scannerOptions()),
-      databases_(loop_.ioContext(), memory_.resource(), definitions_, &worker_) {}
+      databases_(loop_.ioContext(), memory_.resource(), config, &worker_) {}
 
 DbClientState::~DbClientState() {
     const auto phase = phase_.load(std::memory_order_acquire);
@@ -177,8 +165,8 @@ void DbClientState::closeOnWorker() noexcept {
 
 namespace ruvia {
 
-DbClient::DbClient(EventLoop loop, DbConfig config)
-    : state_(std::make_shared<detail::DbClientState>(std::move(loop), std::move(config))) {
+DbClient::DbClient(EventLoop loop, const DbConfig& config)
+    : state_(std::make_shared<detail::DbClientState>(std::move(loop), config)) {
     state_->bindStop();
 }
 

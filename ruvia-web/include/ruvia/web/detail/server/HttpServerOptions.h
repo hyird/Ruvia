@@ -66,14 +66,14 @@ struct ConnectionFailureSink final {
 };
 
 struct WorkerFailureSink final {
-    using Invoke = void (*)(void*, std::exception_ptr) noexcept;
+    using Invoke = void (*)(void*, const std::exception_ptr&) noexcept;
 
     void* target{nullptr};
     Invoke invoke{nullptr};
 
-    void notify(std::exception_ptr failure) const noexcept {
+    void notify(const std::exception_ptr& failure) const noexcept {
         if (invoke != nullptr) {
-            invoke(target, std::move(failure));
+            invoke(target, failure);
         }
     }
 };
@@ -105,8 +105,12 @@ struct HttpServerOptions final {
         }
 
         [[nodiscard]] const StaticRoot* root() const noexcept {
-            if (const auto* standalone = std::get_if<Standalone>(&state_)) return standalone->root;
-            if (const auto* refreshing = std::get_if<Refreshing>(&state_)) return refreshing->root;
+            if (const auto* standalone = std::get_if<Standalone>(&state_)) {
+                return standalone->root;
+            }
+            if (const auto* refreshing = std::get_if<Refreshing>(&state_)) {
+                return refreshing->root;
+            }
             return nullptr;
         }
 
@@ -125,7 +129,9 @@ struct HttpServerOptions final {
         // state. Calling this on a non-refreshing root is an invariant breach.
         void publish(const StaticRoot& root) noexcept {
             auto* refreshing = std::get_if<Refreshing>(&state_);
-            if (refreshing == nullptr) std::terminate();
+            if (refreshing == nullptr) {
+                std::terminate();
+            }
             refreshing->root = &root;
         }
 

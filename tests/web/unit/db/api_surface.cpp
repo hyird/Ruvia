@@ -151,8 +151,13 @@ public:
         return deallocatedAfterRelease_;
     }
 
+    [[nodiscard]] std::size_t allocationCount() const noexcept {
+        return allocationCount_;
+    }
+
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        ++allocationCount_;
         return std::pmr::new_delete_resource()->allocate(bytes, alignment);
     }
 
@@ -167,6 +172,7 @@ private:
 
     bool released_{false};
     bool deallocatedAfterRelease_{false};
+    std::size_t allocationCount_{0};
 };
 
 template <typename Fn>
@@ -187,6 +193,10 @@ static_assert(std::is_copy_constructible_v<ruvia::DbValue>);
 static_assert(std::is_nothrow_move_constructible_v<ruvia::DbValue>);
 static_assert(!std::is_copy_assignable_v<ruvia::DbValue>);
 static_assert(!std::is_move_assignable_v<ruvia::DbValue>);
+static_assert(!std::is_copy_constructible_v<ruvia::DbMigrator>);
+static_assert(!std::is_copy_assignable_v<ruvia::DbMigrator>);
+static_assert(std::is_nothrow_move_constructible_v<ruvia::DbMigrator>);
+static_assert(std::is_nothrow_move_assignable_v<ruvia::DbMigrator>);
 
 template <typename String>
 concept AcceptsTemporaryDbValueText =
@@ -195,9 +205,16 @@ concept AcceptsTemporaryDbValueText =
 template <typename String>
 concept AcceptsLvalueDbValueText = requires(String& value) { ruvia::DbValue(value); };
 
+template <typename Config>
+concept AcceptsValidatedDbConfig =
+    requires(Config&& config) { ruvia::detail::validatedDbConfig(std::forward<Config>(config)); };
+
 static_assert(!AcceptsTemporaryDbValueText<std::string>);
 static_assert(!AcceptsTemporaryDbValueText<const std::string>);
 static_assert(AcceptsLvalueDbValueText<std::string>);
+static_assert(AcceptsValidatedDbConfig<ruvia::DbConfig&>);
+static_assert(!AcceptsValidatedDbConfig<ruvia::DbConfig>);
+static_assert(!AcceptsValidatedDbConfig<const ruvia::DbConfig>);
 static_assert(std::constructible_from<ruvia::DbValue, ruvia::BorrowedText>);
 
 template <typename String, typename Migration = ruvia::DbMigration>
@@ -701,7 +718,9 @@ RUVIA_TEST(db_value_and_result_storage_have_one_live_alternative) {
                 std::optional<std::string_view>("borrowed"));
 
     auto movedField = std::move(borrowedField);
-    RUVIA_CHECK(!borrowedField.value().has_value());
+    // DbField defines an observable empty moved-from state; this assertion is
+    // the contract under test rather than an accidental post-move use.
+    RUVIA_CHECK(!borrowedField.value().has_value());  // NOLINT(clang-analyzer-cplusplus.Move)
     RUVIA_CHECK(movedField.value() == std::optional<std::string_view>("borrowed"));
     auto numeric = ruvia::detail::DbResultAccess::ownedField("-42", nullptr);
     RUVIA_CHECK(numeric.as<std::int64_t>() == std::optional<std::int64_t>(-42));
@@ -900,7 +919,7 @@ RUVIA_TEST(db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_co
 #endif
 
 RUVIA_TEST(db_migrator_copies_public_configuration) {
-    std::pmr::unsynchronized_pool_resource targetResource;
+    TrackingResource targetResource;
     std::optional<ruvia::DbMigrator> migrator;
     {
         auto config = testDbConfig();
@@ -909,14 +928,65 @@ RUVIA_TEST(db_migrator_copies_public_configuration) {
         config.password = std::string(80, 'p');
         config.database = std::string(80, 'd');
         ruvia::DbMigratorOptions options{
-            .table = std::string(80, 't'),
+            .table = std::string(60, 't'),
             .lockTimeout = std::chrono::seconds(30),
             .resource = &targetResource,
         };
         migrator.emplace(config, options);
     }
+    // Opaque owner + four long DB strings + the long migration table all use
+    // the caller's resource rather than their public std::string allocators.
+    RUVIA_CHECK(targetResource.allocationCount() >= 6);
     migrator.reset();
     RUVIA_CHECK(true);
+}
+
+RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {
+    {
+        auto config = testDbConfig();
+        config.host = std::string(80, 'h');
+        config.connectTimeout = std::chrono::milliseconds::zero();
+        TrackingResource resource;
+        const ruvia::DbMigratorOptions options{
+            .table = std::string(60, 't'),
+            .resource = &resource,
+        };
+
+        RUVIA_CHECK(throwsOn([&] { (void)ruvia::DbMigrator(config, options); }));
+        RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
+    }
+    {
+        auto config = testDbConfig();
+        config.host = std::string(80, 'h');
+        TrackingResource resource;
+        const ruvia::DbMigratorOptions options{
+            .table = "invalid-table-name",
+            .resource = &resource,
+        };
+
+        RUVIA_CHECK(throwsOn([&] { (void)ruvia::DbMigrator(config, options); }));
+        RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
+    }
+}
+
+RUVIA_TEST(db_migrator_validates_migration_list_before_allocating_runtime) {
+    const std::array<ruvia::DbMigration, 2> migrations{{
+        ruvia::DbMigration{{.id = "duplicate", .sql = "SELECT 1"}},
+        ruvia::DbMigration{{.id = "duplicate", .sql = "SELECT 2"}},
+    }};
+    auto config = testDbConfig();
+    config.host = std::string(80, 'h');
+    TrackingResource resource;
+    const ruvia::DbMigratorOptions options{
+        .table = std::string(60, 't'),
+        .resource = &resource,
+    };
+
+    RUVIA_CHECK(throwsOn([&] {
+        (void)ruvia::DbMigrator::migrate(
+            config, std::span<const ruvia::DbMigration>(migrations), options);
+    }));
+    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 }
 
 RUVIA_TEST(db_result_value_move_assignment_propagates_allocator_failure) {

@@ -15,7 +15,7 @@ namespace ruvia {
 // but spills the arena's first block to the worker resource on every request,
 // because the in-block fast path is sized at compile time. Prefer raising
 // kRequestArenaInitialBytes itself if a larger zero-heap default is wanted.
-inline constexpr std::size_t kRequestArenaInitialBytes = 4 * 1024;
+inline constexpr std::size_t kRequestArenaInitialBytes = std::size_t{4} * 1024;
 
 struct MemoryPoolConfig {
     std::size_t requestInitialBufferBytes{kRequestArenaInitialBytes};

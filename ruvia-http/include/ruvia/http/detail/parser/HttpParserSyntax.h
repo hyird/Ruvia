@@ -8,7 +8,7 @@
 #include <string_view>
 namespace ruvia::detail {
 
-enum class RequestHeaderKind {
+enum class RequestHeaderKind : std::uint8_t {
     kOther,
     kAccept,
     kAcceptEncoding,
@@ -81,7 +81,12 @@ inline constexpr std::size_t kRequestHeaderKindCount =
     return 0;
 }
 
-enum class ChunkSizeLineStatus { kOk, kInvalidSize, kOverflow, kInvalidExtension };
+enum class ChunkSizeLineStatus : std::uint8_t {
+    kOk,
+    kInvalidSize,
+    kOverflow,
+    kInvalidExtension,
+};
 
 // 256-entry character class tables (picohttpparser/llhttp style): one load
 // replaces multi-comparison chains and lets scan loops validate as they move.

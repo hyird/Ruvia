@@ -108,13 +108,13 @@ public:
         }
         switch (plan.headDisposition()) {
             case ResponseStreamHeadDisposition::kBodyOpen:
-                state_.emplace<BodyOpen>(std::move(plan));
+                state_.emplace<BodyOpen>(plan);
                 break;
             case ResponseStreamHeadDisposition::kTrailersOnly:
-                state_.emplace<TrailersOnly>(std::move(plan));
+                state_.emplace<TrailersOnly>(plan);
                 break;
             case ResponseStreamHeadDisposition::kMessageEnded:
-                state_.emplace<Ended>(std::move(plan));
+                state_.emplace<Ended>(plan);
                 break;
         }
     }
@@ -124,13 +124,13 @@ public:
             return;
         }
         if (auto* value = std::get_if<BodyOpen>(&state_)) {
-            auto plan = std::move(value->plan);
-            state_.emplace<Ended>(std::move(plan));
+            auto plan = value->plan;
+            state_.emplace<Ended>(plan);
             return;
         }
         if (auto* value = std::get_if<TrailersOnly>(&state_)) {
-            auto plan = std::move(value->plan);
-            state_.emplace<Ended>(std::move(plan));
+            auto plan = value->plan;
+            state_.emplace<Ended>(plan);
             return;
         }
         throw std::logic_error("response stream is not committed");
@@ -141,13 +141,13 @@ public:
             return;
         }
         if (auto* value = std::get_if<BodyOpen>(&state_)) {
-            auto plan = std::move(value->plan);
-            state_.emplace<AbortedAfterCommit>(std::move(plan));
+            auto plan = value->plan;
+            state_.emplace<AbortedAfterCommit>(plan);
             return;
         }
         if (auto* value = std::get_if<TrailersOnly>(&state_)) {
-            auto plan = std::move(value->plan);
-            state_.emplace<AbortedAfterCommit>(std::move(plan));
+            auto plan = value->plan;
+            state_.emplace<AbortedAfterCommit>(plan);
             return;
         }
         if (std::holds_alternative<Ended>(state_)) {
@@ -205,21 +205,21 @@ private:
 
     struct BodyOpen final {
         explicit BodyOpen(ResponseStreamCommitPlan commitPlan) noexcept
-            : plan(std::move(commitPlan)) {}
+            : plan(commitPlan) {}
 
         ResponseStreamCommitPlan plan;
     };
 
     struct TrailersOnly final {
         explicit TrailersOnly(ResponseStreamCommitPlan commitPlan) noexcept
-            : plan(std::move(commitPlan)) {}
+            : plan(commitPlan) {}
 
         ResponseStreamCommitPlan plan;
     };
 
     struct Ended final {
         explicit Ended(ResponseStreamCommitPlan commitPlan) noexcept
-            : plan(std::move(commitPlan)) {}
+            : plan(commitPlan) {}
 
         ResponseStreamCommitPlan plan;
     };
@@ -228,7 +228,7 @@ private:
 
     struct AbortedAfterCommit final {
         explicit AbortedAfterCommit(ResponseStreamCommitPlan commitPlan) noexcept
-            : plan(std::move(commitPlan)) {}
+            : plan(commitPlan) {}
 
         ResponseStreamCommitPlan plan;
     };

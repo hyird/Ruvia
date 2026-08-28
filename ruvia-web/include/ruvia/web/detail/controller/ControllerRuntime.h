@@ -57,33 +57,33 @@ class ControllerRegistrationAccess final {
     }
 
     [[nodiscard]] static ControllerRouteBuilder createRouteGroup(
-        const ControllerRouteBuilder& scope, std::string_view prefix, MiddlewareList middlewares) {
-        return scope.createScope(prefix, std::move(middlewares));
+        const ControllerRouteBuilder& scope, std::string_view prefix,
+        const MiddlewareList& middlewares) {
+        return scope.createScope(prefix, middlewares);
     }
 
     static void addRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method,
         std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode,
         std::span<const ControllerMiddlewareDescriptor> middlewares) {
-        scope.registerRoute(method, path, std::move(handler), bodyMode, middlewares);
+        scope.registerRoute(method, path, handler, bodyMode, middlewares);
     }
 
     static void addExtensionMethodRoute(const ControllerRouteBuilder& scope,
         std::string_view methodToken, std::string_view path, ControllerRouteHandler handler,
         RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> middlewares) {
-        scope.registerExtensionMethodRoute(
-            methodToken, path, std::move(handler), bodyMode, middlewares);
+        scope.registerExtensionMethodRoute(methodToken, path, handler, bodyMode, middlewares);
     }
 
     static void addResponseStreamRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method,
         std::string_view path, ControllerRouteStreamHandler handler,
         std::span<const ControllerMiddlewareDescriptor> middlewares) {
-        scope.registerResponseStreamRoute(method, path, std::move(handler), middlewares);
+        scope.registerResponseStreamRoute(method, path, handler, middlewares);
     }
 
     static void addSseRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method,
         std::string_view path, ControllerRouteStreamHandler handler,
         std::span<const ControllerMiddlewareDescriptor> middlewares) {
-        scope.registerSseRoute(method, path, std::move(handler), middlewares);
+        scope.registerSseRoute(method, path, handler, middlewares);
     }
 
     static void addWebSocketRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method,
@@ -91,7 +91,7 @@ class ControllerRegistrationAccess final {
         std::span<const ControllerMiddlewareDescriptor> middlewares,
         WebSocketRouteConfig webSocketConfig = {}) {
         scope.registerWebSocketRoute(
-            method, path, std::move(handler), middlewares, std::move(webSocketConfig));
+            method, path, handler, middlewares, std::move(webSocketConfig));
     }
 
     template <Task<HttpResponse> (ControllerT::*Handler)(Context&)>
@@ -170,7 +170,9 @@ template <ValidationTarget Target, typename BodyT>
         const auto requestBody = co_await c.req().text();
         auto parsed =
             detail::ModelParseAccess::parseJsonBorrowedPartial<BodyT>(requestBody, c.resource());
-        if (!parsed) detail::throwInvalidJsonBody();
+        if (!parsed) {
+            detail::throwInvalidJsonBody();
+        }
         co_return std::move(*parsed);
     } else if constexpr (Target == ValidationTarget::kForm) {
         if (!detail::contentTypeMatches(c.req().header("Content-Type").value_or(std::string_view{}),
@@ -180,7 +182,9 @@ template <ValidationTarget Target, typename BodyT>
         const auto requestBody = co_await c.req().text();
         auto parsed =
             detail::ModelParseAccess::parseFormBorrowedPartial<BodyT>(requestBody, c.resource());
-        if (!parsed) detail::throwInvalidFormBody();
+        if (!parsed) {
+            detail::throwInvalidFormBody();
+        }
         co_return std::move(*parsed);
     } else if constexpr (Target == ValidationTarget::kQuery) {
         co_return parseValidatedFields<Target, BodyT>(c, c.req().queryFields());

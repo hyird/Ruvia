@@ -134,7 +134,7 @@ private:
     // The request's stop token travels with the binding so sleep() observes it;
     // every framework-provided wait must preserve the request deadline.
     void bindContext(Context& context, StopToken stopToken, StreamingHeadThunk streamingHead) {
-        stopToken_ = stopToken;
+        stopToken_ = std::move(stopToken);
         bindContext_(target_, &context, streamingHead);
     }
 

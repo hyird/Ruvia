@@ -268,12 +268,9 @@ std::optional<std::string_view> httpFindSemicolonParameterIgnoreCase(
     }
     const auto expectedFirst = httpAsciiToLower(static_cast<unsigned char>(expected.front()));
     return !httpFindHeaderToken(value, [expected, expectedFirst](std::string_view token) noexcept {
-        if (token.size() == expected.size() &&
-            httpAsciiToLower(static_cast<unsigned char>(token.front())) == expectedFirst &&
-            httpAsciiEqualsIgnoreCase(token, expected)) {
-            return true;
-        }
-        return false;
+        return token.size() == expected.size() &&
+               httpAsciiToLower(static_cast<unsigned char>(token.front())) == expectedFirst &&
+               httpAsciiEqualsIgnoreCase(token, expected);
     }).empty();
 }
 

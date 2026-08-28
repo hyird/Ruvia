@@ -27,7 +27,7 @@ inline constexpr std::size_t kWorkSetArenaBytes = kRequestArenaInitialBytes;
 // 4 KB holds a typical request head with room to spare, and growReadBuffer()
 // doubles on demand up to kMaxHttpHeaderBytes; keeping the fresh size small
 // matters because under high concurrency every active connection holds one.
-inline constexpr std::size_t kInitialReadBufferBytes = 4 * 1024;
+inline constexpr std::size_t kInitialReadBufferBytes = std::size_t{4} * 1024;
 
 // All of a connection's heavy per-request working memory bundled into one
 // poolable unit: the read buffer, the request arena block, the (reused) parse

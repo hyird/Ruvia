@@ -3,6 +3,7 @@
 #include <condition_variable>
 #include <exception>
 #include <mutex>
+#include <utility>
 #include <variant>
 
 namespace ruvia::detail {
@@ -34,7 +35,7 @@ public:
             if (!std::holds_alternative<StartupPending>(startup_)) {
                 return false;
             }
-            startup_.emplace<StartupFailed>(failure);
+            startup_.emplace<StartupFailed>(std::move(failure));
         }
         startupCv_.notify_all();
         return true;
@@ -103,7 +104,7 @@ public:
             if (workerFailure_ != nullptr) {
                 return false;
             }
-            workerFailure_ = failure;
+            workerFailure_ = std::move(failure);
             servingComplete_ = true;
         }
         servingCv_.notify_all();
@@ -122,7 +123,7 @@ private:
     class StartupFailed final {
     public:
         explicit StartupFailed(std::exception_ptr failure) noexcept
-            : failure_(failure) {
+            : failure_(std::move(failure)) {
             if (failure_ == nullptr) {
                 std::terminate();
             }

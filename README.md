@@ -104,9 +104,10 @@ or identity wrappers. Passing a config to an optional App feature enables or
 replaces it, and passing `nullptr` disables it. Ruvia validates each complete
 value before atomically copying retained data into process-owned PMR storage.
 
-`listen()` configures the bind address and its optional HTTP and HTTPS ports as
-one value. An omitted port is disabled, and automatic HTTP-to-HTTPS redirect is
-enabled in that same value:
+`listen()` configures a numeric IPv4 or IPv6 bind address and its optional HTTP
+and HTTPS ports as one value. The address is validated and normalized when the
+configuration is supplied. An omitted port is disabled, and automatic
+HTTP-to-HTTPS redirect is enabled in that same value:
 
 ```cpp
 ruvia::app().listen({
@@ -289,7 +290,7 @@ combined with that ambient token rather than replacing it.
 
 HTTPS origins verify both the peer certificate and host name by default. Test
 or private self-signed origins must opt out explicitly with
-`tlsPeerVerification = ruvia::HttpClientTlsPeerVerificationPolicy::kSkipVerification`.
+`tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification`.
 TCP socket options use explicit policies: HTTP clients enable `tcpNoDelay` and
 `tcpKeepAlive` by default, while `Tcp*Policy::kSystemDefault` leaves the socket
 option untouched.

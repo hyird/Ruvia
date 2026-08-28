@@ -42,6 +42,7 @@ template <FixedString Pattern>
             compiled.regex.emplace(pattern.begin(), pattern.end(),
                 std::regex_constants::ECMAScript | std::regex_constants::optimize);
         } catch (const std::regex_error&) {
+            compiled.regex.reset();
         }
         return compiled;
     }();

@@ -20,9 +20,9 @@ namespace ruvia {
 
 namespace {
 
-constexpr std::size_t kMaxMultipartPreambleBytes = 64 * 1024;
-constexpr std::size_t kMaxMultipartHeaderBytes = 64 * 1024;
-constexpr std::size_t kMaxMultipartDelimiterLineBytes = 64 * 1024;
+constexpr std::size_t kMaxMultipartPreambleBytes = std::size_t{64} * 1024;
+constexpr std::size_t kMaxMultipartHeaderBytes = std::size_t{64} * 1024;
+constexpr std::size_t kMaxMultipartDelimiterLineBytes = std::size_t{64} * 1024;
 
 [[nodiscard]] std::string_view multipartParseErrorMessage(MultipartParseError error) noexcept {
     switch (error) {

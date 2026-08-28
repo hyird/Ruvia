@@ -2,12 +2,10 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <chrono>
 #include <exception>
 #include <limits>
 #include <optional>
-#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -16,12 +14,11 @@
 
 #include <asio/connect.hpp>
 #include <asio/ssl/error.hpp>
-#include <asio/ssl/host_name_verification.hpp>
 #include <asio/write.hpp>
 #include <openssl/rand.h>
-#include <openssl/ssl.h>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/io/TcpSocketOptions.h"
 #include "ruvia/core/detail/util/Base64.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/http/Http1ClientRequestWriter.h"
@@ -29,11 +26,9 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketMessageAccess.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
-#include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 
 namespace ruvia::detail {
 namespace {
@@ -41,35 +36,14 @@ namespace {
 constexpr std::size_t kHandshakeNonceBytes = 16;
 constexpr std::size_t kHandshakeHeaderReserve = 6;
 constexpr std::size_t kHandshakeRequestBufferExtraBytes = 1024;
-constexpr std::size_t kTransportBufferBytes = 16 * 1024;
-constexpr std::size_t kCloseHandshakeBufferBytes = 4096;
+constexpr std::size_t kTransportBufferBytes = std::size_t{16} * 1024;
+constexpr std::size_t kCloseHandshakeBufferBytes = std::size_t{4} * 1024;
 
 [[nodiscard]] EventLoop requireEventLoop(EventLoop loop) {
     if (!loop.valid()) {
         throw std::invalid_argument("WebSocket client requires a valid event loop");
     }
     return loop;
-}
-
-[[nodiscard]] bool isIpLiteral(std::string_view host) noexcept {
-    std::error_code error;
-    (void)asio::ip::make_address(host, error);
-    return !error;
-}
-
-[[nodiscard]] bool isReservedHandshakeHeader(std::string_view name) noexcept {
-    constexpr std::array<std::string_view, 8> reserved{
-        "host",
-        "connection",
-        "upgrade",
-        "sec-websocket-key",
-        "sec-websocket-version",
-        "sec-websocket-protocol",
-        "sec-websocket-extensions",
-        "content-length",
-    };
-    return std::ranges::any_of(reserved,
-        [name](std::string_view candidate) { return httpAsciiEqualsIgnoreCase(name, candidate); });
 }
 
 [[nodiscard]] bool isOfferedSubprotocol(
@@ -79,49 +53,8 @@ constexpr std::size_t kCloseHandshakeBufferBytes = 4096;
     }).empty();
 }
 
-[[nodiscard]] std::string_view selectedAlpnProtocol(SSL* ssl) noexcept {
-    const unsigned char* selected = nullptr;
-    unsigned int size = 0;
-    SSL_get0_alpn_selected(ssl, &selected, &size);
-    return {reinterpret_cast<const char*>(selected), size};
-}
-
 [[nodiscard]] WebSocketClientError::Code transportErrorCode(bool secure) noexcept {
     return secure ? WebSocketClientError::Code::kTlsFailed : WebSocketClientError::Code::kIoError;
-}
-
-void validateOptionalTimeout(std::optional<std::chrono::milliseconds> timeout) {
-    if (timeout.has_value() && timeout->count() <= 0) {
-        throw std::invalid_argument("WebSocket client timeout must be greater than zero");
-    }
-}
-
-template <typename Headers>
-void validateHandshakeHeaders(const Headers& headers) {
-    for (const auto& header : headers) {
-        if (!isValidHttpHeaderName(header.name) || isReservedHandshakeHeader(header.name)) {
-            throw std::invalid_argument("invalid or reserved WebSocket client handshake header");
-        }
-    }
-}
-
-void validateSubprotocols(std::string_view subprotocols) {
-    if (subprotocols.empty()) {
-        return;
-    }
-
-    bool valid = true;
-    std::size_t count = 0;
-    httpVisitCommaSeparatedQuotedItems(subprotocols, [&](std::string_view token) {
-        valid = valid && !token.empty() && std::ranges::all_of(token, [](char ch) {
-            return isHttpTokenChar(static_cast<unsigned char>(ch));
-        });
-        ++count;
-        return valid;
-    });
-    if (!valid || count == 0) {
-        throw std::invalid_argument("invalid WebSocket client subprotocol list");
-    }
 }
 
 class ActivityGuard final {
@@ -154,38 +87,11 @@ struct StopAbort final {
 
 }  // namespace
 
-WebSocketClientState::ConfigStorage::ConfigStorage(
-    WebSocketClientConfig config, std::pmr::memory_resource* resource)
-    : scheme(config.scheme),
-      host(std::move(config.host), resource),
-      port(config.port),
-      target(std::move(config.target), resource),
-      headers(resource),
-      subprotocols(std::move(config.subprotocols), resource),
-      maxMessageBytes(config.maxMessageBytes),
-      connectTimeout(config.connectTimeout),
-      readTimeout(config.readTimeout),
-      writeTimeout(config.writeTimeout),
-      closeHandshakeTimeout(config.closeHandshakeTimeout),
-      tlsPeerVerification(config.tlsPeerVerification),
-      tcpNoDelay(config.tcpNoDelay),
-      tcpKeepAlive(config.tcpKeepAlive),
-      caFile(std::move(config.caFile), resource),
-      certificateChainFile(std::move(config.certificateChainFile), resource),
-      privateKeyFile(std::move(config.privateKeyFile), resource),
-      privateKeyPassword(std::move(config.privateKeyPassword), resource),
-      userAgent(std::move(config.userAgent), resource) {
-    headers.reserve(config.headers.size());
-    for (const auto& [name, value] : config.headers) {
-        headers.emplace_back(name, value, resource);
-    }
-}
-
-WebSocketClientState::WebSocketClientState(EventLoop loop, WebSocketClientConfig config)
+WebSocketClientState::WebSocketClientState(EventLoop loop, const WebSocketClientConfig& config)
     : loop_(requireEventLoop(std::move(loop))),
       worker_(loop_.handle()),
       memory_(),
-      config_(std::move(config), memory_.resource()),
+      config_(config, memory_.resource()),
       tlsContext_(asio::ssl::context::tls_client),
       resolver_(loop_.ioContext()),
       stream_(loop_.ioContext(), tlsContext_),
@@ -194,9 +100,10 @@ WebSocketClientState::WebSocketClientState(EventLoop loop, WebSocketClientConfig
       writeTimer_(loop_.ioContext()),
       input_(memory_.allocator<char>()),
       selectedSubprotocol_(memory_.allocator<char>()) {
-    validateConfig();
-    configureTls();
-    input_.reserve(16 * 1024);
+    if (config_.scheme == WebSocketScheme::kWss) {
+        configureClientTlsContext(tlsContext_, config_.transport.view());
+    }
+    input_.reserve(kTransportBufferBytes);
 }
 
 WebSocketClientState::~WebSocketClientState() {
@@ -206,58 +113,12 @@ WebSocketClientState::~WebSocketClientState() {
     }
 }
 
-void WebSocketClientState::validateConfig() {
-    if (config_.host.empty()) {
-        throw std::invalid_argument("WebSocket client host must not be empty");
-    }
-    if (config_.target.empty() || config_.target.front() != '/') {
-        throw std::invalid_argument("WebSocket client target must use origin-form");
-    }
-    if (config_.maxMessageBytes == 0) {
-        throw std::invalid_argument("WebSocket client max message bytes must be greater than zero");
-    }
-    if (config_.connectTimeout.count() <= 0) {
-        throw std::invalid_argument("WebSocket client connect timeout must be greater than zero");
-    }
-    for (const auto timeout :
-        {config_.readTimeout, config_.writeTimeout, config_.closeHandshakeTimeout}) {
-        validateOptionalTimeout(timeout);
-    }
-    if (!config_.certificateChainFile.empty() && config_.privateKeyFile.empty()) {
-        throw std::invalid_argument("WebSocket client certificate requires a private key");
-    }
-    validateHandshakeHeaders(config_.headers);
-    validateSubprotocols(config_.subprotocols);
-}
-
-void WebSocketClientState::configureTls() {
-    if (config_.tlsPeerVerification == HttpClientTlsPeerVerificationPolicy::kVerify) {
-        tlsContext_.set_verify_mode(asio::ssl::verify_peer);
-        if (config_.caFile.empty()) {
-            tlsContext_.set_default_verify_paths();
-        } else {
-            tlsContext_.load_verify_file(std::string(config_.caFile));
-        }
-    } else {
-        tlsContext_.set_verify_mode(asio::ssl::verify_none);
-    }
-    if (!config_.privateKeyPassword.empty()) {
-        const auto password = std::string(config_.privateKeyPassword);
-        tlsContext_.set_password_callback(
-            [password = std::move(password)](
-                std::size_t, asio::ssl::context_base::password_purpose) { return password; });
-    }
-    if (!config_.certificateChainFile.empty()) {
-        tlsContext_.use_certificate_chain_file(std::string(config_.certificateChainFile));
-        tlsContext_.use_private_key_file(
-            std::string(config_.privateKeyFile), asio::ssl::context::pem);
-    }
-}
-
 void WebSocketClientState::bindStop() {
     std::weak_ptr<WebSocketClientState> weak = shared_from_this();
     stopRegistration_ = loop_.onStop([weak = std::move(weak)] {
-        if (const auto state = weak.lock()) state->closeOnWorker(AbortReason::kClosing);
+        if (const auto state = weak.lock()) {
+            state->closeOnWorker(AbortReason::kClosing);
+        }
     });
 }
 
@@ -273,6 +134,13 @@ void WebSocketClientState::requireOpen() const {
         throw WebSocketClientError(
             WebSocketClientError::Code::kInvalidState, "WebSocket client is not connected");
     }
+}
+
+WsConnection& WebSocketClientState::requireProtocol() noexcept {
+    if (!protocol_.has_value()) {
+        std::terminate();
+    }
+    return protocol_.value();
 }
 
 std::uint16_t WebSocketClientState::port() const noexcept {
@@ -334,10 +202,16 @@ void WebSocketClientState::throwAbort() const {
 }
 
 void WebSocketClientState::closeOnWorker(AbortReason reason) noexcept {
-    if (!worker_.isCurrent()) std::terminate();
+    if (!worker_.isCurrent()) {
+        std::terminate();
+    }
     const auto previous = phase_.exchange(Phase::kClosed, std::memory_order_acq_rel);
-    if (previous == Phase::kClosed) return;
-    if (abortReason_ == AbortReason::kNone) abortReason_ = reason;
+    if (previous == Phase::kClosed) {
+        return;
+    }
+    if (abortReason_ == AbortReason::kNone) {
+        abortReason_ = reason;
+    }
     stopSource_.requestStop();
     resolver_.cancel();
     disarm(connectTimer_);
@@ -347,8 +221,8 @@ void WebSocketClientState::closeOnWorker(AbortReason reason) noexcept {
         (void)protocol_->abort();
     }
     std::error_code ignored;
-    stream_.lowest_layer().cancel(ignored);
-    stream_.lowest_layer().close(ignored);
+    (void)stream_.lowest_layer().cancel(ignored);
+    (void)stream_.lowest_layer().close(ignored);
 }
 
 void WebSocketClientState::requestAbort(AbortReason reason) noexcept {
@@ -390,15 +264,8 @@ Task<void> WebSocketClientState::connect() {
 Task<void> WebSocketClientState::establishTransport() {
     arm(connectTimer_, config_.connectTimeout, AbortReason::kTimeout);
 
-    std::array<char, 8> portBuffer{};
-    const auto [end, error] =
-        std::to_chars(portBuffer.data(), portBuffer.data() + portBuffer.size(), port());
-    if (error != std::errc{}) {
-        throw WebSocketClientError(
-            WebSocketClientError::Code::kInvalidConfig, "invalid WebSocket client port");
-    }
-    const std::string_view portText(
-        portBuffer.data(), static_cast<std::size_t>(end - portBuffer.data()));
+    ClientPortTextBuffer portBuffer{};
+    const auto portText = formatClientPort(port(), portBuffer);
     auto resolved =
         co_await asyncAsio<asio::ip::tcp::resolver::results_type>([&](auto handler) mutable {
             resolver_.async_resolve(config_.host, portText, std::move(handler));
@@ -419,13 +286,8 @@ Task<void> WebSocketClientState::establishTransport() {
             WebSocketClientError::Code::kConnectFailed, connected.errorCode().message());
     }
 
-    std::error_code ignored;
-    if (tcpNoDelayEnabled(config_.tcpNoDelay)) {
-        stream_.lowest_layer().set_option(asio::ip::tcp::no_delay(true), ignored);
-    }
-    if (tcpKeepAliveEnabled(config_.tcpKeepAlive)) {
-        stream_.lowest_layer().set_option(asio::socket_base::keep_alive(true), ignored);
-    }
+    const auto transport = config_.transport.view();
+    configureTcpSocketOptions(stream_.next_layer(), transport.tcpNoDelay, transport.tcpKeepAlive);
 
     if (config_.scheme == WebSocketScheme::kWss) {
         co_await performTlsHandshake();
@@ -433,20 +295,11 @@ Task<void> WebSocketClientState::establishTransport() {
 }
 
 Task<void> WebSocketClientState::performTlsHandshake() {
-    SSL_clear(stream_.native_handle());
-    if (!isIpLiteral(config_.host) &&
-        SSL_set_tlsext_host_name(stream_.native_handle(), config_.host.c_str()) != 1) {
+    const auto tlsSetup = prepareClientTlsStream(
+        stream_, config_.host, config_.transport.view(), ClientAlpnMode::kHttp11);
+    if (tlsSetup != ClientTlsSetupError::kNone) {
         throw WebSocketClientError(
-            WebSocketClientError::Code::kTlsFailed, "failed to set WebSocket TLS SNI host");
-    }
-    if (config_.tlsPeerVerification == HttpClientTlsPeerVerificationPolicy::kVerify) {
-        stream_.set_verify_callback(asio::ssl::host_name_verification(std::string(config_.host)));
-    }
-
-    static constexpr unsigned char kHttp11Alpn[] = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
-    if (SSL_set_alpn_protos(stream_.native_handle(), kHttp11Alpn, sizeof(kHttp11Alpn)) != 0) {
-        throw WebSocketClientError(
-            WebSocketClientError::Code::kTlsFailed, "failed to configure WebSocket TLS ALPN");
+            WebSocketClientError::Code::kTlsFailed, clientTlsSetupErrorMessage(tlsSetup));
     }
 
     auto handshake = co_await asyncAsio([&](auto handler) mutable {
@@ -458,7 +311,7 @@ Task<void> WebSocketClientState::performTlsHandshake() {
             WebSocketClientError::Code::kTlsFailed, handshake.errorCode().message());
     }
 
-    const auto alpn = selectedAlpnProtocol(stream_.native_handle());
+    const auto alpn = selectedClientAlpn(stream_.native_handle());
     if (!alpn.empty() && alpn != "http/1.1") {
         throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
             "upstream did not negotiate HTTP/1.1 for WebSocket");
@@ -551,7 +404,9 @@ Task<void> WebSocketClientState::performHandshake(OperationOptions options) {
 
     std::pmr::vector<HttpHeaderView> headers(memory_.resource());
     headers.reserve(config_.headers.size() + kHandshakeHeaderReserve);
-    for (const auto& header : config_.headers) headers.emplace_back(header.name, header.value);
+    for (const auto& header : config_.headers) {
+        headers.emplace_back(header.name, header.value);
+    }
     headers.emplace_back("Upgrade", "websocket");
     headers.emplace_back("Connection", "Upgrade");
     headers.emplace_back("Sec-WebSocket-Key", keyView);
@@ -682,17 +537,17 @@ Task<std::size_t> WebSocketClientState::readTransport(std::span<char> output,
 
 Task<void> WebSocketClientState::flushOutput(OperationOptions options) {
     for (;;) {
-        const auto plan = protocol_->outputPlan();
+        auto& protocol = requireProtocol();
+        const auto plan = protocol.outputPlan();
         if (!plan.bytes().empty()) {
             co_await writeTransport(plan.bytes(), options, config_.writeTimeout);
-            if (protocol_->consumeOutput(plan.bytes().size()) ==
-                WsOutputConsumeStatus::kOutOfRange) {
+            if (protocol.consumeOutput(plan.bytes().size()) == WsOutputConsumeStatus::kOutOfRange) {
                 std::terminate();
             }
             continue;
         }
         if (plan.disposition() == WsTransportDisposition::kEndTransport) {
-            protocol_->commitTransportEnd();
+            protocol.commitTransportEnd();
             closeOnWorker(AbortReason::kNone);
         }
         co_return;
@@ -711,12 +566,13 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
     ActivityGuard guard(state->readActive_, "concurrent WebSocket client reads are not supported");
     std::array<char, kTransportBufferBytes> bytes{};
     for (;;) {
-        const auto event = state->protocol_->poll();
+        auto& protocol = state->requireProtocol();
+        const auto event = protocol.poll();
         if (!event.has_value()) {
             const auto count =
                 co_await state->readTransport(bytes, options, state->config_.readTimeout);
             if (count == 0) {
-                state->protocol_->notifyTransportEof();
+                protocol.notifyTransportEof();
                 state->closeOnWorker(AbortReason::kNone);
                 co_return std::nullopt;
             }
@@ -730,7 +586,9 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
             co_await state->flushOutput(options);
             continue;
         }
-        if (event->pong() != nullptr) continue;
+        if (event->pong() != nullptr) {
+            continue;
+        }
         if (event->close() != nullptr || event->protocolError() != nullptr ||
             event->transportEnd() != nullptr) {
             co_await state->flushOutput(options);
@@ -752,7 +610,7 @@ Task<void> WebSocketClientState::writeOwned(std::shared_ptr<WebSocketClientState
     state->requireOpen();
     ActivityGuard guard(
         state->writeActive_, "concurrent WebSocket client writes are not supported");
-    const auto submitted = state->protocol_->submitFrame(opcode, payload);
+    const auto submitted = state->requireProtocol().submitFrame(opcode, payload);
     switch (submitted) {
         case WsFrameSubmitStatus::kAccepted:
             break;
@@ -782,7 +640,7 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
     state->requireOpen();
     ActivityGuard readGuard(state->readActive_, "WebSocket client close cannot overlap read");
     ActivityGuard writeGuard(state->writeActive_, "WebSocket client close cannot overlap write");
-    const auto submitted = state->protocol_->submitClose(options.code, reason);
+    const auto submitted = state->requireProtocol().submitClose(options.code, reason);
     if (submitted != WsCloseSubmitStatus::kAccepted) {
         throw WebSocketClientError(
             WebSocketClientError::Code::kProtocolError, "invalid WebSocket client close payload");
@@ -791,12 +649,13 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
     co_await state->flushOutput(operationOptions);
     std::array<char, kCloseHandshakeBufferBytes> bytes{};
     for (;;) {
-        const auto event = state->protocol_->poll();
+        auto& protocol = state->requireProtocol();
+        const auto event = protocol.poll();
         if (!event.has_value()) {
             const auto count = co_await state->readTransport(
                 bytes, operationOptions, state->config_.closeHandshakeTimeout);
             if (count == 0) {
-                state->protocol_->notifyTransportEof();
+                protocol.notifyTransportEof();
                 state->closeOnWorker(AbortReason::kNone);
                 co_return;
             }
@@ -846,10 +705,7 @@ WebSocketClientHandle::WebSocketClientHandle(std::shared_ptr<detail::WebSocketCl
       state_(std::move(state)),
       options_(std::move(options)) {}
 
-WebSocketClientHandle::WebSocketClientHandle(const WebSocketClientHandle& other) noexcept
-    : detail::ScopedCapabilityNode(other),
-      state_(other.state_),
-      options_(other.options_) {}
+WebSocketClientHandle::WebSocketClientHandle(const WebSocketClientHandle& other) noexcept = default;
 
 void WebSocketClientHandle::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
     static_cast<WebSocketClientHandle&>(capability).state_.reset();
@@ -897,8 +753,8 @@ void WebSocketClientHandle::abort() noexcept {
     }
 }
 
-WebSocketClient::WebSocketClient(EventLoop loop, WebSocketClientConfig config)
-    : state_(std::make_shared<detail::WebSocketClientState>(std::move(loop), std::move(config))) {
+WebSocketClient::WebSocketClient(EventLoop loop, const WebSocketClientConfig& config)
+    : state_(std::make_shared<detail::WebSocketClientState>(std::move(loop), config)) {
     state_->bindStop();
 }
 

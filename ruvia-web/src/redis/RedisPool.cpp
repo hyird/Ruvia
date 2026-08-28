@@ -69,7 +69,7 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(
         const auto argSpan = redisArgSpan(args);
         connection.writeBuffer.reserve(respCommandSerializedSize(argSpan));
         appendRespCommand(connection.writeBuffer, argSpan);
-        const auto deadline = operationTimeout.constrainedBy(config_.commandTimeout);
+        const auto deadline = operationTimeout.constrainedBy(commandTimeout_);
         const auto writeEc = co_await asyncSocketWrite(connection, deadline);
         throwIfAborted(connection);
         if (writeEc) {
@@ -149,7 +149,7 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
             appendRespCommand(connection.writeBuffer, args);
         }
 
-        const auto deadline = operationTimeout.constrainedBy(config_.commandTimeout);
+        const auto deadline = operationTimeout.constrainedBy(commandTimeout_);
         const auto writeEc = co_await asyncSocketWrite(connection, deadline);
         throwIfAborted(connection);
         if (writeEc) {

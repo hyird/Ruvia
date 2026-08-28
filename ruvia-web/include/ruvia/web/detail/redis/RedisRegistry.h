@@ -82,8 +82,14 @@ inline constexpr std::size_t kRedisReadBufferBytes = 8192;
 
 class RedisPool final {
 public:
-    RedisPool(asio::io_context& ioContext, RedisConfigStorage config, std::size_t poolSize,
+    RedisPool(asio::io_context& ioContext, const RedisConfigStorage& config,
+        std::optional<std::chrono::milliseconds> commandTimeout, std::size_t poolSize,
         std::pmr::memory_resource* resource = nullptr, const WorkerHandle* worker = nullptr);
+    RedisPool(asio::io_context&, RedisConfigStorage&&, std::optional<std::chrono::milliseconds>,
+        std::size_t, std::pmr::memory_resource* = nullptr, const WorkerHandle* = nullptr) = delete;
+    RedisPool(asio::io_context&, const RedisConfigStorage&&,
+        std::optional<std::chrono::milliseconds>, std::size_t, std::pmr::memory_resource* = nullptr,
+        const WorkerHandle* = nullptr) = delete;
     ~RedisPool();
 
     RedisPool(const RedisPool&) = delete;
@@ -174,7 +180,8 @@ private:
     void throwIfAborted(const Connection& connection) const;
     asio::io_context& ioContext_;
     const WorkerHandle* worker_;
-    RedisConfigStorage config_;
+    const RedisConfigStorage& config_;
+    std::optional<std::chrono::milliseconds> commandTimeout_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Connection> connections_;
     PoolLeaseScheduler scheduler_;
@@ -211,7 +218,16 @@ private:
     using RedisPoolDeleter = PmrObjectDeleter<RedisPool>;
 
     struct Entry final {
+        Entry(std::string_view alias, const RedisConfigStorage& config,
+            std::pmr::memory_resource* resource)
+            : alias(alias, resource),
+              config(config, resource) {}
+
         std::pmr::string alias;
+        // Declared before the pools so their borrowed config reference remains
+        // valid through pool destruction. The registry reserves the complete
+        // entry set before construction, keeping this address stable at runtime.
+        RedisConfigStorage config;
         std::unique_ptr<RedisPool, RedisPoolDeleter> general;
         std::unique_ptr<RedisPool, RedisPoolDeleter> blocking;
     };

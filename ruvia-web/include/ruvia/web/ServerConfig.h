@@ -105,6 +105,8 @@ struct TlsConfig final {
 // An omitted port disables that transport. autoHttpsRedirect turns the HTTP
 // endpoint into a redirect endpoint targeting the HTTPS port in this value.
 struct ListenConfig final {
+    // Numeric IPv4 or IPv6 bind address, normalized when App::listen consumes
+    // this configuration.
     std::string address{"0.0.0.0"};
     std::optional<std::uint16_t> http{};
     std::optional<std::uint16_t> https{};
@@ -121,11 +123,11 @@ struct CompressionConfig final {
     // Eligible bodies through this size are encoded synchronously on the
     // worker; larger bodies are offloaded to the bounded blocking pool when it
     // is enabled, otherwise they are also encoded synchronously.
-    std::size_t syncBytes{64u * 1024u};
+    std::size_t syncBytes{std::size_t{64} * 1024};
     // Buffered bodies above this size remain identity. Static files use their
     // own document-root precompression thresholds and still prefer checked-in
     // precompressed sidecars when present.
-    std::size_t maxBytes{64u * 1024u * 1024u};
+    std::size_t maxBytes{std::size_t{64} * 1024 * 1024};
 };
 
 enum class CorsOriginMode : std::uint8_t {
@@ -190,7 +192,7 @@ struct DocumentRootConfig final {
     bool precompressBrotli{false};
     bool precompressZstd{false};
     std::size_t precompressMinBytes{1024};
-    std::size_t precompressMaxBytes{256u * 1024u};
+    std::size_t precompressMaxBytes{std::size_t{256} * 1024};
 };
 
 // One terminal response outcome with a committed final status, passed to the

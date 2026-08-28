@@ -1,8 +1,10 @@
 #include "test_harness.h"
 
 #include <chrono>
+#include <cstddef>
 #include <concepts>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -24,6 +26,27 @@ namespace {
 using ruvia::CorsConfig;
 using ruvia::HttpResponse;
 using ruvia::detail::Http1ServerRequestParser;
+
+class RejectingMemoryResource final : public std::pmr::memory_resource {
+public:
+    [[nodiscard]] std::size_t allocationCount() const noexcept {
+        return allocationCount_;
+    }
+
+private:
+    void* do_allocate(std::size_t, std::size_t) override {
+        ++allocationCount_;
+        throw std::bad_alloc();
+    }
+
+    void do_deallocate(void*, std::size_t, std::size_t) override {}
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::size_t allocationCount_{0};
+};
 
 void applyCorsHeaders(
     const ruvia::HttpRequest& request, HttpResponse& response, const CorsConfig& config) {
@@ -64,6 +87,29 @@ RUVIA_TEST(cors_config_validates_when_consumed) {
     RUVIA_CHECK(rejects({.maxAge = std::chrono::seconds(-1)}));
     RUVIA_CHECK(
         !rejects({.origin = {.mode = ruvia::CorsOriginMode::kCredentialedExact, .value = "null"}}));
+}
+
+RUVIA_TEST(cors_rejects_the_entire_config_before_owner_allocation) {
+    CorsConfig config{
+        .origin =
+            {
+                .mode = ruvia::CorsOriginMode::kExact,
+                .value = std::string("https://") + std::string(50, 'a') + ".example",
+            },
+        .requestHeaders = {.mode = ruvia::CorsRequestHeadersMode::kFixed},
+    };
+    RejectingMemoryResource resource;
+
+    bool rejectedAsConfig = false;
+    try {
+        (void)ruvia::detail::makeCorsOptions(config, &resource);
+    } catch (const std::invalid_argument& error) {
+        rejectedAsConfig =
+            std::string_view(error.what()) == "CORS fixed request headers must not be empty";
+    }
+
+    RUVIA_CHECK(rejectedAsConfig);
+    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 }
 
 RUVIA_TEST(cors_max_age_distinguishes_absence_from_zero) {
