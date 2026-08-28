@@ -44,7 +44,7 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(
         if (cancellationMailbox_ == nullptr) {
             std::terminate();
         }
-        cancellationId = nextCancellationId();
+        cancellationId = cancellationMailbox_->nextOperationId();
         connection.cancellationId = cancellationId;
         options.stopToken.registerCallback(
             stopRegistration, WorkerCancellationPost<RedisOperationCancellationMailbox>(
@@ -112,7 +112,7 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
         if (cancellationMailbox_ == nullptr) {
             std::terminate();
         }
-        cancellationId = nextCancellationId();
+        cancellationId = cancellationMailbox_->nextOperationId();
         connection.cancellationId = cancellationId;
         options.stopToken.registerCallback(
             stopRegistration, WorkerCancellationPost<RedisOperationCancellationMailbox>(
@@ -171,13 +171,6 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
         guard.discard();
         throw;
     }
-}
-
-std::uint64_t RedisPool::nextCancellationId() noexcept {
-    if (++nextCancellationId_ == 0) {
-        ++nextCancellationId_;
-    }
-    return nextCancellationId_;
 }
 
 void RedisPool::cancelOperationById(std::uint64_t cancellationId) noexcept {

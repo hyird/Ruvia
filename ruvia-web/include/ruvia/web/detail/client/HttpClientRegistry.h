@@ -200,7 +200,6 @@ private:
     [[nodiscard]] Task<std::size_t> acquire(const OperationTimeout& timeout, StopToken stopToken);
     void release(std::size_t index) noexcept;
     void close(Connection& connection) noexcept;
-    [[nodiscard]] std::uint64_t nextCancellationId() noexcept;
     void cancelOperationById(std::uint64_t cancellationId) noexcept;
     void cancelOperation(std::size_t index, std::uint64_t generation, AbortReason reason) noexcept;
     [[nodiscard]] bool armDeadline(
@@ -270,7 +269,6 @@ private:
     std::size_t bytesSent_{0};
     std::size_t bytesReceived_{0};
     std::size_t cookieBytes_{0};
-    std::uint64_t nextCancellationId_{0};
     bool backgroundJoined_{false};
 };
 

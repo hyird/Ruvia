@@ -20,6 +20,7 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
+#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/db/DbRows.h"
@@ -36,76 +37,15 @@ enum class DbSlotAbortReason : std::uint8_t {
     kCancelled,
 };
 
-// One state object is allocated per pool slot at startup. Stop callbacks retain
-// this stable bridge, not the pool itself, and stale generations become no-ops.
-// The owner pointer is read and cleared only on the bound worker; once that
-// worker is detached no queued cancellation continuation can run.
-class DbOperationCancellationState final
-    : public std::enable_shared_from_this<DbOperationCancellationState> {
-public:
-    using Cancel = void (*)(void*, std::size_t, std::uint64_t) noexcept;
-
-    DbOperationCancellationState(
-        WorkerHandle worker, void* owner, std::size_t slot, Cancel cancel) noexcept
-        : worker_(std::move(worker)),
-          owner_(owner),
-          slot_(slot),
-          cancel_(cancel) {}
-
-    void request(std::uint64_t generation) noexcept {
-        if (worker_.isCurrent()) {
-            dispatch(generation);
-            return;
-        }
-        (void)WorkerHandleAccess::deferIfAttached(
-            worker_, [state = shared_from_this(), generation] { state->dispatch(generation); });
-    }
-
-    void detach(void* owner) noexcept {
-        if (owner_ == owner) {
-            owner_ = nullptr;
-        }
-    }
-
-private:
-    void dispatch(std::uint64_t generation) noexcept {
-        if (owner_ != nullptr) {
-            cancel_(owner_, slot_, generation);
-        }
-    }
-
-    WorkerHandle worker_;
-    void* owner_;
-    std::size_t slot_;
-    Cancel cancel_;
-};
+template <typename Pool>
+using DbOperationCancellationMailbox = WorkerCancellationMailbox<Pool>;
 
 template <typename Pool>
-[[nodiscard]] std::shared_ptr<DbOperationCancellationState> makeDbOperationCancellationState(
-    const WorkerHandle& worker, Pool& pool, std::size_t slot) {
-    return std::allocate_shared<DbOperationCancellationState>(
-        std::pmr::polymorphic_allocator<DbOperationCancellationState>(processResource()), worker,
-        &pool, slot, [](void* owner, std::size_t index, std::uint64_t generation) noexcept {
-            static_cast<Pool*>(owner)->cancelOperation(index, generation);
-        });
-}
-
-template <typename Slot>
-[[nodiscard]] std::uint64_t beginDbSlotOperation(Slot& slot) noexcept {
-    slot.abortReason = DbSlotAbortReason::kNone;
-    if (++slot.operationGeneration == 0) {
-        ++slot.operationGeneration;
-    }
-    return slot.operationGeneration;
-}
-
-template <typename Slot>
-void finishDbSlotOperation(Slot& slot, std::uint64_t generation) noexcept {
-    if (slot.operationGeneration == generation) {
-        if (++slot.operationGeneration == 0) {
-            ++slot.operationGeneration;
-        }
-    }
+[[nodiscard]] inline std::shared_ptr<DbOperationCancellationMailbox<Pool>>
+makeDbOperationCancellationMailbox(const WorkerHandle& worker, Pool& pool) {
+    using Mailbox = DbOperationCancellationMailbox<Pool>;
+    return std::allocate_shared<Mailbox>(
+        std::pmr::polymorphic_allocator<Mailbox>(processResource()), pool, worker);
 }
 
 template <typename Pool>
@@ -113,16 +53,22 @@ class DbSlotCancellationGuard final {
 public:
     DbSlotCancellationGuard(Pool& pool, std::size_t slot, const StopToken& stopToken)
         : pool_(&pool),
-          slot_(slot),
-          generation_(beginDbSlotOperation(pool.slots_[slot])),
-          state_(pool.slots_[slot].cancellationState.get()) {
-        if (stopToken.stoppable() && state_ == nullptr) {
+          slot_(slot) {
+        auto& connection = pool.slots_[slot];
+        connection.abortReason = DbSlotAbortReason::kNone;
+        if (!stopToken.stoppable()) {
+            return;
+        }
+        if (pool.cancellationMailbox_ == nullptr) {
             throw std::logic_error("cancellable database operation requires a valid worker");
         }
-        stopToken.registerCallback(stopRegistration_,
-            [state = state_, generation = generation_]() noexcept { state->request(generation); });
+        cancellationId_ = pool.cancellationMailbox_->nextOperationId();
+        connection.cancellationId = cancellationId_;
+        stopToken.registerCallback(
+            stopRegistration_, WorkerCancellationPost<DbOperationCancellationMailbox<Pool>>(
+                                   pool.cancellationMailbox_, cancellationId_));
         if (stopToken.stopRequested()) {
-            pool_->cancelOperation(slot_, generation_);
+            pool_->cancelOperationById(cancellationId_);
         }
     }
 
@@ -136,7 +82,10 @@ public:
     void finish() noexcept {
         stopRegistration_.reset();
         if (pool_ != nullptr) {
-            finishDbSlotOperation(pool_->slots_[slot_], generation_);
+            auto& connection = pool_->slots_[slot_];
+            if (connection.cancellationId == cancellationId_) {
+                connection.cancellationId = 0;
+            }
             pool_ = nullptr;
         }
     }
@@ -144,8 +93,7 @@ public:
 private:
     Pool* pool_;
     std::size_t slot_;
-    std::uint64_t generation_;
-    DbOperationCancellationState* state_;
+    std::uint64_t cancellationId_{0};
     StopRegistration stopRegistration_;
 };
 

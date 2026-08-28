@@ -1,5 +1,11 @@
-#include <array>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -53,6 +59,39 @@ using namespace std::chrono_literals;
 struct SelfSignedPem {
     std::string cert;
     std::string key;
+};
+
+class ScopedTemporaryDirectory final {
+public:
+    explicit ScopedTemporaryDirectory(std::string_view name)
+        : path_(std::filesystem::temp_directory_path() /
+                (std::string(name) + "_" + std::to_string(currentProcessId()))) {
+        std::filesystem::remove_all(path_);
+        std::filesystem::create_directories(path_);
+    }
+
+    ~ScopedTemporaryDirectory() {
+        std::error_code ignored;
+        std::filesystem::remove_all(path_, ignored);
+    }
+
+    ScopedTemporaryDirectory(const ScopedTemporaryDirectory&) = delete;
+    ScopedTemporaryDirectory& operator=(const ScopedTemporaryDirectory&) = delete;
+
+    [[nodiscard]] const std::filesystem::path& path() const noexcept {
+        return path_;
+    }
+
+private:
+    [[nodiscard]] static int currentProcessId() noexcept {
+#if defined(_WIN32)
+        return _getpid();
+#else
+        return getpid();
+#endif
+    }
+
+    std::filesystem::path path_;
 };
 
 void reportStage(const char* stage) noexcept {
@@ -1275,10 +1314,8 @@ int main() {
     reportStage("main.pem-generate");
     const auto pem = makeSelfSignedPem("IP:127.0.0.1");
     const auto mismatchPem = makeSelfSignedPem("DNS:localhost");
-    const auto directory = std::filesystem::temp_directory_path() / "ruvia_http_client_tls";
-    std::error_code ignored;
-    std::filesystem::remove_all(directory, ignored);
-    std::filesystem::create_directories(directory, ignored);
+    const ScopedTemporaryDirectory temporaryDirectory("ruvia_http_client_tls");
+    const auto& directory = temporaryDirectory.path();
     const auto certPath = directory / "cert.pem";
     const auto keyPath = directory / "key.pem";
     const auto mismatchCertPath = directory / "mismatch-cert.pem";
@@ -1370,7 +1407,6 @@ int main() {
     reportStage("main.mtls-stop");
     mtlsServer.stop();
     mtlsServer.join();
-    std::filesystem::remove_all(directory, ignored);
     if (missingClientCertificate != 0 || mtlsResult != 0) {
         std::fprintf(stderr, "HTTP client mutual TLS exchange failed (missing=%d, mtls=%d)\n",
             missingClientCertificate, mtlsResult);

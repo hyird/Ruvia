@@ -151,14 +151,17 @@ ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry,
     std::string message;
     std::exception_ptr failure;
     peer.start([&stopSource] { stopSource.requestStop(); });
-    ruvia::detail::asyncStartTask(runCancelledQuery(registry, stopSource.token(), code, message),
-        asio::bind_executor(
-            ioContext.get_executor(), [&](ruvia::detail::TaskCompletionResult<void> result) {
-                if (const auto* error = result.failure()) {
-                    failure = error->exception();
-                }
-                attachment.stop();
-            }));
+    asio::post(ioContext, [&] {
+        ruvia::detail::asyncStartTask(
+            runCancelledQuery(registry, stopSource.token(), code, message),
+            asio::bind_executor(
+                ioContext.get_executor(), [&](ruvia::detail::TaskCompletionResult<void> result) {
+                    if (const auto* error = result.failure()) {
+                        failure = error->exception();
+                    }
+                    attachment.stop();
+                }));
+    });
     ioContext.run();
     peer.join();
 
@@ -219,16 +222,18 @@ ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry,
                 });
             });
         });
-        ruvia::detail::asyncStartTask(runClosingConnect(registry, code, message),
-            asio::bind_executor(
-                ioContext.get_executor(), [&](ruvia::detail::TaskCompletionResult<void> result) {
-                    ++completions;
-                    taskCompleted = true;
-                    if (const auto* error = result.failure()) {
-                        failure = error->exception();
-                    }
-                    attachment.stop();
-                }));
+        asio::post(ioContext, [&] {
+            ruvia::detail::asyncStartTask(runClosingConnect(registry, code, message),
+                asio::bind_executor(ioContext.get_executor(),
+                    [&](ruvia::detail::TaskCompletionResult<void> result) {
+                        ++completions;
+                        taskCompleted = true;
+                        if (const auto* error = result.failure()) {
+                            failure = error->exception();
+                        }
+                        attachment.stop();
+                    }));
+        });
         ioContext.run();
 
         if (!taskCompleted) {

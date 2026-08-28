@@ -176,7 +176,6 @@ private:
     Task<std::error_code> asyncSocketWrite(Connection& connection, const OperationTimeout& timeout);
     Task<AsioCompletion<std::size_t>> asyncSocketReadSome(
         Connection& connection, std::span<char> buffer, const OperationTimeout& timeout);
-    [[nodiscard]] std::uint64_t nextCancellationId() noexcept;
     void cancelOperationById(std::uint64_t cancellationId) noexcept;
     void throwIfAborted(const Connection& connection) const;
     asio::io_context& ioContext_;
@@ -187,7 +186,6 @@ private:
     std::pmr::vector<Connection> connections_;
     PoolLeaseScheduler scheduler_;
     std::shared_ptr<RedisOperationCancellationMailbox> cancellationMailbox_;
-    std::uint64_t nextCancellationId_{0};
 };
 
 struct RedisCommandExecutor final {

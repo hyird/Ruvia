@@ -111,6 +111,7 @@ public:
     friend void releaseDbSlot(Pool&, std::size_t) noexcept;
     template <typename Pool>
     friend class DbSlotCancellationGuard;
+    friend class WorkerCancellationMailbox<MariaDbPool>;
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
     friend class ::ruvia::DbStreamResult;
@@ -140,8 +141,7 @@ public:
         bool waitActive{false};
         bool closeRequested{false};
         DbSlotAbortReason abortReason{DbSlotAbortReason::kNone};
-        std::uint64_t operationGeneration{0};
-        std::shared_ptr<DbOperationCancellationState> cancellationState;
+        std::uint64_t cancellationId{0};
         enum class DeadlineKind : std::uint8_t { kResolve, kSocket, kSleep };
         OperationDeadline<DeadlineKind> deadline;
     };
@@ -191,7 +191,7 @@ public:
     Task<void> rollbackTransaction(
         std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
     void abortTransaction(std::size_t slot) noexcept;
-    void cancelOperation(std::size_t slot, std::uint64_t generation) noexcept;
+    void cancelOperationById(std::uint64_t cancellationId) noexcept;
     void throwIfCancelled(const ConnectionSlot& slot) const;
 
 private:
@@ -201,6 +201,7 @@ private:
     std::pmr::vector<ConnectionSlot> slots_;
     PoolLeaseScheduler scheduler_;
     WorkerHandle worker_;
+    std::shared_ptr<DbOperationCancellationMailbox<MariaDbPool>> cancellationMailbox_;
 };
 
 #endif  // RUVIA_ENABLE_MARIADB
@@ -246,6 +247,7 @@ private:
     friend void releaseDbSlot(Pool&, std::size_t) noexcept;
     template <typename Pool>
     friend class DbSlotCancellationGuard;
+    friend class WorkerCancellationMailbox<PostgreSqlPool>;
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
     friend class ::ruvia::DbStreamResult;
@@ -269,8 +271,7 @@ private:
         bool waitActive{false};
         bool closeRequested{false};
         DbSlotAbortReason abortReason{DbSlotAbortReason::kNone};
-        std::uint64_t operationGeneration{0};
-        std::shared_ptr<DbOperationCancellationState> cancellationState;
+        std::uint64_t cancellationId{0};
         enum class DeadlineKind : std::uint8_t { kResolve, kSocket };
         OperationDeadline<DeadlineKind> deadline;
     };
@@ -322,7 +323,7 @@ public:
     Task<void> rollbackTransaction(
         std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
     void abortTransaction(std::size_t slot) noexcept;
-    void cancelOperation(std::size_t slot, std::uint64_t generation) noexcept;
+    void cancelOperationById(std::uint64_t cancellationId) noexcept;
     void throwIfCancelled(const ConnectionSlot& slot) const;
 
 private:
@@ -332,6 +333,7 @@ private:
     std::pmr::vector<ConnectionSlot> slots_;
     PoolLeaseScheduler scheduler_;
     WorkerHandle worker_;
+    std::shared_ptr<DbOperationCancellationMailbox<PostgreSqlPool>> cancellationMailbox_;
 };
 
 #endif  // RUVIA_ENABLE_POSTGRESQL

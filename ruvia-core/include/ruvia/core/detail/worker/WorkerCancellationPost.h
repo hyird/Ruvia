@@ -27,6 +27,19 @@ public:
         return worker_;
     }
 
+    // Operation ids are created and consumed on the bound worker. Zero stays
+    // reserved for "no cancellable operation", so stale queued callbacks can
+    // be rejected by comparing one scalar in the owner.
+    [[nodiscard]] std::uint64_t nextOperationId() noexcept {
+        if (!worker_.isCurrent()) {
+            std::terminate();
+        }
+        if (++nextOperationId_ == 0) {
+            ++nextOperationId_;
+        }
+        return nextOperationId_;
+    }
+
     [[nodiscard]] std::shared_ptr<WorkerCancellationMailbox> retain() noexcept {
         auto mailbox = this->weak_from_this().lock();
         if (mailbox == nullptr) {
@@ -51,6 +64,7 @@ public:
 private:
     std::atomic<Owner*> owner_;
     WorkerHandle worker_;
+    std::uint64_t nextOperationId_{0};
 };
 
 // A registered stop callback borrows the pool-owned mailbox and carries only an

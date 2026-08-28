@@ -82,7 +82,9 @@ int main() {
     onWorkerSource.token().registerCallback(onWorkerRegistration,
         ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 44));
     bool observedInline = false;
+    bool observedOperationIds = false;
     ruvia::detail::WorkerHandleAccess::defer(worker, [&] {
+        observedOperationIds = mailbox->nextOperationId() == 1 && mailbox->nextOperationId() == 2;
         onWorkerSource.requestStop();
         observedInline = owner.lastOperationId == 44;
         ioContext.stop();
@@ -90,6 +92,7 @@ int main() {
     ioContext.restart();
     dispatcher->runContext();
     check(observedInline);
+    check(observedOperationIds);
 
     mailbox->detach(owner);
     ruvia::detail::WorkerCancellationDispatch<CancellationMailbox>(mailbox, 43)();

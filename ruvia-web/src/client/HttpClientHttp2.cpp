@@ -489,7 +489,7 @@ Task<void> HttpClientPool::waitForHttp2SessionStop(
     StopRegistration stopRegistration;
     if (stopToken.stoppable()) {
         if (runtime.stateCancellationWaiters++ == 0) {
-            runtime.stateCancellationId = nextCancellationId();
+            runtime.stateCancellationId = cancellationMailbox_->nextOperationId();
         }
         cancellationId = runtime.stateCancellationId;
         stopToken.registerCallback(
@@ -583,7 +583,7 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
         std::uint64_t cancellationId = 0;
         StopRegistration stopRegistration;
         if (stopToken.stoppable()) {
-            cancellationId = nextCancellationId();
+            cancellationId = cancellationMailbox_->nextOperationId();
             pending.cancellationId = cancellationId;
             response.state_->cancellationId = cancellationId;
             stopToken.registerCallback(

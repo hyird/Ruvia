@@ -493,13 +493,6 @@ void HttpClientPool::release(std::size_t index) noexcept {
     }
 }
 
-std::uint64_t HttpClientPool::nextCancellationId() noexcept {
-    if (++nextCancellationId_ == 0) {
-        ++nextCancellationId_;
-    }
-    return nextCancellationId_;
-}
-
 void HttpClientPool::cancelOperationById(std::uint64_t cancellationId) noexcept {
     if (cancellationId == 0) {
         return;
@@ -713,7 +706,7 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
     std::uint64_t cancellationId = 0;
     StopRegistration stopRegistration;
     if (stopToken.stoppable()) {
-        cancellationId = nextCancellationId();
+        cancellationId = cancellationMailbox_->nextOperationId();
         connection.cancellationId = cancellationId;
         stopToken.registerCallback(
             stopRegistration, WorkerCancellationPost<HttpClientOperationCancellationMailbox>(
@@ -1009,7 +1002,7 @@ Task<void> HttpClientPool::executeRequestInto(
             std::uint64_t cancellationId = 0;
             StopRegistration stopRegistration;
             if (options.stopToken.stoppable()) {
-                cancellationId = nextCancellationId();
+                cancellationId = cancellationMailbox_->nextOperationId();
                 connection.cancellationId = cancellationId;
                 state->cancellationId = cancellationId;
                 options.stopToken.registerCallback(stopRegistration,

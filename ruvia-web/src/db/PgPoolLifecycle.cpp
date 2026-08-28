@@ -47,15 +47,13 @@ PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, DbConfigStorage conf
     slots_.reserve(1);
     slots_.emplace_back(ioContext_, resource_);
     if (worker_.valid()) {
-        slots_.back().cancellationState = makeDbOperationCancellationState(worker_, *this, 0);
+        cancellationMailbox_ = makeDbOperationCancellationMailbox(worker_, *this);
     }
 }
 
 PostgreSqlPool::~PostgreSqlPool() {
-    for (auto& slot : slots_) {
-        if (slot.cancellationState != nullptr) {
-            slot.cancellationState->detach(this);
-        }
+    if (cancellationMailbox_ != nullptr) {
+        cancellationMailbox_->detach(*this);
     }
     closeNow();
 }
@@ -135,16 +133,15 @@ void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
     slot.closeRequested = false;
 }
 
-void PostgreSqlPool::cancelOperation(std::size_t slotIndex, std::uint64_t generation) noexcept {
-    if (slotIndex >= slots_.size()) {
-        std::terminate();
-    }
-    auto& slot = slots_[slotIndex];
-    if (slot.operationGeneration != generation) {
+void PostgreSqlPool::cancelOperationById(std::uint64_t cancellationId) noexcept {
+    for (auto& slot : slots_) {
+        if (slot.cancellationId != cancellationId) {
+            continue;
+        }
+        slot.abortReason = DbSlotAbortReason::kCancelled;
+        closeSlot(slot);
         return;
     }
-    slot.abortReason = DbSlotAbortReason::kCancelled;
-    closeSlot(slot);
 }
 
 void PostgreSqlPool::throwIfCancelled(const ConnectionSlot& slot) const {
