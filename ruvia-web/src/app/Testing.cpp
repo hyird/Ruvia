@@ -91,6 +91,8 @@ struct TestApp::Impl final {
     EventLoopPool eventLoops{{.loopCount = 1}};
     EventLoop eventLoop{eventLoops.loop(0)};
     WorkerHandle worker{eventLoop.handle()};
+    StopSource stopSource;
+    StopToken stopToken{stopSource.token()};
     std::optional<detail::ConnectionScanner> connectionScanner;
     std::optional<detail::WorkerCapabilities> capabilities;
     bool finalized{false};
@@ -99,6 +101,7 @@ struct TestApp::Impl final {
 
     ~Impl() {
         if (workerReady) {
+            stopSource.requestStop();
             try {
                 eventLoop.start(stopTestWorker(*connectionScanner, *capabilities)).get();
             } catch (...) {
@@ -302,7 +305,7 @@ TestResponse TestApp::request(const TestRequest& request) {
     const auto resolution = routes.resolve(parsed);
     const auto* resolved = resolution.resolved();
 
-    const auto services = impl_->capabilities->contextServices();
+    const auto services = impl_->capabilities->contextServices(impl_->stopToken);
 
     std::optional<HttpProtocolError> bodyLimitError;
     if (!parseError.has_value() && resolved != nullptr) {
@@ -318,7 +321,7 @@ TestResponse TestApp::request(const TestRequest& request) {
         if (!parseError.has_value() && !bodyLimitError.has_value() && resolved != nullptr && resolved->route().deadlineMs() != 0) {
             requestDeadline.emplace(requestServices.stopToken());
             requestDeadline->arm(requestServices.worker(), std::chrono::milliseconds(resolved->route().deadlineMs()));
-            requestServices = requestServices.withStopToken(requestDeadline->token()).withRequestDeadline(&*requestDeadline);
+            requestServices = requestServices.withRequestDeadline(*requestDeadline);
         }
         if (parseError.has_value()) {
             const auto error = httpParseProtocolError(*parseError);

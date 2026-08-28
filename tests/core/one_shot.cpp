@@ -25,6 +25,18 @@ template <typename T>
 concept HasRvalueWorkerBorrow = requires(T&& receiver) { std::move(receiver).worker(); };
 
 template <typename T>
+concept HasRvalueOneShotWait = requires(T&& receiver) { std::move(receiver).wait(); };
+
+template <typename T>
+concept HasRvalueOneShotCancellableWait = requires(T&& receiver, ruvia::StopToken stopToken) { std::move(receiver).wait(std::move(stopToken)); };
+
+template <typename T>
+concept HasRvalueOneShotTimedWait = requires(T&& receiver) { std::move(receiver).waitFor(std::chrono::seconds(1)); };
+
+template <typename T>
+concept HasRvalueOneShotTimedCancellableWait = requires(T&& receiver, ruvia::StopToken stopToken) { std::move(receiver).waitFor(std::chrono::seconds(1), std::move(stopToken)); };
+
+template <typename T>
 concept HasPositionalOneShotResourceFactory = requires(ruvia::WorkerHandle worker, std::pmr::memory_resource* resource) { ruvia::makeOneShot<T>(worker, resource); };
 
 template <typename T>
@@ -35,6 +47,10 @@ static_assert(std::is_move_constructible_v<ruvia::OneShotReceiver<int>>);
 static_assert(!std::is_move_assignable_v<ruvia::OneShotReceiver<int>>);
 static_assert(!HasRvalueWorkerWaitValue<ruvia::WorkerWaitResult<int>>);
 static_assert(!HasRvalueWorkerBorrow<ruvia::OneShotReceiver<int>>);
+static_assert(!HasRvalueOneShotWait<ruvia::OneShotReceiver<int>>);
+static_assert(!HasRvalueOneShotCancellableWait<ruvia::OneShotReceiver<int>>);
+static_assert(!HasRvalueOneShotTimedWait<ruvia::OneShotReceiver<int>>);
+static_assert(!HasRvalueOneShotTimedCancellableWait<ruvia::OneShotReceiver<int>>);
 static_assert(std::is_aggregate_v<ruvia::OneShotOptions>);
 static_assert(std::same_as<decltype(ruvia::OneShotOptions{}.resource), std::pmr::memory_resource*>);
 static_assert(HasOneShotOptionsFactory<int>);

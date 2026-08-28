@@ -206,7 +206,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                 if (handlerDeadline > std::chrono::milliseconds::zero()) {
                     requestDeadline.emplace(stopToken_);
                     requestDeadline->arm(workerRuntime_.handle(), handlerDeadline);
-                    requestServices = baseRouteServices.withStopToken(requestDeadline->token()).withRequestDeadline(&*requestDeadline);
+                    requestServices = baseRouteServices.withRequestDeadline(*requestDeadline);
                 }
 
                 const auto expectationPlan = parsed.bodyPlan.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);

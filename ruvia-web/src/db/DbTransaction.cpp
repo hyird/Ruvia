@@ -124,13 +124,13 @@ void DbTransaction::expireCapability(detail::ScopedCapabilityNode& capability) n
     transaction.reset();
 }
 
-ScopedOperation<DbRows> DbTransaction::query(std::string_view sql, std::span<const DbValue> params) {
+ScopedOperation<DbRows> DbTransaction::query(std::string_view sql, std::span<const DbValue> params) & {
     requireActive();
     auto statement = prepareDbStatement(sql, params, state_.activePayload().resource);
     return detail::makeScopedOperation(operationScope_, queryPrepared(std::move(statement.sql), std::move(statement.params)));
 }
 
-ScopedOperation<DbExecResult> DbTransaction::execute(std::string_view sql, std::span<const DbValue> params) {
+ScopedOperation<DbExecResult> DbTransaction::execute(std::string_view sql, std::span<const DbValue> params) & {
     // executePrepared performs the authoritative admission check when its lazy
     // task starts. Preparing parameters only needs the transaction's stable
     // request memory domain while the lease is idle.
@@ -155,7 +155,7 @@ Task<DbExecResult> DbTransaction::executePrepared(std::pmr::string sql, std::pmr
     co_return result;
 }
 
-ScopedOperation<void> DbTransaction::commit() {
+ScopedOperation<void> DbTransaction::commit() & {
     requireActive();
     return detail::makeScopedOperation(operationScope_, commitTask());
 }
@@ -167,7 +167,7 @@ Task<void> DbTransaction::commitTask() {
     operation.finishClosed();
 }
 
-ScopedOperation<void> DbTransaction::rollback() {
+ScopedOperation<void> DbTransaction::rollback() & {
     requireActive();
     return detail::makeScopedOperation(operationScope_, rollbackTask());
 }

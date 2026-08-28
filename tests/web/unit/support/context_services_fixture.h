@@ -16,8 +16,13 @@ namespace ruvia::test {
     return worker;
 }
 
+[[nodiscard]] inline const StopToken& testStopToken() {
+    static const StopToken token;
+    return token;
+}
+
 [[nodiscard]] inline detail::ContextServices testContextServices() {
-    return detail::ContextServices(testWorkerHandle());
+    return detail::ContextServices(testWorkerHandle(), testStopToken());
 }
 
 }  // namespace ruvia::test

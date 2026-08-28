@@ -30,12 +30,22 @@ public:
     TaskScope(TaskScope&&) = delete;
     TaskScope& operator=(TaskScope&&) = delete;
 
-    void spawn(Task<void> task);
-    void requestStop() noexcept;
-    [[nodiscard]] StopToken stopToken() const noexcept;
-    [[nodiscard]] bool stopRequested() const noexcept;
-    [[nodiscard]] std::size_t size() const noexcept;
-    [[nodiscard]] Task<void> join();
+    // Every operation is bound to this scope's stable address: child
+    // completion nodes point back to it, and join() reserves it from a lazy
+    // coroutine frame. Reject temporary scopes before either lifetime can be
+    // created and keep even state/token access on the same explicit owner.
+    void spawn(Task<void> task) &;
+    void spawn(Task<void>) && = delete;
+    void requestStop() & noexcept;
+    void requestStop() && = delete;
+    [[nodiscard]] StopToken stopToken() const& noexcept;
+    StopToken stopToken() const&& = delete;
+    [[nodiscard]] bool stopRequested() const& noexcept;
+    bool stopRequested() const&& = delete;
+    [[nodiscard]] std::size_t size() const& noexcept;
+    std::size_t size() const&& = delete;
+    [[nodiscard]] Task<void> join() &;
+    Task<void> join() && = delete;
 
 private:
     struct Node;

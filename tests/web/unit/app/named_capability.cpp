@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
 #include <memory_resource>
 #include <new>
@@ -36,6 +37,9 @@ template <typename Index>
 concept FindsAgainstExternalEntries = requires(const Index& index, const std::vector<Entry>& entries) { index.find(entries, "alias"); };
 
 static_assert(!FindsAgainstExternalEntries<ruvia::detail::NamedCapabilityIndex>);
+static_assert(!std::constructible_from<ruvia::detail::HttpClientPool, asio::io_context&, ruvia::WorkerHandle&&, ruvia::detail::HttpClientConfigStorage, std::pmr::memory_resource*>);
+static_assert(!std::constructible_from<ruvia::detail::HttpClientRegistry, asio::io_context&, ruvia::WorkerHandle&&, std::pmr::memory_resource*, const ruvia::HttpClientConfig&>);
+static_assert(!std::constructible_from<ruvia::detail::HttpClientRegistry, asio::io_context&, ruvia::WorkerHandle&&, std::pmr::memory_resource*, std::span<const ruvia::detail::HttpClientDefinition>>);
 
 class RejectingMemoryResource final : public std::pmr::memory_resource {
 public:

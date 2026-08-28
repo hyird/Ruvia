@@ -54,57 +54,79 @@ public:
     WebSocket(const WebSocket&) = delete;
     WebSocket& operator=(const WebSocket&) = delete;
 
-    [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read();
+    [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read() &;
+    ScopedOperation<std::optional<WebSocketMessage>> read() && = delete;
 
     /// The string_view overloads copy payloads into process-owned PMR storage
     /// before returning. Hot-path producers that already hold a buffer in
     /// request-owned storage can move it into the matching PMR-string overload
     /// to skip that copy.
-    ScopedOperation<void> text(std::string_view payload);
+    ScopedOperation<void> text(std::string_view payload) &;
+    ScopedOperation<void> text(std::string_view) && = delete;
 
     template <typename Text>
         requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
-    ScopedOperation<void> text(Text&& payload) {
+    ScopedOperation<void> text(Text&& payload) & {
         return text(std::string_view(std::forward<Text>(payload)));
     }
+    template <typename Text>
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
+    ScopedOperation<void> text(Text&&) && = delete;
 
     /// Zero-copy text frame: takes ownership of an already-allocated payload.
-    ScopedOperation<void> text(std::pmr::string&& payload);
+    ScopedOperation<void> text(std::pmr::string&& payload) &;
+    ScopedOperation<void> text(std::pmr::string&&) && = delete;
 
-    ScopedOperation<void> binary(std::string_view payload);
+    ScopedOperation<void> binary(std::string_view payload) &;
+    ScopedOperation<void> binary(std::string_view) && = delete;
 
     template <typename Text>
         requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
-    ScopedOperation<void> binary(Text&& payload) {
+    ScopedOperation<void> binary(Text&& payload) & {
         return binary(std::string_view(std::forward<Text>(payload)));
     }
+    template <typename Text>
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
+    ScopedOperation<void> binary(Text&&) && = delete;
 
     /// Zero-copy binary frame.
-    ScopedOperation<void> binary(std::pmr::string&& payload);
+    ScopedOperation<void> binary(std::pmr::string&& payload) &;
+    ScopedOperation<void> binary(std::pmr::string&&) && = delete;
 
-    ScopedOperation<void> pong(std::string_view payload);
+    ScopedOperation<void> pong(std::string_view payload) &;
+    ScopedOperation<void> pong(std::string_view) && = delete;
 
     template <typename Text>
         requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
-    ScopedOperation<void> pong(Text&& payload) {
+    ScopedOperation<void> pong(Text&& payload) & {
         return pong(std::string_view(std::forward<Text>(payload)));
     }
+    template <typename Text>
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
+    ScopedOperation<void> pong(Text&&) && = delete;
 
     /// Zero-copy pong frame.
-    ScopedOperation<void> pong(std::pmr::string&& payload);
+    ScopedOperation<void> pong(std::pmr::string&& payload) &;
+    ScopedOperation<void> pong(std::pmr::string&&) && = delete;
 
-    ScopedOperation<void> ping(std::string_view payload = {});
+    ScopedOperation<void> ping(std::string_view payload = {}) &;
+    ScopedOperation<void> ping(std::string_view = {}) && = delete;
 
     template <typename Text>
         requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
-    ScopedOperation<void> ping(Text&& payload) {
+    ScopedOperation<void> ping(Text&& payload) & {
         return ping(std::string_view(std::forward<Text>(payload)));
     }
+    template <typename Text>
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
+    ScopedOperation<void> ping(Text&&) && = delete;
 
     /// Zero-copy ping frame.
-    ScopedOperation<void> ping(std::pmr::string&& payload);
+    ScopedOperation<void> ping(std::pmr::string&& payload) &;
+    ScopedOperation<void> ping(std::pmr::string&&) && = delete;
 
-    ScopedOperation<void> close(WebSocketCloseOptions options = {});
+    ScopedOperation<void> close(WebSocketCloseOptions options = {}) &;
+    ScopedOperation<void> close(WebSocketCloseOptions = {}) && = delete;
     void abort() noexcept;
 
 private:

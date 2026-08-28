@@ -22,6 +22,18 @@ template <typename T>
 concept HasRvalueWorkerBorrow = requires(T&& receiver) { std::move(receiver).worker(); };
 
 template <typename T>
+concept HasRvalueChannelReceive = requires(T&& receiver) { std::move(receiver).receive(); };
+
+template <typename T>
+concept HasRvalueChannelCancellableReceive = requires(T&& receiver, ruvia::StopToken stopToken) { std::move(receiver).receive(std::move(stopToken)); };
+
+template <typename T>
+concept HasRvalueChannelTimedReceive = requires(T&& receiver) { std::move(receiver).receiveFor(std::chrono::seconds(1)); };
+
+template <typename T>
+concept HasRvalueChannelTimedCancellableReceive = requires(T&& receiver, ruvia::StopToken stopToken) { std::move(receiver).receiveFor(std::chrono::seconds(1), std::move(stopToken)); };
+
+template <typename T>
 concept HasPositionalChannelFactory = requires(ruvia::WorkerHandle worker) { ruvia::makeChannel<T>(worker, std::size_t{1}); } || requires(ruvia::WorkerHandle worker, std::pmr::memory_resource* resource) { ruvia::makeChannel<T>(worker, std::size_t{1}, resource); };
 
 template <typename T>
@@ -31,6 +43,10 @@ static_assert(!std::is_default_constructible_v<ruvia::ChannelReceiver<int>>);
 static_assert(std::is_move_constructible_v<ruvia::ChannelReceiver<int>>);
 static_assert(!std::is_move_assignable_v<ruvia::ChannelReceiver<int>>);
 static_assert(!HasRvalueWorkerBorrow<ruvia::ChannelReceiver<int>>);
+static_assert(!HasRvalueChannelReceive<ruvia::ChannelReceiver<int>>);
+static_assert(!HasRvalueChannelCancellableReceive<ruvia::ChannelReceiver<int>>);
+static_assert(!HasRvalueChannelTimedReceive<ruvia::ChannelReceiver<int>>);
+static_assert(!HasRvalueChannelTimedCancellableReceive<ruvia::ChannelReceiver<int>>);
 static_assert(std::is_aggregate_v<ruvia::ChannelOptions>);
 static_assert(std::same_as<decltype(ruvia::ChannelOptions{}.capacity), std::size_t>);
 static_assert(std::same_as<decltype(ruvia::ChannelOptions{}.resource), std::pmr::memory_resource*>);

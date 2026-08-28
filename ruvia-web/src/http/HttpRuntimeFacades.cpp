@@ -149,34 +149,34 @@ Task<std::optional<std::string_view>> readBody(detail::CallableRef<std::optional
 
 }  // namespace
 
-ScopedOperation<std::optional<std::string_view>> BodyReader::read() {
+ScopedOperation<std::optional<std::string_view>> BodyReader::read() & {
     return detail::makeScopedOperation(operationScope_, readBody(read_, readActive_));
 }
 
-ScopedOperation<void> ResponseStreamWriter::write(std::string_view chunk) {
+ScopedOperation<void> ResponseStreamWriter::write(std::string_view chunk) & {
     requireActive();
     std::pmr::string owned(chunk, detail::processResource());
     return write(std::move(owned));
 }
 
-ScopedOperation<void> ResponseStreamWriter::write(std::pmr::string&& chunk) {
+ScopedOperation<void> ResponseStreamWriter::write(std::pmr::string&& chunk) & {
     requireActive();
     return detail::makeScopedOperation(operationScope_, writeTransferredChunk(target_, write_, std::move(chunk), outputActive_));
 }
 
-ScopedOperation<void> ResponseStreamWriter::writeln(std::string_view chunk) {
+ScopedOperation<void> ResponseStreamWriter::writeln(std::string_view chunk) & {
     requireActive();
     std::pmr::string owned(chunk, detail::processResource());
     owned.push_back('\n');
     return write(std::move(owned));
 }
 
-ScopedOperation<TimerSleepResult> ResponseStreamWriter::sleep(std::chrono::milliseconds duration) {
+ScopedOperation<TimerSleepResult> ResponseStreamWriter::sleep(std::chrono::milliseconds duration) & {
     requireActive();
     return detail::makeScopedOperation(operationScope_, sleep_(target_, duration, stopToken_));
 }
 
-ScopedOperation<void> ResponseStreamWriter::end(std::span<const HttpHeaderView> trailers) {
+ScopedOperation<void> ResponseStreamWriter::end(std::span<const HttpHeaderView> trailers) & {
     requireActive();
     return detail::makeScopedOperation(operationScope_, endOwned(target_, end_, OwnedTrailers(trailers, detail::processResource()), outputActive_));
 }
@@ -189,44 +189,44 @@ ScopedOperation<void> SseWriter::end(std::span<const HttpHeaderView> trailers) {
     return writer().end(trailers);
 }
 
-ScopedOperation<std::optional<WebSocketMessage>> WebSocket::read() {
+ScopedOperation<std::optional<WebSocketMessage>> WebSocket::read() & {
     requireActive();
     return detail::makeScopedOperation(operationScope_, read_(target_));
 }
 
-ScopedOperation<void> WebSocket::text(std::string_view payload) {
+ScopedOperation<void> WebSocket::text(std::string_view payload) & {
     return write(WebSocketOpcode::kText, payload);
 }
 
-ScopedOperation<void> WebSocket::binary(std::string_view payload) {
+ScopedOperation<void> WebSocket::binary(std::string_view payload) & {
     return write(WebSocketOpcode::kBinary, payload);
 }
 
-ScopedOperation<void> WebSocket::pong(std::string_view payload) {
+ScopedOperation<void> WebSocket::pong(std::string_view payload) & {
     return write(WebSocketOpcode::kPong, payload);
 }
 
-ScopedOperation<void> WebSocket::ping(std::string_view payload) {
+ScopedOperation<void> WebSocket::ping(std::string_view payload) & {
     return write(WebSocketOpcode::kPing, payload);
 }
 
-ScopedOperation<void> WebSocket::text(std::pmr::string&& payload) {
+ScopedOperation<void> WebSocket::text(std::pmr::string&& payload) & {
     return write(WebSocketOpcode::kText, std::move(payload));
 }
 
-ScopedOperation<void> WebSocket::binary(std::pmr::string&& payload) {
+ScopedOperation<void> WebSocket::binary(std::pmr::string&& payload) & {
     return write(WebSocketOpcode::kBinary, std::move(payload));
 }
 
-ScopedOperation<void> WebSocket::pong(std::pmr::string&& payload) {
+ScopedOperation<void> WebSocket::pong(std::pmr::string&& payload) & {
     return write(WebSocketOpcode::kPong, std::move(payload));
 }
 
-ScopedOperation<void> WebSocket::ping(std::pmr::string&& payload) {
+ScopedOperation<void> WebSocket::ping(std::pmr::string&& payload) & {
     return write(WebSocketOpcode::kPing, std::move(payload));
 }
 
-ScopedOperation<void> WebSocket::close(WebSocketCloseOptions options) {
+ScopedOperation<void> WebSocket::close(WebSocketCloseOptions options) & {
     requireActive();
     std::pmr::string owned(options.reason.view(), detail::processResource());
     return detail::makeScopedOperation(operationScope_, closeWebSocketWithReason(target_, close_, options, std::move(owned)));

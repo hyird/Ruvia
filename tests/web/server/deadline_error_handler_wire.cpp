@@ -188,7 +188,7 @@ struct DeadlineAwareErrorHandler final {
             ruvia::test::Http2SansIoSessionFixture fixture;
             auto dispatcher = std::make_shared<WorkerDispatcher>(io, 64);
             const auto workerHandle = WorkerHandleAccess::make(dispatcher);
-            auto sessionContext = fixture.context(ruvia::detail::ContextServices(workerHandle).withPlainTransport("127.0.0.1"));
+            auto sessionContext = fixture.context(fixture.services(workerHandle).withPlainTransport("127.0.0.1"));
             co_await taskAsAwaitable(runHttp2SansIoSession(sock, routes, worker, sessionContext));
         },
         asio::detached);

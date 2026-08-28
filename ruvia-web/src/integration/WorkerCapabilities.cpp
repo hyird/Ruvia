@@ -58,9 +58,15 @@ void WorkerCapabilities::shutdownWorkerState() noexcept {
     workerStates_.shutdown();
 }
 
-ContextServices WorkerCapabilities::contextServices() {
-    ContextServices services(worker_, clientRegistries(), &rateLimiter_, options_.maxDecodedBodyBytes);
-    services = services.withWorkerStates(workerStates_).withBlockingPool(options_.blockingPool).withPrecompressedStaticFiles(options_.precompressedStaticFiles).withTrustedProxies(options_.trustedProxies);
+ContextServices WorkerCapabilities::contextServices(const StopToken& stopToken) {
+    ContextServices services(worker_, stopToken, clientRegistries(), &rateLimiter_, options_.maxDecodedBodyBytes);
+    services = services.withWorkerStates(workerStates_).withPrecompressedStaticFiles(options_.precompressedStaticFiles);
+    if (options_.blockingPool != nullptr) {
+        services = services.withBlockingPool(*options_.blockingPool);
+    }
+    if (options_.trustedProxies != nullptr) {
+        services = services.withTrustedProxies(*options_.trustedProxies);
+    }
     if (options_.env != nullptr) {
         services = services.withEnv(*options_.env);
     }

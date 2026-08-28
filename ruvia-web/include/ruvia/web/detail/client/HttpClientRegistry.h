@@ -40,6 +40,7 @@ using HttpClientOperationCancellationMailbox = WorkerCancellationMailbox<HttpCli
 class HttpClientPool final {
 public:
     HttpClientPool(asio::io_context& ioContext, const WorkerHandle& worker, HttpClientConfigStorage config, std::pmr::memory_resource* resource);
+    HttpClientPool(asio::io_context&, WorkerHandle&&, HttpClientConfigStorage, std::pmr::memory_resource*) = delete;
     ~HttpClientPool();
     HttpClientPool(const HttpClientPool&) = delete;
     HttpClientPool& operator=(const HttpClientPool&) = delete;
@@ -69,6 +70,7 @@ private:
         Http2PendingStream(const WorkerHandle& worker, HttpClientResponse& value)
             : signal(worker),
               response(&value) {}
+        Http2PendingStream(WorkerHandle&&, HttpClientResponse&) = delete;
 
         WorkerSignal signal;
         HttpClientResponse* response;
@@ -93,6 +95,7 @@ private:
               connectScheduler(1, resource),
               http1Scheduler(1, resource),
               pending(resource) {}
+        Http2Runtime(WorkerHandle&&, std::pmr::memory_resource*) = delete;
 
         WorkerSignal writeSignal;
         WorkerSignal stateSignal;
@@ -113,6 +116,7 @@ private:
 
     struct Connection final {
         Connection(asio::io_context& ioContext, asio::ssl::context& tlsContext, const WorkerHandle& worker, std::pmr::memory_resource* resource);
+        Connection(asio::io_context&, asio::ssl::context&, WorkerHandle&&, std::pmr::memory_resource*) = delete;
         ~Connection();
         Connection(const Connection&) = delete;
         Connection& operator=(const Connection&) = delete;
@@ -247,6 +251,8 @@ class HttpClientRegistry final {
 public:
     HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, const HttpClientConfig& defaultConfig);
     HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions);
+    HttpClientRegistry(asio::io_context&, WorkerHandle&&, std::pmr::memory_resource*, const HttpClientConfig&) = delete;
+    HttpClientRegistry(asio::io_context&, WorkerHandle&&, std::pmr::memory_resource*, std::span<const HttpClientDefinition>) = delete;
     ~HttpClientRegistry();
     HttpClientRegistry(const HttpClientRegistry&) = delete;
     HttpClientRegistry& operator=(const HttpClientRegistry&) = delete;
