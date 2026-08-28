@@ -443,6 +443,7 @@ int main() {
         const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
         asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exerciseStoppedPool(pool, worker, gate, stoppedPool)), asio::detached);
         ioContext.run();
+        pool.join();
         dispatcher->close();
         dispatcher->stopTimers();
     }
@@ -457,6 +458,7 @@ int main() {
         const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
         asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exerciseQueueFull(pool, worker, gate, queueFull)), asio::detached);
         ioContext.run();
+        pool.join();
         dispatcher->close();
         dispatcher->stopTimers();
     }
@@ -474,6 +476,7 @@ int main() {
         // The task is still holding a pool thread; release it only once nothing
         // is waiting for its result.
         gate.release.release();
+        pool.join();
         dispatcher->stopTimers();
     }
 
