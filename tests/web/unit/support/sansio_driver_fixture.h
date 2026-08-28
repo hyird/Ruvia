@@ -52,8 +52,7 @@
 namespace sansio_driver_test {
 
 inline ruvia::WorkerHandle testWorker(asio::io_context& io) {
-    return ruvia::detail::WorkerHandleAccess::make(
-        std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64));
+    return ruvia::detail::WorkerHandleAccess::make(std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64));
 }
 
 using asio::ip::tcp;
@@ -91,8 +90,7 @@ inline ruvia::Task<ruvia::HttpResponse> slowHandler(void* context, ruvia::Contex
     auto* io = static_cast<asio::io_context*>(context);
     asio::steady_timer timer(*io);
     timer.expires_after(std::chrono::milliseconds(30));
-    const auto waitCompletion = co_await ruvia::detail::asyncAsio(
-        [&timer](auto handler) mutable { timer.async_wait(std::move(handler)); });
+    const auto waitCompletion = co_await ruvia::detail::asyncAsio([&timer](auto handler) mutable { timer.async_wait(std::move(handler)); });
     (void)waitCompletion.errorCode();
     co_return ctx.text("slow");
 }
@@ -158,9 +156,7 @@ inline ruvia::Task<ruvia::HttpResponse> terminatedBodyHandler(void* raw, ruvia::
     }
     asio::steady_timer completionDelay(*observation.io);
     completionDelay.expires_after(std::chrono::milliseconds(5));
-    (void)co_await ruvia::detail::asyncAsio([&completionDelay](auto handler) mutable {
-        completionDelay.async_wait(std::move(handler));
-    });
+    (void)co_await ruvia::detail::asyncAsio([&completionDelay](auto handler) mutable { completionDelay.async_wait(std::move(handler)); });
     observation.handlerFinished = true;
     co_return context.text("transport-ended");
 }
@@ -177,8 +173,7 @@ constexpr std::uint64_t kLargeFileBytes = 200000;  // > default send window (655
 inline ruvia::Task<ruvia::HttpResponse> largeFileHandler(void*, ruvia::Context&) {
     ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
-    ruvia::detail::setResponseFileBody(
-        response, std::filesystem::path(largeFilePath()), kLargeFileBytes, 0, kLargeFileBytes);
+    ruvia::detail::setResponseFileBody(response, std::filesystem::path(largeFilePath()), kLargeFileBytes, 0, kLargeFileBytes);
     co_return response;
 }
 
@@ -212,11 +207,9 @@ inline std::string maskedWsFrame(std::uint8_t opcode, std::string_view payload, 
     return f;
 }
 
-inline std::string frame(
-    std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
+inline std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
     std::string bytes(ruvia::detail::kHttp2FrameHeaderBytes, '\0');
-    ruvia::detail::http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()),
-        static_cast<Http2FrameType>(type), flags, streamId);
+    ruvia::detail::http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()), static_cast<Http2FrameType>(type), flags, streamId);
     bytes.append(payload);
     return bytes;
 }
@@ -268,8 +261,7 @@ inline ruvia::Task<void> streamTrailerHandler(void*, ruvia::Context& c) {
     c.status(ruvia::http_status::kMultiStatus);
     auto& stream = c.streamText();
     co_await stream.write("body-part");
-    const std::array<ruvia::HttpHeaderView, 1> trailers{
-        ruvia::HttpHeaderView{"x-checksum", "abc123"}};
+    const std::array<ruvia::HttpHeaderView, 1> trailers{ruvia::HttpHeaderView{"x-checksum", "abc123"}};
     co_await stream.end(trailers);
 }
 

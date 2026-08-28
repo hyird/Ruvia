@@ -23,8 +23,7 @@ private:
     // Borrows the dispatcher kept alive by the awaiter's stable WorkerHandle.
     // StopRegistration teardown synchronizes any callback before that borrow
     // ends; requestTimerCancellation() owns any continuation it posts.
-    WorkerTimerCancellation(
-        WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept
+    WorkerTimerCancellation(WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept
         : dispatcher_(&dispatcher),
           slot_(slot),
           generation_(generation) {}
@@ -42,8 +41,7 @@ enum class WorkerTimerOutcome : std::uint8_t {
 };
 
 template <typename Rep, typename Period>
-[[nodiscard]] inline std::chrono::steady_clock::duration workerTimerSaturatingDurationCast(
-    std::chrono::duration<Rep, Period> value) {
+[[nodiscard]] inline std::chrono::steady_clock::duration workerTimerSaturatingDurationCast(std::chrono::duration<Rep, Period> value) {
     using Target = std::chrono::steady_clock::duration;
     using Wide = std::chrono::duration<long double, typename Target::period>;
     const auto count = std::chrono::duration_cast<Wide>(value).count();
@@ -61,8 +59,7 @@ template <typename Rep, typename Period>
     return Target(static_cast<typename Target::rep>(count));
 }
 
-[[nodiscard]] inline std::chrono::steady_clock::time_point workerTimerSaturatingDeadline(
-    std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration delay) noexcept {
+[[nodiscard]] inline std::chrono::steady_clock::time_point workerTimerSaturatingDeadline(std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration delay) noexcept {
     if (delay <= std::chrono::steady_clock::duration::zero()) {
         return now;
     }
@@ -73,16 +70,13 @@ template <typename Rep, typename Period>
     return now + delay;
 }
 
-[[nodiscard]] inline std::chrono::steady_clock::time_point workerTimerDeadlineAfter(
-    std::chrono::steady_clock::duration delay) noexcept {
+[[nodiscard]] inline std::chrono::steady_clock::time_point workerTimerDeadlineAfter(std::chrono::steady_clock::duration delay) noexcept {
     return workerTimerSaturatingDeadline(std::chrono::steady_clock::now(), delay);
 }
 
 template <typename Rep, typename Period>
-[[nodiscard]] inline std::chrono::steady_clock::time_point workerTimerDeadlineAfter(
-    std::chrono::duration<Rep, Period> delay) {
-    return workerTimerSaturatingDeadline(
-        std::chrono::steady_clock::now(), workerTimerSaturatingDurationCast(delay));
+[[nodiscard]] inline std::chrono::steady_clock::time_point workerTimerDeadlineAfter(std::chrono::duration<Rep, Period> delay) {
+    return workerTimerSaturatingDeadline(std::chrono::steady_clock::now(), workerTimerSaturatingDurationCast(delay));
 }
 
 class WorkerTimerRegistration final {

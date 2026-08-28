@@ -40,16 +40,11 @@ enum class ResponseTrailerIntent : std::uint8_t { kNone, kPresent };
 // Whether a validated trailer section commits the response to sending trailers.
 // An empty section is not "no decision": it is the decision to send none, which
 // the head must state before any body byte goes out.
-[[nodiscard]] inline ResponseTrailerIntent responseTrailerIntent(
-    const HttpResponseTrailerSection& section) noexcept {
+[[nodiscard]] inline ResponseTrailerIntent responseTrailerIntent(const HttpResponseTrailerSection& section) noexcept {
     return section.empty() ? ResponseTrailerIntent::kNone : ResponseTrailerIntent::kPresent;
 }
 
-enum class ResponseStreamTrailerFraming : std::uint8_t {
-    kUnavailable,
-    kHttp1Chunked,
-    kHttp2TrailingHeaders
-};
+enum class ResponseStreamTrailerFraming : std::uint8_t { kUnavailable, kHttp1Chunked, kHttp2TrailingHeaders };
 
 // Authoritative phase immediately after the initial response head is submitted.
 // kTrailersOnly is intentionally distinct from kBodyOpen: HTTP/2 may carry a
@@ -79,12 +74,9 @@ public:
     }
 
 private:
-    friend ResponseStreamCommitPlan httpResponseStreamCommitPlan(
-        ResponseStreamFraming, HttpKnownMethod, HttpStatusCode, ResponseTrailerIntent) noexcept;
+    friend ResponseStreamCommitPlan httpResponseStreamCommitPlan(ResponseStreamFraming, HttpKnownMethod, HttpStatusCode, ResponseTrailerIntent) noexcept;
 
-    ResponseStreamCommitPlan(ResponseStreamFraming framing, HttpResponseBodyPlan bodyPlan,
-        ResponseStreamTrailerFraming trailerFraming,
-        ResponseStreamHeadDisposition headDisposition) noexcept
+    ResponseStreamCommitPlan(ResponseStreamFraming framing, HttpResponseBodyPlan bodyPlan, ResponseStreamTrailerFraming trailerFraming, ResponseStreamHeadDisposition headDisposition) noexcept
         : framing_(framing),
           bodyPlan_(bodyPlan),
           trailerFraming_(trailerFraming),
@@ -96,25 +88,13 @@ private:
     ResponseStreamHeadDisposition headDisposition_{ResponseStreamHeadDisposition::kMessageEnded};
 };
 
-[[nodiscard]] inline ResponseStreamCommitPlan httpResponseStreamCommitPlan(
-    ResponseStreamFraming framing, HttpKnownMethod requestMethod, HttpStatusCode responseStatus,
-    ResponseTrailerIntent trailerIntent) noexcept {
+[[nodiscard]] inline ResponseStreamCommitPlan httpResponseStreamCommitPlan(ResponseStreamFraming framing, HttpKnownMethod requestMethod, HttpStatusCode responseStatus, ResponseTrailerIntent trailerIntent) noexcept {
     const auto bodyPlan = httpResponseBodyPlan(requestMethod, responseStatus);
     if (framing == ResponseStreamFraming::kHttp2Frames) {
-        return ResponseStreamCommitPlan(framing, bodyPlan,
-            ResponseStreamTrailerFraming::kHttp2TrailingHeaders,
-            bodyPlan.bodySuppressed() ? (trailerIntent == ResponseTrailerIntent::kPresent
-                                                ? ResponseStreamHeadDisposition::kTrailersOnly
-                                                : ResponseStreamHeadDisposition::kMessageEnded)
-                                      : ResponseStreamHeadDisposition::kBodyOpen);
+        return ResponseStreamCommitPlan(framing, bodyPlan, ResponseStreamTrailerFraming::kHttp2TrailingHeaders, bodyPlan.bodySuppressed() ? (trailerIntent == ResponseTrailerIntent::kPresent ? ResponseStreamHeadDisposition::kTrailersOnly : ResponseStreamHeadDisposition::kMessageEnded) : ResponseStreamHeadDisposition::kBodyOpen);
     }
 
-    return ResponseStreamCommitPlan(framing, bodyPlan,
-        framing == ResponseStreamFraming::kHttp1Chunked && !bodyPlan.bodySuppressed()
-            ? ResponseStreamTrailerFraming::kHttp1Chunked
-            : ResponseStreamTrailerFraming::kUnavailable,
-        bodyPlan.bodySuppressed() ? ResponseStreamHeadDisposition::kMessageEnded
-                                  : ResponseStreamHeadDisposition::kBodyOpen);
+    return ResponseStreamCommitPlan(framing, bodyPlan, framing == ResponseStreamFraming::kHttp1Chunked && !bodyPlan.bodySuppressed() ? ResponseStreamTrailerFraming::kHttp1Chunked : ResponseStreamTrailerFraming::kUnavailable, bodyPlan.bodySuppressed() ? ResponseStreamHeadDisposition::kMessageEnded : ResponseStreamHeadDisposition::kBodyOpen);
 }
 
 class ResponseStreamHead final {
@@ -143,19 +123,15 @@ private:
     ResponseStreamCommitPlan commitPlan_;
 };
 
-[[nodiscard]] inline ResponseStreamHead prepareResponseStreamHead(
-    HttpResponse response, ResponseStreamKind kind, ResponseStreamCommitPlan commitPlan) {
+[[nodiscard]] inline ResponseStreamHead prepareResponseStreamHead(HttpResponse response, ResponseStreamKind kind, ResponseStreamCommitPlan commitPlan) {
     if (response.status() != commitPlan.responseStatus()) {
         throw std::invalid_argument("response stream commit plan status does not match response");
     }
     const auto framing = commitPlan.framing();
     const auto bodyPlan = commitPlan.bodyPlan();
     const auto policy = bodyPlan.policy();
-    const bool writerOwnsHttp1KnownLength =
-        framing == ResponseStreamFraming::kHttp1KnownLength && policy.autoContentLengthAllowed();
-    const bool writerOwnsHttp1Chunked = framing == ResponseStreamFraming::kHttp1Chunked &&
-                                        policy.transferEncodingAllowed() &&
-                                        !bodyPlan.bodySuppressed();
+    const bool writerOwnsHttp1KnownLength = framing == ResponseStreamFraming::kHttp1KnownLength && policy.autoContentLengthAllowed();
+    const bool writerOwnsHttp1Chunked = framing == ResponseStreamFraming::kHttp1Chunked && policy.transferEncodingAllowed() && !bodyPlan.bodySuppressed();
 
     // Keep the prepared response metadata consistent with the wire plan. The
     // framework's chunk writer is the only Transfer-Encoding producer; an
@@ -164,26 +140,17 @@ private:
     if (writerOwnsHttp1KnownLength || writerOwnsHttp1Chunked) {
         response.removeHeader("Content-Length");
     }
-    if (framing == ResponseStreamFraming::kHttp1KnownLength ||
-        framing == ResponseStreamFraming::kHttp1Chunked ||
-        framing == ResponseStreamFraming::kHttp1CloseDelimited) {
+    if (framing == ResponseStreamFraming::kHttp1KnownLength || framing == ResponseStreamFraming::kHttp1Chunked || framing == ResponseStreamFraming::kHttp1CloseDelimited) {
         response.removeHeader("Transfer-Encoding");
     }
     if (framing == ResponseStreamFraming::kHttp1CloseDelimited && !bodyPlan.bodySuppressed()) {
         response.removeHeader("Content-Length");
     }
 
-    const bool needsSseContentType = kind == ResponseStreamKind::kSse &&
-                                     !responseHasKnownHeader(response, kResponseHeaderContentType);
-    const bool needsHttp1Chunked = writerOwnsHttp1Chunked && !responseHasKnownHeader(response,
-                                                                 kResponseHeaderTransferEncoding);
-    const bool needsSseCacheControl =
-        kind == ResponseStreamKind::kSse &&
-        (framing == ResponseStreamFraming::kHttp2Frames || policy.transferEncodingAllowed()) &&
-        !responseHasKnownHeader(response, kResponseHeaderCacheControl);
-    const auto additionalHeaders = static_cast<std::size_t>(needsSseContentType) +
-                                   static_cast<std::size_t>(needsHttp1Chunked) +
-                                   static_cast<std::size_t>(needsSseCacheControl);
+    const bool needsSseContentType = kind == ResponseStreamKind::kSse && !responseHasKnownHeader(response, kResponseHeaderContentType);
+    const bool needsHttp1Chunked = writerOwnsHttp1Chunked && !responseHasKnownHeader(response, kResponseHeaderTransferEncoding);
+    const bool needsSseCacheControl = kind == ResponseStreamKind::kSse && (framing == ResponseStreamFraming::kHttp2Frames || policy.transferEncodingAllowed()) && !responseHasKnownHeader(response, kResponseHeaderCacheControl);
+    const auto additionalHeaders = static_cast<std::size_t>(needsSseContentType) + static_cast<std::size_t>(needsHttp1Chunked) + static_cast<std::size_t>(needsSseCacheControl);
     if (additionalHeaders != 0) {
         reserveResponseHeaders(response, response.headers().size() + additionalHeaders);
     }

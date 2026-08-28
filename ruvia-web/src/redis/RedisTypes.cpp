@@ -84,8 +84,7 @@ RedisValue RedisValue::integerValue(std::int64_t input, std::pmr::memory_resourc
     return value;
 }
 
-RedisValue RedisValue::arrayValue(
-    std::pmr::vector<RedisValue> values, std::pmr::memory_resource* resource) {
+RedisValue RedisValue::arrayValue(std::pmr::vector<RedisValue> values, std::pmr::memory_resource* resource) {
     RedisValue value(resource);
     value.kind_ = Kind::kArray;
     value.array_ = std::move(values);

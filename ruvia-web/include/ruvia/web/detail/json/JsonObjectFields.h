@@ -14,8 +14,7 @@
 namespace ruvia::detail {
 
 template <typename Visitor>
-[[nodiscard]] bool dispatchJsonObjectFieldVisitor(
-    Visitor& visitor, std::string_view key, std::string_view value) {
+[[nodiscard]] bool dispatchJsonObjectFieldVisitor(Visitor& visitor, std::string_view key, std::string_view value) {
     if constexpr (requires {
                       { visitor(key, value) } -> std::convertible_to<bool>;
                   }) {
@@ -27,8 +26,7 @@ template <typename Visitor>
 }
 
 template <typename Visitor>
-[[nodiscard]] bool visitJsonObjectFields(ResolvedPmrResourceTag, std::string_view body,
-    std::pmr::memory_resource* resource, Visitor&& visitor) {
+[[nodiscard]] bool visitJsonObjectFields(ResolvedPmrResourceTag, std::string_view body, std::pmr::memory_resource* resource, Visitor&& visitor) {
     auto input = body;
     if (!consumeJsonChar(input, '{')) {
         return false;
@@ -78,10 +76,8 @@ template <typename Visitor>
 }
 
 template <typename Visitor>
-[[nodiscard]] bool visitJsonObjectFields(
-    std::string_view body, std::pmr::memory_resource* resource, Visitor&& visitor) {
-    return visitJsonObjectFields(ResolvedPmrResourceTag{}, body, pmrResourceOrDefault(resource),
-        std::forward<Visitor>(visitor));
+[[nodiscard]] bool visitJsonObjectFields(std::string_view body, std::pmr::memory_resource* resource, Visitor&& visitor) {
+    return visitJsonObjectFields(ResolvedPmrResourceTag{}, body, pmrResourceOrDefault(resource), std::forward<Visitor>(visitor));
 }
 
 // Consumes one object directly from input and lets the visitor consume each
@@ -89,8 +85,7 @@ template <typename Visitor>
 // so a known value is parsed into its typed field without first scanning it to
 // discover a raw slice and then parsing that slice again.
 template <typename Visitor>
-[[nodiscard]] bool consumeJsonObjectFields(ResolvedPmrResourceTag, std::string_view& input,
-    std::pmr::memory_resource* resource, std::size_t depth, Visitor&& visitor) {
+[[nodiscard]] bool consumeJsonObjectFields(ResolvedPmrResourceTag, std::string_view& input, std::pmr::memory_resource* resource, std::size_t depth, Visitor&& visitor) {
     if (depth > kMaxJsonDepth) {
         return false;
     }

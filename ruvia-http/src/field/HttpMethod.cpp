@@ -80,8 +80,7 @@ bool isValidHttpMethodToken(std::string_view method) noexcept {
     if (method.empty()) {
         return false;
     }
-    return std::ranges::all_of(method,
-        [](char ch) noexcept { return detail::isHttpTokenChar(static_cast<unsigned char>(ch)); });
+    return std::ranges::all_of(method, [](char ch) noexcept { return detail::isHttpTokenChar(static_cast<unsigned char>(ch)); });
 }
 
 bool isHttpMethodSafe(std::string_view method) noexcept {

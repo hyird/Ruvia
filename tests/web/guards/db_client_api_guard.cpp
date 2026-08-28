@@ -15,12 +15,8 @@ namespace {
 template <typename T>
 concept HasDefaultOperations = requires(const T& client) {
     { client.query(std::string_view{}) } -> std::same_as<ruvia::ScopedOperation<ruvia::DbRows>>;
-    {
-        client.execute(std::string_view{})
-    } -> std::same_as<ruvia::ScopedOperation<ruvia::DbExecResult>>;
-    {
-        client.queryStream(std::string_view{})
-    } -> std::same_as<ruvia::ScopedOperation<ruvia::DbStreamResult>>;
+    { client.execute(std::string_view{}) } -> std::same_as<ruvia::ScopedOperation<ruvia::DbExecResult>>;
+    { client.queryStream(std::string_view{}) } -> std::same_as<ruvia::ScopedOperation<ruvia::DbStreamResult>>;
     { client.beginTransaction() } -> std::same_as<ruvia::ScopedOperation<ruvia::DbTransaction>>;
 };
 
@@ -32,12 +28,11 @@ concept HasSpanOperations = requires(const T& client, std::span<const ruvia::DbV
 };
 
 template <typename T>
-concept HasInitializerListOperations =
-    requires(const T& client, std::initializer_list<ruvia::DbValue> params) {
-        client.query(std::string_view{}, params);
-        client.execute(std::string_view{}, params);
-        client.queryStream(std::string_view{}, params);
-    };
+concept HasInitializerListOperations = requires(const T& client, std::initializer_list<ruvia::DbValue> params) {
+    client.query(std::string_view{}, params);
+    client.execute(std::string_view{}, params);
+    client.queryStream(std::string_view{}, params);
+};
 
 template <typename T>
 concept HasVariadicOperations = requires(const T& client) {
@@ -52,14 +47,10 @@ concept HasDbRegistrationConfig = requires(T& app, ruvia::DbConfig config) {
 };
 
 template <typename T>
-concept HasDbRegistrationPositional = requires(T& app, ruvia::DbConfig config) {
-    app.database(config);
-} || requires(T& app, ruvia::DbConfig config) { app.database(std::string_view{}, config); };
+concept HasDbRegistrationPositional = requires(T& app, ruvia::DbConfig config) { app.database(config); } || requires(T& app, ruvia::DbConfig config) { app.database(std::string_view{}, config); };
 
 static_assert(std::is_aggregate_v<ruvia::DbRegistrationConfig>);
-static_assert(std::same_as<
-    decltype(ruvia::DbRegistrationConfig{.config = std::declval<ruvia::DbConfig>()}.alias),
-    std::string>);
+static_assert(std::same_as<decltype(ruvia::DbRegistrationConfig{.config = std::declval<ruvia::DbConfig>()}.alias), std::string>);
 static_assert(HasDbRegistrationConfig<ruvia::App>);
 static_assert(!HasDbRegistrationPositional<ruvia::App>);
 
@@ -67,13 +58,9 @@ static_assert(std::constructible_from<ruvia::DbClient, ruvia::EventLoop, ruvia::
 static_assert(!std::default_initializable<ruvia::DbClient>);
 static_assert(!std::copy_constructible<ruvia::DbClient>);
 static_assert(!std::move_constructible<ruvia::DbClient>);
-static_assert(
-    std::same_as<decltype(std::declval<ruvia::DbClient&>().connect()), ruvia::Task<void>>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().withOptions(
-                               ruvia::OperationOptions{})),
-    ruvia::DbHandle>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().worker()),
-    const ruvia::WorkerHandle&>);
+static_assert(std::same_as<decltype(std::declval<ruvia::DbClient&>().connect()), ruvia::Task<void>>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().withOptions(ruvia::OperationOptions{})), ruvia::DbHandle>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().worker()), const ruvia::WorkerHandle&>);
 static_assert(HasDefaultOperations<ruvia::DbClient>);
 static_assert(HasSpanOperations<ruvia::DbClient>);
 static_assert(!HasInitializerListOperations<ruvia::DbClient>);

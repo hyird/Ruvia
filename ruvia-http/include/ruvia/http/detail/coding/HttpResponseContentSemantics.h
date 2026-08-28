@@ -20,8 +20,7 @@ enum class HttpResponseContentSemantics : std::uint8_t {
     kWithContent,
 };
 
-[[nodiscard]] constexpr HttpResponseContentSemantics httpResponseContentSemantics(
-    HttpKnownMethod requestMethod, HttpStatusCode statusCode) noexcept {
+[[nodiscard]] constexpr HttpResponseContentSemantics httpResponseContentSemantics(HttpKnownMethod requestMethod, HttpStatusCode statusCode) noexcept {
     if (statusCode == http_status::kSwitchingProtocols) {
         return HttpResponseContentSemantics::kProtocolSwitch;
     }
@@ -31,15 +30,13 @@ enum class HttpResponseContentSemantics : std::uint8_t {
     if (requestMethod == HttpKnownMethod::kConnect && statusCode.isSuccessful()) {
         return HttpResponseContentSemantics::kConnectTunnel;
     }
-    if (requestMethod == HttpKnownMethod::kHead || statusCode == http_status::kNoContent ||
-        statusCode == http_status::kNotModified) {
+    if (requestMethod == HttpKnownMethod::kHead || statusCode == http_status::kNoContent || statusCode == http_status::kNotModified) {
         return HttpResponseContentSemantics::kWithoutContent;
     }
     return HttpResponseContentSemantics::kWithContent;
 }
 
-[[nodiscard]] inline HttpResponseContentSemantics httpResponseContentSemantics(
-    std::string_view requestMethod, HttpStatusCode statusCode) noexcept {
+[[nodiscard]] inline HttpResponseContentSemantics httpResponseContentSemantics(std::string_view requestMethod, HttpStatusCode statusCode) noexcept {
     return httpResponseContentSemantics(classifyHttpMethod(requestMethod), statusCode);
 }
 

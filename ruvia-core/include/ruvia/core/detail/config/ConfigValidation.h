@@ -14,11 +14,9 @@ struct ConfigHostRules final {
     bool rejectSingleColon{false};
 };
 
-inline constexpr ConfigHostRules kSeparatedPortHostRules{
-    .rejectBrackets = true, .rejectSingleColon = true};
+inline constexpr ConfigHostRules kSeparatedPortHostRules{.rejectBrackets = true, .rejectSingleColon = true};
 
-[[nodiscard]] inline bool isValidConfigHost(
-    std::string_view host, ConfigHostRules rules = {}) noexcept {
+[[nodiscard]] inline bool isValidConfigHost(std::string_view host, ConfigHostRules rules = {}) noexcept {
     if (host.empty()) {
         return false;
     }
@@ -26,8 +24,7 @@ inline constexpr ConfigHostRules kSeparatedPortHostRules{
     std::size_t colonCount = 0;
     for (const auto ch : host) {
         const auto byte = static_cast<unsigned char>(ch);
-        if (byte <= 0x20 || byte == 0x7F || byte == '/' || byte == '\\' ||
-            (rules.rejectBrackets && (byte == '[' || byte == ']'))) {
+        if (byte <= 0x20 || byte == 0x7F || byte == '/' || byte == '\\' || (rules.rejectBrackets && (byte == '[' || byte == ']'))) {
             return false;
         }
         colonCount += byte == ':' ? 1 : 0;
@@ -37,8 +34,7 @@ inline constexpr ConfigHostRules kSeparatedPortHostRules{
 }
 
 [[nodiscard]] inline bool isAsciiHostAlnum(unsigned char byte) noexcept {
-    return (byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') ||
-           (byte >= 'a' && byte <= 'z');
+    return (byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z');
 }
 
 [[nodiscard]] inline bool isAsciiHostDigit(unsigned char byte) noexcept {
@@ -90,8 +86,7 @@ inline constexpr ConfigHostRules kSeparatedPortHostRules{
     return !isIpv4Address;
 }
 
-inline void ensureConfigHost(std::string_view host, const char* emptyMessage,
-    const char* invalidMessage, ConfigHostRules rules = {}) {
+inline void ensureConfigHost(std::string_view host, const char* emptyMessage, const char* invalidMessage, ConfigHostRules rules = {}) {
     if (host.empty()) {
         throw std::invalid_argument(emptyMessage);
     }
@@ -100,8 +95,7 @@ inline void ensureConfigHost(std::string_view host, const char* emptyMessage,
     }
 }
 
-inline void ensureSniHost(
-    std::string_view host, const char* emptyMessage, const char* invalidMessage) {
+inline void ensureSniHost(std::string_view host, const char* emptyMessage, const char* invalidMessage) {
     if (host.empty()) {
         throw std::invalid_argument(emptyMessage);
     }
@@ -116,8 +110,7 @@ inline void ensurePositiveSize(std::size_t value, const char* message) {
     }
 }
 
-inline void ensurePositiveOptionalSize(
-    const std::optional<std::size_t>& value, const char* message) {
+inline void ensurePositiveOptionalSize(const std::optional<std::size_t>& value, const char* message) {
     if (value.has_value() && *value == 0) {
         throw std::invalid_argument(message);
     }
@@ -129,8 +122,7 @@ inline void ensureNonZeroPort(std::uint16_t port, const char* message) {
     }
 }
 
-inline void ensureNonZeroOptionalPort(
-    const std::optional<std::uint16_t>& port, const char* message) {
+inline void ensureNonZeroOptionalPort(const std::optional<std::uint16_t>& port, const char* message) {
     if (port.has_value()) {
         ensureNonZeroPort(*port, message);
     }
@@ -144,16 +136,14 @@ void ensurePositiveDuration(std::chrono::duration<Rep, Period> value, const char
 }
 
 template <typename Rep, typename Period>
-void ensurePositiveOptionalDuration(
-    const std::optional<std::chrono::duration<Rep, Period>>& value, const char* message) {
+void ensurePositiveOptionalDuration(const std::optional<std::chrono::duration<Rep, Period>>& value, const char* message) {
     if (value.has_value() && value->count() <= 0) {
         throw std::invalid_argument(message);
     }
 }
 
 template <typename FirstDuration, typename... RestDurations>
-void ensurePositiveOptionalDurations(
-    const char* message, const FirstDuration& first, const RestDurations&... rest) {
+void ensurePositiveOptionalDurations(const char* message, const FirstDuration& first, const RestDurations&... rest) {
     ensurePositiveOptionalDuration(first, message);
     (ensurePositiveOptionalDuration(rest, message), ...);
 }

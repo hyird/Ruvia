@@ -29,13 +29,11 @@ namespace ruvia::detail {
 // The one prefix-scoping rule, shared by fallback handler selection and by
 // path-scoped middleware. A prefix matches on whole path segments only, so
 // "/api" scopes "/api" and "/api/x" but never "/apix"; "/" scopes everything.
-[[nodiscard]] inline bool pathIsUnderPrefix(
-    std::string_view path, std::string_view prefix) noexcept {
+[[nodiscard]] inline bool pathIsUnderPrefix(std::string_view path, std::string_view prefix) noexcept {
     if (prefix.empty() || prefix == "/") {
         return true;
     }
-    return path == prefix ||
-           (path.size() > prefix.size() && path.starts_with(prefix) && path[prefix.size()] == '/');
+    return path == prefix || (path.size() > prefix.size() && path.starts_with(prefix) && path[prefix.size()] == '/');
 }
 
 }  // namespace ruvia::detail

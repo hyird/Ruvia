@@ -45,8 +45,7 @@ public:
         std::exception_ptr failure;
         {
             std::unique_lock lock(mutex_);
-            startupCv_.wait(
-                lock, [this] { return !std::holds_alternative<StartupPending>(startup_); });
+            startupCv_.wait(lock, [this] { return !std::holds_alternative<StartupPending>(startup_); });
             if (const auto* failed = std::get_if<StartupFailed>(&startup_)) {
                 failure = failed->failure();
             }

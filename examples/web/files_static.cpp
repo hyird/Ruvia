@@ -32,24 +32,21 @@ public:
 
 private:
     ruvia::Task<ruvia::HttpResponse> download(ruvia::Context& c) {
-        co_return c.file({.path = examplesRoot() / "public" / "hello.txt",
-            .contentType = "text/plain; charset=utf-8"});
+        co_return c.file({.path = examplesRoot() / "public" / "hello.txt", .contentType = "text/plain; charset=utf-8"});
     }
 
     ruvia::Task<ruvia::HttpResponse> asset(ruvia::Context& c) {
-        co_return c.staticFile(
-            *gAssets, {.relativePath = c.req().param("*").value_or("index.html")});
+        co_return c.staticFile(*gAssets, {.relativePath = c.req().param("*").value_or("index.html")});
     }
 };
 
 int main() {
-    gAssets = std::make_unique<ruvia::StaticRoot>(examplesRoot() / "public",
-        ruvia::StaticRootOptions{
-            .cacheControl = "public, max-age=3600",
-            .indexFile = "index.html",
-            .rangeRequests = ruvia::StaticRangeRequestPolicy::kHonor,
-            .responseValidators = ruvia::StaticResponseValidatorPolicy::kEmit,
-        });
+    gAssets = std::make_unique<ruvia::StaticRoot>(examplesRoot() / "public", ruvia::StaticRootOptions{
+                                                                                 .cacheControl = "public, max-age=3600",
+                                                                                 .indexFile = "index.html",
+                                                                                 .rangeRequests = ruvia::StaticRangeRequestPolicy::kHonor,
+                                                                                 .responseValidators = ruvia::StaticResponseValidatorPolicy::kEmit,
+                                                                             });
 
     auto documentRoot = ruvia::DocumentRootConfig{
         .root = examplesRoot() / "public",
@@ -67,11 +64,5 @@ int main() {
     // .precompressGzip refresh-builds gzip variants for changed text assets.
     // The application blocking pool is enabled by default.
 
-    ruvia::app()
-        .listen({.address = "0.0.0.0", .http = 8083})
-        .server({.workerCount = 2,
-            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
-        .compression({})
-        .documentRoot(std::move(documentRoot))
-        .run();
+    ruvia::app().listen({.address = "0.0.0.0", .http = 8083}).server({.workerCount = 2, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall}).compression({}).documentRoot(std::move(documentRoot)).run();
 }

@@ -34,8 +34,7 @@ struct Registrar {
 
 inline void reportFailure(TestContext& ctx, const char* file, int line, std::string_view expr) {
     ++ctx.failures;
-    std::fprintf(stderr, "  [FAIL] %s\n    at %s:%d\n    check: %.*s\n", ctx.current, file, line,
-        static_cast<int>(expr.size()), expr.data());
+    std::fprintf(stderr, "  [FAIL] %s\n    at %s:%d\n    check: %.*s\n", ctx.current, file, line, static_cast<int>(expr.size()), expr.data());
 }
 
 }  // namespace ruvia::testing

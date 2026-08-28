@@ -75,28 +75,22 @@ private:
     return config;
 }
 
-ruvia::Task<int> send(
-    ruvia::HttpClient& client, ruvia::WorkerId worker, std::string_view expected) {
+ruvia::Task<int> send(ruvia::HttpClient& client, ruvia::WorkerId worker, std::string_view expected) {
     auto response = co_await client.send({.target = "/worker"});
     const auto body = co_await response.body().readAll();
-    const bool valid = client.worker().isCurrent() && client.worker().id() == worker &&
-                       client.host() == "127.0.0.1" &&
-                       response.status() == ruvia::http_status::kOk && body == expected;
+    const bool valid = client.worker().isCurrent() && client.worker().id() == worker && client.host() == "127.0.0.1" && response.status() == ruvia::http_status::kOk && body == expected;
     co_return valid ? 0 : 1;
 }
 
-void start(const ruvia::EventLoop& loop, ruvia::HttpClient& client, std::string_view expected,
-    std::promise<int>& completion) {
+void start(const ruvia::EventLoop& loop, ruvia::HttpClient& client, std::string_view expected, std::promise<int>& completion) {
     try {
-        ruvia::detail::asyncStartTask(send(client, loop.id(), expected),
-            asio::bind_executor(
-                loop.executor(), [&completion](ruvia::detail::TaskCompletionResult<int> result) {
-                    if (auto* success = result.success()) {
-                        completion.set_value(std::move(*success).takeValue());
-                    } else {
-                        completion.set_exception(result.failure()->exception());
-                    }
-                }));
+        ruvia::detail::asyncStartTask(send(client, loop.id(), expected), asio::bind_executor(loop.executor(), [&completion](ruvia::detail::TaskCompletionResult<int> result) {
+            if (auto* success = result.success()) {
+                completion.set_value(std::move(*success).takeValue());
+            } else {
+                completion.set_exception(result.failure()->exception());
+            }
+        }));
     } catch (...) {
         completion.set_exception(std::current_exception());
     }

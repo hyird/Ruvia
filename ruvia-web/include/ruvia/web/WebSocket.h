@@ -63,8 +63,7 @@ public:
     ScopedOperation<void> text(std::string_view payload);
 
     template <typename Text>
-        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, Text &&>)
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
     ScopedOperation<void> text(Text&& payload) {
         return text(std::string_view(std::forward<Text>(payload)));
     }
@@ -75,8 +74,7 @@ public:
     ScopedOperation<void> binary(std::string_view payload);
 
     template <typename Text>
-        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, Text &&>)
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
     ScopedOperation<void> binary(Text&& payload) {
         return binary(std::string_view(std::forward<Text>(payload)));
     }
@@ -87,8 +85,7 @@ public:
     ScopedOperation<void> pong(std::string_view payload);
 
     template <typename Text>
-        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, Text &&>)
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
     ScopedOperation<void> pong(Text&& payload) {
         return pong(std::string_view(std::forward<Text>(payload)));
     }
@@ -99,8 +96,7 @@ public:
     ScopedOperation<void> ping(std::string_view payload = {});
 
     template <typename Text>
-        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, Text &&>)
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
     ScopedOperation<void> ping(Text&& payload) {
         return ping(std::string_view(std::forward<Text>(payload)));
     }

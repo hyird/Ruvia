@@ -86,8 +86,7 @@ public:
     // Exact raw lookup over the encoded query string. Both `rawName` and the
     // returned value retain their percent-encoded bytes; no application/x-www-
     // form-urlencoded `+` conversion is applied. Later duplicate fields win.
-    [[nodiscard]] std::optional<std::string_view> lastRawQueryValue(
-        std::string_view rawName) const noexcept;
+    [[nodiscard]] std::optional<std::string_view> lastRawQueryValue(std::string_view rawName) const noexcept;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
 
 private:

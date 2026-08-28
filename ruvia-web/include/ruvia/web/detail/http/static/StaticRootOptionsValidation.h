@@ -11,8 +11,7 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline bool staticFileExtensionsEquivalent(
-    std::string_view left, std::string_view right) noexcept {
+[[nodiscard]] inline bool staticFileExtensionsEquivalent(std::string_view left, std::string_view right) noexcept {
     if (left.starts_with('.')) {
         left.remove_prefix(1);
     }
@@ -65,21 +64,16 @@ inline void validateStaticRootOptions(const StaticRootOptions& options) {
         default:
             throw std::invalid_argument("invalid static response validator policy");
     }
-    if (!ruvia::isValidHttpHeaderValue(options.cacheControl) ||
-        (!options.defaultContentType.empty() &&
-            !ruvia::detail::isValidHttpContentTypeFieldValue(options.defaultContentType))) {
+    if (!ruvia::isValidHttpHeaderValue(options.cacheControl) || (!options.defaultContentType.empty() && !ruvia::detail::isValidHttpContentTypeFieldValue(options.defaultContentType))) {
         throw std::invalid_argument("invalid static file header value");
     }
     for (std::size_t i = 0; i < options.mimeTypes.size(); ++i) {
         const auto& mime = options.mimeTypes[i];
-        if (!ruvia::detail::isValidStaticFileExtension(mime.extension) ||
-            mime.contentType.empty() ||
-            !ruvia::detail::isValidHttpContentTypeFieldValue(mime.contentType)) {
+        if (!ruvia::detail::isValidStaticFileExtension(mime.extension) || mime.contentType.empty() || !ruvia::detail::isValidHttpContentTypeFieldValue(mime.contentType)) {
             throw std::invalid_argument("invalid static file mime type");
         }
         for (std::size_t previous = 0; previous < i; ++previous) {
-            if (staticFileExtensionsEquivalent(
-                    options.mimeTypes[previous].extension, mime.extension)) {
+            if (staticFileExtensionsEquivalent(options.mimeTypes[previous].extension, mime.extension)) {
                 throw std::invalid_argument("duplicate static file mime extension");
             }
         }
@@ -104,9 +98,7 @@ inline void validateStaticRootOptions(const StaticRootOptions& options) {
         default:
             throw std::invalid_argument("invalid static file type mode");
     }
-    if (options.indexFile.find('/') != std::string_view::npos ||
-        options.indexFile.find('\\') != std::string_view::npos || options.indexFile == "." ||
-        options.indexFile == "..") {
+    if (options.indexFile.find('/') != std::string_view::npos || options.indexFile.find('\\') != std::string_view::npos || options.indexFile == "." || options.indexFile == "..") {
         throw std::invalid_argument("invalid static file index name");
     }
 }

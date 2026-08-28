@@ -28,8 +28,7 @@ enum class WebSocketProtocolFailure : std::uint16_t {
     kMessageTooLarge = 1009,
 };
 
-[[nodiscard]] constexpr std::uint16_t webSocketProtocolFailureCloseCode(
-    WebSocketProtocolFailure failure) noexcept {
+[[nodiscard]] constexpr std::uint16_t webSocketProtocolFailureCloseCode(WebSocketProtocolFailure failure) noexcept {
     return static_cast<std::uint16_t>(failure);
 }
 
@@ -60,10 +59,8 @@ public:
     }
 
 private:
-    friend std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(
-        unsigned char, unsigned char, bool) noexcept;
-    friend std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(
-        unsigned char, unsigned char, bool, bool) noexcept;
+    friend std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(unsigned char, unsigned char, bool) noexcept;
+    friend std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(unsigned char, unsigned char, bool, bool) noexcept;
 
     constexpr WebSocketFrameStart(WebSocketFrameKind kind, bool final, bool compressed) noexcept
         : kind_(kind),
@@ -90,43 +87,35 @@ private:
 // allowRsv1 enables the RSV1 (compressed) bit when permessage-deflate is
 // negotiated; it is valid only on the first frame of a data message, never on a
 // continuation or control frame (RFC 7692 §6.1). RSV2/RSV3 are always rejected.
-[[nodiscard]] inline std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(
-    unsigned char first, unsigned char second, bool allowRsv1, bool expectMasked) noexcept {
+[[nodiscard]] inline std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(unsigned char first, unsigned char second, bool allowRsv1, bool expectMasked) noexcept {
     const auto rawOpcode = static_cast<std::uint8_t>(first & 0x0FU);
     const bool rsv1 = (first & 0x40U) != 0;
-    if ((first & 0x30U) != 0 || ((second & 0x80U) != 0) != expectMasked ||
-        isInvalidWebSocketRawOpcode(rawOpcode)) {
+    if ((first & 0x30U) != 0 || ((second & 0x80U) != 0) != expectMasked || isInvalidWebSocketRawOpcode(rawOpcode)) {
         return std::nullopt;
     }
     if (rsv1 && (!allowRsv1 || rawOpcode == 0 || rawOpcode >= 0x8)) {
         return std::nullopt;
     }
-    return WebSocketFrameStart(
-        static_cast<WebSocketFrameKind>(rawOpcode), (first & 0x80U) != 0, rsv1);
+    return WebSocketFrameStart(static_cast<WebSocketFrameKind>(rawOpcode), (first & 0x80U) != 0, rsv1);
 }
 
-[[nodiscard]] inline std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(
-    unsigned char first, unsigned char second, bool allowRsv1) noexcept {
+[[nodiscard]] inline std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(unsigned char first, unsigned char second, bool allowRsv1) noexcept {
     return decodeWebSocketFrameStart(first, second, allowRsv1, true);
 }
 
-[[nodiscard]] inline bool isInvalidWebSocketControlFrame(
-    const WebSocketFrameStart& frame, std::uint64_t payloadSize) noexcept {
+[[nodiscard]] inline bool isInvalidWebSocketControlFrame(const WebSocketFrameStart& frame, std::uint64_t payloadSize) noexcept {
     return isWebSocketControlFrameKind(frame.kind()) && (!frame.final() || payloadSize > 125);
 }
 
-[[nodiscard]] inline bool webSocketMessageExceedsLimit(
-    std::size_t payloadSize, ProtocolByteLimit messageLimit) noexcept {
+[[nodiscard]] inline bool webSocketMessageExceedsLimit(std::size_t payloadSize, ProtocolByteLimit messageLimit) noexcept {
     return messageLimit.exceeds(payloadSize);
 }
 
-[[nodiscard]] inline bool webSocketAppendExceedsLimit(
-    std::size_t currentSize, std::size_t appendSize, ProtocolByteLimit messageLimit) noexcept {
+[[nodiscard]] inline bool webSocketAppendExceedsLimit(std::size_t currentSize, std::size_t appendSize, ProtocolByteLimit messageLimit) noexcept {
     return messageLimit.additionExceeds(currentSize, appendSize);
 }
 
-[[nodiscard]] inline bool webSocketFrameLengthExceedsLimit(
-    std::uint64_t payloadSize, ProtocolByteLimit messageLimit) noexcept {
+[[nodiscard]] inline bool webSocketFrameLengthExceedsLimit(std::uint64_t payloadSize, ProtocolByteLimit messageLimit) noexcept {
     if (payloadSize > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
         return true;
     }
@@ -139,24 +128,18 @@ private:
 // limit to control frames would reject a legal Ping/Pong, or a Close carrying a
 // reason phrase, once maxMessageBytes drops below 125 -- silently breaking the
 // close handshake and keepalive on a small-message configuration.
-[[nodiscard]] inline bool webSocketFrameExceedsMessageLimit(
-    WebSocketFrameKind kind, std::uint64_t payloadSize, ProtocolByteLimit messageLimit) noexcept {
-    return !isWebSocketControlFrameKind(kind) &&
-           webSocketFrameLengthExceedsLimit(payloadSize, messageLimit);
+[[nodiscard]] inline bool webSocketFrameExceedsMessageLimit(WebSocketFrameKind kind, std::uint64_t payloadSize, ProtocolByteLimit messageLimit) noexcept {
+    return !isWebSocketControlFrameKind(kind) && webSocketFrameLengthExceedsLimit(payloadSize, messageLimit);
 }
 
-[[nodiscard]] inline bool webSocketMaskedFrameReadSizeOverflows(
-    std::uint64_t payloadSize, std::size_t headerSize) noexcept {
+[[nodiscard]] inline bool webSocketMaskedFrameReadSizeOverflows(std::uint64_t payloadSize, std::size_t headerSize) noexcept {
     constexpr std::size_t kMaskBytes = 4;
     constexpr auto kMaxSize = (std::numeric_limits<std::size_t>::max)();
-    return headerSize > kMaxSize - kMaskBytes ||
-           payloadSize > static_cast<std::uint64_t>(kMaxSize - headerSize - kMaskBytes);
+    return headerSize > kMaxSize - kMaskBytes || payloadSize > static_cast<std::uint64_t>(kMaxSize - headerSize - kMaskBytes);
 }
 
 [[nodiscard]] inline std::uint16_t readWebSocketUint16(const char* data) noexcept {
-    return static_cast<std::uint16_t>(
-        (static_cast<std::uint16_t>(static_cast<unsigned char>(data[0])) << 8) |
-        static_cast<unsigned char>(data[1]));
+    return static_cast<std::uint16_t>((static_cast<std::uint16_t>(static_cast<unsigned char>(data[0])) << 8) | static_cast<unsigned char>(data[1]));
 }
 
 [[nodiscard]] inline bool readWebSocketUint64(const char* data, std::uint64_t& value) noexcept {
@@ -170,12 +153,9 @@ private:
     return true;
 }
 
-[[nodiscard]] inline std::size_t encodeWebSocketFrameHeader(WebSocketFrameHeader& header,
-    WebSocketOpcode opcode, std::size_t payloadSize, bool rsv1 = false,
-    bool masked = false) noexcept {
+[[nodiscard]] inline std::size_t encodeWebSocketFrameHeader(WebSocketFrameHeader& header, WebSocketOpcode opcode, std::size_t payloadSize, bool rsv1 = false, bool masked = false) noexcept {
     std::size_t headerSize = 0;
-    header[headerSize++] =
-        static_cast<char>(0x80U | (rsv1 ? 0x40U : 0U) | static_cast<std::uint8_t>(opcode));
+    header[headerSize++] = static_cast<char>(0x80U | (rsv1 ? 0x40U : 0U) | static_cast<std::uint8_t>(opcode));
     if (payloadSize <= 125) {
         header[headerSize++] = static_cast<char>((masked ? 0x80U : 0U) | payloadSize);
     } else if (payloadSize <= 0xFFFF) {
@@ -192,8 +172,7 @@ private:
     return headerSize;
 }
 
-inline void decodeMaskedWebSocketPayload(
-    char* payload, std::size_t payloadSize, const char* mask) noexcept {
+inline void decodeMaskedWebSocketPayload(char* payload, std::size_t payloadSize, const char* mask) noexcept {
     const auto m0 = static_cast<unsigned char>(mask[0]);
     const auto m1 = static_cast<unsigned char>(mask[1]);
     const auto m2 = static_cast<unsigned char>(mask[2]);

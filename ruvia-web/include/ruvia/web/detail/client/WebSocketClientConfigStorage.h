@@ -18,8 +18,7 @@
 namespace ruvia::detail {
 
 struct WebSocketClientStoredHeader final {
-    WebSocketClientStoredHeader(
-        std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
+    WebSocketClientStoredHeader(std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
         : name(name, resource),
           value(value, resource) {}
 
@@ -33,10 +32,8 @@ struct WebSocketClientSubprotocolRange final {
 };
 
 struct WebSocketClientConfigStorage final {
-    WebSocketClientConfigStorage(
-        const WebSocketClientConfig& source, std::pmr::memory_resource* resource)
-        : WebSocketClientConfigStorage(
-              ValidatedConfigTag{}, validate(source), pmrResourceOrDefault(resource)) {}
+    WebSocketClientConfigStorage(const WebSocketClientConfig& source, std::pmr::memory_resource* resource)
+        : WebSocketClientConfigStorage(ValidatedConfigTag{}, validate(source), pmrResourceOrDefault(resource)) {}
 
     WebSocketScheme scheme;
     std::pmr::string host;
@@ -66,14 +63,12 @@ struct WebSocketClientConfigStorage final {
 private:
     struct ValidatedConfigTag final {};
 
-    [[nodiscard]] static const WebSocketClientConfig& validate(
-        const WebSocketClientConfig& source) {
+    [[nodiscard]] static const WebSocketClientConfig& validate(const WebSocketClientConfig& source) {
         validateWebSocketClientConfig(source);
         return source;
     }
 
-    WebSocketClientConfigStorage(ValidatedConfigTag, const WebSocketClientConfig& source,
-        std::pmr::memory_resource* resource)
+    WebSocketClientConfigStorage(ValidatedConfigTag, const WebSocketClientConfig& source, std::pmr::memory_resource* resource)
         : scheme(source.scheme),
           host(source.host, resource),
           port(source.port),

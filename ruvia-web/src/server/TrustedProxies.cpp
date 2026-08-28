@@ -13,8 +13,7 @@ namespace {
 // Everything is compared in IPv6 form; an IPv4 address becomes its IPv4-mapped
 // equivalent so one masked compare serves both families and a deployment that
 // writes 10.0.0.0/8 still matches a peer that arrives as ::ffff:10.1.2.3.
-[[nodiscard]] bool toMappedBytes(
-    std::string_view text, std::array<std::uint8_t, 16>& out, bool& wasV4) noexcept {
+[[nodiscard]] bool toMappedBytes(std::string_view text, std::array<std::uint8_t, 16>& out, bool& wasV4) noexcept {
     std::error_code ec;
     const auto address = asio::ip::make_address(std::string(text), ec);
     if (ec) {
@@ -70,8 +69,7 @@ bool parseTrustedProxyBlock(std::string_view cidr, TrustedProxyBlock& out) noexc
     return true;
 }
 
-bool trustedProxyBlockContains(
-    const TrustedProxyBlock& block, std::string_view peerAddress) noexcept {
+bool trustedProxyBlockContains(const TrustedProxyBlock& block, std::string_view peerAddress) noexcept {
     std::array<std::uint8_t, 16> peer{};
     bool wasV4 = false;
     if (!toMappedBytes(peerAddress, peer, wasV4)) {

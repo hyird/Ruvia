@@ -20,15 +20,11 @@ namespace ruvia::detail {
 
 [[nodiscard]] inline bool http2IsPendingWebSocketConnect(const Http2StreamState& stream) noexcept {
     const auto* pending = stream.tunnel().pending();
-    return pending != nullptr && pending->form() == Http2ConnectForm::kExtended &&
-           stream.protocolIsWebSocket();
+    return pending != nullptr && pending->form() == Http2ConnectForm::kExtended && stream.protocolIsWebSocket();
 }
 
-[[nodiscard]] inline WebSocketHandshakeValidationResult validateHttp2WebSocketHandshake(
-    const Http2StreamState& stream, const HttpRequest& request) noexcept {
-    if (!http2IsPendingWebSocketConnect(stream) || !http2RemoteFinalHeadDecoded(stream) ||
-        http2RemotePeerHalfClosed(stream) ||
-        stream.remoteContent().allowedWithoutLength() == nullptr) {
+[[nodiscard]] inline WebSocketHandshakeValidationResult validateHttp2WebSocketHandshake(const Http2StreamState& stream, const HttpRequest& request) noexcept {
+    if (!http2IsPendingWebSocketConnect(stream) || !http2RemoteFinalHeadDecoded(stream) || http2RemotePeerHalfClosed(stream) || stream.remoteContent().allowedWithoutLength() == nullptr) {
         return WebSocketHandshakeValidationResultAccess::invalidRequest();
     }
 
@@ -55,20 +51,16 @@ namespace ruvia::detail {
     return WebSocketHandshakeValidationResultAccess::accepted();
 }
 
-inline void http2EncodeWebSocketHandshakeHeaders(
-    std::pmr::string& headerBlock, const WebSocketServerNegotiation& negotiation) {
+inline void http2EncodeWebSocketHandshakeHeaders(std::pmr::string& headerBlock, const WebSocketServerNegotiation& negotiation) {
     try {
         headerBlock.clear();
         HpackEncoder::encodeStatus(headerBlock, http_status::kOk);
-        HpackEncoder::encodeHeaderWithNameIndex(
-            headerBlock, HpackStaticIndex::kDate, cachedDateValue());
+        HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kDate, cachedDateValue());
         if (!negotiation.subprotocol().empty()) {
-            HpackEncoder::encodeHeader(
-                headerBlock, "sec-websocket-protocol", negotiation.subprotocol());
+            HpackEncoder::encodeHeader(headerBlock, "sec-websocket-protocol", negotiation.subprotocol());
         }
         if (!negotiation.extensions().empty()) {
-            HpackEncoder::encodeHeader(
-                headerBlock, "sec-websocket-extensions", negotiation.extensions());
+            HpackEncoder::encodeHeader(headerBlock, "sec-websocket-extensions", negotiation.extensions());
         }
     } catch (...) {
         headerBlock.clear();

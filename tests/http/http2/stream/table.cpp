@@ -14,10 +14,7 @@ using ruvia::detail::Http2LocalSettings;
 using ruvia::detail::Http2StreamTable;
 
 template <typename T>
-concept ExposesRvalueHttp2StreamTableStorage =
-    requires(T&& table) { std::move(table).find(std::uint32_t{}); } || requires(const T&& table) {
-        std::move(table).find(std::uint32_t{});
-    } || requires(T&& table) { std::move(table).create(std::uint32_t{}, std::int32_t{}); };
+concept ExposesRvalueHttp2StreamTableStorage = requires(T&& table) { std::move(table).find(std::uint32_t{}); } || requires(const T&& table) { std::move(table).find(std::uint32_t{}); } || requires(T&& table) { std::move(table).create(std::uint32_t{}, std::int32_t{}); };
 
 static_assert(!ExposesRvalueHttp2StreamTableStorage<Http2StreamTable>);
 
@@ -32,8 +29,7 @@ RUVIA_TEST(stream_table_create_find_remove) {
     RUVIA_CHECK(stream != nullptr);
     RUVIA_CHECK_EQ(table.size(), std::size_t{1});
     RUVIA_CHECK(table.find(1) == stream);
-    RUVIA_CHECK_EQ(
-        stream->sendWindow(), std::int32_t{65535});  // seeded with the peer initial window
+    RUVIA_CHECK_EQ(stream->sendWindow(), std::int32_t{65535});  // seeded with the peer initial window
 
     // create() is idempotent for an existing stream.
     RUVIA_CHECK(table.create(1, 100) == stream);

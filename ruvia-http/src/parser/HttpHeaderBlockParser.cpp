@@ -15,12 +15,10 @@ namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] HttpHeaderSlice makeSlice(std::size_t offset, std::size_t length) noexcept {
-    return HttpHeaderSlice{
-        .offset = static_cast<std::uint32_t>(offset), .length = static_cast<std::uint32_t>(length)};
+    return HttpHeaderSlice{.offset = static_cast<std::uint32_t>(offset), .length = static_cast<std::uint32_t>(length)};
 }
 
-[[nodiscard]] std::size_t trimRightOws(
-    std::string_view buffer, std::size_t begin, std::size_t end) noexcept {
+[[nodiscard]] std::size_t trimRightOws(std::string_view buffer, std::size_t begin, std::size_t end) noexcept {
     while (end > begin && (buffer[end - 1] == ' ' || buffer[end - 1] == '\t')) {
         --end;
     }
@@ -31,9 +29,7 @@ namespace {
 // section 3.1). On success `cursor` sits on the first header field, and
 // `ignoreUpgrade` reports an HTTP/1.0 version, which changes how the field
 // section treats Upgrade.
-[[nodiscard]] std::optional<HttpParseError> parseRequestLine(std::string_view buffer,
-    std::size_t headersEnd, std::size_t& cursor, ParsedRequestHeaderBlock& block,
-    bool& ignoreUpgrade) noexcept {
+[[nodiscard]] std::optional<HttpParseError> parseRequestLine(std::string_view buffer, std::size_t headersEnd, std::size_t& cursor, ParsedRequestHeaderBlock& block, bool& ignoreUpgrade) noexcept {
     const auto methodStart = cursor;
     while (cursor < headersEnd && isHttpTokenChar(static_cast<unsigned char>(buffer[cursor]))) {
         ++cursor;
@@ -78,8 +74,7 @@ namespace {
 // protocol boundary, which are parsed into a typed field on the block, and
 // which may appear only once. Finding the bytes is the loop's job below; every
 // rule about what they mean is here.
-[[nodiscard]] std::optional<HttpParseError> applyRequestHeader(RequestHeaderKind kind,
-    std::string_view value, bool ignoreUpgrade, ParsedRequestHeaderBlock& block) noexcept {
+[[nodiscard]] std::optional<HttpParseError> applyRequestHeader(RequestHeaderKind kind, std::string_view value, bool ignoreUpgrade, ParsedRequestHeaderBlock& block) noexcept {
     switch (kind) {
         case RequestHeaderKind::kHost:
             if (block.hostHeaderIndex >= 0 || !isValidHostHeader(value)) {
@@ -109,10 +104,7 @@ namespace {
             break;
         }
         case RequestHeaderKind::kConnection: {
-            if (block.connectionOptions.parseField(
-                    value, HttpFieldListRole::kRecipient, [](std::string_view option) noexcept {
-                        return !httpConnectionOptionConflictsWithManagedField(option);
-                    }) != HttpFieldListParseStatus::kOk) {
+            if (block.connectionOptions.parseField(value, HttpFieldListRole::kRecipient, [](std::string_view option) noexcept { return !httpConnectionOptionConflictsWithManagedField(option); }) != HttpFieldListParseStatus::kOk) {
                 return HttpParseError::kInvalidConnection;
             }
             break;
@@ -129,10 +121,7 @@ namespace {
             // an HTTP/1.0 request. The bytes still have to be a valid
             // generic field value, but Upgrade-specific grammar must not
             // turn an otherwise valid HTTP/1.0 request into a 400.
-            if (!ignoreUpgrade &&
-                block.upgradeProtocols.parseField(value, HttpFieldListRole::kRecipient,
-                    [](const HttpUpgradeProtocol&) noexcept { return true; }) !=
-                    HttpFieldListParseStatus::kOk) {
+            if (!ignoreUpgrade && block.upgradeProtocols.parseField(value, HttpFieldListRole::kRecipient, [](const HttpUpgradeProtocol&) noexcept { return true; }) != HttpFieldListParseStatus::kOk) {
                 return HttpParseError::kInvalidUpgrade;
             }
             break;
@@ -143,8 +132,7 @@ namespace {
             if (!isValidHttpCorsRequestMethod(value)) {
                 return HttpParseError::kInvalidHeader;
             }
-            if (const auto bit = singletonRequestHeaderBit(kind);
-                (block.seenHeaderBits & bit) != 0) {
+            if (const auto bit = singletonRequestHeaderBit(kind); (block.seenHeaderBits & bit) != 0) {
                 return HttpParseError::kInvalidHeader;
             } else {
                 block.seenHeaderBits |= bit;
@@ -154,8 +142,7 @@ namespace {
             if (!isValidHttpOriginFieldValue(value)) {
                 return HttpParseError::kInvalidHeader;
             }
-            if (const auto bit = singletonRequestHeaderBit(kind);
-                (block.seenHeaderBits & bit) != 0) {
+            if (const auto bit = singletonRequestHeaderBit(kind); (block.seenHeaderBits & bit) != 0) {
                 return HttpParseError::kInvalidHeader;
             } else {
                 block.seenHeaderBits |= bit;
@@ -214,9 +201,7 @@ namespace {
 
 // The header section: one field line at a time, name and value delimited by
 // ':' and CRLF with optional whitespace trimmed off the value.
-[[nodiscard]] std::optional<HttpParseError> parseHeaderFields(std::string_view buffer,
-    std::size_t headersEnd, std::size_t cursor, bool ignoreUpgrade,
-    ParsedRequestHeaderBlock& block) noexcept {
+[[nodiscard]] std::optional<HttpParseError> parseHeaderFields(std::string_view buffer, std::size_t headersEnd, std::size_t cursor, bool ignoreUpgrade, ParsedRequestHeaderBlock& block) noexcept {
     while (cursor < headersEnd) {
         if (block.headerCount == kMaxHttpHeaderFields) {
             return HttpParseError::kTooManyHeaders;
@@ -236,8 +221,7 @@ namespace {
             ++cursor;
         }
         const auto valueStart = cursor;
-        while (cursor < headersEnd &&
-               isHttpFieldValueChar(static_cast<unsigned char>(buffer[cursor]))) {
+        while (cursor < headersEnd && isHttpFieldValueChar(static_cast<unsigned char>(buffer[cursor]))) {
             ++cursor;
         }
         if (cursor + 1 >= headersEnd || buffer[cursor] != '\r' || buffer[cursor + 1] != '\n') {
@@ -252,9 +236,7 @@ namespace {
             if (!isValidHttpRequestTrailerFieldValue(value, HttpFieldListRole::kRecipient)) {
                 return HttpParseError::kInvalidHeader;
             }
-            if (!httpFindHeaderToken(value, [](std::string_view) noexcept {
-                    return true;
-                }).empty()) {
+            if (!httpFindHeaderToken(value, [](std::string_view) noexcept { return true; }).empty()) {
                 block.nonEmptyTrailerHeaderPresent = true;
             }
         }
@@ -271,10 +253,7 @@ namespace {
         }
 
         const auto index = block.headerCount++;
-        block.headers[index] =
-            ParsedRequestHeaderSlot{.name = makeSlice(nameStart, nameEnd - nameStart),
-                .value = makeSlice(valueStart, valueEnd - valueStart),
-                .kind = kind};
+        block.headers[index] = ParsedRequestHeaderSlot{.name = makeSlice(nameStart, nameEnd - nameStart), .value = makeSlice(valueStart, valueEnd - valueStart), .kind = kind};
         if (kind == RequestHeaderKind::kHost) {
             block.hostHeaderIndex = static_cast<KnownRequestHeaderIndex>(index);
         }
@@ -294,8 +273,7 @@ std::size_t findHttpHeaderEnd(std::string_view buffer, std::size_t searchOffset)
 
     auto cursor = searchOffset >= limit ? limit : std::max<std::size_t>(3, searchOffset + 3);
     while (cursor < limit) {
-        const auto* hit =
-            static_cast<const char*>(std::memchr(buffer.data() + cursor, '\n', limit - cursor));
+        const auto* hit = static_cast<const char*>(std::memchr(buffer.data() + cursor, '\n', limit - cursor));
         if (hit == nullptr) {
             return std::string_view::npos;
         }
@@ -309,8 +287,7 @@ std::size_t findHttpHeaderEnd(std::string_view buffer, std::size_t searchOffset)
     return std::string_view::npos;
 }
 
-std::optional<HttpParseError> parseHttpHeaderBlock(
-    std::string_view buffer, std::size_t headerBytes, ParsedRequestHeaderBlock& block) noexcept {
+std::optional<HttpParseError> parseHttpHeaderBlock(std::string_view buffer, std::size_t headerBytes, ParsedRequestHeaderBlock& block) noexcept {
     const auto headersEnd = headerBytes - 2;
     std::size_t cursor = 0;
     bool ignoreUpgrade = false;

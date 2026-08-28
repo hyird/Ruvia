@@ -22,8 +22,7 @@ public:
         return HttpStatusCode(value, ValidatedTag{});
     }
 
-    [[nodiscard]] static constexpr std::optional<HttpStatusCode> tryFromValue(
-        std::uint16_t value) noexcept {
+    [[nodiscard]] static constexpr std::optional<HttpStatusCode> tryFromValue(std::uint16_t value) noexcept {
         if (!isValidValue(value)) {
             return std::nullopt;
         }
@@ -85,15 +84,12 @@ namespace detail {
 inline constexpr std::size_t kHttpStatusCodeTokenSize = 3;
 using HttpStatusCodeToken = std::array<char, kHttpStatusCodeTokenSize>;
 
-[[nodiscard]] inline constexpr HttpStatusCodeToken httpStatusCodeToken(
-    HttpStatusCode status) noexcept {
+[[nodiscard]] inline constexpr HttpStatusCodeToken httpStatusCodeToken(HttpStatusCode status) noexcept {
     const auto value = status.value();
-    return {static_cast<char>('0' + value / 100), static_cast<char>('0' + (value / 10) % 10),
-        static_cast<char>('0' + value % 10)};
+    return {static_cast<char>('0' + value / 100), static_cast<char>('0' + (value / 10) % 10), static_cast<char>('0' + value % 10)};
 }
 
-[[nodiscard]] inline constexpr std::string_view httpStatusCodeTokenView(
-    const HttpStatusCodeToken& token) noexcept {
+[[nodiscard]] inline constexpr std::string_view httpStatusCodeTokenView(const HttpStatusCodeToken& token) noexcept {
     return std::string_view(token.data(), token.size());
 }
 

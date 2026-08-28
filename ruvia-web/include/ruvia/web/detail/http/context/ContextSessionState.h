@@ -98,9 +98,7 @@ private:
 
     std::pmr::memory_resource* resource_;
     bool available_{false};
-    std::variant<SessionUntouched, SessionUnrecognized, SessionLoaded, SessionPersistNew,
-        SessionPersistExisting, SessionRotate, SessionClear>
-        value_;
+    std::variant<SessionUntouched, SessionUnrecognized, SessionLoaded, SessionPersistNew, SessionPersistExisting, SessionRotate, SessionClear> value_;
 };
 
 }  // namespace ruvia::detail

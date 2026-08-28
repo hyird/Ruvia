@@ -13,12 +13,7 @@
 
 namespace ruvia::detail {
 
-enum class Http2ResponseHeadPlanError : std::uint8_t {
-    kInvalidContentLength,
-    kConnectTunnelRequired,
-    kResponseStatusMismatch,
-    kResponseRepresentationMismatch
-};
+enum class Http2ResponseHeadPlanError : std::uint8_t { kInvalidContentLength, kConnectTunnelRequired, kResponseStatusMismatch, kResponseRepresentationMismatch };
 
 class Http2ResponseHeadPlanFailure final {
 public:
@@ -47,18 +42,14 @@ public:
     // never depends on this value, but RFC 9113 requires any emitted value to
     // agree with the DATA content.
     [[nodiscard]] std::optional<std::uint64_t> contentLength() const noexcept {
-        return contentLengthMode_ == ContentLengthMode::kOmit
-                   ? std::nullopt
-                   : std::optional<std::uint64_t>(contentLength_);
+        return contentLengthMode_ == ContentLengthMode::kOmit ? std::nullopt : std::optional<std::uint64_t>(contentLength_);
     }
 
     // Only an application-declared streaming length constrains subsequent DATA.
     // Framework-generated buffered lengths are already bound to their response
     // representation and therefore do not create a streaming accounting limit.
     [[nodiscard]] std::optional<std::uint64_t> streamingContentLength() const noexcept {
-        return contentLengthMode_ == ContentLengthMode::kExplicit
-                   ? std::optional<std::uint64_t>(contentLength_)
-                   : std::nullopt;
+        return contentLengthMode_ == ContentLengthMode::kExplicit ? std::optional<std::uint64_t>(contentLength_) : std::nullopt;
     }
 
 private:
@@ -70,8 +61,7 @@ private:
         kExplicit,
     };
 
-    Http2ResponseHeadPlan(HttpResponseBodyPlan bodyPlan, ContentLengthMode contentLengthMode,
-        std::uint64_t contentLength = 0) noexcept
+    Http2ResponseHeadPlan(HttpResponseBodyPlan bodyPlan, ContentLengthMode contentLengthMode, std::uint64_t contentLength = 0) noexcept
         : bodyPlan_(bodyPlan),
           contentLengthMode_(contentLengthMode),
           contentLength_(contentLength) {}
@@ -97,12 +87,9 @@ public:
     [[nodiscard]] const Http2ResponseHeadPlanFailure* failure() const&& = delete;
 
 private:
-    friend Http2ResponseHeadPlanResult http2BufferedResponseHeadPlan(
-        const HttpBufferedResponseWritePlan&, const HttpResponse&) noexcept;
-    friend Http2ResponseHeadPlanResult http2StreamingResponseHeadPlan(
-        const HttpResponseBodyPlan&, const HttpResponse&) noexcept;
-    friend Http2ResponseHeadPlanResult http2ConnectResponseHeadPlan(
-        const HttpResponseBodyPlan&) noexcept;
+    friend Http2ResponseHeadPlanResult http2BufferedResponseHeadPlan(const HttpBufferedResponseWritePlan&, const HttpResponse&) noexcept;
+    friend Http2ResponseHeadPlanResult http2StreamingResponseHeadPlan(const HttpResponseBodyPlan&, const HttpResponse&) noexcept;
+    friend Http2ResponseHeadPlanResult http2ConnectResponseHeadPlan(const HttpResponseBodyPlan&) noexcept;
 
     using Value = std::variant<Http2ResponseHeadPlan, Http2ResponseHeadPlanFailure>;
 
@@ -110,14 +97,11 @@ private:
     explicit Http2ResponseHeadPlanResult(Alternative alternative) noexcept
         : value_(alternative) {}
 
-    [[nodiscard]] static Http2ResponseHeadPlanResult canonical(
-        HttpResponseBodyPlan bodyPlan, std::uint64_t value) noexcept {
-        return Http2ResponseHeadPlanResult(Http2ResponseHeadPlan(
-            bodyPlan, Http2ResponseHeadPlan::ContentLengthMode::kCanonical, value));
+    [[nodiscard]] static Http2ResponseHeadPlanResult canonical(HttpResponseBodyPlan bodyPlan, std::uint64_t value) noexcept {
+        return Http2ResponseHeadPlanResult(Http2ResponseHeadPlan(bodyPlan, Http2ResponseHeadPlan::ContentLengthMode::kCanonical, value));
     }
 
-    [[nodiscard]] static Http2ResponseHeadPlanResult preserveExplicit(
-        HttpResponseBodyPlan bodyPlan, const HttpResponse& response) noexcept {
+    [[nodiscard]] static Http2ResponseHeadPlanResult preserveExplicit(HttpResponseBodyPlan bodyPlan, const HttpResponse& response) noexcept {
         if (!responseHasKnownHeader(response, kResponseHeaderContentLength)) {
             return omit(bodyPlan);
         }
@@ -126,68 +110,50 @@ private:
         std::uint64_t parsed = 0;
         const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
         if (value.empty() || ec != std::errc{} || ptr != value.data() + value.size()) {
-            return Http2ResponseHeadPlanResult(
-                Http2ResponseHeadPlanFailure(Http2ResponseHeadPlanError::kInvalidContentLength));
+            return Http2ResponseHeadPlanResult(Http2ResponseHeadPlanFailure(Http2ResponseHeadPlanError::kInvalidContentLength));
         }
-        return Http2ResponseHeadPlanResult(Http2ResponseHeadPlan(
-            bodyPlan, Http2ResponseHeadPlan::ContentLengthMode::kExplicit, parsed));
+        return Http2ResponseHeadPlanResult(Http2ResponseHeadPlan(bodyPlan, Http2ResponseHeadPlan::ContentLengthMode::kExplicit, parsed));
     }
 
     [[nodiscard]] static Http2ResponseHeadPlanResult omit(HttpResponseBodyPlan bodyPlan) noexcept {
-        return Http2ResponseHeadPlanResult(
-            Http2ResponseHeadPlan(bodyPlan, Http2ResponseHeadPlan::ContentLengthMode::kOmit));
+        return Http2ResponseHeadPlanResult(Http2ResponseHeadPlan(bodyPlan, Http2ResponseHeadPlan::ContentLengthMode::kOmit));
     }
 
-    [[nodiscard]] static Http2ResponseHeadPlanResult failure(
-        Http2ResponseHeadPlanError error) noexcept {
+    [[nodiscard]] static Http2ResponseHeadPlanResult failure(Http2ResponseHeadPlanError error) noexcept {
         return Http2ResponseHeadPlanResult(Http2ResponseHeadPlanFailure(error));
     }
 
     Value value_;
 };
 
-[[nodiscard]] inline Http2ResponseHeadPlanResult http2BufferedResponseHeadPlan(
-    const HttpBufferedResponseWritePlan& writePlan, const HttpResponse& response) noexcept {
+[[nodiscard]] inline Http2ResponseHeadPlanResult http2BufferedResponseHeadPlan(const HttpBufferedResponseWritePlan& writePlan, const HttpResponse& response) noexcept {
     const auto bodyPlan = writePlan.bodyPlan();
     if (writePlan.responseStatus() != response.status()) {
-        return Http2ResponseHeadPlanResult::failure(
-            Http2ResponseHeadPlanError::kResponseStatusMismatch);
+        return Http2ResponseHeadPlanResult::failure(Http2ResponseHeadPlanError::kResponseStatusMismatch);
     }
     if (!writePlan.matchesResponse(response)) {
-        return Http2ResponseHeadPlanResult::failure(
-            Http2ResponseHeadPlanError::kResponseRepresentationMismatch);
+        return Http2ResponseHeadPlanResult::failure(Http2ResponseHeadPlanError::kResponseRepresentationMismatch);
     }
     const auto policy = bodyPlan.policy();
     if (policy.autoContentLengthAllowed()) {
-        return Http2ResponseHeadPlanResult::canonical(
-            bodyPlan, policy.bodyAllowed() ? writePlan.contentLength() : 0);
+        return Http2ResponseHeadPlanResult::canonical(bodyPlan, policy.bodyAllowed() ? writePlan.contentLength() : 0);
     }
-    return policy.explicitContentLengthAllowed()
-               ? Http2ResponseHeadPlanResult::preserveExplicit(bodyPlan, response)
-               : Http2ResponseHeadPlanResult::omit(bodyPlan);
+    return policy.explicitContentLengthAllowed() ? Http2ResponseHeadPlanResult::preserveExplicit(bodyPlan, response) : Http2ResponseHeadPlanResult::omit(bodyPlan);
 }
 
-[[nodiscard]] inline Http2ResponseHeadPlanResult http2StreamingResponseHeadPlan(
-    const HttpResponseBodyPlan& bodyPlan, const HttpResponse& response) noexcept {
+[[nodiscard]] inline Http2ResponseHeadPlanResult http2StreamingResponseHeadPlan(const HttpResponseBodyPlan& bodyPlan, const HttpResponse& response) noexcept {
     if (bodyPlan.responseStatus() != response.status()) {
-        return Http2ResponseHeadPlanResult::failure(
-            Http2ResponseHeadPlanError::kResponseStatusMismatch);
+        return Http2ResponseHeadPlanResult::failure(Http2ResponseHeadPlanError::kResponseStatusMismatch);
     }
     const auto policy = bodyPlan.policy();
     if (policy.autoContentLengthAllowed() && !policy.bodyAllowed()) {
         return Http2ResponseHeadPlanResult::canonical(bodyPlan, 0);
     }
-    return policy.explicitContentLengthAllowed()
-               ? Http2ResponseHeadPlanResult::preserveExplicit(bodyPlan, response)
-               : Http2ResponseHeadPlanResult::omit(bodyPlan);
+    return policy.explicitContentLengthAllowed() ? Http2ResponseHeadPlanResult::preserveExplicit(bodyPlan, response) : Http2ResponseHeadPlanResult::omit(bodyPlan);
 }
 
-[[nodiscard]] inline Http2ResponseHeadPlanResult http2ConnectResponseHeadPlan(
-    const HttpResponseBodyPlan& bodyPlan) noexcept {
-    return bodyPlan.contentSemantics() == HttpResponseContentSemantics::kConnectTunnel
-               ? Http2ResponseHeadPlanResult::omit(bodyPlan)
-               : Http2ResponseHeadPlanResult::failure(
-                     Http2ResponseHeadPlanError::kConnectTunnelRequired);
+[[nodiscard]] inline Http2ResponseHeadPlanResult http2ConnectResponseHeadPlan(const HttpResponseBodyPlan& bodyPlan) noexcept {
+    return bodyPlan.contentSemantics() == HttpResponseContentSemantics::kConnectTunnel ? Http2ResponseHeadPlanResult::omit(bodyPlan) : Http2ResponseHeadPlanResult::failure(Http2ResponseHeadPlanError::kConnectTunnelRequired);
 }
 
 }  // namespace ruvia::detail

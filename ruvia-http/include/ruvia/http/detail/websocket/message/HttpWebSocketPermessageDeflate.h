@@ -32,8 +32,7 @@ enum class WebSocketInflateResult : std::uint8_t {
 class WebSocketDeflate final {
 public:
     WebSocketDeflate() {
-        if (deflateInit2(
-                &deflate_, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        if (deflateInit2(&deflate_, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
             throw std::runtime_error("failed to initialize WebSocket deflate encoder");
         }
         if (inflateInit2(&inflate_, -15) != Z_OK) {
@@ -63,17 +62,14 @@ public:
         char buffer[4096];
         for (;;) {
             if (deflate_.avail_in == 0 && supplied < input.size()) {
-                const auto count = static_cast<uInt>(std::min<std::size_t>(
-                    input.size() - supplied, (std::numeric_limits<uInt>::max)()));
-                deflate_.next_in =
-                    reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
+                const auto count = static_cast<uInt>(std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
+                deflate_.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
                 deflate_.avail_in = count;
                 supplied += count;
             }
             deflate_.next_out = reinterpret_cast<Bytef*>(buffer);
             deflate_.avail_out = sizeof(buffer);
-            const int status =
-                deflate(&deflate_, supplied == input.size() ? Z_SYNC_FLUSH : Z_NO_FLUSH);
+            const int status = deflate(&deflate_, supplied == input.size() ? Z_SYNC_FLUSH : Z_NO_FLUSH);
             if (status != Z_OK && status != Z_BUF_ERROR) {
                 return false;
             }
@@ -94,23 +90,19 @@ public:
     // Decompresses a whole message: appends the 0x00 0x00 0xFF 0xFF marker that
     // the sender stripped, then raw-inflates into `out`, bounded by one explicit
     // message limit to defuse decompression bombs (RFC 7692 §7.2.2).
-    WebSocketInflateResult decompress(
-        std::string_view input, std::pmr::string& out, ProtocolByteLimit messageLimit) {
+    WebSocketInflateResult decompress(std::string_view input, std::pmr::string& out, ProtocolByteLimit messageLimit) {
         if (inflateReset(&inflate_) != Z_OK) {
             return WebSocketInflateResult::kError;
         }
         static constexpr unsigned char kFlushMarker[4] = {0x00, 0x00, 0xFF, 0xFF};
-        if (const auto r = inflateChunk(input.data(), input.size(), out, messageLimit);
-            r != WebSocketInflateResult::kOk) {
+        if (const auto r = inflateChunk(input.data(), input.size(), out, messageLimit); r != WebSocketInflateResult::kOk) {
             return r;
         }
-        return inflateChunk(
-            reinterpret_cast<const char*>(kFlushMarker), sizeof(kFlushMarker), out, messageLimit);
+        return inflateChunk(reinterpret_cast<const char*>(kFlushMarker), sizeof(kFlushMarker), out, messageLimit);
     }
 
 private:
-    WebSocketInflateResult inflateChunk(
-        const char* data, std::size_t size, std::pmr::string& out, ProtocolByteLimit messageLimit) {
+    WebSocketInflateResult inflateChunk(const char* data, std::size_t size, std::pmr::string& out, ProtocolByteLimit messageLimit) {
         // Messages can exceed zlib's 32-bit avail_in, so supply the input in
         // windows instead of truncating the size.
         inflate_.avail_in = 0;
@@ -118,8 +110,7 @@ private:
         char buffer[8192];
         for (;;) {
             if (inflate_.avail_in == 0 && supplied < size) {
-                const auto count = static_cast<uInt>(
-                    std::min<std::size_t>(size - supplied, (std::numeric_limits<uInt>::max)()));
+                const auto count = static_cast<uInt>(std::min<std::size_t>(size - supplied, (std::numeric_limits<uInt>::max)()));
                 inflate_.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data + supplied));
                 inflate_.avail_in = count;
                 supplied += count;
@@ -152,8 +143,7 @@ private:
 };
 
 [[nodiscard]] constexpr bool webSocketDeflateNegotiated(WebSocketCompression negotiation) noexcept {
-    return negotiation == WebSocketCompression::kPermessageDeflate ||
-           negotiation == WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits;
+    return negotiation == WebSocketCompression::kPermessageDeflate || negotiation == WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits;
 }
 
 // Decide whether the client offered permessage-deflate in a form we can honor. We
@@ -166,8 +156,7 @@ private:
 // Scan one Sec-WebSocket-Extensions field-line value (a comma list of offers) and
 // return the first honorable permessage-deflate offer, or a disabled negotiation
 // if the line carries none we can accept.
-[[nodiscard]] inline std::optional<int> webSocketDeflateWindowBits(
-    std::string_view value) noexcept {
+[[nodiscard]] inline std::optional<int> webSocketDeflateWindowBits(std::string_view value) noexcept {
     value = httpTrimOws(value);
     bool quoted = false;
     if (!value.empty() && value.front() == '"') {
@@ -208,8 +197,7 @@ private:
     return digits != 0 && parsed >= 8 && parsed <= 15 ? std::optional<int>(parsed) : std::nullopt;
 }
 
-[[nodiscard]] inline std::optional<WebSocketCompression> webSocketParseDeflateOffer(
-    std::string_view offer) noexcept {
+[[nodiscard]] inline std::optional<WebSocketCompression> webSocketParseDeflateOffer(std::string_view offer) noexcept {
     const auto firstSemicolon = httpFindUnquotedDelimiter(offer, 0, ';');
     const auto name = httpTrimOws(offer.substr(0, firstSemicolon));
     if (!httpAsciiEqualsIgnoreCase(name, "permessage-deflate")) {
@@ -232,8 +220,7 @@ private:
         const auto equals = parameter.find('=');
         const bool hasValue = equals != std::string_view::npos;
         const auto parameterName = httpTrimOws(hasValue ? parameter.substr(0, equals) : parameter);
-        const auto parameterValue =
-            hasValue ? httpTrimOws(parameter.substr(equals + 1)) : std::string_view{};
+        const auto parameterValue = hasValue ? httpTrimOws(parameter.substr(equals + 1)) : std::string_view{};
 
         if (httpAsciiEqualsIgnoreCase(parameterName, "server_no_context_takeover")) {
             if (serverNoContextTakeover || hasValue) {
@@ -275,12 +262,10 @@ private:
     if (serverWindowSeen && serverWindow != 15) {
         return std::nullopt;
     }
-    return serverWindowSeen ? WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits
-                            : WebSocketCompression::kPermessageDeflate;
+    return serverWindowSeen ? WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits : WebSocketCompression::kPermessageDeflate;
 }
 
-[[nodiscard]] inline WebSocketCompression webSocketScanDeflateOffers(
-    std::string_view offers) noexcept {
+[[nodiscard]] inline WebSocketCompression webSocketScanDeflateOffers(std::string_view offers) noexcept {
     std::optional<WebSocketCompression> accepted;
     httpVisitCommaSeparatedQuotedItems(offers, [&accepted](std::string_view offer) noexcept {
         if (offer.empty()) {
@@ -292,8 +277,7 @@ private:
     return accepted.value_or(WebSocketCompression::kDisabled);
 }
 
-[[nodiscard]] inline WebSocketCompression webSocketNegotiatePermessageDeflate(
-    const HttpRequest& request) noexcept {
+[[nodiscard]] inline WebSocketCompression webSocketNegotiatePermessageDeflate(const HttpRequest& request) noexcept {
     if (!webSocketExtensionOffersValid(request)) {
         return WebSocketCompression::kDisabled;
     }

@@ -15,8 +15,7 @@ template <typename T>
 concept HasControllerPublicGroupMiddlewares = requires { T::ruviaControllerGroupMiddlewares(); };
 
 template <typename T>
-concept HasControllerPublicRegisterRoutes =
-    requires(T& controller, ruvia::detail::Router& router) { controller.registerRoutes(router); };
+concept HasControllerPublicRegisterRoutes = requires(T& controller, ruvia::detail::Router& router) { controller.registerRoutes(router); };
 
 template <typename T>
 concept HasControllerPublicRegistrationState = requires { T::ruviaControllerRegistered_; };
@@ -68,8 +67,7 @@ public:
 class ControllerBaseSurfaceProbe final : public ruvia::Controller<ControllerBaseSurfaceProbe> {
 public:
     template <typename T>
-    inline static constexpr bool hasLegacyMiddlewareFactory =
-        requires { T::template ruviaMakeMiddlewares<>(); };
+    inline static constexpr bool hasLegacyMiddlewareFactory = requires { T::template ruviaMakeMiddlewares<>(); };
 
     template <typename T>
     inline static constexpr bool hasLegacyRouteRegistration = requires { &T::ruviaAddRoute; };
@@ -81,8 +79,7 @@ static_assert(!HasControllerPublicGroupMiddlewares<FastSurfaceController>);
 static_assert(!HasControllerPublicRegisterRoutes<FastSurfaceController>);
 static_assert(!HasControllerPublicRegistrationState<FastSurfaceController>);
 static_assert(!HasControllerPublicRegisterRoutes<UngroupedControllerProbe>);
-static_assert(!HasControllerRegistrationAccessPublicHooks<
-    ruvia::detail::ControllerRegistrationAccess<FastSurfaceController>>);
+static_assert(!HasControllerRegistrationAccessPublicHooks<ruvia::detail::ControllerRegistrationAccess<FastSurfaceController>>);
 static_assert(!ControllerBaseSurfaceProbe::hasLegacyMiddlewareFactory<ControllerBaseSurfaceProbe>);
 static_assert(!ControllerBaseSurfaceProbe::hasLegacyRouteRegistration<ControllerBaseSurfaceProbe>);
 #endif

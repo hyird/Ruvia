@@ -64,8 +64,7 @@ public:
 private:
     friend class RequestBindings;
 
-    RequestBindingHandle(RequestBindings& bindings, const T& value, RequestBindingKind kind,
-        std::string_view rawJson) noexcept;
+    RequestBindingHandle(RequestBindings& bindings, const T& value, RequestBindingKind kind, std::string_view rawJson) noexcept;
 
     RequestBindings* bindings_;
     RequestBindingNode node_;
@@ -113,10 +112,8 @@ public:
         using ModelT = std::remove_cvref_t<T>;
         const auto* key = requestBindingTypeKey<ModelT>();
         for (auto* node = head_; node != nullptr; node = node->previous) {
-            if (node->typeKey == key && node->kind == RequestBindingKind::kValidatedModel &&
-                !node->rawJson.empty()) {
-                return ValidatedJson<ModelT>(
-                    *static_cast<const ModelT*>(node->value), node->rawJson);
+            if (node->typeKey == key && node->kind == RequestBindingKind::kValidatedModel && !node->rawJson.empty()) {
+                return ValidatedJson<ModelT>(*static_cast<const ModelT*>(node->value), node->rawJson);
             }
         }
         throw std::logic_error("validated JSON request model is not available");
@@ -137,15 +134,13 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] RequestBindingHandle<T> bindValidated(
-        const T& value, std::string_view rawJson = {}) {
+    [[nodiscard]] RequestBindingHandle<T> bindValidated(const T& value, std::string_view rawJson = {}) {
         return RequestBindingHandle<T>(*this, value, RequestBindingKind::kValidatedModel, rawJson);
     }
 
     template <typename T>
         requires(!std::is_lvalue_reference_v<T>)
-    [[nodiscard]] RequestBindingHandle<std::remove_cvref_t<T>> bindValidated(
-        T&&, std::string_view = {}) = delete;
+    [[nodiscard]] RequestBindingHandle<std::remove_cvref_t<T>> bindValidated(T&&, std::string_view = {}) = delete;
 
     template <typename T>
     [[nodiscard]] RequestBindingHandle<T> bindState(const T& value) {
@@ -178,8 +173,7 @@ private:
 };
 
 template <typename T>
-RequestBindingHandle<T>::RequestBindingHandle(RequestBindings& bindings, const T& value,
-    RequestBindingKind kind, std::string_view rawJson) noexcept
+RequestBindingHandle<T>::RequestBindingHandle(RequestBindings& bindings, const T& value, RequestBindingKind kind, std::string_view rawJson) noexcept
     : bindings_(&bindings),
       node_{requestBindingTypeKey<T>(), &value, rawJson, nullptr, kind} {
     bindings_->push(node_);

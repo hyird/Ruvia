@@ -19,8 +19,7 @@ public:
           value_(value) {}
 
     template <typename Name, typename Value>
-        requires(detail::HttpTemporaryOwningCharString<Name> ||
-                    detail::HttpTemporaryOwningCharString<Value>)
+        requires(detail::HttpTemporaryOwningCharString<Name> || detail::HttpTemporaryOwningCharString<Value>)
     HttpHeaderView(Name&& name, Value&& value) = delete;
 
     [[nodiscard]] constexpr std::string_view name() const noexcept {

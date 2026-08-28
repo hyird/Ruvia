@@ -22,8 +22,7 @@ namespace ruvia::detail {
 }
 
 template <typename NumberT>
-inline void appendHttpFormattedNumber(
-    std::pmr::string& output, NumberT value, const char* errorMessage) {
+inline void appendHttpFormattedNumber(std::pmr::string& output, NumberT value, const char* errorMessage) {
     std::array<char, 64> buffer;
     const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
     if (ec != std::errc{}) {
@@ -33,8 +32,7 @@ inline void appendHttpFormattedNumber(
 }
 
 template <typename NumberT>
-inline void appendHttpFormattedFiniteNumber(std::pmr::string& output, NumberT value,
-    const char* finiteErrorMessage, const char* formatErrorMessage) {
+inline void appendHttpFormattedFiniteNumber(std::pmr::string& output, NumberT value, const char* finiteErrorMessage, const char* formatErrorMessage) {
     if (!std::isfinite(value)) {
         throw std::invalid_argument(finiteErrorMessage);
     }

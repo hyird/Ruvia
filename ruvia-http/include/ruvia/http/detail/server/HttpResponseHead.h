@@ -9,8 +9,7 @@ class HttpResponse;
 
 namespace detail {
 
-void appendResponseHead(
-    const HttpResponse& response, ResponseHeadBuffer& head, const Http1ResponseHeadPlan& plan);
+void appendResponseHead(const HttpResponse& response, ResponseHeadBuffer& head, const Http1ResponseHeadPlan& plan);
 
 }  // namespace detail
 }  // namespace ruvia

@@ -46,13 +46,11 @@ RUVIA_TEST(db_migration_table_name_rejects_injection) {
     RUVIA_CHECK(isValidMigrationTableName("ruvia_schema_migrations", driver));
     RUVIA_CHECK(isValidMigrationTableName("t1", driver));
     RUVIA_CHECK(isValidMigrationTableName("_private", driver));
-    RUVIA_CHECK(isValidMigrationTableName(
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", driver));
+    RUVIA_CHECK(isValidMigrationTableName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", driver));
     // The name is a non-parameterizable identifier, so anything that could break
     // out of the backtick quoting or restructure the SQL is rejected.
     RUVIA_CHECK(!isValidMigrationTableName("", driver));
-    RUVIA_CHECK(!isValidMigrationTableName(
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", driver));
+    RUVIA_CHECK(!isValidMigrationTableName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", driver));
     RUVIA_CHECK(!isValidMigrationTableName("has space", driver));
     RUVIA_CHECK(!isValidMigrationTableName("has-hyphen", driver));
     RUVIA_CHECK(!isValidMigrationTableName("a.b", driver));
@@ -63,10 +61,8 @@ RUVIA_TEST(db_migration_table_name_rejects_injection) {
 RUVIA_TEST(db_migration_postgresql_lock_timeout_conversion_is_checked) {
     using ruvia::detail::postgresLockTimeoutMilliseconds;
 
-    const auto largestRepresentableSeconds =
-        std::chrono::seconds(std::chrono::milliseconds::max().count() / 1000);
-    RUVIA_CHECK_EQ(postgresLockTimeoutMilliseconds(largestRepresentableSeconds),
-        static_cast<std::uint64_t>(largestRepresentableSeconds.count()) * 1000U);
+    const auto largestRepresentableSeconds = std::chrono::seconds(std::chrono::milliseconds::max().count() / 1000);
+    RUVIA_CHECK_EQ(postgresLockTimeoutMilliseconds(largestRepresentableSeconds), static_cast<std::uint64_t>(largestRepresentableSeconds.count()) * 1000U);
 
     bool overflowRejected = false;
     try {
@@ -97,15 +93,11 @@ RUVIA_TEST(db_migration_list_validation_enforces_integrity) {
     const DbMigration emptyId[] = {DbMigration{{.id = "", .sql = "SQL"}}};
     RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(emptyId, 1)); }));
     const DbMigration emptySql[] = {DbMigration{{.id = "001", .sql = ""}}};
-    RUVIA_CHECK(
-        throwsOn([&] { validateMigrationList(std::span<const DbMigration>(emptySql, 1)); }));
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(emptySql, 1)); }));
     const DbMigration blankSql[] = {DbMigration{{.id = "001", .sql = " \n\t\r"}}};
-    RUVIA_CHECK(
-        throwsOn([&] { validateMigrationList(std::span<const DbMigration>(blankSql, 1)); }));
-    const DbMigration commentOnlySql[] = {
-        DbMigration{{.id = "001", .sql = "/* no statement */\n-- still none\n;"}}};
-    RUVIA_CHECK(
-        throwsOn([&] { validateMigrationList(std::span<const DbMigration>(commentOnlySql, 1)); }));
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(blankSql, 1)); }));
+    const DbMigration commentOnlySql[] = {DbMigration{{.id = "001", .sql = "/* no statement */\n-- still none\n;"}}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(commentOnlySql, 1)); }));
     // An id longer than the 190-byte schema column is rejected.
     const std::string longId(191, 'x');
     const DbMigration tooLong[] = {DbMigration{{.id = longId, .sql = "SQL"}}};
@@ -125,8 +117,7 @@ RUVIA_TEST(db_migration_list_validation_enforces_integrity) {
         DbMigration{{.id = "v1_users", .sql = "SQL1"}},
         DbMigration{{.id = "v2_users", .sql = "SQL2"}},
     };
-    RUVIA_CHECK(
-        !throwsOn([&] { validateMigrationList(std::span<const DbMigration>(distinct, 2)); }));
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(distinct, 2)); }));
 
     // MariaDB collations are PAD SPACE -- the binary one the table pins
     // included -- so "v1" and "v1 " would be one row there and two on
@@ -137,8 +128,7 @@ RUVIA_TEST(db_migration_list_validation_enforces_integrity) {
     RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(leading, 1)); }));
     // Interior spaces are not the ambiguity; they compare exactly.
     const DbMigration interior[] = {DbMigration{{.id = "v1 users", .sql = "SQL1"}}};
-    RUVIA_CHECK(
-        !throwsOn([&] { validateMigrationList(std::span<const DbMigration>(interior, 1)); }));
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(interior, 1)); }));
 }
 
 RUVIA_TEST(db_migration_list_validation_enforces_one_statement) {
@@ -149,104 +139,58 @@ RUVIA_TEST(db_migration_list_validation_enforces_one_statement) {
     // Neither backend runs two statements in one call, so the packaging error
     // is reported here instead of arriving as a backend syntax error pointing
     // at the second statement.
-    const DbMigration two[] = {
-        DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT); CREATE TABLE b(id INT)"}}};
+    const DbMigration two[] = {DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT); CREATE TABLE b(id INT)"}}};
     RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(two, 1)); }));
 
     // A trailing separator is accepted by both backends, so it is accepted
     // here -- with or without trailing whitespace.
     const DbMigration trailing[] = {DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT);"}}};
-    RUVIA_CHECK(
-        !throwsOn([&] { validateMigrationList(std::span<const DbMigration>(trailing, 1)); }));
-    const DbMigration trailingSpace[] = {
-        DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT);\n  "}}};
-    RUVIA_CHECK(
-        !throwsOn([&] { validateMigrationList(std::span<const DbMigration>(trailingSpace, 1)); }));
-    const DbMigration trailingLineComment[] = {
-        DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT); -- one statement\n"}}};
-    RUVIA_CHECK(!throwsOn(
-        [&] { validateMigrationList(std::span<const DbMigration>(trailingLineComment, 1)); }));
-    const DbMigration trailingBlockComment[] = {
-        DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT); /* one; statement */"}}};
-    RUVIA_CHECK(!throwsOn(
-        [&] { validateMigrationList(std::span<const DbMigration>(trailingBlockComment, 1)); }));
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(trailing, 1)); }));
+    const DbMigration trailingSpace[] = {DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT);\n  "}}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(trailingSpace, 1)); }));
+    const DbMigration trailingLineComment[] = {DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT); -- one statement\n"}}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(trailingLineComment, 1)); }));
+    const DbMigration trailingBlockComment[] = {DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT); /* one; statement */"}}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(trailingBlockComment, 1)); }));
 
     // A ';' that is data -- inside a default value, a quoted identifier or a
     // comment -- is not a statement separator.
-    const DbMigration quoted[] = {
-        DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT, s VARCHAR(4) DEFAULT 'a;b')"}}};
+    const DbMigration quoted[] = {DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT, s VARCHAR(4) DEFAULT 'a;b')"}}};
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(quoted, 1)); }));
-    const DbMigration commented[] = {
-        DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT) -- one; two\n"}}};
-    RUVIA_CHECK(
-        !throwsOn([&] { validateMigrationList(std::span<const DbMigration>(commented, 1)); }));
+    const DbMigration commented[] = {DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT) -- one; two\n"}}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(commented, 1)); }));
 
     // PostgreSQL DO blocks and function bodies routinely contain statement
     // separators inside dollar-quoted text. Those bytes are part of the one DO
     // or CREATE FUNCTION statement, including when tags are nested.
-    const DbMigration dollarQuoted[] = {
-        DbMigration{{.id = "001", .sql = "DO $$ BEGIN PERFORM 1; PERFORM 2; END $$;"}}};
-    RUVIA_CHECK(
-        !throwsOn([&] { validateMigrationList(std::span<const DbMigration>(dollarQuoted, 1)); }));
-    const DbMigration tagged[] = {DbMigration{{.id = "001",
-        .sql = "DO $schema$ BEGIN EXECUTE $body$ SELECT 1; SELECT 2 $body$; END $schema$;"}}};
+    const DbMigration dollarQuoted[] = {DbMigration{{.id = "001", .sql = "DO $$ BEGIN PERFORM 1; PERFORM 2; END $$;"}}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(dollarQuoted, 1)); }));
+    const DbMigration tagged[] = {DbMigration{{.id = "001", .sql = "DO $schema$ BEGIN EXECUTE $body$ SELECT 1; SELECT 2 $body$; END $schema$;"}}};
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(tagged, 1)); }));
 
     // PostgreSQL ordinary strings and quoted identifiers do not use a
     // backslash to escape the closing delimiter. These are therefore two
     // statements to PostgreSQL even though MariaDB-style scanning used to
     // consume everything up to the final quote and miss the separator.
-    const DbMigration pgBackslashStringSplit[] = {
-        DbMigration{{.id = "001", .sql = R"(SELECT 'a\'; SELECT 2; --')"}}};
-    RUVIA_CHECK(throwsOn([&] {
-        validateMigrationList(
-            std::span<const DbMigration>(pgBackslashStringSplit, 1), DbDriver::kPostgreSql);
-    }));
-    const DbMigration pgBackslashIdentifierSplit[] = {
-        DbMigration{{.id = "001", .sql = R"(SELECT "a\"; SELECT 2; --")"}}};
-    RUVIA_CHECK(throwsOn([&] {
-        validateMigrationList(
-            std::span<const DbMigration>(pgBackslashIdentifierSplit, 1), DbDriver::kPostgreSql);
-    }));
-    const DbMigration pgHashOperatorSplit[] = {
-        DbMigration{{.id = "001", .sql = "SELECT 1 # 2; SELECT 3"}}};
-    RUVIA_CHECK(throwsOn([&] {
-        validateMigrationList(
-            std::span<const DbMigration>(pgHashOperatorSplit, 1), DbDriver::kPostgreSql);
-    }));
+    const DbMigration pgBackslashStringSplit[] = {DbMigration{{.id = "001", .sql = R"(SELECT 'a\'; SELECT 2; --')"}}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(pgBackslashStringSplit, 1), DbDriver::kPostgreSql); }));
+    const DbMigration pgBackslashIdentifierSplit[] = {DbMigration{{.id = "001", .sql = R"(SELECT "a\"; SELECT 2; --")"}}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(pgBackslashIdentifierSplit, 1), DbDriver::kPostgreSql); }));
+    const DbMigration pgHashOperatorSplit[] = {DbMigration{{.id = "001", .sql = "SELECT 1 # 2; SELECT 3"}}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(pgHashOperatorSplit, 1), DbDriver::kPostgreSql); }));
 
     // The MariaDB validator still accepts the constructs that are data there:
     // backslash-escaped quotes inside strings and '#' line comments.
-    const DbMigration mariaBackslashString[] = {
-        DbMigration{{.id = "001", .sql = R"(SELECT 'a\'; SELECT 2; --')"}}};
-    RUVIA_CHECK(!throwsOn([&] {
-        validateMigrationList(
-            std::span<const DbMigration>(mariaBackslashString, 1), DbDriver::kMariaDb);
-    }));
-    const DbMigration mariaHashComment[] = {
-        DbMigration{{.id = "001", .sql = "SELECT 1 # one; two\n"}}};
-    RUVIA_CHECK(!throwsOn([&] {
-        validateMigrationList(
-            std::span<const DbMigration>(mariaHashComment, 1), DbDriver::kMariaDb);
-    }));
-    const DbMigration mariaTrailingHashComment[] = {
-        DbMigration{{.id = "001", .sql = "SELECT 1; # one statement\n"}}};
-    RUVIA_CHECK(!throwsOn([&] {
-        validateMigrationList(
-            std::span<const DbMigration>(mariaTrailingHashComment, 1), DbDriver::kMariaDb);
-    }));
-    const DbMigration mariaDashNoWhitespace[] = {
-        DbMigration{{.id = "001", .sql = "SELECT 1; --not a MariaDB comment"}}};
-    RUVIA_CHECK(throwsOn([&] {
-        validateMigrationList(
-            std::span<const DbMigration>(mariaDashNoWhitespace, 1), DbDriver::kMariaDb);
-    }));
-    const DbMigration pgTrailingHashText[] = {
-        DbMigration{{.id = "001", .sql = "SELECT 1; # not a PostgreSQL comment"}}};
-    RUVIA_CHECK(throwsOn([&] {
-        validateMigrationList(
-            std::span<const DbMigration>(pgTrailingHashText, 1), DbDriver::kPostgreSql);
-    }));
+    const DbMigration mariaBackslashString[] = {DbMigration{{.id = "001", .sql = R"(SELECT 'a\'; SELECT 2; --')"}}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(mariaBackslashString, 1), DbDriver::kMariaDb); }));
+    const DbMigration mariaHashComment[] = {DbMigration{{.id = "001", .sql = "SELECT 1 # one; two\n"}}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(mariaHashComment, 1), DbDriver::kMariaDb); }));
+    const DbMigration mariaTrailingHashComment[] = {DbMigration{{.id = "001", .sql = "SELECT 1; # one statement\n"}}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(mariaTrailingHashComment, 1), DbDriver::kMariaDb); }));
+    const DbMigration mariaDashNoWhitespace[] = {DbMigration{{.id = "001", .sql = "SELECT 1; --not a MariaDB comment"}}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(mariaDashNoWhitespace, 1), DbDriver::kMariaDb); }));
+    const DbMigration pgTrailingHashText[] = {DbMigration{{.id = "001", .sql = "SELECT 1; # not a PostgreSQL comment"}}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(pgTrailingHashText, 1), DbDriver::kPostgreSql); }));
 }
 
 RUVIA_TEST(db_migration_checksum_pins_the_recorded_text) {
@@ -257,17 +201,13 @@ RUVIA_TEST(db_migration_checksum_pins_the_recorded_text) {
     // has to keep meaning the same thing across releases, so the digest and its
     // encoding are pinned rather than merely self-consistent.
     const auto abc = migrationChecksum("abc", std::pmr::get_default_resource());
-    RUVIA_CHECK_EQ(std::string(abc.data(), abc.size()),
-        std::string("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
+    RUVIA_CHECK_EQ(std::string(abc.data(), abc.size()), std::string("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
     RUVIA_CHECK_EQ(abc.size(), kMigrationChecksumSize);
 
     // Same text, same digest; one edited byte, a different one.
-    const auto first =
-        migrationChecksum("CREATE TABLE a(id INT)", std::pmr::get_default_resource());
-    const auto again =
-        migrationChecksum("CREATE TABLE a(id INT)", std::pmr::get_default_resource());
-    const auto edited =
-        migrationChecksum("CREATE TABLE a(id BIGINT)", std::pmr::get_default_resource());
+    const auto first = migrationChecksum("CREATE TABLE a(id INT)", std::pmr::get_default_resource());
+    const auto again = migrationChecksum("CREATE TABLE a(id INT)", std::pmr::get_default_resource());
+    const auto edited = migrationChecksum("CREATE TABLE a(id BIGINT)", std::pmr::get_default_resource());
     RUVIA_CHECK(first == again);
     RUVIA_CHECK(first != edited);
 }
@@ -281,9 +221,7 @@ RUVIA_TEST(db_migration_carries_its_atomicity) {
     // statement that cannot run in a transaction block does not cost the rest
     // of the list its atomicity.
     const DbMigration standard{{.id = "001", .sql = "CREATE TABLE a(id INT)"}};
-    const DbMigration concurrent{{.id = "002",
-        .sql = "CREATE INDEX CONCURRENTLY i ON a (id)",
-        .atomicity = DbMigrationAtomicity::kUnwrapped}};
+    const DbMigration concurrent{{.id = "002", .sql = "CREATE INDEX CONCURRENTLY i ON a (id)", .atomicity = DbMigrationAtomicity::kUnwrapped}};
     RUVIA_CHECK(standard.atomicity() == DbMigrationAtomicity::kTransactional);
     RUVIA_CHECK(concurrent.atomicity() == DbMigrationAtomicity::kUnwrapped);
 }
@@ -293,9 +231,7 @@ RUVIA_TEST(db_migration_list_rejects_invalid_atomicity) {
     using ruvia::DbMigrationAtomicity;
     using ruvia::detail::validateMigrationList;
 
-    const std::array migrations{DbMigration{{.id = "001",
-        .sql = "CREATE TABLE a(id INT)",
-        .atomicity = static_cast<DbMigrationAtomicity>(42)}}};
+    const std::array migrations{DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT)", .atomicity = static_cast<DbMigrationAtomicity>(42)}}};
     RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(migrations)); }));
 }
 

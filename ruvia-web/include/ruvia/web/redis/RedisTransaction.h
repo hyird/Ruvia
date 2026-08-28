@@ -13,8 +13,7 @@
 
 namespace ruvia {
 
-class RedisTransaction final : private detail::ScopedCapabilityNode,
-                               private detail::RedisCommandBatchMixin<RedisTransaction> {
+class RedisTransaction final : private detail::ScopedCapabilityNode, private detail::RedisCommandBatchMixin<RedisTransaction> {
     using BatchCommands = detail::RedisCommandBatchMixin<RedisTransaction>;
 
 public:
@@ -102,10 +101,7 @@ private:
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return pipeline_.resource();
     }
-    [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(detail::RedisPool& pool,
-        OperationOptions options, std::pmr::memory_resource* resource,
-        std::pmr::vector<RedisPipeline::Command> watches,
-        std::pmr::vector<RedisPipeline::Command> commands);
+    [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(detail::RedisPool& pool, OperationOptions options, std::pmr::memory_resource* resource, std::pmr::vector<RedisPipeline::Command> watches, std::pmr::vector<RedisPipeline::Command> commands);
 
     RedisPipeline pipeline_;
     std::pmr::vector<RedisPipeline::Command> watches_;

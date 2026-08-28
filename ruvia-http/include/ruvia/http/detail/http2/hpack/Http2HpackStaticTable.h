@@ -21,13 +21,11 @@ struct HpackStaticHeaderMatch final {
 
 inline constexpr auto kHpackStatusOkToken = httpStatusCodeToken(http_status::kOk);
 inline constexpr auto kHpackStatusNoContentToken = httpStatusCodeToken(http_status::kNoContent);
-inline constexpr auto kHpackStatusPartialContentToken =
-    httpStatusCodeToken(http_status::kPartialContent);
+inline constexpr auto kHpackStatusPartialContentToken = httpStatusCodeToken(http_status::kPartialContent);
 inline constexpr auto kHpackStatusNotModifiedToken = httpStatusCodeToken(http_status::kNotModified);
 inline constexpr auto kHpackStatusBadRequestToken = httpStatusCodeToken(http_status::kBadRequest);
 inline constexpr auto kHpackStatusNotFoundToken = httpStatusCodeToken(http_status::kNotFound);
-inline constexpr auto kHpackStatusInternalServerErrorToken =
-    httpStatusCodeToken(http_status::kInternalServerError);
+inline constexpr auto kHpackStatusInternalServerErrorToken = httpStatusCodeToken(http_status::kInternalServerError);
 
 // Normative HPACK static table from RFC 7541 Appendix A.
 inline constexpr std::array<HpackStaticHeader, 61> kHpackStaticTable{{
@@ -100,8 +98,7 @@ inline constexpr std::size_t kHpackStaticTableSize = kHpackStaticTable.size();
     return kHpackStaticTable[index - 1];
 }
 
-[[nodiscard]] inline HpackStaticHeaderMatch hpackFindStaticHeaderMatch(
-    std::string_view name, std::string_view value) noexcept {
+[[nodiscard]] inline HpackStaticHeaderMatch hpackFindStaticHeaderMatch(std::string_view name, std::string_view value) noexcept {
     HpackStaticHeaderMatch match;
     for (std::size_t i = 0; i < kHpackStaticTable.size(); ++i) {
         const auto& header = kHpackStaticTable[i];

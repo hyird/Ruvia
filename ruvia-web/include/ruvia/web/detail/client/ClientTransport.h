@@ -31,16 +31,13 @@ struct ClientTransportConfigView final {
 
 class ClientTransportConfigStorage final {
 public:
-    ClientTransportConfigStorage(
-        ClientTransportConfigView source, std::pmr::memory_resource* resource);
-    ClientTransportConfigStorage(
-        const ClientTransportConfigStorage& source, std::pmr::memory_resource* resource);
+    ClientTransportConfigStorage(ClientTransportConfigView source, std::pmr::memory_resource* resource);
+    ClientTransportConfigStorage(const ClientTransportConfigStorage& source, std::pmr::memory_resource* resource);
 
     [[nodiscard]] ClientTransportConfigView view() const noexcept;
 
 private:
-    ClientTransportConfigStorage(ResolvedPmrResourceTag, ClientTransportConfigView source,
-        std::pmr::memory_resource* resource);
+    ClientTransportConfigStorage(ResolvedPmrResourceTag, ClientTransportConfigView source, std::pmr::memory_resource* resource);
 
     TlsPeerVerificationPolicy tlsPeerVerification_;
     TcpNoDelayPolicy tcpNoDelay_;
@@ -83,17 +80,13 @@ enum class ClientTlsSetupError : std::uint8_t {
 
 using ClientPortTextBuffer = std::array<char, std::numeric_limits<std::uint16_t>::digits10 + 1>;
 
-void validateClientOriginHost(
-    std::string_view host, const char* emptyMessage, const char* invalidMessage);
+void validateClientOriginHost(std::string_view host, const char* emptyMessage, const char* invalidMessage);
 [[nodiscard]] bool isClientIpAddress(std::string_view host) noexcept;
-[[nodiscard]] std::string_view formatClientPort(
-    std::uint16_t port, ClientPortTextBuffer& buffer) noexcept;
+[[nodiscard]] std::string_view formatClientPort(std::uint16_t port, ClientPortTextBuffer& buffer) noexcept;
 [[nodiscard]] std::string_view selectedClientAlpn(SSL* ssl) noexcept;
 void validateClientTransportConfig(ClientTransportConfigView config);
 void configureClientTlsContext(asio::ssl::context& context, ClientTransportConfigView config);
-[[nodiscard]] ClientTlsSetupError prepareClientTlsStream(
-    asio::ssl::stream<asio::ip::tcp::socket>& stream, const std::pmr::string& host,
-    ClientTransportConfigView config, ClientAlpnMode alpnMode);
+[[nodiscard]] ClientTlsSetupError prepareClientTlsStream(asio::ssl::stream<asio::ip::tcp::socket>& stream, const std::pmr::string& host, ClientTransportConfigView config, ClientAlpnMode alpnMode);
 [[nodiscard]] std::string_view clientTlsSetupErrorMessage(ClientTlsSetupError error) noexcept;
 
 }  // namespace ruvia::detail

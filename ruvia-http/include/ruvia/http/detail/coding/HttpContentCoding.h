@@ -10,8 +10,7 @@
 namespace ruvia::detail {
 
 struct HttpContentCodingFieldResultAccess final {
-    [[nodiscard]] static constexpr HttpContentCodingFieldResult coding(
-        HttpContentCoding value) noexcept {
+    [[nodiscard]] static constexpr HttpContentCodingFieldResult coding(HttpContentCoding value) noexcept {
         return HttpContentCodingFieldResult(value);
     }
 
@@ -32,8 +31,7 @@ struct HttpContentCodingFieldResultAccess final {
 // ignore empty list members, while senders cannot generate them.
 class HttpContentCodingFieldParser final {
 public:
-    explicit HttpContentCodingFieldParser(
-        HttpFieldListRole role = HttpFieldListRole::kRecipient) noexcept
+    explicit HttpContentCodingFieldParser(HttpFieldListRole role = HttpFieldListRole::kRecipient) noexcept
         : role_(role),
           state_(std::in_place_type<Supported>) {}
 
@@ -51,12 +49,10 @@ private:
     std::variant<Supported, HttpUnsupportedContentCoding, HttpInvalidContentCodingField> state_;
 };
 
-[[nodiscard]] bool isValidHttpContentEncodingFieldValue(
-    std::string_view value, HttpFieldListRole role) noexcept;
+[[nodiscard]] bool isValidHttpContentEncodingFieldValue(std::string_view value, HttpFieldListRole role) noexcept;
 
 template <typename Headers>
-[[nodiscard]] inline HttpContentCodingFieldResult httpContentCodingFromHeaders(
-    const Headers& headers) noexcept {
+[[nodiscard]] inline HttpContentCodingFieldResult httpContentCodingFromHeaders(const Headers& headers) noexcept {
     HttpContentCodingFieldParser parser;
     for (const auto& header : headers) {
         if (httpAsciiEqualsIgnoreCase(header.name(), "Content-Encoding")) {

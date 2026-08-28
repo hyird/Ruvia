@@ -6,15 +6,13 @@ namespace ruvia {
 HttpProtocolError httpParseProtocolError(HttpParseError error) noexcept {
     switch (error) {
         case HttpParseError::kHeaderTooLarge:
-            return HttpProtocolError(
-                http_status::kRequestHeaderFieldsTooLarge, "request header is too large");
+            return HttpProtocolError(http_status::kRequestHeaderFieldsTooLarge, "request header is too large");
         case HttpParseError::kBodyTooLarge:
             return detail::HttpRequestBodyFailure::tooLarge().protocolError();
         case HttpParseError::kInvalidRequestLine:
             return HttpProtocolError(http_status::kBadRequest, "invalid request line");
         case HttpParseError::kUnsupportedHttpVersion:
-            return HttpProtocolError(
-                http_status::kHttpVersionNotSupported, "unsupported HTTP version");
+            return HttpProtocolError(http_status::kHttpVersionNotSupported, "unsupported HTTP version");
         case HttpParseError::kInvalidRequestTarget:
             return HttpProtocolError(http_status::kBadRequest, "invalid request target");
         case HttpParseError::kInvalidHeader:
@@ -24,8 +22,7 @@ HttpProtocolError httpParseProtocolError(HttpParseError error) noexcept {
         case HttpParseError::kInvalidUpgrade:
             return HttpProtocolError(http_status::kBadRequest, "invalid Upgrade header");
         case HttpParseError::kTooManyHeaders:
-            return HttpProtocolError(
-                http_status::kRequestHeaderFieldsTooLarge, "too many request headers");
+            return HttpProtocolError(http_status::kRequestHeaderFieldsTooLarge, "too many request headers");
         case HttpParseError::kMissingHost:
             return HttpProtocolError(http_status::kBadRequest, "missing Host header");
         case HttpParseError::kInvalidHost:

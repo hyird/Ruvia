@@ -10,16 +10,11 @@
 namespace ruvia {
 namespace {
 
-static_assert(static_cast<std::size_t>(detail::RequestHeaderKind::kAccept) ==
-              static_cast<std::size_t>(detail::RequestKnownHeader::kAccept) + 1);
-static_assert(static_cast<std::size_t>(detail::RequestHeaderKind::kAuthorization) ==
-              static_cast<std::size_t>(detail::RequestKnownHeader::kAuthorization) + 1);
-static_assert(static_cast<std::size_t>(detail::RequestHeaderKind::kContentEncoding) ==
-              static_cast<std::size_t>(detail::RequestKnownHeader::kContentEncoding) + 1);
-static_assert(static_cast<std::size_t>(detail::RequestHeaderKind::kUserAgent) ==
-              static_cast<std::size_t>(detail::RequestKnownHeader::kUserAgent) + 1);
-static_assert(detail::kRequestHeaderKindCount ==
-              static_cast<std::size_t>(detail::RequestKnownHeader::kUserAgent) + 2);
+static_assert(static_cast<std::size_t>(detail::RequestHeaderKind::kAccept) == static_cast<std::size_t>(detail::RequestKnownHeader::kAccept) + 1);
+static_assert(static_cast<std::size_t>(detail::RequestHeaderKind::kAuthorization) == static_cast<std::size_t>(detail::RequestKnownHeader::kAuthorization) + 1);
+static_assert(static_cast<std::size_t>(detail::RequestHeaderKind::kContentEncoding) == static_cast<std::size_t>(detail::RequestKnownHeader::kContentEncoding) + 1);
+static_assert(static_cast<std::size_t>(detail::RequestHeaderKind::kUserAgent) == static_cast<std::size_t>(detail::RequestKnownHeader::kUserAgent) + 1);
+static_assert(detail::kRequestHeaderKindCount == static_cast<std::size_t>(detail::RequestKnownHeader::kUserAgent) + 2);
 
 }  // namespace
 
@@ -44,16 +39,14 @@ std::optional<std::string_view> HttpRequest::header(std::string_view name) const
     return std::nullopt;
 }
 
-std::optional<std::string_view> HttpRequest::lastRawQueryValue(
-    std::string_view rawName) const noexcept {
+std::optional<std::string_view> HttpRequest::lastRawQueryValue(std::string_view rawName) const noexcept {
     std::optional<std::string_view> result;
-    (void)detail::visitUrlEncodedPairs(
-        queryString_, [&](std::string_view name, std::string_view value) noexcept {
-            if (name == rawName) {
-                result = value;
-            }
-            return true;
-        });
+    (void)detail::visitUrlEncodedPairs(queryString_, [&](std::string_view name, std::string_view value) noexcept {
+        if (name == rawName) {
+            result = value;
+        }
+        return true;
+    });
     return result;
 }
 

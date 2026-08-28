@@ -25,8 +25,7 @@ namespace ruvia::detail {
     while (!weight.empty() && (weight.front() == ' ' || weight.front() == '\t')) {
         weight.remove_prefix(1);
     }
-    if (weight.size() < 3 || httpAsciiToLower(static_cast<unsigned char>(weight[0])) != 'q' ||
-        weight[1] != '=') {
+    if (weight.size() < 3 || httpAsciiToLower(static_cast<unsigned char>(weight[0])) != 'q' || weight[1] != '=') {
         return 0;
     }
     const auto qvalue = weight.substr(2);
@@ -37,22 +36,19 @@ namespace ruvia::detail {
     return parsed < 0 ? 0 : parsed;
 }
 
-inline void httpUpdateAcceptedEncodingQuality(std::string_view acceptEncoding,
-    std::string_view coding, int& explicitQuality, int& wildcardQuality) noexcept {
-    httpVisitCommaSeparatedQuoted(acceptEncoding,
-        [coding, &explicitQuality, &wildcardQuality](std::string_view item) noexcept {
-            const auto token = httpHeaderTokenBeforeParameters(item);
-            if (httpAsciiEqualsIgnoreCase(token, coding)) {
-                httpAccumulateAcceptedQuality(httpEncodingQualityParameter(item), explicitQuality);
-            } else if (token == "*") {
-                httpAccumulateAcceptedQuality(httpEncodingQualityParameter(item), wildcardQuality);
-            }
-            return true;
-        });
+inline void httpUpdateAcceptedEncodingQuality(std::string_view acceptEncoding, std::string_view coding, int& explicitQuality, int& wildcardQuality) noexcept {
+    httpVisitCommaSeparatedQuoted(acceptEncoding, [coding, &explicitQuality, &wildcardQuality](std::string_view item) noexcept {
+        const auto token = httpHeaderTokenBeforeParameters(item);
+        if (httpAsciiEqualsIgnoreCase(token, coding)) {
+            httpAccumulateAcceptedQuality(httpEncodingQualityParameter(item), explicitQuality);
+        } else if (token == "*") {
+            httpAccumulateAcceptedQuality(httpEncodingQualityParameter(item), wildcardQuality);
+        }
+        return true;
+    });
 }
 
-[[nodiscard]] inline bool httpAcceptedEncodingAllows(
-    int explicitQuality, int wildcardQuality) noexcept {
+[[nodiscard]] inline bool httpAcceptedEncodingAllows(int explicitQuality, int wildcardQuality) noexcept {
     return explicitQuality >= 0 ? explicitQuality > 0 : wildcardQuality > 0;
 }
 
@@ -69,8 +65,7 @@ struct HttpAcceptedEncodingQuality {
     }
 };
 
-[[nodiscard]] inline bool httpAcceptsEncoding(
-    std::string_view acceptEncoding, std::string_view coding) noexcept {
+[[nodiscard]] inline bool httpAcceptsEncoding(std::string_view acceptEncoding, std::string_view coding) noexcept {
     if (acceptEncoding.empty()) {
         return httpAsciiEqualsIgnoreCase(coding, "identity");
     }
@@ -96,17 +91,13 @@ struct HttpResponseCodingQualities final {
             const auto token = httpHeaderTokenBeforeParameters(item);
             hasNonEmptyItem = true;
             if (httpAsciiEqualsIgnoreCase(token, "gzip")) {
-                httpAccumulateAcceptedQuality(
-                    httpEncodingQualityParameter(item), gzip.explicitQuality);
+                httpAccumulateAcceptedQuality(httpEncodingQualityParameter(item), gzip.explicitQuality);
             } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
-                httpAccumulateAcceptedQuality(
-                    httpEncodingQualityParameter(item), brotli.explicitQuality);
+                httpAccumulateAcceptedQuality(httpEncodingQualityParameter(item), brotli.explicitQuality);
             } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
-                httpAccumulateAcceptedQuality(
-                    httpEncodingQualityParameter(item), zstd.explicitQuality);
+                httpAccumulateAcceptedQuality(httpEncodingQualityParameter(item), zstd.explicitQuality);
             } else if (httpAsciiEqualsIgnoreCase(token, "identity")) {
-                httpAccumulateAcceptedQuality(
-                    httpEncodingQualityParameter(item), identity.explicitQuality);
+                httpAccumulateAcceptedQuality(httpEncodingQualityParameter(item), identity.explicitQuality);
             } else if (token == "*") {
                 const auto wildcard = httpEncodingQualityParameter(item);
                 httpAccumulateAcceptedQuality(wildcard, gzip.wildcardQuality);
@@ -141,23 +132,17 @@ private:
                 if (!fieldPresent) {
                     return 999;
                 }
-                return gzip.accepts() ? (gzip.explicitQuality >= 0 ? gzip.explicitQuality
-                                                                   : gzip.wildcardQuality)
-                                      : -1;
+                return gzip.accepts() ? (gzip.explicitQuality >= 0 ? gzip.explicitQuality : gzip.wildcardQuality) : -1;
             case HttpContentCoding::kBrotli:
                 if (!fieldPresent) {
                     return 999;
                 }
-                return brotli.accepts() ? (brotli.explicitQuality >= 0 ? brotli.explicitQuality
-                                                                       : brotli.wildcardQuality)
-                                        : -1;
+                return brotli.accepts() ? (brotli.explicitQuality >= 0 ? brotli.explicitQuality : brotli.wildcardQuality) : -1;
             case HttpContentCoding::kZstd:
                 if (!fieldPresent) {
                     return 999;
                 }
-                return zstd.accepts() ? (zstd.explicitQuality >= 0 ? zstd.explicitQuality
-                                                                   : zstd.wildcardQuality)
-                                      : -1;
+                return zstd.accepts() ? (zstd.explicitQuality >= 0 ? zstd.explicitQuality : zstd.wildcardQuality) : -1;
         }
         return -1;
     }
@@ -177,9 +162,7 @@ public:
     }
 
     [[nodiscard]] static constexpr HttpResponseCodingCandidates all() noexcept {
-        return HttpResponseCodingCandidates(
-            bit(HttpContentCoding::kIdentity) | bit(HttpContentCoding::kGzip) |
-            bit(HttpContentCoding::kBrotli) | bit(HttpContentCoding::kZstd));
+        return HttpResponseCodingCandidates(bit(HttpContentCoding::kIdentity) | bit(HttpContentCoding::kGzip) | bit(HttpContentCoding::kBrotli) | bit(HttpContentCoding::kZstd));
     }
 
     constexpr HttpResponseCodingCandidates& include(HttpContentCoding coding) noexcept {
@@ -220,11 +203,8 @@ class HttpResponseCodingSelectionResult;
 
 class HttpResponseCodingSelection final {
 public:
-    [[nodiscard]] static HttpResponseCodingSelectionResult select(
-        const HttpResponseCodingQualities& qualities) noexcept;
-    [[nodiscard]] static HttpResponseCodingSelectionResult select(
-        const HttpResponseCodingQualities& qualities,
-        HttpResponseCodingCandidates candidates) noexcept;
+    [[nodiscard]] static HttpResponseCodingSelectionResult select(const HttpResponseCodingQualities& qualities) noexcept;
+    [[nodiscard]] static HttpResponseCodingSelectionResult select(const HttpResponseCodingQualities& qualities, HttpResponseCodingCandidates candidates) noexcept;
 
     [[nodiscard]] constexpr HttpContentCoding coding() const noexcept {
         return coding_;
@@ -244,8 +224,7 @@ public:
     }
 
 private:
-    constexpr HttpResponseCodingSelection(HttpContentCoding coding, bool identityAccepted,
-        bool acceptEncodingPresent, std::uint8_t acceptableBits) noexcept
+    constexpr HttpResponseCodingSelection(HttpContentCoding coding, bool identityAccepted, bool acceptEncodingPresent, std::uint8_t acceptableBits) noexcept
         : coding_(coding),
           identityAccepted_(identityAccepted),
           acceptEncodingPresent_(acceptEncodingPresent),
@@ -285,8 +264,7 @@ private:
     friend class HttpResponseCodingSelection;
     friend class HttpResponseCodingSelectionResult;
 
-    explicit constexpr HttpResponseCodingSelectionFailure(
-        HttpResponseCodingSelectionError error) noexcept
+    explicit constexpr HttpResponseCodingSelectionFailure(HttpResponseCodingSelectionError error) noexcept
         : error_(error) {}
 
     HttpResponseCodingSelectionError error_;
@@ -325,14 +303,11 @@ private:
 // > gzip > identity. A coding with q=0 or one the client never accepts is
 // excluded. A failure result means the request has no acceptable response
 // content coding and must be answered with 406 Not Acceptable by the Web layer.
-inline HttpResponseCodingSelectionResult HttpResponseCodingSelection::select(
-    const HttpResponseCodingQualities& qualities) noexcept {
+inline HttpResponseCodingSelectionResult HttpResponseCodingSelection::select(const HttpResponseCodingQualities& qualities) noexcept {
     return select(qualities, HttpResponseCodingCandidates::all());
 }
 
-inline HttpResponseCodingSelectionResult HttpResponseCodingSelection::select(
-    const HttpResponseCodingQualities& qualities,
-    HttpResponseCodingCandidates candidates) noexcept {
+inline HttpResponseCodingSelectionResult HttpResponseCodingSelection::select(const HttpResponseCodingQualities& qualities, HttpResponseCodingCandidates candidates) noexcept {
     const int identityScore = qualities.score(HttpContentCoding::kIdentity);
     const HttpContentCoding availableCodings[] = {
         HttpContentCoding::kBrotli,
@@ -361,11 +336,9 @@ inline HttpResponseCodingSelectionResult HttpResponseCodingSelection::select(
         }
     }
     if (!found) {
-        return HttpResponseCodingSelectionResult(HttpResponseCodingSelectionFailure(
-            HttpResponseCodingSelectionError::kNoAcceptableCoding));
+        return HttpResponseCodingSelectionResult(HttpResponseCodingSelectionFailure(HttpResponseCodingSelectionError::kNoAcceptableCoding));
     }
-    return HttpResponseCodingSelectionResult(HttpResponseCodingSelection(
-        best, identityScore >= 0, qualities.fieldPresent, acceptableBits));
+    return HttpResponseCodingSelectionResult(HttpResponseCodingSelection(best, identityScore >= 0, qualities.fieldPresent, acceptableBits));
 }
 
 }  // namespace ruvia::detail

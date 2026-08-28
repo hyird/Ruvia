@@ -21,10 +21,8 @@ std::string_view guess(const char* name) {
     return guessStaticFileContentType(std::filesystem::path(name));
 }
 
-std::string fileEtag(
-    std::uint64_t size, std::uint64_t modifiedToken, ruvia::detail::ResponseFileIdentity identity) {
-    const auto out = ruvia::detail::makeStaticFileSnapshotEtag(
-        std::pmr::get_default_resource(), size, modifiedToken, identity);
+std::string fileEtag(std::uint64_t size, std::uint64_t modifiedToken, ruvia::detail::ResponseFileIdentity identity) {
+    const auto out = ruvia::detail::makeStaticFileSnapshotEtag(std::pmr::get_default_resource(), size, modifiedToken, identity);
     return std::string(out.data(), out.size());
 }
 

@@ -50,10 +50,7 @@ public:
           message_(options.message.view(), resource_) {
         issues_.reserve(issues.size());
         for (const auto& issue : issues) {
-            issues_.push_back(ValidationIssue({.field = issue.field(),
-                .code = issue.code(),
-                .message = issue.message(),
-                .resource = resource_}));
+            issues_.push_back(ValidationIssue({.field = issue.field(), .code = issue.code(), .message = issue.message(), .resource = resource_}));
         }
     }
 
@@ -74,10 +71,7 @@ public:
     [[nodiscard]] const IssueList& issues() const&& = delete;
 
     [[nodiscard]] HttpErrorInfo info() const& noexcept {
-        return HttpErrorInfo({.status = statusCode_,
-            .code = code_,
-            .message = message_,
-            .validationIssues = issues_});
+        return HttpErrorInfo({.status = statusCode_, .code = code_, .message = message_, .validationIssues = issues_});
     }
     [[nodiscard]] HttpErrorInfo info() const&& = delete;
 
@@ -105,14 +99,12 @@ public:
           issues_(resource_) {}
 
     Validator& add(std::string_view field, std::string_view code, std::string_view message) & {
-        issues_.push_back(ValidationIssue(
-            {.field = field, .code = code, .message = message, .resource = resource_}));
+        issues_.push_back(ValidationIssue({.field = field, .code = code, .message = message, .resource = resource_}));
         return *this;
     }
 
     template <typename OptionalT>
-    Validator& required(const OptionalT& value, std::string_view field,
-        std::string_view message = "is required") & {
+    Validator& required(const OptionalT& value, std::string_view field, std::string_view message = "is required") & {
         if (!value) {
             add(field, "required", message);
         }
@@ -120,8 +112,7 @@ public:
     }
 
     template <typename OptionalT>
-    Validator& minLength(const OptionalT& value, std::string_view field, std::size_t min,
-        std::string_view message = "is too short") & {
+    Validator& minLength(const OptionalT& value, std::string_view field, std::size_t min, std::string_view message = "is too short") & {
         if (value && detail::validationStringView(*value).size() < min) {
             add(field, "too_small", message);
         }
@@ -129,8 +120,7 @@ public:
     }
 
     template <typename OptionalT>
-    Validator& maxLength(const OptionalT& value, std::string_view field, std::size_t max,
-        std::string_view message = "is too long") & {
+    Validator& maxLength(const OptionalT& value, std::string_view field, std::size_t max, std::string_view message = "is too long") & {
         if (value && detail::validationStringView(*value).size() > max) {
             add(field, "too_big", message);
         }
@@ -138,8 +128,7 @@ public:
     }
 
     template <typename OptionalT, typename MinT, typename MaxT>
-    Validator& range(const OptionalT& value, std::string_view field, MinT min, MaxT max,
-        std::string_view message = "is out of range") & {
+    Validator& range(const OptionalT& value, std::string_view field, MinT min, MaxT max, std::string_view message = "is out of range") & {
         if (value) {
             if (*value < min) {
                 add(field, "too_small", message);
@@ -151,9 +140,7 @@ public:
     }
 
     template <typename OptionalT>
-    Validator& oneOf(const OptionalT& value, std::string_view field,
-        std::initializer_list<std::string_view> allowed,
-        std::string_view message = "is not allowed") & {
+    Validator& oneOf(const OptionalT& value, std::string_view field, std::initializer_list<std::string_view> allowed, std::string_view message = "is not allowed") & {
         if (!value) {
             return *this;
         }
@@ -249,16 +236,14 @@ private:
     ::ruvia::detail::model::Each<validator_type> {}
 
 #define RUVIA_RULE(field, ...) (field, (#field), (::ruvia::detail::model::Rules{__VA_ARGS__}))
-#define RUVIA_RULE_NAME(wire_name, field, ...) \
-    (field, (wire_name), (::ruvia::detail::model::Rules{__VA_ARGS__}))
+#define RUVIA_RULE_NAME(wire_name, field, ...) (field, (wire_name), (::ruvia::detail::model::Rules{__VA_ARGS__}))
 
 #define RUVIA_VALIDATE_RULE_FIELD(T, x) RUVIA_VALIDATE_RULE_FIELD_I(RUVIA_VALIDATION_UNPAREN x)
 #define RUVIA_VALIDATE_RULE_FIELD_I(...) RUVIA_VALIDATE_RULE_FIELD_IMPL(__VA_ARGS__)
-#define RUVIA_VALIDATE_RULE_FIELD_IMPL(field, wire, rules)                                 \
-    {                                                                                      \
-        ::std::pmr::string ruviaPath(validator.resource());                                \
-        ::ruvia::detail::model::appendPath(ruviaPath, prefix, ::std::string_view{wire});   \
-        const auto& ruviaValue = body.template get<#field>();                              \
-        (rules).validate(::ruvia::detail::ModelValidationAccess::fieldState<#field>(body), \
-            ruviaValue, ruviaPath, validator);                                             \
+#define RUVIA_VALIDATE_RULE_FIELD_IMPL(field, wire, rules)                                                                    \
+    {                                                                                                                         \
+        ::std::pmr::string ruviaPath(validator.resource());                                                                   \
+        ::ruvia::detail::model::appendPath(ruviaPath, prefix, ::std::string_view{wire});                                      \
+        const auto& ruviaValue = body.template get<#field>();                                                                 \
+        (rules).validate(::ruvia::detail::ModelValidationAccess::fieldState<#field>(body), ruviaValue, ruviaPath, validator); \
     }

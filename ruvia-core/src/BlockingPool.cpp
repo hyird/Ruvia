@@ -27,8 +27,7 @@ namespace {
     return std::clamp(halfHardwareThreads, std::size_t{2}, std::size_t{8});
 }
 
-[[nodiscard]] std::size_t resolveQueueCapacity(
-    std::size_t requested, std::size_t threadCount) noexcept {
+[[nodiscard]] std::size_t resolveQueueCapacity(std::size_t requested, std::size_t threadCount) noexcept {
     if (requested != 0) {
         return requested;
     }
@@ -146,9 +145,7 @@ struct BlockingPool::Impl final {
     }
 
     static void throwIfCurrent(const std::pmr::vector<std::thread>& threads) {
-        if (std::ranges::any_of(threads, [](const std::thread& thread) {
-                return thread.joinable() && thread.get_id() == std::this_thread::get_id();
-            })) {
+        if (std::ranges::any_of(threads, [](const std::thread& thread) { return thread.joinable() && thread.get_id() == std::this_thread::get_id(); })) {
             throw std::logic_error("cannot join a blocking pool from one of its threads");
         }
     }

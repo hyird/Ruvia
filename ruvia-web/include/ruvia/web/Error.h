@@ -20,10 +20,7 @@ namespace ruvia {
 namespace detail {
 
 template <typename Range>
-concept HttpTemporaryOwningValidationIssueRange =
-    !std::is_lvalue_reference_v<Range&&> && std::ranges::contiguous_range<Range> &&
-    !std::ranges::borrowed_range<Range> &&
-    std::same_as<std::remove_cv_t<std::ranges::range_value_t<Range>>, ValidationIssue>;
+concept HttpTemporaryOwningValidationIssueRange = !std::is_lvalue_reference_v<Range&&> && std::ranges::contiguous_range<Range> && !std::ranges::borrowed_range<Range> && std::same_as<std::remove_cv_t<std::ranges::range_value_t<Range>>, ValidationIssue>;
 
 }  // namespace detail
 
@@ -35,8 +32,7 @@ public:
         : issues_(issues) {}
 
     template <typename Range>
-        requires std::is_lvalue_reference_v<Range&&> && std::ranges::contiguous_range<Range> &&
-                 std::same_as<std::remove_cv_t<std::ranges::range_value_t<Range>>, ValidationIssue>
+        requires std::is_lvalue_reference_v<Range&&> && std::ranges::contiguous_range<Range> && std::same_as<std::remove_cv_t<std::ranges::range_value_t<Range>>, ValidationIssue>
     constexpr BorrowedValidationIssues(Range&& issues) noexcept
         : issues_(std::ranges::data(issues), std::ranges::size(issues)) {}
 

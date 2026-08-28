@@ -37,8 +37,7 @@ RUVIA_TEST(pattern_compile_rejects_malformed_atoms) {
     RUVIA_CHECK(!compiles("^[a-z$"));  // unterminated char class
     RUVIA_CHECK(!compiles("^a**$"));   // stacked quantifiers
     RUVIA_CHECK(!compiles("^+$"));     // quantifier with no preceding atom
-    RUVIA_CHECK(
-        !compiles("^a\\$"));  // dangling backslash: '\' escapes the '$' anchor, none left to close
+    RUVIA_CHECK(!compiles("^a\\$"));   // dangling backslash: '\' escapes the '$' anchor, none left to close
 }
 
 RUVIA_TEST(pattern_compile_escape_handling) {

@@ -33,14 +33,10 @@ struct HttpServerListenerDefinition final {
     };
 
     struct TlsClientCertificatePolicy final {
-        explicit TlsClientCertificatePolicy(std::pmr::memory_resource* resource = nullptr,
-            TlsClientCertificateRequirement configuredRequirement =
-                TlsClientCertificateRequirement::kOptional)
-            : TlsClientCertificatePolicy(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource),
-                  configuredRequirement) {}
+        explicit TlsClientCertificatePolicy(std::pmr::memory_resource* resource = nullptr, TlsClientCertificateRequirement configuredRequirement = TlsClientCertificateRequirement::kOptional)
+            : TlsClientCertificatePolicy(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource), configuredRequirement) {}
 
-        TlsClientCertificatePolicy(ResolvedPmrResourceTag, std::pmr::memory_resource* resource,
-            TlsClientCertificateRequirement configuredRequirement)
+        TlsClientCertificatePolicy(ResolvedPmrResourceTag, std::pmr::memory_resource* resource, TlsClientCertificateRequirement configuredRequirement)
             : verifyFile(resource),
               requirement(configuredRequirement) {}
 
@@ -81,8 +77,7 @@ struct HttpServerListenerDefinition final {
 
     using Transport = std::variant<PlainHttp, Tls, RedirectHttpToHttps>;
 
-    HttpServerListenerDefinition(
-        asio::ip::tcp::endpoint configuredEndpoint, Transport configuredTransport = PlainHttp{})
+    HttpServerListenerDefinition(asio::ip::tcp::endpoint configuredEndpoint, Transport configuredTransport = PlainHttp{})
         : endpoint(std::move(configuredEndpoint)),
           transport(std::move(configuredTransport)) {}
 
@@ -95,8 +90,7 @@ using SniContextLookup = std::pmr::vector<std::pair<std::pmr::string, asio::ssl:
 
 class HttpServerListener final {
 public:
-    HttpServerListener(asio::io_context& ioContext, const HttpServerListenerDefinition& definition,
-        std::pmr::memory_resource* resource);
+    HttpServerListener(asio::io_context& ioContext, const HttpServerListenerDefinition& definition, std::pmr::memory_resource* resource);
 
     HttpServerListener(const HttpServerListener&) = delete;
     HttpServerListener& operator=(const HttpServerListener&) = delete;
@@ -108,8 +102,7 @@ public:
     }
     const HttpServerListenerDefinition::Tls* tls() const&& = delete;
 
-    [[nodiscard]] const HttpServerListenerDefinition::RedirectHttpToHttps* redirect()
-        const& noexcept {
+    [[nodiscard]] const HttpServerListenerDefinition::RedirectHttpToHttps* redirect() const& noexcept {
         return std::get_if<HttpServerListenerDefinition::RedirectHttpToHttps>(&transport);
     }
     const HttpServerListenerDefinition::RedirectHttpToHttps* redirect() const&& = delete;
@@ -122,8 +115,7 @@ public:
     SniContextLookup sniLookup;
 
 private:
-    HttpServerListener(ResolvedPmrResourceTag, asio::io_context& ioContext,
-        const HttpServerListenerDefinition& definition, std::pmr::memory_resource* resource);
+    HttpServerListener(ResolvedPmrResourceTag, asio::io_context& ioContext, const HttpServerListenerDefinition& definition, std::pmr::memory_resource* resource);
 };
 
 }  // namespace ruvia::detail

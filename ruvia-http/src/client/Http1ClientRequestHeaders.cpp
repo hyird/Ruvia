@@ -22,8 +22,7 @@ bool isValidClientTeField(std::string_view value) noexcept {
     return detail::isValidClientHttpTeFieldValue(value);
 }
 
-bool analyzeHeaders(std::span<const HttpHeaderView> headers, RequestHeaderFacts& facts,
-    Http1ClientRequestPrepareError& error) noexcept {
+bool analyzeHeaders(std::span<const HttpHeaderView> headers, RequestHeaderFacts& facts, Http1ClientRequestPrepareError& error) noexcept {
     for (const auto& header : headers) {
         const auto name = header.name();
         const auto value = header.value();
@@ -52,12 +51,7 @@ bool analyzeHeaders(std::span<const HttpHeaderView> headers, RequestHeaderFacts&
             error = Http1ClientRequestPrepareError::kExpectHeaderManagedByWriter;
             return false;
         }
-        if ((kind == detail::RequestHeaderKind::kOrigin &&
-                !detail::isValidHttpOriginFieldValue(value)) ||
-            (kind == detail::RequestHeaderKind::kAccessControlRequestMethod &&
-                !detail::isValidHttpCorsRequestMethod(value)) ||
-            (kind == detail::RequestHeaderKind::kAccessControlRequestHeaders &&
-                !detail::isValidHttpCorsRequestHeaderNames(value))) {
+        if ((kind == detail::RequestHeaderKind::kOrigin && !detail::isValidHttpOriginFieldValue(value)) || (kind == detail::RequestHeaderKind::kAccessControlRequestMethod && !detail::isValidHttpCorsRequestMethod(value)) || (kind == detail::RequestHeaderKind::kAccessControlRequestHeaders && !detail::isValidHttpCorsRequestHeaderNames(value))) {
             error = Http1ClientRequestPrepareError::kInvalidHeader;
             return false;
         }
@@ -69,17 +63,12 @@ bool analyzeHeaders(std::span<const HttpHeaderView> headers, RequestHeaderFacts&
             facts.singletonHeaders |= bit;
         }
         if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
-            if (facts.connectionOptions.parseField(value, detail::HttpFieldListRole::kSender,
-                    [](std::string_view option) noexcept {
-                        return !detail::httpConnectionOptionConflictsWithManagedField(option);
-                    }) != detail::HttpFieldListParseStatus::kOk) {
+            if (facts.connectionOptions.parseField(value, detail::HttpFieldListRole::kSender, [](std::string_view option) noexcept { return !detail::httpConnectionOptionConflictsWithManagedField(option); }) != detail::HttpFieldListParseStatus::kOk) {
                 error = Http1ClientRequestPrepareError::kInvalidConnection;
                 return false;
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
-            if (facts.upgradeProtocols.parseField(value, detail::HttpFieldListRole::kSender,
-                    [](const detail::HttpUpgradeProtocol&) noexcept { return true; }) !=
-                detail::HttpFieldListParseStatus::kOk) {
+            if (facts.upgradeProtocols.parseField(value, detail::HttpFieldListRole::kSender, [](const detail::HttpUpgradeProtocol&) noexcept { return true; }) != detail::HttpFieldListParseStatus::kOk) {
                 error = Http1ClientRequestPrepareError::kInvalidUpgrade;
                 return false;
             }
@@ -96,16 +85,13 @@ bool analyzeHeaders(std::span<const HttpHeaderView> headers, RequestHeaderFacts&
             }
             facts.hasContentType = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Content-Encoding")) {
-            if (!detail::isValidHttpContentEncodingFieldValue(
-                    value, detail::HttpFieldListRole::kSender)) {
+            if (!detail::isValidHttpContentEncodingFieldValue(value, detail::HttpFieldListRole::kSender)) {
                 error = Http1ClientRequestPrepareError::kInvalidHeader;
                 return false;
             }
         }
 
-        if (!addHeadBytes(facts.wireBytes, name.size()) || !addHeadBytes(facts.wireBytes, 2) ||
-            !addHeadBytes(facts.wireBytes, value.size()) ||
-            !addHeadBytes(facts.wireBytes, kCrlf.size())) {
+        if (!addHeadBytes(facts.wireBytes, name.size()) || !addHeadBytes(facts.wireBytes, 2) || !addHeadBytes(facts.wireBytes, value.size()) || !addHeadBytes(facts.wireBytes, kCrlf.size())) {
             error = Http1ClientRequestPrepareError::kHeaderTooLarge;
             return false;
         }

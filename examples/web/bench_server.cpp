@@ -7,17 +7,13 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
-RUVIA_REQUEST_MODEL(UserDTO, RUVIA_OPTIONAL_FIELD(name, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32), RUVIA_OPTIONAL_FIELD(email, ruvia::String));
+RUVIA_REQUEST_MODEL(UserDTO, RUVIA_OPTIONAL_FIELD(name, ruvia::String), RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32), RUVIA_OPTIONAL_FIELD(email, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(UserEcho, RUVIA_OPTIONAL_FIELD(name, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32), RUVIA_OPTIONAL_FIELD(email, ruvia::String));
+RUVIA_RESPONSE_MODEL(UserEcho, RUVIA_OPTIONAL_FIELD(name, ruvia::String), RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32), RUVIA_OPTIONAL_FIELD(email, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(StatusResponse, RUVIA_OPTIONAL_FIELD(status, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(framework, ruvia::String));
+RUVIA_RESPONSE_MODEL(StatusResponse, RUVIA_OPTIONAL_FIELD(status, ruvia::String), RUVIA_OPTIONAL_FIELD(framework, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(UserByIdResponse, RUVIA_OPTIONAL_FIELD(userId, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(name, ruvia::String));
+RUVIA_RESPONSE_MODEL(UserByIdResponse, RUVIA_OPTIONAL_FIELD(userId, ruvia::String), RUVIA_OPTIONAL_FIELD(name, ruvia::String));
 
 RUVIA_RESPONSE_MODEL(MiddlewareResponse, RUVIA_OPTIONAL_FIELD(middleware_count, ruvia::UInt32));
 
@@ -40,9 +36,7 @@ public:
     RUVIA_GET("/users/:id", user);
     RUVIA_GET("/middleware/0", middleware0);
     RUVIA_GET("/middleware/3", middleware3, Passthrough<0>, Passthrough<1>, Passthrough<2>);
-    RUVIA_GET("/middleware/10", middleware10, Passthrough<0>, Passthrough<1>, Passthrough<2>,
-        Passthrough<3>, Passthrough<4>, Passthrough<5>, Passthrough<6>, Passthrough<7>,
-        Passthrough<8>, Passthrough<9>);
+    RUVIA_GET("/middleware/10", middleware10, Passthrough<0>, Passthrough<1>, Passthrough<2>, Passthrough<3>, Passthrough<4>, Passthrough<5>, Passthrough<6>, Passthrough<7>, Passthrough<8>, Passthrough<9>);
     RUVIA_ROUTES_END
 
 private:
@@ -134,8 +128,7 @@ int main() {
 
     // Response compression is off by default. Enable it explicitly when the
     // benchmark is intended to include negotiation and encoding work.
-    if (const char* compression = std::getenv("COMPRESSION");
-        compression != nullptr && compression[0] == '1') {
+    if (const char* compression = std::getenv("COMPRESSION"); compression != nullptr && compression[0] == '1') {
         app.compression({});
     }
 

@@ -103,7 +103,7 @@ RUVIA_TEST(config_host_validation_separated_port_rules) {
     RUVIA_CHECK(!isValidConfigHost("[::1]", kSeparatedPortHostRules));    // brackets rejected
     RUVIA_CHECK(!isValidConfigHost("host:80", kSeparatedPortHostRules));  // single colon rejected
     RUVIA_CHECK(isValidConfigHost("host", kSeparatedPortHostRules));      // bare host is fine
-    RUVIA_CHECK(isValidConfigHost("::1", kSeparatedPortHostRules));  // two colons is not "single"
+    RUVIA_CHECK(isValidConfigHost("::1", kSeparatedPortHostRules));       // two colons is not "single"
 }
 
 RUVIA_TEST(sni_host_validation_accepts_dns_name_only) {
@@ -137,35 +137,25 @@ RUVIA_TEST(config_size_port_duration_guards) {
 RUVIA_TEST(config_ensure_host_throws_distinct_messages) {
     // An empty host reports the empty message; an invalid host reports the
     // invalid message; a valid host does not throw.
-    RUVIA_CHECK_EQ(caughtMessage([] { ensureConfigHost("", "was-empty", "was-invalid"); }),
-        std::string("was-empty"));
-    RUVIA_CHECK_EQ(caughtMessage([] { ensureConfigHost("bad host", "was-empty", "was-invalid"); }),
-        std::string("was-invalid"));
-    RUVIA_CHECK(
-        caughtMessage([] { ensureConfigHost("example.com", "was-empty", "was-invalid"); }).empty());
+    RUVIA_CHECK_EQ(caughtMessage([] { ensureConfigHost("", "was-empty", "was-invalid"); }), std::string("was-empty"));
+    RUVIA_CHECK_EQ(caughtMessage([] { ensureConfigHost("bad host", "was-empty", "was-invalid"); }), std::string("was-invalid"));
+    RUVIA_CHECK(caughtMessage([] { ensureConfigHost("example.com", "was-empty", "was-invalid"); }).empty());
 }
 
 RUVIA_TEST(client_transport_validation_uses_one_host_and_policy_contract) {
-    RUVIA_CHECK(!throwsInvalid(
-        [] { validateClientOriginHost("example.com", "host is empty", "host is invalid"); }));
-    RUVIA_CHECK(!throwsInvalid(
-        [] { validateClientOriginHost("::1", "host is empty", "host is invalid"); }));
-    RUVIA_CHECK(throwsInvalid(
-        [] { validateClientOriginHost("host:443", "host is empty", "host is invalid"); }));
-    RUVIA_CHECK(throwsInvalid(
-        [] { validateClientOriginHost("[::1]", "host is empty", "host is invalid"); }));
+    RUVIA_CHECK(!throwsInvalid([] { validateClientOriginHost("example.com", "host is empty", "host is invalid"); }));
+    RUVIA_CHECK(!throwsInvalid([] { validateClientOriginHost("::1", "host is empty", "host is invalid"); }));
+    RUVIA_CHECK(throwsInvalid([] { validateClientOriginHost("host:443", "host is empty", "host is invalid"); }));
+    RUVIA_CHECK(throwsInvalid([] { validateClientOriginHost("[::1]", "host is empty", "host is invalid"); }));
 
     ruvia::HttpClientConfig config;
-    RUVIA_CHECK(!throwsInvalid(
-        [&config] { validateClientTransportConfig(clientTransportConfigView(config)); }));
+    RUVIA_CHECK(!throwsInvalid([&config] { validateClientTransportConfig(clientTransportConfigView(config)); }));
 
     config.tcpNoDelay = std::bit_cast<ruvia::TcpNoDelayPolicy>(std::uint8_t{255});
-    RUVIA_CHECK(throwsInvalid(
-        [&config] { validateClientTransportConfig(clientTransportConfigView(config)); }));
+    RUVIA_CHECK(throwsInvalid([&config] { validateClientTransportConfig(clientTransportConfigView(config)); }));
     config.tcpNoDelay = ruvia::TcpNoDelayPolicy::kEnable;
     config.certificateChainFile = "client.pem";
-    RUVIA_CHECK(throwsInvalid(
-        [&config] { validateClientTransportConfig(clientTransportConfigView(config)); }));
+    RUVIA_CHECK(throwsInvalid([&config] { validateClientTransportConfig(clientTransportConfigView(config)); }));
 }
 
 RUVIA_TEST(client_transport_formats_the_complete_port_domain) {
@@ -205,8 +195,7 @@ RUVIA_TEST(http_client_config_is_validated_before_pmr_normalization) {
     config.connectTimeout = std::chrono::milliseconds::zero();
     CountingMemoryResource resource;
 
-    RUVIA_CHECK(
-        throwsInvalid([&] { (void)ruvia::detail::HttpClientConfigStorage(config, &resource); }));
+    RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::HttpClientConfigStorage(config, &resource); }));
     RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 }
 
@@ -229,30 +218,25 @@ RUVIA_TEST(websocket_client_config_is_validated_before_pmr_normalization) {
     config.connectTimeout = std::chrono::milliseconds::zero();
     CountingMemoryResource resource;
 
-    RUVIA_CHECK(throwsInvalid(
-        [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
+    RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
     RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 
     config.connectTimeout = std::chrono::milliseconds{5000};
     config.target = "/events#fragment";
-    RUVIA_CHECK(throwsInvalid(
-        [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
+    RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
     RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 
     config.target = "/";
     config.subprotocols = {"chat", "chat"};
-    RUVIA_CHECK(throwsInvalid(
-        [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
+    RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
     RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 
     config.subprotocols = {"bad token"};
-    RUVIA_CHECK(throwsInvalid(
-        [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
+    RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
     RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 
     config.subprotocols = {""};
-    RUVIA_CHECK(throwsInvalid(
-        [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
+    RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
     RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 }
 
@@ -329,15 +313,12 @@ RUVIA_TEST(app_document_root_rejects_disabled_refresh) {
     ruvia::DocumentRootConfig disabledRefresh;
     disabledRefresh.root = "public";
     disabledRefresh.runtime.refreshInterval = std::chrono::milliseconds::zero();
-    RUVIA_CHECK(throwsInvalid(
-        [&disabledRefresh] { ruvia::app().documentRoot(std::move(disabledRefresh)); }));
+    RUVIA_CHECK(throwsInvalid([&disabledRefresh] { ruvia::app().documentRoot(std::move(disabledRefresh)); }));
 }
 
 RUVIA_TEST(app_compression_rejects_invalid_thresholds_at_configuration) {
-    RUVIA_CHECK(
-        throwsInvalid([] { ruvia::app().compression({.minBytes = 1024, .syncBytes = 512}); }));
-    RUVIA_CHECK(throwsInvalid(
-        [] { ruvia::app().compression({.minBytes = 1024, .syncBytes = 2048, .maxBytes = 1024}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().compression({.minBytes = 1024, .syncBytes = 512}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().compression({.minBytes = 1024, .syncBytes = 2048, .maxBytes = 1024}); }));
 }
 
 RUVIA_TEST(integration_config_copies_public_strings_into_internal_pmr_storage) {

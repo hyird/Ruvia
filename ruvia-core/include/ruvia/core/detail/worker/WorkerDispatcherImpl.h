@@ -46,8 +46,7 @@ struct TimerSlot final {
 // Heap order: earliest deadline first, ties broken by registration order.
 struct TimerEntryLater final {
     bool operator()(const TimerEntry& left, const TimerEntry& right) const noexcept {
-        return left.deadline > right.deadline ||
-               (left.deadline == right.deadline && left.sequence > right.sequence);
+        return left.deadline > right.deadline || (left.deadline == right.deadline && left.sequence > right.sequence);
     }
 };
 

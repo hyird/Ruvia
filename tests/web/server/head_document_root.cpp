@@ -39,8 +39,7 @@ const std::string kFileBody(4096, 'a');
 // Read one response head (up to and including the blank line) and drop it from
 // the buffer, leaving any following bytes (a body, or a pipelined response) for
 // the caller to inspect.
-[[nodiscard]] std::string readHead(
-    asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
+[[nodiscard]] std::string readHead(asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
     const std::size_t n = asio::read_until(socket, buffer, "\r\n\r\n", ec);
     if (ec) {
         return {};
@@ -108,8 +107,7 @@ const std::string kFileBody(4096, 'a');
 
 [[nodiscard]] std::string gzipEncode(std::string_view plain) {
     z_stream stream{};
-    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) !=
-        Z_OK) {
+    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
         return {};
     }
     std::string encoded(compressBound(static_cast<uLong>(plain.size())) + 64, '\0');
@@ -128,8 +126,7 @@ const std::string kFileBody(4096, 'a');
 }
 
 ruvia::Task<ruvia::HttpResponse> staticFileRoute(void* target, ruvia::Context& context) {
-    co_return context.staticFile(*static_cast<ruvia::StaticRoot*>(target),
-        {.relativePath = "dynamic.txt", .contentType = "text/plain"});
+    co_return context.staticFile(*static_cast<ruvia::StaticRoot*>(target), {.relativePath = "dynamic.txt", .contentType = "text/plain"});
 }
 
 }  // namespace
@@ -157,18 +154,13 @@ int main() {
     std::pmr::memory_resource* resource = std::pmr::get_default_resource();
     ruvia::detail::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
-    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet,
-        std::pmr::string("/handler-static", resource),
-        ruvia::detail::RouteHandler(&root, &staticFileRoute),
-        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/handler-static", resource), ruvia::detail::RouteHandler(&root, &staticFileRoute), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
     routerImpl.finalize();
     ruvia::detail::HttpServerOptions options;
     options.documentRoot = ruvia::detail::HttpServerOptions::DocumentRoot::standalone(root);
     options.compression.emplace();
 
-    ruvia::detail::WebWorkerRuntime server(
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(),
-        {}, options);
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -186,8 +178,7 @@ int main() {
     asio::streambuf buffer;
 
     // HEAD of the file: 200, Content-Length of the whole representation, no body.
-    asio::write(sock,
-        asio::buffer(std::string_view("HEAD /asset.txt HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+    asio::write(sock, asio::buffer(std::string_view("HEAD /asset.txt HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
     const std::string headHead = readHead(sock, buffer, ec);
     if (!headHead.starts_with("HTTP/1.1 200")) {
         fail(1, "HEAD of a document-root file was not 200");
@@ -201,9 +192,7 @@ int main() {
     // Pipeline a GET on the same connection. If HEAD had leaked a body, these
     // bytes would be misframed and this head would not start with a status line.
     if (rc == 0) {
-        asio::write(sock,
-            asio::buffer(std::string_view("GET /asset.txt HTTP/1.1\r\nHost: localhost\r\n\r\n")),
-            ec);
+        asio::write(sock, asio::buffer(std::string_view("GET /asset.txt HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
         const std::string getHead = readHead(sock, buffer, ec);
         if (!getHead.starts_with("HTTP/1.1 200")) {
             fail(4, "GET after HEAD did not parse as a clean 200 response");
@@ -283,9 +272,7 @@ int main() {
     // Disabling compression also disables sidecar negotiation. Even when gzip
     // is accepted, the identity representation is returned if it is allowed.
     options.compression.reset();
-    ruvia::detail::WebWorkerRuntime sidecarServer(
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(),
-        {}, options);
+    ruvia::detail::WebWorkerRuntime sidecarServer(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
     sidecarServer.start();
     asio::ip::tcp::socket sidecarSocket(ctx);
     sidecarSocket.connect(sidecarServer.localEndpoint(), ec);

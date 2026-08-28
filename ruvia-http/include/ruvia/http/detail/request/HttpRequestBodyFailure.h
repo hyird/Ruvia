@@ -26,8 +26,7 @@ public:
     [[nodiscard]] HttpProtocolError protocolError() const noexcept {
         switch (kind_) {
             case Kind::kTooLarge:
-                return HttpProtocolError(
-                    http_status::kContentTooLarge, "request body is too large");
+                return HttpProtocolError(http_status::kContentTooLarge, "request body is too large");
             case Kind::kIncomplete:
                 return HttpProtocolError(http_status::kBadRequest, "incomplete request body");
         }
@@ -43,18 +42,12 @@ private:
     Kind kind_;
 };
 
-[[nodiscard]] inline std::optional<HttpRequestBodyFailure> httpRequestBodySizeFailure(
-    std::size_t size, ProtocolByteLimit limit) noexcept {
-    return limit.exceeds(size)
-               ? std::optional<HttpRequestBodyFailure>(HttpRequestBodyFailure::tooLarge())
-               : std::nullopt;
+[[nodiscard]] inline std::optional<HttpRequestBodyFailure> httpRequestBodySizeFailure(std::size_t size, ProtocolByteLimit limit) noexcept {
+    return limit.exceeds(size) ? std::optional<HttpRequestBodyFailure>(HttpRequestBodyFailure::tooLarge()) : std::nullopt;
 }
 
-[[nodiscard]] inline std::optional<HttpRequestBodyFailure> httpRequestBodyAdditionFailure(
-    std::size_t currentSize, std::size_t additionalSize, ProtocolByteLimit limit) noexcept {
-    return limit.additionExceeds(currentSize, additionalSize)
-               ? std::optional<HttpRequestBodyFailure>(HttpRequestBodyFailure::tooLarge())
-               : std::nullopt;
+[[nodiscard]] inline std::optional<HttpRequestBodyFailure> httpRequestBodyAdditionFailure(std::size_t currentSize, std::size_t additionalSize, ProtocolByteLimit limit) noexcept {
+    return limit.additionExceeds(currentSize, additionalSize) ? std::optional<HttpRequestBodyFailure>(HttpRequestBodyFailure::tooLarge()) : std::nullopt;
 }
 
 static_assert(std::is_trivially_copyable_v<HttpRequestBodyFailure>);

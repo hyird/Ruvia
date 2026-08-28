@@ -10,16 +10,14 @@
 
 namespace ruvia {
 
-ContextRequest::RequestFormData::Object::Object(
-    const RequestFormData& form, std::string_view dotPath)
+ContextRequest::RequestFormData::Object::Object(const RequestFormData& form, std::string_view dotPath)
     : form_(&form),
       dotPath_(dotPath, resourceFor(form)),
       entries_(resourceFor(form)) {
     rebuildEntries();
 }
 
-ContextRequest::RequestFormData::Object ContextRequest::RequestFormData::Object::object(
-    std::string_view name) const {
+ContextRequest::RequestFormData::Object ContextRequest::RequestFormData::Object::object(std::string_view name) const {
     if (path().empty()) {
         return Object(*form_, name);
     }
@@ -34,8 +32,7 @@ ContextRequest::RequestFormData::Object ContextRequest::RequestFormData::Object:
     return Object(*form_, std::string_view(childPath));
 }
 
-std::string_view ContextRequest::RequestFormData::Object::directChildName(
-    const ContextRequest::RequestFormField& field, std::string_view dotPath) noexcept {
+std::string_view ContextRequest::RequestFormData::Object::directChildName(const ContextRequest::RequestFormField& field, std::string_view dotPath) noexcept {
     const auto path = field.path();
     if (path.empty()) {
         return {};
@@ -86,18 +83,14 @@ void ContextRequest::RequestFormData::Object::rebuildEntries() {
         const auto name = directChildName(form_->fields_[firstIndex], path());
         do {
             ++offset;
-        } while (offset < order.size() &&
-                 directChildName(form_->fields_[order[offset]], path()) == name);
+        } while (offset < order.size() && directChildName(form_->fields_[order[offset]], path()) == name);
         builds.push_back(EntryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
-    std::ranges::stable_sort(builds, [](const EntryBuild& left, const EntryBuild& right) noexcept {
-        return left.firstIndex < right.firstIndex;
-    });
+    std::ranges::stable_sort(builds, [](const EntryBuild& left, const EntryBuild& right) noexcept { return left.firstIndex < right.firstIndex; });
 
     entries_.reserve(builds.size());
     for (const auto& build : builds) {
-        entries_.push_back(Group::make(
-            currentResource, directChildName(form_->fields_[build.firstIndex], path()), false));
+        entries_.push_back(Group::make(currentResource, directChildName(form_->fields_[build.firstIndex], path()), false));
         auto& formEntry = entries_.back();
         for (std::size_t i = build.begin; i < build.end; ++i) {
             formEntry.add(form_->fields_[order[i]]);
@@ -112,8 +105,7 @@ ContextRequest::RequestFormData::RequestFormData(std::pmr::vector<RequestFormFie
     rebuildEntries();
 }
 
-bool ContextRequest::RequestFormData::consumePath(
-    const RequestFormField& field, std::size_t& index, std::string_view dotPath) noexcept {
+bool ContextRequest::RequestFormData::consumePath(const RequestFormField& field, std::size_t& index, std::string_view dotPath) noexcept {
     if (dotPath.empty()) {
         return true;
     }
@@ -121,8 +113,7 @@ bool ContextRequest::RequestFormData::consumePath(
     std::size_t offset = 0;
     while (true) {
         const auto dot = dotPath.find('.', offset);
-        const auto segment = dot == std::string_view::npos ? dotPath.substr(offset)
-                                                           : dotPath.substr(offset, dot - offset);
+        const auto segment = dot == std::string_view::npos ? dotPath.substr(offset) : dotPath.substr(offset, dot - offset);
         const auto path = field.path();
         if (segment.empty() || index >= path.size()) {
             return false;
@@ -177,9 +168,7 @@ void ContextRequest::RequestFormData::rebuildEntries() {
         } while (offset < order.size() && entryName(fields_[order[offset]]) == name);
         builds.push_back(EntryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
-    std::ranges::stable_sort(builds, [](const EntryBuild& left, const EntryBuild& right) noexcept {
-        return left.firstIndex < right.firstIndex;
-    });
+    std::ranges::stable_sort(builds, [](const EntryBuild& left, const EntryBuild& right) noexcept { return left.firstIndex < right.firstIndex; });
 
     entries_.reserve(builds.size());
     for (const auto& build : builds) {
@@ -230,14 +219,11 @@ void ContextRequest::RequestFormData::rebuildPathEntries(std::pmr::memory_resour
         } while (offset < order.size() && pathEntryName(fields_[order[offset]]) == name);
         builds.push_back(EntryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
-    std::ranges::stable_sort(builds, [](const EntryBuild& left, const EntryBuild& right) noexcept {
-        return left.firstIndex < right.firstIndex;
-    });
+    std::ranges::stable_sort(builds, [](const EntryBuild& left, const EntryBuild& right) noexcept { return left.firstIndex < right.firstIndex; });
 
     pathEntries_.reserve(builds.size());
     for (const auto& build : builds) {
-        pathEntries_.push_back(
-            Group::make(resource, pathEntryName(fields_[build.firstIndex]), false));
+        pathEntries_.push_back(Group::make(resource, pathEntryName(fields_[build.firstIndex]), false));
         auto& entry = pathEntries_.back();
         for (std::size_t i = build.begin; i < build.end; ++i) {
             entry.add(fields_[order[i]]);

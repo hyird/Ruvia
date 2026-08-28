@@ -7,8 +7,7 @@
 
 namespace ruvia {
 
-void EtagFieldCondition::update(
-    std::string_view value, std::string_view expected, bool strong) noexcept {
+void EtagFieldCondition::update(std::string_view value, std::string_view expected, bool strong) noexcept {
     present = true;
     ++lineCount;
     const auto trimmed = detail::httpTrimOws(value);
@@ -29,10 +28,8 @@ void EtagFieldCondition::update(
 
 FileEtagConditions fileEtagConditions(const HttpRequest& request, std::string_view etag) noexcept {
     FileEtagConditions result;
-    const bool hasIfMatch =
-        detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfMatch);
-    const bool hasIfNoneMatch =
-        detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfNoneMatch);
+    const bool hasIfMatch = detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfMatch);
+    const bool hasIfNoneMatch = detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfNoneMatch);
     if (!hasIfMatch && !hasIfNoneMatch) {
         return result;
     }
@@ -44,8 +41,7 @@ FileEtagConditions fileEtagConditions(const HttpRequest& request, std::string_vi
     for (const auto& header : request.headers()) {
         if (hasIfMatch && detail::httpAsciiEqualsIgnoreCase(header.name(), "If-Match")) {
             result.ifMatch.update(header.value(), etag, true);
-        } else if (hasIfNoneMatch &&
-                   detail::httpAsciiEqualsIgnoreCase(header.name(), "If-None-Match")) {
+        } else if (hasIfNoneMatch && detail::httpAsciiEqualsIgnoreCase(header.name(), "If-None-Match")) {
             result.ifNoneMatch.update(header.value(), etag, false);
         }
     }
@@ -62,8 +58,7 @@ bool httpDateUnmodified(std::string_view header, std::time_t modifiedSeconds) no
     return !date.has_value() || modifiedSeconds <= *date;
 }
 
-bool ifRangeAllows(std::string_view header, std::string_view etag, std::time_t modifiedSeconds,
-    bool dateValidatorStrong) noexcept {
+bool ifRangeAllows(std::string_view header, std::string_view etag, std::time_t modifiedSeconds, bool dateValidatorStrong) noexcept {
     if (header.empty()) {
         return false;
     }
@@ -86,12 +81,7 @@ bool ifRangeAllows(std::string_view header, std::string_view etag, std::time_t m
 }
 
 FileConditionalHeaders fileConditionalHeaders(const HttpRequest& request) noexcept {
-    return FileConditionalHeaders{
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfUnmodifiedSince),
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfModifiedSince),
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kRange),
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfRange),
-        detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfRange)};
+    return FileConditionalHeaders{detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfUnmodifiedSince), detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfModifiedSince), detail::requestKnownHeader(request, detail::RequestKnownHeader::kRange), detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfRange), detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfRange)};
 }
 
 }  // namespace ruvia

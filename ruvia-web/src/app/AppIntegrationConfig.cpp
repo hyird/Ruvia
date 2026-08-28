@@ -11,46 +11,29 @@
 namespace ruvia {
 #ifdef RUVIA_ENABLE_DATABASE
 App& App::database(DbRegistrationConfig config) {
-    return detail::mutateStoppedApp(*this, *state_,
-        "cannot configure database while app is running", [&](detail::AppState& state) {
-            detail::upsertNamedCapabilityDefinition(state.databases, config.alias, config.config,
-                "database alias must not be empty", detail::appResource());
-        });
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure database while app is running", [&](detail::AppState& state) { detail::upsertNamedCapabilityDefinition(state.databases, config.alias, config.config, "database alias must not be empty", detail::appResource()); });
 }
 
 App& App::database(std::nullptr_t) {
-    return detail::mutateStoppedApp(*this, *state_,
-        "cannot configure database while app is running",
-        [](detail::AppState& state) { state.databases.clear(); });
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure database while app is running", [](detail::AppState& state) { state.databases.clear(); });
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
 App& App::redis(RedisRegistrationConfig config) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot configure redis while app is running",
-        [&](detail::AppState& state) {
-            detail::upsertNamedCapabilityDefinition(state.redis, config.alias, config.config,
-                "redis alias must not be empty", detail::appResource());
-        });
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure redis while app is running", [&](detail::AppState& state) { detail::upsertNamedCapabilityDefinition(state.redis, config.alias, config.config, "redis alias must not be empty", detail::appResource()); });
 }
 
 App& App::redis(std::nullptr_t) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot configure redis while app is running",
-        [](detail::AppState& state) { state.redis.clear(); });
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure redis while app is running", [](detail::AppState& state) { state.redis.clear(); });
 }
 #endif
 
 App& App::httpClient(HttpClientRegistrationConfig config) {
-    return detail::mutateStoppedApp(*this, *state_,
-        "cannot configure HTTP client while app is running", [&](detail::AppState& state) {
-            detail::upsertNamedCapabilityDefinition(state.httpClients, config.alias, config.config,
-                "HTTP client alias must not be empty", detail::appResource());
-        });
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure HTTP client while app is running", [&](detail::AppState& state) { detail::upsertNamedCapabilityDefinition(state.httpClients, config.alias, config.config, "HTTP client alias must not be empty", detail::appResource()); });
 }
 
 App& App::httpClient(std::nullptr_t) {
-    return detail::mutateStoppedApp(*this, *state_,
-        "cannot configure HTTP client while app is running",
-        [](detail::AppState& state) { state.httpClients.clear(); });
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure HTTP client while app is running", [](detail::AppState& state) { state.httpClients.clear(); });
 }
 }  // namespace ruvia

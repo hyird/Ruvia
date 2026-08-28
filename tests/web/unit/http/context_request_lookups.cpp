@@ -10,12 +10,11 @@ RUVIA_TEST(context_request_cookie_single_lookup_does_not_materialize_cookie_list
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "a=1; b=2; a=3"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "a=1; b=2; a=3"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const auto cookie = context.req().cookie("a");
     RUVIA_CHECK(cookie.has_value());
@@ -33,7 +32,7 @@ RUVIA_TEST(context_request_cookie_single_lookup_scans_repeated_cookie_fields) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const auto cookie = context.req().cookie("a");
     RUVIA_CHECK(cookie.has_value());
@@ -51,7 +50,7 @@ RUVIA_TEST(context_request_cookie_fields_include_repeated_cookie_headers) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const auto& cookies = context.req().cookieFields();
     RUVIA_CHECK_EQ(cookies.size(), std::size_t{3});
@@ -74,7 +73,7 @@ RUVIA_TEST(context_request_query_single_lookup_materializes_one_shared_cache) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const auto query = context.req().query("a");
     RUVIA_CHECK(query.has_value());
@@ -103,7 +102,7 @@ RUVIA_TEST(context_request_query_list_uses_last_duplicate_like_single_lookup) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     // Single-value lookup resolves a duplicate name to its LAST value.
     RUVIA_CHECK_EQ(*context.req().query("a"), std::string_view("3"));
@@ -139,26 +138,21 @@ RUVIA_TEST(context_request_query_fields_preserve_duplicates_for_model_binding) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const auto& fields = context.req().queryFields();
     RUVIA_CHECK_EQ(fields.size(), std::size_t{3});
     RUVIA_CHECK_EQ(*fields.get("message"), std::string_view("second"));
 
-    RUVIA_CHECK(!ruvia::detail::ModelParseAccess::parseFormFields<AccessorSurfaceRequest>(
-        fields, requestMemory.resource())
-            .has_value());
-    const auto parsed =
-        ruvia::detail::ModelParseAccess::parseFormFieldsPartial<AccessorSurfaceRequest>(
-            fields, requestMemory.resource());
+    RUVIA_CHECK(!ruvia::detail::ModelParseAccess::parseFormFields<AccessorSurfaceRequest>(fields, requestMemory.resource()).has_value());
+    const auto parsed = ruvia::detail::ModelParseAccess::parseFormFieldsPartial<AccessorSurfaceRequest>(fields, requestMemory.resource());
     RUVIA_CHECK(parsed.has_value());
     if (!parsed) {
         return;
     }
     RUVIA_CHECK(parsed->get<"message">().has_value());
     RUVIA_CHECK_EQ(parsed->get<"message">()->view(), std::string_view("first"));
-    RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(*parsed) ==
-                ruvia::detail::ModelFieldState::kDuplicate);
+    RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(*parsed) == ruvia::detail::ModelFieldState::kDuplicate);
 }
 
 RUVIA_TEST(context_request_queries_use_empty_span_only_for_missing_name) {
@@ -169,7 +163,7 @@ RUVIA_TEST(context_request_queries_use_empty_span_only_for_missing_name) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const auto emptyValue = context.req().queries("empty");
     RUVIA_CHECK_EQ(emptyValue.size(), std::size_t{1});
@@ -191,8 +185,7 @@ RUVIA_TEST(context_request_param_single_lookup_materializes_one_shared_cache) {
     const std::string_view values[] = {"skip", "one%20two"};
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(
-        requestMemory, request, "/items/:id", names, values, std::size(names), 0);
+    auto context = ContextAccess::make(requestMemory, request, "/items/:id", names, values, std::size(names), 0, ruvia::test::testContextServices());
 
     const auto param = context.req().param("id");
     RUVIA_CHECK(param.has_value());
@@ -215,7 +208,7 @@ RUVIA_TEST(context_request_query_rejects_and_remembers_malformed_percent_encodin
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         bool threw = false;
@@ -241,8 +234,7 @@ RUVIA_TEST(context_request_param_rejects_and_remembers_malformed_percent_encodin
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(
-        requestMemory, request, "/items/:id", names, values, std::size(names), 0);
+    auto context = ContextAccess::make(requestMemory, request, "/items/:id", names, values, std::size(names), 0, ruvia::test::testContextServices());
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         bool threw = false;
@@ -271,7 +263,7 @@ RUVIA_TEST(context_request_accepts_merges_multiple_accept_field_lines) {
         for (const auto line : acceptLines) {
             HttpRequestAccess::addHeader(request, HttpHeaderView{"Accept", line}, slot);
         }
-        auto context = ContextAccess::make(memory, request);
+        auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         return context.req().accepts(mediaType);
     };
 
@@ -309,7 +301,7 @@ RUVIA_TEST(context_request_header_lookup_uses_last_match) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     asio::io_context& io = ruvia::test::newTestIoContext();
     std::string header;
@@ -327,7 +319,7 @@ RUVIA_TEST(context_request_header_lookup_is_case_insensitive_and_presence_aware)
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const auto presentEmpty = context.req().header("x-EMPTY");
     RUVIA_CHECK(presentEmpty.has_value());
@@ -343,7 +335,7 @@ RUVIA_TEST(context_request_preserves_exact_extension_method_token) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     asio::io_context& io = ruvia::test::newTestIoContext();
     MethodObservation observation;
@@ -368,7 +360,7 @@ RUVIA_TEST(context_request_header_fields_enumerate_every_field_in_order) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     // Called on the prvalue req() returns: the borrowed list belongs to the
     // Context, so this must not be an rvalue-deleted overload.
@@ -396,7 +388,7 @@ RUVIA_TEST(context_request_query_fields_enumerate_repeated_names) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const auto& queries = context.req().queryFields();
     RUVIA_CHECK_EQ(queries.size(), std::size_t(3));
@@ -410,12 +402,11 @@ RUVIA_TEST(context_request_bulk_accessors_share_the_named_lookup_cache) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "a=1; b=2"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "a=1; b=2"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     // A named lookup alone must not materialize the list...
     RUVIA_CHECK(!ContextAccess::requestCookiesMaterialized(context));
@@ -451,12 +442,11 @@ RUVIA_TEST(context_request_negotiate_picks_the_client_preferred_media_type) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     // Server order lists html first, but the client prefers json.
     const std::string_view supported[] = {"text/html", "application/json"};
-    const auto chosen =
-        context.req().negotiate(ruvia::ContextRequest::Negotiable::kMediaType, supported);
+    const auto chosen = context.req().negotiate(ruvia::ContextRequest::Negotiable::kMediaType, supported);
     RUVIA_CHECK(chosen.has_value());
     RUVIA_CHECK_EQ(*chosen, std::string_view("application/json"));
 
@@ -473,13 +463,11 @@ RUVIA_TEST(context_request_negotiate_reports_no_acceptable_representation) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const std::string_view supported[] = {"text/html", "application/json"};
     // nullopt is the 406 signal, which is why this cannot fall back to front().
-    RUVIA_CHECK(!context.req()
-            .negotiate(ruvia::ContextRequest::Negotiable::kMediaType, supported)
-            .has_value());
+    RUVIA_CHECK(!context.req().negotiate(ruvia::ContextRequest::Negotiable::kMediaType, supported).has_value());
 }
 
 RUVIA_TEST(context_request_negotiate_without_the_field_takes_server_preference) {
@@ -489,11 +477,10 @@ RUVIA_TEST(context_request_negotiate_without_the_field_takes_server_preference) 
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const std::string_view supported[] = {"application/json", "text/html"};
-    const auto chosen =
-        context.req().negotiate(ruvia::ContextRequest::Negotiable::kMediaType, supported);
+    const auto chosen = context.req().negotiate(ruvia::ContextRequest::Negotiable::kMediaType, supported);
     RUVIA_CHECK(chosen.has_value());
     RUVIA_CHECK_EQ(*chosen, std::string_view("application/json"));
 }
@@ -506,12 +493,11 @@ RUVIA_TEST(context_request_negotiate_language_uses_basic_prefix_filtering) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     // RFC 4647 basic filtering: the range "en" matches the tag "en-US".
     const std::string_view supported[] = {"fr-CA", "en-US"};
-    const auto chosen =
-        context.req().negotiate(ruvia::ContextRequest::Negotiable::kLanguage, supported);
+    const auto chosen = context.req().negotiate(ruvia::ContextRequest::Negotiable::kLanguage, supported);
     RUVIA_CHECK(chosen.has_value());
     RUVIA_CHECK_EQ(*chosen, std::string_view("en-US"));
 }
@@ -525,11 +511,10 @@ RUVIA_TEST(context_request_negotiate_honours_explicit_zero_quality_exclusion) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const std::string_view supported[] = {"gzip", "br"};
-    const auto chosen =
-        context.req().negotiate(ruvia::ContextRequest::Negotiable::kEncoding, supported);
+    const auto chosen = context.req().negotiate(ruvia::ContextRequest::Negotiable::kEncoding, supported);
     RUVIA_CHECK(chosen.has_value());
     RUVIA_CHECK_EQ(*chosen, std::string_view("br"));
 }
@@ -544,11 +529,10 @@ RUVIA_TEST(context_request_negotiate_folds_repeated_field_lines) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const std::string_view supported[] = {"de", "ja"};
-    const auto chosen =
-        context.req().negotiate(ruvia::ContextRequest::Negotiable::kLanguage, supported);
+    const auto chosen = context.req().negotiate(ruvia::ContextRequest::Negotiable::kLanguage, supported);
     RUVIA_CHECK(chosen.has_value());
     RUVIA_CHECK_EQ(*chosen, std::string_view("ja"));
 }

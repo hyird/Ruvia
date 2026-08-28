@@ -64,9 +64,7 @@ public:
         }
         lastRead_ = static_cast<std::streamsize>(result);
 #else
-        const auto requested =
-            static_cast<DWORD>(std::min<std::uint64_t>(static_cast<std::uint64_t>(size),
-                static_cast<std::uint64_t>((std::numeric_limits<DWORD>::max)())));
+        const auto requested = static_cast<DWORD>(std::min<std::uint64_t>(static_cast<std::uint64_t>(size), static_cast<std::uint64_t>((std::numeric_limits<DWORD>::max)())));
         DWORD result = 0;
         if (::ReadFile(handle_.get(), output, requested, &result, nullptr) == 0) {
             error_ = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
@@ -84,8 +82,7 @@ public:
     // descriptor validates replacement races, but an in-place write can alter
     // bytes while that descriptor remains valid. The ctime/change-time token
     // in ResponseFileIdentity makes that mutation visible to the runtime.
-    [[nodiscard]] bool matchesSnapshot(
-        ResponseFileIdentity expected, std::uint64_t expectedSize) const noexcept {
+    [[nodiscard]] bool matchesSnapshot(ResponseFileIdentity expected, std::uint64_t expectedSize) const noexcept {
         if (!expected.requiresValidation()) {
             return true;
         }
@@ -129,8 +126,7 @@ public:
         return input_.gcount();
     }
 
-    [[nodiscard]] bool matchesSnapshot(
-        ResponseFileIdentity expected, std::uint64_t) const noexcept {
+    [[nodiscard]] bool matchesSnapshot(ResponseFileIdentity expected, std::uint64_t) const noexcept {
         // Checked identities are rejected by the portable fallback at open:
         // there is no native handle to validate without reopening a path.
         return !expected.requiresValidation();
