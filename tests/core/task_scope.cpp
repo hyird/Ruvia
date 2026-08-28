@@ -15,6 +15,24 @@
 #include <type_traits>
 #include <utility>
 
+template <typename T>
+concept HasRvalueTaskScopeSpawn = requires(T&& scope) { std::move(scope).spawn(ruvia::Task<void>{}); };
+
+template <typename T>
+concept HasRvalueTaskScopeRequestStop = requires(T&& scope) { std::move(scope).requestStop(); };
+
+template <typename T>
+concept HasRvalueTaskScopeStopToken = requires(const T&& scope) { std::move(scope).stopToken(); };
+
+template <typename T>
+concept HasRvalueTaskScopeStopRequested = requires(const T&& scope) { std::move(scope).stopRequested(); };
+
+template <typename T>
+concept HasRvalueTaskScopeSize = requires(const T&& scope) { std::move(scope).size(); };
+
+template <typename T>
+concept HasRvalueTaskScopeJoin = requires(T&& scope) { std::move(scope).join(); };
+
 static_assert(std::is_move_constructible_v<ruvia::Task<void>>);
 static_assert(!std::is_move_assignable_v<ruvia::Task<void>>);
 static_assert(std::is_move_constructible_v<ruvia::Task<int>>);
@@ -27,6 +45,12 @@ static_assert(!std::is_constructible_v<ruvia::TaskScope, const ruvia::WorkerHand
 static_assert(!std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&>);
 static_assert(!std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&, ruvia::TaskScopeOptions>);
 static_assert(!std::is_constructible_v<ruvia::TaskScope, ruvia::WorkerHandle&&, std::pmr::memory_resource*>);
+static_assert(!HasRvalueTaskScopeSpawn<ruvia::TaskScope>);
+static_assert(!HasRvalueTaskScopeRequestStop<ruvia::TaskScope>);
+static_assert(!HasRvalueTaskScopeStopToken<ruvia::TaskScope>);
+static_assert(!HasRvalueTaskScopeStopRequested<ruvia::TaskScope>);
+static_assert(!HasRvalueTaskScopeSize<ruvia::TaskScope>);
+static_assert(!HasRvalueTaskScopeJoin<ruvia::TaskScope>);
 
 namespace {
 
