@@ -34,6 +34,7 @@ using TcpSocket = asio::ip::tcp::socket;
 class ContextServices;
 class AcceptedConnectionLease;
 class RouteTable;
+class ValidatedHttpServerConfiguration;
 class WebWorkerDispatch;
 
 class WebWorkerRuntime final {
@@ -45,6 +46,8 @@ public:
         WorkerCapabilityDefinitions capabilities = {}, HttpServerOptions options = {});
     WebWorkerRuntime(asio::ip::tcp::endpoint endpoint, const RouteTable& routes,
         WorkerCapabilityDefinitions capabilities = {}, HttpServerOptions options = {});
+    WebWorkerRuntime(const ValidatedHttpServerConfiguration& configuration,
+        const RouteTable& routes, WorkerCapabilityDefinitions capabilities);
     ~WebWorkerRuntime();
 
     WebWorkerRuntime(const WebWorkerRuntime&) = delete;
@@ -72,18 +75,18 @@ public:
     [[nodiscard]] WebWorkerHandle webWorker() const;
 
 private:
-    struct ValidatedOptionsTag final {};
+    struct ValidatedConfigurationTag final {};
     using DocumentRootPtr = std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>>;
     using ListenerPtr = std::unique_ptr<HttpServerListener, PmrObjectDeleter<HttpServerListener>>;
 
-    WebWorkerRuntime(ValidatedOptionsTag, std::span<const HttpServerListenerDefinition> listeners,
-        const RouteTable& routes, WorkerCapabilityDefinitions capabilities,
-        HttpServerOptions validatedOptions);
+    WebWorkerRuntime(ValidatedConfigurationTag,
+        std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes,
+        WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions);
 
     void configureAcceptor(HttpServerListener& listener);
     void configureTlsContext(HttpServerListener& listener);
     void stopOnContext() noexcept;
-    void failWorker(std::exception_ptr failure) noexcept;
+    void failWorker(const std::exception_ptr& failure) noexcept;
     void runIoContext() noexcept;
     Task<void> runWorker();
     Task<void> staticRootRefreshLoop();

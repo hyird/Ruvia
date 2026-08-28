@@ -98,13 +98,15 @@ RUVIA_TEST(rate_limiter_resets_after_window) {
         .maxRequests = 1,
         .window = std::chrono::milliseconds(20),
     };
-    ManualRateLimiterClock::set(1'000);
+    // The window starts with this key's first request instead of aligning to a
+    // process-wide clock boundary.
+    ManualRateLimiterClock::set(1'007);
     ManualRateLimiter limiter(rule, kNoRouteRules, kCapacity);
     RUVIA_CHECK(rateLimitAllowed(limiter.allowDefault("k")));
     RUVIA_CHECK(!rateLimitAllowed(limiter.allowDefault("k")));
-    ManualRateLimiterClock::set(1'019);
+    ManualRateLimiterClock::set(1'026);
     RUVIA_CHECK(!rateLimitAllowed(limiter.allowDefault("k")));
-    ManualRateLimiterClock::set(1'020);
+    ManualRateLimiterClock::set(1'027);
     RUVIA_CHECK(rateLimitAllowed(limiter.allowDefault("k")));  // new fixed window admits again
 }
 

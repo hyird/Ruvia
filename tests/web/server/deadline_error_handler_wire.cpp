@@ -233,8 +233,12 @@ struct DeadlineAwareErrorHandler final {
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) {
+                co_return;
+            }
 
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
@@ -253,7 +257,9 @@ struct DeadlineAwareErrorHandler final {
             HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             while (!result.ended) {
                 char headerBytes[kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    break;
+                }
                 const auto header =
                     http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');

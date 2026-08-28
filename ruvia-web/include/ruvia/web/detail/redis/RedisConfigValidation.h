@@ -1,15 +1,12 @@
 #pragma once
 
-#ifdef RUVIA_ENABLE_REDIS
-
-#include "ruvia/web/redis/RedisTypes.h"
 #include "ruvia/core/detail/config/ConfigValidation.h"
 #include "ruvia/core/detail/io/TcpSocketOptions.h"
+#include "ruvia/web/redis/RedisTypes.h"
 
 namespace ruvia::detail {
 
-template <typename Config>
-inline void validateRedisConfig(const Config& config) {
+inline void validateRedisConfig(const RedisConfig& config) {
     ensureConfigHost(config.host, "redis host must not be empty", "redis host is invalid",
         kSeparatedPortHostRules);
     ensureNonZeroPort(config.port, "redis port must not be zero");
@@ -26,5 +23,3 @@ inline void validateRedisConfig(const Config& config) {
 }
 
 }  // namespace ruvia::detail
-
-#endif  // RUVIA_ENABLE_REDIS

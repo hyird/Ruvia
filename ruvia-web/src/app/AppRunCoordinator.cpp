@@ -22,49 +22,10 @@
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
+#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 
 namespace ruvia {
 namespace {
-
-[[nodiscard]] StaticRootOptions makeStaticRootOptions(const detail::AppStaticRootOptions& source) {
-    StaticRootOptions result;
-    result.cacheControl.assign(source.cacheControl);
-    result.indexFile.assign(source.indexFile);
-    result.defaultContentType.assign(source.defaultContentType);
-    result.mimeTypes.reserve(source.mimeTypes.size());
-    for (const auto& mimeType : source.mimeTypes) {
-        result.mimeTypes.push_back(StaticMimeType{
-            .extension = std::string(mimeType.extension),
-            .contentType = std::string(mimeType.contentType),
-        });
-    }
-
-    switch (source.fileTypeKind) {
-        case StaticFileTypePolicy::Kind::kDefaults:
-            result.fileTypes = {.kind = StaticFileTypePolicy::Kind::kDefaults};
-            break;
-        case StaticFileTypePolicy::Kind::kAll:
-            result.fileTypes = {.kind = StaticFileTypePolicy::Kind::kAll};
-            break;
-        case StaticFileTypePolicy::Kind::kOnly: {
-            std::vector<std::string> extensions;
-            extensions.reserve(source.fileTypeExtensions.size());
-            for (const auto& extension : source.fileTypeExtensions) {
-                extensions.emplace_back(extension);
-            }
-            result.fileTypes = {
-                .kind = StaticFileTypePolicy::Kind::kOnly,
-                .extensions = std::move(extensions),
-            };
-            break;
-        }
-    }
-
-    result.rangeRequests = source.rangeRequests;
-    result.responseValidators = source.responseValidators;
-    result.dotfiles = source.dotfiles;
-    return result;
-}
 
 void addShutdownSignals(asio::signal_set& signals) {
     signals.add(SIGINT);
@@ -179,8 +140,10 @@ private:
         preparedOptions.env = &state_.env;
         preparedOptions.workerFailure = detail::WorkerFailureSink{
             .target = &owner_,
-            .invoke = [](void* target,
-                          std::exception_ptr) noexcept { static_cast<App*>(target)->stop(); },
+            .invoke =
+                [](void* target, const std::exception_ptr&) noexcept {
+                    static_cast<App*>(target)->stop();
+                },
         };
 
         std::unique_ptr<StaticRoot, detail::PmrObjectDeleter<StaticRoot>> configuredDocumentRoot(
@@ -188,8 +151,8 @@ private:
         if (state_.documentRootConfig.has_value()) {
             const auto documentRootPath =
                 detail::makePathFromNativePath(state_.documentRootConfig->root);
-            configuredDocumentRoot = detail::makePmrObject<StaticRoot>(runtimeResource_,
-                documentRootPath, makeStaticRootOptions(state_.documentRootConfig->staticOptions));
+            configuredDocumentRoot = detail::StaticRootAccess::make(
+                runtimeResource_, documentRootPath, state_.documentRootConfig->staticOptions);
             if (preparedOptions.compression.has_value() &&
                 state_.documentRootConfig->precompression.enabled()) {
                 detail::StaticRootAccess::installPrecompressedVariants(
@@ -205,19 +168,11 @@ private:
             preparedOptions.blockingPool = runtime->blockingPool.get();
         }
 
-        std::pmr::vector<detail::HttpServerListenerDefinition> listeners(runtimeResource_);
-        listeners.reserve(state_.listeners.size());
-        for (const auto& listener : state_.listeners) {
-            listeners.emplace_back(
-                asio::ip::tcp::endpoint(
-                    asio::ip::make_address(std::string_view(listener.address)), listener.port),
-                listener.transport);
-        }
+        const auto validatedConfiguration =
+            detail::validateHttpServerConfiguration(state_.listeners, std::move(preparedOptions));
 
         runtime->workers.reserve(state_.workerCount);
         for (std::size_t i = 0; i < state_.workerCount; ++i) {
-            auto workerOptions =
-                i + 1 == state_.workerCount ? std::move(preparedOptions) : preparedOptions;
             detail::ControllerStore controllers;
             auto router = buildWorkerRouter(state_, runtimeResource_, controllers,
                 controllerRegistrars, runtime->routePlan.get());
@@ -235,9 +190,8 @@ private:
                 .workerStates = std::span<const detail::WorkerStateDefinition>(state_.workerStates),
                 .httpClients = std::span<const detail::HttpClientDefinition>(state_.httpClients),
             };
-            auto worker = detail::makePmrObject<detail::WebWorkerRuntime>(runtimeResource_,
-                std::span<const detail::HttpServerListenerDefinition>(listeners),
-                routes.routeTable(), capabilities, std::move(workerOptions));
+            auto worker = detail::makePmrObject<detail::WebWorkerRuntime>(
+                runtimeResource_, validatedConfiguration, routes.routeTable(), capabilities);
             worker->prepare();
             runtime->workers.emplace_back(
                 std::move(controllers), std::move(router), std::move(worker));

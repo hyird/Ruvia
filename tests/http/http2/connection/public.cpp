@@ -25,7 +25,9 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (reject_) throw std::bad_alloc();
+        if (reject_) {
+            throw std::bad_alloc();
+        }
         return std::pmr::new_delete_resource()->allocate(bytes, alignment);
     }
 
@@ -59,7 +61,9 @@ std::pmr::string clientResponseWire(std::pmr::memory_resource* resource, std::st
     bool includeHeader = false, bool endStream = true) {
     std::pmr::string block(resource);
     ruvia::HpackEncoder::encodeStatus(block, ruvia::http_status::kOk);
-    if (includeHeader) ruvia::HpackEncoder::encodeHeader(block, "x-test", "value");
+    if (includeHeader) {
+        ruvia::HpackEncoder::encodeHeader(block, "x-test", "value");
+    }
 
     std::pmr::string wire(resource);
     appendPeerSettings(wire);
@@ -101,7 +105,9 @@ std::pmr::string serverRequestWire(std::pmr::memory_resource* resource, std::str
     appendPeerSettings(wire);
     const auto headFlags = static_cast<std::uint8_t>(0x4 | (body.empty() ? 0x1 : 0));
     appendFrame(wire, ruvia::Http2FrameType::kHeaders, headFlags, 1, block);
-    if (!body.empty()) appendFrame(wire, ruvia::Http2FrameType::kData, 0x1, 1, body);
+    if (!body.empty()) {
+        appendFrame(wire, ruvia::Http2FrameType::kData, 0x1, 1, body);
+    }
     return wire;
 }
 
@@ -110,7 +116,9 @@ ruvia::Http2Connection preparedClient(std::pmr::memory_resource* resource) {
     (void)client.consumeOutput(client.pendingOutput().size());
     const auto submitted = client.submitRequestHead(ruvia::Http2RegularRequestHeadView{
         .method = "GET", .scheme = "https", .authority = "example.test", .target = "/"});
-    if (submitted.submitted() == nullptr) throw std::logic_error("test request was not submitted");
+    if (submitted.submitted() == nullptr) {
+        throw std::logic_error("test request was not submitted");
+    }
     (void)client.consumeOutput(client.pendingOutput().size());
     return client;
 }

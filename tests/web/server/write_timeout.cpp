@@ -114,14 +114,18 @@ int main() {
             bool closed = false;
             asio::steady_timer safety(ctx, 2000ms);
             safety.async_wait([&](const std::error_code& e) {
-                if (!e) socket.cancel();
+                if (!e) {
+                    socket.cancel();
+                }
             });
             std::function<void()> readMore;
             readMore = [&]() {
                 socket.async_read_some(
                     asio::buffer(drainBuf), [&](const std::error_code& e, std::size_t) {
                         if (e) {
-                            if (e != asio::error::operation_aborted) closed = true;
+                            if (e != asio::error::operation_aborted) {
+                                closed = true;
+                            }
                             safety.cancel();
                             return;
                         }

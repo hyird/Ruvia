@@ -58,18 +58,22 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
                 std::string(http1ClientResponseParseErrorMessage(parseResult.failure()->error())));
         }
         if (parseResult.needMore()) {
-            if (connection.readBuffer.size() >= kMaxHttpHeaderBytes)
+            if (connection.readBuffer.size() >= kMaxHttpHeaderBytes) {
                 throw HttpClientError(
                     HttpClientError::Code::kProtocolError, "HTTP response head is too large");
+            }
             const auto bytes = co_await readSome(connection, input, timeout);
-            if (bytes == 0)
+            if (bytes == 0) {
                 throw HttpClientError(HttpClientError::Code::kIoError,
                     "upstream closed before the HTTP response head");
+            }
             connection.readBuffer.append(input.data(), bytes);
             continue;
         }
         auto* parsed = parseResult.parsed();
-        if (!parsed) std::terminate();
+        if (!parsed) {
+            std::terminate();
+        }
         const auto consumedHead = parsed->consumedBytes();
         if (parsed->plan().informational()) {
             const bool closesExchange = parsed->plan().informational()->persistence() ==
@@ -85,9 +89,10 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         response.state_->status = parsed->head().status();
         response.state_->protocolVersion = parsed->head().protocolVersion();
         response.state_->headers.reserve(parsed->head().headers().size());
-        for (const auto& header : parsed->head().headers())
+        for (const auto& header : parsed->head().headers()) {
             response.state_->headers.push_back(HttpClientResponseHeaderAccess::make(
                 header.name(), header.value(), responseResource));
+        }
         connection.readBuffer.erase(0, consumedHead);
         if (parsed->plan().connectTunnel() != nullptr ||
             parsed->plan().protocolUpgrade() != nullptr) {
@@ -144,15 +149,21 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
                     continue;
                 }
                 throwTransferFailure(decoded);
-                if (decoded.needInput() || decoded.complete()) return;
+                if (decoded.needInput() || decoded.complete()) {
+                    return;
+                }
                 throw HttpClientError(HttpClientError::Code::kProtocolError,
                     "invalid HTTP response transfer-coding state");
             }
         };
         const auto finishTransferDecoder = [&] {
-            if (!transferDecoder) return;
+            if (!transferDecoder) {
+                return;
+            }
             const auto finished = transferDecoder->finishInput();
-            if (finished.complete()) return;
+            if (finished.complete()) {
+                return;
+            }
             throwTransferFailure(finished);
             throw HttpClientError(
                 HttpClientError::Code::kProtocolError, "incomplete HTTP response transfer coding");
@@ -166,7 +177,9 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
                         field->name(), field->value(), responseResource));
                     continue;
                 }
-                if (trailer.end()) return;
+                if (trailer.end()) {
+                    return;
+                }
                 throw HttpClientError(HttpClientError::Code::kProtocolError,
                     "invalid chunked HTTP response trailers");
             }
@@ -175,17 +188,19 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
             while (!response.state_->collectAll &&
                    response.state_->pending.size() >= config_.maxResponseBytes) {
                 co_await response.state_->spaceSignal.wait();
-                if (response.state_->abandoned)
+                if (response.state_->abandoned) {
                     throw HttpClientError(
                         HttpClientError::Code::kCancelled, "HTTP response body was abandoned");
+                }
             }
         };
         const auto readMore = [&]() -> Task<void> {
             co_await waitForBufferSpace();
             const auto bytes = co_await readSome(connection, input, timeout);
-            if (bytes == 0)
+            if (bytes == 0) {
                 throw HttpClientError(HttpClientError::Code::kIoError,
                     "upstream closed before the HTTP response completed");
+            }
             connection.readBuffer.append(input.data(), bytes);
         };
         bool closeAfter = false;
@@ -199,7 +214,9 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
             contentSemanticsPresent = true;
             auto remaining = known->contentLength();
             while (remaining != 0) {
-                if (connection.readBuffer.empty()) co_await readMore();
+                if (connection.readBuffer.empty()) {
+                    co_await readMore();
+                }
                 const auto count = std::min(remaining, connection.readBuffer.size());
                 appendChecked(std::string_view(connection.readBuffer).substr(0, count));
                 connection.readBuffer.erase(0, count);
@@ -211,11 +228,13 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
             contentSemanticsPresent = true;
             requireEmptyContent = true;
             if (const auto* zeroKnown = zero->knownLength()) {
-                while (connection.readBuffer.size() < zeroKnown->contentLength())
+                while (connection.readBuffer.size() < zeroKnown->contentLength()) {
                     co_await readMore();
-                if (zeroKnown->contentLength() != 0)
+                }
+                if (zeroKnown->contentLength() != 0) {
                     throw HttpClientError(HttpClientError::Code::kProtocolError,
                         "HTTP 205 response content is not empty");
+                }
                 closeAfter = zeroKnown->persistence() == Http1ClosePolicy::kCloseAfterResponse;
                 framingHandled = true;
             } else if (zero->chunked()) {
@@ -236,14 +255,23 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
                                 : ProtocolByteLimit::limited(config_.maxResponseBytes));
             for (;;) {
                 auto decoded = decoder.decode(connection.readBuffer);
-                if (const auto* body = decoded.bodyChunk()) appendTransferDecoded(body->bytes());
-                if (const auto* complete = decoded.complete()) retainTrailers(complete->trailers());
+                if (const auto* body = decoded.bodyChunk()) {
+                    appendTransferDecoded(body->bytes());
+                }
+                if (const auto* complete = decoded.complete()) {
+                    retainTrailers(complete->trailers());
+                }
                 connection.readBuffer.erase(0, decoded.consumedBytes());
-                if (decoded.failure())
+                if (decoded.failure()) {
                     throw HttpClientError(
                         HttpClientError::Code::kProtocolError, "invalid chunked HTTP response");
-                if (decoded.complete()) break;
-                if (decoded.needMore() || connection.readBuffer.empty()) co_await readMore();
+                }
+                if (decoded.complete()) {
+                    break;
+                }
+                if (decoded.needMore() || connection.readBuffer.empty()) {
+                    co_await readMore();
+                }
             }
             finishTransferDecoder();
             closeAfter = chunkedPlan->persistence() == Http1ClosePolicy::kCloseAfterResponse;
@@ -256,7 +284,9 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
             for (;;) {
                 co_await waitForBufferSpace();
                 const auto bytes = co_await readSome(connection, input, timeout, true);
-                if (bytes == 0) break;
+                if (bytes == 0) {
+                    break;
+                }
                 appendTransferDecoded(std::string_view(input.data(), bytes));
             }
             finishTransferDecoder();
@@ -277,12 +307,15 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
             throw HttpClientError(
                 HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
         }
-        if (!connection.readBuffer.empty())
+        if (!connection.readBuffer.empty()) {
             throw HttpClientError(
                 HttpClientError::Code::kProtocolError, "unexpected bytes after HTTP response");
+        }
         decodeResponseContentEncoding(
             response, contentSemanticsPresent, config_.maxResponseBytes, responseResource);
-        if (closeAfter) close(connection);
+        if (closeAfter) {
+            close(connection);
+        }
         co_return;
     }
 }

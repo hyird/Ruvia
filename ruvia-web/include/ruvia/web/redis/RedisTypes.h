@@ -236,6 +236,8 @@ public:
     RedisKeyValue(const RedisKeyValue&) = default;
     RedisKeyValue& operator=(const RedisKeyValue&) = default;
     RedisKeyValue(RedisKeyValue&&) noexcept = default;
+    // A different PMR resource can require allocation during assignment.
+    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     RedisKeyValue& operator=(RedisKeyValue&&) = default;
 
     [[nodiscard]] std::string_view key() const& noexcept {
@@ -269,6 +271,8 @@ public:
     RedisScoredValue(const RedisScoredValue&) = default;
     RedisScoredValue& operator=(const RedisScoredValue&) = default;
     RedisScoredValue(RedisScoredValue&&) noexcept = default;
+    // A different PMR resource can require allocation during assignment.
+    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     RedisScoredValue& operator=(RedisScoredValue&&) = default;
 
     [[nodiscard]] std::string_view value() const& noexcept {
@@ -376,6 +380,8 @@ public:
     RedisStreamEntry(const RedisStreamEntry&) = default;
     RedisStreamEntry& operator=(const RedisStreamEntry&) = default;
     RedisStreamEntry(RedisStreamEntry&&) noexcept = default;
+    // A different PMR resource can require allocation during assignment.
+    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     RedisStreamEntry& operator=(RedisStreamEntry&&) = default;
 
     [[nodiscard]] std::string_view id() const& noexcept {
@@ -404,6 +410,8 @@ public:
     RedisStreamReadResult(const RedisStreamReadResult&) = default;
     RedisStreamReadResult& operator=(const RedisStreamReadResult&) = default;
     RedisStreamReadResult(RedisStreamReadResult&&) noexcept = default;
+    // A different PMR resource can require allocation during assignment.
+    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     RedisStreamReadResult& operator=(RedisStreamReadResult&&) = default;
 
     [[nodiscard]] std::string_view stream() const& noexcept {
@@ -460,7 +468,7 @@ class RedisRegistry;
 
 class RedisError final : public std::runtime_error {
 public:
-    enum class Code {
+    enum class Code : std::uint8_t {
         kNotConfigured,
         kConnectFailed,
         kAuthFailed,
@@ -483,11 +491,13 @@ private:
 
 class RedisValue final {
 public:
-    enum class Kind { kNull, kString, kInteger, kArray, kError };
+    enum class Kind : std::uint8_t { kNull, kString, kInteger, kArray, kError };
 
     RedisValue(const RedisValue&) = default;
     RedisValue& operator=(const RedisValue&) = default;
     RedisValue(RedisValue&&) noexcept = default;
+    // A different PMR resource can require allocation during assignment.
+    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     RedisValue& operator=(RedisValue&&) = default;
 
     [[nodiscard]] Kind kind() const noexcept;

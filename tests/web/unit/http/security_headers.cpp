@@ -1,7 +1,9 @@
 #include "test_harness.h"
 
 #include <array>
+#include <bit>
 #include <concepts>
+#include <cstdint>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -64,6 +66,10 @@ static_assert(
 static_assert(
     SecurityHeadersConfig{}.existingHeaders == SecurityHeaderConflictPolicy::kPreserveExisting);
 static_assert(!HasSecurityHeadersOverwriteExistingBoolean<SecurityHeadersConfig>);
+static_assert(!std::is_copy_constructible_v<ruvia::SecurityHeadersMiddleware>);
+static_assert(!std::is_copy_assignable_v<ruvia::SecurityHeadersMiddleware>);
+static_assert(!std::is_move_constructible_v<ruvia::SecurityHeadersMiddleware>);
+static_assert(!std::is_move_assignable_v<ruvia::SecurityHeadersMiddleware>);
 
 class SecurityContextFixture final {
 public:
@@ -143,7 +149,7 @@ RUVIA_TEST(security_headers_xss_protection_header_policy_is_explicit) {
 RUVIA_TEST(security_headers_reject_invalid_xss_protection_header_policy) {
     SecurityContextFixture fixture;
     const SecurityHeadersConfig options{
-        .xssProtectionHeader = static_cast<XssProtectionHeaderPolicy>(0xFF),
+        .xssProtectionHeader = std::bit_cast<XssProtectionHeaderPolicy>(std::uint8_t{0xFF}),
     };
 
     bool rejected = false;
@@ -158,7 +164,7 @@ RUVIA_TEST(security_headers_reject_invalid_xss_protection_header_policy) {
 RUVIA_TEST(security_headers_reject_invalid_default_header_policy) {
     SecurityContextFixture fixture;
     const SecurityHeadersConfig options{
-        .frameOptionsHeader = static_cast<DefaultSecurityHeaderPolicy>(0xFF),
+        .frameOptionsHeader = std::bit_cast<DefaultSecurityHeaderPolicy>(std::uint8_t{0xFF}),
     };
 
     bool rejected = false;
@@ -286,7 +292,7 @@ RUVIA_TEST(security_headers_respect_existing_header_conflict_policy) {
 RUVIA_TEST(security_headers_reject_invalid_conflict_policy) {
     SecurityContextFixture fixture;
     const SecurityHeadersConfig options{
-        .existingHeaders = static_cast<SecurityHeaderConflictPolicy>(0xFF),
+        .existingHeaders = std::bit_cast<SecurityHeaderConflictPolicy>(std::uint8_t{0xFF}),
     };
 
     bool rejected = false;

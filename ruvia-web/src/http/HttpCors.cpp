@@ -56,8 +56,7 @@ void reflectCorsRequestHeaderNames(const HttpRequest& request, HttpResponse& res
     }
 }
 
-void assignCorsHeaderNames(
-    std::pmr::string& output, const std::vector<std::string>& names, const char* emptyMessage) {
+void validateCorsHeaderNames(const std::vector<std::string>& names, const char* emptyMessage) {
     if (emptyMessage != nullptr && names.empty()) {
         throw std::invalid_argument(emptyMessage);
     }
@@ -65,6 +64,11 @@ void assignCorsHeaderNames(
         if (!isValidHttpHeaderName(name)) {
             throw std::invalid_argument("CORS header names must be valid HTTP field names");
         }
+    }
+}
+
+void appendCorsHeaderNames(std::pmr::string& output, const std::vector<std::string>& names) {
+    for (const auto& name : names) {
         if (!output.empty()) {
             output.append(", ");
         }
@@ -72,11 +76,7 @@ void assignCorsHeaderNames(
     }
 }
 
-}  // namespace
-
-CorsOptions makeCorsOptions(const CorsConfig& config, std::pmr::memory_resource* resource) {
-    CorsOptions stored(resource);
-    stored.originMode = config.origin.mode;
+void validateCorsConfig(const CorsConfig& config) {
     switch (config.origin.mode) {
         case CorsOriginMode::kAny:
             if (!config.origin.value.empty()) {
@@ -89,13 +89,11 @@ CorsOptions makeCorsOptions(const CorsConfig& config, std::pmr::memory_resource*
                 !isValidHttpSerializedOrigin(config.origin.value)) {
                 throw std::invalid_argument("CORS origin must be a WHATWG serialized origin");
             }
-            stored.origin = config.origin.value;
             break;
         default:
             throw std::invalid_argument("CORS origin mode is invalid");
     }
 
-    stored.requestHeadersMode = config.requestHeaders.mode;
     switch (config.requestHeaders.mode) {
         case CorsRequestHeadersMode::kReflect:
             if (!config.requestHeaders.names.empty()) {
@@ -104,16 +102,34 @@ CorsOptions makeCorsOptions(const CorsConfig& config, std::pmr::memory_resource*
             }
             break;
         case CorsRequestHeadersMode::kFixed:
-            assignCorsHeaderNames(stored.requestHeaders, config.requestHeaders.names,
-                "CORS fixed request headers must not be empty");
+            validateCorsHeaderNames(
+                config.requestHeaders.names, "CORS fixed request headers must not be empty");
             break;
         default:
             throw std::invalid_argument("CORS request headers mode is invalid");
     }
-    assignCorsHeaderNames(stored.exposeHeaders, config.exposeHeaders, nullptr);
+    validateCorsHeaderNames(config.exposeHeaders, nullptr);
     if (config.maxAge.has_value() && config.maxAge->count() < 0) {
         throw std::invalid_argument("CORS max age must not be negative");
     }
+}
+
+}  // namespace
+
+CorsOptions makeCorsOptions(const CorsConfig& config, std::pmr::memory_resource* resource) {
+    validateCorsConfig(config);
+
+    CorsOptions stored(resource);
+    stored.originMode = config.origin.mode;
+    if (config.origin.mode != CorsOriginMode::kAny) {
+        stored.origin = config.origin.value;
+    }
+
+    stored.requestHeadersMode = config.requestHeaders.mode;
+    if (config.requestHeaders.mode == CorsRequestHeadersMode::kFixed) {
+        appendCorsHeaderNames(stored.requestHeaders, config.requestHeaders.names);
+    }
+    appendCorsHeaderNames(stored.exposeHeaders, config.exposeHeaders);
     stored.maxAge = config.maxAge;
     return stored;
 }

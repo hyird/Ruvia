@@ -171,7 +171,6 @@ private:
         return true;
     }
 
-private:
     Http2LocalSendState localSend_;
     Http2RemoteReceiveState remoteReceive_;
     bool queued_ : 1 {false};

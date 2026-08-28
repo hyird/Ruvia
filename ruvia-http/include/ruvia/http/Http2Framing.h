@@ -61,7 +61,9 @@ struct Http2FrameHeader final {
 
 [[nodiscard]] inline std::optional<Http2FrameHeader> parseHttp2FrameHeader(
     std::span<const char> bytes) noexcept {
-    if (bytes.size() < kHttp2FrameHeaderBytes) return std::nullopt;
+    if (bytes.size() < kHttp2FrameHeaderBytes) {
+        return std::nullopt;
+    }
     const auto* data = reinterpret_cast<const unsigned char*>(bytes.data());
     return Http2FrameHeader{
         .length = (static_cast<std::uint32_t>(data[0]) << 16) |
@@ -77,8 +79,9 @@ struct Http2FrameHeader final {
 [[nodiscard]] inline bool encodeHttp2FrameHeader(std::span<char> output, std::uint32_t length,
     Http2FrameType type, std::uint8_t flags, std::uint32_t streamId) noexcept {
     if (output.size() < kHttp2FrameHeaderBytes || length > kHttp2MaxFrameSize ||
-        streamId > 0x7fffffffU)
+        streamId > 0x7fffffffU) {
         return false;
+    }
     output[0] = static_cast<char>((length >> 16) & 0xff);
     output[1] = static_cast<char>((length >> 8) & 0xff);
     output[2] = static_cast<char>(length & 0xff);

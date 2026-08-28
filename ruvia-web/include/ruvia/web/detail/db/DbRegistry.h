@@ -88,7 +88,6 @@ public:
     void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept;
     [[nodiscard]] bool needsDeadlineScan() const noexcept;
 
-public:
     template <typename Pool>
     friend Task<void> finishDbTransaction(
         Pool&, std::size_t, std::string_view, std::pmr::memory_resource*, const OperationOptions&);
@@ -148,7 +147,6 @@ public:
         OperationDeadline<DeadlineKind> deadline;
     };
 
-public:
     // Backend dispatch entry points. The class itself remains detail-only.
     Task<std::size_t> acquireSlot(const OperationTimeout& timeout, StopToken stopToken);
     void releaseSlot(std::size_t slot) noexcept;
@@ -342,6 +340,8 @@ private:
 class DbRegistry final {
 public:
     DbRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource,
+        const DbConfig& defaultConfig, const WorkerHandle* worker = nullptr);
+    DbRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource,
         std::span<const DbDefinition> databases, const WorkerHandle* worker = nullptr);
     ~DbRegistry();
 
@@ -361,7 +361,6 @@ public:
     [[nodiscard]] DbHandle get(std::string_view alias, std::pmr::memory_resource* resource,
         ScopedOperationScope& operationScope) const;
 
-public:
 #ifdef RUVIA_ENABLE_MARIADB
     using MariaDbPoolOwner = std::unique_ptr<MariaDbPool, PmrObjectDeleter<MariaDbPool>>;
 #endif
@@ -383,6 +382,10 @@ public:
     };
 
 private:
+    void add(asio::io_context& ioContext, const WorkerHandle* worker, std::string_view alias,
+        DbConfigStorage config);
+    void buildAliasIndex();
+
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> clients_;
     std::pmr::vector<std::size_t> aliasIndex_;

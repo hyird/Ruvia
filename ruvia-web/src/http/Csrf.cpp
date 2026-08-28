@@ -1,9 +1,12 @@
 #include "ruvia/web/Csrf.h"
 
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/detail/http/SecureToken.h"
+#include "ruvia/web/detail/util/RegistrationResource.h"
 
 #include <array>
 #include <cstddef>
+#include <stdexcept>
 
 #include <openssl/rand.h>
 
@@ -31,13 +34,39 @@ SecureTokenResult generateSecureToken(std::span<char> buffer) noexcept {
 
 namespace ruvia {
 
+CsrfProtection::ConfigStorage::ValidatedConfig CsrfProtection::ConfigStorage::validate(
+    const CsrfProtectionConfig& source) {
+    if (!isValidHttpHeaderName(source.cookieName)) {
+        throw std::invalid_argument("CSRF cookie name must be a valid HTTP token");
+    }
+    if (!isValidHttpHeaderName(source.headerName)) {
+        throw std::invalid_argument("CSRF header name must be a valid HTTP field name");
+    }
+    return ValidatedConfig{.source = &source};
+}
+
+CsrfProtection::ConfigStorage::ConfigStorage(
+    const CsrfProtectionConfig& source, std::pmr::memory_resource* resource)
+    : ConfigStorage(validate(source), resource) {}
+
+CsrfProtection::ConfigStorage::ConfigStorage(
+    ValidatedConfig validated, std::pmr::memory_resource* resource)
+    : cookieName(validated.source->cookieName, resource),
+      headerName(validated.source->headerName, resource) {}
+
+CsrfProtection::CsrfProtection()
+    : CsrfProtection(CsrfProtectionConfig{}) {}
+
+CsrfProtection::CsrfProtection(const CsrfProtectionConfig& config)
+    : config_(config, detail::registrationResource()) {}
+
 Task<void> CsrfProtection::handle(Context& c, Next& next) {
     const auto method = c.req().knownMethod();
     const bool safe = method == HttpKnownMethod::kGet || method == HttpKnownMethod::kHead ||
                       method == HttpKnownMethod::kOptions;
-    const auto cookie = c.req().cookie(cookieName_);
+    const auto cookie = c.req().cookie(config_.cookieName);
     if (!safe) {
-        const auto header = c.req().header(headerName_);
+        const auto header = c.req().header(config_.headerName);
         if (!cookie || cookie->empty() || !header || header->empty() ||
             !detail::csrfTokensEqual(*cookie, *header)) {
             c.respond(c.error({.status = ruvia::http_status::kForbidden,
@@ -69,7 +98,7 @@ Task<void> CsrfProtection::handle(Context& c, Next& next) {
             .secure = connection.tls() != nullptr ? CookieAttributePolicy::kEmit
                                                   : CookieAttributePolicy::kOmit,
         };
-        c.setCookie({.name = cookieName_, .value = token->value(), .attributes = options});
+        c.setCookie({.name = config_.cookieName, .value = token->value(), .attributes = options});
     }
     co_await next();
 }

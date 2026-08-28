@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/core/memory/PmrResource.h"
+
 // Deciding who the client is when the server sits behind a reverse proxy.
 //
 // A forwarding header is client-controlled input: anyone can send
@@ -43,11 +45,8 @@ struct TrustedProxyBlock final {
 // The startup-owned trusted set. Empty means "trust nothing", the default.
 class TrustedProxySet final {
 public:
-    TrustedProxySet()
-        : blocks_(std::pmr::get_default_resource()) {}
-
-    explicit TrustedProxySet(std::pmr::memory_resource* resource)
-        : blocks_(resource) {}
+    explicit TrustedProxySet(std::pmr::memory_resource* resource = nullptr)
+        : TrustedProxySet(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource)) {}
 
     void add(TrustedProxyBlock block) {
         blocks_.push_back(block);
@@ -70,6 +69,9 @@ public:
     }
 
 private:
+    TrustedProxySet(ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+        : blocks_(resource) {}
+
     std::pmr::vector<TrustedProxyBlock> blocks_;
 };
 

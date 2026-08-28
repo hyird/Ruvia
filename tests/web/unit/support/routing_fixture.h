@@ -697,9 +697,9 @@ inline ruvia::Task<ruvia::HttpResponse> customError(ruvia::Context& context, Htt
     co_return context.body("custom-error");
 }
 
-inline DispatchResult dispatchWithHandlersToken(RouteHandler handler, HttpErrorHandler errorH,
-    HttpNotFoundHandler notFoundH, std::string_view method, std::string_view p,
-    std::string_view contentEncoding = {}, std::string_view body = {}) {
+inline DispatchResult dispatchWithHandlersToken(RouteHandler handler,
+    const HttpErrorHandler& errorH, const HttpNotFoundHandler& notFoundH, std::string_view method,
+    std::string_view p, std::string_view contentEncoding = {}, std::string_view body = {}) {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     if (errorH != nullptr) {
@@ -736,8 +736,8 @@ inline DispatchResult dispatchWithHandlersToken(RouteHandler handler, HttpErrorH
     return extractDispatchResult(future.get());  // arena still alive here
 }
 
-inline DispatchResult dispatchWithHandlers(RouteHandler handler, HttpErrorHandler errorH,
-    HttpNotFoundHandler notFoundH, HttpKnownMethod method, std::string_view p) {
+inline DispatchResult dispatchWithHandlers(RouteHandler handler, const HttpErrorHandler& errorH,
+    const HttpNotFoundHandler& notFoundH, HttpKnownMethod method, std::string_view p) {
     return dispatchWithHandlersToken(
         handler, errorH, notFoundH, ruvia::knownHttpMethodToken(method), p);
 }

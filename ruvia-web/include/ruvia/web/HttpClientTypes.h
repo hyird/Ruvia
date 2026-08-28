@@ -6,11 +6,14 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "ruvia/core/TcpSocketOptions.h"
 #include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpLimits.h"
+#include "ruvia/web/TlsPeerVerification.h"
 
 namespace ruvia {
 
@@ -18,11 +21,6 @@ enum class HttpClientProtocol : std::uint8_t {
     kNegotiate,
     kHttp1Only,
     kHttp2Only,
-};
-
-enum class HttpClientTlsPeerVerificationPolicy : std::uint8_t {
-    kVerify,
-    kSkipVerification,
 };
 
 enum class HttpClientReceivedCookiePolicy : std::uint8_t {
@@ -41,15 +39,14 @@ struct HttpClientConfig final {
     std::size_t maxConcurrentHttp2StreamsPerConnection{100};
     std::size_t maxBufferedRequests{1024};
     std::size_t maxCookies{256};
-    std::size_t maxCookieBytes{32 * 1024};
+    std::size_t maxCookieBytes{std::size_t{32} * 1024};
     std::chrono::milliseconds connectTimeout{5000};
     std::optional<std::chrono::milliseconds> writeTimeout{30000};
     std::optional<std::chrono::milliseconds> requestTimeout{30000};
     std::optional<std::chrono::milliseconds> acquireTimeout{5000};
-    std::size_t maxResponseBytes{16 * 1024 * 1024};
+    std::size_t maxResponseBytes{kDefaultMaxBufferedBodyBytes};
     HttpClientProtocol protocol{HttpClientProtocol::kNegotiate};
-    HttpClientTlsPeerVerificationPolicy tlsPeerVerification{
-        HttpClientTlsPeerVerificationPolicy::kVerify};
+    TlsPeerVerificationPolicy tlsPeerVerification{TlsPeerVerificationPolicy::kVerify};
     TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
     TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kEnable};
     HttpClientReceivedCookiePolicy receivedCookies{HttpClientReceivedCookiePolicy::kIgnore};
@@ -79,8 +76,8 @@ public:
         kClosing,
     };
 
-    HttpClientError(Code code, std::string message)
-        : std::runtime_error(std::move(message)),
+    HttpClientError(Code code, std::string_view message)
+        : std::runtime_error(std::string(message)),
           code_(code) {}
 
     [[nodiscard]] Code code() const noexcept {

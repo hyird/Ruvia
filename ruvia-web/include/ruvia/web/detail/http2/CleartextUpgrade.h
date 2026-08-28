@@ -13,6 +13,7 @@
 #include <asio/ip/tcp.hpp>
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -20,9 +21,18 @@
 
 namespace ruvia::detail {
 
-enum class CleartextHttp2Probe { kHttp1, kNeedMorePreface, kCompletePreface, kDropConnection };
+enum class CleartextHttp2Probe : std::uint8_t {
+    kHttp1,
+    kNeedMorePreface,
+    kCompletePreface,
+    kDropConnection,
+};
 
-enum class CleartextHttp2DispatchResult { kContinueHttp1, kContinueReadLoop, kSessionFinished };
+enum class CleartextHttp2DispatchResult : std::uint8_t {
+    kContinueHttp1,
+    kContinueReadLoop,
+    kSessionFinished,
+};
 
 // Runtime policy for bytes that reached the HTTP/1 parser but do not look like
 // an HTTP request line. A real HTTP-version token receives the protocol error;

@@ -1,9 +1,11 @@
 #pragma once
 
 #include "ruvia/core/detail/util/NativePath.h"
+#include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/detail/response/HttpResponseFileBody.h"
 #include "ruvia/web/StaticFiles.h"
+#include "ruvia/web/detail/http/static/StaticRootConfigStorage.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -13,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ruvia::detail {
@@ -22,7 +25,7 @@ struct StaticRootPrecompressionOptions final {
     bool brotli{false};
     bool zstd{false};
     std::size_t minBytes{1024};
-    std::size_t maxBytes{256u * 1024u};
+    std::size_t maxBytes{std::size_t{256} * 1024};
 
     [[nodiscard]] constexpr bool enabled() const noexcept {
         return gzip || brotli || zstd;
@@ -65,28 +68,11 @@ struct StaticRootEntry final {
     std::pmr::vector<StaticRootMemoryVariant> memoryVariants;
 };
 
-struct StaticMimeTypeStorage final {
-    explicit StaticMimeTypeStorage(std::pmr::memory_resource* resource)
-        : extension(resource),
-          contentType(resource) {}
-
-    std::pmr::string extension;
-    std::pmr::string contentType;
-};
-
 struct StaticRootState final {
     NativePathString root;
-    std::pmr::string indexFile;
-    std::pmr::string cacheControl;
-    std::pmr::string defaultContentType;
-    std::pmr::vector<StaticMimeTypeStorage> mimeTypes;
-    StaticFileTypePolicy::Kind fileTypeKind{StaticFileTypePolicy::Kind::kDefaults};
-    std::pmr::vector<std::pmr::string> fileTypeExtensions;
+    StaticRootConfigStorage config;
     std::pmr::vector<StaticRootEntry> entries;
     std::pmr::vector<std::pmr::string> directories;
-    StaticRangeRequestPolicy rangeRequests{StaticRangeRequestPolicy::kHonor};
-    StaticResponseValidatorPolicy responseValidators{StaticResponseValidatorPolicy::kEmit};
-    StaticDotfilePolicy dotfiles{StaticDotfilePolicy::kDeny};
     // Refresh request leases are charged to this worker-owned snapshot, not to
     // the server globally. The refresh loop can therefore reclaim unrelated
     // retired snapshots while a long request still holds an older one.
@@ -95,13 +81,9 @@ struct StaticRootState final {
     std::size_t activeBindings{0};
     std::uint64_t fingerprint{0};
 
-    explicit StaticRootState(std::pmr::memory_resource* resource)
+    StaticRootState(std::pmr::memory_resource* resource, StaticRootConfigStorage configuredPolicy)
         : root(resource),
-          indexFile(resource),
-          cacheControl(resource),
-          defaultContentType(resource),
-          mimeTypes(resource),
-          fileTypeExtensions(resource),
+          config(std::move(configuredPolicy)),
           entries(resource),
           directories(resource) {}
 };
@@ -258,6 +240,16 @@ private:
 
 class StaticRootAccess final {
 public:
+    [[nodiscard]] static std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>> make(
+        std::pmr::memory_resource* objectResource, const std::filesystem::path& root,
+        const StaticRootConfigStorage& config);
+    [[nodiscard]] static std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>> make(
+        std::pmr::memory_resource* objectResource, const std::filesystem::path& root,
+        StaticRootConfigStorage&& config);
+    [[nodiscard]] static std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>> clone(
+        std::pmr::memory_resource* objectResource, const StaticRoot& source);
+    [[nodiscard]] static StaticRootConfigStorage copyConfig(
+        const StaticRoot& root, std::pmr::memory_resource* resource);
     [[nodiscard]] static std::string_view indexFile(const StaticRoot& root) noexcept;
     [[nodiscard]] static bool hasDirectoryIndex(const StaticRoot& root) noexcept;
     [[nodiscard]] static std::optional<StaticRootEntryView> find(
@@ -266,7 +258,6 @@ public:
         const StaticRoot& root, std::string_view relativePath) noexcept;
     [[nodiscard]] static bool isIndexedDirectory(
         const StaticRoot& root, std::string_view relativePath) noexcept;
-    [[nodiscard]] static StaticRootOptions options(const StaticRoot& root);
     [[nodiscard]] static std::uint64_t fingerprint(const StaticRoot& root) noexcept;
     [[nodiscard]] static bool sameSnapshot(
         const StaticRoot& left, const StaticRoot& right) noexcept;
@@ -275,6 +266,10 @@ public:
     [[nodiscard]] static bool hasActiveBindings(const StaticRoot& root) noexcept;
     static void installPrecompressedVariants(StaticRoot& root, const StaticRoot* previous,
         const StaticRootPrecompressionOptions& options);
+
+private:
+    [[nodiscard]] static std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>> construct(
+        std::pmr::memory_resource* objectResource, StaticRoot::PreparedConstruction prepared);
 };
 
 }  // namespace ruvia::detail

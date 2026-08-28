@@ -66,12 +66,12 @@ struct SignedCookieLookupOptions final {
 
 class ContextRequest final {
 public:
-    enum class RepeatedScalarPolicy {
+    enum class RepeatedScalarPolicy : std::uint8_t {
         kLastValue,
         kRetainAll,
     };
 
-    enum class DottedNamePolicy {
+    enum class DottedNamePolicy : std::uint8_t {
         kLiteral,
         kExpandPath,
     };

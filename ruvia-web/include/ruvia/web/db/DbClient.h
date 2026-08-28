@@ -24,7 +24,7 @@ class DbClientState;
 // the same worker-local backend without an HTTP App or a special context.
 class DbClient final {
 public:
-    DbClient(EventLoop loop, DbConfig config);
+    DbClient(EventLoop loop, const DbConfig& config);
     ~DbClient();
 
     DbClient(const DbClient&) = delete;

@@ -6,6 +6,7 @@
 #include "ruvia/web/db/Db.h"
 
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/memory/PmrObject.h"
 
 #include <asio/bind_executor.hpp>
 #include <asio/steady_timer.hpp>
@@ -99,19 +100,33 @@ private:
 
 namespace {
 
-[[nodiscard]] detail::DbConfigStorage cloneMigrationConfig(
-    const DbConfig& source, std::pmr::memory_resource* resource) {
-    return detail::DbConfigStorage(source, resource);
-}
-
 struct DbMigratorOptionsStorage final {
     DbMigratorOptionsStorage(const DbMigratorOptions& source, std::pmr::memory_resource* resource)
+        : table(source.table, resource),
+          lockTimeout(source.lockTimeout) {}
+
+    DbMigratorOptionsStorage(
+        const DbMigratorOptionsStorage& source, std::pmr::memory_resource* resource)
         : table(source.table, resource),
           lockTimeout(source.lockTimeout) {}
 
     std::pmr::string table;
     std::chrono::seconds lockTimeout;
 };
+
+void validateDbMigratorOptions(const DbMigratorOptions& options, DbDriver driver) {
+    if (!detail::isValidMigrationTableName(options.table, driver)) {
+        throw std::invalid_argument("database migration table has an invalid backend identifier");
+    }
+    if (options.lockTimeout.count() <= 0) {
+        throw std::invalid_argument("database migration lock timeout must be greater than zero");
+    }
+    if (driver == DbDriver::kPostgreSql) {
+        // PostgreSQL receives this value in milliseconds, and a valid seconds
+        // duration can still overflow that representation during conversion.
+        (void)detail::postgresLockTimeoutMilliseconds(options.lockTimeout);
+    }
+}
 
 void appendQuotedIdentifier(std::pmr::string& sql, std::string_view identifier, DbDriver driver) {
     if (!detail::isValidMigrationTableName(identifier, driver)) {
@@ -272,27 +287,11 @@ public:
         std::span<const DbMigration> migrations, DbMigratorOptionsStorage options,
         std::pmr::memory_resource* resource) {
         auto* resolved = detail::pmrResourceOrDefault(resource);
-        detail::validateMigrationList(migrations, config.driver);
-        if (!detail::isValidMigrationTableName(options.table, config.driver)) {
-            throw std::invalid_argument(
-                "database migration table has an invalid backend identifier");
-        }
-        if (options.lockTimeout.count() <= 0) {
-            throw std::invalid_argument(
-                "database migration lock timeout must be greater than zero");
-        }
         const auto driver = config.driver;
-        if (driver == DbDriver::kPostgreSql) {
-            // Validate before opening a connection.  PostgreSQL receives this
-            // value in milliseconds, and a valid seconds duration can still
-            // overflow that representation during conversion.
-            (void)detail::postgresLockTimeoutMilliseconds(options.lockTimeout);
-        }
 
         if (!config.acquireTimeout.has_value()) {
             config.acquireTimeout = config.queryTimeout;
         }
-        validateDbConfig(config);
         DbMigrationReport report(resolved);
 
         auto lockName = buildMigrationLockName(config, resolved);
@@ -438,31 +437,36 @@ private:
     }
 };
 
-DbMigrator::DbMigrator(const DbConfig& config, DbMigratorOptions options)
-    : config_(config),
-      options_(options),
-      resource_(detail::pmrResourceOrDefault(options.resource)) {}
+class DbMigrator::Storage final {
+public:
+    Storage(detail::ValidatedDbConfigView configSource, const DbMigratorOptions& optionsSource,
+        std::pmr::memory_resource* storageResource)
+        : resource(storageResource),
+          config(configSource, storageResource),
+          options(optionsSource, storageResource) {}
 
-DbMigrationReport DbMigrator::migrate(std::span<const DbMigration> migrations) const {
-    auto options = options_;
-    options.resource = resource_;
-    return migrate(config_, migrations, std::move(options));
+    std::pmr::memory_resource* resource;
+    detail::DbConfigStorage config;
+    DbMigratorOptionsStorage options;
+};
+
+void DbMigrator::StorageDeleter::operator()(Storage* storage) const noexcept {
+    detail::destroyPmrObject(storage, resource);
 }
 
-DbMigrationReport DbMigrator::migrate(
-    const DbConfig& config, std::span<const DbMigration> migrations, DbMigratorOptions options) {
-    auto* resolved = detail::pmrResourceOrDefault(options.resource);
-    auto ownedConfig = cloneMigrationConfig(config, resolved);
-    auto ownedOptions = DbMigratorOptionsStorage(options, resolved);
+namespace {
+
+[[nodiscard]] DbMigrationReport runMigrations(detail::DbConfigStorage config,
+    std::span<const DbMigration> migrations, DbMigratorOptionsStorage options,
+    std::pmr::memory_resource* resource) {
     asio::io_context ioContext(1);
     // Outlives the coroutine that attaches to it and is destroyed before the
     // io_context, so no tick can observe either after it is gone.
     detail::DbMigrationDeadlineScanner scanner(ioContext);
     std::optional<DbMigrationReport> report;
     std::exception_ptr exception;
-    detail::asyncStartTask(
-        detail::DbMigrationRunner::run(ioContext, scanner, std::move(ownedConfig), migrations,
-            std::move(ownedOptions), resolved),
+    detail::asyncStartTask(detail::DbMigrationRunner::run(ioContext, scanner, std::move(config),
+                               migrations, std::move(options), resource),
         asio::bind_executor(ioContext.get_executor(),
             [&report, &exception](detail::TaskCompletionResult<DbMigrationReport> completion) {
                 if (const auto* failure = completion.failure()) {
@@ -479,6 +483,46 @@ DbMigrationReport DbMigrator::migrate(
         throw std::logic_error("database migration produced no report or exception");
     }
     return std::move(*report);
+}
+
+}  // namespace
+
+DbMigrator::StorageOwner DbMigrator::makeStorage(
+    const DbConfig& config, const DbMigratorOptions& options) {
+    auto* resource = detail::pmrResourceOrDefault(options.resource);
+    const auto validatedConfig = detail::validatedDbConfig(config);
+    validateDbMigratorOptions(options, validatedConfig.get().driver);
+    return StorageOwner(
+        detail::constructPmrObject<Storage>(resource, validatedConfig, options, resource),
+        StorageDeleter{resource});
+}
+
+DbMigrator::DbMigrator(const DbConfig& config, const DbMigratorOptions& options)
+    : storage_(makeStorage(config, options)) {}
+
+DbMigrator::~DbMigrator() = default;
+
+DbMigrator::DbMigrator(DbMigrator&&) noexcept = default;
+
+DbMigrator& DbMigrator::operator=(DbMigrator&&) noexcept = default;
+
+DbMigrationReport DbMigrator::migrate(std::span<const DbMigration> migrations) const {
+    if (storage_ == nullptr) {
+        throw std::logic_error("database migrator has been moved from");
+    }
+    detail::validateMigrationList(migrations, storage_->config.driver);
+    return runMigrations(detail::DbConfigStorage(storage_->config, storage_->resource), migrations,
+        DbMigratorOptionsStorage(storage_->options, storage_->resource), storage_->resource);
+}
+
+DbMigrationReport DbMigrator::migrate(const DbConfig& config,
+    std::span<const DbMigration> migrations, const DbMigratorOptions& options) {
+    auto* resource = detail::pmrResourceOrDefault(options.resource);
+    const auto validatedConfig = detail::validatedDbConfig(config);
+    validateDbMigratorOptions(options, validatedConfig.get().driver);
+    detail::validateMigrationList(migrations, validatedConfig.get().driver);
+    return runMigrations(detail::DbConfigStorage(validatedConfig, resource), migrations,
+        DbMigratorOptionsStorage(options, resource), resource);
 }
 
 }  // namespace ruvia

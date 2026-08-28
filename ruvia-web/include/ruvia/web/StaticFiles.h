@@ -60,6 +60,7 @@ struct StaticRootOptions final {
 namespace detail {
 
 class StaticRootAccess;
+struct StaticRootConfigStorage;
 struct StaticRootState;
 
 }  // namespace detail
@@ -102,6 +103,16 @@ public:
     [[nodiscard]] std::filesystem::path path() const;
 
 private:
+    struct PreparedConstruction;
+
+    explicit StaticRoot(PreparedConstruction prepared);
+    [[nodiscard]] static PreparedConstruction prepareConstruction(
+        const std::filesystem::path& root, StaticRootOptions options);
+    [[nodiscard]] static PreparedConstruction prepareConstruction(
+        const std::filesystem::path& root, const detail::StaticRootConfigStorage& config);
+    [[nodiscard]] static PreparedConstruction prepareConstruction(
+        const std::filesystem::path& root, detail::StaticRootConfigStorage&& config);
+
     struct StateDeleter final {
         void operator()(detail::StaticRootState* state) const noexcept;
     };

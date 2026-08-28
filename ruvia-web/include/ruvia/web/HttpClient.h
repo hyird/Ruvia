@@ -15,7 +15,7 @@ class HttpClientState;
 // not create a thread, and connections are established lazily by send().
 class HttpClient final {
 public:
-    HttpClient(EventLoop loop, HttpClientConfig config);
+    HttpClient(EventLoop loop, const HttpClientConfig& config);
     ~HttpClient();
 
     HttpClient(const HttpClient&) = delete;

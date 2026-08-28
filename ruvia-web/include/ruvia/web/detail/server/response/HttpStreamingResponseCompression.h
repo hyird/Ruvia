@@ -13,7 +13,7 @@
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/server/response/HttpResponseCompression.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/util/PmrResource.h"
+#include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia::detail {
 
@@ -26,7 +26,7 @@ public:
         HttpResponseCodingSelection selection, HttpResponseCodingAvailability availability) noexcept
         : selection_(selection),
           availability_(availability),
-          encodedChunk_(httpPmrResourceOrDefault(resource)) {}
+          encodedChunk_(pmrResourceOrDefault(resource)) {}
 
     HttpStreamingResponseCompression(const HttpStreamingResponseCompression&) = delete;
     HttpStreamingResponseCompression& operator=(const HttpStreamingResponseCompression&) = delete;

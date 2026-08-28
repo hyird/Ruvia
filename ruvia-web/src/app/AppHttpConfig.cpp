@@ -14,33 +14,6 @@ namespace ruvia {
 
 namespace {
 
-[[nodiscard]] detail::AppStaticRootOptions copyStaticRootOptionsToAppResource(
-    const StaticRootOptions& source) {
-    auto* const resource = detail::appResource();
-    detail::AppStaticRootOptions result(resource);
-    result.cacheControl = source.cacheControl;
-    result.indexFile = source.indexFile;
-    result.defaultContentType = source.defaultContentType;
-    result.mimeTypes.reserve(source.mimeTypes.size());
-    for (const auto& mime : source.mimeTypes) {
-        auto& stored = result.mimeTypes.emplace_back(resource);
-        stored.extension = mime.extension;
-        stored.contentType = mime.contentType;
-    }
-
-    result.fileTypeKind = source.fileTypes.kind;
-    if (result.fileTypeKind == StaticFileTypePolicy::Kind::kOnly) {
-        result.fileTypeExtensions.reserve(source.fileTypes.extensions.size());
-        for (const auto& extension : source.fileTypes.extensions) {
-            result.fileTypeExtensions.push_back(std::pmr::string(extension, resource));
-        }
-    }
-    result.rangeRequests = source.rangeRequests;
-    result.responseValidators = source.responseValidators;
-    result.dotfiles = source.dotfiles;
-    return result;
-}
-
 [[nodiscard]] detail::StaticRootPrecompressionOptions makeStaticRootPrecompressionOptions(
     const DocumentRootConfig& config) {
     detail::ensurePositiveSize(config.precompressMinBytes,
@@ -108,15 +81,15 @@ App& App::documentRoot(DocumentRootConfig config) {
             if (config.staticOptions.indexFile.empty()) {
                 config.staticOptions.indexFile = "index.html";
             }
-            detail::normalizeMimeTypes(config.staticOptions.mimeTypes);
-            detail::normalizeFileTypes(config.staticOptions.fileTypes.extensions);
             detail::validateStaticRootOptions(config.staticOptions);
+            const auto precompression = makeStaticRootPrecompressionOptions(config);
 
-            detail::AppDocumentRootConfig replacement(detail::appResource());
+            detail::AppDocumentRootConfig replacement(
+                detail::appResource(), detail::storeValidatedStaticRootConfig(
+                                           config.staticOptions, detail::appResource()));
             detail::assignNativePath(replacement.root, config.root);
-            replacement.staticOptions = copyStaticRootOptionsToAppResource(config.staticOptions);
             replacement.runtime = config.runtime;
-            replacement.precompression = makeStaticRootPrecompressionOptions(config);
+            replacement.precompression = precompression;
 
             state.documentRootConfig = std::move(replacement);
         });

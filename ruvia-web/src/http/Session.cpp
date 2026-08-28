@@ -44,6 +44,7 @@ std::optional<Session> Context::trySession() noexcept {
 #ifdef RUVIA_ENABLE_REDIS
 
 #include "ruvia/web/detail/http/SecureToken.h"
+#include "ruvia/web/detail/util/RegistrationResource.h"
 #include "ruvia/web/redis/RedisHandle.h"
 #include "ruvia/http/HttpHeader.h"
 
@@ -53,21 +54,39 @@ std::optional<Session> Context::trySession() noexcept {
 
 namespace ruvia {
 
-SessionMiddleware::SessionMiddleware(SessionConfig config)
-    : config_(std::move(config)) {
-    if (config_.redisAlias.empty()) {
+SessionMiddleware::ConfigStorage::ValidatedConfig SessionMiddleware::ConfigStorage::validate(
+    const SessionConfig& source) {
+    if (source.redisAlias.empty()) {
         throw std::invalid_argument("session Redis alias must not be empty");
     }
-    if (!isValidHttpHeaderName(config_.cookieName)) {
+    if (!isValidHttpHeaderName(source.cookieName)) {
         throw std::invalid_argument("session cookie name must be a valid HTTP token");
     }
-    if (config_.keyPrefix.empty()) {
+    if (source.keyPrefix.empty()) {
         throw std::invalid_argument("session key prefix must not be empty");
     }
-    if (config_.ttl.count() <= 0) {
+    if (source.ttl.count() <= 0) {
         throw std::invalid_argument("session TTL must be greater than zero");
     }
+    return ValidatedConfig{.source = &source};
 }
+
+SessionMiddleware::ConfigStorage::ConfigStorage(
+    const SessionConfig& source, std::pmr::memory_resource* resource)
+    : ConfigStorage(validate(source), resource) {}
+
+SessionMiddleware::ConfigStorage::ConfigStorage(
+    ValidatedConfig validated, std::pmr::memory_resource* resource)
+    : redisAlias(validated.source->redisAlias, resource),
+      cookieName(validated.source->cookieName, resource),
+      keyPrefix(validated.source->keyPrefix, resource),
+      ttl(validated.source->ttl) {}
+
+SessionMiddleware::SessionMiddleware()
+    : SessionMiddleware(SessionConfig{}) {}
+
+SessionMiddleware::SessionMiddleware(const SessionConfig& config)
+    : config_(config, detail::registrationResource()) {}
 
 Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     detail::SessionAccess::bind(c);

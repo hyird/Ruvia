@@ -31,6 +31,10 @@
 
 namespace {
 
+static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
+    ruvia::detail::RedisConfigStorage&&, std::optional<std::chrono::milliseconds>, std::size_t,
+    std::pmr::memory_resource*, const ruvia::WorkerHandle*>);
+
 [[nodiscard]] ruvia::detail::RedisDefinition redisDefinition(std::string_view alias,
     const ruvia::RedisConfig& config = {},
     std::pmr::memory_resource* resource = std::pmr::get_default_resource()) {
@@ -760,8 +764,9 @@ RUVIA_TEST(redis_active_command_reports_pool_closing_instead_of_io_error) {
     config.port = server.port();
     config.commandTimeout = std::nullopt;
     auto* const resource = std::pmr::get_default_resource();
+    const auto storedConfig = ruvia::detail::RedisConfigStorage(config, resource);
     ruvia::detail::RedisPool pool(
-        ioContext, ruvia::detail::RedisConfigStorage(config, resource), 1, resource);
+        ioContext, storedConfig, storedConfig.commandTimeout, 1, resource);
 
     auto exercise = [&]() -> ruvia::Task<ruvia::RedisError::Code> {
         std::pmr::vector<std::pmr::string> args(resource);

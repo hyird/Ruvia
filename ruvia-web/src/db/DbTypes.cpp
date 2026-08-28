@@ -99,6 +99,7 @@ DbField::DbField(DbField&& other) noexcept
     other.storage_.emplace<std::monostate>();
 }
 
+// NOLINTNEXTLINE(performance-noexcept-move-constructor)
 DbField& DbField::operator=(DbField&& other) {
     if (this == &other) {
         return *this;
@@ -160,6 +161,7 @@ DbRow::DbRow(DbRow&& other) noexcept
     other.columnNames_.emplace<OwnedColumnNames>(other.resource_);
 }
 
+// NOLINTNEXTLINE(performance-noexcept-move-constructor)
 DbRow& DbRow::operator=(DbRow&& other) {
     if (this == &other) {
         return *this;
@@ -258,7 +260,7 @@ DbRows::DbRows(DbRows&& other) noexcept
     : rows_(std::move(other.rows_)),
       fields_(std::move(other.fields_)),
       columnNames_(std::move(other.columnNames_)),
-      rawResult_(std::move(other.rawResult_)) {
+      rawResult_(other.rawResult_) {
     other.rawResult_.template emplace<NoRawResult>();
 }
 

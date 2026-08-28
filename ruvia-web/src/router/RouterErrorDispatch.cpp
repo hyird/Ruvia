@@ -27,7 +27,7 @@ namespace ruvia {
 namespace {
 
 struct OwnedHttpErrorInfo;
-void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exception);
+void assignExceptionError(OwnedHttpErrorInfo& errorInfo, const std::exception_ptr& exception);
 
 struct OwnedHttpErrorInfo final {
     HttpErrorInfo info{};
@@ -44,7 +44,7 @@ struct OwnedHttpErrorInfo final {
         assign(source);
     }
 
-    OwnedHttpErrorInfo(std::pmr::memory_resource* resource, std::exception_ptr exception)
+    OwnedHttpErrorInfo(std::pmr::memory_resource* resource, const std::exception_ptr& exception)
         : OwnedHttpErrorInfo(HttpErrorInfo({.status = ruvia::http_status::kInternalServerError,
                                  .message = "unhandled exception"}),
               resource) {
@@ -71,7 +71,7 @@ struct OwnedHttpErrorInfo final {
     }
 };
 
-void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exception) {
+void assignExceptionError(OwnedHttpErrorInfo& errorInfo, const std::exception_ptr& exception) {
     try {
         if (exception != nullptr) {
             std::rethrow_exception(exception);
@@ -106,21 +106,21 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
     }
 }
 
-[[nodiscard]] bool isUnsupportedRequestContentCoding(std::exception_ptr exception) noexcept {
+[[nodiscard]] bool isUnsupportedRequestContentCoding(const std::exception_ptr& exception) noexcept {
     try {
         if (exception != nullptr) {
             std::rethrow_exception(exception);
         }
     } catch (const detail::UnsupportedRequestContentCoding&) {
         return true;
+        // Classification only; the caller still owns and dispatches the exception.
+        // NOLINTNEXTLINE(bugprone-empty-catch)
     } catch (...) {
-        // Classification only: the caller still owns `exception` and answers it
-        // through the error path. Nothing is discarded here.
     }
     return false;
 }
 
-void applyExceptionResponseMetadata(HttpResponse& response, std::exception_ptr exception) {
+void applyExceptionResponseMetadata(HttpResponse& response, const std::exception_ptr& exception) {
     if (isUnsupportedRequestContentCoding(exception)) {
         response.header("Accept-Encoding", detail::httpSupportedRequestContentCodings());
     }

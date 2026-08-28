@@ -82,7 +82,9 @@ private:
                          : ruvia::http_status::kBadGateway);
             errorBody = error.what();
         }
-        if (!errorBody.empty()) co_await c.streamText().write(errorBody);
+        if (!errorBody.empty()) {
+            co_await c.streamText().write(errorBody);
+        }
     }
 };
 

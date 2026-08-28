@@ -1,12 +1,9 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
-#include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbConfigStorage.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
 #endif
 
@@ -39,8 +36,6 @@ App& App::database(DbRegistrationConfig config) {
             if (config.alias.empty()) {
                 throw std::invalid_argument("database alias must not be empty");
             }
-            detail::validateDbConfig(config.config);
-
             auto storedConfig = detail::DbConfigStorage(config.config, detail::appResource());
             upsertDefinition(state.databases, config.alias, storedConfig,
                 [](std::string_view storedAlias, detail::DbConfigStorage&& definitionConfig) {
@@ -65,8 +60,6 @@ App& App::redis(RedisRegistrationConfig config) {
             if (config.alias.empty()) {
                 throw std::invalid_argument("redis alias must not be empty");
             }
-            detail::validateRedisConfig(config.config);
-
             auto storedConfig = detail::RedisConfigStorage(config.config, detail::appResource());
             upsertDefinition(state.redis, config.alias, storedConfig,
                 [](std::string_view storedAlias, detail::RedisConfigStorage&& definitionConfig) {
@@ -89,8 +82,6 @@ App& App::httpClient(HttpClientRegistrationConfig config) {
             if (config.alias.empty()) {
                 throw std::invalid_argument("HTTP client alias must not be empty");
             }
-            detail::validateHttpClientConfig(config.config);
-
             auto storedConfig =
                 detail::HttpClientConfigStorage(config.config, detail::appResource());
             upsertDefinition(state.httpClients, config.alias, storedConfig,

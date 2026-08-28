@@ -49,7 +49,9 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
             auto readFrameInto = [&readExact](ruvia::detail::Http2FrameHeader& header,
                                      std::string& payload) -> asio::awaitable<bool> {
                 char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) co_return false;
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    co_return false;
+                }
                 header = ruvia::detail::http2ParseFrameHeader(
                     std::string_view(headerBytes, sizeof(headerBytes)));
                 payload.assign(header.length, '\0');
@@ -59,8 +61,12 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
                 co_return true;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) {
+                co_return;
+            }
 
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "CONNECT");
@@ -79,7 +85,9 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
             ruvia::detail::Http2FrameHeader header{};
             std::string payload;
             for (;;) {
-                if (!co_await readFrameInto(header, payload)) co_return;
+                if (!co_await readFrameInto(header, payload)) {
+                    co_return;
+                }
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders) &&
                     header.streamId == 1) {
                     gotHandshake = true;
@@ -89,11 +97,14 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
 
             // Send a masked text frame through the tunnel and reassemble the echo
             // (the transport may split the ws frame across DATA frames).
-            if (!co_await writeAll(frame(0x0 /*DATA*/, 0, 1, maskedWsFrame(0x1, "hello"))))
+            if (!co_await writeAll(frame(0x0 /*DATA*/, 0, 1, maskedWsFrame(0x1, "hello")))) {
                 co_return;
+            }
             std::string tunnelBytes;
             while (echoedFrame.empty()) {
-                if (!co_await readFrameInto(header, payload)) co_return;
+                if (!co_await readFrameInto(header, payload)) {
+                    co_return;
+                }
                 if (header.type != static_cast<std::uint8_t>(Http2FrameType::kData) ||
                     header.streamId != 1) {
                     continue;
@@ -116,7 +127,9 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
                 co_return;
             }
             for (;;) {
-                if (!co_await readFrameInto(header, payload)) break;
+                if (!co_await readFrameInto(header, payload)) {
+                    break;
+                }
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
                     header.streamId == 1 &&
                     (header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) {
@@ -182,8 +195,12 @@ RUVIA_TEST(sansio_driver_h2_websocket_success_ignores_accept_encoding_rejection)
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) {
+                co_return;
+            }
 
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "CONNECT");
@@ -394,8 +411,12 @@ RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) {
+                co_return;
+            }
 
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "CONNECT");
@@ -411,13 +432,18 @@ RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
 
             for (;;) {
                 char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    break;
+                }
                 const auto header = ruvia::detail::http2ParseFrameHeader(
                     std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
-                if (header.streamId != 1) continue;
+                }
+                if (header.streamId != 1) {
+                    continue;
+                }
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders)) {
                     gotResponseHead = true;
                 }
@@ -479,8 +505,12 @@ RUVIA_TEST(sansio_driver_h2_websocket_permessage_deflate) {
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4, 0, 0, {}))) {
+                co_return;
+            }
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "CONNECT");
             HpackEncoder::encodeHeader(headerBlock, ":protocol", "websocket");
@@ -500,12 +530,15 @@ RUVIA_TEST(sansio_driver_h2_websocket_permessage_deflate) {
             ruvia::detail::Http2FrameHeader header{};
             for (;;) {
                 char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) co_return;
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    co_return;
+                }
                 header = ruvia::detail::http2ParseFrameHeader(
                     std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     co_return;
+                }
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders) &&
                     header.streamId == 1) {
                     HpackCollect collect;
@@ -518,7 +551,9 @@ RUVIA_TEST(sansio_driver_h2_websocket_permessage_deflate) {
             // Send a COMPRESSED masked text frame; the server must inflate + echo it.
             ruvia::detail::WebSocketDeflate clientCodec;
             std::pmr::string compressed(std::pmr::get_default_resource());
-            if (!clientCodec.compress("hello-deflate", compressed)) co_return;
+            if (!clientCodec.compress("hello-deflate", compressed)) {
+                co_return;
+            }
             if (!co_await writeAll(frame(0x0, 0, 1,
                     maskedWsFrame(0x1, std::string_view(compressed.data(), compressed.size()),
                         /*rsv1=*/true)))) {
@@ -527,12 +562,15 @@ RUVIA_TEST(sansio_driver_h2_websocket_permessage_deflate) {
             std::string tunnelBytes;
             while (echoedFrame.empty()) {
                 char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) co_return;
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    co_return;
+                }
                 header = ruvia::detail::http2ParseFrameHeader(
                     std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     co_return;
+                }
                 if (header.type != static_cast<std::uint8_t>(Http2FrameType::kData) ||
                     header.streamId != 1) {
                     continue;
@@ -613,39 +651,64 @@ RUVIA_TEST(sansio_driver_h2_two_concurrent_ws_tunnels) {
                     std::string_view(block.data(), block.size()));
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4, 0, 0, {}))) {
+                co_return;
+            }
             // Open BOTH tunnels (streams 1 and 3) before sending any frames.
-            if (!co_await writeAll(openTunnel(1))) co_return;
-            if (!co_await writeAll(openTunnel(3))) co_return;
+            if (!co_await writeAll(openTunnel(1))) {
+                co_return;
+            }
+            if (!co_await writeAll(openTunnel(3))) {
+                co_return;
+            }
             // A masked text frame down each tunnel.
-            if (!co_await writeAll(frame(0x0, 0, 1, maskedWsFrame(0x1, "one")))) co_return;
-            if (!co_await writeAll(frame(0x0, 0, 3, maskedWsFrame(0x1, "three")))) co_return;
+            if (!co_await writeAll(frame(0x0, 0, 1, maskedWsFrame(0x1, "one")))) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x0, 0, 3, maskedWsFrame(0x1, "three")))) {
+                co_return;
+            }
 
             std::string tunnel1;
             std::string tunnel3;
             auto extractFrame = [](std::string& acc) -> std::string {
-                if (acc.size() < 2) return {};
+                if (acc.size() < 2) {
+                    return {};
+                }
                 const auto len =
                     static_cast<std::size_t>(static_cast<unsigned char>(acc[1]) & 0x7FU);
-                if (acc.size() < 2 + len) return {};
+                if (acc.size() < 2 + len) {
+                    return {};
+                }
                 return acc.substr(0, 2 + len);
             };
             while (echo1.empty() || echo3.empty()) {
                 char hb[ruvia::detail::kHttp2FrameHeaderBytes];
-                if (!co_await readExact(hb, sizeof(hb))) co_return;
+                if (!co_await readExact(hb, sizeof(hb))) {
+                    co_return;
+                }
                 const auto header =
                     ruvia::detail::http2ParseFrameHeader(std::string_view(hb, sizeof(hb)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     co_return;
-                if (header.type != static_cast<std::uint8_t>(Http2FrameType::kData)) continue;
+                }
+                if (header.type != static_cast<std::uint8_t>(Http2FrameType::kData)) {
+                    continue;
+                }
                 if (header.streamId == 1) {
                     tunnel1 += payload;
-                    if (echo1.empty()) echo1 = extractFrame(tunnel1);
+                    if (echo1.empty()) {
+                        echo1 = extractFrame(tunnel1);
+                    }
                 } else if (header.streamId == 3) {
                     tunnel3 += payload;
-                    if (echo3.empty()) echo3 = extractFrame(tunnel3);
+                    if (echo3.empty()) {
+                        echo3 = extractFrame(tunnel3);
+                    }
                 }
             }
             closeClientSocket(sock);

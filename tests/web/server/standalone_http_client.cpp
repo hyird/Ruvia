@@ -30,7 +30,9 @@ public:
     ~OneShotOrigin() {
         std::error_code ignored;
         acceptor_.close(ignored);
-        if (thread_.joinable()) thread_.join();
+        if (thread_.joinable()) {
+            thread_.join();
+        }
     }
 
     [[nodiscard]] std::uint16_t port() const {
@@ -45,7 +47,9 @@ private:
             asio::streambuf request;
             std::error_code error;
             (void)asio::read_until(socket, request, "\r\n\r\n", error);
-            if (error) return;
+            if (error) {
+                return;
+            }
             auto response = std::string("HTTP/1.1 200 OK\r\nContent-Length: ");
             response += std::to_string(body_.size());
             response += "\r\nConnection: close\r\n\r\n";
@@ -152,8 +156,12 @@ int main() {
             return 1;
         } catch (const std::invalid_argument&) {
         }
-        if (const auto result = pooledWorker(); result != 0) return 10 + result;
-        if (const auto result = attachedWorker(); result != 0) return 20 + result;
+        if (const auto result = pooledWorker(); result != 0) {
+            return 10 + result;
+        }
+        if (const auto result = attachedWorker(); result != 0) {
+            return 20 + result;
+        }
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "standalone HTTP client test failed: %s\n", error.what());

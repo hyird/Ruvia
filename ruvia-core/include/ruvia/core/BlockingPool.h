@@ -267,7 +267,11 @@ public:
             throw BlockingOperationRejected(payload_.status);
         }
         if constexpr (!std::is_void_v<T>) {
-            return std::move(*payload_.value);
+            auto& value = payload_.value;
+            if (!value.has_value()) {
+                std::terminate();
+            }
+            return std::move(value).value();
         }
     }
 

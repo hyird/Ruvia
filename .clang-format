@@ -15,6 +15,7 @@ AlignAfterOpenBracket: DontAlign
 BinPackArguments: true
 BinPackParameters: true
 AllowShortFunctionsOnASingleLine: Empty
+InsertBraces: true
 BreakBeforeBraces: Attach
 BreakTemplateDeclarations: Yes
 PackConstructorInitializers: Never

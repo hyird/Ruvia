@@ -2,12 +2,14 @@
 
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "ruvia/web/detail/http/SessionAccess.h"
 #include "ruvia/web/detail/http/SecureToken.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/web/Session.h"
 
 namespace {
 
@@ -45,6 +47,38 @@ private:
 };
 
 }  // namespace
+
+#ifdef RUVIA_ENABLE_REDIS
+
+RUVIA_TEST(session_middleware_rejects_invalid_config_before_use) {
+    const auto rejection = [](const ruvia::SessionConfig& config) {
+        try {
+            const ruvia::SessionMiddleware middleware(config);
+        } catch (const std::invalid_argument& error) {
+            return std::string(error.what());
+        }
+        return std::string{};
+    };
+
+    auto config = ruvia::SessionConfig{};
+    config.redisAlias.clear();
+    RUVIA_CHECK_EQ(rejection(config), std::string_view("session Redis alias must not be empty"));
+
+    config = ruvia::SessionConfig{};
+    config.cookieName = "bad cookie";
+    RUVIA_CHECK_EQ(
+        rejection(config), std::string_view("session cookie name must be a valid HTTP token"));
+
+    config = ruvia::SessionConfig{};
+    config.keyPrefix.clear();
+    RUVIA_CHECK_EQ(rejection(config), std::string_view("session key prefix must not be empty"));
+
+    config = ruvia::SessionConfig{};
+    config.ttl = std::chrono::seconds::zero();
+    RUVIA_CHECK_EQ(rejection(config), std::string_view("session TTL must be greater than zero"));
+}
+
+#endif
 
 RUVIA_TEST(session_cookie_append_preserves_existing_set_cookie) {
     auto response = makeResponse();

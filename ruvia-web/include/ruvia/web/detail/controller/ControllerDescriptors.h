@@ -117,7 +117,7 @@ private:
         std::span<const ControllerMiddlewareDescriptor> middlewares = {},
         WebSocketRouteConfig webSocketConfig = {}) const;
     [[nodiscard]] ControllerRouteBuilder createScope(std::string_view prefix,
-        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
+        const std::pmr::vector<ControllerMiddlewareDescriptor>& middlewares =
             std::pmr::vector<ControllerMiddlewareDescriptor>(registrationResource())) const;
 
     struct OwnedPrefixTag final {};

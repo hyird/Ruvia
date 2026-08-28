@@ -18,7 +18,9 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (reject_) throw std::bad_alloc();
+        if (reject_) {
+            throw std::bad_alloc();
+        }
         return std::pmr::new_delete_resource()->allocate(bytes, alignment);
     }
 

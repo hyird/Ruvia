@@ -1,10 +1,11 @@
 #pragma once
 
+#include <cstdint>
 #include <string_view>
 
 namespace ruvia {
 
-enum class HttpKnownMethod {
+enum class HttpKnownMethod : std::uint8_t {
     kGet,
     kPost,
     kPut,

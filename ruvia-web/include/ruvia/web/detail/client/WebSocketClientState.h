@@ -1,13 +1,11 @@
 #pragma once
 
-#include <array>
 #include <atomic>
 #include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
-#include <vector>
 
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
@@ -20,6 +18,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/web/WebSocketClient.h"
+#include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
 
 namespace ruvia {
 class Http1ParsedClientResponseHead;
@@ -29,7 +28,7 @@ namespace ruvia::detail {
 
 class WebSocketClientState final : public std::enable_shared_from_this<WebSocketClientState> {
 public:
-    WebSocketClientState(EventLoop loop, WebSocketClientConfig config);
+    WebSocketClientState(EventLoop loop, const WebSocketClientConfig& config);
     ~WebSocketClientState();
 
     void bindStop();
@@ -53,38 +52,6 @@ private:
     enum class Phase : std::uint8_t { kFresh, kConnecting, kOpen, kClosing, kClosed };
     enum class AbortReason : std::uint8_t { kNone, kTimeout, kCancelled, kClosing };
 
-    struct StoredHeader final {
-        StoredHeader(
-            std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
-            : name(name, resource),
-              value(value, resource) {}
-        std::pmr::string name;
-        std::pmr::string value;
-    };
-
-    struct ConfigStorage final {
-        ConfigStorage(WebSocketClientConfig config, std::pmr::memory_resource* resource);
-        WebSocketScheme scheme;
-        std::pmr::string host;
-        std::optional<std::uint16_t> port;
-        std::pmr::string target;
-        std::pmr::vector<StoredHeader> headers;
-        std::pmr::string subprotocols;
-        std::size_t maxMessageBytes;
-        std::chrono::milliseconds connectTimeout;
-        std::optional<std::chrono::milliseconds> readTimeout;
-        std::optional<std::chrono::milliseconds> writeTimeout;
-        std::optional<std::chrono::milliseconds> closeHandshakeTimeout;
-        HttpClientTlsPeerVerificationPolicy tlsPeerVerification;
-        TcpNoDelayPolicy tcpNoDelay;
-        TcpKeepAlivePolicy tcpKeepAlive;
-        std::pmr::string caFile;
-        std::pmr::string certificateChainFile;
-        std::pmr::string privateKeyFile;
-        std::pmr::string privateKeyPassword;
-        std::pmr::string userAgent;
-    };
-
     [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<WebSocketClientState> state);
     [[nodiscard]] static Task<std::optional<WebSocketMessage>> readOwned(
         std::shared_ptr<WebSocketClientState> state, OperationOptions options);
@@ -93,10 +60,9 @@ private:
     [[nodiscard]] static Task<void> closeOwned(std::shared_ptr<WebSocketClientState> state,
         WebSocketCloseOptions options, std::pmr::string reason, OperationOptions operationOptions);
 
-    void validateConfig();
-    void configureTls();
     void requireCurrent() const;
     void requireOpen() const;
+    [[nodiscard]] WsConnection& requireProtocol() noexcept;
     [[nodiscard]] std::uint16_t port() const noexcept;
     void closeOnWorker(AbortReason reason) noexcept;
     void requestAbort(AbortReason reason) noexcept;
@@ -121,7 +87,7 @@ private:
     EventLoop loop_;
     WorkerHandle worker_;
     WorkerMemory memory_;
-    ConfigStorage config_;
+    WebSocketClientConfigStorage config_;
     asio::ssl::context tlsContext_;
     asio::ip::tcp::resolver resolver_;
     asio::ssl::stream<asio::ip::tcp::socket> stream_;

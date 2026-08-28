@@ -106,7 +106,7 @@ public:
     BasicRateLimiter(std::optional<RateLimitRule> defaultRulePerWorker,
         RouteRateLimitPresence routeRules, std::size_t capacity,
         std::pmr::memory_resource* resource = nullptr)
-        : defaultRulePerWorker_(std::move(defaultRulePerWorker)),
+        : defaultRulePerWorker_(defaultRulePerWorker),
           slots_(pmrResourceOrDefault(resource)) {
         if (defaultRulePerWorker_.has_value()) {
             validateRateLimitRule(*defaultRulePerWorker_);
@@ -180,16 +180,12 @@ private:
         return nowMs <= 0 ? std::uint64_t{0} : static_cast<std::uint64_t>(nowMs);
     }
 
-    [[nodiscard]] static std::uint64_t currentResetAtMs(
+    [[nodiscard]] static std::uint64_t nextResetAtMs(
         std::int64_t nowMs, const RateLimitRule& rule) noexcept {
         const auto now = safeNowMs(nowMs);
         const auto windowMs = static_cast<std::uint64_t>(rule.window.count());
-        const auto bucket = now / windowMs;
         const auto maxTime = std::numeric_limits<std::uint64_t>::max();
-        if (bucket >= maxTime / windowMs) {
-            return maxTime;
-        }
-        return (bucket + 1) * windowMs;
+        return windowMs > maxTime - now ? maxTime : now + windowMs;
     }
 
     [[nodiscard]] static std::int64_t resetAfterMs(
@@ -254,7 +250,7 @@ private:
 
         const auto nowMs = Clock::nowMs();
         const auto now = safeNowMs(nowMs);
-        const auto resetAtMs = currentResetAtMs(nowMs, rule);
+        const auto resetAtMs = nextResetAtMs(nowMs, rule);
         const auto hash = keyHash(scope, key);
         const auto mask = slots_.size() - 1;
         const auto start = static_cast<std::size_t>(hash) & mask;

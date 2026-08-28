@@ -1,12 +1,14 @@
 #pragma once
 
 #include <bit>
+#include <span>
 #include <stdexcept>
+#include <utility>
 
-#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/core/detail/config/ConfigValidation.h"
-#include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 
 namespace ruvia::detail {
 
@@ -20,7 +22,9 @@ inline void validateHttpServerTlsIdentity(
 
 inline void validateDocumentRootRuntimeConfig(const HttpServerOptions& options) {
     const auto* refresh = options.documentRoot.refreshOptions();
-    if (refresh == nullptr) return;
+    if (refresh == nullptr) {
+        return;
+    }
     ensurePositiveDuration(
         refresh->refreshInterval, "document root refresh interval must be greater than zero");
     if (options.blockingPool == nullptr) {
@@ -28,7 +32,9 @@ inline void validateDocumentRootRuntimeConfig(const HttpServerOptions& options) 
             "document root refresh cannot run while the blocking pool is disabled");
     }
     const auto* precompression = options.documentRoot.precompressionOptions();
-    if (precompression == nullptr) return;
+    if (precompression == nullptr) {
+        return;
+    }
     ensurePositiveSize(precompression->minBytes,
         "document root precompression minimum size must be greater than zero");
     if (precompression->maxBytes < precompression->minBytes) {
@@ -73,31 +79,35 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
     validateDocumentRootRuntimeConfig(options);
 }
 
+inline void validateHttpServerTlsOptions(const HttpServerListenerDefinition::Tls& tls) {
+    validateHttpServerTlsIdentity(tls.identity);
+    if (tls.clientCertificates.has_value()) {
+        switch (tls.clientCertificates->requirement) {
+            case TlsClientCertificateRequirement::kOptional:
+            case TlsClientCertificateRequirement::kRequired:
+                break;
+            default:
+                throw std::invalid_argument("TLS client certificate requirement is invalid");
+        }
+        if (tls.clientCertificates->verifyFile.empty()) {
+            throw std::invalid_argument("TLS client certificate CA bundle must not be empty");
+        }
+    }
+    for (std::size_t i = 0; i < tls.sniIdentities.size(); ++i) {
+        const auto& sni = tls.sniIdentities[i];
+        ensureSniHost(sni.host, "SNI host must not be empty", "SNI host is invalid");
+        validateHttpServerTlsIdentity(sni.identity);
+        for (std::size_t j = 0; j < i; ++j) {
+            if (httpAsciiEqualsIgnoreCase(tls.sniIdentities[j].host, sni.host)) {
+                throw std::invalid_argument("SNI hosts must be unique");
+            }
+        }
+    }
+}
+
 inline void validateHttpServerListener(const HttpServerListenerDefinition& listener) {
     if (const auto* tls = std::get_if<HttpServerListenerDefinition::Tls>(&listener.transport)) {
-        validateHttpServerTlsIdentity(tls->identity);
-        if (tls->clientCertificates.has_value()) {
-            if (tls->clientCertificates->verifyFile.empty()) {
-                throw std::invalid_argument("TLS client certificate CA bundle must not be empty");
-            }
-            switch (tls->clientCertificates->requirement) {
-                case TlsClientCertificateRequirement::kOptional:
-                case TlsClientCertificateRequirement::kRequired:
-                    break;
-                default:
-                    throw std::invalid_argument("TLS client certificate requirement is invalid");
-            }
-        }
-        for (std::size_t i = 0; i < tls->sniIdentities.size(); ++i) {
-            const auto& sni = tls->sniIdentities[i];
-            ensureSniHost(sni.host, "SNI host must not be empty", "SNI host is invalid");
-            validateHttpServerTlsIdentity(sni.identity);
-            for (std::size_t j = 0; j < i; ++j) {
-                if (httpAsciiEqualsIgnoreCase(tls->sniIdentities[j].host, sni.host)) {
-                    throw std::invalid_argument("SNI hosts must be unique");
-                }
-            }
-        }
+        validateHttpServerTlsOptions(*tls);
     }
     if (const auto* redirect =
             std::get_if<HttpServerListenerDefinition::RedirectHttpToHttps>(&listener.transport)) {
@@ -106,9 +116,39 @@ inline void validateHttpServerListener(const HttpServerListenerDefinition& liste
     }
 }
 
-[[nodiscard]] inline HttpServerOptions validatedHttpServerOptions(HttpServerOptions options) {
+class ValidatedHttpServerConfiguration final {
+public:
+    [[nodiscard]] std::span<const HttpServerListenerDefinition> listeners() const noexcept {
+        return listeners_;
+    }
+
+    [[nodiscard]] const HttpServerOptions& options() const noexcept {
+        return options_;
+    }
+
+private:
+    ValidatedHttpServerConfiguration(
+        std::span<const HttpServerListenerDefinition> listeners, HttpServerOptions options)
+        : listeners_(listeners),
+          options_(std::move(options)) {}
+
+    friend ValidatedHttpServerConfiguration validateHttpServerConfiguration(
+        std::span<const HttpServerListenerDefinition> listeners, HttpServerOptions options);
+
+    std::span<const HttpServerListenerDefinition> listeners_;
+    HttpServerOptions options_;
+};
+
+[[nodiscard]] inline ValidatedHttpServerConfiguration validateHttpServerConfiguration(
+    std::span<const HttpServerListenerDefinition> listeners, HttpServerOptions options) {
+    if (listeners.empty()) {
+        throw std::invalid_argument("HTTP server worker requires at least one listener");
+    }
+    for (const auto& listener : listeners) {
+        validateHttpServerListener(listener);
+    }
     validateHttpServerOptions(options);
-    return options;
+    return ValidatedHttpServerConfiguration(listeners, std::move(options));
 }
 
 }  // namespace ruvia::detail

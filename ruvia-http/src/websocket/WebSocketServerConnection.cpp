@@ -129,15 +129,24 @@ WebSocketFeedStatus WebSocketServerConnection::feed(std::string_view input) {
 
 std::optional<WebSocketEvent> WebSocketServerConnection::nextEvent() & {
     auto event = impl_->connection.poll();
-    if (!event) return std::nullopt;
-    if (const auto* value = event->message())
+    if (!event) {
+        return std::nullopt;
+    }
+    if (const auto* value = event->message()) {
         return WebSocketEvent::message(value->opcode(), value->payload());
-    if (const auto* value = event->ping()) return WebSocketEvent::ping(value->payload());
-    if (const auto* value = event->pong()) return WebSocketEvent::pong(value->payload());
-    if (const auto* value = event->close())
+    }
+    if (const auto* value = event->ping()) {
+        return WebSocketEvent::ping(value->payload());
+    }
+    if (const auto* value = event->pong()) {
+        return WebSocketEvent::pong(value->payload());
+    }
+    if (const auto* value = event->close()) {
         return WebSocketEvent::close(value->closeCode(), value->reason());
-    if (const auto* value = event->protocolError())
+    }
+    if (const auto* value = event->protocolError()) {
         return WebSocketEvent::protocolError(value->closeCode());
+    }
     return WebSocketEvent::transportEndEvent();
 }
 

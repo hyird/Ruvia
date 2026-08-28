@@ -6,6 +6,7 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 
@@ -16,30 +17,13 @@ namespace ruvia::detail {
 // its owning PMR domain here.
 struct DbConfigStorage final {
     DbConfigStorage(const DbConfig& source, std::pmr::memory_resource* resource)
-        : driver(source.driver),
-          host(source.host, resource),
-          port(source.port.value_or(defaultDbPort(source.driver))),
-          username(source.username, resource),
-          password(source.password, resource),
-          database(source.database, resource),
-          connectTimeout(source.connectTimeout),
-          readTimeout(source.readTimeout),
-          writeTimeout(source.writeTimeout),
-          queryTimeout(source.queryTimeout),
-          acquireTimeout(source.acquireTimeout) {}
+        : DbConfigStorage(validatedDbConfig(source), pmrResourceOrDefault(resource)) {}
+
+    DbConfigStorage(ValidatedDbConfigView source, std::pmr::memory_resource* resource)
+        : DbConfigStorage(ValidatedConfigTag{}, source.get(), pmrResourceOrDefault(resource)) {}
 
     DbConfigStorage(const DbConfigStorage& source, std::pmr::memory_resource* resource)
-        : driver(source.driver),
-          host(source.host, resource),
-          port(source.port),
-          username(source.username, resource),
-          password(source.password, resource),
-          database(source.database, resource),
-          connectTimeout(source.connectTimeout),
-          readTimeout(source.readTimeout),
-          writeTimeout(source.writeTimeout),
-          queryTimeout(source.queryTimeout),
-          acquireTimeout(source.acquireTimeout) {}
+        : DbConfigStorage(ValidatedConfigTag{}, source, pmrResourceOrDefault(resource)) {}
 
     DbDriver driver{DbDriver::kUnspecified};
     std::pmr::string host;
@@ -52,6 +36,36 @@ struct DbConfigStorage final {
     std::optional<std::chrono::milliseconds> writeTimeout;
     std::optional<std::chrono::milliseconds> queryTimeout;
     std::optional<std::chrono::milliseconds> acquireTimeout;
+
+private:
+    struct ValidatedConfigTag final {};
+
+    DbConfigStorage(ValidatedConfigTag, const DbConfig& source, std::pmr::memory_resource* resource)
+        : driver(source.driver),
+          host(source.host, resource),
+          port(source.port.value_or(defaultDbPort(source.driver))),
+          username(source.username, resource),
+          password(source.password, resource),
+          database(source.database, resource),
+          connectTimeout(source.connectTimeout),
+          readTimeout(source.readTimeout),
+          writeTimeout(source.writeTimeout),
+          queryTimeout(source.queryTimeout),
+          acquireTimeout(source.acquireTimeout) {}
+
+    DbConfigStorage(
+        ValidatedConfigTag, const DbConfigStorage& source, std::pmr::memory_resource* resource)
+        : driver(source.driver),
+          host(source.host, resource),
+          port(source.port),
+          username(source.username, resource),
+          password(source.password, resource),
+          database(source.database, resource),
+          connectTimeout(source.connectTimeout),
+          readTimeout(source.readTimeout),
+          writeTimeout(source.writeTimeout),
+          queryTimeout(source.queryTimeout),
+          acquireTimeout(source.acquireTimeout) {}
 };
 
 struct DbDefinition final {

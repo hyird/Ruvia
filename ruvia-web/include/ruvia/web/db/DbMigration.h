@@ -1,10 +1,11 @@
 #pragma once
 
-#include "ruvia/web/db/DbTypes.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/db/DbTypes.h"
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -125,17 +126,31 @@ public:
     // The configuration and migration-table name are copied into options.resource;
     // their source PMR storage may be released after construction. The supplied
     // resource itself must outlive this migrator.
-    explicit DbMigrator(const DbConfig& config, DbMigratorOptions options = {});
+    explicit DbMigrator(const DbConfig& config, const DbMigratorOptions& options = {});
+    ~DbMigrator();
+
+    DbMigrator(const DbMigrator&) = delete;
+    DbMigrator& operator=(const DbMigrator&) = delete;
+    DbMigrator(DbMigrator&&) noexcept;
+    DbMigrator& operator=(DbMigrator&&) noexcept;
 
     [[nodiscard]] DbMigrationReport migrate(std::span<const DbMigration> migrations) const;
 
     [[nodiscard]] static DbMigrationReport migrate(const DbConfig& config,
-        std::span<const DbMigration> migrations, DbMigratorOptions options = {});
+        std::span<const DbMigration> migrations, const DbMigratorOptions& options = {});
 
 private:
-    DbConfig config_;
-    DbMigratorOptions options_;
-    std::pmr::memory_resource* resource_;
+    class Storage;
+    struct StorageDeleter final {
+        std::pmr::memory_resource* resource{nullptr};
+        void operator()(Storage* storage) const noexcept;
+    };
+    using StorageOwner = std::unique_ptr<Storage, StorageDeleter>;
+
+    [[nodiscard]] static StorageOwner makeStorage(
+        const DbConfig& config, const DbMigratorOptions& options);
+
+    StorageOwner storage_;
 };
 
 }  // namespace ruvia

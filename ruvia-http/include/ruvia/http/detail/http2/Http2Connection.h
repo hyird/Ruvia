@@ -149,9 +149,12 @@ private:
 
     using Value = std::variant<WebSocketServerNegotiation, Http2WebSocketHandshakeSubmitFailure>;
 
-    template <typename Alternative>
-    explicit Http2WebSocketHandshakeSubmitResult(Alternative&& alternative) noexcept
-        : value_(std::forward<Alternative>(alternative)) {}
+    explicit Http2WebSocketHandshakeSubmitResult(WebSocketServerNegotiation&& negotiation) noexcept
+        : value_(std::move(negotiation)) {}
+
+    explicit Http2WebSocketHandshakeSubmitResult(
+        Http2WebSocketHandshakeSubmitFailure failure) noexcept
+        : value_(failure) {}
 
     [[nodiscard]] static Http2WebSocketHandshakeSubmitResult makeSubmitted(
         WebSocketServerNegotiation&& negotiation) noexcept {

@@ -386,8 +386,12 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4, 0, 0, {}))) {
+                co_return;
+            }
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
             HpackEncoder::encodeHeader(headerBlock, ":path", "/trail");
@@ -403,13 +407,18 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
             bool sawHead = false;
             for (;;) {
                 char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    break;
+                }
                 const auto header = ruvia::detail::http2ParseFrameHeader(
                     std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
-                if (header.streamId != 1) continue;
+                }
+                if (header.streamId != 1) {
+                    continue;
+                }
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders)) {
                     HpackCollect collect;
                     (void)decoder.decode(payload, &collect, &HpackCollect::onHeader);
@@ -423,7 +432,9 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                     }
                 } else if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData)) {
                     body += payload;
-                    if ((header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) break;
+                    if ((header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) {
+                        break;
+                    }
                 }
             }
             closeClientSocket(sock);
@@ -483,11 +494,14 @@ RUVIA_TEST(sansio_driver_h2_stream_send_window_pacing) {
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
             // SETTINGS_INITIAL_WINDOW_SIZE = 8: the 64-byte body must be granted 8 at a time.
             const char settingsPayload[6] = {0x00, 0x04, 0x00, 0x00, 0x00, 0x08};
-            if (!co_await writeAll(frame(0x4, 0, 0, std::string_view(settingsPayload, 6))))
+            if (!co_await writeAll(frame(0x4, 0, 0, std::string_view(settingsPayload, 6)))) {
                 co_return;
+            }
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
             HpackEncoder::encodeHeader(headerBlock, ":path", "/big");
@@ -501,13 +515,18 @@ RUVIA_TEST(sansio_driver_h2_stream_send_window_pacing) {
 
             for (;;) {
                 char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    break;
+                }
                 const auto header = ruvia::detail::http2ParseFrameHeader(
                     std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
-                if (header.streamId != 1) continue;
+                }
+                if (header.streamId != 1) {
+                    continue;
+                }
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData)) {
                     received += payload.size();
                     if ((header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) {
@@ -600,12 +619,15 @@ RUVIA_TEST(sansio_driver_h2_large_file_body_paces_and_completes) {
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
             // Small initial window (16) so the file body blocks almost immediately and
             // only completes if WINDOW_UPDATE-driven pacing wakes it repeatedly.
             const char settingsPayload[6] = {0x00, 0x04, 0x00, 0x00, 0x00, 0x10};
-            if (!co_await writeAll(frame(0x4, 0, 0, std::string_view(settingsPayload, 6))))
+            if (!co_await writeAll(frame(0x4, 0, 0, std::string_view(settingsPayload, 6)))) {
                 co_return;
+            }
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
             HpackEncoder::encodeHeader(headerBlock, ":path", "/file");
@@ -619,12 +641,15 @@ RUVIA_TEST(sansio_driver_h2_large_file_body_paces_and_completes) {
 
             for (;;) {
                 char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    break;
+                }
                 const auto header = ruvia::detail::http2ParseFrameHeader(
                     std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
+                }
                 if (header.streamId != 1 ||
                     header.type != static_cast<std::uint8_t>(Http2FrameType::kData)) {
                     continue;
@@ -704,8 +729,12 @@ RUVIA_TEST(sansio_driver_h2_streaming_request_body) {
                 co_await t.async_wait(asio::as_tuple(asio::use_awaitable));
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4, 0, 0, {}))) {
+                co_return;
+            }
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "POST");
             HpackEncoder::encodeHeader(headerBlock, ":path", "/upload");
@@ -717,21 +746,29 @@ RUVIA_TEST(sansio_driver_h2_streaming_request_body) {
                 co_return;
             }
             co_await yield();
-            if (!co_await writeAll(frame(0x0, 0, 1, "aaa"))) co_return;  // 3 bytes
+            if (!co_await writeAll(frame(0x0, 0, 1, "aaa"))) {
+                co_return;  // 3 bytes
+            }
             co_await yield();
-            if (!co_await writeAll(frame(0x0, 0, 1, "bb"))) co_return;  // 2 bytes
+            if (!co_await writeAll(frame(0x0, 0, 1, "bb"))) {
+                co_return;  // 2 bytes
+            }
             co_await yield();
-            if (!co_await writeAll(frame(0x0, ruvia::detail::kHttp2FlagEndStream, 1, {})))
+            if (!co_await writeAll(frame(0x0, ruvia::detail::kHttp2FlagEndStream, 1, {}))) {
                 co_return;
+            }
 
             for (;;) {
                 char hb[ruvia::detail::kHttp2FrameHeaderBytes];
-                if (!co_await readExact(hb, sizeof(hb))) break;
+                if (!co_await readExact(hb, sizeof(hb))) {
+                    break;
+                }
                 const auto header =
                     ruvia::detail::http2ParseFrameHeader(std::string_view(hb, sizeof(hb)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
+                }
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
                     header.streamId == 1 && !payload.empty()) {
                     body = payload;
@@ -790,8 +827,12 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4, 0, 0, {}))) {
+                co_return;
+            }
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "POST");
             HpackEncoder::encodeHeader(headerBlock, ":path", "/echo");
@@ -802,7 +843,9 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
                 co_return;
             }
             // Body, then a trailing HEADERS block carrying END_STREAM.
-            if (!co_await writeAll(frame(0x0, 0, 1, "hi"))) co_return;
+            if (!co_await writeAll(frame(0x0, 0, 1, "hi"))) {
+                co_return;
+            }
             std::pmr::string trailerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(trailerBlock, "x-checksum", "abc");
             if (!co_await writeAll(frame(0x1,
@@ -813,12 +856,15 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
 
             for (;;) {
                 char hb[ruvia::detail::kHttp2FrameHeaderBytes];
-                if (!co_await readExact(hb, sizeof(hb))) break;
+                if (!co_await readExact(hb, sizeof(hb))) {
+                    break;
+                }
                 const auto header =
                     ruvia::detail::http2ParseFrameHeader(std::string_view(hb, sizeof(hb)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
+                }
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
                     header.streamId == 1 && !payload.empty()) {
                     body = payload;
@@ -877,10 +923,13 @@ RUVIA_TEST(sansio_driver_h2_large_buffered_body_paces_and_completes) {
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            const char settingsPayload[6] = {0x00, 0x04, 0x00, 0x00, 0x00, 0x20};  // window 32
-            if (!co_await writeAll(frame(0x4, 0, 0, std::string_view(settingsPayload, 6))))
+            if (!co_await writeAll(kClientPreface)) {
                 co_return;
+            }
+            const char settingsPayload[6] = {0x00, 0x04, 0x00, 0x00, 0x00, 0x20};  // window 32
+            if (!co_await writeAll(frame(0x4, 0, 0, std::string_view(settingsPayload, 6)))) {
+                co_return;
+            }
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
             HpackEncoder::encodeHeader(headerBlock, ":path", "/big");
@@ -894,12 +943,15 @@ RUVIA_TEST(sansio_driver_h2_large_buffered_body_paces_and_completes) {
 
             for (;;) {
                 char hb[ruvia::detail::kHttp2FrameHeaderBytes];
-                if (!co_await readExact(hb, sizeof(hb))) break;
+                if (!co_await readExact(hb, sizeof(hb))) {
+                    break;
+                }
                 const auto header =
                     ruvia::detail::http2ParseFrameHeader(std::string_view(hb, sizeof(hb)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
+                }
                 if (header.streamId != 1 ||
                     header.type != static_cast<std::uint8_t>(Http2FrameType::kData)) {
                     continue;

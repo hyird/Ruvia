@@ -7,10 +7,11 @@
 // without a socket. These tests use ONLY public headers, exactly like an
 // application's own test suite would.
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <string>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/HttpHeader.h"
@@ -19,6 +20,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/SecurityHeaders.h"
+#include "ruvia/web/Session.h"
 #include "ruvia/web/Testing.h"
 
 RUVIA_REQUEST_MODEL(TestingFacadeEcho, RUVIA_OPTIONAL_FIELD(value, ruvia::String));
@@ -123,6 +125,9 @@ public:
     RUVIA_METHOD("PROPFIND", "/files", propfind);
     RUVIA_METHOD("PURGE", "/files", purge);
     RUVIA_METHOD("PROPFIND", "/dav-only", davOnly);
+#ifdef RUVIA_ENABLE_REDIS
+    RUVIA_GET("/session-clear", clearSession);
+#endif
     RUVIA_ROUTES_END
 
 private:
@@ -175,6 +180,13 @@ private:
     ruvia::Task<ruvia::HttpResponse> davOnly(ruvia::Context& c) {
         co_return c.body(std::string_view("dav"));
     }
+
+#ifdef RUVIA_ENABLE_REDIS
+    ruvia::Task<ruvia::HttpResponse> clearSession(ruvia::Context& c) {
+        c.session().clear();
+        co_return c.body("cleared");
+    }
+#endif
 
     ruvia::Task<ruvia::HttpResponse> whoami(ruvia::Context& c) {
         const auto& user = c.requestState<TestingFacadeUser>();
@@ -656,6 +668,46 @@ RUVIA_TEST(testing_facade_security_headers_reach_unmatched_requests) {
     RUVIA_CHECK(missing.header("X-Content-Type-Options").has_value());
     RUVIA_CHECK(missing.header("X-Frame-Options").has_value());
 }
+
+RUVIA_TEST(testing_facade_security_headers_own_configured_policy) {
+    ruvia::TestApp app;
+    {
+        ruvia::SecurityHeadersConfig config;
+        config.frameOptionsHeader = ruvia::DefaultSecurityHeaderPolicy::kOmit;
+        config.xssProtectionHeader = ruvia::XssProtectionHeaderPolicy::kOmit;
+        config.contentSecurityPolicy = "default-src 'none'";
+        config.customHeaders = {{"X-Custom-Security", std::string(80, 'v')}};
+        app.use<ruvia::SecurityHeadersMiddleware>(config);
+    }
+
+    const auto response = app.request(ruvia::TestRequest::get("/t/hello"));
+    RUVIA_CHECK_EQ(
+        response.header("Content-Security-Policy"), std::string_view("default-src 'none'"));
+    RUVIA_CHECK(!response.header("X-Frame-Options").has_value());
+    RUVIA_CHECK(!response.header("X-XSS-Protection").has_value());
+    const std::string expectedCustomValue(80, 'v');
+    RUVIA_CHECK_EQ(response.header("X-Custom-Security"), std::string_view(expectedCustomValue));
+}
+
+#ifdef RUVIA_ENABLE_REDIS
+RUVIA_TEST(testing_facade_session_middleware_owns_configured_cookie_policy) {
+    ruvia::TestApp app;
+    {
+        ruvia::SessionConfig config;
+        config.redisAlias = std::string(80, 'r');
+        config.cookieName = "ruvia_session";
+        config.keyPrefix = std::string(80, 'k');
+        config.ttl = std::chrono::minutes(15);
+        app.use<ruvia::SessionMiddleware>(config);
+    }
+
+    const auto response = app.request(ruvia::TestRequest::get("/t/session-clear"));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+    const auto cookie = response.header("Set-Cookie");
+    RUVIA_CHECK(cookie.has_value());
+    RUVIA_CHECK(cookie->starts_with("ruvia_session=;"));
+}
+#endif
 
 RUVIA_TEST(testing_facade_routes_an_extension_method_by_its_exact_token) {
     ruvia::TestApp app;

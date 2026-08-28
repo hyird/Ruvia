@@ -43,7 +43,8 @@ public:
     }
 
 private:
-    static constexpr std::size_t kRecordLimit = Http2LocalSettings::kMaxConcurrentStreams * 4;
+    static constexpr std::size_t kRecordLimit =
+        static_cast<std::size_t>(Http2LocalSettings::kMaxConcurrentStreams) * 4;
 
     struct ClosedStreamRecord final {
         std::uint32_t id{0};

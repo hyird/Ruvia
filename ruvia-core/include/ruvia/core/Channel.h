@@ -359,6 +359,9 @@ private:
 };
 
 template <typename T>
+// The value parameter accepts both lvalue handles and rvalue handles before
+// transferring the stable dispatcher endpoint into the channel state.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
 [[nodiscard]] auto makeChannel(WorkerHandle worker, ChannelOptions options) {
     auto* resolved = detail::pmrResourceOrDefault(options.resource);
     std::pmr::polymorphic_allocator<detail::ChannelState<T>> allocator(resolved);

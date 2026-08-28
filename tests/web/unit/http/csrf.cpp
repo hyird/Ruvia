@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -86,8 +87,9 @@ struct CsrfOutcome final {
 
 // Runs CsrfProtection::handle over a synthesized request and reports whether the
 // chain continued (next called) or was short-circuited with a response.
-CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view cookieToken,
-    bool withHeader, std::string_view headerToken) {
+CsrfOutcome runCsrf(ruvia::CsrfProtection& csrf, std::string_view cookieName,
+    std::string_view headerName, HttpKnownMethod method, bool withCookie,
+    std::string_view cookieToken, bool withHeader, std::string_view headerToken) {
     WorkerMemory worker;
     RequestMemory memory(worker);
     HttpRequest request = HttpRequestAccess::make();
@@ -95,14 +97,15 @@ CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view co
     HttpRequestAccess::setMethod(request, ruvia::knownHttpMethodToken(method));
     // The header views point into these strings, so they must outlive the context
     // use below -- keep them at function scope, not inside the if-blocks.
-    std::string cookie = "XSRF-TOKEN=";
+    std::string cookie(cookieName);
+    cookie.push_back('=');
     cookie.append(cookieToken.data(), cookieToken.size());
     if (withCookie) {
         HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", cookie},
             HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie));
     }
     if (withHeader) {
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"X-XSRF-TOKEN", headerToken});
+        HttpRequestAccess::addHeader(request, HttpHeaderView{headerName, headerToken});
     }
     HttpRequestAccess::setResource(request, memory.resource());
     auto context = ContextAccess::make(memory, request);
@@ -114,19 +117,27 @@ CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view co
     Next next =
         NextAccess::make(state, [](ruvia::detail::NextState) -> ruvia::Task<void> { co_return; });
 
-    ruvia::CsrfProtection csrf;
     asio::io_context& io = ruvia::test::newTestIoContext();
     asio::co_spawn(io, ruvia::detail::taskAsAwaitable(csrf.handle(context, next)), asio::detached);
     io.run();
 
     CsrfOutcome out;
     out.nextInvoked = control.phase() == ruvia::detail::NextState::Control::Phase::kInvoked;
-    out.reseeded = ContextAccess::hasPendingSetCookie(context, "XSRF-TOKEN=");
+    std::string cookiePrefix(cookieName);
+    cookiePrefix.push_back('=');
+    out.reseeded = ContextAccess::hasPendingSetCookie(context, cookiePrefix);
     out.hasResponse = ContextAccess::hasResponse(context);
     if (out.hasResponse) {
         out.status = ContextAccess::takeResponse(context).status().value();
     }
     return out;
+}
+
+CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view cookieToken,
+    bool withHeader, std::string_view headerToken) {
+    ruvia::CsrfProtection csrf;
+    return runCsrf(csrf, "XSRF-TOKEN", "X-XSRF-TOKEN", method, withCookie, cookieToken, withHeader,
+        headerToken);
 }
 
 }  // namespace
@@ -154,6 +165,29 @@ RUVIA_TEST(csrf_custom_names_validate_at_construction) {
     RUVIA_CHECK(throwsInvalid([] {
         (void)ruvia::CsrfProtection({.cookieName = "XSRF-TOKEN", .headerName = "Bad Header"});
     }));
+}
+
+RUVIA_TEST(csrf_middleware_owns_custom_names_after_source_destruction) {
+    std::unique_ptr<ruvia::CsrfProtection> csrf;
+    const std::string cookieName(80, 'c');
+    const std::string headerName(80, 'h');
+    {
+        ruvia::CsrfProtectionConfig config{
+            .cookieName = cookieName,
+            .headerName = headerName,
+        };
+        csrf = std::make_unique<ruvia::CsrfProtection>(config);
+    }
+
+    const auto safe =
+        runCsrf(*csrf, cookieName, headerName, HttpKnownMethod::kGet, false, {}, false, {});
+    RUVIA_CHECK(safe.nextInvoked);
+    RUVIA_CHECK(safe.reseeded);
+
+    const auto unsafe = runCsrf(*csrf, cookieName, headerName, HttpKnownMethod::kPost, true,
+        "abcdef123456", true, "abcdef123456");
+    RUVIA_CHECK(unsafe.nextInvoked);
+    RUVIA_CHECK(!unsafe.hasResponse);
 }
 
 RUVIA_TEST(csrf_token_requires_a_large_enough_buffer) {
