@@ -57,6 +57,7 @@ private:
     MoveOnlyFunction<void(std::exception_ptr)> failed_;
     mutable std::mutex submitMutex_;
     StopSource stopSource_;
+    StopToken stopToken_{stopSource_.token()};
     std::atomic_size_t outstanding_{0};
     WorkerPostCounters postCounters_;
     std::atomic_uint64_t completed_{0};

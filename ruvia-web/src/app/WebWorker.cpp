@@ -18,13 +18,13 @@ namespace ruvia {
 WebWorkerContext::WebWorkerContext(const WorkerHandle& worker, std::pmr::memory_resource* resource,
     detail::WorkerClientRegistryView clientRegistries,
     const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool,
-    StopToken stopToken) noexcept
-    : worker_(&worker),
+    const StopToken& stopToken) noexcept
+    : worker_(worker),
       resource_(detail::pmrResourceOrDefault(resource)),
       clientRegistries_(clientRegistries),
       workerStates_(workerStates),
       blockingPool_(blockingPool),
-      stopToken_(std::move(stopToken)) {}
+      stopToken_(stopToken) {}
 
 BlockingPool& WebWorkerContext::blockingPool() const {
     if (blockingPool_ == nullptr) {
@@ -43,7 +43,7 @@ void* WebWorkerContext::workerStateInstance(const void* typeKey) const {
 }
 
 const WorkerHandle& WebWorkerContext::worker() const& noexcept {
-    return *worker_;
+    return worker_;
 }
 
 std::pmr::memory_resource* WebWorkerContext::resource() const noexcept {
@@ -243,7 +243,7 @@ void WebWorkerDispatch::start(Task task) {
 
 ruvia::Task<void> WebWorkerDispatch::run(Task task) {
     WebWorkerContext context(
-        worker_, resource_, clientRegistries_, workerStates_, blockingPool_, stopSource_.token());
+        worker_, resource_, clientRegistries_, workerStates_, blockingPool_, stopToken_);
     co_await task(context);
 }
 

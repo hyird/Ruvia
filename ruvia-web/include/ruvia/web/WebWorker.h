@@ -65,28 +65,28 @@ private:
     WebWorkerContext(const WorkerHandle& worker, std::pmr::memory_resource* resource,
         detail::WorkerClientRegistryView clientRegistries,
         const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool,
-        StopToken stopToken) noexcept;
+        const StopToken& stopToken) noexcept;
 
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
     friend class detail::BlockingCapability<WebWorkerContext>;
     friend class detail::WorkerStateCapability<WebWorkerContext>;
     [[nodiscard]] BlockingPool& blockingPool() const;
     [[nodiscard]] const WorkerHandle& blockingWorker() const noexcept {
-        return *worker_;
+        return worker_;
     }
     [[nodiscard]] StopToken blockingStopToken() const noexcept {
         return stopToken_;
     }
 
-    // WebWorkerDispatch owns this stable handle until every posted task has
-    // completed; contexts borrow it so starting a task does not copy endpoint
-    // ownership on the worker thread.
-    const WorkerHandle* worker_;
+    // WebWorkerDispatch owns these stable values until every posted task has
+    // completed. Contexts borrow them so starting a task does not copy endpoint
+    // or cancellation-state ownership on the worker thread.
+    const WorkerHandle& worker_;
     std::pmr::memory_resource* resource_;
     detail::WorkerClientRegistryView clientRegistries_;
     const detail::WorkerStateRegistry* workerStates_;
     BlockingPool* blockingPool_;
-    StopToken stopToken_;
+    const StopToken& stopToken_;
     // Each posted callback gets an independent operation lifetime. Declared
     // last so cold frames are destroyed before the callback context disappears.
     mutable detail::ScopedOperationScope operationScope_;
