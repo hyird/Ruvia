@@ -9,18 +9,6 @@ RUVIA_TEST(http_client_response_head_commits_status_and_version_at_construction)
     RUVIA_CHECK(head.protocolVersion() == HttpProtocolVersion::kHttp10);
 }
 
-RUVIA_TEST(http_client_origin_target_validation) {
-    RUVIA_CHECK(isValidHttpClientOriginTarget("/ok%2F?q=%7B%7D"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("*"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget(""));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("relative"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad#fragment"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad\\path"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%zz"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%2"));
-}
-
 RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
     const auto upperBoundary =
         parseHead("GET", "HTTP/1.1 599 Extension Status\r\nContent-Length: 0");

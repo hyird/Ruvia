@@ -10,10 +10,10 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "ruvia/http/HttpClientRequestTarget.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketSubprotocolSet.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 
 namespace ruvia::detail {
@@ -42,7 +42,7 @@ inline void validateWebSocketClientConfig(const WebSocketClientConfig& config) {
     if (config.port.has_value() && config.port.value() == 0) {
         throw std::invalid_argument("WebSocket client port must be greater than zero");
     }
-    if (config.target.empty() || config.target.front() != '/') {
+    if (!isValidHttpClientOriginTarget(config.target)) {
         throw std::invalid_argument("WebSocket client target must use origin-form");
     }
     if (config.maxMessageBytes == 0) {
@@ -66,20 +66,12 @@ inline void validateWebSocketClientConfig(const WebSocketClientConfig& config) {
         }
     }
 
-    if (config.subprotocols.empty()) {
-        return;
-    }
-    bool valid = true;
-    std::size_t count = 0;
-    httpVisitCommaSeparatedQuotedItems(config.subprotocols, [&](std::string_view token) {
-        valid = valid && !token.empty() && std::ranges::all_of(token, [](char ch) {
-            return isHttpTokenChar(static_cast<unsigned char>(ch));
-        });
-        ++count;
-        return valid;
-    });
-    if (!valid || count == 0) {
-        throw std::invalid_argument("invalid WebSocket client subprotocol list");
+    WebSocketSubprotocolSet subprotocols;
+    for (const auto& subprotocol : config.subprotocols) {
+        if (!subprotocols.append(subprotocol)) {
+            throw std::invalid_argument(
+                "WebSocket client subprotocols must contain at most 64 unique HTTP tokens");
+        }
     }
 }
 

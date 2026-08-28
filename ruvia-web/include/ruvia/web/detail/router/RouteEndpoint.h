@@ -1,9 +1,14 @@
 #pragma once
 
+#include <memory_resource>
+#include <span>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketSubprotocolSet.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Next.h"
 #include "ruvia/web/WebSocket.h"
@@ -71,7 +76,7 @@ public:
         return handler_;
     }
 
-    [[nodiscard]] std::string_view subprotocols() const noexcept {
+    [[nodiscard]] std::span<const std::string_view> subprotocols() const noexcept {
         return subprotocols_;
     }
 
@@ -85,11 +90,22 @@ private:
     WebSocketRouteEndpoint(std::pmr::memory_resource* resource, RouteStreamHandler handler,
         const WebSocketRouteConfig& options)
         : handler_(handler),
-          subprotocols_(options.subprotocols, resource),
-          lifecycle_(options.lifecycle) {}
+          subprotocolStorage_(resource),
+          subprotocols_(resource),
+          lifecycle_(options.lifecycle) {
+        subprotocolStorage_.reserve(options.subprotocols.size());
+        for (const auto& subprotocol : options.subprotocols) {
+            subprotocolStorage_.emplace_back(subprotocol);
+        }
+        subprotocols_.reserve(subprotocolStorage_.size());
+        for (const auto& subprotocol : subprotocolStorage_) {
+            subprotocols_.emplace_back(subprotocol);
+        }
+    }
 
     RouteStreamHandler handler_;
-    std::pmr::string subprotocols_;
+    std::pmr::vector<std::pmr::string> subprotocolStorage_;
+    std::pmr::vector<std::string_view> subprotocols_;
     WebSocketLifecycleOptions lifecycle_;
 };
 
@@ -154,10 +170,12 @@ public:
                     "websocket heartbeat intervals must be greater than zero");
             }
         }
-        if (!options.subprotocols.empty() &&
-            !isValidWebSocketSubprotocolList(options.subprotocols)) {
-            throw std::invalid_argument(
-                "websocket subprotocols must be a list of at most 64 unique HTTP tokens");
+        WebSocketSubprotocolSet subprotocols;
+        for (const auto& subprotocol : options.subprotocols) {
+            if (!subprotocols.append(subprotocol)) {
+                throw std::invalid_argument(
+                    "websocket subprotocols must contain at most 64 unique HTTP tokens");
+            }
         }
         return RouteEndpoint(
             WebSocketRouteEndpoint(pmrResourceOrDefault(resource), handler, options));
@@ -171,9 +189,12 @@ public:
             return RouteEndpoint::responseStream(endpoint->handler(), endpoint->kind());
         }
         const auto& endpoint = *webSocket();
-        return RouteEndpoint::webSocket(resource, endpoint.handler(),
-            WebSocketRouteConfig{.subprotocols = std::string(endpoint.subprotocols()),
-                .lifecycle = endpoint.lifecycle()});
+        WebSocketRouteConfig options{.lifecycle = endpoint.lifecycle()};
+        options.subprotocols.reserve(endpoint.subprotocols().size());
+        for (const auto subprotocol : endpoint.subprotocols()) {
+            options.subprotocols.emplace_back(subprotocol);
+        }
+        return RouteEndpoint::webSocket(resource, endpoint.handler(), std::move(options));
     }
 
     [[nodiscard]] const BufferedRouteEndpoint* buffered() const& noexcept {

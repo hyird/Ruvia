@@ -15,6 +15,7 @@
 
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
+#include "ruvia/http/HttpClientRequestTarget.h"
 #include "ruvia/http/HttpLimits.h"
 
 namespace {
@@ -26,6 +27,7 @@ using ruvia::Http1ClosePolicy;
 using ruvia::HttpClientRequestContentView;
 using ruvia::HttpClientRequestView;
 using ruvia::HttpOriginView;
+using ruvia::isValidHttpClientOriginTarget;
 
 class RejectingCharacterStorageResource final : public std::pmr::memory_resource {
 private:
@@ -53,6 +55,18 @@ static_assert(
     std::constructible_from<ruvia::Http1ClientResponseParser, ruvia::Http1ClientExchangeState&&>);
 static_assert(!std::constructible_from<ruvia::Http1ClientResponseParser,
     const ruvia::PreparedHttp1ClientRequest&>);
+
+RUVIA_TEST(http_client_origin_target_validation) {
+    RUVIA_CHECK(isValidHttpClientOriginTarget("/ok%2F?q=%7B%7D"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("*"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget(""));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("relative"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad#fragment"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad\\path"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%zz"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%2"));
+}
 
 template <typename T>
 concept HasAnyRvalueHttpClientRequestContentViewAccessor = requires(T&& content) {

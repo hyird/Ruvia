@@ -15,6 +15,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Http1ClientRequestHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Http1ClientRequestWriter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientRedirect.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientRequestTarget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseHead.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponsePlan.cpp

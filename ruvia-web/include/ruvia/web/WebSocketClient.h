@@ -34,7 +34,7 @@ struct WebSocketClientConfig final {
     std::optional<std::uint16_t> port{};
     std::string target{"/"};
     std::vector<std::pair<std::string, std::string>> headers{};
-    std::string subprotocols{};
+    std::vector<std::string> subprotocols{};
     std::size_t maxMessageBytes{kDefaultMaxWebSocketMessageBytes};
     std::chrono::milliseconds connectTimeout{5000};
     std::optional<std::chrono::milliseconds> readTimeout{};

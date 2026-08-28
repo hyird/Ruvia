@@ -14,6 +14,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace ruvia {
 
@@ -34,7 +35,8 @@ struct WebSocketLifecycleOptions final {
 };
 
 struct WebSocketRouteConfig final {
-    std::string subprotocols{};
+    // Server preference order. Every entry must be a nonempty, unique HTTP token.
+    std::vector<std::string> subprotocols{};
     WebSocketLifecycleOptions lifecycle{};
 };
 

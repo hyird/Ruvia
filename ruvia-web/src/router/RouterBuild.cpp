@@ -3,7 +3,9 @@
 #include "ruvia/web/detail/router/PathSegments.h"
 
 #include <memory>
+#include <span>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 #include "ruvia/core/memory/PmrResource.h"
@@ -44,6 +46,19 @@ namespace {
         pattern = patternRest;
         path = pathRest;
     }
+}
+
+[[nodiscard]] bool webSocketSubprotocolsEqual(const std::pmr::vector<std::pmr::string>& owned,
+    std::span<const std::string_view> borrowed) noexcept {
+    if (owned.size() != borrowed.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < owned.size(); ++i) {
+        if (owned[i] != borrowed[i]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace
@@ -109,7 +124,10 @@ void detail::RouteTable::captureRouteIdentities() {
             const auto& webSocket = *endpoint.webSocket();
             identity.endpointKind = CompiledRoutePlan::EndpointKind::kWebSocket;
             identity.streamInvoke = webSocket.handler().invoke();
-            identity.webSocketSubprotocols = webSocket.subprotocols();
+            identity.webSocketSubprotocols.reserve(webSocket.subprotocols().size());
+            for (const auto subprotocol : webSocket.subprotocols()) {
+                identity.webSocketSubprotocols.emplace_back(subprotocol);
+            }
             if (webSocket.lifecycle().heartbeat.pingInterval.has_value()) {
                 identity.webSocketPingIntervalMs =
                     webSocket.lifecycle().heartbeat.pingInterval->count();
@@ -195,7 +213,8 @@ void detail::RouteTable::bindCompiledPlan(const CompiledRoutePlan& plan) {
             endpointMatches =
                 identity.endpointKind == CompiledRoutePlan::EndpointKind::kWebSocket &&
                 identity.streamInvoke == webSocket.handler().invoke() &&
-                identity.webSocketSubprotocols == webSocket.subprotocols() &&
+                webSocketSubprotocolsEqual(
+                    identity.webSocketSubprotocols, webSocket.subprotocols()) &&
                 identity.webSocketPingIntervalMs == pingIntervalMs &&
                 identity.webSocketPongTimeoutMs == pongTimeoutMs &&
                 identity.webSocketCloseTimeoutMs == closeTimeoutMs;
