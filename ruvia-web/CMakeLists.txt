@@ -65,7 +65,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSessionEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSendWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/WorkerCapabilities.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/WorkerDataState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ratelimit/RateLimitDecision.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/PathSegments.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/Router.cpp

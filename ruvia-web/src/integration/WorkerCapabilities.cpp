@@ -5,19 +5,46 @@
 #include "ruvia/web/detail/http/context/ContextServices.h"
 
 namespace ruvia::detail {
+namespace {
+
+template <typename Registry>
+void registerDeadlineScan(ConnectionScanner& scanner,
+    ConnectionScanner::WorkerMaintenanceRegistration& registration, Registry& registry) noexcept {
+    if (!registry.needsDeadlineScan()) {
+        return;
+    }
+    scanner.registerWorkerMaintenance(registration, &registry,
+        [](void* target) noexcept { static_cast<Registry*>(target)->scanDeadlines(); });
+}
+
+}  // namespace
 
 WorkerCapabilities::WorkerCapabilities(asio::io_context& ioContext, const WorkerHandle& worker,
     std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions,
     WorkerCapabilityOptions options, ConnectionScanner& scanner)
-    : data_(ioContext, worker, resource, definitions.databases, definitions.redis, scanner),
+    : databases_(ioContext, resource, definitions.databases, &worker),
+      redis_(ioContext, resource, definitions.redis, &worker),
       httpClients_(ioContext, worker, resource, definitions.httpClients),
       workerStates_(resource, definitions.workerStates),
       rateLimiter_(
           options.defaultRateLimit, options.routeRateLimits, options.rateLimitCapacity, resource),
-      options_(std::move(options)) {}
+      options_(std::move(options)) {
+    registerDeadlineScan(scanner, databaseDeadlineMaintenance_, databases_);
+    registerDeadlineScan(scanner, redisDeadlineMaintenance_, redis_);
+}
 
 Task<void> WorkerCapabilities::connect() {
-    co_await data_.connect();
+    try {
+        if (!databases_.empty()) {
+            co_await databases_.connect();
+        }
+        if (!redis_.empty()) {
+            co_await redis_.connect();
+        }
+    } catch (...) {
+        closeNow();
+        throw;
+    }
 }
 
 Task<void> WorkerCapabilities::join() {
@@ -25,8 +52,9 @@ Task<void> WorkerCapabilities::join() {
 }
 
 void WorkerCapabilities::closeNow() noexcept {
-    data_.closeNow();
     httpClients_.closeNow();
+    redis_.closeNow();
+    databases_.closeNow();
 }
 
 void WorkerCapabilities::initializeWorkerState() {
@@ -38,8 +66,8 @@ void WorkerCapabilities::shutdownWorkerState() noexcept {
 }
 
 ContextServices WorkerCapabilities::contextServices() noexcept {
-    ContextServices services(&data_.databases(), &data_.redis(), &rateLimiter_,
-        options_.maxDecodedBodyBytes, nullptr, &httpClients_);
+    ContextServices services(
+        &databases_, &redis_, &rateLimiter_, options_.maxDecodedBodyBytes, nullptr, &httpClients_);
     services = services.withWorkerStates(workerStates_)
                    .withBlockingPool(options_.blockingPool)
                    .withPrecompressedStaticFiles(options_.precompressedStaticFiles)
@@ -51,11 +79,11 @@ ContextServices WorkerCapabilities::contextServices() noexcept {
 }
 
 DbRegistry& WorkerCapabilities::databases() noexcept {
-    return data_.databases();
+    return databases_;
 }
 
 RedisRegistry& WorkerCapabilities::redis() noexcept {
-    return data_.redis();
+    return redis_;
 }
 
 HttpClientRegistry& WorkerCapabilities::httpClients() noexcept {

@@ -1,0 +1,40 @@
+#include "test_harness.h"
+
+#include <type_traits>
+
+#include <asio/io_context.hpp>
+
+#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/HttpLimits.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/integration/WorkerCapabilities.h"
+
+static_assert(!std::is_copy_constructible_v<ruvia::detail::WorkerCapabilities>);
+static_assert(!std::is_move_constructible_v<ruvia::detail::WorkerCapabilities>);
+static_assert(ruvia::detail::WorkerCapabilityOptions{}.rateLimitCapacity ==
+              ruvia::kDefaultRateLimitCapacityPerWorker);
+
+RUVIA_TEST(worker_capabilities_exposes_one_address_stable_capability_graph) {
+    asio::io_context ioContext;
+    ruvia::WorkerHandle worker;
+    ruvia::WorkerMemory memory;
+    ruvia::detail::ConnectionScanner scanner(worker, {});
+    ruvia::detail::WorkerCapabilities capabilities(
+        ioContext, worker, memory.resource(), {}, {}, scanner);
+
+    capabilities.initializeWorkerState();
+    const auto services = capabilities.contextServices();
+
+    RUVIA_CHECK(services.db() == &capabilities.databases());
+    RUVIA_CHECK(services.redis() == &capabilities.redis());
+    RUVIA_CHECK(services.httpClients() == &capabilities.httpClients());
+    RUVIA_CHECK(services.workerStates() == &capabilities.workerStates());
+    RUVIA_CHECK(services.rateLimiter() == &capabilities.rateLimiter());
+    RUVIA_CHECK_EQ(services.maxDecodedBodyBytes(), ruvia::kDefaultMaxBufferedBodyBytes);
+    RUVIA_CHECK(services.blockingPool() == nullptr);
+
+    capabilities.closeNow();
+    capabilities.shutdownWorkerState();
+}
