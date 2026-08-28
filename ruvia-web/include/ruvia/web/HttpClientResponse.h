@@ -32,16 +32,19 @@ public:
     // The returned view remains valid until the next body operation. A null
     // optional is the only end-of-body signal; an empty data chunk is never
     // returned. Reads are linear and concurrent operations are rejected.
-    [[nodiscard]] ScopedOperation<std::optional<std::string_view>> read();
+    [[nodiscard]] ScopedOperation<std::optional<std::string_view>> read() &;
+    ScopedOperation<std::optional<std::string_view>> read() && = delete;
 
     // Collects the unread remainder of this same stream. maxBytes is a caller
     // bound in addition to the origin's transport bound.
-    [[nodiscard]] ScopedOperation<std::pmr::string> readAll(std::size_t maxBytes = kDefaultMaxBufferedBodyBytes);
+    [[nodiscard]] ScopedOperation<std::pmr::string> readAll(std::size_t maxBytes = kDefaultMaxBufferedBodyBytes) &;
+    ScopedOperation<std::pmr::string> readAll(std::size_t = kDefaultMaxBufferedBodyBytes) && = delete;
 
     // Copies this same stream into a controller response stream with natural
     // backpressure. This is the common forwarding path for both small and
     // long-lived upstream responses.
-    [[nodiscard]] ScopedOperation<void> pipeTo(ResponseStreamWriter& output);
+    [[nodiscard]] ScopedOperation<void> pipeTo(ResponseStreamWriter& output) &;
+    ScopedOperation<void> pipeTo(ResponseStreamWriter&) && = delete;
 
     [[nodiscard]] bool complete() const noexcept;
 

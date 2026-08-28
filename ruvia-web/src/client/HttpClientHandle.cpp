@@ -126,7 +126,7 @@ bool HttpClientResponseBody::complete() const noexcept {
     return state_ == nullptr || (state_->complete && state_->offset == state_->buffered.size() && state_->pending.empty());
 }
 
-ScopedOperation<std::optional<std::string_view>> HttpClientResponseBody::read() {
+ScopedOperation<std::optional<std::string_view>> HttpClientResponseBody::read() & {
     if (readActive_) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
@@ -174,7 +174,7 @@ Task<std::optional<std::string_view>> HttpClientResponseBody::readTask() {
     co_return chunk;
 }
 
-ScopedOperation<std::pmr::string> HttpClientResponseBody::readAll(std::size_t maxBytes) {
+ScopedOperation<std::pmr::string> HttpClientResponseBody::readAll(std::size_t maxBytes) & {
     if (readActive_) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
@@ -220,7 +220,7 @@ Task<std::pmr::string> HttpClientResponseBody::readAllTask(std::size_t maxBytes)
     co_return result;
 }
 
-ScopedOperation<void> HttpClientResponseBody::pipeTo(ResponseStreamWriter& output) {
+ScopedOperation<void> HttpClientResponseBody::pipeTo(ResponseStreamWriter& output) & {
     if (readActive_) {
         throw std::logic_error("HTTP client response body operation is already active");
     }

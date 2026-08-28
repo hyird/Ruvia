@@ -6,7 +6,7 @@
 
 namespace ruvia {
 
-ScopedOperation<std::optional<MultipartStreamPart>> MultipartReader::read() {
+ScopedOperation<std::optional<MultipartStreamPart>> MultipartReader::read() & {
     requireActive();
     return detail::makeScopedOperation(operationScope_, readTask());
 }

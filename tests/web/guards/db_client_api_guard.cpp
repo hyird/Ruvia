@@ -44,6 +44,12 @@ concept HasVariadicOperations = requires(const T& client) {
 template <typename Client>
 concept HasRvalueDbClientOperation = requires(Client&& client) { std::move(client).connect(); } || requires(Client&& client) { std::move(client).withOptions({}); } || requires(Client&& client) { std::move(client).query(std::string_view{}); } || requires(Client&& client, std::span<const ruvia::DbValue> params) { std::move(client).query(std::string_view{}, params); } || requires(Client&& client) { std::move(client).query(std::string_view{}, 1); } || requires(Client&& client) { std::move(client).execute(std::string_view{}); } || requires(Client&& client, std::span<const ruvia::DbValue> params) { std::move(client).execute(std::string_view{}, params); } || requires(Client&& client) { std::move(client).execute(std::string_view{}, 1); } || requires(Client&& client) { std::move(client).queryStream(std::string_view{}); } || requires(Client&& client, std::span<const ruvia::DbValue> params) { std::move(client).queryStream(std::string_view{}, params); } || requires(Client&& client) { std::move(client).queryStream(std::string_view{}, 1); } || requires(Client&& client) { std::move(client).beginTransaction(); };
 
+template <typename Stream>
+concept HasRvalueDbStreamOperation = requires(Stream&& stream) { std::move(stream).read(); } || requires(Stream&& stream) { std::move(stream).close(); };
+
+template <typename Transaction>
+concept HasRvalueDbTransactionOperation = requires(Transaction&& transaction) { std::move(transaction).query(std::string_view{}); } || requires(Transaction&& transaction, std::span<const ruvia::DbValue> params) { std::move(transaction).query(std::string_view{}, params); } || requires(Transaction&& transaction) { std::move(transaction).query(std::string_view{}, 1); } || requires(Transaction&& transaction) { std::move(transaction).execute(std::string_view{}); } || requires(Transaction&& transaction, std::span<const ruvia::DbValue> params) { std::move(transaction).execute(std::string_view{}, params); } || requires(Transaction&& transaction) { std::move(transaction).execute(std::string_view{}, 1); } || requires(Transaction&& transaction) { std::move(transaction).commit(); } || requires(Transaction&& transaction) { std::move(transaction).rollback(); };
+
 template <typename T>
 concept HasDbRegistrationConfig = requires(T& app, ruvia::DbConfig config) {
     { app.database(ruvia::DbRegistrationConfig{.config = config}) } -> std::same_as<ruvia::App&>;
@@ -69,6 +75,8 @@ static_assert(HasSpanOperations<ruvia::DbClient>);
 static_assert(!HasInitializerListOperations<ruvia::DbClient>);
 static_assert(HasVariadicOperations<ruvia::DbClient>);
 static_assert(!HasRvalueDbClientOperation<ruvia::DbClient>);
+static_assert(!HasRvalueDbStreamOperation<ruvia::DbStreamResult>);
+static_assert(!HasRvalueDbTransactionOperation<ruvia::DbTransaction>);
 
 }  // namespace
 

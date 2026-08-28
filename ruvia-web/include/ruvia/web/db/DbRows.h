@@ -96,8 +96,10 @@ public:
     ~DbStreamResult();
 
     [[nodiscard]] bool active() const noexcept;
-    ScopedOperation<std::optional<DbRow>> read();
-    ScopedOperation<void> close();
+    ScopedOperation<std::optional<DbRow>> read() &;
+    ScopedOperation<std::optional<DbRow>> read() && = delete;
+    ScopedOperation<void> close() &;
+    ScopedOperation<void> close() && = delete;
 
 private:
     friend class DbHandle;
