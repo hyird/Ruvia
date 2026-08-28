@@ -22,8 +22,9 @@ class ResponseStreamWriter;
 class WorkerHandle;
 
 // A borrow-only facade embedded in HttpClientResponse. It cannot be detached,
-// independently destroyed, or moved away from the response that owns the
-// underlying transport state.
+// independently destroyed, or moved away from the response. Body operations
+// bind directly to the response's address-stable transport state, so moving
+// their public response owner does not invalidate a cold or running operation.
 class HttpClientResponseBody final {
 public:
     HttpClientResponseBody(const HttpClientResponseBody&) = delete;
@@ -54,26 +55,24 @@ private:
     friend class HttpClientResponse;
     friend class detail::HttpClientPool;
 
-    ~HttpClientResponseBody();
+    ~HttpClientResponseBody() = default;
 
-    [[nodiscard]] Task<std::optional<std::string_view>> readTask();
-    [[nodiscard]] Task<std::pmr::string> readAllTask(std::size_t maxBytes);
-    [[nodiscard]] Task<void> pipeToTask(ResponseStreamWriter& output);
+    [[nodiscard]] static Task<std::optional<std::string_view>> readTask(detail::HttpClientResponseState& state);
+    [[nodiscard]] static Task<std::pmr::string> readAllTask(detail::HttpClientResponseState& state, std::size_t maxBytes);
+    [[nodiscard]] static Task<void> pipeToTask(detail::HttpClientResponseState& state, ResponseStreamWriter& output);
 
     explicit HttpClientResponseBody(detail::HttpClientResponseState* state) noexcept
         : state_(state) {}
 
     detail::HttpClientResponseState* state_{nullptr};
-    bool readActive_{false};
-    detail::ScopedOperationScope operationScope_;
 };
 
 class HttpClientResponse final {
 public:
     HttpClientResponse(const HttpClientResponse&) = delete;
     HttpClientResponse& operator=(const HttpClientResponse&) = delete;
-    // Body operations borrow the embedded facade. Moving a response while one
-    // is pending is a structured-lifetime violation and terminates.
+    // Body operations bind to the address-stable response state, so the public
+    // owner remains movable while an operation is cold or running.
     HttpClientResponse(HttpClientResponse&& other) noexcept;
     HttpClientResponse& operator=(HttpClientResponse&& other) noexcept;
     ~HttpClientResponse();
@@ -100,7 +99,6 @@ private:
     HttpClientResponse(std::pmr::memory_resource* resource, const WorkerHandle& worker, detail::HttpClientPool& pool);
     HttpClientResponse(std::pmr::memory_resource*, WorkerHandle&&, detail::HttpClientPool&) = delete;
     HttpClientResponse(detail::HttpClientResponseState* state, bool retain) noexcept;
-    [[nodiscard]] static detail::HttpClientResponseState* takeStateForMove(HttpClientResponse& other) noexcept;
     void release() noexcept;
 
     detail::HttpClientResponseState* state_{nullptr};

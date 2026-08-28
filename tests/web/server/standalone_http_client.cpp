@@ -1,5 +1,4 @@
 #include <cstdio>
-#include <cstdlib>
 #include <exception>
 #include <future>
 #include <stdexcept>
@@ -81,18 +80,22 @@ private:
 
 ruvia::Task<int> send(ruvia::HttpClient& client, ruvia::WorkerId worker, std::string_view expected) {
     auto response = co_await client.send({.target = "/worker"});
-    const auto body = co_await response.body().readAll();
-    const bool valid = client.worker().isCurrent() && client.worker().id() == worker && client.host() == "127.0.0.1" && response.status() == ruvia::http_status::kOk && body == expected;
-    co_return valid ? 0 : 1;
-}
-
-ruvia::Task<int> moveResponseWithPendingBodyOperation(ruvia::HttpClient& client) {
-    auto response = co_await client.send({.target = "/pending-body-move"});
-    auto operation = response.body().read();
+    {
+        auto discarded = response.body().read();
+        static_cast<void>(discarded);
+    }
+    auto operation = response.body().readAll();
+    bool competingReadRejected = false;
+    try {
+        auto competing = response.body().read();
+        static_cast<void>(competing);
+    } catch (const std::logic_error&) {
+        competingReadRejected = true;
+    }
     auto moved = std::move(response);
-    (void)operation;
-    (void)moved;
-    co_return 0;
+    const auto body = co_await std::move(operation);
+    const bool valid = competingReadRejected && client.worker().isCurrent() && client.worker().id() == worker && client.host() == "127.0.0.1" && moved.status() == ruvia::http_status::kOk && body == expected;
+    co_return valid ? 0 : 1;
 }
 
 void start(const ruvia::EventLoop& loop, ruvia::HttpClient& client, std::string_view expected, std::promise<int>& completion) {
@@ -154,51 +157,9 @@ int attachedWorker() {
     return closing == ruvia::PostStatus::kAccepted ? result : 3;
 }
 
-int pendingBodyMove() noexcept {
-    std::set_terminate([] { std::_Exit(86); });
-    try {
-        OneShotOrigin origin("pending");
-        ruvia::EventLoopPool loops({.loopCount = 1});
-        auto loop = loops.loop(0);
-        ruvia::HttpClient client(loop, configFor(origin.port()));
-        loops.start();
-
-        std::promise<int> completion;
-        auto future = completion.get_future();
-        const auto posted = loop.post([&] {
-            try {
-                ruvia::detail::asyncStartTask(moveResponseWithPendingBodyOperation(client), asio::bind_executor(loop.executor(), [&completion](ruvia::detail::TaskCompletionResult<int> result) {
-                    if (auto* success = result.success()) {
-                        completion.set_value(std::move(*success).takeValue());
-                    } else {
-                        completion.set_value(0);
-                    }
-                }));
-            } catch (...) {
-                completion.set_value(0);
-            }
-        });
-        if (posted != ruvia::PostStatus::kAccepted) {
-            loops.stop();
-            loops.join();
-            return 0;
-        }
-        const auto result = future.get();
-        (void)loop.post([&] { client.close(); });
-        loops.stop();
-        loops.join();
-        return result;
-    } catch (...) {
-        return 0;
-    }
-}
-
 }  // namespace
 
-int main(int argc, char** argv) {
-    if (argc == 2 && std::string_view(argv[1]) == "pending-body-move") {
-        return pendingBodyMove();
-    }
+int main() {
     try {
         try {
             ruvia::HttpClient invalid(ruvia::EventLoop{}, configFor(80));

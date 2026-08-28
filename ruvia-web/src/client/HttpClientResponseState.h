@@ -5,6 +5,7 @@
 #include <optional>
 #include <vector>
 
+#include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/http/HttpClient.h"
@@ -60,6 +61,9 @@ public:
     std::uint64_t requestId{0};
     std::uint64_t cancellationId{0};
     std::uint32_t streamId{0};
+    // Declared last so the operation scope closes while every field borrowed
+    // by a body coroutine is alive.
+    ScopedOperationScope bodyOperationScope;
 };
 
 }  // namespace ruvia::detail

@@ -280,23 +280,33 @@ public:
         close();
     }
 
-    [[nodiscard]] Task<WorkerWaitResult<T>> wait() const {
+    // The task owns the shared state, but this receiver owns the receive side:
+    // destroying it closes every cold or running wait. Require a named owner
+    // so storing a task cannot silently turn a temporary receiver into an
+    // already-closed operation.
+    [[nodiscard]] Task<WorkerWaitResult<T>> wait() const& {
         return detail::waitOneShotState<T>(state_, std::nullopt, {});
     }
+    Task<WorkerWaitResult<T>> wait() const&& = delete;
 
-    [[nodiscard]] Task<WorkerWaitResult<T>> wait(StopToken stopToken) const {
+    [[nodiscard]] Task<WorkerWaitResult<T>> wait(StopToken stopToken) const& {
         return detail::waitOneShotState<T>(state_, std::nullopt, std::move(stopToken));
     }
+    Task<WorkerWaitResult<T>> wait(StopToken) const&& = delete;
 
     template <typename Rep, typename Period>
-    [[nodiscard]] Task<WorkerWaitResult<T>> waitFor(std::chrono::duration<Rep, Period> duration) const {
+    [[nodiscard]] Task<WorkerWaitResult<T>> waitFor(std::chrono::duration<Rep, Period> duration) const& {
         return detail::waitOneShotState<T>(state_, detail::workerTimerSaturatingDurationCast(duration), {});
     }
+    template <typename Rep, typename Period>
+    Task<WorkerWaitResult<T>> waitFor(std::chrono::duration<Rep, Period>) const&& = delete;
 
     template <typename Rep, typename Period>
-    [[nodiscard]] Task<WorkerWaitResult<T>> waitFor(std::chrono::duration<Rep, Period> duration, StopToken stopToken) const {
+    [[nodiscard]] Task<WorkerWaitResult<T>> waitFor(std::chrono::duration<Rep, Period> duration, StopToken stopToken) const& {
         return detail::waitOneShotState<T>(state_, detail::workerTimerSaturatingDurationCast(duration), std::move(stopToken));
     }
+    template <typename Rep, typename Period>
+    Task<WorkerWaitResult<T>> waitFor(std::chrono::duration<Rep, Period>, StopToken) const&& = delete;
 
     // The worker every wait must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from

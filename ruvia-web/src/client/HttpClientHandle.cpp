@@ -44,28 +44,15 @@ HttpClientResponse::HttpClientResponse(detail::HttpClientResponseState* state, b
 }
 
 HttpClientResponse::HttpClientResponse(HttpClientResponse&& other) noexcept
-    : state_(takeStateForMove(other)),
+    : state_(std::exchange(other.state_, nullptr)),
       body_(state_),
       consumer_(other.consumer_) {
     other.body_.state_ = nullptr;
 }
 
-detail::HttpClientResponseState* HttpClientResponse::takeStateForMove(HttpClientResponse& other) noexcept {
-    if (other.body_.operationScope_.hasPendingOperations()) {
-        // Body operations are member coroutines and retain the address of the
-        // embedded body facade. Moving its response would leave a cold frame
-        // pointing at the moved-from body.
-        std::terminate();
-    }
-    return std::exchange(other.state_, nullptr);
-}
-
 HttpClientResponse& HttpClientResponse::operator=(HttpClientResponse&& other) noexcept {
     if (this == &other) {
         return *this;
-    }
-    if (body_.operationScope_.hasPendingOperations() || other.body_.operationScope_.hasPendingOperations()) {
-        std::terminate();
     }
     std::swap(state_, other.state_);
     std::swap(consumer_, other.consumer_);
@@ -75,7 +62,6 @@ HttpClientResponse& HttpClientResponse::operator=(HttpClientResponse&& other) no
 }
 
 HttpClientResponse::~HttpClientResponse() {
-    body_.operationScope_.close();
     release();
 }
 
@@ -85,6 +71,9 @@ void HttpClientResponse::release() noexcept {
     }
     auto* state = std::exchange(state_, nullptr);
     body_.state_ = nullptr;
+    if (consumer_) {
+        state->bodyOperationScope.close();
+    }
     if (consumer_ && !state->complete && !state->abandoned && state->pool != nullptr) {
         state->pool->abandonResponse(*state);
     }
@@ -109,155 +98,121 @@ std::span<const HttpClientResponseHeader> HttpClientResponse::trailers() const& 
     return state_->trailers;
 }
 
-HttpClientResponseBody::~HttpClientResponseBody() {
-    operationScope_.close();
-}
-
 bool HttpClientResponseBody::complete() const noexcept {
     return state_ == nullptr || (state_->complete && state_->offset == state_->buffered.size() && state_->pending.empty());
 }
 
 ScopedOperation<std::optional<std::string_view>> HttpClientResponseBody::read() & {
-    if (readActive_) {
+    if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
-    return detail::makeScopedOperation(operationScope_, readTask());
+    return detail::makeScopedOperation(state_->bodyOperationScope, readTask(*state_));
 }
 
-Task<std::optional<std::string_view>> HttpClientResponseBody::readTask() {
-    struct Guard final {
-        bool& active;
-        explicit Guard(bool& value)
-            : active(value) {
-            active = true;
-        }
-        ~Guard() {
-            active = false;
-        }
-    } guard(readActive_);
-    state_->incrementalRead = true;
-    while (state_->offset == state_->buffered.size() && state_->pending.empty() && !state_->complete) {
-        state_->buffered.clear();
-        state_->offset = 0;
-        co_await state_->dataSignal.wait();
+Task<std::optional<std::string_view>> HttpClientResponseBody::readTask(detail::HttpClientResponseState& state) {
+    state.incrementalRead = true;
+    while (state.offset == state.buffered.size() && state.pending.empty() && !state.complete) {
+        state.buffered.clear();
+        state.offset = 0;
+        co_await state.dataSignal.wait();
     }
-    if (state_->offset == state_->buffered.size() && !state_->pending.empty()) {
-        if (state_->http2DataPending && state_->pool != nullptr) {
-            state_->pool->releaseResponseData(*state_);
+    if (state.offset == state.buffered.size() && !state.pending.empty()) {
+        if (state.http2DataPending && state.pool != nullptr) {
+            state.pool->releaseResponseData(state);
         }
-        state_->buffered.clear();
-        state_->offset = 0;
-        state_->buffered.swap(state_->pending);
-        state_->spaceSignal.notify();
+        state.buffered.clear();
+        state.offset = 0;
+        state.buffered.swap(state.pending);
+        state.spaceSignal.notify();
     }
-    if (state_->offset == state_->buffered.size()) {
-        if (state_->failure) {
-            std::rethrow_exception(state_->failure);
+    if (state.offset == state.buffered.size()) {
+        if (state.failure) {
+            std::rethrow_exception(state.failure);
         }
-        if (state_->errorCode) {
-            throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode), "HTTP response body read failed");
+        if (state.errorCode) {
+            throw HttpClientError(static_cast<HttpClientError::Code>(*state.errorCode), "HTTP response body read failed");
         }
         co_return std::nullopt;
     }
-    const auto count = std::min(kResponseBodyReadChunkBytes, state_->buffered.size() - state_->offset);
-    const auto chunk = std::string_view(state_->buffered).substr(state_->offset, count);
-    state_->offset += count;
+    const auto count = std::min(kResponseBodyReadChunkBytes, state.buffered.size() - state.offset);
+    const auto chunk = std::string_view(state.buffered).substr(state.offset, count);
+    state.offset += count;
     co_return chunk;
 }
 
 ScopedOperation<std::pmr::string> HttpClientResponseBody::readAll(std::size_t maxBytes) & {
-    if (readActive_) {
+    if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
-    return detail::makeScopedOperation(operationScope_, readAllTask(maxBytes));
+    return detail::makeScopedOperation(state_->bodyOperationScope, readAllTask(*state_, maxBytes));
 }
 
-Task<std::pmr::string> HttpClientResponseBody::readAllTask(std::size_t maxBytes) {
-    struct Guard final {
-        bool& active;
-        explicit Guard(bool& value)
-            : active(value) {
-            active = true;
-        }
-        ~Guard() {
-            active = false;
-        }
-    } guard(readActive_);
-    state_->collectAll = true;
-    if (state_->http2DataPending && state_->pool != nullptr) {
-        state_->pool->releaseResponseData(*state_);
+Task<std::pmr::string> HttpClientResponseBody::readAllTask(detail::HttpClientResponseState& state, std::size_t maxBytes) {
+    state.collectAll = true;
+    if (state.http2DataPending && state.pool != nullptr) {
+        state.pool->releaseResponseData(state);
     }
-    state_->spaceSignal.notify();
-    while (!state_->complete) {
-        co_await state_->dataSignal.wait();
+    state.spaceSignal.notify();
+    while (!state.complete) {
+        co_await state.dataSignal.wait();
     }
-    if (state_->failure) {
-        std::rethrow_exception(state_->failure);
+    if (state.failure) {
+        std::rethrow_exception(state.failure);
     }
-    if (state_->errorCode) {
-        throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode), "HTTP response body read failed");
+    if (state.errorCode) {
+        throw HttpClientError(static_cast<HttpClientError::Code>(*state.errorCode), "HTTP response body read failed");
     }
-    const auto remaining = state_->buffered.size() - state_->offset;
-    const auto totalRemaining = remaining + state_->pending.size();
-    const auto effectiveLimit = std::min(maxBytes, state_->bufferedLimit);
+    const auto remaining = state.buffered.size() - state.offset;
+    const auto totalRemaining = remaining + state.pending.size();
+    const auto effectiveLimit = std::min(maxBytes, state.bufferedLimit);
     if (totalRemaining > effectiveLimit) {
         throw HttpClientError(HttpClientError::Code::kResponseTooLarge, "HTTP response body exceeds readAll byte limit");
     }
-    std::pmr::string result(state_->resource);
-    result.assign(state_->buffered.data() + state_->offset, remaining);
-    result.append(state_->pending);
-    state_->offset = state_->buffered.size();
-    state_->pending.clear();
+    std::pmr::string result(state.resource);
+    result.assign(state.buffered.data() + state.offset, remaining);
+    result.append(state.pending);
+    state.offset = state.buffered.size();
+    state.pending.clear();
     co_return result;
 }
 
 ScopedOperation<void> HttpClientResponseBody::pipeTo(ResponseStreamWriter& output) & {
-    if (readActive_) {
+    if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
-    return detail::makeScopedOperation(operationScope_, pipeToTask(output));
+    return detail::makeScopedOperation(state_->bodyOperationScope, pipeToTask(*state_, output));
 }
 
-Task<void> HttpClientResponseBody::pipeToTask(ResponseStreamWriter& output) {
-    struct Guard final {
-        bool& active;
-        explicit Guard(bool& value)
-            : active(value) {
-            active = true;
-        }
-        ~Guard() {
-            active = false;
-        }
-    } guard(readActive_);
-    state_->incrementalRead = true;
+Task<void> HttpClientResponseBody::pipeToTask(detail::HttpClientResponseState& state, ResponseStreamWriter& output) {
+    state.incrementalRead = true;
     for (;;) {
-        while (state_->offset == state_->buffered.size() && state_->pending.empty() && !state_->complete) {
-            state_->buffered.clear();
-            state_->offset = 0;
-            co_await state_->dataSignal.wait();
+        while (state.offset == state.buffered.size() && state.pending.empty() && !state.complete) {
+            state.buffered.clear();
+            state.offset = 0;
+            co_await state.dataSignal.wait();
         }
-        if (state_->offset == state_->buffered.size() && !state_->pending.empty()) {
-            if (state_->http2DataPending && state_->pool != nullptr) {
-                state_->pool->releaseResponseData(*state_);
+        if (state.offset == state.buffered.size() && !state.pending.empty()) {
+            if (state.http2DataPending && state.pool != nullptr) {
+                state.pool->releaseResponseData(state);
             }
-            state_->buffered.clear();
-            state_->offset = 0;
-            state_->buffered.swap(state_->pending);
-            state_->spaceSignal.notify();
+            state.buffered.clear();
+            state.offset = 0;
+            state.buffered.swap(state.pending);
+            state.spaceSignal.notify();
         }
-        if (state_->offset == state_->buffered.size()) {
-            if (state_->failure) {
-                std::rethrow_exception(state_->failure);
+        if (state.offset == state.buffered.size()) {
+            if (state.failure) {
+                std::rethrow_exception(state.failure);
             }
-            if (state_->errorCode) {
-                throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode), "HTTP response body forwarding failed");
+            if (state.errorCode) {
+                throw HttpClientError(static_cast<HttpClientError::Code>(*state.errorCode), "HTTP response body forwarding failed");
             }
             co_return;
         }
-        const auto count = std::min(kResponseBodyReadChunkBytes, state_->buffered.size() - state_->offset);
-        const auto chunk = std::string_view(state_->buffered).substr(state_->offset, count);
+        const auto count = std::min(kResponseBodyReadChunkBytes, state.buffered.size() - state.offset);
+        const auto chunk = std::string_view(state.buffered).substr(state.offset, count);
         co_await output.write(chunk);
-        state_->offset += count;
+        state.offset += count;
     }
 }
 
