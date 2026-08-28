@@ -17,8 +17,7 @@ namespace ruvia::detail {
 
 class Http2SansIoSessionContext final {
 public:
-    Http2SansIoSessionContext(ContextServices services, const HttpServerOptions& options,
-        ConnectionScanner::Entry& scannerEntry, const HttpServerWorkerState& workerState)
+    Http2SansIoSessionContext(ContextServices services, const HttpServerOptions& options, ConnectionScanner::Entry& scannerEntry, const HttpServerWorkerState& workerState)
         : services_(requireServices(std::move(services))),
           options_(options),
           scannerEntry_(scannerEntry),
@@ -54,13 +53,11 @@ private:
     const HttpServerWorkerState& workerState_;
 };
 
-[[nodiscard]] inline ConnectionScanner::Phase http2SansIoInactivityPhase(
-    bool headerBlockInProgress, std::size_t activeRuntimeCount) noexcept {
+[[nodiscard]] inline ConnectionScanner::Phase http2SansIoInactivityPhase(bool headerBlockInProgress, std::size_t activeRuntimeCount) noexcept {
     if (headerBlockInProgress) {
         return ConnectionScanner::Phase::kReadingInitial;
     }
-    return activeRuntimeCount == 0 ? ConnectionScanner::Phase::kIdle
-                                   : ConnectionScanner::Phase::kReadingPayload;
+    return activeRuntimeCount == 0 ? ConnectionScanner::Phase::kIdle : ConnectionScanner::Phase::kReadingPayload;
 }
 
 }  // namespace ruvia::detail

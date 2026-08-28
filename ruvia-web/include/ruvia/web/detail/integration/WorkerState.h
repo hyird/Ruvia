@@ -60,27 +60,16 @@ public:
     template <typename T, typename Factory>
     [[nodiscard]] static WorkerStateDefinition make(Factory&& factory) {
         using Stored = std::decay_t<Factory>;
-        static_assert(std::is_invocable_v<Stored&>,
-            "worker state factory must be invocable with no arguments");
-        static_assert(std::is_constructible_v<T, std::invoke_result_t<Stored&>>,
-            "worker state factory must return a value that constructs T");
+        static_assert(std::is_invocable_v<Stored&>, "worker state factory must be invocable with no arguments");
+        static_assert(std::is_constructible_v<T, std::invoke_result_t<Stored&>>, "worker state factory must return a value that constructs T");
         WorkerStateDefinition definition;
         definition.typeKey_ = workerStateTypeKey<T>();
-        definition.factory_ =
-            constructPmrObject<Stored>(processResource(), std::forward<Factory>(factory));
+        definition.factory_ = constructPmrObject<Stored>(processResource(), std::forward<Factory>(factory));
         // Named apart from the enclosing `factory` parameter: these lambdas are
         // captureless and receive the erased pointer, not that object.
-        definition.destroyFactory_ = [](void* storedFactory) noexcept {
-            destroyPmrObject(static_cast<Stored*>(storedFactory), processResource());
-        };
-        definition.createInstance_ = [](void* storedFactory,
-                                         std::pmr::memory_resource* resource) -> void* {
-            return constructPmrObject<T>(resource, (*static_cast<Stored*>(storedFactory))());
-        };
-        definition.destroyInstance_ = [](void* instance,
-                                          std::pmr::memory_resource* resource) noexcept {
-            destroyPmrObject(static_cast<T*>(instance), resource);
-        };
+        definition.destroyFactory_ = [](void* storedFactory) noexcept { destroyPmrObject(static_cast<Stored*>(storedFactory), processResource()); };
+        definition.createInstance_ = [](void* storedFactory, std::pmr::memory_resource* resource) -> void* { return constructPmrObject<T>(resource, (*static_cast<Stored*>(storedFactory))()); };
+        definition.destroyInstance_ = [](void* instance, std::pmr::memory_resource* resource) noexcept { destroyPmrObject(static_cast<T*>(instance), resource); };
         return definition;
     }
 
@@ -89,8 +78,7 @@ public:
     }
 
     [[nodiscard]] bool valid() const noexcept {
-        return typeKey_ != nullptr && factory_ != nullptr && destroyFactory_ != nullptr &&
-               createInstance_ != nullptr && destroyInstance_ != nullptr;
+        return typeKey_ != nullptr && factory_ != nullptr && destroyFactory_ != nullptr && createInstance_ != nullptr && destroyInstance_ != nullptr;
     }
 
 private:
@@ -144,8 +132,7 @@ void validateWorkerStateDefinitions(const Definitions& definitions) {
 // allocation-free binary search.
 class WorkerStateRegistry final {
 public:
-    WorkerStateRegistry(
-        std::pmr::memory_resource* resource, std::span<const WorkerStateDefinition> definitions)
+    WorkerStateRegistry(std::pmr::memory_resource* resource, std::span<const WorkerStateDefinition> definitions)
         : resource_(validatedResource(resource, definitions)),
           definitions_(definitions),
           entries_(resource_),
@@ -171,9 +158,7 @@ public:
         typeIndex_.reserve(definitions_.size());
         try {
             for (const auto& definition : definitions_) {
-                entries_.push_back(InstanceEntry{definition.typeKey_,
-                    definition.createInstance_(definition.factory_, resource_),
-                    definition.destroyInstance_});
+                entries_.push_back(InstanceEntry{definition.typeKey_, definition.createInstance_(definition.factory_, resource_), definition.destroyInstance_});
                 typeIndex_.push_back(TypeIndexEntry{definition.typeKey_, entries_.size() - 1});
             }
             std::ranges::sort(typeIndex_, std::less<const void*>{}, &TypeIndexEntry::typeKey);
@@ -193,8 +178,7 @@ public:
     }
 
     [[nodiscard]] void* instance(const void* typeKey) const noexcept {
-        const auto match = std::ranges::lower_bound(
-            typeIndex_, typeKey, std::less<const void*>{}, &TypeIndexEntry::typeKey);
+        const auto match = std::ranges::lower_bound(typeIndex_, typeKey, std::less<const void*>{}, &TypeIndexEntry::typeKey);
         if (match == typeIndex_.end() || match->typeKey != typeKey) {
             return nullptr;
         }
@@ -204,8 +188,7 @@ public:
 private:
     // Called from the first member initializer so malformed startup input cannot
     // allocate container bookkeeping on standard libraries with debug proxies.
-    [[nodiscard]] static std::pmr::memory_resource* validatedResource(
-        std::pmr::memory_resource* resource, std::span<const WorkerStateDefinition> definitions) {
+    [[nodiscard]] static std::pmr::memory_resource* validatedResource(std::pmr::memory_resource* resource, std::span<const WorkerStateDefinition> definitions) {
         validateWorkerStateDefinitions(definitions);
         return pmrResourceOrDefault(resource);
     }

@@ -18,8 +18,7 @@ namespace detail {
 // TLS paths reach the server as PMR strings, so a filesystem path whose native
 // encoding is not char (Windows) is converted and the complete normalized
 // configuration is validated here exactly once.
-[[nodiscard]] HttpServerListenerDefinition::Tls normalizeTlsOptions(
-    const TlsConfig& config, std::pmr::memory_resource* resource);
+[[nodiscard]] HttpServerListenerDefinition::Tls normalizeTlsOptions(const TlsConfig& config, std::pmr::memory_resource* resource);
 
 }  // namespace detail
 }  // namespace ruvia

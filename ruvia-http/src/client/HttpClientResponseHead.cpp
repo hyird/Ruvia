@@ -15,8 +15,7 @@ namespace ruvia::detail {
 
 namespace {
 
-[[nodiscard]] Http1ClientStatusLineParseResult parseStatusLine(
-    std::string_view statusLine) noexcept {
+[[nodiscard]] Http1ClientStatusLineParseResult parseStatusLine(std::string_view statusLine) noexcept {
     const auto separator = statusLine.find(' ');
     if (separator == std::string_view::npos) {
         return Http1ClientResponseParseError::kInvalidStatusLine;
@@ -52,41 +51,31 @@ namespace {
         }
     }
 
-    return Http1ClientParsedStatusLine{.statusCode = *parsedStatus,
-        .protocolVersion =
-            version == "HTTP/1.1" ? HttpProtocolVersion::kHttp11 : HttpProtocolVersion::kHttp10};
+    return Http1ClientParsedStatusLine{.statusCode = *parsedStatus, .protocolVersion = version == "HTTP/1.1" ? HttpProtocolVersion::kHttp11 : HttpProtocolVersion::kHttp10};
 }
 
 }  // namespace
 
-Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
-    std::string_view headSection, const Http1ClientExchangeState& exchangeState) noexcept {
+Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(std::string_view headSection, const Http1ClientExchangeState& exchangeState) noexcept {
     const auto firstLineEnd = headSection.find("\r\n");
-    const auto firstLine =
-        firstLineEnd == std::string_view::npos ? headSection : headSection.substr(0, firstLineEnd);
+    const auto firstLine = firstLineEnd == std::string_view::npos ? headSection : headSection.substr(0, firstLineEnd);
     auto statusLineResult = parseStatusLine(firstLine);
     const auto* statusLine = std::get_if<Http1ClientParsedStatusLine>(&statusLineResult);
     if (statusLine == nullptr) {
         return std::get<Http1ClientResponseParseError>(statusLineResult);
     }
-    Http1ClientResponseHeadParseResult result(
-        std::in_place_type<Http1ClientParsedResponseHead>, *statusLine);
+    Http1ClientResponseHeadParseResult result(std::in_place_type<Http1ClientParsedResponseHead>, *statusLine);
     auto& output = std::get<Http1ClientParsedResponseHead>(result);
 
-    const auto contentSemantics = httpResponseContentSemantics(
-        Http1ClientExchangeStateAccess::method(exchangeState), output.statusCode);
+    const auto contentSemantics = httpResponseContentSemantics(Http1ClientExchangeStateAccess::method(exchangeState), output.statusCode);
     HttpInterimResponseHeaderValidator interimHeaders(HttpFieldListRole::kRecipient);
     const bool framingFieldsApply = contentSemantics == HttpResponseContentSemantics::kWithContent;
-    const bool resetContentRequiresEmpty =
-        output.statusCode == http_status::kResetContent &&
-        contentSemantics != HttpResponseContentSemantics::kConnectTunnel;
+    const bool resetContentRequiresEmpty = output.statusCode == http_status::kResetContent && contentSemantics != HttpResponseContentSemantics::kConnectTunnel;
 
-    auto remaining = firstLineEnd == std::string_view::npos ? std::string_view{}
-                                                            : headSection.substr(firstLineEnd + 2);
+    auto remaining = firstLineEnd == std::string_view::npos ? std::string_view{} : headSection.substr(firstLineEnd + 2);
     while (!remaining.empty()) {
         const auto lineEnd = remaining.find("\r\n");
-        const auto line =
-            lineEnd == std::string_view::npos ? remaining : remaining.substr(0, lineEnd);
+        const auto line = lineEnd == std::string_view::npos ? remaining : remaining.substr(0, lineEnd);
         const auto colon = line.find(':');
         if (colon == std::string_view::npos) {
             return Http1ClientResponseParseError::kInvalidHeader;
@@ -94,10 +83,7 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
 
         const auto name = line.substr(0, colon);
         const auto value = httpTrimOws(line.substr(colon + 1));
-        const bool fieldsValid = contentSemantics == HttpResponseContentSemantics::kInformational
-                                     ? interimHeaders.validate(name, value) ==
-                                           HttpInterimResponseHeaderValidationStatus::kOk
-                                     : isValidHttpHeaderName(name) && isValidHttpHeaderValue(value);
+        const bool fieldsValid = contentSemantics == HttpResponseContentSemantics::kInformational ? interimHeaders.validate(name, value) == HttpInterimResponseHeaderValidationStatus::kOk : isValidHttpHeaderName(name) && isValidHttpHeaderValue(value);
         if (!fieldsValid) {
             return Http1ClientResponseParseError::kInvalidHeader;
         }
@@ -138,18 +124,13 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
             if (!isValidHttpResponseTrailerFieldValue(value, HttpFieldListRole::kRecipient)) {
                 return Http1ClientResponseParseError::kInvalidHeader;
             }
-            if (!httpFindHeaderToken(value, [](std::string_view) noexcept {
-                    return true;
-                }).empty()) {
+            if (!httpFindHeaderToken(value, [](std::string_view) noexcept { return true; }).empty()) {
                 output.nonEmptyTrailerHeaderPresent = true;
             }
         } else if (httpAsciiEqualsIgnoreCase(name, "TE")) {
             return Http1ClientResponseParseError::kInvalidHeader;
         } else if (httpAsciiEqualsIgnoreCase(name, "Connection")) {
-            if (output.connectionOptions.parseField(
-                    value, HttpFieldListRole::kRecipient, [](std::string_view option) noexcept {
-                        return !httpConnectionOptionConflictsWithManagedField(option);
-                    }) != HttpFieldListParseStatus::kOk) {
+            if (output.connectionOptions.parseField(value, HttpFieldListRole::kRecipient, [](std::string_view option) noexcept { return !httpConnectionOptionConflictsWithManagedField(option); }) != HttpFieldListParseStatus::kOk) {
                 return Http1ClientResponseParseError::kInvalidConnection;
             }
         } else if (httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding")) {
@@ -171,9 +152,7 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
                 }
             }
         } else if (httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
-            if (output.upgradeProtocols.parseField(value, HttpFieldListRole::kRecipient,
-                    [](const HttpUpgradeProtocol&) noexcept { return true; }) !=
-                HttpFieldListParseStatus::kOk) {
+            if (output.upgradeProtocols.parseField(value, HttpFieldListRole::kRecipient, [](const HttpUpgradeProtocol&) noexcept { return true; }) != HttpFieldListParseStatus::kOk) {
                 return Http1ClientResponseParseError::kInvalidUpgrade;
             }
         }

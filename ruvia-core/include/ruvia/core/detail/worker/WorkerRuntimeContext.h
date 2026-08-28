@@ -50,11 +50,8 @@ public:
         dispatcher_->runContext(std::move(failureHandler));
     }
 
-    void run(MoveOnlyFunction<void()> startupHandler,
-        MoveOnlyFunction<void(std::exception_ptr)> failureHandler,
-        MoveOnlyFunction<void()> shutdownHandler) {
-        dispatcher_->runContext(
-            std::move(startupHandler), std::move(failureHandler), std::move(shutdownHandler));
+    void run(MoveOnlyFunction<void()> startupHandler, MoveOnlyFunction<void(std::exception_ptr)> failureHandler, MoveOnlyFunction<void()> shutdownHandler) {
+        dispatcher_->runContext(std::move(startupHandler), std::move(failureHandler), std::move(shutdownHandler));
     }
 
     void close() noexcept {

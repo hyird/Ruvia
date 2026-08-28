@@ -14,9 +14,7 @@ bool isValidHttpHeaderName(std::string_view name) noexcept {
     if (name.empty()) {
         return false;
     }
-    return std::ranges::all_of(name, [](char value) noexcept {
-        return detail::isHttpTokenChar(static_cast<unsigned char>(value));
-    });
+    return std::ranges::all_of(name, [](char value) noexcept { return detail::isHttpTokenChar(static_cast<unsigned char>(value)); });
 }
 
 bool isValidHttpHeaderValue(std::string_view value) noexcept {
@@ -27,9 +25,7 @@ bool isValidHttpHeaderValue(std::string_view value) noexcept {
             return false;
         }
     }
-    return std::ranges::all_of(value, [](char c) noexcept {
-        return detail::isHttpFieldValueChar(static_cast<unsigned char>(c));
-    });
+    return std::ranges::all_of(value, [](char c) noexcept { return detail::isHttpFieldValueChar(static_cast<unsigned char>(c)); });
 }
 
 bool isValidHttpStatusText(std::string_view value) noexcept {

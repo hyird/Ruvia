@@ -21,8 +21,7 @@ ruvia::ScopedOperation<ruvia::HttpResponse> makeExpiredNotFoundResponse() {
     return context.notFound();
 }
 
-ruvia::Task<void> awaitExpiredNotFoundResponse(
-    ruvia::ScopedOperation<ruvia::HttpResponse>& operation, bool& rejected) {
+ruvia::Task<void> awaitExpiredNotFoundResponse(ruvia::ScopedOperation<ruvia::HttpResponse>& operation, bool& rejected) {
     try {
         (void)co_await std::move(operation);
     } catch (const std::logic_error&) {
@@ -49,8 +48,7 @@ ruvia::Task<void> writeExpiredSse(ruvia::SseWriter& writer, bool& rejected) {
     }
 }
 
-ruvia::Task<void> writeExpiredInvalidSse(
-    ruvia::SseWriter& writer, bool& lifetimeRejected, bool& validationRan) {
+ruvia::Task<void> writeExpiredInvalidSse(ruvia::SseWriter& writer, bool& lifetimeRejected, bool& validationRan) {
     try {
         co_await writer.write(ruvia::SseMessage{.data = "must-not-run", .event = "bad\nevent"});
     } catch (const std::invalid_argument&) {
@@ -62,9 +60,7 @@ ruvia::Task<void> writeExpiredInvalidSse(
 
 ruvia::MultipartReader makeExpiredMultipartReader() {
     ruvia::detail::BodyReaderBinding<ImmediateBodySource> binding;
-    return ruvia::MultipartReader(
-        binding.facade(), {.boundary = ruvia::MultipartBoundary("BOUNDARY"),
-                              .resource = ruvia::detail::processResource()});
+    return ruvia::MultipartReader(binding.facade(), {.boundary = ruvia::MultipartBoundary("BOUNDARY"), .resource = ruvia::detail::processResource()});
 }
 
 ruvia::Task<void> readExpiredMultipart(ruvia::MultipartReader& reader, bool& rejected) {
@@ -83,8 +79,7 @@ RUVIA_TEST(response_stream_cold_operation_rejects_after_capability_teardown) {
     bool rejected = false;
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(awaitExpiredWrite(operation, rejected)), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(awaitExpiredWrite(operation, rejected)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -97,8 +92,7 @@ RUVIA_TEST(websocket_cold_operation_rejects_after_facade_teardown) {
     auto operation = makeExpiredWebSocketWrite(capture);
     bool rejected = false;
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(awaitExpiredWrite(operation, rejected)), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(awaitExpiredWrite(operation, rejected)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK(rejected);
@@ -109,9 +103,7 @@ RUVIA_TEST(body_reader_cold_operation_rejects_after_facade_teardown) {
     auto operation = makeExpiredBodyRead();
     bool rejected = false;
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(awaitExpiredBodyRead(operation, rejected)),
-        asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(awaitExpiredBodyRead(operation, rejected)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK(rejected);
@@ -121,9 +113,7 @@ RUVIA_TEST(context_not_found_cold_operation_rejects_after_context_teardown) {
     auto operation = makeExpiredNotFoundResponse();
     bool rejected = false;
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(awaitExpiredNotFoundResponse(operation, rejected)),
-        asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(awaitExpiredNotFoundResponse(operation, rejected)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK(rejected);
@@ -134,8 +124,7 @@ RUVIA_TEST(sse_writer_rejects_after_stream_writer_teardown) {
     auto writer = makeExpiredSseWriter(sink);
     bool rejected = false;
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(writeExpiredSse(writer, rejected)), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writeExpiredSse(writer, rejected)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK(rejected);
@@ -149,10 +138,7 @@ RUVIA_TEST(sse_writer_checks_lifetime_before_message_validation) {
     bool lifetimeRejected = false;
     bool validationRan = false;
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(
-            writeExpiredInvalidSse(writer, lifetimeRejected, validationRan)),
-        asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writeExpiredInvalidSse(writer, lifetimeRejected, validationRan)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK(lifetimeRejected);
@@ -205,8 +191,7 @@ RUVIA_TEST(multipart_reader_rejects_after_body_reader_teardown) {
     auto reader = makeExpiredMultipartReader();
     bool rejected = false;
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(readExpiredMultipart(reader, rejected)), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(readExpiredMultipart(reader, rejected)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK(rejected);
@@ -253,8 +238,7 @@ RUVIA_TEST(scoped_capability_copy_relinks_and_early_destruction_unlinks) {
 RUVIA_TEST(scoped_operation_parent_close_destroys_cold_frame_immediately) {
     ruvia::detail::ScopedOperationScope scope;
     bool destroyed = false;
-    auto operation =
-        ruvia::detail::makeScopedOperation(scope, coldFrameTask(ColdFrameProbe(destroyed)));
+    auto operation = ruvia::detail::makeScopedOperation(scope, coldFrameTask(ColdFrameProbe(destroyed)));
     RUVIA_CHECK(!destroyed);
     scope.close();
     RUVIA_CHECK(destroyed);

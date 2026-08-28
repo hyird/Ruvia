@@ -40,8 +40,7 @@ public:
 
     // Encode one input chunk. When flush is true, the coding emits all bytes
     // currently visible to the peer; this is needed for low-latency SSE.
-    [[nodiscard]] HttpContentEncodeStep write(
-        std::string_view input, std::pmr::string& output, bool flush = false);
+    [[nodiscard]] HttpContentEncodeStep write(std::string_view input, std::pmr::string& output, bool flush = false);
 
     // Finish the representation and append the final coding bytes.
     [[nodiscard]] HttpContentEncodeStep finish(std::pmr::string& output);

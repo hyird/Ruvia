@@ -102,8 +102,7 @@ std::size_t respCommandSerializedSize(std::span<const std::pmr::string> args) {
     return respSerializedSize(args);
 }
 
-RedisValue hiredisReplyToValue(const redisReply& reply, std::size_t depth, std::size_t maxDepth,
-    std::pmr::memory_resource* resource) {
+RedisValue hiredisReplyToValue(const redisReply& reply, std::size_t depth, std::size_t maxDepth, std::pmr::memory_resource* resource) {
     if (maxDepth > 0 && depth > maxDepth) {
         throw RedisError(RedisError::Code::kProtocolError, "redis array nesting is too deep");
     }
@@ -121,8 +120,7 @@ RedisValue hiredisReplyToValue(const redisReply& reply, std::size_t depth, std::
         case REDIS_REPLY_ERROR:
             return RedisTypesAccess::errorValue(redisReplyStringView(reply), resource);
         case REDIS_REPLY_INTEGER:
-            return RedisTypesAccess::integerValue(
-                static_cast<std::int64_t>(reply.integer), resource);
+            return RedisTypesAccess::integerValue(static_cast<std::int64_t>(reply.integer), resource);
         case REDIS_REPLY_NIL:
             return RedisTypesAccess::nullValue(resource);
 #ifdef REDIS_REPLY_DOUBLE
@@ -148,8 +146,7 @@ RedisValue hiredisReplyToValue(const redisReply& reply, std::size_t depth, std::
 #endif
         {
             if (maxDepth > 0 && depth >= maxDepth) {
-                throw RedisError(
-                    RedisError::Code::kProtocolError, "redis array nesting is too deep");
+                throw RedisError(RedisError::Code::kProtocolError, "redis array nesting is too deep");
             }
             std::pmr::vector<RedisValue> values(resource);
             values.reserve(reply.elements);
@@ -157,8 +154,7 @@ RedisValue hiredisReplyToValue(const redisReply& reply, std::size_t depth, std::
                 if (reply.element == nullptr || reply.element[i] == nullptr) {
                     throw RedisError(RedisError::Code::kProtocolError, "invalid redis array reply");
                 }
-                values.emplace_back(
-                    hiredisReplyToValue(*reply.element[i], depth + 1, maxDepth, resource));
+                values.emplace_back(hiredisReplyToValue(*reply.element[i], depth + 1, maxDepth, resource));
             }
             return RedisTypesAccess::arrayValue(std::move(values), resource);
         }

@@ -83,8 +83,7 @@ RUVIA_TEST(json_string_escape_output_content_is_exact) {
     // The five named control escapes are emitted in short form, not \u00XX.
     RUVIA_CHECK_EQ(escaped(std::string_view("\b\f\n\r\t", 5)), std::string("\"\\b\\f\\n\\r\\t\""));
     // Other control bytes take UPPERCASE-hex \u00XX with the correct nibbles.
-    RUVIA_CHECK_EQ(
-        escaped(std::string_view("\x00\x01\x1f", 3)), std::string("\"\\u0000\\u0001\\u001F\""));
+    RUVIA_CHECK_EQ(escaped(std::string_view("\x00\x01\x1f", 3)), std::string("\"\\u0000\\u0001\\u001F\""));
     // Escapes interleaved with plain runs preserve every byte across chunk boundaries.
     RUVIA_CHECK_EQ(escaped("a\nb\"c"), std::string("\"a\\nb\\\"c\""));
     // High (UTF-8 lead/continuation) bytes pass through verbatim, never escaped.

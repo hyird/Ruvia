@@ -17,16 +17,13 @@ namespace {
 
 }  // namespace
 
-WorkerCapabilities::WorkerCapabilities(asio::io_context& ioContext, const WorkerHandle& worker,
-    std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions,
-    WorkerCapabilityOptions options, ConnectionScanner& scanner)
+WorkerCapabilities::WorkerCapabilities(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions, WorkerCapabilityOptions options, ConnectionScanner& scanner)
     : worker_(requireWorkerCapabilitiesWorker(worker)),
       databases_(ioContext, scanner, resource, definitions.databases),
       redis_(ioContext, resource, definitions.redis, worker_),
       httpClients_(ioContext, worker_, resource, definitions.httpClients),
       workerStates_(resource, definitions.workerStates),
-      rateLimiter_(
-          options.defaultRateLimit, options.routeRateLimits, options.rateLimitCapacity, resource),
+      rateLimiter_(options.defaultRateLimit, options.routeRateLimits, options.rateLimitCapacity, resource),
       options_(std::move(options)) {}
 
 Task<void> WorkerCapabilities::connect() {
@@ -62,12 +59,8 @@ void WorkerCapabilities::shutdownWorkerState() noexcept {
 }
 
 ContextServices WorkerCapabilities::contextServices() {
-    ContextServices services(
-        worker_, clientRegistries(), &rateLimiter_, options_.maxDecodedBodyBytes);
-    services = services.withWorkerStates(workerStates_)
-                   .withBlockingPool(options_.blockingPool)
-                   .withPrecompressedStaticFiles(options_.precompressedStaticFiles)
-                   .withTrustedProxies(options_.trustedProxies);
+    ContextServices services(worker_, clientRegistries(), &rateLimiter_, options_.maxDecodedBodyBytes);
+    services = services.withWorkerStates(workerStates_).withBlockingPool(options_.blockingPool).withPrecompressedStaticFiles(options_.precompressedStaticFiles).withTrustedProxies(options_.trustedProxies);
     if (options_.env != nullptr) {
         services = services.withEnv(*options_.env);
     }

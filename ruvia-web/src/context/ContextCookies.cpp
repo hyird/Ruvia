@@ -20,8 +20,7 @@ namespace {
 // The name the client sends back in Cookie is the wire name: an enum prefix
 // becomes part of the name at serialization. Request-side lookups and the MAC
 // of a signed cookie must both use it; the bare name never reaches the client.
-[[nodiscard]] std::string_view cookieWireName(
-    std::pmr::string& storage, std::string_view name, const ruvia::CookieOptions& options) {
+[[nodiscard]] std::string_view cookieWireName(std::pmr::string& storage, std::string_view name, const ruvia::CookieOptions& options) {
     if (!options.prefix) {
         return name;
     }
@@ -32,8 +31,7 @@ namespace {
     return storage;
 }
 
-[[nodiscard]] std::pmr::string composeSignedCookieValue(std::pmr::memory_resource* resource,
-    std::string_view name, std::string_view value, std::string_view secret) {
+[[nodiscard]] std::pmr::string composeSignedCookieValue(std::pmr::memory_resource* resource, std::string_view name, std::string_view value, std::string_view secret) {
     std::pmr::string signedValue(resource);
     signedValue.reserve(value.size() + 1 + detail::kCookieSignatureSize);
     if (!value.empty()) {
@@ -46,19 +44,16 @@ namespace {
     return signedValue;
 }
 
-void writeCookie(HttpResponse& response, std::string_view name, std::string_view value,
-    const CookieOptions& options) {
+void writeCookie(HttpResponse& response, std::string_view name, std::string_view value, const CookieOptions& options) {
     const detail::SetCookiePlan plan(name, value, options);
-    auto& header = detail::upsertResponseSetCookieUninitializedValue(
-        response, plan.wirePrefix(), plan.name(), plan.path(), plan.domain(), plan.size());
+    auto& header = detail::upsertResponseSetCookieUninitializedValue(response, plan.wirePrefix(), plan.name(), plan.path(), plan.domain(), plan.size());
     plan.write(detail::responseHeaderValueBegin(header));
 }
 
 }  // namespace
 
 void Context::setCookie(SetCookieOptions options) {
-    writeCookie(responseState_.activeResponse(), options.name.view(), options.value.view(),
-        options.attributes);
+    writeCookie(responseState_.activeResponse(), options.name.view(), options.value.view(), options.attributes);
 }
 
 void Context::setSignedCookie(SetSignedCookieOptions options) {
@@ -66,10 +61,7 @@ void Context::setSignedCookie(SetSignedCookieOptions options) {
     const auto name = options.name.view();
     const auto value = options.value.view();
     const auto secret = options.secret.view();
-    writeCookie(responseState_.activeResponse(), name,
-        composeSignedCookieValue(
-            resource(), cookieWireName(wireName, name, options.attributes), value, secret),
-        options.attributes);
+    writeCookie(responseState_.activeResponse(), name, composeSignedCookieValue(resource(), cookieWireName(wireName, name, options.attributes), value, secret), options.attributes);
 }
 
 void Context::deleteCookie(DeleteCookieOptions options) {

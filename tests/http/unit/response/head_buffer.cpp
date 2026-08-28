@@ -17,9 +17,7 @@ using ruvia::detail::kResponseHeadStackBytes;
 using ruvia::detail::ResponseHeadBuffer;
 
 template <typename T>
-concept ExposesRvalueResponseHeadBufferStorage = requires(T&& buffer) {
-    std::move(buffer).view();
-} || requires(T&& buffer) { std::move(buffer).stackCursor(std::size_t{}); };
+concept ExposesRvalueResponseHeadBufferStorage = requires(T&& buffer) { std::move(buffer).view(); } || requires(T&& buffer) { std::move(buffer).stackCursor(std::size_t{}); };
 
 static_assert(!ExposesRvalueResponseHeadBufferStorage<ResponseHeadBuffer>);
 

@@ -31,8 +31,7 @@ public:
         replaceIndex_ = (replaceIndex_ + 1) % kRecordLimit;
     }
 
-    [[nodiscard]] std::optional<Http2StreamCloseSource> source(
-        std::uint32_t streamId) const noexcept {
+    [[nodiscard]] std::optional<Http2StreamCloseSource> source(std::uint32_t streamId) const noexcept {
         for (std::size_t i = 0; i < size_; ++i) {
             const auto& record = records_[i];
             if (record.id == streamId) {
@@ -43,8 +42,7 @@ public:
     }
 
 private:
-    static constexpr std::size_t kRecordLimit =
-        static_cast<std::size_t>(Http2LocalSettings::kMaxConcurrentStreams) * 4;
+    static constexpr std::size_t kRecordLimit = static_cast<std::size_t>(Http2LocalSettings::kMaxConcurrentStreams) * 4;
 
     struct ClosedStreamRecord final {
         std::uint32_t id{0};

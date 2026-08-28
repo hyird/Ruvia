@@ -8,8 +8,7 @@
 namespace ruvia::detail {
 
 template <typename Vector>
-[[nodiscard]] inline bool http2ShouldCompactOffsetVector(
-    Vector& values, std::size_t& offset, std::size_t threshold) noexcept {
+[[nodiscard]] inline bool http2ShouldCompactOffsetVector(Vector& values, std::size_t& offset, std::size_t threshold) noexcept {
     if (offset == 0) {
         return false;
     }
@@ -22,8 +21,7 @@ template <typename Vector>
 }
 
 template <typename Vector>
-inline void http2CompactOffsetVector(
-    Vector& values, std::size_t& offset, std::size_t threshold) noexcept {
+inline void http2CompactOffsetVector(Vector& values, std::size_t& offset, std::size_t threshold) noexcept {
     using Value = typename Vector::value_type;
     static_assert(std::is_trivially_copyable_v<Value>,
         "http2CompactOffsetVector uses memmove; use http2CompactMovableOffsetVector for owning "
@@ -33,15 +31,13 @@ inline void http2CompactOffsetVector(
         return;
     }
     const auto remaining = values.size() - offset;
-    std::memmove(
-        values.data(), values.data() + offset, remaining * sizeof(typename Vector::value_type));
+    std::memmove(values.data(), values.data() + offset, remaining * sizeof(typename Vector::value_type));
     values.resize(remaining);
     offset = 0;
 }
 
 template <typename Vector>
-inline void http2CompactMovableOffsetVector(
-    Vector& values, std::size_t& offset, std::size_t threshold) {
+inline void http2CompactMovableOffsetVector(Vector& values, std::size_t& offset, std::size_t threshold) {
     if (!http2ShouldCompactOffsetVector(values, offset, threshold)) {
         return;
     }

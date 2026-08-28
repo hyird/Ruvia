@@ -26,8 +26,7 @@ namespace {
 
 constexpr auto kJoinBound = std::chrono::seconds(3);
 
-[[nodiscard]] std::chrono::steady_clock::duration stopAndJoin(
-    ruvia::detail::WebWorkerRuntime& server) {
+[[nodiscard]] std::chrono::steady_clock::duration stopAndJoin(ruvia::detail::WebWorkerRuntime& server) {
     server.stop();
     const auto begin = std::chrono::steady_clock::now();
     server.join();
@@ -42,8 +41,7 @@ int main() {
     {
         // Case 1: no connections.
         ruvia::detail::RouteTable routes(resource);
-        ruvia::detail::WebWorkerRuntime server(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
+        ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
         server.start();
         if (stopAndJoin(server) >= kJoinBound) {
             std::fputs("idle shutdown did not finish immediately\n", stderr);
@@ -55,8 +53,7 @@ int main() {
         // Case 2: stop() owns socket termination. It must not wait for an idle
         // keep-alive client to close its side of the connection.
         ruvia::detail::RouteTable routes(resource);
-        ruvia::detail::WebWorkerRuntime server(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
+        ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
         server.start();
 
         asio::io_context clientContext;
@@ -77,8 +74,7 @@ int main() {
         // Case 3: a worker failure may race with an already-posted stop. Both
         // paths must converge on the same immediate terminal state.
         ruvia::detail::RouteTable routes(resource);
-        ruvia::detail::WebWorkerRuntime server(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
+        ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
         server.start();
 
         asio::io_context clientContext;
@@ -111,8 +107,7 @@ int main() {
         try {
             server.join();
         } catch (const std::runtime_error& error) {
-            sawWorkerFailure =
-                std::string_view(error.what()) == "worker failed during immediate stop";
+            sawWorkerFailure = std::string_view(error.what()) == "worker failed during immediate stop";
         }
 
         std::error_code ignored;

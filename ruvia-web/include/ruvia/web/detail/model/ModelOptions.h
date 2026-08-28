@@ -40,10 +40,7 @@ public:
         if (value) {
             return;
         }
-        std::apply(
-            [&value, resource](
-                const auto&... options) { (applyDefaultOption(value, resource, options), ...); },
-            options_);
+        std::apply([&value, resource](const auto&... options) { (applyDefaultOption(value, resource, options), ...); }, options_);
     }
 
 private:
@@ -57,8 +54,7 @@ private:
     }
 
     template <typename OptionalT, typename OptionT>
-    static void applyDefaultOption(
-        OptionalT& value, std::pmr::memory_resource* resource, const OptionT& option) {
+    static void applyDefaultOption(OptionalT& value, std::pmr::memory_resource* resource, const OptionT& option) {
         if constexpr (isDefaultRule<OptionT>()) {
             using FieldT = typename OptionalT::value_type;
             assignDefaultValue<FieldT>(value, option.value, resource);
@@ -70,10 +66,8 @@ private:
     }
 
     template <typename FieldT, typename ValueT>
-    static void assignDefaultValue(
-        std::optional<FieldT>& target, const ValueT& value, std::pmr::memory_resource* resource) {
-        if constexpr (detail::isRuviaString<FieldT> &&
-                      std::is_convertible_v<const ValueT&, std::string_view>) {
+    static void assignDefaultValue(std::optional<FieldT>& target, const ValueT& value, std::pmr::memory_resource* resource) {
+        if constexpr (detail::isRuviaString<FieldT> && std::is_convertible_v<const ValueT&, std::string_view>) {
             target.emplace(std::string_view(value), ::ruvia::ModelOptions{.resource = resource});
         } else {
             target.emplace(value);

@@ -17,8 +17,7 @@ struct Http1ClientResponseParseResultAccess final {
         return Http1ClientResponseParseResult(Http1ClientResponseNeedMore());
     }
 
-    [[nodiscard]] static Http1ClientResponseParseResult failure(
-        Http1ClientResponseParseError error) noexcept {
+    [[nodiscard]] static Http1ClientResponseParseResult failure(Http1ClientResponseParseError error) noexcept {
         return Http1ClientResponseParseResult(Http1ClientResponseParseFailure(error));
     }
 
@@ -26,10 +25,8 @@ struct Http1ClientResponseParseResultAccess final {
         return Http1ClientResponseParseResult(Http1ClientResponseParseTerminal(completed));
     }
 
-    [[nodiscard]] static Http1ClientResponseParseResult parsed(HttpClientResponseHead head,
-        Http1ClientResponsePlan plan, std::size_t consumedBytes) noexcept {
-        return Http1ClientResponseParseResult(
-            Http1ParsedClientResponseHead(std::move(head), std::move(plan), consumedBytes));
+    [[nodiscard]] static Http1ClientResponseParseResult parsed(HttpClientResponseHead head, Http1ClientResponsePlan plan, std::size_t consumedBytes) noexcept {
+        return Http1ClientResponseParseResult(Http1ParsedClientResponseHead(std::move(head), std::move(plan), consumedBytes));
     }
 };
 
@@ -39,8 +36,7 @@ namespace ruvia {
 
 namespace {
 
-[[nodiscard]] constexpr detail::Http1ClientRequestContentPhase receiveContinue(
-    detail::Http1ClientRequestContentPhase phase) noexcept {
+[[nodiscard]] constexpr detail::Http1ClientRequestContentPhase receiveContinue(detail::Http1ClientRequestContentPhase phase) noexcept {
     switch (phase) {
         case detail::Http1ClientRequestContentPhase::kAwaitingContinue:
             return detail::Http1ClientRequestContentPhase::kContinueReceived;
@@ -58,8 +54,7 @@ namespace {
 }  // namespace
 namespace {}  // namespace
 
-std::string_view http1ClientResponseParseErrorMessage(
-    Http1ClientResponseParseError error) noexcept {
+std::string_view http1ClientResponseParseErrorMessage(Http1ClientResponseParseError error) noexcept {
     switch (error) {
         case Http1ClientResponseParseError::kHeaderTooLarge:
             return "response header is too large";
@@ -138,8 +133,7 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(std::string_view
     auto plan = std::get<Http1ClientResponsePlan>(std::move(planning));
     const auto* const informationalPlan = plan.informational();
     const bool informational = informationalPlan != nullptr;
-    const bool closingInformational =
-        informational && informationalPlan->persistence() == Http1ClosePolicy::kCloseAfterResponse;
+    const bool closingInformational = informational && informationalPlan->persistence() == Http1ClosePolicy::kCloseAfterResponse;
     if (informational && informationalResponseCount_ >= detail::kMaxHttpClientInterimResponses) {
         return fail(Http1ClientResponseParseError::kTooManyInformationalResponses);
     }
@@ -147,35 +141,30 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(std::string_view
     // No owning response head is observable until the entire head and framing
     // plan have validated. Protocol failure therefore has no partially mutated
     // out-parameter and performs no PMR allocation.
-    auto head = detail::HttpClientResponseHeadAccess::make(
-        parsed.statusCode, parsed.protocolVersion, resource_);
+    auto head = detail::HttpClientResponseHeadAccess::make(parsed.statusCode, parsed.protocolVersion, resource_);
     auto& headers = detail::HttpClientResponseHeadAccess::headers(head);
     if (parsed.headerCount != 0) {
         headers.reserve(parsed.headerCount);
     }
     for (std::size_t i = 0; i < parsed.headerCount; ++i) {
         const auto& header = parsed.headers[i];
-        headers.emplace_back(
-            detail::HttpClientResponseHeaderAccess::make(header.name(), header.value(), resource_));
+        headers.emplace_back(detail::HttpClientResponseHeaderAccess::make(header.name(), header.value(), resource_));
     }
 
-    auto result = detail::Http1ClientResponseParseResultAccess::parsed(
-        std::move(head), std::move(plan), headerBytes);
+    auto result = detail::Http1ClientResponseParseResultAccess::parsed(std::move(head), std::move(plan), headerBytes);
     if (informational) {
         ++informationalResponseCount_;
     }
     if (parsed.statusCode == http_status::kContinue && !closingInformational) {
         requestContentPhase_ = receiveContinue(requestContentPhase_);
     }
-    if (closingInformational || parsed.statusCode == http_status::kSwitchingProtocols ||
-        parsed.statusCode.isFinal()) {
+    if (closingInformational || parsed.statusCode == http_status::kSwitchingProtocols || parsed.statusCode.isFinal()) {
         phase_ = Phase::kComplete;
     }
     return result;
 }
 
-Http1ClientRequestContentCompletionStatus
-Http1ClientResponseParser::completeRequestContent() noexcept {
+Http1ClientRequestContentCompletionStatus Http1ClientResponseParser::completeRequestContent() noexcept {
     if (phase_ != Phase::kAwaitResponse) {
         return Http1ClientRequestContentCompletionStatus::kExchangeTerminal;
     }
@@ -184,12 +173,10 @@ Http1ClientResponseParser::completeRequestContent() noexcept {
             requestContentPhase_ = detail::Http1ClientRequestContentPhase::kContentComplete;
             return Http1ClientRequestContentCompletionStatus::kCompleted;
         case detail::Http1ClientRequestContentPhase::kAwaitingContinue:
-            requestContentPhase_ =
-                detail::Http1ClientRequestContentPhase::kContentCompleteAwaitingContinue;
+            requestContentPhase_ = detail::Http1ClientRequestContentPhase::kContentCompleteAwaitingContinue;
             return Http1ClientRequestContentCompletionStatus::kCompleted;
         case detail::Http1ClientRequestContentPhase::kContinueReceived:
-            requestContentPhase_ =
-                detail::Http1ClientRequestContentPhase::kContinueReceivedContentComplete;
+            requestContentPhase_ = detail::Http1ClientRequestContentPhase::kContinueReceivedContentComplete;
             return Http1ClientRequestContentCompletionStatus::kCompleted;
         case detail::Http1ClientRequestContentPhase::kContentComplete:
         case detail::Http1ClientRequestContentPhase::kContentCompleteAwaitingContinue:

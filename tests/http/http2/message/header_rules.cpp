@@ -38,8 +38,7 @@ RUVIA_TEST(http2_forbidden_connection_headers) {
     // Application response models are version-neutral, so the final-response
     // gate owns a case-insensitive check and forbids TE as well (the trailers
     // exception in RFC 9113 applies only to requests).
-    for (const auto name :
-        {"Connection", "keep-alive", "PROXY-CONNECTION", "te", "Transfer-Encoding", "Upgrade"}) {
+    for (const auto name : {"Connection", "keep-alive", "PROXY-CONNECTION", "te", "Transfer-Encoding", "Upgrade"}) {
         RUVIA_CHECK(http2IsForbiddenResponseConnectionField(name));
     }
     RUVIA_CHECK(!http2IsForbiddenResponseConnectionField("content-type"));
@@ -84,11 +83,7 @@ RUVIA_TEST(http2_valid_regular_header) {
 RUVIA_TEST(http2_forbidden_request_trailer_headers) {
     // Fields that govern framing, routing, auth, caching, or state must not appear in
     // an HTTP/2 trailer section -- they are only meaningful in the header block.
-    for (const char* name : {"host", "content-length", "connection", "content-encoding",
-             "content-type", "cookie", "authorization", "range", "if-match", "if-none-match",
-             "if-modified-since", "if-unmodified-since", "if-range", "expect", "te", "trailer",
-             "keep-alive", "set-cookie", "max-forwards", "cache-control", "accept-ranges",
-             "content-range", "proxy-authenticate", "proxy-authorization"}) {
+    for (const char* name : {"host", "content-length", "connection", "content-encoding", "content-type", "cookie", "authorization", "range", "if-match", "if-none-match", "if-modified-since", "if-unmodified-since", "if-range", "expect", "te", "trailer", "keep-alive", "set-cookie", "max-forwards", "cache-control", "accept-ranges", "content-range", "proxy-authenticate", "proxy-authorization"}) {
         RUVIA_CHECK(http2IsForbiddenRequestTrailerHeader(name));
     }
     // Ordinary content trailers (a checksum, a signature, a trace id) are permitted.

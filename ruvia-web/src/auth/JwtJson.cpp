@@ -16,27 +16,24 @@ namespace ruvia {
 namespace detail {
 
 template <typename Visitor>
-[[nodiscard]] bool visitUniqueJwtJsonObjectFields(
-    std::string_view json, std::pmr::memory_resource* resource, Visitor&& visitor) {
+[[nodiscard]] bool visitUniqueJwtJsonObjectFields(std::string_view json, std::pmr::memory_resource* resource, Visitor&& visitor) {
     std::pmr::vector<std::pmr::string> names(resource);
     bool duplicate = false;
-    const bool valid = visitJsonObjectFields(ResolvedPmrResourceTag{}, json, resource,
-        [&](std::string_view name, std::string_view value) {
-            for (const auto& existing : names) {
-                if (std::string_view(existing) == name) {
-                    duplicate = true;
-                    return false;
-                }
+    const bool valid = visitJsonObjectFields(ResolvedPmrResourceTag{}, json, resource, [&](std::string_view name, std::string_view value) {
+        for (const auto& existing : names) {
+            if (std::string_view(existing) == name) {
+                duplicate = true;
+                return false;
             }
-            names.emplace_back(name);
-            visitor(name, value);
-            return true;
-        });
+        }
+        names.emplace_back(name);
+        visitor(name, value);
+        return true;
+    });
     return valid && !duplicate;
 }
 
-[[nodiscard]] std::optional<std::chrono::system_clock::time_point> jwtParseJsonNumericDate(
-    std::string_view value) {
+[[nodiscard]] std::optional<std::chrono::system_clock::time_point> jwtParseJsonNumericDate(std::string_view value) {
     skipJsonWhitespace(value);
     if (value.empty()) {
         return std::nullopt;
@@ -54,9 +51,7 @@ template <typename Visitor>
 
     double fractional = 0;
     auto fractionalText = value;
-    while (!fractionalText.empty() &&
-           (fractionalText.back() == ' ' || fractionalText.back() == '\t' ||
-               fractionalText.back() == '\r' || fractionalText.back() == '\n')) {
+    while (!fractionalText.empty() && (fractionalText.back() == ' ' || fractionalText.back() == '\t' || fractionalText.back() == '\r' || fractionalText.back() == '\n')) {
         fractionalText.remove_suffix(1);
     }
     if (!parseDecimalNumber(fractionalText, fractional) || !std::isfinite(fractional)) {
@@ -72,12 +67,10 @@ template <typename Visitor>
     if (fractional <= minSeconds) {
         return Clock::time_point::min();
     }
-    return Clock::time_point(std::chrono::duration_cast<Clock::duration>(
-        std::chrono::duration<long double>(fractional)));
+    return Clock::time_point(std::chrono::duration_cast<Clock::duration>(std::chrono::duration<long double>(fractional)));
 }
 
-[[nodiscard]] std::optional<std::pmr::string> jwtDecodeJsonStringValue(
-    std::string_view value, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::optional<std::pmr::string> jwtDecodeJsonStringValue(std::string_view value, std::pmr::memory_resource* resource) {
     const auto parsed = parseJsonString(value);
     if (!parsed.has_value()) {
         return std::nullopt;
@@ -134,8 +127,7 @@ void jwtAppendJsonEscaped(std::pmr::string& out, std::string_view value) {
     out.push_back('"');
 }
 
-void jwtAppendJsonMember(
-    std::pmr::string& out, bool& first, std::string_view name, std::string_view value) {
+void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view name, std::string_view value) {
     if (!first) {
         out.push_back(',');
     }
@@ -145,8 +137,7 @@ void jwtAppendJsonMember(
     jwtAppendJsonEscaped(out, value);
 }
 
-void jwtAppendJsonMember(
-    std::pmr::string& out, bool& first, std::string_view name, std::int64_t value) {
+void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view name, std::int64_t value) {
     if (!first) {
         out.push_back(',');
     }
@@ -162,18 +153,17 @@ std::pmr::string jwtParseJoseAlgorithm(std::string_view json, std::pmr::memory_r
     bool algorithmSeen = false;
     bool algorithmValid = false;
     bool unsupportedCriticalHeader = false;
-    const bool valid = visitUniqueJwtJsonObjectFields(
-        json, resolved, [&](std::string_view name, std::string_view value) {
-            if (name == "alg") {
-                algorithmSeen = true;
-                if (auto decoded = jwtDecodeJsonStringValue(value, resolved)) {
-                    algorithm = std::move(*decoded);
-                    algorithmValid = true;
-                }
-            } else if (name == "crit") {
-                unsupportedCriticalHeader = true;
+    const bool valid = visitUniqueJwtJsonObjectFields(json, resolved, [&](std::string_view name, std::string_view value) {
+        if (name == "alg") {
+            algorithmSeen = true;
+            if (auto decoded = jwtDecodeJsonStringValue(value, resolved)) {
+                algorithm = std::move(*decoded);
+                algorithmValid = true;
             }
-        });
+        } else if (name == "crit") {
+            unsupportedCriticalHeader = true;
+        }
+    });
     if (!valid || !algorithmSeen || !algorithmValid || unsupportedCriticalHeader) {
         throw std::runtime_error("JWT JOSE header is invalid");
     }
@@ -189,8 +179,7 @@ namespace {
 // malformed structure (non-string element, unterminated array, trailing junk)
 // `out` is cleared and false is returned, so verification fails closed rather
 // than acting on a half-parsed list.
-[[nodiscard]] bool jwtDecodeAudiences(std::pmr::vector<std::pmr::string>& out,
-    std::string_view value, std::pmr::memory_resource* resource) {
+[[nodiscard]] bool jwtDecodeAudiences(std::pmr::vector<std::pmr::string>& out, std::string_view value, std::pmr::memory_resource* resource) {
     detail::skipJsonWhitespace(value);
     if (value.empty()) {
         return false;
@@ -254,78 +243,75 @@ namespace {
 
 }  // namespace
 
-JwtPayload detail::JwtPayloadAccess::decodePayloadJson(
-    std::string_view json, std::pmr::memory_resource* resource) {
+JwtPayload detail::JwtPayloadAccess::decodePayloadJson(std::string_view json, std::pmr::memory_resource* resource) {
     auto* resolved = detail::pmrResourceOrDefault(resource);
     JwtPayload payload({.resource = resolved});
 
     bool registeredClaimInvalid = false;
 
-    const bool valid = detail::visitUniqueJwtJsonObjectFields(
-        json, resolved, [&](std::string_view key, std::string_view value) {
-            if (key == "iss") {
-                if (auto issuer = detail::jwtDecodeJsonStringValue(value, resolved)) {
-                    payload.issuer_ = std::move(*issuer);
-                } else {
-                    registeredClaimInvalid = true;
-                }
-                return;
+    const bool valid = detail::visitUniqueJwtJsonObjectFields(json, resolved, [&](std::string_view key, std::string_view value) {
+        if (key == "iss") {
+            if (auto issuer = detail::jwtDecodeJsonStringValue(value, resolved)) {
+                payload.issuer_ = std::move(*issuer);
+            } else {
+                registeredClaimInvalid = true;
             }
-            if (key == "sub") {
-                if (auto subject = detail::jwtDecodeJsonStringValue(value, resolved)) {
-                    payload.subject_ = std::move(*subject);
-                } else {
-                    registeredClaimInvalid = true;
-                }
-                return;
+            return;
+        }
+        if (key == "sub") {
+            if (auto subject = detail::jwtDecodeJsonStringValue(value, resolved)) {
+                payload.subject_ = std::move(*subject);
+            } else {
+                registeredClaimInvalid = true;
             }
-            if (key == "aud") {
-                if (!jwtDecodeAudiences(payload.audiences_, value, resolved)) {
-                    registeredClaimInvalid = true;
-                }
-                return;
+            return;
+        }
+        if (key == "aud") {
+            if (!jwtDecodeAudiences(payload.audiences_, value, resolved)) {
+                registeredClaimInvalid = true;
             }
-            if (key == "jti") {
-                if (auto id = detail::jwtDecodeJsonStringValue(value, resolved)) {
-                    payload.id_ = std::move(*id);
-                } else {
-                    registeredClaimInvalid = true;
-                }
-                return;
+            return;
+        }
+        if (key == "jti") {
+            if (auto id = detail::jwtDecodeJsonStringValue(value, resolved)) {
+                payload.id_ = std::move(*id);
+            } else {
+                registeredClaimInvalid = true;
             }
-            if (key == "exp") {
-                if (const auto exp = detail::jwtParseJsonNumericDate(value)) {
-                    payload.expiresAt_ = *exp;
-                } else {
-                    registeredClaimInvalid = true;
-                }
-                return;
+            return;
+        }
+        if (key == "exp") {
+            if (const auto exp = detail::jwtParseJsonNumericDate(value)) {
+                payload.expiresAt_ = *exp;
+            } else {
+                registeredClaimInvalid = true;
             }
-            if (key == "nbf") {
-                if (const auto nbf = detail::jwtParseJsonNumericDate(value)) {
-                    payload.notBefore_ = *nbf;
-                } else {
-                    registeredClaimInvalid = true;
-                }
-                return;
+            return;
+        }
+        if (key == "nbf") {
+            if (const auto nbf = detail::jwtParseJsonNumericDate(value)) {
+                payload.notBefore_ = *nbf;
+            } else {
+                registeredClaimInvalid = true;
             }
-            if (key == "iat") {
-                if (const auto iat = detail::jwtParseJsonNumericDate(value)) {
-                    payload.issuedAt_ = *iat;
-                } else {
-                    registeredClaimInvalid = true;
-                }
-                return;
+            return;
+        }
+        if (key == "iat") {
+            if (const auto iat = detail::jwtParseJsonNumericDate(value)) {
+                payload.issuedAt_ = *iat;
+            } else {
+                registeredClaimInvalid = true;
             }
-            if (!detail::jwtIsReservedClaim(key)) {
-                if (auto claimValue = detail::jwtDecodeJsonStringValue(value, resolved)) {
-                    std::pmr::string claimName(resolved);
-                    claimName.assign(key.data(), key.size());
-                    payload.claims_.push_back(detail::JwtPayloadAccess::claim(
-                        std::move(claimName), std::move(*claimValue)));
-                }
+            return;
+        }
+        if (!detail::jwtIsReservedClaim(key)) {
+            if (auto claimValue = detail::jwtDecodeJsonStringValue(value, resolved)) {
+                std::pmr::string claimName(resolved);
+                claimName.assign(key.data(), key.size());
+                payload.claims_.push_back(detail::JwtPayloadAccess::claim(std::move(claimName), std::move(*claimValue)));
             }
-        });
+        }
+    });
     if (!valid || registeredClaimInvalid) {
         throw std::runtime_error("JWT payload is not a valid unique claims object");
     }

@@ -46,8 +46,7 @@ public:
         } catch (const std::logic_error&) {
             mutationRejected = true;
         }
-        controllerObservedAppGate =
-            controllerObservedAppGate && runtimeUnpublished && mutationRejected;
+        controllerObservedAppGate = controllerObservedAppGate && runtimeUnpublished && mutationRejected;
     }
 
     ~InstanceProbeController() {
@@ -131,9 +130,7 @@ int main() {
         propagated = std::string_view(error.what()) == "app worker task failed";
     }
 
-    if (!rejectedZeroCapacity || !controllerObservedAppGate || !stableSelection || !accepted ||
-        !propagated || !stopHookAfterStart || !stopHookSawWorkersStopping || !hooksRanOnRunThread ||
-        stopCalls != 1) {
+    if (!rejectedZeroCapacity || !controllerObservedAppGate || !stableSelection || !accepted || !propagated || !stopHookAfterStart || !stopHookSawWorkersStopping || !hooksRanOnRunThread || stopCalls != 1) {
         return 1;
     }
     if (!isolatedInstances) {

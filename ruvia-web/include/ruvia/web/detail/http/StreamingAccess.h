@@ -29,12 +29,8 @@ struct StreamingAccess final {
         return BodyReader(BodyReader::Token{}, target, read);
     }
 
-    [[nodiscard]] static ResponseStreamWriter makeResponseStreamWriter(void* target,
-        StreamWrite write, StreamEnd end, StreamSleep sleep, StreamBindContext bindContext,
-        StreamReleaseContext releaseContext, StreamCommitted committed,
-        StreamAborted aborted) noexcept {
-        return ResponseStreamWriter(
-            target, write, end, sleep, bindContext, releaseContext, committed, aborted);
+    [[nodiscard]] static ResponseStreamWriter makeResponseStreamWriter(void* target, StreamWrite write, StreamEnd end, StreamSleep sleep, StreamBindContext bindContext, StreamReleaseContext releaseContext, StreamCommitted committed, StreamAborted aborted) noexcept {
+        return ResponseStreamWriter(target, write, end, sleep, bindContext, releaseContext, committed, aborted);
     }
 
     [[nodiscard]] static SseWriter makeSseWriter(ResponseStreamWriter& writer) noexcept {
@@ -43,8 +39,7 @@ struct StreamingAccess final {
 
     // The token is supplied by the caller rather than read from `context`:
     // Context is incomplete here, and this header is deliberately narrow.
-    static void bindContext(ResponseStreamWriter& writer, Context& context, StopToken stopToken,
-        ResponseStreamWriter::StreamingHeadThunk streamingHead) {
+    static void bindContext(ResponseStreamWriter& writer, Context& context, StopToken stopToken, ResponseStreamWriter::StreamingHeadThunk streamingHead) {
         writer.bindContext(context, std::move(stopToken), streamingHead);
     }
 

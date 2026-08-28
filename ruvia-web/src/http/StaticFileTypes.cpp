@@ -43,9 +43,7 @@ inline constexpr std::string_view kDefaultStaticFileTypes[] = {
     "xsl",
 };
 
-const detail::StaticRootMimeTypeStorage* findStaticMimeType(
-    const std::pmr::vector<detail::StaticRootMimeTypeStorage>& mimeTypes,
-    std::string_view extension) noexcept {
+const detail::StaticRootMimeTypeStorage* findStaticMimeType(const std::pmr::vector<detail::StaticRootMimeTypeStorage>& mimeTypes, std::string_view extension) noexcept {
     if (mimeTypes.size() <= kStaticRootLinearLookupLimit) {
         for (const auto& mime : mimeTypes) {
             if (mime.extension == extension) {
@@ -55,10 +53,7 @@ const detail::StaticRootMimeTypeStorage* findStaticMimeType(
         return nullptr;
     }
 
-    const auto iter = std::ranges::lower_bound(mimeTypes, extension, std::ranges::less{},
-        [](const detail::StaticRootMimeTypeStorage& mime) noexcept {
-            return std::string_view(mime.extension);
-        });
+    const auto iter = std::ranges::lower_bound(mimeTypes, extension, std::ranges::less{}, [](const detail::StaticRootMimeTypeStorage& mime) noexcept { return std::string_view(mime.extension); });
     if (iter == mimeTypes.end() || std::string_view(iter->extension) != extension) {
         return nullptr;
     }
@@ -70,8 +65,7 @@ const detail::StaticRootMimeTypeStorage* findStaticMimeType(
 namespace detail {
 
 bool isValidStaticFileExtension(std::string_view extension) noexcept {
-    if (extension.empty() || extension.find('/') != std::string_view::npos ||
-        extension.find('\\') != std::string_view::npos) {
+    if (extension.empty() || extension.find('/') != std::string_view::npos || extension.find('\\') != std::string_view::npos) {
         return false;
     }
     if (extension == "." || extension == "..") {
@@ -98,15 +92,13 @@ bool fileTypeAllowed(std::string_view extension, const StaticRootConfigStorage& 
     return std::ranges::binary_search(config.fileTypeExtensions, value);
 }
 
-std::pmr::string contentTypeFor(const std::filesystem::path& path, std::string_view extension,
-    const StaticRootConfigStorage& config, std::pmr::memory_resource* resource) {
+std::pmr::string contentTypeFor(const std::filesystem::path& path, std::string_view extension, const StaticRootConfigStorage& config, std::pmr::memory_resource* resource) {
     if (const auto* const mime = findStaticMimeType(config.mimeTypes, extension); mime != nullptr) {
         return std::pmr::string(mime->contentType, resource);
     }
 
     const auto guessed = detail::guessStaticFileContentType(path);
-    if (guessed != std::string_view("application/octet-stream") ||
-        config.defaultContentType.empty()) {
+    if (guessed != std::string_view("application/octet-stream") || config.defaultContentType.empty()) {
         return std::pmr::string(guessed, resource);
     }
     return std::pmr::string(config.defaultContentType, resource);

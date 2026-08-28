@@ -38,8 +38,7 @@ public:
     }
 
     [[nodiscard]] bool aborted() const noexcept {
-        return std::holds_alternative<AbortedBeforeCommit>(state_) ||
-               std::holds_alternative<AbortedAfterCommit>(state_);
+        return std::holds_alternative<AbortedBeforeCommit>(state_) || std::holds_alternative<AbortedAfterCommit>(state_);
     }
 
     // True once a body-suppressed head (HEAD / 304 semantics) has completed the
@@ -233,8 +232,7 @@ private:
         ResponseStreamCommitPlan plan;
     };
 
-    using State = std::variant<Unbound, Bound, Detached, BodyOpen, TrailersOnly, Ended,
-        AbortedBeforeCommit, AbortedAfterCommit>;
+    using State = std::variant<Unbound, Bound, Detached, BodyOpen, TrailersOnly, Ended, AbortedBeforeCommit, AbortedAfterCommit>;
 
     State state_;
 };

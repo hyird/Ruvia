@@ -25,8 +25,7 @@ namespace {
     std::size_t offset = 0;
     for (;;) {
         const auto dot = name.find('.', offset);
-        const auto segment =
-            dot == std::string_view::npos ? name.substr(offset) : name.substr(offset, dot - offset);
+        const auto segment = dot == std::string_view::npos ? name.substr(offset) : name.substr(offset, dot - offset);
         if (segment == "__proto__") {
             return true;
         }
@@ -48,8 +47,7 @@ void assignDotPath(ContextRequest::RequestFormField& field, std::pmr::memory_res
     std::size_t offset = 0;
     for (;;) {
         const auto dot = name.find('.', offset);
-        const auto segment =
-            dot == std::string_view::npos ? name.substr(offset) : name.substr(offset, dot - offset);
+        const auto segment = dot == std::string_view::npos ? name.substr(offset) : name.substr(offset, dot - offset);
         path.emplace_back(std::pmr::string(segment.data(), segment.size(), resource));
         if (dot == std::string_view::npos) {
             break;
@@ -58,9 +56,7 @@ void assignDotPath(ContextRequest::RequestFormField& field, std::pmr::memory_res
     }
 }
 
-[[nodiscard]] std::pmr::vector<std::size_t> sortedFormFieldOrder(
-    const std::pmr::vector<ContextRequest::RequestFormField>& fields,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] std::pmr::vector<std::size_t> sortedFormFieldOrder(const std::pmr::vector<ContextRequest::RequestFormField>& fields, std::pmr::memory_resource* resource) {
     std::pmr::vector<std::size_t> order(resource);
     order.reserve(fields.size());
     for (std::size_t i = 0; i < fields.size(); ++i) {
@@ -77,8 +73,7 @@ void assignDotPath(ContextRequest::RequestFormField& field, std::pmr::memory_res
     return order;
 }
 
-void appendParsedBodyField(std::pmr::vector<ContextRequest::RequestFormField>& fields,
-    ContextRequest::RequestFormField&& field, ContextRequest::ParseBodyOptions options) {
+void appendParsedBodyField(std::pmr::vector<ContextRequest::RequestFormField>& fields, ContextRequest::RequestFormField&& field, ContextRequest::ParseBodyOptions options) {
     if (options.dottedNames == ContextRequest::DottedNamePolicy::kExpandPath) {
         if (fieldNameHasProtoObject(field.name())) {
             return;
@@ -94,10 +89,8 @@ void appendParsedBodyField(std::pmr::vector<ContextRequest::RequestFormField>& f
     fields.emplace_back(std::move(field));
 }
 
-void compactParsedBodyFields(std::pmr::vector<ContextRequest::RequestFormField>& fields,
-    ContextRequest::ParseBodyOptions options) {
-    if (options.repeatedScalars == ContextRequest::RepeatedScalarPolicy::kRetainAll ||
-        fields.size() < 2) {
+void compactParsedBodyFields(std::pmr::vector<ContextRequest::RequestFormField>& fields, ContextRequest::ParseBodyOptions options) {
+    if (options.repeatedScalars == ContextRequest::RepeatedScalarPolicy::kRetainAll || fields.size() < 2) {
         return;
     }
 
@@ -144,31 +137,22 @@ void compactParsedBodyFields(std::pmr::vector<ContextRequest::RequestFormField>&
     }
 }
 
-[[nodiscard]] ContextRequest::RequestFormData parseUrlEncodedFormBody(std::string_view requestBody,
-    std::pmr::memory_resource* resource, ContextRequest::ParseBodyOptions options) {
+[[nodiscard]] ContextRequest::RequestFormData parseUrlEncodedFormBody(std::string_view requestBody, std::pmr::memory_resource* resource, ContextRequest::ParseBodyOptions options) {
     std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
     fields.reserve(boundedFieldReserve(delimitedFieldCount(requestBody, '&')));
     bool valid = true;
-    const bool ok = detail::visitUrlEncodedPairs(requestBody,
-        [resource, &fields, &valid, options](std::string_view key, std::string_view value) {
-            auto decodedName = detail::decodeUrlComponent(
-                key, {.mode = detail::UrlDecodeMode::kForm, .resource = resource});
-            auto decodedValue = detail::decodeUrlComponent(
-                value, {.mode = detail::UrlDecodeMode::kForm, .resource = resource});
-            if (!decodedName || !decodedValue) {
-                valid = false;
-                return false;
-            }
+    const bool ok = detail::visitUrlEncodedPairs(requestBody, [resource, &fields, &valid, options](std::string_view key, std::string_view value) {
+        auto decodedName = detail::decodeUrlComponent(key, {.mode = detail::UrlDecodeMode::kForm, .resource = resource});
+        auto decodedValue = detail::decodeUrlComponent(value, {.mode = detail::UrlDecodeMode::kForm, .resource = resource});
+        if (!decodedName || !decodedValue) {
+            valid = false;
+            return false;
+        }
 
-            const bool array =
-                fieldNameIsArray(std::string_view(decodedName->data(), decodedName->size()));
-            appendParsedBodyField(fields,
-                detail::RequestFormFieldAccess::make(resource, std::move(*decodedName),
-                    std::move(*decodedValue), std::pmr::string(resource),
-                    std::pmr::string(resource), false, array),
-                options);
-            return true;
-        });
+        const bool array = fieldNameIsArray(std::string_view(decodedName->data(), decodedName->size()));
+        appendParsedBodyField(fields, detail::RequestFormFieldAccess::make(resource, std::move(*decodedName), std::move(*decodedValue), std::pmr::string(resource), std::pmr::string(resource), false, array), options);
+        return true;
+    });
     if (!ok || !valid) {
         throwInvalidFormBody();
     }
@@ -183,8 +167,7 @@ void countMultipartPart(std::size_t& parts, std::size_t maxFields) {
     }
 }
 
-void enforceMultipartFieldCap(
-    std::string_view requestBody, const MultipartBoundary& boundary, std::size_t maxFields) {
+void enforceMultipartFieldCap(std::string_view requestBody, const MultipartBoundary& boundary, std::size_t maxFields) {
     const auto initial = detail::httpFindInitialMultipartDelimiter(requestBody, boundary, true);
     const auto* firstPart = initial.part();
     if (firstPart == nullptr) {
@@ -195,8 +178,7 @@ void enforceMultipartFieldCap(
     countMultipartPart(parts, maxFields);
     std::size_t cursor = firstPart->offset() + firstPart->lineBytes();
     for (;;) {
-        const auto next =
-            detail::httpFindMultipartBodyDelimiter(requestBody.substr(cursor), boundary, true);
+        const auto next = detail::httpFindMultipartBodyDelimiter(requestBody.substr(cursor), boundary, true);
         if (const auto* part = next.part()) {
             countMultipartPart(parts, maxFields);
             cursor += part->offset() + part->lineBytes();
@@ -206,9 +188,7 @@ void enforceMultipartFieldCap(
     }
 }
 
-[[nodiscard]] ContextRequest::RequestFormData parseMultipartFormBody(std::string_view requestBody,
-    MultipartBoundary boundary, std::pmr::memory_resource* resource,
-    ContextRequest::ParseBodyOptions options) {
+[[nodiscard]] ContextRequest::RequestFormData parseMultipartFormBody(std::string_view requestBody, MultipartBoundary boundary, std::pmr::memory_resource* resource, ContextRequest::ParseBodyOptions options) {
     enforceMultipartFieldCap(requestBody, boundary, options.maxFields);
 
     auto parts = parseCompleteMultipartBody(requestBody, std::move(boundary), resource);
@@ -224,16 +204,8 @@ void enforceMultipartFieldCap(
         // RFC 7578 section 4.4: a part without a Content-Type defaults to
         // text/plain. Surface that effective type to the form consumer rather
         // than an empty string (the raw multipart parts API stays faithful).
-        std::pmr::string contentType =
-            partContentType.empty()
-                ? std::pmr::string("text/plain", resource)
-                : std::pmr::string(partContentType.data(), partContentType.size(), resource);
-        appendParsedBodyField(fields,
-            detail::RequestFormFieldAccess::make(resource, std::move(name),
-                std::pmr::string(partBody.data(), partBody.size(), resource),
-                std::pmr::string(partFilename.data(), partFilename.size(), resource),
-                std::move(contentType), part.hasFilename(), array),
-            options);
+        std::pmr::string contentType = partContentType.empty() ? std::pmr::string("text/plain", resource) : std::pmr::string(partContentType.data(), partContentType.size(), resource);
+        appendParsedBodyField(fields, detail::RequestFormFieldAccess::make(resource, std::move(name), std::pmr::string(partBody.data(), partBody.size(), resource), std::pmr::string(partFilename.data(), partFilename.size(), resource), std::move(contentType), part.hasFilename(), array), options);
     }
     compactParsedBodyFields(fields, options);
     return detail::RequestFormDataAccess::fromFields(std::move(fields));
@@ -241,10 +213,8 @@ void enforceMultipartFieldCap(
 
 }  // namespace
 
-[[nodiscard]] std::pmr::vector<MultipartPart> parseCompleteMultipartBody(
-    std::string_view requestBody, MultipartBoundary boundary, std::pmr::memory_resource* resource) {
-    auto parsed =
-        parseMultipartBody(requestBody, {.boundary = std::move(boundary), .resource = resource});
+[[nodiscard]] std::pmr::vector<MultipartPart> parseCompleteMultipartBody(std::string_view requestBody, MultipartBoundary boundary, std::pmr::memory_resource* resource) {
+    auto parsed = parseMultipartBody(requestBody, {.boundary = std::move(boundary), .resource = resource});
     if (const auto* failure = parsed.failure()) {
         throw failure->protocolError();
     }
@@ -255,9 +225,7 @@ void enforceMultipartFieldCap(
     return std::move(*body).takeParts();
 }
 
-[[nodiscard]] ContextRequest::RequestFormData parseFormBodyFromView(std::string_view contentType,
-    std::string_view requestBody, std::pmr::memory_resource* resource,
-    ContextRequest::ParseBodyOptions options) {
+[[nodiscard]] ContextRequest::RequestFormData parseFormBodyFromView(std::string_view contentType, std::string_view requestBody, std::pmr::memory_resource* resource, ContextRequest::ParseBodyOptions options) {
     if (detail::contentTypeMatches(contentType, "application/x-www-form-urlencoded")) {
         return parseUrlEncodedFormBody(requestBody, resource, options);
     }

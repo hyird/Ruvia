@@ -72,11 +72,9 @@ struct FailureObservation final {
     }
 };
 
-std::string frame(
-    std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
+std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
     std::string bytes(kHttp2FrameHeaderBytes, '\0');
-    http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()),
-        static_cast<Http2FrameType>(type), flags, streamId);
+    http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()), static_cast<Http2FrameType>(type), flags, streamId);
     bytes.append(payload);
     return bytes;
 }
@@ -87,8 +85,7 @@ int main() {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     std::pmr::string boomPath("/boom", std::pmr::get_default_resource());
-    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(boomPath),
-        ruvia::detail::RouteStreamHandler(nullptr, &failingStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(boomPath), ruvia::detail::RouteStreamHandler(nullptr, &failingStreamHandler), {}, {});
     impl.finalize();
     const auto& routes = impl.routeTable();
 
@@ -104,13 +101,10 @@ int main() {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::test::Http2SansIoSessionFixture fixture;
-            fixture.options.connectionFailure.callback = ruvia::detail::CallbackAccess::bind<void(
-                const ruvia::ConnectionFailureRecord&) noexcept>(observation);
+            fixture.options.connectionFailure.callback = ruvia::detail::CallbackAccess::bind<void(const ruvia::ConnectionFailureRecord&) noexcept>(observation);
             auto dispatcher = std::make_shared<WorkerDispatcher>(io, 64);
             const auto workerHandle = WorkerHandleAccess::make(dispatcher);
-            co_await taskAsAwaitable(runHttp2SansIoSession(sock, routes, worker,
-                fixture.context(
-                    ContextServices{}.withPlainTransport("127.0.0.1").withWorker(workerHandle))));
+            co_await taskAsAwaitable(runHttp2SansIoSession(sock, routes, worker, fixture.context(ContextServices{}.withPlainTransport("127.0.0.1").withWorker(workerHandle))));
         },
         asio::detached);
 
@@ -121,18 +115,15 @@ int main() {
         io,
         [&]() -> asio::awaitable<void> {
             tcp::socket sock(io);
-            co_await sock.async_connect(
-                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            co_await sock.async_connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
 
             auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_write(sock,
-                    asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_write(sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
                 (void)n;
                 co_return !ec;
             };
             auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_read(
-                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_read(sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
                 co_return !ec && n == size;
             };
 
@@ -148,9 +139,7 @@ int main() {
             HpackEncoder::encodeHeader(headerBlock, ":path", "/boom");
             HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
             HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
-            if (!co_await writeAll(
-                    frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1,
-                        std::string_view(headerBlock.data(), headerBlock.size())))) {
+            if (!co_await writeAll(frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1, std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
 
@@ -160,8 +149,7 @@ int main() {
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header =
-                    http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;

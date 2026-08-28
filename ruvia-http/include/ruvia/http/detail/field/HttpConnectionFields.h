@@ -23,17 +23,10 @@ enum class HttpFieldListRole : std::uint8_t { kRecipient, kSender };
 
 enum class HttpFieldListParseStatus : std::uint8_t { kOk, kMalformed, kRejected };
 
-enum class HttpConnectionOption : std::uint8_t {
-    kClose = 1U << 0,
-    kKeepAlive = 1U << 1,
-    kUpgrade = 1U << 2,
-    kTe = 1U << 3
-};
+enum class HttpConnectionOption : std::uint8_t { kClose = 1U << 0, kKeepAlive = 1U << 1, kUpgrade = 1U << 2, kTe = 1U << 3 };
 
-[[nodiscard]] inline bool httpConnectionOptionConflictsWithManagedField(
-    std::string_view option) noexcept {
-    if (httpAsciiEqualsIgnoreCase(option, "Host") || httpAsciiEqualsIgnoreCase(option, "Expect") ||
-        httpAsciiEqualsIgnoreCase(option, "Trailer")) {
+[[nodiscard]] inline bool httpConnectionOptionConflictsWithManagedField(std::string_view option) noexcept {
+    if (httpAsciiEqualsIgnoreCase(option, "Host") || httpAsciiEqualsIgnoreCase(option, "Expect") || httpAsciiEqualsIgnoreCase(option, "Trailer")) {
         return true;
     }
     switch (classifyRequestHeader(option)) {
@@ -67,8 +60,7 @@ enum class HttpConnectionOption : std::uint8_t {
             return true;
     }
     const auto knownBit = classifyResponseHeaderName(option);
-    return knownBit != 0 && knownBit != kResponseHeaderConnection &&
-           knownBit != kResponseHeaderTransferEncoding;
+    return knownBit != 0 && knownBit != kResponseHeaderConnection && knownBit != kResponseHeaderTransferEncoding;
 }
 
 // Incremental parser for the logical Connection field value. Repeated field
@@ -76,14 +68,12 @@ enum class HttpConnectionOption : std::uint8_t {
 // occurrence erase an earlier close/Upgrade/TE signal.
 class HttpConnectionOptions final {
 public:
-    [[nodiscard]] HttpFieldListParseStatus parseField(
-        std::string_view fieldValue, HttpFieldListRole role) noexcept {
+    [[nodiscard]] HttpFieldListParseStatus parseField(std::string_view fieldValue, HttpFieldListRole role) noexcept {
         return parseField(fieldValue, role, [](std::string_view) noexcept { return true; });
     }
 
     template <typename Visitor>
-    [[nodiscard]] HttpFieldListParseStatus parseField(
-        std::string_view fieldValue, HttpFieldListRole role, Visitor&& visitor) noexcept {
+    [[nodiscard]] HttpFieldListParseStatus parseField(std::string_view fieldValue, HttpFieldListRole role, Visitor&& visitor) noexcept {
         auto parsedBits = state_;
         std::size_t start = 0;
         while (start <= fieldValue.size()) {
@@ -170,15 +160,11 @@ struct HttpUpgradeProtocol final {
     std::string_view version;
 };
 
-[[nodiscard]] inline bool httpParseUpgradeProtocol(
-    std::string_view value, HttpUpgradeProtocol& output) noexcept {
+[[nodiscard]] inline bool httpParseUpgradeProtocol(std::string_view value, HttpUpgradeProtocol& output) noexcept {
     const auto slash = value.find('/');
     const auto name = slash == std::string_view::npos ? value : value.substr(0, slash);
-    const auto version =
-        slash == std::string_view::npos ? std::string_view{} : value.substr(slash + 1);
-    if (!isValidHttpHeaderName(name) ||
-        (slash != std::string_view::npos &&
-            (!isValidHttpHeaderName(version) || version.find('/') != std::string_view::npos))) {
+    const auto version = slash == std::string_view::npos ? std::string_view{} : value.substr(slash + 1);
+    if (!isValidHttpHeaderName(name) || (slash != std::string_view::npos && (!isValidHttpHeaderName(version) || version.find('/') != std::string_view::npos))) {
         return false;
     }
     output = HttpUpgradeProtocol{.name = name, .version = version};
@@ -188,8 +174,7 @@ struct HttpUpgradeProtocol final {
 template <HttpTemporaryOwningCharString Value>
 bool httpParseUpgradeProtocol(Value&&, HttpUpgradeProtocol&) = delete;
 
-[[nodiscard]] inline bool httpUpgradeProtocolEquals(
-    const HttpUpgradeProtocol& left, const HttpUpgradeProtocol& right) noexcept {
+[[nodiscard]] inline bool httpUpgradeProtocolEquals(const HttpUpgradeProtocol& left, const HttpUpgradeProtocol& right) noexcept {
     // RFC 9110 section 7.8: protocol-name is case-insensitive, while an
     // optional protocol-version remains an exact token.
     return httpAsciiEqualsIgnoreCase(left.name, right.name) && left.version == right.version;
@@ -206,8 +191,7 @@ enum class HttpUpgradeFieldState : std::uint8_t {
 class HttpUpgradeProtocols final {
 public:
     template <typename Visitor>
-    [[nodiscard]] HttpFieldListParseStatus parseField(
-        std::string_view fieldValue, HttpFieldListRole role, Visitor&& visitor) noexcept {
+    [[nodiscard]] HttpFieldListParseStatus parseField(std::string_view fieldValue, HttpFieldListRole role, Visitor&& visitor) noexcept {
         bool parsedProtocol = false;
         std::size_t start = 0;
         while (start <= fieldValue.size()) {

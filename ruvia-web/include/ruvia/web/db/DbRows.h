@@ -77,8 +77,7 @@ public:
 private:
     friend struct detail::DbResultAccess;
 
-    constexpr DbExecResult(
-        std::uint64_t affectedRows, std::optional<std::uint64_t> lastInsertId) noexcept
+    constexpr DbExecResult(std::uint64_t affectedRows, std::optional<std::uint64_t> lastInsertId) noexcept
         : affectedRows_(affectedRows),
           lastInsertId_(lastInsertId) {}
 
@@ -106,8 +105,7 @@ private:
     friend class detail::PostgreSqlPool;
 
     struct Lease final {
-        Lease(detail::DbPoolRef client, std::size_t slot, void* result,
-            std::pmr::memory_resource* resource, OperationOptions options) noexcept;
+        Lease(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
 
         detail::DbPoolRef client;
         std::size_t slot;
@@ -117,8 +115,7 @@ private:
     };
 
     DbStreamResult() noexcept = default;
-    DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result,
-        std::pmr::memory_resource* resource, OperationOptions options) noexcept;
+    DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
     void reset() noexcept;
     void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;

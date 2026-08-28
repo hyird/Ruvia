@@ -190,8 +190,7 @@ bool isValidHttpChunkExtension(std::string_view value) noexcept {
     };
     const auto parseToken = [&value, &cursor]() noexcept {
         const auto begin = cursor;
-        while (
-            cursor < value.size() && isHttpTokenChar(static_cast<unsigned char>(value[cursor]))) {
+        while (cursor < value.size() && isHttpTokenChar(static_cast<unsigned char>(value[cursor]))) {
             ++cursor;
         }
         return cursor != begin;

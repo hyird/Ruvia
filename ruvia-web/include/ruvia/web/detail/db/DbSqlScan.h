@@ -30,8 +30,7 @@ namespace ruvia::detail {
     return character == ' ' || character == '\t' || character == '\r' || character == '\n';
 }
 
-[[nodiscard]] inline constexpr bool isMariaDbDoubleDashComment(
-    std::string_view sql, std::size_t index) noexcept {
+[[nodiscard]] inline constexpr bool isMariaDbDoubleDashComment(std::string_view sql, std::size_t index) noexcept {
     if (index + 2 >= sql.size() || sql[index] != '-' || sql[index + 1] != '-') {
         return false;
     }
@@ -48,8 +47,7 @@ namespace ruvia::detail {
     return false;
 }
 
-[[nodiscard]] constexpr std::size_t skipSqlQuotedRun(
-    std::string_view sql, std::size_t index, char terminator, bool backslashEscapes) noexcept {
+[[nodiscard]] constexpr std::size_t skipSqlQuotedRun(std::string_view sql, std::size_t index, char terminator, bool backslashEscapes) noexcept {
     const auto size = sql.size();
     if (index >= size) {
         return size;
@@ -76,8 +74,7 @@ namespace ruvia::detail {
     return size;
 }
 
-[[nodiscard]] constexpr std::size_t skipSqlLineComment(
-    std::string_view sql, std::size_t start) noexcept {
+[[nodiscard]] constexpr std::size_t skipSqlLineComment(std::string_view sql, std::size_t start) noexcept {
     auto cursor = start;
     while (cursor < sql.size() && sql[cursor] != '\n') {
         ++cursor;
@@ -85,8 +82,7 @@ namespace ruvia::detail {
     return cursor < sql.size() ? cursor + 1 : sql.size();
 }
 
-[[nodiscard]] constexpr std::size_t skipSqlBlockComment(
-    std::string_view sql, std::size_t index) noexcept {
+[[nodiscard]] constexpr std::size_t skipSqlBlockComment(std::string_view sql, std::size_t index) noexcept {
     auto cursor = index + 2;
     while (cursor + 1 < sql.size()) {
         if (sql[cursor] == '*' && sql[cursor + 1] == '/') {
@@ -149,8 +145,7 @@ namespace ruvia::detail {
 // string literals, but their delimiter is either $$ or $tag$. Keep this scan
 // separate from skipSqlAtom(): MariaDB's '?' binder shares that generic helper
 // and must not treat its ordinary '$' identifiers as quoted strings.
-[[nodiscard]] constexpr std::size_t skipPostgreSqlDollarQuotedAtom(
-    std::string_view sql, std::size_t index) noexcept {
+[[nodiscard]] constexpr std::size_t skipPostgreSqlDollarQuotedAtom(std::string_view sql, std::size_t index) noexcept {
     const auto size = sql.size();
     if (index >= size || sql[index] != '$') {
         return index < size ? index + 1 : size;
@@ -183,10 +178,8 @@ namespace ruvia::detail {
     return isPostgreSqlDollarTagContinue(character) || byte == '$';
 }
 
-[[nodiscard]] constexpr bool hasPostgreSqlEscapeStringPrefix(
-    std::string_view sql, std::size_t index) noexcept {
-    if (index + 1 >= sql.size() || (sql[index] != 'E' && sql[index] != 'e') ||
-        sql[index + 1] != '\'') {
+[[nodiscard]] constexpr bool hasPostgreSqlEscapeStringPrefix(std::string_view sql, std::size_t index) noexcept {
+    if (index + 1 >= sql.size() || (sql[index] != 'E' && sql[index] != 'e') || sql[index + 1] != '\'') {
         return false;
     }
     return index == 0 || !isPostgreSqlIdentifierContinue(sql[index - 1]);
@@ -196,8 +189,7 @@ namespace ruvia::detail {
 // separator: ordinary strings and quoted identifiers use doubled delimiters,
 // not backslash escapes, and '#' is an operator byte rather than a comment
 // opener. Escape strings keep the explicit E'...' backslash rule.
-[[nodiscard]] constexpr std::size_t skipPostgreSqlSqlAtom(
-    std::string_view sql, std::size_t index) noexcept {
+[[nodiscard]] constexpr std::size_t skipPostgreSqlSqlAtom(std::string_view sql, std::size_t index) noexcept {
     const auto size = sql.size();
     if (index >= size) {
         return size;
@@ -242,8 +234,7 @@ namespace ruvia::detail {
 // npos. Bytes inside literals, quoted identifiers and comments are data and are
 // skipped whole. A byte that opens one of those constructs is that construct
 // and is never reported as syntax.
-[[nodiscard]] constexpr std::size_t findSqlSyntaxByte(
-    std::string_view sql, char wanted, std::size_t from = 0) noexcept {
+[[nodiscard]] constexpr std::size_t findSqlSyntaxByte(std::string_view sql, char wanted, std::size_t from = 0) noexcept {
     for (auto index = from; index < sql.size();) {
         const auto next = skipSqlAtom(sql, index);
         if (next == index + 1 && sql[index] == wanted) {
@@ -257,8 +248,7 @@ namespace ruvia::detail {
 // PostgreSQL adds dollar-quoted strings to the generic opaque constructs. This
 // variant is used by migration statement validation; the MariaDB parameter
 // binder intentionally continues to use findSqlSyntaxByte().
-[[nodiscard]] constexpr std::size_t findPostgreSqlSyntaxByte(
-    std::string_view sql, char wanted, std::size_t from = 0) noexcept {
+[[nodiscard]] constexpr std::size_t findPostgreSqlSyntaxByte(std::string_view sql, char wanted, std::size_t from = 0) noexcept {
     for (auto index = from; index < sql.size();) {
         const auto next = skipPostgreSqlSqlAtom(sql, index);
         if (next == index + 1 && sql[index] == wanted) {

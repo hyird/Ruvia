@@ -5,8 +5,7 @@
 namespace ruvia {
 namespace {
 
-RUVIA_RESPONSE_MODEL(HealthResponseModel, RUVIA_REQUIRED_FIELD(status, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(reason, ruvia::String));
+RUVIA_RESPONSE_MODEL(HealthResponseModel, RUVIA_REQUIRED_FIELD(status, ruvia::String), RUVIA_OPTIONAL_FIELD(reason, ruvia::String));
 
 }  // namespace
 

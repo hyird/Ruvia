@@ -50,8 +50,7 @@ public:
     }
     const Http2LocalConnectionOpen* open() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalConnectionGracefulDrain* gracefulDrain()
-        const& noexcept {
+    [[nodiscard]] constexpr const Http2LocalConnectionGracefulDrain* gracefulDrain() const& noexcept {
         return std::get_if<Http2LocalConnectionGracefulDrain>(&state_);
     }
     const Http2LocalConnectionGracefulDrain* gracefulDrain() const&& = delete;
@@ -74,8 +73,7 @@ public:
     }
 
 private:
-    using State = std::variant<Http2LocalConnectionOpen, Http2LocalConnectionGracefulDrain,
-        Http2LocalConnectionFatalFailure>;
+    using State = std::variant<Http2LocalConnectionOpen, Http2LocalConnectionGracefulDrain, Http2LocalConnectionFatalFailure>;
 
     State state_;
 };

@@ -62,11 +62,9 @@ int main() {
 
     const auto allocationsBeforeRegistration = allocationCount.load(std::memory_order_relaxed);
     const auto ownersBeforeRegistration = mailbox.use_count();
-    source.token().registerCallback(
-        registration, ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 41));
+    source.token().registerCallback(registration, ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 41));
     check(mailbox.use_count() == ownersBeforeRegistration);
-    ruvia::MoveOnlyFunction<void()> queuedDispatch(
-        ruvia::detail::WorkerCancellationDispatch<CancellationMailbox>(mailbox, 42));
+    ruvia::MoveOnlyFunction<void()> queuedDispatch(ruvia::detail::WorkerCancellationDispatch<CancellationMailbox>(mailbox, 42));
     check(allocationCount.load(std::memory_order_relaxed) == allocationsBeforeRegistration);
     registration.reset();
 
@@ -79,8 +77,7 @@ int main() {
 
     ruvia::StopSource onWorkerSource;
     ruvia::StopRegistration onWorkerRegistration;
-    onWorkerSource.token().registerCallback(onWorkerRegistration,
-        ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 44));
+    onWorkerSource.token().registerCallback(onWorkerRegistration, ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 44));
     bool observedInline = false;
     bool observedOperationIds = false;
     ruvia::detail::WorkerHandleAccess::defer(worker, [&] {

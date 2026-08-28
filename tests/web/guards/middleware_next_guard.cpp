@@ -49,15 +49,11 @@ bool exerciseTypedControlPhases() {
     using Control = ruvia::detail::NextState::Control;
     using Invocation = ruvia::detail::NextState::Invocation;
     Control control;
-    if (control.phase() != Control::Phase::kFresh ||
-        control.beginInvocation() != Invocation::kReady ||
-        control.phase() != Control::Phase::kInvoked ||
-        control.beginInvocation() != Invocation::kRepeated) {
+    if (control.phase() != Control::Phase::kFresh || control.beginInvocation() != Invocation::kReady || control.phase() != Control::Phase::kInvoked || control.beginInvocation() != Invocation::kRepeated) {
         return false;
     }
     control.expire();
-    return control.phase() == Control::Phase::kExpired &&
-           control.beginInvocation() == Invocation::kExpired;
+    return control.phase() == Control::Phase::kExpired && control.beginInvocation() == Invocation::kExpired;
 }
 
 ruvia::Task<void> countingContinuation(ruvia::detail::NextState) {
@@ -68,8 +64,7 @@ ruvia::Task<void> countingContinuation(ruvia::detail::NextState) {
 ruvia::Task<int> exerciseExpiredNext() {
     std::pmr::monotonic_buffer_resource resource;
     ruvia::detail::NextState::Control control;
-    auto next = ruvia::detail::NextAccess::make(
-        ruvia::detail::NextState{.control = &control}, &countingContinuation);
+    auto next = ruvia::detail::NextAccess::make(ruvia::detail::NextState{.control = &control}, &countingContinuation);
 
     control.expire();
     co_await next();

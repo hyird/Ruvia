@@ -28,8 +28,7 @@ enum class TimerSleepResult : std::uint8_t {
 // cancelled and joined. This is the same borrow-only boundary the request hot
 // path applies everywhere else; a temporary handle would dangle in the lazy
 // coroutine frame.
-[[nodiscard]] Task<TimerSleepResult> sleepFor(
-    const WorkerHandle& worker, std::chrono::steady_clock::duration duration);
+[[nodiscard]] Task<TimerSleepResult> sleepFor(const WorkerHandle& worker, std::chrono::steady_clock::duration duration);
 Task<TimerSleepResult> sleepFor(WorkerHandle&&, std::chrono::steady_clock::duration) = delete;
 
 // The same sleep, cut short when `stopToken` is stopped as well as by worker
@@ -41,9 +40,7 @@ Task<TimerSleepResult> sleepFor(WorkerHandle&&, std::chrono::steady_clock::durat
 // a worker timer is worker-owned state, so cancellation is deferred onto the
 // worker and validated there -- a stop that arrives after the sleep already
 // finished is a no-op rather than a use-after-free.
-[[nodiscard]] Task<TimerSleepResult> sleepFor(
-    const WorkerHandle& worker, std::chrono::steady_clock::duration duration, StopToken stopToken);
-Task<TimerSleepResult> sleepFor(
-    WorkerHandle&&, std::chrono::steady_clock::duration, StopToken) = delete;
+[[nodiscard]] Task<TimerSleepResult> sleepFor(const WorkerHandle& worker, std::chrono::steady_clock::duration duration, StopToken stopToken);
+Task<TimerSleepResult> sleepFor(WorkerHandle&&, std::chrono::steady_clock::duration, StopToken) = delete;
 
 }  // namespace ruvia

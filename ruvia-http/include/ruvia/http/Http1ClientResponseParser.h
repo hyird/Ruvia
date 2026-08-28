@@ -95,8 +95,7 @@ public:
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    constexpr Http1ClientKnownLengthResponse(
-        std::size_t contentLength, Http1ClosePolicy persistence) noexcept
+    constexpr Http1ClientKnownLengthResponse(std::size_t contentLength, Http1ClosePolicy persistence) noexcept
         : contentLength_(contentLength),
           persistence_(persistence) {}
 
@@ -119,8 +118,7 @@ public:
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    constexpr Http1ClientChunkedResponse(
-        HttpTransferCodings transferCodings, Http1ClosePolicy persistence) noexcept
+    constexpr Http1ClientChunkedResponse(HttpTransferCodings transferCodings, Http1ClosePolicy persistence) noexcept
         : transferCodings_(transferCodings),
           persistence_(persistence) {}
 
@@ -140,8 +138,7 @@ public:
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    explicit constexpr Http1ClientCloseDelimitedResponse(
-        HttpTransferCodings transferCodings) noexcept
+    explicit constexpr Http1ClientCloseDelimitedResponse(HttpTransferCodings transferCodings) noexcept
         : transferCodings_(transferCodings) {}
 
     HttpTransferCodings transferCodings_;
@@ -164,8 +161,7 @@ public:
     }
     const Http1ClientChunkedResponse* chunked() const&& = delete;
 
-    [[nodiscard]] constexpr const Http1ClientCloseDelimitedResponse* closeDelimited()
-        const& noexcept {
+    [[nodiscard]] constexpr const Http1ClientCloseDelimitedResponse* closeDelimited() const& noexcept {
         return std::get_if<Http1ClientCloseDelimitedResponse>(&framing_);
     }
     const Http1ClientCloseDelimitedResponse* closeDelimited() const&& = delete;
@@ -173,8 +169,7 @@ public:
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    using Framing = std::variant<Http1ClientKnownLengthResponse, Http1ClientChunkedResponse,
-        Http1ClientCloseDelimitedResponse>;
+    using Framing = std::variant<Http1ClientKnownLengthResponse, Http1ClientChunkedResponse, Http1ClientCloseDelimitedResponse>;
 
     explicit constexpr Http1ClientResponseWithZeroContent(Framing framing) noexcept
         : framing_(framing) {}
@@ -202,20 +197,17 @@ private:
 // it.
 class Http1ClientResponsePlan final {
 public:
-    [[nodiscard]] constexpr const Http1ClientInformationalResponse* informational()
-        const& noexcept {
+    [[nodiscard]] constexpr const Http1ClientInformationalResponse* informational() const& noexcept {
         return std::get_if<Http1ClientInformationalResponse>(&state_);
     }
     const Http1ClientInformationalResponse* informational() const&& = delete;
 
-    [[nodiscard]] constexpr const Http1ClientResponseWithoutContent* withoutContent()
-        const& noexcept {
+    [[nodiscard]] constexpr const Http1ClientResponseWithoutContent* withoutContent() const& noexcept {
         return std::get_if<Http1ClientResponseWithoutContent>(&state_);
     }
     const Http1ClientResponseWithoutContent* withoutContent() const&& = delete;
 
-    [[nodiscard]] constexpr const Http1ClientResponseWithZeroContent* zeroContent()
-        const& noexcept {
+    [[nodiscard]] constexpr const Http1ClientResponseWithZeroContent* zeroContent() const& noexcept {
         return std::get_if<Http1ClientResponseWithZeroContent>(&state_);
     }
     const Http1ClientResponseWithZeroContent* zeroContent() const&& = delete;
@@ -230,8 +222,7 @@ public:
     }
     const Http1ClientChunkedResponse* chunked() const&& = delete;
 
-    [[nodiscard]] constexpr const Http1ClientCloseDelimitedResponse* closeDelimited()
-        const& noexcept {
+    [[nodiscard]] constexpr const Http1ClientCloseDelimitedResponse* closeDelimited() const& noexcept {
         return std::get_if<Http1ClientCloseDelimitedResponse>(&state_);
     }
     const Http1ClientCloseDelimitedResponse* closeDelimited() const&& = delete;
@@ -246,21 +237,16 @@ public:
     }
     const Http1ClientProtocolUpgrade* protocolUpgrade() const&& = delete;
 
-    [[nodiscard]] constexpr std::optional<HttpClientRequestContentSignal> requestContentSignal()
-        const noexcept {
+    [[nodiscard]] constexpr std::optional<HttpClientRequestContentSignal> requestContentSignal() const noexcept {
         return requestContentSignal_;
     }
 
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    using State = std::variant<Http1ClientInformationalResponse, Http1ClientResponseWithoutContent,
-        Http1ClientResponseWithZeroContent, Http1ClientKnownLengthResponse,
-        Http1ClientChunkedResponse, Http1ClientCloseDelimitedResponse, Http1ClientConnectTunnel,
-        Http1ClientProtocolUpgrade>;
+    using State = std::variant<Http1ClientInformationalResponse, Http1ClientResponseWithoutContent, Http1ClientResponseWithZeroContent, Http1ClientKnownLengthResponse, Http1ClientChunkedResponse, Http1ClientCloseDelimitedResponse, Http1ClientConnectTunnel, Http1ClientProtocolUpgrade>;
 
-    Http1ClientResponsePlan(
-        State state, std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept
+    Http1ClientResponsePlan(State state, std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept
         : state_(state),
           requestContentSignal_(requestContentSignal) {}
 
@@ -292,8 +278,7 @@ enum class Http1ClientResponseParseError : std::uint8_t {
     kTooManyInformationalResponses,
 };
 
-[[nodiscard]] std::string_view http1ClientResponseParseErrorMessage(
-    Http1ClientResponseParseError error) noexcept;
+[[nodiscard]] std::string_view http1ClientResponseParseErrorMessage(Http1ClientResponseParseError error) noexcept;
 
 class Http1ClientResponseNeedMore final {
 private:
@@ -333,8 +318,7 @@ public:
 private:
     friend struct detail::Http1ClientResponseParseResultAccess;
 
-    Http1ParsedClientResponseHead(HttpClientResponseHead head, Http1ClientResponsePlan plan,
-        std::size_t consumedBytes) noexcept
+    Http1ParsedClientResponseHead(HttpClientResponseHead head, Http1ClientResponsePlan plan, std::size_t consumedBytes) noexcept
         : head_(std::move(head)),
           plan_(plan),
           consumedBytes_(consumedBytes) {}
@@ -430,9 +414,7 @@ private:
     explicit Http1ClientResponseParseResult(Http1ClientResponseParseTerminal state) noexcept
         : state_(state) {}
 
-    std::variant<Http1ClientResponseNeedMore, Http1ParsedClientResponseHead,
-        Http1ClientResponseParseFailure, Http1ClientResponseParseTerminal>
-        state_;
+    std::variant<Http1ClientResponseNeedMore, Http1ParsedClientResponseHead, Http1ClientResponseParseFailure, Http1ClientResponseParseTerminal> state_;
 };
 
 // Per-request HTTP/1 response-head state machine. Construction consumes the
@@ -448,8 +430,7 @@ public:
     };
 
     explicit Http1ClientResponseParser(Http1ClientExchangeState exchangeState) noexcept;
-    explicit Http1ClientResponseParser(
-        Http1ClientExchangeState exchangeState, Options options) noexcept;
+    explicit Http1ClientResponseParser(Http1ClientExchangeState exchangeState, Options options) noexcept;
 
     Http1ClientResponseParser(const Http1ClientResponseParser&) = delete;
     Http1ClientResponseParser& operator=(const Http1ClientResponseParser&) = delete;
@@ -461,8 +442,7 @@ public:
     [[nodiscard]] Http1ClientResponseParseResult parse(std::string_view buffer);
 
 private:
-    [[nodiscard]] static constexpr detail::Http1ClientRequestContentPhase
-    initialRequestContentPhase(const Http1ClientExchangeState& state) noexcept {
+    [[nodiscard]] static constexpr detail::Http1ClientRequestContentPhase initialRequestContentPhase(const Http1ClientExchangeState& state) noexcept {
         switch (detail::Http1ClientExchangeStateAccess::contentState(state)) {
             case detail::Http1ClientInitialContentState::kComplete:
                 return detail::Http1ClientRequestContentPhase::kContentComplete;
@@ -487,12 +467,10 @@ private:
     std::uint8_t informationalResponseCount_{0};
 };
 
-inline Http1ClientResponseParser::Http1ClientResponseParser(
-    Http1ClientExchangeState exchangeState) noexcept
+inline Http1ClientResponseParser::Http1ClientResponseParser(Http1ClientExchangeState exchangeState) noexcept
     : Http1ClientResponseParser(std::move(exchangeState), Options{}) {}
 
-inline Http1ClientResponseParser::Http1ClientResponseParser(
-    Http1ClientExchangeState exchangeState, Options options) noexcept
+inline Http1ClientResponseParser::Http1ClientResponseParser(Http1ClientExchangeState exchangeState, Options options) noexcept
     : exchangeState_(std::move(exchangeState)),
       resource_(options.resource),
       requestContentPhase_(initialRequestContentPhase(exchangeState_)) {}

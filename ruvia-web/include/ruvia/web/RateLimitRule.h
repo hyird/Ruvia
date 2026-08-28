@@ -38,8 +38,7 @@ inline constexpr void validateRateLimitRule(const RateLimitRule& rule) {
     if (rule.window.count() <= 0) {
         throw std::invalid_argument("rate limit window must be greater than zero");
     }
-    if (rule.overflowPolicy != RateLimitOverflowPolicy::kDeny &&
-        rule.overflowPolicy != RateLimitOverflowPolicy::kAllow) {
+    if (rule.overflowPolicy != RateLimitOverflowPolicy::kDeny && rule.overflowPolicy != RateLimitOverflowPolicy::kAllow) {
         throw std::invalid_argument("rate limit overflow policy is invalid");
     }
 }

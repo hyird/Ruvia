@@ -15,8 +15,7 @@ enum class HttpRequestContentSemantics : std::uint8_t {
     kContentTypeRequired,
 };
 
-[[nodiscard]] constexpr HttpRequestContentSemantics httpRequestContentSemantics(
-    std::string_view method) noexcept {
+[[nodiscard]] constexpr HttpRequestContentSemantics httpRequestContentSemantics(std::string_view method) noexcept {
     if (method == "CONNECT" || method == "TRACE") {
         return HttpRequestContentSemantics::kForbidden;
     }

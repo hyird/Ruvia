@@ -11,8 +11,7 @@
 namespace {
 
 std::optional<std::string> urlDecode(std::string_view in, ruvia::detail::UrlDecodeMode mode) {
-    auto decoded = ruvia::detail::decodeUrlComponent(
-        in, {.mode = mode, .resource = std::pmr::get_default_resource()});
+    auto decoded = ruvia::detail::decodeUrlComponent(in, {.mode = mode, .resource = std::pmr::get_default_resource()});
     if (!decoded.has_value()) {
         return std::nullopt;
     }
@@ -84,10 +83,7 @@ RUVIA_TEST(url_find_pair_value) {
 
 RUVIA_TEST(url_visit_pairs_count) {
     std::vector<std::pair<std::string, std::string>> pairs;
-    (void)ruvia::detail::visitUrlEncodedPairs(
-        "x=1&y=2&z=3", [&](std::string_view n, std::string_view v) {
-            pairs.emplace_back(std::string(n), std::string(v));
-        });
+    (void)ruvia::detail::visitUrlEncodedPairs("x=1&y=2&z=3", [&](std::string_view n, std::string_view v) { pairs.emplace_back(std::string(n), std::string(v)); });
     RUVIA_CHECK_EQ(pairs.size(), std::size_t(3));
     if (pairs.size() == 3) {
         RUVIA_CHECK_EQ(pairs[0].first, std::string("x"));
@@ -98,10 +94,7 @@ RUVIA_TEST(url_visit_pairs_count) {
 RUVIA_TEST(url_visit_pairs_skips_empty_segments) {
     std::vector<std::pair<std::string, std::string>> pairs;
     // Leading, doubled, and trailing '&' produce empty segments that must NOT yield ("","") pairs.
-    (void)ruvia::detail::visitUrlEncodedPairs(
-        "&a=1&&b=2&", [&](std::string_view n, std::string_view v) {
-            pairs.emplace_back(std::string(n), std::string(v));
-        });
+    (void)ruvia::detail::visitUrlEncodedPairs("&a=1&&b=2&", [&](std::string_view n, std::string_view v) { pairs.emplace_back(std::string(n), std::string(v)); });
     RUVIA_CHECK_EQ(pairs.size(), std::size_t(2));
     if (pairs.size() == 2) {
         RUVIA_CHECK_EQ(pairs[0].first, std::string("a"));
@@ -109,9 +102,6 @@ RUVIA_TEST(url_visit_pairs_skips_empty_segments) {
     }
     // A key with an empty value ("k=") is still a real field and must be kept.
     std::vector<std::pair<std::string, std::string>> kept;
-    (void)ruvia::detail::visitUrlEncodedPairs("k=&=v", [&](std::string_view n, std::string_view v) {
-        kept.emplace_back(std::string(n), std::string(v));
-    });
-    RUVIA_CHECK_EQ(
-        kept.size(), std::size_t(2));  // "k=" (name k, empty value) and "=v" (empty name, value v)
+    (void)ruvia::detail::visitUrlEncodedPairs("k=&=v", [&](std::string_view n, std::string_view v) { kept.emplace_back(std::string(n), std::string(v)); });
+    RUVIA_CHECK_EQ(kept.size(), std::size_t(2));  // "k=" (name k, empty value) and "=v" (empty name, value v)
 }

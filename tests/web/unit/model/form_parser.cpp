@@ -44,8 +44,7 @@ RUVIA_TEST(form_number_floating_accepts_fraction_and_exponent) {
     RUVIA_CHECK(parseFormNumber<double>("1.5") == 1.5);
     RUVIA_CHECK(parseFormNumber<double>("-2e3") == -2000.0);
     RUVIA_CHECK(!parseFormNumber<double>("").has_value());
-    RUVIA_CHECK(
-        !parseFormNumber<double>("1.2.3").has_value());  // trailing junk after a valid prefix
+    RUVIA_CHECK(!parseFormNumber<double>("1.2.3").has_value());  // trailing junk after a valid prefix
 }
 
 RUVIA_TEST(form_number_floating_rejects_non_finite) {
@@ -62,12 +61,10 @@ RUVIA_TEST(form_number_floating_rejects_non_finite) {
 RUVIA_TEST(form_value_decode_failure_returns_no_partial_value) {
     auto* resource = std::pmr::get_default_resource();
 
-    const auto rejected = parseFormValue<ruvia::String>(
-        "decoded%2", ruvia::detail::FormValueEncoding::kUrlEncoded, resource);
+    const auto rejected = parseFormValue<ruvia::String>("decoded%2", ruvia::detail::FormValueEncoding::kUrlEncoded, resource);
     RUVIA_CHECK(!rejected.has_value());
 
-    const auto parsed = parseFormValue<ruvia::String>(
-        "decoded%20value", ruvia::detail::FormValueEncoding::kUrlEncoded, resource);
+    const auto parsed = parseFormValue<ruvia::String>("decoded%20value", ruvia::detail::FormValueEncoding::kUrlEncoded, resource);
     RUVIA_CHECK(parsed.has_value());
     RUVIA_CHECK_EQ(parsed->view(), std::string_view("decoded value"));
 }
@@ -75,13 +72,11 @@ RUVIA_TEST(form_value_decode_failure_returns_no_partial_value) {
 RUVIA_TEST(form_value_encoding_is_explicit) {
     auto* resource = std::pmr::get_default_resource();
 
-    const auto encoded = parseFormValue<ruvia::Int32>(
-        "%34%32", ruvia::detail::FormValueEncoding::kUrlEncoded, resource);
+    const auto encoded = parseFormValue<ruvia::Int32>("%34%32", ruvia::detail::FormValueEncoding::kUrlEncoded, resource);
     RUVIA_CHECK(encoded.has_value());
     RUVIA_CHECK_EQ(static_cast<std::int32_t>(*encoded), 42);
 
-    const auto decoded = parseFormValue<ruvia::String>(
-        "literal%20value+plus", ruvia::detail::FormValueEncoding::kDecoded, resource);
+    const auto decoded = parseFormValue<ruvia::String>("literal%20value+plus", ruvia::detail::FormValueEncoding::kDecoded, resource);
     RUVIA_CHECK(decoded.has_value());
     RUVIA_CHECK_EQ(decoded->view(), std::string_view("literal%20value+plus"));
 }

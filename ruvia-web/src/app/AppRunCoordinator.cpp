@@ -45,11 +45,7 @@ void invokeStopHooks(detail::AppState& state) noexcept {
     }
 }
 
-[[nodiscard]] std::unique_ptr<detail::Router, detail::PmrObjectDeleter<detail::Router>>
-buildWorkerRouter(const detail::AppState& state, std::pmr::memory_resource* runtimeResource,
-    detail::ControllerStore& controllers,
-    std::span<const detail::ControllerRegistrar> controllerRegistrars,
-    const detail::CompiledRoutePlan* compiledPlan) {
+[[nodiscard]] std::unique_ptr<detail::Router, detail::PmrObjectDeleter<detail::Router>> buildWorkerRouter(const detail::AppState& state, std::pmr::memory_resource* runtimeResource, detail::ControllerStore& controllers, std::span<const detail::ControllerRegistrar> controllerRegistrars, const detail::CompiledRoutePlan* compiledPlan) {
     auto router = detail::makePmrObject<detail::Router>(runtimeResource);
     detail::registerControllers(*router, controllers, controllerRegistrars);
     auto& routes = detail::RouterImpl::from(*router);
@@ -134,48 +130,34 @@ private:
 
     void buildAndPublishRuntime() {
         const auto controllerRegistrars = detail::sealControllerRegistrars();
-        auto runtime =
-            detail::makePmrObject<detail::AppRuntimeGraph>(runtimeResource_, runtimeResource_);
+        auto runtime = detail::makePmrObject<detail::AppRuntimeGraph>(runtimeResource_, runtimeResource_);
         auto preparedOptions = state_.options;
         preparedOptions.env = &state_.env;
         preparedOptions.workerFailure = detail::WorkerFailureSink{
             .target = &owner_,
-            .invoke =
-                [](void* target, const std::exception_ptr&) noexcept {
-                    static_cast<App*>(target)->stop();
-                },
+            .invoke = [](void* target, const std::exception_ptr&) noexcept { static_cast<App*>(target)->stop(); },
         };
 
-        std::unique_ptr<StaticRoot, detail::PmrObjectDeleter<StaticRoot>> configuredDocumentRoot(
-            nullptr, detail::PmrObjectDeleter<StaticRoot>{runtimeResource_});
+        std::unique_ptr<StaticRoot, detail::PmrObjectDeleter<StaticRoot>> configuredDocumentRoot(nullptr, detail::PmrObjectDeleter<StaticRoot>{runtimeResource_});
         if (state_.documentRootConfig.has_value()) {
-            const auto documentRootPath =
-                detail::makePathFromNativePath(state_.documentRootConfig->root);
-            configuredDocumentRoot = detail::StaticRootAccess::make(
-                runtimeResource_, documentRootPath, state_.documentRootConfig->staticOptions);
-            if (preparedOptions.compression.has_value() &&
-                state_.documentRootConfig->precompression.enabled()) {
-                detail::StaticRootAccess::installPrecompressedVariants(
-                    *configuredDocumentRoot, nullptr, state_.documentRootConfig->precompression);
+            const auto documentRootPath = detail::makePathFromNativePath(state_.documentRootConfig->root);
+            configuredDocumentRoot = detail::StaticRootAccess::make(runtimeResource_, documentRootPath, state_.documentRootConfig->staticOptions);
+            if (preparedOptions.compression.has_value() && state_.documentRootConfig->precompression.enabled()) {
+                detail::StaticRootAccess::installPrecompressedVariants(*configuredDocumentRoot, nullptr, state_.documentRootConfig->precompression);
             }
-            preparedOptions.documentRoot =
-                detail::HttpServerOptions::DocumentRoot::refreshing(*configuredDocumentRoot,
-                    state_.documentRootConfig->runtime, state_.documentRootConfig->precompression);
+            preparedOptions.documentRoot = detail::HttpServerOptions::DocumentRoot::refreshing(*configuredDocumentRoot, state_.documentRootConfig->runtime, state_.documentRootConfig->precompression);
         }
         if (state_.blockingPool.has_value()) {
-            runtime->blockingPool =
-                detail::makePmrObject<BlockingPool>(runtimeResource_, *state_.blockingPool);
+            runtime->blockingPool = detail::makePmrObject<BlockingPool>(runtimeResource_, *state_.blockingPool);
             preparedOptions.blockingPool = runtime->blockingPool.get();
         }
 
-        const auto validatedConfiguration =
-            detail::validateHttpServerConfiguration(state_.listeners, std::move(preparedOptions));
+        const auto validatedConfiguration = detail::validateHttpServerConfiguration(state_.listeners, std::move(preparedOptions));
 
         runtime->workers.reserve(state_.workerCount);
         for (std::size_t i = 0; i < state_.workerCount; ++i) {
             detail::ControllerStore controllers;
-            auto router = buildWorkerRouter(state_, runtimeResource_, controllers,
-                controllerRegistrars, runtime->routePlan.get());
+            auto router = buildWorkerRouter(state_, runtimeResource_, controllers, controllerRegistrars, runtime->routePlan.get());
             auto& routes = detail::RouterImpl::from(*router);
             if (runtime->routePlan == nullptr) {
                 runtime->routePlan = routes.releaseCompiledPlan();
@@ -190,11 +172,9 @@ private:
                 .workerStates = std::span<const detail::WorkerStateDefinition>(state_.workerStates),
                 .httpClients = std::span<const detail::HttpClientDefinition>(state_.httpClients),
             };
-            auto worker = detail::makePmrObject<detail::WebWorkerRuntime>(
-                runtimeResource_, validatedConfiguration, routes.routeTable(), capabilities);
+            auto worker = detail::makePmrObject<detail::WebWorkerRuntime>(runtimeResource_, validatedConfiguration, routes.routeTable(), capabilities);
             worker->prepare();
-            runtime->workers.emplace_back(
-                std::move(controllers), std::move(router), std::move(worker));
+            runtime->workers.emplace_back(std::move(controllers), std::move(router), std::move(worker));
         }
 
         std::lock_guard lock(state_.mutex);
@@ -302,8 +282,7 @@ private:
                 if (firstFailure == nullptr) {
                     firstFailure = std::current_exception();
                 } else {
-                    detail::reportUnhandledFailure(
-                        "additional web worker failure", std::current_exception());
+                    detail::reportUnhandledFailure("additional web worker failure", std::current_exception());
                 }
             }
         }
@@ -311,8 +290,7 @@ private:
     }
 
     void retireRuntime() noexcept {
-        std::unique_ptr<detail::AppRuntimeGraph, detail::PmrObjectDeleter<detail::AppRuntimeGraph>>
-            retired(nullptr, detail::PmrObjectDeleter<detail::AppRuntimeGraph>{runtimeResource_});
+        std::unique_ptr<detail::AppRuntimeGraph, detail::PmrObjectDeleter<detail::AppRuntimeGraph>> retired(nullptr, detail::PmrObjectDeleter<detail::AppRuntimeGraph>{runtimeResource_});
         {
             std::lock_guard lock(state_.mutex);
             retired = std::move(state_.runtime);

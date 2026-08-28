@@ -19,13 +19,9 @@ namespace ruvia::detail {
 
 // Web static-file path policy: normalize a client path relative to the configured
 // document root and reject every attempt to ascend above it.
-[[nodiscard]] inline std::pmr::string normalizeStaticRelativePath(
-    std::string_view input, std::pmr::polymorphic_allocator<char> allocator) {
-    if (!input.empty() &&
-        (input.front() == '/' || input.front() == '\\' || isWindowsDrivePath(input))) {
-        throw HttpError({.status = ruvia::http_status::kForbidden,
-            .code = "forbidden",
-            .message = "invalid static file path"});
+[[nodiscard]] inline std::pmr::string normalizeStaticRelativePath(std::string_view input, std::pmr::polymorphic_allocator<char> allocator) {
+    if (!input.empty() && (input.front() == '/' || input.front() == '\\' || isWindowsDrivePath(input))) {
+        throw HttpError({.status = ruvia::http_status::kForbidden, .code = "forbidden", .message = "invalid static file path"});
     }
 
     std::pmr::string output(allocator);
@@ -39,9 +35,7 @@ namespace ruvia::detail {
         if (!segment.empty() && segment != ".") {
             if (segment == "..") {
                 if (output.empty()) {
-                    throw HttpError({.status = ruvia::http_status::kForbidden,
-                        .code = "forbidden",
-                        .message = "invalid static file path"});
+                    throw HttpError({.status = ruvia::http_status::kForbidden, .code = "forbidden", .message = "invalid static file path"});
                 }
                 const auto previousSlash = output.rfind('/');
                 if (previousSlash == std::pmr::string::npos) {

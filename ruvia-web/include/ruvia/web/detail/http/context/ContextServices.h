@@ -36,16 +36,13 @@ public:
     ContextServices() noexcept
         : connInfo_(ConnInfo::plain({})) {}
 
-    ContextServices(const WorkerHandle& worker, WorkerClientRegistryView clientRegistries = {},
-        RateLimiter* rateLimiter = nullptr,
-        std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes)
+    ContextServices(const WorkerHandle& worker, WorkerClientRegistryView clientRegistries = {}, RateLimiter* rateLimiter = nullptr, std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes)
         : clientRegistries_(clientRegistries),
           rateLimiter_(rateLimiter),
           maxDecodedBodyBytes_(maxDecodedBodyBytes),
           worker_(&requireWorker(worker)),
           connInfo_(ConnInfo::plain({})) {}
-    ContextServices(WorkerHandle&&, WorkerClientRegistryView = {}, RateLimiter* = nullptr,
-        std::size_t = kDefaultMaxBufferedBodyBytes) = delete;
+    ContextServices(WorkerHandle&&, WorkerClientRegistryView = {}, RateLimiter* = nullptr, std::size_t = kDefaultMaxBufferedBodyBytes) = delete;
 
     [[nodiscard]] constexpr WorkerClientRegistryView clientRegistries() const noexcept {
         return clientRegistries_;
@@ -234,8 +231,7 @@ public:
     }
 
     // The registry is worker-owned and outlives every dispatched request.
-    [[nodiscard]] ContextServices withWorkerStates(
-        const WorkerStateRegistry& value) const noexcept {
+    [[nodiscard]] ContextServices withWorkerStates(const WorkerStateRegistry& value) const noexcept {
         auto services = *this;
         services.workerStates_ = &value;
         return services;
@@ -243,8 +239,7 @@ public:
 
     // Views borrow connection-owned storage and remain valid for every Context
     // created while that connection is dispatched.
-    [[nodiscard]] ContextServices withPlainTransport(
-        std::string_view remoteAddress) const noexcept {
+    [[nodiscard]] ContextServices withPlainTransport(std::string_view remoteAddress) const noexcept {
         auto services = *this;
         services.connInfo_ = ConnInfo::plain(remoteAddress);
         return services;
@@ -253,20 +248,17 @@ public:
     template <typename Traits, typename Allocator>
     ContextServices withPlainTransport(std::basic_string<char, Traits, Allocator>&&) const = delete;
 
-    [[nodiscard]] ContextServices withTlsTransport(std::string_view remoteAddress,
-        std::string_view clientCertificateSubject = {}) const noexcept {
+    [[nodiscard]] ContextServices withTlsTransport(std::string_view remoteAddress, std::string_view clientCertificateSubject = {}) const noexcept {
         auto services = *this;
         services.connInfo_ = ConnInfo::tls(remoteAddress, clientCertificateSubject);
         return services;
     }
 
     template <typename Traits, typename Allocator>
-    ContextServices withTlsTransport(
-        std::basic_string<char, Traits, Allocator>&&, std::string_view = {}) const = delete;
+    ContextServices withTlsTransport(std::basic_string<char, Traits, Allocator>&&, std::string_view = {}) const = delete;
 
     template <typename Traits, typename Allocator>
-    ContextServices withTlsTransport(
-        std::string_view, std::basic_string<char, Traits, Allocator>&&) const = delete;
+    ContextServices withTlsTransport(std::string_view, std::basic_string<char, Traits, Allocator>&&) const = delete;
 
 private:
     [[nodiscard]] static const WorkerHandle& requireWorker(const WorkerHandle& worker) {

@@ -46,11 +46,9 @@ using namespace ruvia::detail;
 constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 constexpr std::string_view kFileBody = "hello-static-file-over-h2";
 
-std::string frame(
-    std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
+std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
     std::string bytes(kHttp2FrameHeaderBytes, '\0');
-    http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()),
-        static_cast<Http2FrameType>(type), flags, streamId);
+    http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()), static_cast<Http2FrameType>(type), flags, streamId);
     bytes.append(payload);
     return bytes;
 }
@@ -65,8 +63,7 @@ struct StreamResult {
 
 [[nodiscard]] std::string gzipEncode(std::string_view plain) {
     z_stream stream{};
-    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) !=
-        Z_OK) {
+    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
         return {};
     }
     std::string encoded(compressBound(static_cast<uLong>(plain.size())) + 64, '\0');
@@ -140,16 +137,11 @@ int main() {
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
             ruvia::test::Http2SansIoSessionFixture fixture;
-            fixture.options.documentRoot =
-                ruvia::detail::HttpServerOptions::DocumentRoot::standalone(root);
+            fixture.options.documentRoot = ruvia::detail::HttpServerOptions::DocumentRoot::standalone(root);
             fixture.options.compression.emplace();
             auto dispatcher = std::make_shared<WorkerDispatcher>(io, 64);
             const auto workerHandle = WorkerHandleAccess::make(dispatcher);
-            co_await taskAsAwaitable(runHttp2SansIoSession(sock, routes, worker,
-                fixture.context(ContextServices{}
-                        .withPlainTransport("127.0.0.1")
-                        .withWorker(workerHandle)
-                        .withPrecompressedStaticFiles())));
+            co_await taskAsAwaitable(runHttp2SansIoSession(sock, routes, worker, fixture.context(ContextServices{}.withPlainTransport("127.0.0.1").withWorker(workerHandle).withPrecompressedStaticFiles())));
         },
         asio::detached);
 
@@ -161,23 +153,18 @@ int main() {
         io,
         [&]() -> asio::awaitable<void> {
             tcp::socket sock(io);
-            co_await sock.async_connect(
-                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            co_await sock.async_connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
 
             auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_write(sock,
-                    asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_write(sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
                 (void)n;
                 co_return !ec;
             };
             auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_read(
-                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_read(sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
                 co_return !ec && n == size;
             };
-            auto requestHeaders =
-                [&writeAll](std::string_view method, std::uint32_t streamId,
-                    std::string_view acceptEncoding = {}) -> asio::awaitable<bool> {
+            auto requestHeaders = [&writeAll](std::string_view method, std::uint32_t streamId, std::string_view acceptEncoding = {}) -> asio::awaitable<bool> {
                 std::pmr::string headerBlock(std::pmr::get_default_resource());
                 HpackEncoder::encodeHeader(headerBlock, ":method", method);
                 HpackEncoder::encodeHeader(headerBlock, ":path", "/asset.txt");
@@ -186,9 +173,7 @@ int main() {
                 if (!acceptEncoding.empty()) {
                     HpackEncoder::encodeHeader(headerBlock, "accept-encoding", acceptEncoding);
                 }
-                co_return co_await writeAll(
-                    frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, streamId,
-                        std::string_view(headerBlock.data(), headerBlock.size())));
+                co_return co_await writeAll(frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, streamId, std::string_view(headerBlock.data(), headerBlock.size())));
             };
 
             if (!co_await writeAll(kClientPreface)) {
@@ -213,36 +198,29 @@ int main() {
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header =
-                    http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
                 }
-                StreamResult* stream = header.streamId == 1   ? &getStream
-                                       : header.streamId == 3 ? &headStream
-                                       : header.streamId == 5 ? &sidecarStream
-                                                              : nullptr;
+                StreamResult* stream = header.streamId == 1 ? &getStream : header.streamId == 3 ? &headStream : header.streamId == 5 ? &sidecarStream : nullptr;
                 if (stream == nullptr) {
                     continue;
                 }
                 if (header.type == 0x1 /*HEADERS*/) {
-                    (void)decoder.decode(std::string_view(payload.data(), payload.size()), stream,
-                        [](void* target, std::string_view name, std::string_view value) {
-                            if (name == ":status") {
-                                static_cast<StreamResult*>(target)->status = std::string(value);
-                            } else if (name == "content-encoding") {
-                                static_cast<StreamResult*>(target)->contentEncoding =
-                                    std::string(value);
-                            }
-                            return true;
-                        });
+                    (void)decoder.decode(std::string_view(payload.data(), payload.size()), stream, [](void* target, std::string_view name, std::string_view value) {
+                        if (name == ":status") {
+                            static_cast<StreamResult*>(target)->status = std::string(value);
+                        } else if (name == "content-encoding") {
+                            static_cast<StreamResult*>(target)->contentEncoding = std::string(value);
+                        }
+                        return true;
+                    });
                 } else if (header.type == 0x0 /*DATA*/) {
                     stream->sawData = true;
                     stream->body.append(payload);
                 }
-                if ((header.flags & kHttp2FlagEndStream) != 0 &&
-                    (header.type == 0x0 || header.type == 0x1)) {
+                if ((header.flags & kHttp2FlagEndStream) != 0 && (header.type == 0x0 || header.type == 0x1)) {
                     stream->ended = true;
                 }
             }
@@ -255,8 +233,7 @@ int main() {
     fs::remove_all(dir);
 
     if (getStream.status != "200") {
-        std::fprintf(stderr, "document root not served over HTTP/2: GET status='%s'\n",
-            getStream.status.c_str());
+        std::fprintf(stderr, "document root not served over HTTP/2: GET status='%s'\n", getStream.status.c_str());
         return 1;
     }
     if (getStream.body != kFileBody) {
@@ -265,24 +242,19 @@ int main() {
     }
     // HEAD must answer 200 for the same file GET serves, but carry no DATA body.
     if (headStream.status != "200") {
-        std::fprintf(stderr, "HEAD of a document-root file over HTTP/2 was not 200: status='%s'\n",
-            headStream.status.c_str());
+        std::fprintf(stderr, "HEAD of a document-root file over HTTP/2 was not 200: status='%s'\n", headStream.status.c_str());
         return 3;
     }
     if (headStream.sawData || !headStream.body.empty()) {
-        std::fprintf(
-            stderr, "HEAD over HTTP/2 must send no body, got '%s'\n", headStream.body.c_str());
+        std::fprintf(stderr, "HEAD over HTTP/2 must send no body, got '%s'\n", headStream.body.c_str());
         return 4;
     }
     if (sidecarStream.status != "200") {
-        std::fprintf(stderr,
-            "precompressed document-root sidecar over HTTP/2 was not 200: status='%s'\n",
-            sidecarStream.status.c_str());
+        std::fprintf(stderr, "precompressed document-root sidecar over HTTP/2 was not 200: status='%s'\n", sidecarStream.status.c_str());
         return 5;
     }
     if (sidecarStream.contentEncoding != "gzip") {
-        std::fprintf(stderr, "precompressed document-root sidecar lost gzip encoding: '%s'\n",
-            sidecarStream.contentEncoding.c_str());
+        std::fprintf(stderr, "precompressed document-root sidecar lost gzip encoding: '%s'\n", sidecarStream.contentEncoding.c_str());
         return 6;
     }
     if (gzipDecode(sidecarStream.body) != kFileBody) {

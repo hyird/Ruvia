@@ -12,17 +12,13 @@ RUVIA_TEST(http_server_worker_completion_is_monotonic) {
 
     RUVIA_CHECK(completion.markStartupReady());
     RUVIA_CHECK(!completion.markStartupReady());
-    RUVIA_CHECK(
-        !completion.markStartupFailed(std::make_exception_ptr(std::runtime_error("late failure"))));
+    RUVIA_CHECK(!completion.markStartupFailed(std::make_exception_ptr(std::runtime_error("late failure"))));
     completion.waitForStartup();
 }
 
 RUVIA_TEST(http_server_worker_completion_propagates_startup_failure) {
     ruvia::detail::HttpServerWorkerCompletion completion;
-    std::thread worker([&completion] {
-        (void)completion.markStartupFailed(
-            std::make_exception_ptr(std::runtime_error("startup failed")));
-    });
+    std::thread worker([&completion] { (void)completion.markStartupFailed(std::make_exception_ptr(std::runtime_error("startup failed"))); });
 
     try {
         completion.waitForStartup();

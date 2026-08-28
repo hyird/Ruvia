@@ -36,7 +36,7 @@ RUVIA_TEST(pattern_match_plan_quantifiers_and_anchoring) {
     // Greedy matching must backtrack so a following atom can still match.
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*a$"}>("a"));    // a* takes 0, a takes 1
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*a$"}>("aaa"));  // a* backtracks to 2
-    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*a$"}>(""));  // no byte for the final atom
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*a$"}>(""));    // no byte for the final atom
 
     // Escape-class quantifiers and exact-length anchoring.
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d+$"}>("123"));
@@ -57,9 +57,8 @@ RUVIA_TEST(pattern_match_multiple_quantifiers_backtrack_correctly) {
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("aaa"));  // b* takes zero
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("bbb"));  // a* takes zero
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("aabb"));
-    RUVIA_CHECK(
-        !matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("aba"));         // 'a' after b cannot match
-    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("ba"));  // wrong order
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("aba"));  // 'a' after b cannot match
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("ba"));   // wrong order
 
     // Overlapping quantifiers on the same atom: a* must give a byte back to a+.
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*a+$"}>("a"));  // a* zero, a+ one
@@ -70,9 +69,8 @@ RUVIA_TEST(pattern_match_multiple_quantifiers_backtrack_correctly) {
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("12-34"));
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("-"));  // both runs empty
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("12-"));
-    RUVIA_CHECK(
-        !matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("12-3a"));  // trailing non-digit
-    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("1234"));  // no separator
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("12-3a"));  // trailing non-digit
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("1234"));   // no separator
 }
 
 RUVIA_TEST(pattern_match_escape_classes) {

@@ -18,8 +18,7 @@ namespace ruvia::detail {
 // itself before tearing down worker-owned state, so both drained and abandoned
 // queue entries can safely release the mailbox after the pool is gone.
 template <typename Owner>
-class WorkerCancellationMailbox final
-    : public std::enable_shared_from_this<WorkerCancellationMailbox<Owner>> {
+class WorkerCancellationMailbox final : public std::enable_shared_from_this<WorkerCancellationMailbox<Owner>> {
 public:
     WorkerCancellationMailbox(Owner& owner, const WorkerHandle& worker) noexcept
         : owner_(&owner),
@@ -73,11 +72,9 @@ private:
 // and allocator are gone. Keep both the mailbox and its shared control block
 // in process memory so abandoned queue entries remain safe to release.
 template <typename Owner>
-[[nodiscard]] inline std::shared_ptr<WorkerCancellationMailbox<Owner>>
-makeWorkerCancellationMailbox(Owner& owner, const WorkerHandle& worker) {
+[[nodiscard]] inline std::shared_ptr<WorkerCancellationMailbox<Owner>> makeWorkerCancellationMailbox(Owner& owner, const WorkerHandle& worker) {
     using Mailbox = WorkerCancellationMailbox<Owner>;
-    return std::allocate_shared<Mailbox>(
-        std::pmr::polymorphic_allocator<Mailbox>(processResource()), owner, worker);
+    return std::allocate_shared<Mailbox>(std::pmr::polymorphic_allocator<Mailbox>(processResource()), owner, worker);
 }
 
 // A registered stop callback borrows the pool-owned mailbox and carries only an
@@ -103,8 +100,7 @@ private:
 template <typename Mailbox>
 class WorkerCancellationPost final {
 public:
-    WorkerCancellationPost(
-        const std::shared_ptr<Mailbox>& mailbox, std::uint64_t operationId) noexcept
+    WorkerCancellationPost(const std::shared_ptr<Mailbox>& mailbox, std::uint64_t operationId) noexcept
         : mailbox_(mailbox.get()),
           operationId_(operationId) {
         if (mailbox_ == nullptr) {
@@ -129,12 +125,6 @@ private:
 };
 
 template <typename Mailbox>
-inline constexpr bool workerCancellationPostIsInline =
-    sizeof(WorkerCancellationPost<Mailbox>) <= 3 * sizeof(void*) &&
-    sizeof(WorkerCancellationDispatch<Mailbox>) <= 3 * sizeof(void*) &&
-    alignof(WorkerCancellationPost<Mailbox>) <= alignof(std::max_align_t) &&
-    alignof(WorkerCancellationDispatch<Mailbox>) <= alignof(std::max_align_t) &&
-    std::is_nothrow_move_constructible_v<WorkerCancellationPost<Mailbox>> &&
-    std::is_nothrow_move_constructible_v<WorkerCancellationDispatch<Mailbox>>;
+inline constexpr bool workerCancellationPostIsInline = sizeof(WorkerCancellationPost<Mailbox>) <= 3 * sizeof(void*) && sizeof(WorkerCancellationDispatch<Mailbox>) <= 3 * sizeof(void*) && alignof(WorkerCancellationPost<Mailbox>) <= alignof(std::max_align_t) && alignof(WorkerCancellationDispatch<Mailbox>) <= alignof(std::max_align_t) && std::is_nothrow_move_constructible_v<WorkerCancellationPost<Mailbox>> && std::is_nothrow_move_constructible_v<WorkerCancellationDispatch<Mailbox>>;
 
 }  // namespace ruvia::detail

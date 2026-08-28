@@ -111,8 +111,7 @@ private:
         : name_(std::move(name)),
           value_(std::move(value)) {}
 
-    HttpClientResponseHeader(detail::HttpResolvedPmrResourceTag, std::string_view name,
-        std::string_view value, std::pmr::memory_resource* resource)
+    HttpClientResponseHeader(detail::HttpResolvedPmrResourceTag, std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
         : name_(name.data(), name.size(), resource),
           value_(value.data(), value.size(), resource) {}
 
@@ -155,21 +154,17 @@ public:
         return HttpClientRequestContentView(HttpClientRequestWithoutContent());
     }
 
-    [[nodiscard]] static constexpr HttpClientRequestContentView bytes(
-        std::string_view value) noexcept {
+    [[nodiscard]] static constexpr HttpClientRequestContentView bytes(std::string_view value) noexcept {
         return HttpClientRequestContentView(HttpClientRequestBytesView(value));
     }
 
     template <typename Traits, typename Allocator>
-    static HttpClientRequestContentView bytes(
-        std::basic_string<char, Traits, Allocator>&&) = delete;
+    static HttpClientRequestContentView bytes(std::basic_string<char, Traits, Allocator>&&) = delete;
 
     template <typename Traits, typename Allocator>
-    static HttpClientRequestContentView bytes(
-        const std::basic_string<char, Traits, Allocator>&&) = delete;
+    static HttpClientRequestContentView bytes(const std::basic_string<char, Traits, Allocator>&&) = delete;
 
-    [[nodiscard]] constexpr const HttpClientRequestWithoutContent* withoutContent()
-        const& noexcept {
+    [[nodiscard]] constexpr const HttpClientRequestWithoutContent* withoutContent() const& noexcept {
         return std::get_if<HttpClientRequestWithoutContent>(&content_);
     }
     const HttpClientRequestWithoutContent* withoutContent() const&& = delete;
@@ -182,8 +177,7 @@ public:
 private:
     using Content = std::variant<HttpClientRequestWithoutContent, HttpClientRequestBytesView>;
 
-    explicit constexpr HttpClientRequestContentView(
-        HttpClientRequestWithoutContent content) noexcept
+    explicit constexpr HttpClientRequestContentView(HttpClientRequestWithoutContent content) noexcept
         : content_(content) {}
 
     explicit constexpr HttpClientRequestContentView(HttpClientRequestBytesView content) noexcept
@@ -229,13 +223,10 @@ public:
 private:
     friend struct detail::HttpClientResponseHeadAccess;
 
-    HttpClientResponseHead(HttpStatusCode status, HttpProtocolVersion protocolVersion,
-        std::pmr::memory_resource* resource)
-        : HttpClientResponseHead(detail::HttpResolvedPmrResourceTag{}, status, protocolVersion,
-              detail::httpPmrResourceOrDefault(resource)) {}
+    HttpClientResponseHead(HttpStatusCode status, HttpProtocolVersion protocolVersion, std::pmr::memory_resource* resource)
+        : HttpClientResponseHead(detail::HttpResolvedPmrResourceTag{}, status, protocolVersion, detail::httpPmrResourceOrDefault(resource)) {}
 
-    HttpClientResponseHead(detail::HttpResolvedPmrResourceTag, HttpStatusCode status,
-        HttpProtocolVersion protocolVersion, std::pmr::memory_resource* resource)
+    HttpClientResponseHead(detail::HttpResolvedPmrResourceTag, HttpStatusCode status, HttpProtocolVersion protocolVersion, std::pmr::memory_resource* resource)
         : status_(status),
           protocolVersion_(protocolVersion),
           headers_(resource) {}

@@ -46,10 +46,8 @@ class ChannelSendResult final {
 public:
     ChannelSendResult(const ChannelSendResult&) = delete;
     ChannelSendResult& operator=(const ChannelSendResult&) = delete;
-    ChannelSendResult(ChannelSendResult&&) noexcept(
-        std::is_nothrow_move_constructible_v<T>) = default;
-    ChannelSendResult& operator=(ChannelSendResult&&) noexcept(
-        std::is_nothrow_move_constructible_v<T> && std::is_nothrow_move_assignable_v<T>) = default;
+    ChannelSendResult(ChannelSendResult&&) noexcept(std::is_nothrow_move_constructible_v<T>) = default;
+    ChannelSendResult& operator=(ChannelSendResult&&) noexcept(std::is_nothrow_move_constructible_v<T> && std::is_nothrow_move_assignable_v<T>) = default;
 
     [[nodiscard]] ChannelSendStatus status() const noexcept {
         return status_;
@@ -70,8 +68,7 @@ public:
     T* rejected() && = delete;
     const T* rejected() const&& = delete;
 
-    [[nodiscard]] std::optional<T> takeRejected() && noexcept(
-        std::is_nothrow_move_constructible_v<T>) {
+    [[nodiscard]] std::optional<T> takeRejected() && noexcept(std::is_nothrow_move_constructible_v<T>) {
         return std::move(rejected_);
     }
 
@@ -81,8 +78,7 @@ private:
     explicit ChannelSendResult(ChannelSendStatus status) noexcept
         : status_(status) {}
 
-    ChannelSendResult(ChannelSendStatus status, T&& rejected) noexcept(
-        std::is_nothrow_move_constructible_v<T>)
+    ChannelSendResult(ChannelSendStatus status, T&& rejected) noexcept(std::is_nothrow_move_constructible_v<T>)
         : status_(status),
           rejected_(std::move(rejected)) {}
 
@@ -90,8 +86,7 @@ private:
         return ChannelSendResult(ChannelSendStatus::kSent);
     }
 
-    [[nodiscard]] static ChannelSendResult reject(ChannelSendStatus status, T&& value) noexcept(
-        std::is_nothrow_move_constructible_v<T>) {
+    [[nodiscard]] static ChannelSendResult reject(ChannelSendStatus status, T&& value) noexcept(std::is_nothrow_move_constructible_v<T>) {
         return ChannelSendResult(status, std::move(value));
     }
 
@@ -116,8 +111,7 @@ struct ChannelWorkerStopping final {};
 
 template <typename T>
 struct ChannelState final : WorkerShutdownListener {
-    ChannelState(
-        WorkerHandle target, std::size_t requestedCapacity, std::pmr::memory_resource* resource)
+    ChannelState(WorkerHandle target, std::size_t requestedCapacity, std::pmr::memory_resource* resource)
         : worker(std::move(target)),
           slots(resource) {
         if (!worker.valid()) {
@@ -145,20 +139,17 @@ struct ChannelState final : WorkerShutdownListener {
 };
 
 template <typename T>
-struct ChannelReceiveAwaiter final
-    : WorkerSingleWaitAwaiter<T, ChannelState<T>, ChannelReceiveAwaiter<T>> {
+struct ChannelReceiveAwaiter final : WorkerSingleWaitAwaiter<T, ChannelState<T>, ChannelReceiveAwaiter<T>> {
     using Wait = WorkerSingleWaitAwaiter<T, ChannelState<T>, ChannelReceiveAwaiter<T>>;
 
-    ChannelReceiveAwaiter(std::shared_ptr<ChannelState<T>> value,
-        std::optional<std::chrono::steady_clock::duration> timeoutValue, StopToken stopTokenValue)
+    ChannelReceiveAwaiter(std::shared_ptr<ChannelState<T>> value, std::optional<std::chrono::steady_clock::duration> timeoutValue, StopToken stopTokenValue)
         : Wait(std::move(value), timeoutValue, std::move(stopTokenValue)) {}
 
     [[nodiscard]] bool await_ready() {
         auto& owner = this->state();
         std::lock_guard lock(owner.mutex);
         if (owner.size != 0) {
-            (void)this->completeResult(
-                WorkerWaitResultAccess::value(std::move(*owner.slots[owner.head])));
+            (void)this->completeResult(WorkerWaitResultAccess::value(std::move(*owner.slots[owner.head])));
             owner.slots[owner.head].reset();
             owner.head = (owner.head + 1) % owner.slots.size();
             --owner.size;
@@ -198,8 +189,7 @@ struct ChannelReceiveAwaiter final
 };
 
 template <typename T>
-[[nodiscard]] Task<WorkerWaitResult<T>> receiveChannelState(std::shared_ptr<ChannelState<T>> state,
-    std::optional<std::chrono::steady_clock::duration> timeout, StopToken stopToken) {
+[[nodiscard]] Task<WorkerWaitResult<T>> receiveChannelState(std::shared_ptr<ChannelState<T>> state, std::optional<std::chrono::steady_clock::duration> timeout, StopToken stopToken) {
     if (!state || !state->worker.isCurrent()) {
         throw std::logic_error("channel receive must run on its bound worker");
     }
@@ -232,18 +222,15 @@ public:
                 return ChannelSendResult<T>::reject(ChannelSendStatus::kClosed, std::move(value));
             }
             if (std::holds_alternative<detail::ChannelWorkerStopping>(state_->lifecycle)) {
-                return ChannelSendResult<T>::reject(
-                    ChannelSendStatus::kWorkerStopping, std::move(value));
+                return ChannelSendResult<T>::reject(ChannelSendStatus::kWorkerStopping, std::move(value));
             }
             assert(std::holds_alternative<detail::ChannelOpen>(state_->lifecycle));
             if (!state_->worker.accepting()) {
-                return ChannelSendResult<T>::reject(
-                    ChannelSendStatus::kWorkerStopping, std::move(value));
+                return ChannelSendResult<T>::reject(ChannelSendStatus::kWorkerStopping, std::move(value));
             }
             if (state_->waiter != nullptr) {
                 waiter = state_->waiter;
-                wake =
-                    waiter->completeResult(detail::WorkerWaitResultAccess::value(std::move(value)));
+                wake = waiter->completeResult(detail::WorkerWaitResultAccess::value(std::move(value)));
                 state_->waiter = nullptr;
                 state_->waiterGeneration = 0;
                 // Wake the receiver while still holding the mutex. Once it is
@@ -321,17 +308,13 @@ public:
     }
 
     template <typename Rep, typename Period>
-    [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(
-        std::chrono::duration<Rep, Period> duration) const {
-        return detail::receiveChannelState<T>(
-            state_, detail::workerTimerSaturatingDurationCast(duration), {});
+    [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period> duration) const {
+        return detail::receiveChannelState<T>(state_, detail::workerTimerSaturatingDurationCast(duration), {});
     }
 
     template <typename Rep, typename Period>
-    [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(
-        std::chrono::duration<Rep, Period> duration, StopToken stopToken) const {
-        return detail::receiveChannelState<T>(
-            state_, detail::workerTimerSaturatingDurationCast(duration), std::move(stopToken));
+    [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period> duration, StopToken stopToken) const {
+        return detail::receiveChannelState<T>(state_, detail::workerTimerSaturatingDurationCast(duration), std::move(stopToken));
     }
 
     // The worker every receive must run on. Makes the receive-side affinity
@@ -365,8 +348,7 @@ template <typename T>
 [[nodiscard]] auto makeChannel(WorkerHandle worker, ChannelOptions options) {
     auto* resolved = detail::pmrResourceOrDefault(options.resource);
     std::pmr::polymorphic_allocator<detail::ChannelState<T>> allocator(resolved);
-    auto state = std::allocate_shared<detail::ChannelState<T>>(
-        allocator, std::move(worker), options.capacity, resolved);
+    auto state = std::allocate_shared<detail::ChannelState<T>>(allocator, std::move(worker), options.capacity, resolved);
     detail::WorkerHandleAccess::registerShutdownListener(state->worker, state);
     return std::pair(ChannelSender<T>(state), ChannelReceiver<T>(state));
 }

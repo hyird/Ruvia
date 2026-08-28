@@ -38,9 +38,7 @@ struct NamedCapabilityDefinition final {
 // Existing aliases preserve registration order; new aliases take one owned PMR
 // copy of the name and configuration.
 template <typename Definition, typename SourceConfig>
-void upsertNamedCapabilityDefinition(std::pmr::vector<Definition>& definitions,
-    std::string_view alias, const SourceConfig& sourceConfig, const char* emptyMessage,
-    std::pmr::memory_resource* resource) {
+void upsertNamedCapabilityDefinition(std::pmr::vector<Definition>& definitions, std::string_view alias, const SourceConfig& sourceConfig, const char* emptyMessage, std::pmr::memory_resource* resource) {
     validateCapabilityAlias(alias, emptyMessage);
     auto* const resolved = pmrResourceOrDefault(resource);
     typename Definition::ConfigStorage storedConfig(sourceConfig, resolved);
@@ -57,8 +55,7 @@ void upsertNamedCapabilityDefinition(std::pmr::vector<Definition>& definitions,
 // owners call this before constructing pools, so an invalid later definition
 // cannot leave a partially built worker capability graph behind.
 template <typename Entries>
-void validateCapabilityAliases(
-    const Entries& entries, const char* emptyMessage, const char* duplicateMessage) {
+void validateCapabilityAliases(const Entries& entries, const char* emptyMessage, const char* duplicateMessage) {
     for (std::size_t index = 0; index < entries.size(); ++index) {
         const std::string_view alias = entries[index].alias;
         validateCapabilityAlias(alias, emptyMessage);
@@ -85,13 +82,11 @@ public:
 
     template <typename Entries>
     void build(const Entries& entries) {
-        buildAliases(
-            entries, [](const auto& entry) noexcept -> std::string_view { return entry.alias; });
+        buildAliases(entries, [](const auto& entry) noexcept -> std::string_view { return entry.alias; });
     }
 
     [[nodiscard]] std::optional<std::size_t> find(std::string_view alias) const noexcept {
-        const auto match =
-            std::ranges::lower_bound(aliases_, alias, {}, &NamedCapabilityIndex::aliasView);
+        const auto match = std::ranges::lower_bound(aliases_, alias, {}, &NamedCapabilityIndex::aliasView);
         if (match == aliases_.end() || match->alias != alias) {
             return std::nullopt;
         }

@@ -17,8 +17,7 @@ namespace ruvia::detail {
 namespace {
 
 template <typename NativeChar>
-void assignTlsFileNameFromNative(
-    std::pmr::string& output, std::basic_string_view<NativeChar> native) {
+void assignTlsFileNameFromNative(std::pmr::string& output, std::basic_string_view<NativeChar> native) {
     if constexpr (std::is_same_v<NativeChar, char>) {
         output.assign(native.data(), native.size());
     } else {
@@ -46,23 +45,17 @@ asio::ip::address normalizeListenAddress(std::string_view address) {
 }
 
 bool hasTlsConfiguration(const TlsConfig& config) noexcept {
-    return !config.certificateChainFile.empty() || !config.privateKeyFile.empty() ||
-           !config.privateKeyPassword.empty() || config.clientCertificates.verifyFile.has_value() ||
-           config.clientCertificates.requirement != TlsClientCertificateRequirement::kOptional ||
-           !config.sni.empty();
+    return !config.certificateChainFile.empty() || !config.privateKeyFile.empty() || !config.privateKeyPassword.empty() || config.clientCertificates.verifyFile.has_value() || config.clientCertificates.requirement != TlsClientCertificateRequirement::kOptional || !config.sni.empty();
 }
 
-HttpServerListenerDefinition::Tls normalizeTlsOptions(
-    const TlsConfig& config, std::pmr::memory_resource* resource) {
+HttpServerListenerDefinition::Tls normalizeTlsOptions(const TlsConfig& config, std::pmr::memory_resource* resource) {
     auto* const targetResource = pmrResourceOrDefault(resource);
     HttpServerListenerDefinition::Tls tls(ResolvedPmrResourceTag{}, targetResource);
     assignTlsFileName(tls.identity.certificateChainFile, config.certificateChainFile);
     assignTlsFileName(tls.identity.privateKeyFile, config.privateKeyFile);
     tls.identity.privateKeyPassword = config.privateKeyPassword;
-    if (config.clientCertificates.verifyFile.has_value() ||
-        config.clientCertificates.requirement != TlsClientCertificateRequirement::kOptional) {
-        auto& policy = tls.clientCertificates.emplace(
-            ResolvedPmrResourceTag{}, targetResource, config.clientCertificates.requirement);
+    if (config.clientCertificates.verifyFile.has_value() || config.clientCertificates.requirement != TlsClientCertificateRequirement::kOptional) {
+        auto& policy = tls.clientCertificates.emplace(ResolvedPmrResourceTag{}, targetResource, config.clientCertificates.requirement);
         if (config.clientCertificates.verifyFile.has_value()) {
             assignTlsFileName(policy.verifyFile, *config.clientCertificates.verifyFile);
         }

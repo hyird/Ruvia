@@ -37,8 +37,7 @@ inline void validateTcpKeepAlivePolicy(TcpKeepAlivePolicy policy) {
     return policy == TcpKeepAlivePolicy::kEnable;
 }
 
-inline void configureTcpSocketOptions(asio::ip::tcp::socket& socket, TcpNoDelayPolicy noDelay,
-    TcpKeepAlivePolicy keepAlive) noexcept {
+inline void configureTcpSocketOptions(asio::ip::tcp::socket& socket, TcpNoDelayPolicy noDelay, TcpKeepAlivePolicy keepAlive) noexcept {
     std::error_code ignored;
     if (tcpNoDelayEnabled(noDelay)) {
         // Asio returns error_code in compatibility mode and void with

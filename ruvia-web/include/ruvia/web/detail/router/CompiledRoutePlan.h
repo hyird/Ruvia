@@ -29,9 +29,7 @@ public:
           identities_(resource_),
           extensionRouteIndices_(resource_),
           exactSlots_(resource_),
-          dynamicRoots_{DynamicNode(resource_), DynamicNode(resource_), DynamicNode(resource_),
-              DynamicNode(resource_), DynamicNode(resource_), DynamicNode(resource_),
-              DynamicNode(resource_)},
+          dynamicRoots_{DynamicNode(resource_), DynamicNode(resource_), DynamicNode(resource_), DynamicNode(resource_), DynamicNode(resource_), DynamicNode(resource_), DynamicNode(resource_)},
           dynamicNodeArena_(resource_),
           unmatchedMiddlewareInvokes_(resource_) {}
 
@@ -114,7 +112,6 @@ private:
     bool hasRouteRateLimit_{false};
 };
 
-using CompiledRoutePlanPtr =
-    std::unique_ptr<CompiledRoutePlan, PmrObjectDeleter<CompiledRoutePlan>>;
+using CompiledRoutePlanPtr = std::unique_ptr<CompiledRoutePlan, PmrObjectDeleter<CompiledRoutePlan>>;
 
 }  // namespace ruvia::detail

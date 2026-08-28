@@ -10,8 +10,7 @@ std::size_t HpackDecoder::entrySize(std::string_view name, std::string_view valu
     return name.size() + value.size() + 32;
 }
 
-HpackDecoder::StepResult HpackDecoder::indexedHeader(
-    std::uint32_t index, HeaderView& header) const noexcept {
+HpackDecoder::StepResult HpackDecoder::indexedHeader(std::uint32_t index, HeaderView& header) const noexcept {
     if (index == 0) {
         return HpackDecodeError::kInvalidIndex;
     }
@@ -29,8 +28,7 @@ HpackDecoder::StepResult HpackDecoder::indexedHeader(
     return std::nullopt;
 }
 
-HpackDecoder::StepResult HpackDecoder::indexedName(
-    std::uint32_t index, std::string_view& name) const noexcept {
+HpackDecoder::StepResult HpackDecoder::indexedName(std::uint32_t index, std::string_view& name) const noexcept {
     HeaderView header;
     if (const auto error = indexedHeader(index, header); error.has_value()) {
         return error;
@@ -69,8 +67,7 @@ std::size_t HpackDecoder::dynamicEntryCount() const noexcept {
     return dynamic_.size() - dynamicOffset_;
 }
 
-const HpackDecoder::Entry& HpackDecoder::dynamicEntryByNewestIndex(
-    std::size_t newestIndex) const noexcept {
+const HpackDecoder::Entry& HpackDecoder::dynamicEntryByNewestIndex(std::size_t newestIndex) const noexcept {
     return dynamic_[dynamic_.size() - newestIndex - 1];
 }
 

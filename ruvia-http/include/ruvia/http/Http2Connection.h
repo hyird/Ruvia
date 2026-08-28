@@ -27,31 +27,11 @@ class Http2ConnectionOwnerEndpoint;
 }
 
 enum class Http2Role : std::uint8_t { kServer, kClient };
-enum class Http2FeedResult : std::uint8_t {
-    kEventsPending,
-    kAccepted,
-    kNeedInput,
-    kProtocolFailure
-};
+enum class Http2FeedResult : std::uint8_t { kEventsPending, kAccepted, kNeedInput, kProtocolFailure };
 enum class Http2EndStream : std::uint8_t { kKeepOpen, kEndStream };
 enum class Http2OutputConsumeStatus : std::uint8_t { kPending, kDrained, kOutOfRange };
-enum class Http2SubmitStatus : std::uint8_t {
-    kAccepted,
-    kClosed,
-    kInvalidState,
-    kInvalidMessage,
-    kPeerCapabilityUnavailable
-};
-enum class Http2DataSubmitStatus : std::uint8_t {
-    kAccepted,
-    kQueued,
-    kBackpressured,
-    kExpectationPending,
-    kClosed,
-    kInvalidState,
-    kContentLengthExceeded,
-    kContentLengthIncomplete
-};
+enum class Http2SubmitStatus : std::uint8_t { kAccepted, kClosed, kInvalidState, kInvalidMessage, kPeerCapabilityUnavailable };
+enum class Http2DataSubmitStatus : std::uint8_t { kAccepted, kQueued, kBackpressured, kExpectationPending, kClosed, kInvalidState, kContentLengthExceeded, kContentLengthIncomplete };
 enum class Http2RequestContentReleaseStatus : std::uint8_t { kReleased, kNotPending, kClosed };
 enum class Http2ServerRequestReleaseStatus : std::uint8_t { kReleased, kClosed, kInvalidLease };
 enum class Http2StreamCloseSource : std::uint8_t { kLocal, kPeer, kPeerGoaway };
@@ -102,8 +82,7 @@ public:
         return std::get_if<Http2RequestWithoutContent>(&value_);
     }
     const Http2RequestWithoutContent* withoutContent() const&& = delete;
-    [[nodiscard]] constexpr const Http2KnownLengthRequestContent* knownLengthContent()
-        const& noexcept {
+    [[nodiscard]] constexpr const Http2KnownLengthRequestContent* knownLengthContent() const& noexcept {
         return std::get_if<Http2KnownLengthRequestContent>(&value_);
     }
     const Http2KnownLengthRequestContent* knownLengthContent() const&& = delete;
@@ -113,8 +92,7 @@ public:
     const Http2StreamingRequestContent* streamingContent() const&& = delete;
 
 private:
-    using Value = std::variant<Http2RequestWithoutContent, Http2KnownLengthRequestContent,
-        Http2StreamingRequestContent>;
+    using Value = std::variant<Http2RequestWithoutContent, Http2KnownLengthRequestContent, Http2StreamingRequestContent>;
     explicit constexpr Http2RequestContent(Http2RequestWithoutContent value) noexcept
         : value_(value) {}
     explicit constexpr Http2RequestContent(Http2KnownLengthRequestContent value) noexcept
@@ -147,14 +125,7 @@ struct Http2ExtendedConnectRequestHeadView final {
     std::span<const HttpHeaderView> headers{};
 };
 
-enum class Http2RequestHeadSubmitError : std::uint8_t {
-    kInvalidState,
-    kConnectionUnavailable,
-    kPeerStreamLimitReached,
-    kLocalStreamCapacityReached,
-    kPeerCapabilityUnavailable,
-    kInvalidMessage
-};
+enum class Http2RequestHeadSubmitError : std::uint8_t { kInvalidState, kConnectionUnavailable, kPeerStreamLimitReached, kLocalStreamCapacityReached, kPeerCapabilityUnavailable, kInvalidMessage };
 
 class Http2SubmittedRequestHead final {
 public:
@@ -200,12 +171,10 @@ private:
         : value_(value) {}
     explicit constexpr Http2RequestHeadSubmitResult(Http2RequestHeadSubmitFailure value) noexcept
         : value_(value) {}
-    [[nodiscard]] static constexpr Http2RequestHeadSubmitResult makeSubmitted(
-        std::uint32_t streamId) noexcept {
+    [[nodiscard]] static constexpr Http2RequestHeadSubmitResult makeSubmitted(std::uint32_t streamId) noexcept {
         return Http2RequestHeadSubmitResult(Http2SubmittedRequestHead(streamId));
     }
-    [[nodiscard]] static constexpr Http2RequestHeadSubmitResult makeFailure(
-        Http2RequestHeadSubmitError error) noexcept {
+    [[nodiscard]] static constexpr Http2RequestHeadSubmitResult makeFailure(Http2RequestHeadSubmitError error) noexcept {
         return Http2RequestHeadSubmitResult(Http2RequestHeadSubmitFailure(error));
     }
     Value value_;
@@ -228,18 +197,13 @@ private:
     friend class Http2Connection;
     friend class Http2MessageBodyChunkEvent;
     friend class Http2TunnelDataEvent;
-    Http2ReceivedDataCredit(detail::Http2ConnectionOwnerEndpoint* endpoint, std::uint32_t streamId,
-        std::uint32_t bytes) noexcept;
+    Http2ReceivedDataCredit(detail::Http2ConnectionOwnerEndpoint* endpoint, std::uint32_t streamId, std::uint32_t bytes) noexcept;
     detail::Http2ConnectionOwnerEndpoint* endpoint_{nullptr};
     std::uint32_t streamId_{0};
     std::uint32_t bytes_{0};
 };
 
-enum class Http2ReceivedDataAcknowledgeStatus : std::uint8_t {
-    kAcknowledged,
-    kClosed,
-    kInvalidCredit
-};
+enum class Http2ReceivedDataAcknowledgeStatus : std::uint8_t { kAcknowledged, kClosed, kInvalidCredit };
 
 class Http2InformationalHeadEvent final {
 public:
@@ -250,15 +214,13 @@ public:
         return head_;
     }
     const HttpClientResponseHead& head() const&& = delete;
-    [[nodiscard]] std::optional<HttpClientRequestContentSignal> requestContentSignal()
-        const noexcept {
+    [[nodiscard]] std::optional<HttpClientRequestContentSignal> requestContentSignal() const noexcept {
         return signal_;
     }
 
 private:
     friend class Http2Event;
-    Http2InformationalHeadEvent(std::uint32_t streamId, HttpClientResponseHead head,
-        std::optional<HttpClientRequestContentSignal> signal) noexcept
+    Http2InformationalHeadEvent(std::uint32_t streamId, HttpClientResponseHead head, std::optional<HttpClientRequestContentSignal> signal) noexcept
         : streamId_(streamId),
           head_(std::move(head)),
           signal_(signal) {}
@@ -284,17 +246,14 @@ public:
         return request_;
     }
     const HttpRequest& request() const&& = delete;
-    [[nodiscard]] HttpServerExpectationPlan expectationPlan(
-        HttpUnsupportedExpectationPolicy policy) const noexcept {
+    [[nodiscard]] HttpServerExpectationPlan expectationPlan(HttpUnsupportedExpectationPolicy policy) const noexcept {
         return expectations_.serverPlan(content_, policy);
     }
 
 private:
     friend class Http2Connection;
     friend class Http2Event;
-    Http2RequestHeadEvent(detail::Http2ConnectionOwnerEndpoint* endpoint, std::uint32_t streamId,
-        HttpRequest request, HttpRequestExpectations expectations,
-        HttpRequestContentIndication content) noexcept;
+    Http2RequestHeadEvent(detail::Http2ConnectionOwnerEndpoint* endpoint, std::uint32_t streamId, HttpRequest request, HttpRequestExpectations expectations, HttpRequestContentIndication content) noexcept;
     std::uint32_t streamId_;
     HttpRequest request_;
     HttpRequestExpectations expectations_;
@@ -311,15 +270,13 @@ public:
         return head_;
     }
     const HttpClientResponseHead& head() const&& = delete;
-    [[nodiscard]] std::optional<HttpClientRequestContentSignal> requestContentSignal()
-        const noexcept {
+    [[nodiscard]] std::optional<HttpClientRequestContentSignal> requestContentSignal() const noexcept {
         return signal_;
     }
 
 private:
     friend class Http2Event;
-    Http2ResponseHeadEvent(std::uint32_t streamId, HttpClientResponseHead head,
-        std::optional<HttpClientRequestContentSignal> signal) noexcept
+    Http2ResponseHeadEvent(std::uint32_t streamId, HttpClientResponseHead head, std::optional<HttpClientRequestContentSignal> signal) noexcept
         : streamId_(streamId),
           head_(std::move(head)),
           signal_(signal) {}
@@ -342,8 +299,7 @@ public:
 
 private:
     friend class Http2Event;
-    Http2MessageBodyChunkEvent(detail::Http2ConnectionOwnerEndpoint* endpoint,
-        std::uint32_t streamId, std::string_view bytes, std::uint32_t credit) noexcept
+    Http2MessageBodyChunkEvent(detail::Http2ConnectionOwnerEndpoint* endpoint, std::uint32_t streamId, std::string_view bytes, std::uint32_t credit) noexcept
         : streamId_(streamId),
           bytes_(bytes),
           credit_(endpoint, streamId, credit) {}
@@ -379,8 +335,7 @@ public:
 
 private:
     friend class Http2Event;
-    Http2TunnelDataEvent(detail::Http2ConnectionOwnerEndpoint* endpoint, std::uint32_t streamId,
-        std::string_view bytes, std::uint32_t credit) noexcept
+    Http2TunnelDataEvent(detail::Http2ConnectionOwnerEndpoint* endpoint, std::uint32_t streamId, std::string_view bytes, std::uint32_t credit) noexcept
         : streamId_(streamId),
           bytes_(bytes),
           credit_(endpoint, streamId, credit) {}
@@ -416,8 +371,7 @@ public:
 
 private:
     friend class Http2Event;
-    constexpr Http2StreamClosedEvent(
-        std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error) noexcept
+    constexpr Http2StreamClosedEvent(std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error) noexcept
         : streamId_(streamId),
           source_(source),
           error_(error) {}
@@ -515,50 +469,38 @@ public:
 
 private:
     friend class Http2Connection;
-    using Value = std::variant<Http2InformationalHeadEvent, Http2RequestHeadEvent,
-        Http2ResponseHeadEvent, Http2MessageBodyChunkEvent, Http2MessageEndEvent,
-        Http2TunnelDataEvent, Http2TunnelEndEvent, Http2StreamClosedEvent,
-        Http2RequestUnprocessedEvent, Http2GoawayEvent>;
+    using Value = std::variant<Http2InformationalHeadEvent, Http2RequestHeadEvent, Http2ResponseHeadEvent, Http2MessageBodyChunkEvent, Http2MessageEndEvent, Http2TunnelDataEvent, Http2TunnelEndEvent, Http2StreamClosedEvent, Http2RequestUnprocessedEvent, Http2GoawayEvent>;
     template <typename Event>
     explicit Http2Event(Event event) noexcept
         : value_(std::move(event)) {}
-    [[nodiscard]] static Http2Event informationalHead(std::uint32_t id, HttpClientResponseHead head,
-        std::optional<HttpClientRequestContentSignal> signal) noexcept {
+    [[nodiscard]] static Http2Event informationalHead(std::uint32_t id, HttpClientResponseHead head, std::optional<HttpClientRequestContentSignal> signal) noexcept {
         return Http2Event(Http2InformationalHeadEvent(id, std::move(head), signal));
     }
-    [[nodiscard]] static Http2Event requestHead(detail::Http2ConnectionOwnerEndpoint* endpoint,
-        std::uint32_t id, HttpRequest request, HttpRequestExpectations expectations,
-        HttpRequestContentIndication content) noexcept {
-        return Http2Event(
-            Http2RequestHeadEvent(endpoint, id, std::move(request), expectations, content));
+    [[nodiscard]] static Http2Event requestHead(detail::Http2ConnectionOwnerEndpoint* endpoint, std::uint32_t id, HttpRequest request, HttpRequestExpectations expectations, HttpRequestContentIndication content) noexcept {
+        return Http2Event(Http2RequestHeadEvent(endpoint, id, std::move(request), expectations, content));
     }
-    [[nodiscard]] static Http2Event responseHead(std::uint32_t id, HttpClientResponseHead head,
-        std::optional<HttpClientRequestContentSignal> signal) noexcept {
+    [[nodiscard]] static Http2Event responseHead(std::uint32_t id, HttpClientResponseHead head, std::optional<HttpClientRequestContentSignal> signal) noexcept {
         return Http2Event(Http2ResponseHeadEvent(id, std::move(head), signal));
     }
-    [[nodiscard]] static Http2Event messageBodyChunk(detail::Http2ConnectionOwnerEndpoint* endpoint,
-        std::uint32_t id, std::string_view bytes, std::uint32_t credit) noexcept {
+    [[nodiscard]] static Http2Event messageBodyChunk(detail::Http2ConnectionOwnerEndpoint* endpoint, std::uint32_t id, std::string_view bytes, std::uint32_t credit) noexcept {
         return Http2Event(Http2MessageBodyChunkEvent(endpoint, id, bytes, credit));
     }
     [[nodiscard]] static Http2Event messageEnd(std::uint32_t id) noexcept {
         return Http2Event(Http2MessageEndEvent(id));
     }
-    [[nodiscard]] static Http2Event tunnelData(detail::Http2ConnectionOwnerEndpoint* endpoint,
-        std::uint32_t id, std::string_view bytes, std::uint32_t credit) noexcept {
+    [[nodiscard]] static Http2Event tunnelData(detail::Http2ConnectionOwnerEndpoint* endpoint, std::uint32_t id, std::string_view bytes, std::uint32_t credit) noexcept {
         return Http2Event(Http2TunnelDataEvent(endpoint, id, bytes, credit));
     }
     [[nodiscard]] static Http2Event tunnelEnd(std::uint32_t id) noexcept {
         return Http2Event(Http2TunnelEndEvent(id));
     }
-    [[nodiscard]] static Http2Event streamClosed(
-        std::uint32_t id, Http2StreamCloseSource source, Http2ErrorCode error) noexcept {
+    [[nodiscard]] static Http2Event streamClosed(std::uint32_t id, Http2StreamCloseSource source, Http2ErrorCode error) noexcept {
         return Http2Event(Http2StreamClosedEvent(id, source, error));
     }
     [[nodiscard]] static Http2Event requestUnprocessed(std::uint32_t id) noexcept {
         return Http2Event(Http2RequestUnprocessedEvent(id));
     }
-    [[nodiscard]] static Http2Event goaway(
-        std::uint32_t lastStreamId, Http2ErrorCode error) noexcept {
+    [[nodiscard]] static Http2Event goaway(std::uint32_t lastStreamId, Http2ErrorCode error) noexcept {
         return Http2Event(Http2GoawayEvent(lastStreamId, error));
     }
     Value value_;
@@ -591,20 +533,13 @@ public:
     void takeOutput(std::pmr::string& output);
     [[nodiscard]] bool wantsWrite() const noexcept;
 
-    [[nodiscard]] Http2RequestHeadSubmitResult submitRequestHead(
-        const Http2RegularRequestHeadView& request);
-    [[nodiscard]] Http2RequestHeadSubmitResult submitRequestHead(
-        const Http2ConnectRequestHeadView& request);
-    [[nodiscard]] Http2RequestHeadSubmitResult submitRequestHead(
-        const Http2ExtendedConnectRequestHeadView& request);
-    [[nodiscard]] Http2DataSubmitStatus submitData(
-        std::uint32_t streamId, std::string_view bytes, Http2EndStream endStream);
-    [[nodiscard]] Http2RequestContentReleaseStatus releaseRequestContent(
-        std::uint32_t streamId) noexcept;
-    [[nodiscard]] Http2SubmitStatus submitInterimResponseHead(
-        std::uint32_t streamId, const HttpInterimResponseHead& response);
-    [[nodiscard]] Http2SubmitStatus submitBufferedResponse(
-        std::uint32_t streamId, const HttpResponse& response);
+    [[nodiscard]] Http2RequestHeadSubmitResult submitRequestHead(const Http2RegularRequestHeadView& request);
+    [[nodiscard]] Http2RequestHeadSubmitResult submitRequestHead(const Http2ConnectRequestHeadView& request);
+    [[nodiscard]] Http2RequestHeadSubmitResult submitRequestHead(const Http2ExtendedConnectRequestHeadView& request);
+    [[nodiscard]] Http2DataSubmitStatus submitData(std::uint32_t streamId, std::string_view bytes, Http2EndStream endStream);
+    [[nodiscard]] Http2RequestContentReleaseStatus releaseRequestContent(std::uint32_t streamId) noexcept;
+    [[nodiscard]] Http2SubmitStatus submitInterimResponseHead(std::uint32_t streamId, const HttpInterimResponseHead& response);
+    [[nodiscard]] Http2SubmitStatus submitBufferedResponse(std::uint32_t streamId, const HttpResponse& response);
     [[nodiscard]] Http2SubmitStatus submitReset(std::uint32_t streamId, Http2ErrorCode error);
     [[nodiscard]] Http2ReceivedDataAcknowledgeStatus acknowledge(Http2ReceivedDataCredit&& credit);
     [[nodiscard]] bool hasQueuedData(std::uint32_t streamId) const noexcept;

@@ -41,8 +41,7 @@ template <typename T>
 [[nodiscard]] RequestBindingHandle<T> bindValidatedModel(Context& context, const T& model);
 
 template <typename T>
-[[nodiscard]] RequestBindingHandle<T> bindValidatedJsonModel(
-    Context& context, const T& model, std::string_view rawJson);
+[[nodiscard]] RequestBindingHandle<T> bindValidatedJsonModel(Context& context, const T& model, std::string_view rawJson);
 
 template <typename T>
     requires(!std::is_lvalue_reference_v<T>)
@@ -117,8 +116,7 @@ public:
         friend class ContextRequest;
         friend struct RequestFormField;
 
-        constexpr RequestBlob(
-            std::span<const std::byte> bytes, std::string_view contentType) noexcept
+        constexpr RequestBlob(std::span<const std::byte> bytes, std::string_view contentType) noexcept
             : bytes_(bytes),
               contentType_(contentType) {}
 
@@ -173,10 +171,7 @@ public:
     private:
         friend struct detail::RequestFormFieldAccess;
 
-        RequestFormField(std::pmr::memory_resource* resource, std::pmr::string&& fieldName,
-            std::pmr::string&& fieldValue, std::pmr::string&& fieldFilename = {},
-            std::pmr::string&& fieldContentType = {}, bool fieldFile = false,
-            bool fieldArray = false)
+        RequestFormField(std::pmr::memory_resource* resource, std::pmr::string&& fieldName, std::pmr::string&& fieldValue, std::pmr::string&& fieldFilename = {}, std::pmr::string&& fieldContentType = {}, bool fieldFile = false, bool fieldArray = false)
             : name_(std::move(fieldName)),
               value_(std::move(fieldValue)),
               filename_(std::move(fieldFilename)),
@@ -251,8 +246,7 @@ public:
             friend class RequestFormData;
             friend class Object;
 
-            [[nodiscard]] static Group make(
-                std::pmr::memory_resource* resource, std::string_view name, bool array) {
+            [[nodiscard]] static Group make(std::pmr::memory_resource* resource, std::string_view name, bool array) {
                 return Group(resource, name, array);
             }
 
@@ -282,8 +276,7 @@ public:
             }
 
             [[nodiscard]] std::span<const RequestFormField* const> fields() const noexcept {
-                return group_ == nullptr ? std::span<const RequestFormField* const>{}
-                                         : group_->fields();
+                return group_ == nullptr ? std::span<const RequestFormField* const>{} : group_->fields();
             }
 
             [[nodiscard]] std::size_t size() const noexcept {
@@ -355,8 +348,7 @@ public:
 
             Object(const RequestFormData& form, std::string_view dotPath);
 
-            [[nodiscard]] static std::pmr::memory_resource* resourceFor(
-                const RequestFormData& form) noexcept {
+            [[nodiscard]] static std::pmr::memory_resource* resourceFor(const RequestFormData& form) noexcept {
                 return form.fields_.get_allocator().resource();
             }
 
@@ -381,8 +373,7 @@ public:
                 return nullptr;
             }
 
-            [[nodiscard]] static std::string_view directChildName(
-                const RequestFormField& field, std::string_view dotPath) noexcept;
+            [[nodiscard]] static std::string_view directChildName(const RequestFormField& field, std::string_view dotPath) noexcept;
 
             void rebuildEntries();
 
@@ -449,11 +440,9 @@ public:
             return name.find('.') != std::string_view::npos;
         }
 
-        [[nodiscard]] static bool consumePath(
-            const RequestFormField& field, std::size_t& index, std::string_view dotPath) noexcept;
+        [[nodiscard]] static bool consumePath(const RequestFormField& field, std::size_t& index, std::string_view dotPath) noexcept;
 
-        [[nodiscard]] static bool pathMatches(
-            const RequestFormField& field, std::string_view dotPath) noexcept {
+        [[nodiscard]] static bool pathMatches(const RequestFormField& field, std::string_view dotPath) noexcept {
             const auto path = field.path();
             if (path.empty() || dotPath.empty()) {
                 return false;
@@ -463,16 +452,14 @@ public:
             return consumePath(field, index, dotPath) && index == path.size();
         }
 
-        [[nodiscard]] static bool pathMatchesChild(const RequestFormField& field,
-            std::string_view dotPath, std::string_view name) noexcept {
+        [[nodiscard]] static bool pathMatchesChild(const RequestFormField& field, std::string_view dotPath, std::string_view name) noexcept {
             const auto path = field.path();
             if (path.empty() || name.empty()) {
                 return false;
             }
 
             std::size_t index = 0;
-            return consumePath(field, index, dotPath) && consumePath(field, index, name) &&
-                   index == path.size();
+            return consumePath(field, index, dotPath) && consumePath(field, index, name) && index == path.size();
         }
 
         [[nodiscard]] const Group* pathEntry(std::string_view dotPath) const noexcept {
@@ -487,8 +474,7 @@ public:
             return nullptr;
         }
 
-        [[nodiscard]] const Group* pathEntryChild(
-            std::string_view dotPath, std::string_view name) const noexcept {
+        [[nodiscard]] const Group* pathEntryChild(std::string_view dotPath, std::string_view name) const noexcept {
             if (name.empty()) {
                 return nullptr;
             }
@@ -500,21 +486,17 @@ public:
             return nullptr;
         }
 
-        [[nodiscard]] static bool pathNameMatchesChild(
-            std::string_view pathName, std::string_view dotPath, std::string_view name) noexcept {
+        [[nodiscard]] static bool pathNameMatchesChild(std::string_view pathName, std::string_view dotPath, std::string_view name) noexcept {
             if (name.empty()) {
                 return false;
             }
             if (dotPath.empty()) {
                 return pathName == name;
             }
-            return pathName.size() == dotPath.size() + 1 + name.size() &&
-                   pathName.starts_with(dotPath) && pathName[dotPath.size()] == '.' &&
-                   pathName.ends_with(name);
+            return pathName.size() == dotPath.size() + 1 + name.size() && pathName.starts_with(dotPath) && pathName[dotPath.size()] == '.' && pathName.ends_with(name);
         }
 
-        [[nodiscard]] std::size_t countAtChild(
-            std::string_view dotPath, std::string_view name) const noexcept {
+        [[nodiscard]] std::size_t countAtChild(std::string_view dotPath, std::string_view name) const noexcept {
             const auto* formEntry = pathEntryChild(dotPath, name);
             return formEntry == nullptr ? 0 : formEntry->size();
         }
@@ -532,8 +514,7 @@ public:
 
         void rebuildPathEntries(std::pmr::memory_resource* resource);
 
-        [[nodiscard]] static std::string_view pathEntryName(
-            const RequestFormField& field) noexcept {
+        [[nodiscard]] static std::string_view pathEntryName(const RequestFormField& field) noexcept {
             return field.name();
         }
 
@@ -582,13 +563,10 @@ public:
     // mine is best?" -- looping accepts() in server order cannot, because it
     // returns the server's first acceptable option rather than the client's
     // most preferred one.
-    [[nodiscard]] std::optional<std::string_view> negotiate(
-        Negotiable field, std::span<const std::string_view> supported) const noexcept;
+    [[nodiscard]] std::optional<std::string_view> negotiate(Negotiable field, std::span<const std::string_view> supported) const noexcept;
 
-    [[nodiscard]] std::optional<std::string_view> negotiate(
-        Negotiable field, std::initializer_list<std::string_view> supported) const noexcept {
-        return negotiate(
-            field, std::span<const std::string_view>(supported.begin(), supported.size()));
+    [[nodiscard]] std::optional<std::string_view> negotiate(Negotiable field, std::initializer_list<std::string_view> supported) const noexcept {
+        return negotiate(field, std::span<const std::string_view>(supported.begin(), supported.size()));
     }
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const;
     [[nodiscard]] std::span<const std::string_view> queries(std::string_view name) const;
@@ -621,8 +599,7 @@ public:
     [[nodiscard]] const RequestNameValueList& paramFields() const;
     // Verifies the "value.signature" format written by setSignedCookie; returns
     // the value view on a valid signature, nullopt when missing or tampered.
-    [[nodiscard]] std::optional<std::string_view> signedCookie(
-        SignedCookieLookupOptions options) const;
+    [[nodiscard]] std::optional<std::string_view> signedCookie(SignedCookieLookupOptions options) const;
     [[nodiscard]] ScopedOperation<std::string_view> text() const;
     [[nodiscard]] ScopedOperation<std::span<const std::byte>> bytes() const;
     [[nodiscard]] ScopedOperation<RequestBlob> blob() const;
@@ -696,12 +673,9 @@ private:
     template <typename T>
     [[nodiscard]] static Task<std::optional<T>> formIfModelTask(const Context* context);
     [[nodiscard]] static Task<std::string_view> contextTextTask(const Context* context);
-    [[nodiscard]] static bool contextContentTypeMatches(
-        const Context* context, std::string_view expected) noexcept;
-    [[nodiscard]] static std::pmr::memory_resource* contextResource(
-        const Context* context) noexcept;
-    [[nodiscard]] static detail::ScopedOperationScope& contextOperationScope(
-        const Context* context) noexcept;
+    [[nodiscard]] static bool contextContentTypeMatches(const Context* context, std::string_view expected) noexcept;
+    [[nodiscard]] static std::pmr::memory_resource* contextResource(const Context* context) noexcept;
+    [[nodiscard]] static detail::ScopedOperationScope& contextOperationScope(const Context* context) noexcept;
 
     const Context* context_{nullptr};
 };

@@ -21,10 +21,8 @@ RUVIA_TEST(email_like_accepts_utf8_and_still_rejects_control_bytes) {
     // A UTF-8 byte (>= 0x80) is not a control character. A signed-char comparison
     // treated it as <= 0x20 and wrongly rejected internationalized addresses
     // (RFC 6531); they must be accepted.
-    RUVIA_CHECK(
-        isEmailLike(std::string_view("caf\xC3\xA9@example.com", 17)));  // café@... (é, 2-byte)
-    RUVIA_CHECK(
-        isEmailLike(std::string_view("\xE4\xBD\xA0@example.com", 15)));  // 3-byte local part
+    RUVIA_CHECK(isEmailLike(std::string_view("caf\xC3\xA9@example.com", 17)));   // café@... (é, 2-byte)
+    RUVIA_CHECK(isEmailLike(std::string_view("\xE4\xBD\xA0@example.com", 15)));  // 3-byte local part
     // Control bytes, SP, and DEL stay rejected via the same (now unsigned) guard.
     RUVIA_CHECK(!isEmailLike(std::string_view("a@b.c\x01", 6)));  // 0x01 control
     RUVIA_CHECK(!isEmailLike(std::string_view("a@b.c\x7f", 6)));  // DEL

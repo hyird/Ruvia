@@ -84,19 +84,16 @@ public:
     void reset() noexcept {
         auto phase = phase_.load(std::memory_order_acquire);
         for (;;) {
-            if (phase == RegistrationPhase::kIdle || phase == RegistrationPhase::kResetPending ||
-                phase == RegistrationPhase::kResetting) {
+            if (phase == RegistrationPhase::kIdle || phase == RegistrationPhase::kResetPending || phase == RegistrationPhase::kResetting) {
                 return;
             }
             if (phase == RegistrationPhase::kRegistering) {
-                if (phase_.compare_exchange_weak(phase, RegistrationPhase::kResetPending,
-                        std::memory_order_acq_rel, std::memory_order_acquire)) {
+                if (phase_.compare_exchange_weak(phase, RegistrationPhase::kResetPending, std::memory_order_acq_rel, std::memory_order_acquire)) {
                     return;
                 }
                 continue;
             }
-            if (phase_.compare_exchange_weak(phase, RegistrationPhase::kResetting,
-                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+            if (phase_.compare_exchange_weak(phase, RegistrationPhase::kResetting, std::memory_order_acq_rel, std::memory_order_acquire)) {
                 clearRegistration();
                 phase_.store(RegistrationPhase::kIdle, std::memory_order_release);
                 return;
@@ -119,14 +116,11 @@ private:
         kResetting,
     };
 
-    StopRegistration(std::stop_token first, std::stop_token second,
-        std::shared_ptr<const void> owner, MoveOnlyFunction<void()> callback) {
-        registerCallbacks(
-            std::move(first), std::move(second), std::move(owner), std::move(callback));
+    StopRegistration(std::stop_token first, std::stop_token second, std::shared_ptr<const void> owner, MoveOnlyFunction<void()> callback) {
+        registerCallbacks(std::move(first), std::move(second), std::move(owner), std::move(callback));
     }
 
-    void registerCallbacks(std::stop_token first, std::stop_token second,
-        std::shared_ptr<const void> owner, MoveOnlyFunction<void()> callback) {
+    void registerCallbacks(std::stop_token first, std::stop_token second, std::shared_ptr<const void> owner, MoveOnlyFunction<void()> callback) {
         if ((!first.stop_possible() && !second.stop_possible()) || !callback) {
             return;
         }
@@ -136,8 +130,7 @@ private:
         }
 
         auto expected = RegistrationPhase::kIdle;
-        if (!phase_.compare_exchange_strong(expected, RegistrationPhase::kRegistering,
-                std::memory_order_acq_rel, std::memory_order_acquire)) {
+        if (!phase_.compare_exchange_strong(expected, RegistrationPhase::kRegistering, std::memory_order_acq_rel, std::memory_order_acquire)) {
             std::terminate();
         }
         owner_ = std::move(owner);
@@ -150,8 +143,7 @@ private:
         }
 
         expected = RegistrationPhase::kRegistering;
-        if (phase_.compare_exchange_strong(expected, RegistrationPhase::kRegistered,
-                std::memory_order_acq_rel, std::memory_order_acquire)) {
+        if (phase_.compare_exchange_strong(expected, RegistrationPhase::kRegistered, std::memory_order_acq_rel, std::memory_order_acquire)) {
             return;
         }
         if (expected != RegistrationPhase::kResetPending) {
@@ -215,8 +207,7 @@ private:
         : firstToken_(std::move(token)),
           owner_(std::move(owner)) {}
 
-    StopToken(std::stop_token first, std::stop_token second,
-        std::shared_ptr<const void> owner = {}) noexcept
+    StopToken(std::stop_token first, std::stop_token second, std::shared_ptr<const void> owner = {}) noexcept
         : firstToken_(std::move(first)),
           secondToken_(std::move(second)),
           owner_(std::move(owner)) {}
@@ -312,10 +303,8 @@ inline StopToken combineStopTokens(StopToken first, StopToken second) {
         inlineTokens[inlineCount++] = token;
         return true;
     };
-    const bool tokensFit = append(first.firstToken_) && append(first.secondToken_) &&
-                           append(second.firstToken_) && append(second.secondToken_);
-    const bool ownersFit =
-        first.owner_ == nullptr || second.owner_ == nullptr || first.owner_ == second.owner_;
+    const bool tokensFit = append(first.firstToken_) && append(first.secondToken_) && append(second.firstToken_) && append(second.secondToken_);
+    const bool ownersFit = first.owner_ == nullptr || second.owner_ == nullptr || first.owner_ == second.owner_;
     if (tokensFit && ownersFit) {
         auto owner = first.owner_ != nullptr ? std::move(first.owner_) : std::move(second.owner_);
         if (inlineCount == 1) {

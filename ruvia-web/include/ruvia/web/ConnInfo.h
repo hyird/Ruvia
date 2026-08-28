@@ -128,16 +128,14 @@ private:
         return ConnInfo(remoteAddress, PlainConnectionTransport{});
     }
 
-    [[nodiscard]] static constexpr ConnInfo tls(
-        std::string_view remoteAddress, std::string_view clientCertificateSubject) noexcept {
+    [[nodiscard]] static constexpr ConnInfo tls(std::string_view remoteAddress, std::string_view clientCertificateSubject) noexcept {
         return ConnInfo(remoteAddress, TlsConnectionTransport(clientCertificateSubject));
     }
 
     // Applied only after the peer has been matched against the configured
     // trusted set. An empty argument leaves the transport-derived value, so a
     // proxy that sends one field but not the other does not blank the rest.
-    constexpr void applyForwarded(
-        std::string_view clientAddress, std::string_view forwardedScheme) noexcept {
+    constexpr void applyForwarded(std::string_view clientAddress, std::string_view forwardedScheme) noexcept {
         if (!clientAddress.empty()) {
             client_ = Address(clientAddress);
             viaTrustedProxy_ = true;

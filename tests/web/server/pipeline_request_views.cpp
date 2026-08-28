@@ -52,17 +52,13 @@ private:
 };
 
 template <typename Handler>
-void registerRoute(ruvia::detail::RouterImpl& router, ruvia::HttpKnownMethod method,
-    std::string_view path, Handler& handler) {
-    router.registerRoute(method, std::pmr::string(path, std::pmr::get_default_resource()),
-        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(handler),
-        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+void registerRoute(ruvia::detail::RouterImpl& router, ruvia::HttpKnownMethod method, std::string_view path, Handler& handler) {
+    router.registerRoute(method, std::pmr::string(path, std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(handler), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
 }
 
 // Returns the paths the server logged for one pipelined burst, or an empty
 // vector if fewer than `expected` records arrived before the bound.
-std::vector<std::string> logPipelinedBurst(const asio::ip::tcp::endpoint& endpoint,
-    const AccessLogListener& listener, std::string_view pipelined, std::size_t expected) {
+std::vector<std::string> logPipelinedBurst(const asio::ip::tcp::endpoint& endpoint, const AccessLogListener& listener, std::string_view pipelined, std::size_t expected) {
     asio::io_context clientContext;
     asio::ip::tcp::socket client(clientContext);
     client.connect(endpoint);
@@ -90,12 +86,8 @@ int main() {
     ruvia::detail::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
     // The route table borrows the handlers, so they must outlive the server.
-    auto firstHandler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {
-        co_return c.text("one");
-    };
-    auto secondHandler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {
-        co_return c.text("two");
-    };
+    auto firstHandler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> { co_return c.text("one"); };
+    auto secondHandler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> { co_return c.text("two"); };
     // Consuming the body is what lets the connection stay alive to serve the
     // pipelined successor, and it drives the known-length remainder path.
     auto uploadHandler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {
@@ -109,12 +101,9 @@ int main() {
 
     AccessLogListener listener;
     ruvia::detail::HttpServerOptions options;
-    options.accessLog.callback =
-        ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(listener);
+    options.accessLog.callback = ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(listener);
 
-    ruvia::detail::WebWorkerRuntime server(
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(),
-        {}, std::move(options));
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, std::move(options));
     server.start();
 
     // A bodyless request keeps the whole pipelined successor in the read buffer.
@@ -137,12 +126,9 @@ int main() {
     // pipeline-remainder path, so a regression in one must not be masked by the
     // other failing first.
     int failures = 0;
-    const auto check = [&failures](const char* label, const std::vector<std::string>& got,
-                           std::size_t at, std::string_view wantFirst,
-                           std::string_view wantSecond) {
+    const auto check = [&failures](const char* label, const std::vector<std::string>& got, std::size_t at, std::string_view wantFirst, std::string_view wantSecond) {
         if (got.size() < at + 2) {
-            std::fprintf(stderr, "%s: expected at least %zu access log records, got %zu\n", label,
-                at + 2, got.size());
+            std::fprintf(stderr, "%s: expected at least %zu access log records, got %zu\n", label, at + 2, got.size());
             ++failures;
             return;
         }
@@ -152,8 +138,7 @@ int main() {
         std::fprintf(stderr,
             "%s: pipelined request corrupted the logged path: got {\"%s\", "
             "\"%s\"}, want {\"%.*s\", \"%.*s\"}\n",
-            label, got[at].c_str(), got[at + 1].c_str(), static_cast<int>(wantFirst.size()),
-            wantFirst.data(), static_cast<int>(wantSecond.size()), wantSecond.data());
+            label, got[at].c_str(), got[at + 1].c_str(), static_cast<int>(wantFirst.size()), wantFirst.data(), static_cast<int>(wantSecond.size()), wantSecond.data());
         ++failures;
     };
 

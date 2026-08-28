@@ -36,8 +36,7 @@ void cancelWorkerSingleWait(const std::shared_ptr<State>& state, std::uint64_t g
 template <typename T, typename State, typename Awaiter>
 class WorkerSingleWaitAwaiter {
 public:
-    WorkerSingleWaitAwaiter(std::shared_ptr<State> state,
-        std::optional<std::chrono::steady_clock::duration> timeout, StopToken stopToken)
+    WorkerSingleWaitAwaiter(std::shared_ptr<State> state, std::optional<std::chrono::steady_clock::duration> timeout, StopToken stopToken)
         : state_(std::move(state)),
           timeout_(timeout),
           stopToken_(std::move(stopToken)),
@@ -57,8 +56,7 @@ public:
         return stopToken_;
     }
 
-    [[nodiscard]] const std::optional<std::chrono::steady_clock::duration>& timeout()
-        const noexcept {
+    [[nodiscard]] const std::optional<std::chrono::steady_clock::duration>& timeout() const noexcept {
         return timeout_;
     }
 
@@ -85,20 +83,17 @@ public:
         }
         if (timeout_) {
             try {
-                WorkerHandleAccess::scheduleTimer(owner.worker, timer_,
-                    workerTimerDeadlineAfter(*timeout_),
-                    [&owner, waiter, completion = &completion_](WorkerTimerOutcome outcome) {
-                        if (outcome == WorkerTimerOutcome::kExpired) {
-                            std::lock_guard stateLock(owner.mutex);
-                            if (owner.waiter == waiter) {
-                                owner.waiter = nullptr;
-                                owner.waiterGeneration = 0;
-                                (void)completion->complete(WorkerWaitResultAccess::outcome<T>(
-                                    WorkerWaitStatus::kTimedOut));
-                            }
+                WorkerHandleAccess::scheduleTimer(owner.worker, timer_, workerTimerDeadlineAfter(*timeout_), [&owner, waiter, completion = &completion_](WorkerTimerOutcome outcome) {
+                    if (outcome == WorkerTimerOutcome::kExpired) {
+                        std::lock_guard stateLock(owner.mutex);
+                        if (owner.waiter == waiter) {
+                            owner.waiter = nullptr;
+                            owner.waiterGeneration = 0;
+                            (void)completion->complete(WorkerWaitResultAccess::outcome<T>(WorkerWaitStatus::kTimedOut));
                         }
-                        completion->continuation().resume();
-                    });
+                    }
+                    completion->continuation().resume();
+                });
             } catch (...) {
                 if (owner.waiter == waiter) {
                     owner.waiter = nullptr;
@@ -123,8 +118,7 @@ public:
             return;
         }
         auto* waiter = self();
-        WorkerHandleAccess::deferOrTerminate(
-            state().worker, [waiter] { waiter->resumeContinuation(); });
+        WorkerHandleAccess::deferOrTerminate(state().worker, [waiter] { waiter->resumeContinuation(); });
     }
 
     void resumeContinuation() noexcept {
@@ -144,15 +138,11 @@ private:
         return state.nextWaiterGeneration;
     }
 
-    [[nodiscard]] static StopRegistration registerCancellation(
-        const StopToken& token, const std::shared_ptr<State>& state, std::uint64_t generation) {
+    [[nodiscard]] static StopRegistration registerCancellation(const StopToken& token, const std::shared_ptr<State>& state, std::uint64_t generation) {
         if (!token.stoppable() || token.stopRequested()) {
             return {};
         }
-        return token.registerCallback([state, generation] {
-            (void)WorkerHandleAccess::deferIfAttached(
-                state->worker, [state, generation] { cancelWorkerSingleWait(state, generation); });
-        });
+        return token.registerCallback([state, generation] { (void)WorkerHandleAccess::deferIfAttached(state->worker, [state, generation] { cancelWorkerSingleWait(state, generation); }); });
     }
 
     std::shared_ptr<State> state_;
@@ -179,8 +169,7 @@ void completeWorkerSingleWait(State& state, WorkerWaitStatus status) noexcept {
 }
 
 template <typename State>
-void cancelWorkerSingleWait(
-    const std::shared_ptr<State>& state, std::uint64_t generation) noexcept {
+void cancelWorkerSingleWait(const std::shared_ptr<State>& state, std::uint64_t generation) noexcept {
     std::lock_guard lock(state->mutex);
     if (state->waiter == nullptr || state->waiterGeneration != generation) {
         return;

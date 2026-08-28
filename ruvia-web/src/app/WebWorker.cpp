@@ -15,10 +15,7 @@
 
 namespace ruvia {
 
-WebWorkerContext::WebWorkerContext(const WorkerHandle& worker, std::pmr::memory_resource* resource,
-    detail::WorkerClientRegistryView clientRegistries,
-    const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool,
-    const StopToken& stopToken) noexcept
+WebWorkerContext::WebWorkerContext(const WorkerHandle& worker, std::pmr::memory_resource* resource, detail::WorkerClientRegistryView clientRegistries, const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool, const StopToken& stopToken) noexcept
     : worker_(worker),
       resource_(detail::pmrResourceOrDefault(resource)),
       clientRegistries_(clientRegistries),
@@ -36,8 +33,7 @@ BlockingPool& WebWorkerContext::blockingPool() const {
 void* WebWorkerContext::workerStateInstance(const void* typeKey) const {
     auto* instance = workerStates_ == nullptr ? nullptr : workerStates_->instance(typeKey);
     if (instance == nullptr) {
-        throw std::logic_error(
-            "worker state type is not registered: call App::useWorkerState<T>() before App::run()");
+        throw std::logic_error("worker state type is not registered: call App::useWorkerState<T>() before App::run()");
     }
     return instance;
 }
@@ -101,10 +97,8 @@ WebWorkerStats WebWorkerHandle::stats() const noexcept {
     return dispatch_ ? dispatch_->stats() : WebWorkerStats{};
 }
 
-WebWorkerPostResult WebWorkerHandle::postTask(
-    MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const {
-    return dispatch_ ? dispatch_->post(std::move(task))
-                     : WebWorkerPostResult::reject(PostStatus::kWorkerStopping, std::move(task));
+WebWorkerPostResult WebWorkerHandle::postTask(MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const {
+    return dispatch_ ? dispatch_->post(std::move(task)) : WebWorkerPostResult::reject(PostStatus::kWorkerStopping, std::move(task));
 }
 
 }  // namespace ruvia
@@ -128,9 +122,7 @@ using AbandonReservation = std::unique_ptr<WebWorkerDispatch, AbandonReservation
 
 }  // namespace
 
-WebWorkerDispatch::WebWorkerDispatch(asio::any_io_executor executor, WorkerHandle worker,
-    std::pmr::memory_resource* resource, WorkerCapabilities& capabilities,
-    MoveOnlyFunction<void(std::exception_ptr)> failed)
+WebWorkerDispatch::WebWorkerDispatch(asio::any_io_executor executor, WorkerHandle worker, std::pmr::memory_resource* resource, WorkerCapabilities& capabilities, MoveOnlyFunction<void(std::exception_ptr)> failed)
     : executor_(std::move(executor)),
       worker_(std::move(worker)),
       resource_(pmrResourceOrDefault(resource)),
@@ -164,18 +156,16 @@ WebWorkerPostResult WebWorkerDispatch::post(Task task) {
         return WebWorkerPostResult::reject(PostStatus::kWorkerStopping, std::move(task));
     }
 
-    const auto status = WorkerHandleAccess::postFactory(
-        worker_, [this, &task]() mutable -> MoveOnlyFunction<void()> {
-            outstanding_.fetch_add(1, std::memory_order_acq_rel);
-            AbandonReservation reservation(this);
-            return [task = std::move(task), reservation = std::move(reservation)]() mutable {
-                WebWorkerDispatch* self = reservation.release();
-                self->start(std::move(task));
-            };
-        });
+    const auto status = WorkerHandleAccess::postFactory(worker_, [this, &task]() mutable -> MoveOnlyFunction<void()> {
+        outstanding_.fetch_add(1, std::memory_order_acq_rel);
+        AbandonReservation reservation(this);
+        return [task = std::move(task), reservation = std::move(reservation)]() mutable {
+            WebWorkerDispatch* self = reservation.release();
+            self->start(std::move(task));
+        };
+    });
     postCounters_.record(status);
-    return status == PostStatus::kAccepted ? WebWorkerPostResult::accept()
-                                           : WebWorkerPostResult::reject(status, std::move(task));
+    return status == PostStatus::kAccepted ? WebWorkerPostResult::accept() : WebWorkerPostResult::reject(status, std::move(task));
 }
 
 void WebWorkerDispatch::close() noexcept {
@@ -219,22 +209,21 @@ WebWorkerStats WebWorkerDispatch::stats() const noexcept {
 void WebWorkerDispatch::start(Task task) {
     try {
         auto operation = run(std::move(task));
-        asyncStartTask(std::move(operation),
-            asio::bind_executor(executor_, [this](const TaskCompletionResult<void>& result) {
-                std::exception_ptr failure;
-                if (const auto* failed = result.failure()) {
-                    failedCount_.fetch_add(1, std::memory_order_relaxed);
-                    failure = failed->exception();
-                }
-                // Reconcile the accepted task before invoking the failure
-                // sink. The sink normally stops this worker and is allowed
-                // to trigger arbitrary terminal control flow; no such path
-                // may leave retire() observing a phantom outstanding job.
-                complete();
-                if (failure != nullptr && failed_) {
-                    failed_(std::move(failure));
-                }
-            }));
+        asyncStartTask(std::move(operation), asio::bind_executor(executor_, [this](const TaskCompletionResult<void>& result) {
+            std::exception_ptr failure;
+            if (const auto* failed = result.failure()) {
+                failedCount_.fetch_add(1, std::memory_order_relaxed);
+                failure = failed->exception();
+            }
+            // Reconcile the accepted task before invoking the failure
+            // sink. The sink normally stops this worker and is allowed
+            // to trigger arbitrary terminal control flow; no such path
+            // may leave retire() observing a phantom outstanding job.
+            complete();
+            if (failure != nullptr && failed_) {
+                failed_(std::move(failure));
+            }
+        }));
     } catch (...) {
         complete();
         throw;
@@ -242,8 +231,7 @@ void WebWorkerDispatch::start(Task task) {
 }
 
 ruvia::Task<void> WebWorkerDispatch::run(Task task) {
-    WebWorkerContext context(
-        worker_, resource_, clientRegistries_, workerStates_, blockingPool_, stopToken_);
+    WebWorkerContext context(worker_, resource_, clientRegistries_, workerStates_, blockingPool_, stopToken_);
     co_await task(context);
 }
 

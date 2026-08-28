@@ -37,14 +37,12 @@ using ruvia::detail::ContextServices;
 using ruvia::detail::HttpRequestAccess;
 
 template <typename Target>
-concept HasContextlessSecurityHeaders = requires(Target& target,
-    const SecurityHeadersConfig& options) { ruvia::applySecurityHeaders(target, options); };
+concept HasContextlessSecurityHeaders = requires(Target& target, const SecurityHeadersConfig& options) { ruvia::applySecurityHeaders(target, options); };
 
 static_assert(!HasContextlessSecurityHeaders<HttpResponse>);
 
 template <typename T>
-concept HasSecurityHeadersOverwriteExistingBoolean =
-    requires(T& options) { options.overwriteExisting = true; };
+concept HasSecurityHeadersOverwriteExistingBoolean = requires(T& options) { options.overwriteExisting = true; };
 
 static_assert(std::is_aggregate_v<SecurityHeader>);
 static_assert(std::is_aggregate_v<SecurityHeadersConfig>);
@@ -53,18 +51,12 @@ static_assert(std::same_as<decltype(SecurityHeader{}.value), std::string>);
 static_assert(std::same_as<decltype(SecurityHeadersConfig{}.contentSecurityPolicy), std::string>);
 static_assert(std::same_as<decltype(SecurityHeadersConfig{}.referrerPolicy), std::string>);
 static_assert(std::same_as<decltype(SecurityHeadersConfig{}.permissionsPolicy), std::string>);
-static_assert(
-    std::same_as<decltype(SecurityHeadersConfig{}.customHeaders), std::vector<SecurityHeader>>);
-static_assert(
-    SecurityHeadersConfig{}.contentTypeOptionsHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
-static_assert(
-    SecurityHeadersConfig{}.frameOptionsHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
-static_assert(SecurityHeadersConfig{}.strictTransportSecurityHeader ==
-              DefaultSecurityHeaderPolicy::kEmitDefault);
-static_assert(
-    std::same_as<decltype(SecurityHeadersConfig{}.existingHeaders), SecurityHeaderConflictPolicy>);
-static_assert(
-    SecurityHeadersConfig{}.existingHeaders == SecurityHeaderConflictPolicy::kPreserveExisting);
+static_assert(std::same_as<decltype(SecurityHeadersConfig{}.customHeaders), std::vector<SecurityHeader>>);
+static_assert(SecurityHeadersConfig{}.contentTypeOptionsHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
+static_assert(SecurityHeadersConfig{}.frameOptionsHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
+static_assert(SecurityHeadersConfig{}.strictTransportSecurityHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
+static_assert(std::same_as<decltype(SecurityHeadersConfig{}.existingHeaders), SecurityHeaderConflictPolicy>);
+static_assert(SecurityHeadersConfig{}.existingHeaders == SecurityHeaderConflictPolicy::kPreserveExisting);
 static_assert(!HasSecurityHeadersOverwriteExistingBoolean<SecurityHeadersConfig>);
 static_assert(!std::is_copy_constructible_v<ruvia::SecurityHeadersMiddleware>);
 static_assert(!std::is_copy_assignable_v<ruvia::SecurityHeadersMiddleware>);
@@ -109,17 +101,13 @@ RUVIA_TEST(security_headers_default_set) {
 
     RUVIA_CHECK_EQ(response.header("X-Content-Type-Options"), std::string_view("nosniff"));
     RUVIA_CHECK_EQ(response.header("X-Frame-Options"), std::string_view("DENY"));
-    RUVIA_CHECK_EQ(response.header("Strict-Transport-Security"),
-        std::string_view("max-age=31536000; includeSubDomains"));
+    RUVIA_CHECK_EQ(response.header("Strict-Transport-Security"), std::string_view("max-age=31536000; includeSubDomains"));
     // Modern guidance disables the legacy XSS auditor rather than enabling it.
     RUVIA_CHECK_EQ(response.header("X-XSS-Protection"), std::string_view("0"));
     // Secure-by-default policy values ship out of the box.
-    RUVIA_CHECK_EQ(
-        response.header("Content-Security-Policy"), std::string_view("default-src 'self'"));
-    RUVIA_CHECK_EQ(
-        response.header("Referrer-Policy"), std::string_view("strict-origin-when-cross-origin"));
-    RUVIA_CHECK_EQ(response.header("Permissions-Policy"),
-        std::string_view("geolocation=(), microphone=(), camera=()"));
+    RUVIA_CHECK_EQ(response.header("Content-Security-Policy"), std::string_view("default-src 'self'"));
+    RUVIA_CHECK_EQ(response.header("Referrer-Policy"), std::string_view("strict-origin-when-cross-origin"));
+    RUVIA_CHECK_EQ(response.header("Permissions-Policy"), std::string_view("geolocation=(), microphone=(), camera=()"));
 }
 
 RUVIA_TEST(security_headers_emit_hsts_only_for_tls_contexts) {
@@ -129,13 +117,11 @@ RUVIA_TEST(security_headers_emit_hsts_only_for_tls_contexts) {
 
     SecurityContextFixture tls(ContextServices{}.withTlsTransport("192.0.2.2"));
     applySecurityHeaders(tls.context());
-    RUVIA_CHECK_EQ(tls.response().header("Strict-Transport-Security"),
-        std::string_view("max-age=31536000; includeSubDomains"));
+    RUVIA_CHECK_EQ(tls.response().header("Strict-Transport-Security"), std::string_view("max-age=31536000; includeSubDomains"));
 }
 
 RUVIA_TEST(security_headers_xss_protection_header_policy_is_explicit) {
-    static_assert(
-        SecurityHeadersConfig{}.xssProtectionHeader == XssProtectionHeaderPolicy::kEmitDisabled);
+    static_assert(SecurityHeadersConfig{}.xssProtectionHeader == XssProtectionHeaderPolicy::kEmitDisabled);
 
     SecurityContextFixture fixture;
     const SecurityHeadersConfig options{
@@ -210,8 +196,7 @@ RUVIA_TEST(security_headers_emit_configured_policies) {
     applySecurityHeaders(fixture.context(), options);
     const auto& response = fixture.response();
 
-    RUVIA_CHECK_EQ(
-        response.header("Content-Security-Policy"), std::string_view("default-src 'self'"));
+    RUVIA_CHECK_EQ(response.header("Content-Security-Policy"), std::string_view("default-src 'self'"));
     RUVIA_CHECK_EQ(response.header("Referrer-Policy"), std::string_view("no-referrer"));
 }
 
@@ -268,8 +253,7 @@ RUVIA_TEST(security_headers_custom_hsts_is_still_tls_only) {
 
     SecurityContextFixture tls(ContextServices{}.withTlsTransport("192.0.2.2"));
     applySecurityHeaders(tls.context(), options);
-    RUVIA_CHECK_EQ(
-        tls.response().header("Strict-Transport-Security"), std::string_view("max-age=1"));
+    RUVIA_CHECK_EQ(tls.response().header("Strict-Transport-Security"), std::string_view("max-age=1"));
 }
 
 RUVIA_TEST(security_headers_respect_existing_header_conflict_policy) {
@@ -282,10 +266,9 @@ RUVIA_TEST(security_headers_respect_existing_header_conflict_policy) {
 
     SecurityContextFixture replace;
     replace.context().header("X-Frame-Options", "SAMEORIGIN");
-    applySecurityHeaders(
-        replace.context(), SecurityHeadersConfig{
-                               .existingHeaders = SecurityHeaderConflictPolicy::kReplaceExisting,
-                           });
+    applySecurityHeaders(replace.context(), SecurityHeadersConfig{
+                                                .existingHeaders = SecurityHeaderConflictPolicy::kReplaceExisting,
+                                            });
     RUVIA_CHECK_EQ(replace.response().header("X-Frame-Options"), std::string_view("DENY"));
 }
 

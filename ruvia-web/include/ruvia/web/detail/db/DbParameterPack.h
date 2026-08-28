@@ -14,8 +14,7 @@ namespace ruvia::detail {
 // vector of DbValue -- cannot construct a DbValue, so it fails this concept and
 // the span overload keeps winning without needing an explicit exclusion.
 template <typename Param>
-concept DbParameter =
-    std::constructible_from<DbValue, Param&&> || HttpTemporaryOwningCharString<Param>;
+concept DbParameter = std::constructible_from<DbValue, Param&&> || HttpTemporaryOwningCharString<Param>;
 
 template <typename... Params>
 concept DbParameterPack = sizeof...(Params) > 0 && (DbParameter<Params> && ...);

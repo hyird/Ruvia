@@ -178,18 +178,15 @@ bool Http2Connection::applySettingsPayload(std::string_view payload) {
         const auto entry = http2ReadSettingEntry(payload, offset);
         const auto result = candidate.apply(entry.id, entry.value);
         if (const auto* failure = result.failure()) {
-            appendGoaway(http2PeerSettingErrorCode(failure->error()),
-                http2PeerSettingErrorMessage(failure->error()));
+            appendGoaway(http2PeerSettingErrorCode(failure->error()), http2PeerSettingErrorMessage(failure->error()));
             return false;
         }
-        if (entry.id == Http2SettingId::kHeaderTableSize &&
-            entry.value < encoderDynamicTableSize_) {
+        if (entry.id == Http2SettingId::kHeaderTableSize && entry.value < encoderDynamicTableSize_) {
             encoderTableSizeReduction = true;
         }
     }
 
-    const auto initialWindowDelta = static_cast<std::int64_t>(candidate.initialWindowSize()) -
-                                    static_cast<std::int64_t>(peerSettings_.initialWindowSize());
+    const auto initialWindowDelta = static_cast<std::int64_t>(candidate.initialWindowSize()) - static_cast<std::int64_t>(peerSettings_.initialWindowSize());
     // Http2StreamTable preflights every stream before changing any of them. Do
     // this while the live peer settings are still untouched; a rejected delta can
     // therefore emit GOAWAY without publishing a partially applied SETTINGS.
@@ -264,9 +261,7 @@ bool Http2Connection::processSettings(const Http2FrameHeader& header, std::strin
         return true;
     } catch (...) {
         if (settingsApplied) {
-            const auto appliedInitialWindowDelta =
-                static_cast<std::int64_t>(peerSettings_.initialWindowSize()) -
-                static_cast<std::int64_t>(previousInitialWindowSize);
+            const auto appliedInitialWindowDelta = static_cast<std::int64_t>(peerSettings_.initialWindowSize()) - static_cast<std::int64_t>(previousInitialWindowSize);
             if (!http2ApplyStreamSendWindowDelta(streams_, -appliedInitialWindowDelta)) {
                 std::terminate();
             }
@@ -302,8 +297,7 @@ bool Http2Connection::processPriority(const Http2FrameHeader& header, std::strin
         try {
             output_.appendRstStream(header.streamId, Http2ErrorCode::kFrameSizeError);
             if (stream != nullptr) {
-                closeStream(header.streamId, Http2StreamCloseSource::kLocal,
-                    Http2ErrorCode::kFrameSizeError);
+                closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kFrameSizeError);
             }
         } catch (...) {
             output_.rollbackTo(outputCheckpoint);
@@ -329,10 +323,7 @@ bool Http2Connection::processGoaway(const Http2FrameHeader& header, std::string_
         return false;
     }
 
-    const Http2PeerGoaway goaway(
-        http2Read31(reinterpret_cast<const unsigned char*>(payload.data())),
-        static_cast<Http2ErrorCode>(
-            http2Read32(reinterpret_cast<const unsigned char*>(payload.data() + 4))));
+    const Http2PeerGoaway goaway(http2Read31(reinterpret_cast<const unsigned char*>(payload.data())), static_cast<Http2ErrorCode>(http2Read32(reinterpret_cast<const unsigned char*>(payload.data() + 4))));
     if (peerGoaway_ && goaway.lastStreamId() > peerGoaway_->lastStreamId()) {
         // RFC 9113 §6.8: increasing this value can make an already retried request
         // ambiguous, so the peer is not allowed to widen it on a later GOAWAY.
@@ -387,8 +378,7 @@ bool Http2Connection::processGoaway(const Http2FrameHeader& header, std::string_
     // deferred DATA, stream-table storage, and peer concurrency slots cannot leak.
     for (std::size_t i = 0; i < unprocessedCount; ++i) {
         const auto streamId = unprocessedStreamIds[i];
-        if (!closeStreamImpl(streamId, Http2StreamCloseSource::kPeerGoaway, goaway.error(),
-                CloseNotification::kOwnerAlreadyKnows)) {
+        if (!closeStreamImpl(streamId, Http2StreamCloseSource::kPeerGoaway, goaway.error(), CloseNotification::kOwnerAlreadyKnows)) {
             continue;
         }
         events_.push_back(Http2Event::requestUnprocessed(streamId));
@@ -425,8 +415,7 @@ bool Http2Connection::processPing(const Http2FrameHeader& header, std::string_vi
 }
 
 bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_view payload) {
-    if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings &&
-        header.type != static_cast<std::uint8_t>(Http2FrameType::kSettings)) {
+    if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings && header.type != static_cast<std::uint8_t>(Http2FrameType::kSettings)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "first frame must be SETTINGS");
         return false;
     }
@@ -459,17 +448,14 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
             return false;
         default:
             if (header.streamId != 0) {
-                if (auto* stream = findStream(header.streamId);
-                    stream != nullptr && !http2StreamIsClosed(*stream) &&
-                    stream->tunnel().open() != nullptr) {
+                if (auto* stream = findStream(header.streamId); stream != nullptr && !http2StreamIsClosed(*stream) && stream->tunnel().open() != nullptr) {
                     // RFC 9113 8.5 narrows connected streams to DATA and the three
                     // stream-management frame types, even though unknown frames are
                     // normally ignored elsewhere.
                     const auto outputCheckpoint = output_.checkpoint();
                     try {
                         output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-                        closeStream(header.streamId, Http2StreamCloseSource::kLocal,
-                            Http2ErrorCode::kProtocolError);
+                        closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
                     } catch (...) {
                         output_.rollbackTo(outputCheckpoint);
                         throw;
@@ -542,8 +528,7 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
     // frame DIRECTLY over the caller's `in`. A span containing a second frame (or even
     // a partial tail) takes the owned slow path below. This is the boundary that keeps
     // a throwing later frame from making the caller retry an already committed prefix.
-    if (input_.empty() && prefacePhase_ != PrefacePhase::kAwaitingClientMagic &&
-        in.size() >= kHttp2FrameHeaderBytes) {
+    if (input_.empty() && prefacePhase_ != PrefacePhase::kAwaitingClientMagic && in.size() >= kHttp2FrameHeaderBytes) {
         const auto header = http2ParseFrameHeader(in.substr(0, kHttp2FrameHeaderBytes));
         if (in.size() - kHttp2FrameHeaderBytes == header.length) {
             std::size_t offset = 0;
@@ -571,8 +556,7 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
             if (input_.size() - inputOffset_ < kHttp2ClientPreface.size()) {
                 return Http2FeedResult::kNeedInput;  // wait for the full preface
             }
-            if (std::string_view(input_.data() + inputOffset_, kHttp2ClientPreface.size()) !=
-                kHttp2ClientPreface) {
+            if (std::string_view(input_.data() + inputOffset_, kHttp2ClientPreface.size()) != kHttp2ClientPreface) {
                 appendGoaway(Http2ErrorCode::kProtocolError, "invalid connection preface");
                 return Http2FeedResult::kProtocolFailure;
             }
@@ -589,8 +573,7 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
             return Http2FeedResult::kProtocolFailure;
         }
         retryInput_ = false;
-        return inputOffset_ < input_.size() ? Http2FeedResult::kNeedInput
-                                            : Http2FeedResult::kAccepted;
+        return inputOffset_ < input_.size() ? Http2FeedResult::kNeedInput : Http2FeedResult::kAccepted;
     } catch (...) {
         if (!retryingInput) {
             retryInput_ = true;
@@ -605,15 +588,11 @@ void Http2Connection::beginConnection() {
     }
     std::array<char, Http2LocalSettings::kFrameBytes + kHttp2WindowUpdateFrameBytes> buffer;
     auto* out = http2WriteLocalSettingsFrame(buffer.data());
-    if constexpr (Http2LocalSettings::kInitialWindowSize >
-                  static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize)) {
-        out = http2WriteWindowUpdate(out, 0,
-            Http2LocalSettings::kInitialWindowSize -
-                static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize));
+    if constexpr (Http2LocalSettings::kInitialWindowSize > static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize)) {
+        out = http2WriteWindowUpdate(out, 0, Http2LocalSettings::kInitialWindowSize - static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize));
     }
     const auto settingsBytes = static_cast<std::size_t>(out - buffer.data());
-    const auto prefaceBytes =
-        role_ == Http2Role::kClient ? kHttp2ClientPreface.size() : std::size_t{0};
+    const auto prefaceBytes = role_ == Http2Role::kClient ? kHttp2ClientPreface.size() : std::size_t{0};
     if (settingsBytes > std::numeric_limits<std::size_t>::max() - prefaceBytes) {
         throw std::length_error("HTTP/2 connection preface output size overflow");
     }
@@ -625,8 +604,7 @@ void Http2Connection::beginConnection() {
         output_.appendBytes(kHttp2ClientPreface);
     }
     output_.appendBytes(std::string_view(buffer.data(), settingsBytes));
-    prefacePhase_ = role_ == Http2Role::kClient ? PrefacePhase::kAwaitingPeerSettings
-                                                : PrefacePhase::kAwaitingClientMagic;
+    prefacePhase_ = role_ == Http2Role::kClient ? PrefacePhase::kAwaitingPeerSettings : PrefacePhase::kAwaitingClientMagic;
 }
 
 }  // namespace ruvia::detail

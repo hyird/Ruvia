@@ -6,14 +6,11 @@
 #include "ruvia/http/HttpCache.h"
 
 RUVIA_TEST(parse_cache_control_flags_and_ages) {
-    const auto cc = ruvia::parseCacheControl(
-        "public, max-age=60, s-maxage=120, stale-while-revalidate=30, immutable");
+    const auto cc = ruvia::parseCacheControl("public, max-age=60, s-maxage=120, stale-while-revalidate=30, immutable");
     RUVIA_CHECK(cc.has(ruvia::CacheControlDirective::kPublic));
     RUVIA_CHECK(!cc.has(ruvia::CacheControlDirective::kNoStore));
     RUVIA_CHECK(cc.has(ruvia::CacheControlDirective::kImmutable));
-    RUVIA_CHECK(!cc.has(static_cast<ruvia::CacheControlDirective>(
-        static_cast<std::uint16_t>(ruvia::CacheControlDirective::kPublic) |
-        static_cast<std::uint16_t>(ruvia::CacheControlDirective::kImmutable))));
+    RUVIA_CHECK(!cc.has(static_cast<ruvia::CacheControlDirective>(static_cast<std::uint16_t>(ruvia::CacheControlDirective::kPublic) | static_cast<std::uint16_t>(ruvia::CacheControlDirective::kImmutable))));
     RUVIA_CHECK(cc.maxAge().has_value());
     RUVIA_CHECK_EQ(*cc.maxAge(), std::uint64_t{60});
     RUVIA_CHECK_EQ(*cc.sMaxAge(), std::uint64_t{120});
@@ -21,8 +18,7 @@ RUVIA_TEST(parse_cache_control_flags_and_ages) {
 }
 
 RUVIA_TEST(parse_cache_control_request_directives) {
-    const auto request =
-        ruvia::parseCacheControl("only-if-cached, max-age=0, min-fresh=15, max-stale=30");
+    const auto request = ruvia::parseCacheControl("only-if-cached, max-age=0, min-fresh=15, max-stale=30");
     RUVIA_CHECK(request.has(ruvia::CacheControlDirective::kOnlyIfCached));
     RUVIA_CHECK_EQ(request.maxAge().value_or(1), std::uint64_t{0});
     RUVIA_CHECK_EQ(request.minFresh().value_or(0), std::uint64_t{15});
@@ -33,8 +29,7 @@ RUVIA_TEST(parse_cache_control_request_directives) {
     RUVIA_CHECK(anyStale.has(ruvia::CacheControlDirective::kMaxStaleAny));
     RUVIA_CHECK(!anyStale.maxStale().has_value());
 
-    const auto invalid =
-        ruvia::parseCacheControl("only-if-cached=yes, min-fresh=bad, max-stale=bad");
+    const auto invalid = ruvia::parseCacheControl("only-if-cached=yes, min-fresh=bad, max-stale=bad");
     RUVIA_CHECK(!invalid.has(ruvia::CacheControlDirective::kOnlyIfCached));
     RUVIA_CHECK(!invalid.minFresh().has_value());
     RUVIA_CHECK(!invalid.maxStale().has_value());
@@ -79,8 +74,7 @@ RUVIA_TEST(parse_cache_control_quoted_and_case_insensitive_and_unknown) {
 }
 
 RUVIA_TEST(parse_cache_control_decodes_quoted_pairs_in_delta_seconds) {
-    const auto cc = ruvia::parseCacheControl(
-        R"(max-age="6\0", s-maxage="1\20", stale-while-revalidate="\30", stale-if-error="4\5")");
+    const auto cc = ruvia::parseCacheControl(R"(max-age="6\0", s-maxage="1\20", stale-while-revalidate="\30", stale-if-error="4\5")");
     RUVIA_CHECK_EQ(cc.maxAge().value_or(0), std::uint64_t{60});
     RUVIA_CHECK_EQ(cc.sMaxAge().value_or(0), std::uint64_t{120});
     RUVIA_CHECK_EQ(cc.staleWhileRevalidate().value_or(0), std::uint64_t{30});
@@ -123,8 +117,7 @@ RUVIA_TEST(parse_cache_control_freshness_uses_first_occurrence) {
 
     // An invalid first occurrence cannot be repaired by a later value; caches
     // must not accidentally turn invalid freshness information into freshness.
-    const auto invalidFirst =
-        ruvia::parseCacheControl("max-age=invalid, max-age=3600, s-maxage=, s-maxage=7200");
+    const auto invalidFirst = ruvia::parseCacheControl("max-age=invalid, max-age=3600, s-maxage=, s-maxage=7200");
     RUVIA_CHECK(!invalidFirst.maxAge().has_value());
     RUVIA_CHECK(!invalidFirst.sMaxAge().has_value());
 }
@@ -181,8 +174,7 @@ RUVIA_TEST(parse_cache_control_ignores_arguments_on_bare_directives) {
 
     // no-cache and private are different: their response forms can carry a
     // field-name list, so an argument does not invalidate the directive.
-    const auto qualified =
-        ruvia::parseCacheControl("no-cache=\"Set-Cookie\", private=\"Authorization\"");
+    const auto qualified = ruvia::parseCacheControl("no-cache=\"Set-Cookie\", private=\"Authorization\"");
     RUVIA_CHECK(qualified.has(ruvia::CacheControlDirective::kNoCache));
     RUVIA_CHECK(qualified.has(ruvia::CacheControlDirective::kPrivate));
 }

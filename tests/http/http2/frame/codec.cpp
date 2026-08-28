@@ -79,8 +79,7 @@ RUVIA_TEST(frame_settings_entry_serialization) {
     char buf[6];
     char* end = http2WriteSettingsEntry(buf, Http2SettingId::kMaxConcurrentStreams, 100);
     RUVIA_CHECK(end - buf == 6);
-    RUVIA_CHECK_EQ(
-        http2Read16(bytes(buf)), static_cast<std::uint16_t>(Http2SettingId::kMaxConcurrentStreams));
+    RUVIA_CHECK_EQ(http2Read16(bytes(buf)), static_cast<std::uint16_t>(Http2SettingId::kMaxConcurrentStreams));
     RUVIA_CHECK_EQ(http2Read32(bytes(buf) + 2), std::uint32_t{100});
 }
 
@@ -102,8 +101,7 @@ RUVIA_TEST(frame_goaway_payload_serialization) {
     char* end = http2WriteGoawayPayload(buf, 0x8000000F, Http2ErrorCode::kProtocolError);
     RUVIA_CHECK(end - buf == 8);
     RUVIA_CHECK_EQ(http2Read32(bytes(buf)), std::uint32_t{0x0F});
-    RUVIA_CHECK_EQ(
-        http2Read32(bytes(buf) + 4), static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+    RUVIA_CHECK_EQ(http2Read32(bytes(buf) + 4), static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
 }
 
 RUVIA_TEST(http2_big_endian_readers) {

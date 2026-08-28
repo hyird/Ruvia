@@ -86,8 +86,7 @@ private:
     int fd_;
 };
 
-[[nodiscard]] inline ResponseFileSnapshot snapshotNativeFileHandle(
-    int fd, std::error_code& ec) noexcept {
+[[nodiscard]] inline ResponseFileSnapshot snapshotNativeFileHandle(int fd, std::error_code& ec) noexcept {
     struct stat status{};
     if (::fstat(fd, &status) != 0) {
         ec = std::error_code(errno, std::system_category());
@@ -108,19 +107,12 @@ private:
     const auto changedSeconds = status.st_ctim.tv_sec;
     const auto changedNanoseconds = status.st_ctim.tv_nsec;
 #endif
-    const std::array<std::uint64_t, 4> words{static_cast<std::uint64_t>(status.st_dev),
-        static_cast<std::uint64_t>(status.st_ino), static_cast<std::uint64_t>(changedSeconds),
-        static_cast<std::uint64_t>(changedNanoseconds)};
+    const std::array<std::uint64_t, 4> words{static_cast<std::uint64_t>(status.st_dev), static_cast<std::uint64_t>(status.st_ino), static_cast<std::uint64_t>(changedSeconds), static_cast<std::uint64_t>(changedNanoseconds)};
     ec = {};
-    return ResponseFileSnapshot{ResponseFileIdentity::checked(words),
-        static_cast<std::uint64_t>(status.st_size),
-        static_cast<std::uint64_t>(modifiedSeconds) * UINT64_C(1000000000) +
-            static_cast<std::uint64_t>(modifiedNanoseconds),
-        static_cast<std::time_t>(modifiedSeconds)};
+    return ResponseFileSnapshot{ResponseFileIdentity::checked(words), static_cast<std::uint64_t>(status.st_size), static_cast<std::uint64_t>(modifiedSeconds) * UINT64_C(1000000000) + static_cast<std::uint64_t>(modifiedNanoseconds), static_cast<std::time_t>(modifiedSeconds)};
 }
 
-[[nodiscard]] inline ResponseFileSnapshot snapshotResponseFile(
-    const HttpNativePathChar* path, std::error_code& ec) noexcept {
+[[nodiscard]] inline ResponseFileSnapshot snapshotResponseFile(const HttpNativePathChar* path, std::error_code& ec) noexcept {
     NativeFileHandle input(::open(path, O_RDONLY | O_CLOEXEC));
     if (input.get() < 0) {
         ec = std::error_code(errno, std::system_category());
@@ -129,8 +121,7 @@ private:
     return snapshotNativeFileHandle(input.get(), ec);
 }
 
-[[nodiscard]] inline NativeFileHandle openNativeFileForRead(
-    ResponseFileBody file, std::error_code& ec, NativeFileOpenOptions = {}) noexcept {
+[[nodiscard]] inline NativeFileHandle openNativeFileForRead(ResponseFileBody file, std::error_code& ec, NativeFileOpenOptions = {}) noexcept {
     NativeFileHandle input(::open(file.nativePathCStr(), O_RDONLY | O_CLOEXEC));
     if (input.get() < 0) {
         ec = std::error_code(errno, std::system_category());
@@ -205,15 +196,11 @@ private:
     return static_cast<std::time_t>((ticks - kWindowsToUnixEpoch100ns) / UINT64_C(10000000));
 }
 
-[[nodiscard]] inline ResponseFileSnapshot snapshotNativeFileHandle(
-    HANDLE handle, std::error_code& ec) noexcept {
+[[nodiscard]] inline ResponseFileSnapshot snapshotNativeFileHandle(HANDLE handle, std::error_code& ec) noexcept {
     FILE_ID_INFO id{};
     FILE_STANDARD_INFO standard{};
     FILE_BASIC_INFO basic{};
-    if (::GetFileInformationByHandleEx(handle, FileIdInfo, &id, sizeof(id)) == 0 ||
-        ::GetFileInformationByHandleEx(handle, FileStandardInfo, &standard, sizeof(standard)) ==
-            0 ||
-        ::GetFileInformationByHandleEx(handle, FileBasicInfo, &basic, sizeof(basic)) == 0) {
+    if (::GetFileInformationByHandleEx(handle, FileIdInfo, &id, sizeof(id)) == 0 || ::GetFileInformationByHandleEx(handle, FileStandardInfo, &standard, sizeof(standard)) == 0 || ::GetFileInformationByHandleEx(handle, FileBasicInfo, &basic, sizeof(basic)) == 0) {
         ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
         return {};
     }
@@ -226,19 +213,13 @@ private:
     static_assert(sizeof(id.FileId.Identifier) == 16);
     std::memcpy(&fileIdLow, id.FileId.Identifier, sizeof(fileIdLow));
     std::memcpy(&fileIdHigh, id.FileId.Identifier + sizeof(fileIdLow), sizeof(fileIdHigh));
-    const std::array<std::uint64_t, 4> words{static_cast<std::uint64_t>(id.VolumeSerialNumber),
-        fileIdLow, fileIdHigh, windowsFileTimeToken(basic.ChangeTime)};
+    const std::array<std::uint64_t, 4> words{static_cast<std::uint64_t>(id.VolumeSerialNumber), fileIdLow, fileIdHigh, windowsFileTimeToken(basic.ChangeTime)};
     ec = {};
-    return ResponseFileSnapshot{ResponseFileIdentity::checked(words),
-        static_cast<std::uint64_t>(standard.EndOfFile.QuadPart),
-        windowsFileTimeToken(basic.LastWriteTime), windowsFileTimeSeconds(basic.LastWriteTime)};
+    return ResponseFileSnapshot{ResponseFileIdentity::checked(words), static_cast<std::uint64_t>(standard.EndOfFile.QuadPart), windowsFileTimeToken(basic.LastWriteTime), windowsFileTimeSeconds(basic.LastWriteTime)};
 }
 
-[[nodiscard]] inline ResponseFileSnapshot snapshotResponseFile(
-    const HttpNativePathChar* path, std::error_code& ec) noexcept {
-    NativeFileHandle input(
-        ::CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+[[nodiscard]] inline ResponseFileSnapshot snapshotResponseFile(const HttpNativePathChar* path, std::error_code& ec) noexcept {
+    NativeFileHandle input(::CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
     if (input.get() == INVALID_HANDLE_VALUE) {
         ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
         return {};
@@ -246,8 +227,7 @@ private:
     return snapshotNativeFileHandle(input.get(), ec);
 }
 
-[[nodiscard]] inline NativeFileHandle openNativeFileForRead(
-    ResponseFileBody file, std::error_code& ec, NativeFileOpenOptions options = {}) noexcept {
+[[nodiscard]] inline NativeFileHandle openNativeFileForRead(ResponseFileBody file, std::error_code& ec, NativeFileOpenOptions options = {}) noexcept {
     DWORD flags = FILE_ATTRIBUTE_NORMAL;
     if (options.overlapped) {
         flags |= FILE_FLAG_OVERLAPPED;
@@ -256,9 +236,7 @@ private:
         flags |= FILE_FLAG_SEQUENTIAL_SCAN;
     }
 
-    NativeFileHandle input(::CreateFileW(file.nativePathCStr(), GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, flags,
-        nullptr));
+    NativeFileHandle input(::CreateFileW(file.nativePathCStr(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, flags, nullptr));
     if (input.get() == INVALID_HANDLE_VALUE) {
         ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
         return NativeFileHandle();
@@ -277,8 +255,7 @@ private:
     return input;
 }
 #else
-[[nodiscard]] inline ResponseFileSnapshot snapshotResponseFile(
-    const HttpNativePathChar* path, std::error_code& ec) noexcept {
+[[nodiscard]] inline ResponseFileSnapshot snapshotResponseFile(const HttpNativePathChar* path, std::error_code& ec) noexcept {
     static_cast<void>(path);
     ec = std::make_error_code(std::errc::not_supported);
     return {};

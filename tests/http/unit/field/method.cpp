@@ -67,9 +67,7 @@ RUVIA_TEST(http_method_safety_and_idempotency_follow_wire_semantics) {
 }
 
 RUVIA_TEST(http_known_method_token_round_trips) {
-    const HttpKnownMethod methods[] = {HttpKnownMethod::kGet, HttpKnownMethod::kPost,
-        HttpKnownMethod::kPut, HttpKnownMethod::kDelete, HttpKnownMethod::kPatch,
-        HttpKnownMethod::kHead, HttpKnownMethod::kOptions, HttpKnownMethod::kConnect};
+    const HttpKnownMethod methods[] = {HttpKnownMethod::kGet, HttpKnownMethod::kPost, HttpKnownMethod::kPut, HttpKnownMethod::kDelete, HttpKnownMethod::kPatch, HttpKnownMethod::kHead, HttpKnownMethod::kOptions, HttpKnownMethod::kConnect};
     for (const auto method : methods) {
         RUVIA_CHECK(classifyHttpMethod(knownHttpMethodToken(method)) == method);
     }

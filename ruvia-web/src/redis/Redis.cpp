@@ -9,8 +9,7 @@
 namespace ruvia {
 namespace detail {
 
-RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource,
-    std::span<const RedisDefinition> redis, WorkerHandle worker)
+RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const RedisDefinition> redis, WorkerHandle worker)
     : worker_(std::move(worker)),
       resource_(detail::pmrResourceOrDefault(resource)),
       pools_(resource_),
@@ -31,10 +30,8 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
         // waits require an explicit StopToken or operation timeout. Inheriting
         // the ordinary pool's command timeout would cut long waits short and
         // repeatedly discard/reconnect BLOCK 0 sockets.
-        entry.general = makePmrObject<RedisPool>(resource_, ioContext, entry.config,
-            entry.config.commandTimeout, generalSize, worker_, resource_);
-        entry.blocking = makePmrObject<RedisPool>(
-            resource_, ioContext, entry.config, std::nullopt, blockingSize, worker_, resource_);
+        entry.general = makePmrObject<RedisPool>(resource_, ioContext, entry.config, entry.config.commandTimeout, generalSize, worker_, resource_);
+        entry.blocking = makePmrObject<RedisPool>(resource_, ioContext, entry.config, std::nullopt, blockingSize, worker_, resource_);
     }
 }
 
@@ -61,8 +58,7 @@ bool RedisRegistry::empty() const noexcept {
     return pools_.empty();
 }
 
-RedisHandle RedisRegistry::get(
-    std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
+RedisHandle RedisRegistry::get(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
     const auto defaultPoolIndex = aliasIndex_.defaultIndex();
     if (!defaultPoolIndex.has_value()) {
         throw RedisError(RedisError::Code::kNotConfigured, "default redis is not configured");
@@ -71,8 +67,7 @@ RedisHandle RedisRegistry::get(
     return RedisHandle(*entry.general, *entry.blocking, resource, operationScope);
 }
 
-RedisHandle RedisRegistry::get(std::string_view alias, std::pmr::memory_resource* resource,
-    ScopedOperationScope& operationScope) const {
+RedisHandle RedisRegistry::get(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
     const auto match = aliasIndex_.find(alias);
     if (match.has_value()) {
         auto& entry = pools_[*match];

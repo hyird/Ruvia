@@ -124,33 +124,29 @@ struct Http2SansIoSleepCancellation final {
 // continuation owner and a terminal event cannot double-resume the coroutine.
 class Http2SansIoSleepAwaiter final {
 public:
-    Http2SansIoSleepAwaiter(const WorkerHandle& worker, Http2SansIoTermination& termination,
-        std::chrono::steady_clock::duration duration) noexcept
+    Http2SansIoSleepAwaiter(const WorkerHandle& worker, Http2SansIoTermination& termination, std::chrono::steady_clock::duration duration) noexcept
         : worker_(worker),
           termination_(termination),
           duration_(duration),
           observer_(this, &Http2SansIoSleepAwaiter::notifyTermination) {}
 
-    Http2SansIoSleepAwaiter(const WorkerHandle& worker, Http2SansIoTermination& termination,
-        std::chrono::steady_clock::duration duration, StopToken stopToken)
+    Http2SansIoSleepAwaiter(const WorkerHandle& worker, Http2SansIoTermination& termination, std::chrono::steady_clock::duration duration, StopToken stopToken)
         : worker_(worker),
           termination_(termination),
           duration_(duration),
           stopToken_(std::move(stopToken)),
           cancellation_(std::make_shared<Http2SansIoSleepCancellation>()),
-          stopRegistration_(stopToken_.registerCallback(
-              [worker = &worker, cancellation = cancellation_]() noexcept {
-                  WorkerHandleAccess::deferOrTerminate(*worker, [cancellation] {
-                      if (cancellation->timer != nullptr) {
-                          cancellation->timer->cancel();
-                      }
-                  });
-              })),
+          stopRegistration_(stopToken_.registerCallback([worker = &worker, cancellation = cancellation_]() noexcept {
+              WorkerHandleAccess::deferOrTerminate(*worker, [cancellation] {
+                  if (cancellation->timer != nullptr) {
+                      cancellation->timer->cancel();
+                  }
+              });
+          })),
           observer_(this, &Http2SansIoSleepAwaiter::notifyTermination) {}
 
     [[nodiscard]] bool await_ready() const noexcept {
-        return duration_ <= std::chrono::steady_clock::duration::zero() ||
-               termination_.terminated() || stopToken_.stopRequested();
+        return duration_ <= std::chrono::steady_clock::duration::zero() || termination_.terminated() || stopToken_.stopRequested();
     }
 
     bool await_suspend(std::coroutine_handle<> continuation) {
@@ -162,15 +158,14 @@ public:
             cancellation_->timer = &timer_;
         }
         try {
-            WorkerHandleAccess::scheduleTimer(worker_, timer_, workerTimerDeadlineAfter(duration_),
-                [this](WorkerTimerOutcome outcome) noexcept {
-                    timerOutcome_ = outcome;
-                    if (cancellation_ != nullptr) {
-                        cancellation_->timer = nullptr;
-                    }
-                    termination_.detach(observer_);
-                    continuation_.resume();
-                });
+            WorkerHandleAccess::scheduleTimer(worker_, timer_, workerTimerDeadlineAfter(duration_), [this](WorkerTimerOutcome outcome) noexcept {
+                timerOutcome_ = outcome;
+                if (cancellation_ != nullptr) {
+                    cancellation_->timer = nullptr;
+                }
+                termination_.detach(observer_);
+                continuation_.resume();
+            });
         } catch (...) {
             if (cancellation_ != nullptr) {
                 cancellation_->timer = nullptr;
@@ -188,8 +183,7 @@ public:
         if (timerOutcome_ == WorkerTimerOutcome::kCancelled) {
             return TimerSleepResult::kStopRequested;
         }
-        return stopToken_.stopRequested() ? TimerSleepResult::kStopRequested
-                                          : TimerSleepResult::kElapsed;
+        return stopToken_.stopRequested() ? TimerSleepResult::kStopRequested : TimerSleepResult::kElapsed;
     }
 
 private:

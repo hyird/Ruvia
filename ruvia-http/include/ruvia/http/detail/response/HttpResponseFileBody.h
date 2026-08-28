@@ -18,8 +18,7 @@ public:
         return ResponseFileIdentity({}, false);
     }
 
-    [[nodiscard]] static constexpr ResponseFileIdentity checked(
-        std::array<std::uint64_t, 4> words) noexcept {
+    [[nodiscard]] static constexpr ResponseFileIdentity checked(std::array<std::uint64_t, 4> words) noexcept {
         return ResponseFileIdentity(words, true);
     }
 
@@ -32,8 +31,7 @@ public:
     }
     [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words() const&& = delete;
 
-    friend constexpr bool operator==(
-        const ResponseFileIdentity&, const ResponseFileIdentity&) noexcept = default;
+    friend constexpr bool operator==(const ResponseFileIdentity&, const ResponseFileIdentity&) noexcept = default;
 
 private:
     constexpr ResponseFileIdentity(std::array<std::uint64_t, 4> words, bool checked) noexcept
@@ -80,8 +78,7 @@ private:
     friend class HttpResponseBody;
     friend struct ResponseFileBodyAccess;
 
-    constexpr ResponseFileBody(const HttpNativePathChar* nativePath, std::uint64_t size,
-        std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) noexcept
+    constexpr ResponseFileBody(const HttpNativePathChar* nativePath, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) noexcept
         : nativePath_(nativePath),
           size_(size),
           offset_(offset),
@@ -99,9 +96,7 @@ private:
 // can build the same typed file descriptor without reaching into the response
 // body's private representation.
 struct ResponseFileBodyAccess final {
-    [[nodiscard]] static constexpr ResponseFileBody make(const HttpNativePathChar* path,
-        std::uint64_t size, std::uint64_t offset, std::uint64_t length,
-        ResponseFileIdentity identity) noexcept {
+    [[nodiscard]] static constexpr ResponseFileBody make(const HttpNativePathChar* path, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) noexcept {
         return ResponseFileBody(path, size, offset, length, identity);
     }
 };

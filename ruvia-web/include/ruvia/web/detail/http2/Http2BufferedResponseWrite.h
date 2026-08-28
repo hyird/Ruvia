@@ -50,8 +50,7 @@ public:
 private:
     friend class Http2BufferedResponseWriteResult;
 
-    explicit constexpr Http2BufferedResponseWritePeerAbortedAfterCommit(
-        HttpStatusCode status) noexcept
+    explicit constexpr Http2BufferedResponseWritePeerAbortedAfterCommit(HttpStatusCode status) noexcept
         : status_(status) {}
 
     HttpStatusCode status_;
@@ -83,32 +82,24 @@ private:
 // boundary and whether termination came from the peer or the local write path.
 class Http2BufferedResponseWriteResult final {
 public:
-    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult makeCompleted(
-        HttpStatusCode status) noexcept {
+    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult makeCompleted(HttpStatusCode status) noexcept {
         return Http2BufferedResponseWriteResult(Http2BufferedResponseWriteCompleted(status));
     }
 
-    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
-    makePeerAbortedBeforeCommit() noexcept {
-        return Http2BufferedResponseWriteResult(
-            Http2BufferedResponseWritePeerAbortedBeforeCommit{});
+    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult makePeerAbortedBeforeCommit() noexcept {
+        return Http2BufferedResponseWriteResult(Http2BufferedResponseWritePeerAbortedBeforeCommit{});
     }
 
-    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult makePeerAbortedAfterCommit(
-        HttpStatusCode status) noexcept {
-        return Http2BufferedResponseWriteResult(
-            Http2BufferedResponseWritePeerAbortedAfterCommit(status));
+    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult makePeerAbortedAfterCommit(HttpStatusCode status) noexcept {
+        return Http2BufferedResponseWriteResult(Http2BufferedResponseWritePeerAbortedAfterCommit(status));
     }
 
-    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
-    makeFailedBeforeCommit() noexcept {
+    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult makeFailedBeforeCommit() noexcept {
         return Http2BufferedResponseWriteResult(Http2BufferedResponseWriteFailedBeforeCommit{});
     }
 
-    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult makeFailedAfterCommit(
-        HttpStatusCode status) noexcept {
-        return Http2BufferedResponseWriteResult(
-            Http2BufferedResponseWriteFailedAfterCommit(status));
+    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult makeFailedAfterCommit(HttpStatusCode status) noexcept {
+        return Http2BufferedResponseWriteResult(Http2BufferedResponseWriteFailedAfterCommit(status));
     }
 
     [[nodiscard]] constexpr const Http2BufferedResponseWriteCompleted* completed() const& noexcept {
@@ -116,29 +107,22 @@ public:
     }
     const Http2BufferedResponseWriteCompleted* completed() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2BufferedResponseWritePeerAbortedBeforeCommit*
-    peerAbortedBeforeCommit() const& noexcept {
-        return state_ == State::kPeerAbortedBeforeCommit ? &value_.peerAbortedBeforeCommit
-                                                         : nullptr;
+    [[nodiscard]] constexpr const Http2BufferedResponseWritePeerAbortedBeforeCommit* peerAbortedBeforeCommit() const& noexcept {
+        return state_ == State::kPeerAbortedBeforeCommit ? &value_.peerAbortedBeforeCommit : nullptr;
     }
-    const Http2BufferedResponseWritePeerAbortedBeforeCommit* peerAbortedBeforeCommit() const&& =
-        delete;
+    const Http2BufferedResponseWritePeerAbortedBeforeCommit* peerAbortedBeforeCommit() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2BufferedResponseWritePeerAbortedAfterCommit*
-    peerAbortedAfterCommit() const& noexcept {
+    [[nodiscard]] constexpr const Http2BufferedResponseWritePeerAbortedAfterCommit* peerAbortedAfterCommit() const& noexcept {
         return state_ == State::kPeerAbortedAfterCommit ? &value_.peerAbortedAfterCommit : nullptr;
     }
-    const Http2BufferedResponseWritePeerAbortedAfterCommit* peerAbortedAfterCommit() const&& =
-        delete;
+    const Http2BufferedResponseWritePeerAbortedAfterCommit* peerAbortedAfterCommit() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedBeforeCommit* failedBeforeCommit()
-        const& noexcept {
+    [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedBeforeCommit* failedBeforeCommit() const& noexcept {
         return state_ == State::kFailedBeforeCommit ? &value_.failedBeforeCommit : nullptr;
     }
     const Http2BufferedResponseWriteFailedBeforeCommit* failedBeforeCommit() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedAfterCommit* failedAfterCommit()
-        const& noexcept {
+    [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedAfterCommit* failedAfterCommit() const& noexcept {
         return state_ == State::kFailedAfterCommit ? &value_.failedAfterCommit : nullptr;
     }
     const Http2BufferedResponseWriteFailedAfterCommit* failedAfterCommit() const&& = delete;
@@ -157,13 +141,7 @@ public:
     }
 
 private:
-    enum class State : std::uint8_t {
-        kCompleted,
-        kPeerAbortedBeforeCommit,
-        kPeerAbortedAfterCommit,
-        kFailedBeforeCommit,
-        kFailedAfterCommit
-    };
+    enum class State : std::uint8_t { kCompleted, kPeerAbortedBeforeCommit, kPeerAbortedAfterCommit, kFailedBeforeCommit, kFailedAfterCommit };
 
     union Value {
         constexpr explicit Value(Http2BufferedResponseWriteCompleted value) noexcept
@@ -184,24 +162,19 @@ private:
         Http2BufferedResponseWriteFailedAfterCommit failedAfterCommit;
     };
 
-    explicit constexpr Http2BufferedResponseWriteResult(
-        Http2BufferedResponseWriteCompleted value) noexcept
+    explicit constexpr Http2BufferedResponseWriteResult(Http2BufferedResponseWriteCompleted value) noexcept
         : value_(value),
           state_(State::kCompleted) {}
-    explicit constexpr Http2BufferedResponseWriteResult(
-        Http2BufferedResponseWritePeerAbortedBeforeCommit value) noexcept
+    explicit constexpr Http2BufferedResponseWriteResult(Http2BufferedResponseWritePeerAbortedBeforeCommit value) noexcept
         : value_(value),
           state_(State::kPeerAbortedBeforeCommit) {}
-    explicit constexpr Http2BufferedResponseWriteResult(
-        Http2BufferedResponseWritePeerAbortedAfterCommit value) noexcept
+    explicit constexpr Http2BufferedResponseWriteResult(Http2BufferedResponseWritePeerAbortedAfterCommit value) noexcept
         : value_(value),
           state_(State::kPeerAbortedAfterCommit) {}
-    explicit constexpr Http2BufferedResponseWriteResult(
-        Http2BufferedResponseWriteFailedBeforeCommit value) noexcept
+    explicit constexpr Http2BufferedResponseWriteResult(Http2BufferedResponseWriteFailedBeforeCommit value) noexcept
         : value_(value),
           state_(State::kFailedBeforeCommit) {}
-    explicit constexpr Http2BufferedResponseWriteResult(
-        Http2BufferedResponseWriteFailedAfterCommit value) noexcept
+    explicit constexpr Http2BufferedResponseWriteResult(Http2BufferedResponseWriteFailedAfterCommit value) noexcept
         : value_(value),
           state_(State::kFailedAfterCommit) {}
 
@@ -218,23 +191,19 @@ static_assert(sizeof(Http2BufferedResponseWriteResult) <= 4);
 // non-template compiles that policy once for plain and TLS sessions.
 class Http2BufferedResponseWriter final {
 public:
-    Http2BufferedResponseWriter(Http2Connection& connection,
-        Http2SansIoStreamRuntimeTable& streamRuntimes, WorkerMemory& worker,
-        WorkerSignal& writeSignal) noexcept;
+    Http2BufferedResponseWriter(Http2Connection& connection, Http2SansIoStreamRuntimeTable& streamRuntimes, WorkerMemory& worker, WorkerSignal& writeSignal) noexcept;
 
     Http2BufferedResponseWriter(const Http2BufferedResponseWriter&) = delete;
     Http2BufferedResponseWriter& operator=(const Http2BufferedResponseWriter&) = delete;
     Http2BufferedResponseWriter(Http2BufferedResponseWriter&&) = delete;
     Http2BufferedResponseWriter& operator=(Http2BufferedResponseWriter&&) = delete;
 
-    [[nodiscard]] Task<Http2BufferedResponseWriteResult> write(std::uint32_t streamId,
-        const HttpResponse& response, HttpBufferedResponseWritePlan writePlan);
+    [[nodiscard]] Task<Http2BufferedResponseWriteResult> write(std::uint32_t streamId, const HttpResponse& response, HttpBufferedResponseWritePlan writePlan);
 
 private:
     enum class DataWriteResult : std::uint8_t { kCompleted, kPeerAborted, kFailed };
 
-    [[nodiscard]] Task<DataWriteResult> writeData(
-        std::uint32_t streamId, std::string_view chunk, Http2EndStream endStream);
+    [[nodiscard]] Task<DataWriteResult> writeData(std::uint32_t streamId, std::string_view chunk, Http2EndStream endStream);
     void wakeWriter() noexcept;
 
     Http2Connection& connection_;

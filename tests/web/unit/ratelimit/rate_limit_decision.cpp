@@ -65,8 +65,7 @@ struct RouteLimitResult final {
 
 // Runs the per-route limiter over one fresh request that shares the given limiter
 // and scope (and the same empty remote address, so they collide on one counter).
-RouteLimitResult runRouteLimit(
-    RateLimiter& limiter, std::uintptr_t scope, const RouteRateLimitOptions& options) {
+RouteLimitResult runRouteLimit(RateLimiter& limiter, std::uintptr_t scope, const RouteRateLimitOptions& options) {
     WorkerMemory worker;
     RequestMemory memory(worker);
     HttpRequest request = HttpRequestAccess::make();
@@ -83,8 +82,7 @@ RouteLimitResult runRouteLimit(
         r.status = response.status().value();
         r.retryAfter = std::string(response.header("Retry-After").value_or(std::string_view{}));
         r.limit = std::string(response.header("X-RateLimit-Limit").value_or(std::string_view{}));
-        r.remaining =
-            std::string(response.header("X-RateLimit-Remaining").value_or(std::string_view{}));
+        r.remaining = std::string(response.header("X-RateLimit-Remaining").value_or(std::string_view{}));
         r.reset = std::string(response.header("X-RateLimit-Reset").value_or(std::string_view{}));
     }
     return r;
@@ -135,15 +133,13 @@ RUVIA_TEST(http1_closing_rejection_has_exclusive_error_alternatives) {
     RUVIA_CHECK(none.error() == nullptr);
     RUVIA_CHECK(none.rateLimit() == nullptr);
 
-    const auto ordinary = Http1ClosingRejection::error(ruvia::HttpErrorInfo(
-        {.status = ruvia::http_status::kBadRequest, .message = "bad request"}));
+    const auto ordinary = Http1ClosingRejection::error(ruvia::HttpErrorInfo({.status = ruvia::http_status::kBadRequest, .message = "bad request"}));
     RUVIA_CHECK(ordinary.error() != nullptr);
     RUVIA_CHECK_EQ(ordinary.error()->status(), ruvia::http_status::kBadRequest);
     RUVIA_CHECK(ordinary.rateLimit() == nullptr);
 
     const auto decision = RateLimitDecision::reject(std::chrono::milliseconds(125));
-    const auto limited = Http1ClosingRejection::rateLimit(
-        ruvia::detail::rateLimitRejectionError(), *decision.rejection());
+    const auto limited = Http1ClosingRejection::rateLimit(ruvia::detail::rateLimitRejectionError(), *decision.rejection());
     RUVIA_CHECK(limited.error() != nullptr);
     RUVIA_CHECK_EQ(limited.error()->status(), ruvia::http_status::kTooManyRequests);
     RUVIA_CHECK(limited.rateLimit() != nullptr);
@@ -254,8 +250,7 @@ RUVIA_TEST(route_rate_limit_429_carries_retry_after_and_ratelimit_headers) {
     // The per-route limiter's rejection path (applyRouteRateLimit) had no coverage:
     // the RateLimiter core is tested, but not the 429 response it produces with the
     // Retry-After and X-RateLimit-* advisory headers a client relies on.
-    RateLimiter limiter(std::nullopt, RouteRateLimitPresence::kPresent,
-        ruvia::kDefaultRateLimitCapacityPerWorker, std::pmr::get_default_resource());
+    RateLimiter limiter(std::nullopt, RouteRateLimitPresence::kPresent, ruvia::kDefaultRateLimitCapacityPerWorker, std::pmr::get_default_resource());
     const RouteRateLimitOptions options{.rule = {
                                             .maxRequests = 1,
                                             .window = std::chrono::seconds(60),
@@ -297,8 +292,7 @@ RUVIA_TEST(rate_limit_key_groups_ipv6_by_64_prefix) {
     // the shared slot table, so genuine IPv6 is grouped by its /64 network prefix.
     // Two addresses sharing a /64 must yield the same key...
     RUVIA_CHECK_EQ(rateLimitKey("2001:db8:1:2::1"), rateLimitKey("2001:db8:1:2::dead:beef"));
-    RUVIA_CHECK_EQ(
-        rateLimitKey("2001:db8:1:2:ffff:ffff:ffff:ffff"), rateLimitKey("2001:db8:1:2::1"));
+    RUVIA_CHECK_EQ(rateLimitKey("2001:db8:1:2:ffff:ffff:ffff:ffff"), rateLimitKey("2001:db8:1:2::1"));
     // ...and different /64s must yield different keys (no over-grouping).
     RUVIA_CHECK(rateLimitKey("2001:db8:1:2::1") != rateLimitKey("2001:db8:1:3::1"));
     RUVIA_CHECK(rateLimitKey("2001:db8:1:2::1") != rateLimitKey("2001:db8:2:2::1"));

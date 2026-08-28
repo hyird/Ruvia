@@ -36,8 +36,7 @@ enum class Http1InterimConnectionDisposition : std::uint8_t {
     kCloseAfterInterimResponse,
 };
 
-[[nodiscard]] std::string_view http1InterimResponsePrepareErrorMessage(
-    Http1InterimResponsePrepareError error) noexcept;
+[[nodiscard]] std::string_view http1InterimResponsePrepareErrorMessage(Http1InterimResponsePrepareError error) noexcept;
 
 class Http1InterimResponseBufferTooSmall final {
 public:
@@ -63,16 +62,14 @@ public:
         return head_;
     }
 
-    [[nodiscard]] constexpr Http1InterimConnectionDisposition connectionDisposition()
-        const noexcept {
+    [[nodiscard]] constexpr Http1InterimConnectionDisposition connectionDisposition() const noexcept {
         return connectionDisposition_;
     }
 
 private:
     friend struct detail::Http1InterimResponsePrepareResultAccess;
 
-    constexpr PreparedHttp1InterimResponse(
-        std::string_view head, Http1InterimConnectionDisposition connectionDisposition) noexcept
+    constexpr PreparedHttp1InterimResponse(std::string_view head, Http1InterimConnectionDisposition connectionDisposition) noexcept
         : head_(head),
           connectionDisposition_(connectionDisposition) {}
 
@@ -89,8 +86,7 @@ public:
 private:
     friend struct detail::Http1InterimResponsePrepareResultAccess;
 
-    explicit constexpr Http1InterimResponsePrepareFailure(
-        Http1InterimResponsePrepareError error) noexcept
+    explicit constexpr Http1InterimResponsePrepareFailure(Http1InterimResponsePrepareError error) noexcept
         : error_(error) {}
 
     Http1InterimResponsePrepareError error_;
@@ -98,8 +94,7 @@ private:
 
 class Http1InterimResponsePrepareResult final {
 public:
-    [[nodiscard]] constexpr const Http1InterimResponseBufferTooSmall* bufferTooSmall()
-        const& noexcept {
+    [[nodiscard]] constexpr const Http1InterimResponseBufferTooSmall* bufferTooSmall() const& noexcept {
         return std::get_if<Http1InterimResponseBufferTooSmall>(&state_);
     }
     const Http1InterimResponseBufferTooSmall* bufferTooSmall() const&& = delete;
@@ -117,21 +112,16 @@ public:
 private:
     friend struct detail::Http1InterimResponsePrepareResultAccess;
 
-    explicit constexpr Http1InterimResponsePrepareResult(
-        Http1InterimResponseBufferTooSmall state) noexcept
+    explicit constexpr Http1InterimResponsePrepareResult(Http1InterimResponseBufferTooSmall state) noexcept
         : state_(state) {}
 
-    explicit constexpr Http1InterimResponsePrepareResult(
-        PreparedHttp1InterimResponse state) noexcept
+    explicit constexpr Http1InterimResponsePrepareResult(PreparedHttp1InterimResponse state) noexcept
         : state_(state) {}
 
-    explicit constexpr Http1InterimResponsePrepareResult(
-        Http1InterimResponsePrepareFailure state) noexcept
+    explicit constexpr Http1InterimResponsePrepareResult(Http1InterimResponsePrepareFailure state) noexcept
         : state_(state) {}
 
-    std::variant<Http1InterimResponseBufferTooSmall, PreparedHttp1InterimResponse,
-        Http1InterimResponsePrepareFailure>
-        state_;
+    std::variant<Http1InterimResponseBufferTooSmall, PreparedHttp1InterimResponse, Http1InterimResponsePrepareFailure> state_;
 };
 
 // Allocation-free HTTP/1.1 interim-head writer. It validates the complete
@@ -140,8 +130,7 @@ private:
 // exactly those represented by HttpInterimResponseHead.
 class Http1InterimResponseWriter final {
 public:
-    [[nodiscard]] Http1InterimResponsePrepareResult prepare(
-        const HttpInterimResponseHead& response, std::span<char> headBuffer) const noexcept;
+    [[nodiscard]] Http1InterimResponsePrepareResult prepare(const HttpInterimResponseHead& response, std::span<char> headBuffer) const noexcept;
 };
 
 }  // namespace ruvia

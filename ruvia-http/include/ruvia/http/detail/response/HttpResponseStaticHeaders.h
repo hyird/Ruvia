@@ -11,20 +11,16 @@
 namespace ruvia::detail {
 
 template <std::size_t N>
-[[nodiscard]] constexpr HttpResponseHeader staticResponseHeader(
-    const char (&bytes)[N], std::uint32_t nameSize, std::uint32_t knownBit) noexcept {
-    return makeResponseHeader(
-        bytes, nameSize, static_cast<std::uint32_t>(N - 1 - nameSize), knownBit, false);
+[[nodiscard]] constexpr HttpResponseHeader staticResponseHeader(const char (&bytes)[N], std::uint32_t nameSize, std::uint32_t knownBit) noexcept {
+    return makeResponseHeader(bytes, nameSize, static_cast<std::uint32_t>(N - 1 - nameSize), knownBit, false);
 }
 
-[[nodiscard]] inline std::optional<HttpResponseHeader> builtinStaticResponseHeader(
-    std::uint32_t knownBit, std::string_view value) noexcept {
+[[nodiscard]] inline std::optional<HttpResponseHeader> builtinStaticResponseHeader(std::uint32_t knownBit, std::string_view value) noexcept {
     static constexpr char kTextContentType[] = "Content-Typetext/plain; charset=UTF-8";
     static constexpr char kJsonContentType[] = "Content-Typeapplication/json";
     static constexpr char kHtmlContentType[] = "Content-Typetext/html; charset=UTF-8";
     static constexpr char kLowercaseUtf8TextContentType[] = "Content-Typetext/plain; charset=utf-8";
-    static constexpr char kLowercaseUtf8JsonContentType[] =
-        "Content-Typeapplication/json; charset=utf-8";
+    static constexpr char kLowercaseUtf8JsonContentType[] = "Content-Typeapplication/json; charset=utf-8";
     static constexpr char kLowercaseUtf8HtmlContentType[] = "Content-Typetext/html; charset=utf-8";
     static constexpr char kCssContentType[] = "Content-Typetext/css; charset=utf-8";
     static constexpr char kJsContentType[] = "Content-Typetext/javascript; charset=utf-8";
@@ -44,8 +40,7 @@ template <std::size_t N>
     static constexpr char kVaryOrigin[] = "VaryOrigin";
     static constexpr char kVaryAccessControlRequestHeaders[] = "VaryAccess-Control-Request-Headers";
     static constexpr char kVaryAccessControlRequestMethod[] = "VaryAccess-Control-Request-Method";
-    static constexpr char kAccessControlAllowCredentialsTrue[] =
-        "Access-Control-Allow-Credentialstrue";
+    static constexpr char kAccessControlAllowCredentialsTrue[] = "Access-Control-Allow-Credentialstrue";
 
     switch (knownBit) {
         case kResponseHeaderContentType:

@@ -83,8 +83,7 @@ public:
                 return awaiter_.await_ready();
             }
 
-            [[nodiscard]] std::coroutine_handle<> await_suspend(
-                std::coroutine_handle<> continuation) noexcept {
+            [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) noexcept {
                 return awaiter_.await_suspend(continuation);
             }
 

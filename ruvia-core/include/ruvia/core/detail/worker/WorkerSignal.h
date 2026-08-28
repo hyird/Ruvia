@@ -165,16 +165,13 @@ inline void WorkerSignal::notify() noexcept {
         ++scheduledWaiters_;
         // A detached intrusive node has no recoverable owner. Dispatch failure
         // is terminal instead of silently stranding the continuation.
-        WorkerHandleAccess::deferOrTerminate(
-            worker_, [this, waiter, continuation] { resumeScheduled(waiter, continuation); });
+        WorkerHandleAccess::deferOrTerminate(worker_, [this, waiter, continuation] { resumeScheduled(waiter, continuation); });
         waiter = next;
     }
 }
 
-inline void WorkerSignal::resumeScheduled(
-    Awaiter* waiter, std::coroutine_handle<> continuation) noexcept {
-    if (!worker_.isCurrent() || waiter == nullptr || waiter->state != AwaitState::kScheduled ||
-        waiter->continuation != continuation || scheduledWaiters_ == 0) {
+inline void WorkerSignal::resumeScheduled(Awaiter* waiter, std::coroutine_handle<> continuation) noexcept {
+    if (!worker_.isCurrent() || waiter == nullptr || waiter->state != AwaitState::kScheduled || waiter->continuation != continuation || scheduledWaiters_ == 0) {
         std::terminate();
     }
     --scheduledWaiters_;

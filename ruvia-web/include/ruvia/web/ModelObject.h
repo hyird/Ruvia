@@ -23,8 +23,7 @@ class JsonValue final {
 public:
     enum class Kind : unsigned char { kObject, kArray, kString, kNumber, kBoolean, kNull };
 
-    [[nodiscard]] static std::optional<JsonValue> parse(
-        std::string_view body, ModelParseOptions options = {}) noexcept {
+    [[nodiscard]] static std::optional<JsonValue> parse(std::string_view body, ModelParseOptions options = {}) noexcept {
         auto input = body;
         if (!detail::skipJsonValue(input)) {
             return std::nullopt;
@@ -33,17 +32,14 @@ public:
         if (!input.empty()) {
             return std::nullopt;
         }
-        return JsonValue(
-            detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(options.resource));
+        return JsonValue(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(options.resource));
     }
 
     template <typename Traits, typename Allocator>
-    static std::optional<JsonValue> parse(
-        std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
+    static std::optional<JsonValue> parse(std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
 
     template <typename Traits, typename Allocator>
-    static std::optional<JsonValue> parse(
-        const std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
+    static std::optional<JsonValue> parse(const std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
 
     [[nodiscard]] std::string_view view() const noexcept {
         return body_;
@@ -102,8 +98,7 @@ public:
 private:
     JsonValue() noexcept = default;
 
-    JsonValue(detail::ResolvedPmrResourceTag, std::string_view body,
-        std::pmr::memory_resource* resource) noexcept
+    JsonValue(detail::ResolvedPmrResourceTag, std::string_view body, std::pmr::memory_resource* resource) noexcept
         : body_(body),
           resource_(resource) {}
 
@@ -113,8 +108,7 @@ private:
 
 class JsonObject final {
 public:
-    [[nodiscard]] static std::optional<JsonObject> parse(
-        std::string_view body, ModelParseOptions options = {}) noexcept {
+    [[nodiscard]] static std::optional<JsonObject> parse(std::string_view body, ModelParseOptions options = {}) noexcept {
         detail::JsonScanner scanner(body);
         if (!scanner.consumeObject()) {
             return std::nullopt;
@@ -123,17 +117,14 @@ public:
         if (!scanner.empty()) {
             return std::nullopt;
         }
-        return JsonObject(
-            detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(options.resource));
+        return JsonObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(options.resource));
     }
 
     template <typename Traits, typename Allocator>
-    static std::optional<JsonObject> parse(
-        std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
+    static std::optional<JsonObject> parse(std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
 
     template <typename Traits, typename Allocator>
-    static std::optional<JsonObject> parse(
-        const std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
+    static std::optional<JsonObject> parse(const std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
 
     [[nodiscard]] std::string_view view() const noexcept {
         return body_;
@@ -144,24 +135,23 @@ public:
         auto* const resource = resource_;
         std::optional<T> result;
         bool lastMatchFailed = false;
-        const bool valid = detail::visitJsonObjectFields(detail::ResolvedPmrResourceTag{}, body_,
-            resource, [&](std::string_view key, std::string_view valueView) {
-                if (key != field) {
-                    return true;
-                }
-
-                auto valueInput = valueView;
-                auto value = detail::parseJsonValue<T>(valueInput, resource);
-                detail::skipJsonWhitespace(valueInput);
-                if (!value || !valueInput.empty()) {
-                    result.reset();
-                    lastMatchFailed = true;
-                    return true;
-                }
-                result.emplace(std::move(*value));
-                lastMatchFailed = false;
+        const bool valid = detail::visitJsonObjectFields(detail::ResolvedPmrResourceTag{}, body_, resource, [&](std::string_view key, std::string_view valueView) {
+            if (key != field) {
                 return true;
-            });
+            }
+
+            auto valueInput = valueView;
+            auto value = detail::parseJsonValue<T>(valueInput, resource);
+            detail::skipJsonWhitespace(valueInput);
+            if (!value || !valueInput.empty()) {
+                result.reset();
+                lastMatchFailed = true;
+                return true;
+            }
+            result.emplace(std::move(*value));
+            lastMatchFailed = false;
+            return true;
+        });
 
         if (!valid || lastMatchFailed) {
             return std::nullopt;
@@ -174,8 +164,7 @@ private:
 
     JsonObject() noexcept = default;
 
-    JsonObject(detail::ResolvedPmrResourceTag, std::string_view body,
-        std::pmr::memory_resource* resource) noexcept
+    JsonObject(detail::ResolvedPmrResourceTag, std::string_view body, std::pmr::memory_resource* resource) noexcept
         : body_(body),
           resource_(resource) {}
 
@@ -193,22 +182,18 @@ template <typename T>
 
 class FormObject final {
 public:
-    [[nodiscard]] static std::optional<FormObject> parse(
-        std::string_view body, ModelParseOptions options = {}) noexcept {
+    [[nodiscard]] static std::optional<FormObject> parse(std::string_view body, ModelParseOptions options = {}) noexcept {
         if (!detail::validateFormEncoding(body)) {
             return std::nullopt;
         }
-        return FormObject(
-            detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(options.resource));
+        return FormObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(options.resource));
     }
 
     template <typename Traits, typename Allocator>
-    static std::optional<FormObject> parse(
-        std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
+    static std::optional<FormObject> parse(std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
 
     template <typename Traits, typename Allocator>
-    static std::optional<FormObject> parse(
-        const std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
+    static std::optional<FormObject> parse(const std::basic_string<char, Traits, Allocator>&&, ModelParseOptions = {}) = delete;
 
     [[nodiscard]] std::string_view view() const noexcept {
         return body_;
@@ -219,23 +204,21 @@ public:
         auto* const resource = resource_;
         std::optional<T> result;
         bool lastMatchFailed = false;
-        const bool valid = detail::visitRawFormFields(
-            body_, [&](std::string_view name, std::string_view valueView) {
-                if (!detail::formFieldNameEquals(name, field)) {
-                    return true;
-                }
-
-                auto value = detail::parseFormValue<T>(detail::ResolvedPmrResourceTag{}, valueView,
-                    detail::FormValueEncoding::kUrlEncoded, resource);
-                if (!value.has_value()) {
-                    result.reset();
-                    lastMatchFailed = true;
-                    return true;
-                }
-                result.emplace(std::move(*value));
-                lastMatchFailed = false;
+        const bool valid = detail::visitRawFormFields(body_, [&](std::string_view name, std::string_view valueView) {
+            if (!detail::formFieldNameEquals(name, field)) {
                 return true;
-            });
+            }
+
+            auto value = detail::parseFormValue<T>(detail::ResolvedPmrResourceTag{}, valueView, detail::FormValueEncoding::kUrlEncoded, resource);
+            if (!value.has_value()) {
+                result.reset();
+                lastMatchFailed = true;
+                return true;
+            }
+            result.emplace(std::move(*value));
+            lastMatchFailed = false;
+            return true;
+        });
 
         if (!valid || lastMatchFailed) {
             return std::nullopt;
@@ -246,8 +229,7 @@ public:
 private:
     FormObject() noexcept = default;
 
-    FormObject(detail::ResolvedPmrResourceTag, std::string_view body,
-        std::pmr::memory_resource* resource) noexcept
+    FormObject(detail::ResolvedPmrResourceTag, std::string_view body, std::pmr::memory_resource* resource) noexcept
         : body_(body),
           resource_(resource) {}
 
@@ -287,27 +269,19 @@ public:
     }
 
 private:
-    friend ModelInput makeJsonModelInput(std::string_view body, std::pmr::memory_resource* resource,
-        ModelStringStorage stringStorage) noexcept;
-    friend ModelInput makeFormModelInput(std::string_view body, std::pmr::memory_resource* resource,
-        ModelStringStorage stringStorage) noexcept;
-    friend ModelInput makeFormFieldsModelInput(
-        const RequestNameValueList& fields, std::pmr::memory_resource* resource) noexcept;
+    friend ModelInput makeJsonModelInput(std::string_view body, std::pmr::memory_resource* resource, ModelStringStorage stringStorage) noexcept;
+    friend ModelInput makeFormModelInput(std::string_view body, std::pmr::memory_resource* resource, ModelStringStorage stringStorage) noexcept;
+    friend ModelInput makeFormFieldsModelInput(const RequestNameValueList& fields, std::pmr::memory_resource* resource) noexcept;
 
-    ModelInput(ModelInputKind kind, std::string_view body,
-        std::pmr::memory_resource* resource = nullptr,
-        ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) noexcept
-        : ModelInput(ResolvedPmrResourceTag{}, kind, body, pmrResourceOrDefault(resource),
-              stringStorage) {}
+    ModelInput(ModelInputKind kind, std::string_view body, std::pmr::memory_resource* resource = nullptr, ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) noexcept
+        : ModelInput(ResolvedPmrResourceTag{}, kind, body, pmrResourceOrDefault(resource), stringStorage) {}
 
-    ModelInput(
-        const RequestNameValueList& fields, std::pmr::memory_resource* resource = nullptr) noexcept
+    ModelInput(const RequestNameValueList& fields, std::pmr::memory_resource* resource = nullptr) noexcept
         : kind_(ModelInputKind::kFormFields),
           fields_(&fields),
           resource_(pmrResourceOrDefault(resource)) {}
 
-    ModelInput(ResolvedPmrResourceTag, ModelInputKind kind, std::string_view body,
-        std::pmr::memory_resource* resource, ModelStringStorage stringStorage) noexcept
+    ModelInput(ResolvedPmrResourceTag, ModelInputKind kind, std::string_view body, std::pmr::memory_resource* resource, ModelStringStorage stringStorage) noexcept
         : kind_(kind),
           body_(body),
           resource_(resource),
@@ -320,20 +294,15 @@ private:
     ModelStringStorage stringStorage_{ModelStringStorage::kBorrowed};
 };
 
-[[nodiscard]] inline ModelInput makeJsonModelInput(std::string_view body,
-    std::pmr::memory_resource* resource,
-    ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) noexcept {
+[[nodiscard]] inline ModelInput makeJsonModelInput(std::string_view body, std::pmr::memory_resource* resource, ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) noexcept {
     return ModelInput(ModelInputKind::kJson, body, resource, stringStorage);
 }
 
-[[nodiscard]] inline ModelInput makeFormModelInput(std::string_view body,
-    std::pmr::memory_resource* resource,
-    ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) noexcept {
+[[nodiscard]] inline ModelInput makeFormModelInput(std::string_view body, std::pmr::memory_resource* resource, ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) noexcept {
     return ModelInput(ModelInputKind::kForm, body, resource, stringStorage);
 }
 
-[[nodiscard]] inline ModelInput makeFormFieldsModelInput(
-    const RequestNameValueList& fields, std::pmr::memory_resource* resource) noexcept {
+[[nodiscard]] inline ModelInput makeFormFieldsModelInput(const RequestNameValueList& fields, std::pmr::memory_resource* resource) noexcept {
     return ModelInput(fields, resource);
 }
 

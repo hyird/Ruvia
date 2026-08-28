@@ -16,28 +16,17 @@ namespace ruvia {
 namespace {
 
 void storeRepeatedNextError(Context& context) {
-    detail::ContextAccess::setError(
-        context, std::make_exception_ptr(std::logic_error("next() called multiple times")));
-    detail::ContextAccess::setResponse(
-        context, detail::makeDefaultErrorResponse(context.resource(),
-                     HttpErrorInfo({.status = ruvia::http_status::kInternalServerError,
-                         .code = "next_called_multiple_times",
-                         .message = "next() called multiple times"})));
+    detail::ContextAccess::setError(context, std::make_exception_ptr(std::logic_error("next() called multiple times")));
+    detail::ContextAccess::setResponse(context, detail::makeDefaultErrorResponse(context.resource(), HttpErrorInfo({.status = ruvia::http_status::kInternalServerError, .code = "next_called_multiple_times", .message = "next() called multiple times"})));
 }
 
 void storeNextAfterResponseError(Context& context) {
-    detail::ContextAccess::setError(
-        context, std::make_exception_ptr(std::logic_error("next() called after respond()")));
-    detail::ContextAccess::setResponse(
-        context, detail::makeDefaultErrorResponse(context.resource(),
-                     HttpErrorInfo({.status = ruvia::http_status::kInternalServerError,
-                         .code = "next_called_after_response",
-                         .message = "next() called after respond()"})));
+    detail::ContextAccess::setError(context, std::make_exception_ptr(std::logic_error("next() called after respond()")));
+    detail::ContextAccess::setResponse(context, detail::makeDefaultErrorResponse(context.resource(), HttpErrorInfo({.status = ruvia::http_status::kInternalServerError, .code = "next_called_after_response", .message = "next() called after respond()"})));
 }
 
 detail::NextState::Control* makeNextControl(Context& context) {
-    auto* control = static_cast<detail::NextState::Control*>(context.resource()->allocate(
-        sizeof(detail::NextState::Control), alignof(detail::NextState::Control)));
+    auto* control = static_cast<detail::NextState::Control*>(context.resource()->allocate(sizeof(detail::NextState::Control), alignof(detail::NextState::Control)));
     std::construct_at(control);
     return control;
 }
@@ -64,8 +53,7 @@ NextControlScope makeNextControlScope(detail::NextState::Control& control) noexc
 
 }  // namespace
 
-Task<HttpResponse> detail::RouteTable::invokeRoute(
-    const RouteEntry& route, Context& context) const {
+Task<HttpResponse> detail::RouteTable::invokeRoute(const RouteEntry& route, Context& context) const {
     const auto* endpoint = route.endpoint().buffered();
     if (endpoint == nullptr) {
         throw std::logic_error("route is not a buffered-response route");
@@ -79,8 +67,7 @@ Task<HttpResponse> detail::RouteTable::invokeRoute(
     return invokeRouteWithMiddleware(route, context);
 }
 
-Task<HttpResponse> detail::RouteTable::invokeRouteWithMiddleware(
-    const RouteEntry& route, Context& context) const {
+Task<HttpResponse> detail::RouteTable::invokeRouteWithMiddleware(const RouteEntry& route, Context& context) const {
     co_await invokeMiddlewareAt(route, 0, context);
     if (detail::ContextAccess::hasResponse(context)) {
         co_return detail::ContextAccess::takeResponse(context);
@@ -88,12 +75,10 @@ Task<HttpResponse> detail::RouteTable::invokeRouteWithMiddleware(
     if (auto exception = context.exception()) {
         co_return co_await handleException(context, exception);
     }
-    throw std::logic_error(
-        "context is not finalized; middleware must set a response or await next()");
+    throw std::logic_error("context is not finalized; middleware must set a response or await next()");
 }
 
-Task<void> detail::RouteTable::invokeMiddlewareAt(
-    const RouteEntry& route, std::size_t index, Context& context) const {
+Task<void> detail::RouteTable::invokeMiddlewareAt(const RouteEntry& route, std::size_t index, Context& context) const {
     if (index >= route.middlewareCount()) {
         const auto* endpoint = route.endpoint().buffered();
         if (endpoint == nullptr) {
@@ -107,13 +92,7 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
     auto& control = *makeNextControl(context);
     auto controlScope = makeNextControlScope(control);
-    auto& next = NextAccess::makeIn(context.resource(),
-        detail::NextState{.table = this,
-            .route = &route,
-            .context = &context,
-            .control = &control,
-            .index = index + 1},
-        &RouteTable::invokeMiddlewareContinuation);
+    auto& next = NextAccess::makeIn(context.resource(), detail::NextState{.table = this, .route = &route, .context = &context, .control = &control, .index = index + 1}, &RouteTable::invokeMiddlewareContinuation);
     auto task = middleware(context, next);
     co_await std::move(task);
     co_return;
@@ -145,13 +124,11 @@ Task<void> detail::RouteTable::invokeMiddlewareContinuation(NextState state) {
 // The unmatched-request chain. It mirrors the route chain exactly except for
 // its terminal: there is no route endpoint, so the 404/405/501 response comes
 // from the caller-supplied thunk instead.
-Task<HttpResponse> detail::RouteTable::runUnmatchedChain(
-    Context& context, const UnmatchedTerminal& terminal) const {
+Task<HttpResponse> detail::RouteTable::runUnmatchedChain(Context& context, const UnmatchedTerminal& terminal) const {
     if (unmatchedMiddlewareCount_ == 0) {
         return terminal(context);
     }
-    return [](const RouteTable* table, Context* unmatchedContext,
-               const UnmatchedTerminal* unmatchedTerminal) -> Task<HttpResponse> {
+    return [](const RouteTable* table, Context* unmatchedContext, const UnmatchedTerminal* unmatchedTerminal) -> Task<HttpResponse> {
         co_await table->invokeUnmatchedMiddlewareAt(0, *unmatchedContext, *unmatchedTerminal);
         if (detail::ContextAccess::hasResponse(*unmatchedContext)) {
             co_return detail::ContextAccess::takeResponse(*unmatchedContext);
@@ -159,13 +136,11 @@ Task<HttpResponse> detail::RouteTable::runUnmatchedChain(
         if (auto exception = unmatchedContext->exception()) {
             co_return co_await table->handleException(*unmatchedContext, exception);
         }
-        throw std::logic_error(
-            "context is not finalized; middleware must set a response or await next()");
+        throw std::logic_error("context is not finalized; middleware must set a response or await next()");
     }(this, &context, &terminal);
 }
 
-Task<void> detail::RouteTable::invokeUnmatchedMiddlewareAt(
-    std::size_t index, Context& context, const UnmatchedTerminal& terminal) const {
+Task<void> detail::RouteTable::invokeUnmatchedMiddlewareAt(std::size_t index, Context& context, const UnmatchedTerminal& terminal) const {
     if (index >= unmatchedMiddlewareCount_) {
         auto response = co_await terminal(context);
         detail::ContextAccess::setResponse(context, std::move(response));
@@ -175,13 +150,7 @@ Task<void> detail::RouteTable::invokeUnmatchedMiddlewareAt(
     const auto& middleware = middlewareFrames_[unmatchedMiddlewareOffset_ + index];
     auto& control = *makeNextControl(context);
     auto controlScope = makeNextControlScope(control);
-    auto& next = NextAccess::makeIn(context.resource(),
-        detail::NextState{.table = this,
-            .context = &context,
-            .unmatchedTerminal = &terminal,
-            .control = &control,
-            .index = index + 1},
-        &RouteTable::invokeUnmatchedMiddlewareContinuation);
+    auto& next = NextAccess::makeIn(context.resource(), detail::NextState{.table = this, .context = &context, .unmatchedTerminal = &terminal, .control = &control, .index = index + 1}, &RouteTable::invokeUnmatchedMiddlewareContinuation);
     auto task = middleware(context, next);
     co_await std::move(task);
     co_return;
@@ -198,8 +167,7 @@ Task<void> detail::RouteTable::invokeUnmatchedMiddlewareContinuation(NextState s
         co_return;
     }
     const auto* table = state.table;
-    const auto* terminal =
-        static_cast<const RouteTable::UnmatchedTerminal*>(state.unmatchedTerminal);
+    const auto* terminal = static_cast<const RouteTable::UnmatchedTerminal*>(state.unmatchedTerminal);
     std::exception_ptr exception;
     try {
         co_await table->invokeUnmatchedMiddlewareAt(state.index, *context, *terminal);
@@ -211,8 +179,7 @@ Task<void> detail::RouteTable::invokeUnmatchedMiddlewareContinuation(NextState s
     }
 }
 
-Task<void> detail::RouteTable::invokeStreamMiddlewareAt(const RouteEntry& route, std::size_t index,
-    Context& context, StreamMiddlewareChainState& chain, const RouteStreamHandler& handler) const {
+Task<void> detail::RouteTable::invokeStreamMiddlewareAt(const RouteEntry& route, std::size_t index, Context& context, StreamMiddlewareChainState& chain, const RouteStreamHandler& handler) const {
     if (index >= route.middlewareCount()) {
         chain.markHandlerInvoked();
         co_await handler(context);
@@ -222,15 +189,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(const RouteEntry& route,
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
     auto& control = *makeNextControl(context);
     auto controlScope = makeNextControlScope(control);
-    auto& next = NextAccess::makeIn(context.resource(),
-        detail::NextState{.table = this,
-            .route = &route,
-            .context = &context,
-            .streamChain = &chain,
-            .streamHandler = &handler,
-            .control = &control,
-            .index = index + 1},
-        &RouteTable::invokeStreamMiddlewareContinuation);
+    auto& next = NextAccess::makeIn(context.resource(), detail::NextState{.table = this, .route = &route, .context = &context, .streamChain = &chain, .streamHandler = &handler, .control = &control, .index = index + 1}, &RouteTable::invokeStreamMiddlewareContinuation);
     auto task = middleware(context, next);
     co_await std::move(task);
     co_return;
@@ -251,8 +210,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(NextState stat
     auto* chain = state.streamChain;
     std::exception_ptr exception;
     try {
-        co_await table->invokeStreamMiddlewareAt(
-            *route, state.index, *context, *chain, *state.streamHandler);
+        co_await table->invokeStreamMiddlewareAt(*route, state.index, *context, *chain, *state.streamHandler);
     } catch (const ResponseStreamHeadOnlyComplete&) {
         // Not a failure: the committed head already completed a
         // body-suppressed message (HEAD on a streaming route). Let the signal
@@ -268,8 +226,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(NextState stat
     }
 }
 
-Task<void> detail::RouteTable::storeMiddlewareExceptionResponse(
-    Context& context, std::exception_ptr exception) const {
+Task<void> detail::RouteTable::storeMiddlewareExceptionResponse(Context& context, std::exception_ptr exception) const {
     auto response = co_await handleException(context, exception);
     detail::ContextAccess::setResponse(context, std::move(response));
 }

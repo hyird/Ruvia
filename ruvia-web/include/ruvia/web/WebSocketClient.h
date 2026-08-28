@@ -99,8 +99,7 @@ public:
 
 private:
     friend class detail::WebSocketClientState;
-    WebSocketClientHandle(std::shared_ptr<detail::WebSocketClientState> state,
-        detail::ScopedOperationScope& scope, OperationOptions options) noexcept;
+    WebSocketClientHandle(std::shared_ptr<detail::WebSocketClientState> state, detail::ScopedOperationScope& scope, OperationOptions options) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
     std::shared_ptr<detail::WebSocketClientState> state_;

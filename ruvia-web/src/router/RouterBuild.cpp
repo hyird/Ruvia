@@ -13,8 +13,7 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] bool dynamicRouteMatchesPath(
-    std::string_view pattern, std::string_view path) noexcept {
+[[nodiscard]] bool dynamicRouteMatchesPath(std::string_view pattern, std::string_view path) noexcept {
     for (;;) {
         std::string_view patternSegment;
         std::string_view patternRest;
@@ -48,8 +47,7 @@ namespace {
     }
 }
 
-[[nodiscard]] bool webSocketSubprotocolsEqual(const std::pmr::vector<std::pmr::string>& owned,
-    std::span<const std::string_view> borrowed) noexcept {
+[[nodiscard]] bool webSocketSubprotocolsEqual(const std::pmr::vector<std::pmr::string>& owned, std::span<const std::string_view> borrowed) noexcept {
     if (owned.size() != borrowed.size()) {
         return false;
     }
@@ -64,11 +62,9 @@ namespace {
 }  // namespace
 
 detail::RouteEntry::RouteEntry(std::pmr::memory_resource* resource, Init init)
-    : RouteEntry(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource),
-          std::move(init)) {}
+    : RouteEntry(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource), std::move(init)) {}
 
-detail::RouteEntry::RouteEntry(
-    detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource, Init init)
+detail::RouteEntry::RouteEntry(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource, Init init)
     : method_(init.method),
       methodToken_(init.methodToken, resource),
       path_(init.path, resource),
@@ -129,21 +125,17 @@ void detail::RouteTable::captureRouteIdentities() {
                 identity.webSocketSubprotocols.emplace_back(subprotocol);
             }
             if (webSocket.lifecycle().heartbeat.pingInterval.has_value()) {
-                identity.webSocketPingIntervalMs =
-                    webSocket.lifecycle().heartbeat.pingInterval->count();
-                identity.webSocketPongTimeoutMs =
-                    webSocket.lifecycle().heartbeat.pongTimeout->count();
+                identity.webSocketPingIntervalMs = webSocket.lifecycle().heartbeat.pingInterval->count();
+                identity.webSocketPongTimeoutMs = webSocket.lifecycle().heartbeat.pongTimeout->count();
             }
             if (webSocket.lifecycle().closeHandshakeTimeout.has_value()) {
-                identity.webSocketCloseTimeoutMs =
-                    webSocket.lifecycle().closeHandshakeTimeout->count();
+                identity.webSocketCloseTimeoutMs = webSocket.lifecycle().closeHandshakeTimeout->count();
             }
         }
 
         identity.middlewareInvokes.reserve(route.middlewareCount());
         for (std::size_t i = 0; i < route.middlewareCount(); ++i) {
-            identity.middlewareInvokes.push_back(
-                middlewareFrames_[route.middlewareOffset() + i].invoke());
+            identity.middlewareInvokes.push_back(middlewareFrames_[route.middlewareOffset() + i].invoke());
         }
     }
 
@@ -156,15 +148,12 @@ void detail::RouteTable::captureRouteIdentities() {
 }
 
 void detail::RouteTable::bindCompiledPlan(const CompiledRoutePlan& plan) {
-    if (plan.identities_.size() != routes_.size() ||
-        plan.hasRouteRateLimit_ != hasRouteRateLimit_ ||
-        plan.unmatchedMiddlewareInvokes_.size() != unmatchedMiddlewareCount_) {
+    if (plan.identities_.size() != routes_.size() || plan.hasRouteRateLimit_ != hasRouteRateLimit_ || plan.unmatchedMiddlewareInvokes_.size() != unmatchedMiddlewareCount_) {
         throw std::logic_error("worker route table differs from the compiled application plan");
     }
 
     for (std::size_t i = 0; i < unmatchedMiddlewareCount_; ++i) {
-        if (middlewareFrames_[unmatchedMiddlewareOffset_ + i].invoke() !=
-            plan.unmatchedMiddlewareInvokes_[i]) {
+        if (middlewareFrames_[unmatchedMiddlewareOffset_ + i].invoke() != plan.unmatchedMiddlewareInvokes_[i]) {
             throw std::logic_error("worker route table differs from the compiled application plan");
         }
     }
@@ -172,52 +161,28 @@ void detail::RouteTable::bindCompiledPlan(const CompiledRoutePlan& plan) {
     for (std::size_t i = 0; i < routes_.size(); ++i) {
         const auto& route = routes_[i];
         const auto& identity = plan.identities_[i];
-        if (route.method() != identity.method || route.methodToken() != identity.methodToken ||
-            route.path() != identity.path || route.dynamic() != identity.dynamic ||
-            route.maxRequestBodyBytes() != identity.maxRequestBodyBytes ||
-            route.deadlineMs() != identity.deadlineMs ||
-            route.middlewareCount() != identity.middlewareInvokes.size()) {
+        if (route.method() != identity.method || route.methodToken() != identity.methodToken || route.path() != identity.path || route.dynamic() != identity.dynamic || route.maxRequestBodyBytes() != identity.maxRequestBodyBytes || route.deadlineMs() != identity.deadlineMs || route.middlewareCount() != identity.middlewareInvokes.size()) {
             throw std::logic_error("worker route table differs from the compiled application plan");
         }
 
         for (std::size_t middleware = 0; middleware < route.middlewareCount(); ++middleware) {
-            if (middlewareFrames_[route.middlewareOffset() + middleware].invoke() !=
-                identity.middlewareInvokes[middleware]) {
-                throw std::logic_error(
-                    "worker route table differs from the compiled application plan");
+            if (middlewareFrames_[route.middlewareOffset() + middleware].invoke() != identity.middlewareInvokes[middleware]) {
+                throw std::logic_error("worker route table differs from the compiled application plan");
             }
         }
 
         const auto& endpoint = route.endpoint();
         bool endpointMatches = false;
         if (const auto* buffered = endpoint.buffered()) {
-            endpointMatches = identity.endpointKind == CompiledRoutePlan::EndpointKind::kBuffered &&
-                              identity.requestBodyMode == buffered->requestBodyMode() &&
-                              identity.bufferedInvoke == buffered->handler().invoke();
+            endpointMatches = identity.endpointKind == CompiledRoutePlan::EndpointKind::kBuffered && identity.requestBodyMode == buffered->requestBodyMode() && identity.bufferedInvoke == buffered->handler().invoke();
         } else if (const auto* stream = endpoint.responseStream()) {
-            endpointMatches =
-                identity.endpointKind == CompiledRoutePlan::EndpointKind::kResponseStream &&
-                identity.responseStreamKind == stream->kind() &&
-                identity.streamInvoke == stream->handler().invoke();
+            endpointMatches = identity.endpointKind == CompiledRoutePlan::EndpointKind::kResponseStream && identity.responseStreamKind == stream->kind() && identity.streamInvoke == stream->handler().invoke();
         } else {
             const auto& webSocket = *endpoint.webSocket();
-            const auto pingIntervalMs = webSocket.lifecycle().heartbeat.pingInterval.has_value()
-                                            ? webSocket.lifecycle().heartbeat.pingInterval->count()
-                                            : std::int64_t{-1};
-            const auto pongTimeoutMs = webSocket.lifecycle().heartbeat.pingInterval.has_value()
-                                           ? webSocket.lifecycle().heartbeat.pongTimeout->count()
-                                           : std::int64_t{-1};
-            const auto closeTimeoutMs = webSocket.lifecycle().closeHandshakeTimeout.has_value()
-                                            ? webSocket.lifecycle().closeHandshakeTimeout->count()
-                                            : std::int64_t{-1};
-            endpointMatches =
-                identity.endpointKind == CompiledRoutePlan::EndpointKind::kWebSocket &&
-                identity.streamInvoke == webSocket.handler().invoke() &&
-                webSocketSubprotocolsEqual(
-                    identity.webSocketSubprotocols, webSocket.subprotocols()) &&
-                identity.webSocketPingIntervalMs == pingIntervalMs &&
-                identity.webSocketPongTimeoutMs == pongTimeoutMs &&
-                identity.webSocketCloseTimeoutMs == closeTimeoutMs;
+            const auto pingIntervalMs = webSocket.lifecycle().heartbeat.pingInterval.has_value() ? webSocket.lifecycle().heartbeat.pingInterval->count() : std::int64_t{-1};
+            const auto pongTimeoutMs = webSocket.lifecycle().heartbeat.pingInterval.has_value() ? webSocket.lifecycle().heartbeat.pongTimeout->count() : std::int64_t{-1};
+            const auto closeTimeoutMs = webSocket.lifecycle().closeHandshakeTimeout.has_value() ? webSocket.lifecycle().closeHandshakeTimeout->count() : std::int64_t{-1};
+            endpointMatches = identity.endpointKind == CompiledRoutePlan::EndpointKind::kWebSocket && identity.streamInvoke == webSocket.handler().invoke() && webSocketSubprotocolsEqual(identity.webSocketSubprotocols, webSocket.subprotocols()) && identity.webSocketPingIntervalMs == pingIntervalMs && identity.webSocketPongTimeoutMs == pongTimeoutMs && identity.webSocketCloseTimeoutMs == closeTimeoutMs;
         }
         if (!endpointMatches) {
             throw std::logic_error("worker route table differs from the compiled application plan");
@@ -234,8 +199,7 @@ void detail::RouteTable::buildServerExtensionMethodTokens() {
     serverExtensionMethodTokens_.reserve(plan_->extensionRouteIndices_.size());
     for (const auto routeIndex : plan_->extensionRouteIndices_) {
         const auto token = routes_[routeIndex].methodToken();
-        if (std::ranges::find(serverExtensionMethodTokens_, token) ==
-            serverExtensionMethodTokens_.end()) {
+        if (std::ranges::find(serverExtensionMethodTokens_, token) == serverExtensionMethodTokens_.end()) {
             serverExtensionMethodTokens_.push_back(token);
         }
     }
@@ -266,8 +230,7 @@ void detail::RouterImpl::validateNoDynamicRouteConflict(std::span<const PendingR
     return endpoint.buffered() != nullptr;
 }
 
-void detail::RouterImpl::buildRouteTable(
-    RouteTable& table, const CompiledRoutePlan* compiledPlan) const {
+void detail::RouterImpl::buildRouteTable(RouteTable& table, const CompiledRoutePlan* compiledPlan) const {
     std::size_t headShadowCandidateCount = 0;
     std::size_t middlewareCount = 0;
     for (const auto& route : pendingRoutes_) {
@@ -281,16 +244,7 @@ void detail::RouterImpl::buildRouteTable(
 
     for (const auto& pending : pendingRoutes_) {
         const auto pendingMiddlewares = pending.middlewares();
-        RouteEntry route(detail::ResolvedPmrResourceTag{}, table.resource_,
-            RouteEntry::Init{.method = pending.method(),
-                .methodToken = pending.methodToken(),
-                .path = pending.path(),
-                .endpoint = pending.endpoint().clone(table.resource_),
-                .dynamic = pending.dynamic(),
-                .maxRequestBodyBytes = pending.maxRequestBodyBytes(),
-                .deadlineMs = pending.deadlineMs(),
-                .middlewareOffset = 0,
-                .middlewareCount = 0});
+        RouteEntry route(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{.method = pending.method(), .methodToken = pending.methodToken(), .path = pending.path(), .endpoint = pending.endpoint().clone(table.resource_), .dynamic = pending.dynamic(), .maxRequestBodyBytes = pending.maxRequestBodyBytes(), .deadlineMs = pending.deadlineMs(), .middlewareOffset = 0, .middlewareCount = 0});
         // App-wide middleware runs before controller/route middleware on every
         // matched route: each route's contiguous frame range starts with the
         // shared global instances.
@@ -307,10 +261,8 @@ void detail::RouterImpl::buildRouteTable(
             }
             table.middlewareFrames_.push_back(globalMiddlewareFrames_[i]);
         }
-        table.middlewareFrames_.insert(
-            table.middlewareFrames_.end(), pendingMiddlewares.begin(), pendingMiddlewares.end());
-        route.setMiddlewareRange(
-            middlewareOffset, table.middlewareFrames_.size() - middlewareOffset);
+        table.middlewareFrames_.insert(table.middlewareFrames_.end(), pendingMiddlewares.begin(), pendingMiddlewares.end());
+        route.setMiddlewareRange(middlewareOffset, table.middlewareFrames_.size() - middlewareOffset);
         table.routes_.push_back(std::move(route));
     }
 
@@ -322,12 +274,10 @@ void detail::RouterImpl::buildRouteTable(
             table.middlewareFrames_.push_back(globalMiddlewareFrames_[i]);
         }
     }
-    table.unmatchedMiddlewareCount_ =
-        table.middlewareFrames_.size() - table.unmatchedMiddlewareOffset_;
+    table.unmatchedMiddlewareCount_ = table.middlewareFrames_.size() - table.unmatchedMiddlewareOffset_;
 
     const auto originalRouteCount = table.routes_.size();
-    const auto conflictsWithHeadRoute = [](const RouteEntry& source,
-                                            const RouteEntry& headRoute) noexcept {
+    const auto conflictsWithHeadRoute = [](const RouteEntry& source, const RouteEntry& headRoute) noexcept {
         if (source.dynamic() && headRoute.dynamic()) {
             return RouteTable::sameDynamicShape(source.path(), headRoute.path());
         }
@@ -362,15 +312,7 @@ void detail::RouterImpl::buildRouteTable(
         if (conflictsWithExistingHead) {
             continue;
         }
-        RouteEntry shadow(detail::ResolvedPmrResourceTag{}, table.resource_,
-            RouteEntry::Init{.method = HttpKnownMethod::kHead,
-                .path = source.path(),
-                .endpoint = source.endpoint().clone(table.resource_),
-                .dynamic = source.dynamic(),
-                .maxRequestBodyBytes = source.maxRequestBodyBytes(),
-                .deadlineMs = source.deadlineMs(),
-                .middlewareOffset = source.middlewareOffset(),
-                .middlewareCount = source.middlewareCount()});
+        RouteEntry shadow(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{.method = HttpKnownMethod::kHead, .path = source.path(), .endpoint = source.endpoint().clone(table.resource_), .dynamic = source.dynamic(), .maxRequestBodyBytes = source.maxRequestBodyBytes(), .deadlineMs = source.deadlineMs(), .middlewareOffset = source.middlewareOffset(), .middlewareCount = source.middlewareCount()});
         table.routes_.push_back(std::move(shadow));
     }
 

@@ -12,8 +12,7 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] std::optional<MultipartBoundary> decodeMultipartBoundaryParameter(
-    std::string_view parameter) {
+[[nodiscard]] std::optional<MultipartBoundary> decodeMultipartBoundaryParameter(std::string_view parameter) {
     std::array<char, 70> decoded{};
     std::size_t size = 0;
     if (!parameter.empty() && parameter.front() == '"') {
@@ -56,8 +55,7 @@ namespace {
 
 MultipartBoundaryParseResult parseMultipartBoundary(std::string_view contentType) {
     const auto mediaEnd = contentType.find(';');
-    const auto mediaType = detail::httpTrimOws(
-        mediaEnd == std::string_view::npos ? contentType : contentType.substr(0, mediaEnd));
+    const auto mediaType = detail::httpTrimOws(mediaEnd == std::string_view::npos ? contentType : contentType.substr(0, mediaEnd));
     if (!detail::httpAsciiEqualsIgnoreCase(mediaType, "multipart/form-data")) {
         return MultipartBoundaryParseResult::makeNotApplicable();
     }

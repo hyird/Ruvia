@@ -28,19 +28,16 @@ namespace {
         message.append(": ");
         message.append(error.message());
     }
-    return DbError(DbError::Code::kIoError, DbDriver::kMariaDb, std::move(message),
-        error ? std::optional<std::int64_t>(error.value()) : std::nullopt);
+    return DbError(DbError::Code::kIoError, DbDriver::kMariaDb, std::move(message), error ? std::optional<std::int64_t>(error.value()) : std::nullopt);
 }
 
 }  // namespace
 
-Task<detail::DbResolvedAddresses> detail::MariaDbPool::resolveHost(
-    ConnectionSlot& slot, const OperationTimeout& deadline) {
+Task<detail::DbResolvedAddresses> detail::MariaDbPool::resolveHost(ConnectionSlot& slot, const OperationTimeout& deadline) {
     return resolveDbHost(*this, slot, deadline, "MariaDB");
 }
 
-Task<void> detail::MariaDbPool::connectUnlocked(
-    ConnectionSlot& slot, const OperationTimeout& operationTimeout) {
+Task<void> detail::MariaDbPool::connectUnlocked(ConnectionSlot& slot, const OperationTimeout& operationTimeout) {
     if (scheduler_.closing()) {
         throw DbError(DbError::Code::kClosing, DbDriver::kMariaDb, "database client is closing");
     }
@@ -61,8 +58,7 @@ Task<void> detail::MariaDbPool::connectUnlocked(
         slot.connection = connection;
         slot.waitSocket = detail::makePmrObject<detail::DbSlotSocket>(resource_, ioContext_);
         if (mysql_optionsv(slot.connection, MYSQL_OPT_NONBLOCK, nullptr) != 0) {
-            throw mysqlError(*slot.connection, "enabling MariaDB non-blocking I/O",
-                DbError::Code::kConnectFailed);
+            throw mysqlError(*slot.connection, "enabling MariaDB non-blocking I/O", DbError::Code::kConnectFailed);
         }
         // Pin the connection charset before connecting. mysql_real_escape_string --
         // the interpolateSql injection defense -- escapes according to the
@@ -72,30 +68,19 @@ Task<void> detail::MariaDbPool::connectUnlocked(
         // safe regardless of the server or client library default, and it carries
         // full Unicode. Set here (not via SET NAMES) so it also governs the handshake.
         if (mysql_optionsv(slot.connection, MYSQL_SET_CHARSET_NAME, "utf8mb4") != 0) {
-            throw mysqlError(
-                *slot.connection, "configuring MariaDB utf8mb4", DbError::Code::kConnectFailed);
+            throw mysqlError(*slot.connection, "configuring MariaDB utf8mb4", DbError::Code::kConnectFailed);
         }
-        if (!detail::setMysqlTimeout(
-                *slot.connection, MYSQL_OPT_CONNECT_TIMEOUT, config_.connectTimeout) ||
-            !detail::setMysqlTimeout(
-                *slot.connection, MYSQL_OPT_READ_TIMEOUT, config_.readTimeout) ||
-            !detail::setMysqlTimeout(
-                *slot.connection, MYSQL_OPT_WRITE_TIMEOUT, config_.writeTimeout)) {
-            throw mysqlError(
-                *slot.connection, "configuring MariaDB timeouts", DbError::Code::kConnectFailed);
+        if (!detail::setMysqlTimeout(*slot.connection, MYSQL_OPT_CONNECT_TIMEOUT, config_.connectTimeout) || !detail::setMysqlTimeout(*slot.connection, MYSQL_OPT_READ_TIMEOUT, config_.readTimeout) || !detail::setMysqlTimeout(*slot.connection, MYSQL_OPT_WRITE_TIMEOUT, config_.writeTimeout)) {
+            throw mysqlError(*slot.connection, "configuring MariaDB timeouts", DbError::Code::kConnectFailed);
         }
 
         auto& initialized = *slot.connection;
         constexpr auto clientFlags = 0UL;
         MYSQL* connected = nullptr;
-        int status = mysql_real_connect_start(&connected, &initialized, resolvedHosts.c_str(),
-            config_.username.c_str(), config_.password.c_str(),
-            config_.database.empty() ? nullptr : config_.database.c_str(), config_.port, nullptr,
-            clientFlags);
+        int status = mysql_real_connect_start(&connected, &initialized, resolvedHosts.c_str(), config_.username.c_str(), config_.password.c_str(), config_.database.empty() ? nullptr : config_.database.c_str(), config_.port, nullptr, clientFlags);
 
         while (status != 0) {
-            status = mysql_real_connect_cont(
-                &connected, &initialized, co_await waitForMysql(slot, status, deadline));
+            status = mysql_real_connect_cont(&connected, &initialized, co_await waitForMysql(slot, status, deadline));
         }
 
         if (connected == nullptr) {
@@ -112,20 +97,16 @@ Task<void> detail::MariaDbPool::connectUnlocked(
         // restores the suspend the API is built around.
         const auto native = mysql_get_socket(&initialized);
         using NativeSocket = std::remove_cv_t<decltype(native)>;
-        if (native == static_cast<NativeSocket>(MARIADB_INVALID_SOCKET) ||
-            slot.waitSocket == nullptr) {
+        if (native == static_cast<NativeSocket>(MARIADB_INVALID_SOCKET) || slot.waitSocket == nullptr) {
             throw mysqlSocketError("MariaDB connection has no waitable socket", {});
         }
-        if (const auto error = slot.waitSocket->ensureAssigned(
-                static_cast<detail::DbSlotSocket::NativeSocket>(native));
-            error) {
+        if (const auto error = slot.waitSocket->ensureAssigned(static_cast<detail::DbSlotSocket::NativeSocket>(native)); error) {
             throw mysqlSocketError("binding MariaDB connection socket", error);
         }
         const auto nonBlockingError = slot.waitSocket->makeNonBlocking();
         const auto releaseError = slot.waitSocket->release();
         if (nonBlockingError) {
-            throw mysqlSocketError(
-                "making MariaDB connection socket non-blocking", nonBlockingError);
+            throw mysqlSocketError("making MariaDB connection socket non-blocking", nonBlockingError);
         }
         if (releaseError) {
             throw mysqlSocketError("detaching MariaDB connection socket", releaseError);
@@ -138,16 +119,13 @@ Task<void> detail::MariaDbPool::connectUnlocked(
     }
 }
 
-Task<void> detail::MariaDbPool::runMysqlQuery(
-    ConnectionSlot& slot, std::string_view sql, const OperationTimeout& deadline) {
+Task<void> detail::MariaDbPool::runMysqlQuery(ConnectionSlot& slot, std::string_view sql, const OperationTimeout& deadline) {
     auto& connection = *slot.connection;
     validateMariaDbSqlLength(sql.size());
     int queryResult = 0;
-    int status = mysql_real_query_start(
-        &queryResult, &connection, sql.data(), static_cast<unsigned long>(sql.size()));
+    int status = mysql_real_query_start(&queryResult, &connection, sql.data(), static_cast<unsigned long>(sql.size()));
     while (status != 0) {
-        status = mysql_real_query_cont(
-            &queryResult, &connection, co_await waitForMysql(slot, status, deadline));
+        status = mysql_real_query_cont(&queryResult, &connection, co_await waitForMysql(slot, status, deadline));
     }
     if (queryResult != 0) {
         throw mysqlError(connection, "mysql_real_query", DbError::Code::kStatementFailed);
@@ -155,20 +133,17 @@ Task<void> detail::MariaDbPool::runMysqlQuery(
     co_return;
 }
 
-Task<st_mysql_res*> detail::MariaDbPool::storeMysqlResult(
-    ConnectionSlot& slot, const OperationTimeout& deadline) {
+Task<st_mysql_res*> detail::MariaDbPool::storeMysqlResult(ConnectionSlot& slot, const OperationTimeout& deadline) {
     auto& connection = *slot.connection;
     MYSQL_RES* result = nullptr;
     int status = mysql_store_result_start(&result, &connection);
     while (status != 0) {
-        status = mysql_store_result_cont(
-            &result, &connection, co_await waitForMysql(slot, status, deadline));
+        status = mysql_store_result_cont(&result, &connection, co_await waitForMysql(slot, status, deadline));
     }
     co_return result;
 }
 
-Task<int> detail::MariaDbPool::waitForMysql(
-    ConnectionSlot& slot, int status, const OperationTimeout& deadline) {
+Task<int> detail::MariaDbPool::waitForMysql(ConnectionSlot& slot, int status, const OperationTimeout& deadline) {
     throwIfCancelled(slot);
     auto& connection = *slot.connection;
     const auto timeout = deadline.remaining();
@@ -180,9 +155,7 @@ Task<int> detail::MariaDbPool::waitForMysql(
     // instead ends the operation, and the caller closes the connection: the
     // statement may still be running server-side, which is exactly what a
     // client-side timeout means.
-    const auto timedOut = [] {
-        return DbError(DbError::Code::kTimeout, DbDriver::kMariaDb, "MariaDB operation timed out");
-    };
+    const auto timedOut = [] { return DbError(DbError::Code::kTimeout, DbDriver::kMariaDb, "MariaDB operation timed out"); };
     if (timeout.has_value() && timeout->count() <= 0) {
         throw timedOut();
     }
@@ -197,16 +170,14 @@ Task<int> detail::MariaDbPool::waitForMysql(
     const auto wantsException = (status & MYSQL_WAIT_EXCEPT) != 0;
     if (!wantsRead && !wantsWrite && !wantsException) {
         if (!selectedDeadline.timeout) {
-            throw DbError(DbError::Code::kIoError, DbDriver::kMariaDb,
-                "MariaDB requested an unsupported empty wait");
+            throw DbError(DbError::Code::kIoError, DbDriver::kMariaDb, "MariaDB requested an unsupported empty wait");
         }
         setSlotDeadline(slot, *selectedDeadline.timeout, ConnectionSlot::DeadlineKind::kSleep);
         struct DeadlineAwaiter final {
             ConnectionSlot& slot;
 
             [[nodiscard]] bool await_ready() noexcept {
-                return slot.deadline.expire(std::chrono::steady_clock::now()).has_value() ||
-                       slot.deadline.expired();
+                return slot.deadline.expire(std::chrono::steady_clock::now()).has_value() || slot.deadline.expired();
             }
 
             void await_suspend(std::coroutine_handle<> handle) noexcept {
@@ -234,11 +205,9 @@ Task<int> detail::MariaDbPool::waitForMysql(
         clearSlotDeadline(slot);
         throwIfCancelled(slot);
         if (slot.closeRequested) {
-            throw DbError(
-                DbError::Code::kClosing, DbDriver::kMariaDb, "database client is closing");
+            throw DbError(DbError::Code::kClosing, DbDriver::kMariaDb, "database client is closing");
         }
-        if (deadline.expired() ||
-            selectedDeadline.source == detail::MysqlWaitDeadlineSource::kOperation) {
+        if (deadline.expired() || selectedDeadline.source == detail::MysqlWaitDeadlineSource::kOperation) {
             throw timedOut();
         }
         co_return MYSQL_WAIT_TIMEOUT;
@@ -247,21 +216,17 @@ Task<int> detail::MariaDbPool::waitForMysql(
     const auto native = mysql_get_socket(&connection);
     using NativeSocket = std::remove_cv_t<decltype(native)>;
     if (native == static_cast<NativeSocket>(MARIADB_INVALID_SOCKET)) {
-        throw mysqlSocketError("MariaDB returned an invalid socket for an active wait",
-            std::make_error_code(std::errc::bad_file_descriptor));
+        throw mysqlSocketError("MariaDB returned an invalid socket for an active wait", std::make_error_code(std::errc::bad_file_descriptor));
     }
 
     if (slot.waitSocket == nullptr) {
         throw mysqlSocketError("MariaDB wait socket is unavailable", {});
     }
-    if (const auto error = slot.waitSocket->ensureAssigned(
-            static_cast<detail::DbSlotSocket::NativeSocket>(native));
-        error) {
+    if (const auto error = slot.waitSocket->ensureAssigned(static_cast<detail::DbSlotSocket::NativeSocket>(native)); error) {
         throw mysqlSocketError("binding MariaDB wait socket", error);
     }
 
-    setSlotDeadline(slot, selectedDeadline.timeout.value_or(std::chrono::milliseconds(0)),
-        ConnectionSlot::DeadlineKind::kSocket);
+    setSlotDeadline(slot, selectedDeadline.timeout.value_or(std::chrono::milliseconds(0)), ConnectionSlot::DeadlineKind::kSocket);
     struct SocketWaitAwaiter final {
         ConnectionSlot& slot;
         detail::DbSlotSocket& slotSocket;
@@ -299,21 +264,15 @@ Task<int> detail::MariaDbPool::waitForMysql(
                 // and stay suspended until the already-published handlers have
                 // drained before surfacing the original exception.
                 if ((status & MYSQL_WAIT_READ) != 0) {
-                    waitable.async_wait(readWait, [this](std::error_code waitEc) noexcept {
-                        onSocket(MYSQL_WAIT_READ, waitEc);
-                    });
+                    waitable.async_wait(readWait, [this](std::error_code waitEc) noexcept { onSocket(MYSQL_WAIT_READ, waitEc); });
                     ++pending;
                 }
                 if ((status & MYSQL_WAIT_WRITE) != 0) {
-                    waitable.async_wait(writeWait, [this](std::error_code waitEc) noexcept {
-                        onSocket(MYSQL_WAIT_WRITE, waitEc);
-                    });
+                    waitable.async_wait(writeWait, [this](std::error_code waitEc) noexcept { onSocket(MYSQL_WAIT_WRITE, waitEc); });
                     ++pending;
                 }
                 if ((status & MYSQL_WAIT_EXCEPT) != 0) {
-                    waitable.async_wait(errorWait, [this](std::error_code waitEc) noexcept {
-                        onSocket(MYSQL_WAIT_EXCEPT, waitEc);
-                    });
+                    waitable.async_wait(errorWait, [this](std::error_code waitEc) noexcept { onSocket(MYSQL_WAIT_EXCEPT, waitEc); });
                     ++pending;
                 }
             } catch (...) {
@@ -333,9 +292,7 @@ Task<int> detail::MariaDbPool::waitForMysql(
 
         void onSocket(int flag, std::error_code waitError) noexcept {
             if (!resultSet) {
-                const bool deadlineExpired =
-                    slot.deadline.expire(std::chrono::steady_clock::now()).has_value() ||
-                    slot.deadline.expired();
+                const bool deadlineExpired = slot.deadline.expire(std::chrono::steady_clock::now()).has_value() || slot.deadline.expired();
                 if (deadlineExpired) {
                     result = MYSQL_WAIT_TIMEOUT;
                 } else if (waitError) {
@@ -383,8 +340,7 @@ Task<int> detail::MariaDbPool::waitForMysql(
     {
         ActiveWait activeWait(slot);
         try {
-            result = co_await SocketWaitAwaiter{slot, *slot.waitSocket, status, socketFailure, {},
-                MYSQL_WAIT_TIMEOUT, 0, false, {}};
+            result = co_await SocketWaitAwaiter{slot, *slot.waitSocket, status, socketFailure, {}, MYSQL_WAIT_TIMEOUT, 0, false, {}};
             expired = slot.deadline.expired();
         } catch (...) {
             waitFailure = std::current_exception();
@@ -395,9 +351,7 @@ Task<int> detail::MariaDbPool::waitForMysql(
     // only after all readiness handlers have drained, and before returning
     // control to that continuation.
     const auto releaseError = slot.waitSocket->release();
-    const bool operationExpired =
-        deadline.expired() ||
-        (selectedDeadline.source == detail::MysqlWaitDeadlineSource::kOperation && expired);
+    const bool operationExpired = deadline.expired() || (selectedDeadline.source == detail::MysqlWaitDeadlineSource::kOperation && expired);
     clearSlotDeadline(slot);
     throwIfCancelled(slot);
     if (slot.closeRequested) {
@@ -412,8 +366,7 @@ Task<int> detail::MariaDbPool::waitForMysql(
         } catch (const DbError&) {
             throw;
         } catch (const std::system_error& error) {
-            throw DbError(
-                DbError::Code::kIoError, DbDriver::kMariaDb, error.what(), error.code().value());
+            throw DbError(DbError::Code::kIoError, DbDriver::kMariaDb, error.what(), error.code().value());
         } catch (const std::runtime_error& error) {
             throw DbError(DbError::Code::kIoError, DbDriver::kMariaDb, error.what());
         }

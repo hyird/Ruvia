@@ -28,8 +28,7 @@ public:
 
 private:
     friend class WebSocketClosePayloadEncodeResult;
-    friend WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(
-        std::uint16_t, std::string_view) noexcept;
+    friend WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(std::uint16_t, std::string_view) noexcept;
 
     WebSocketEncodedClosePayload(std::uint16_t code, std::string_view reason) noexcept;
 
@@ -45,11 +44,9 @@ public:
 
 private:
     friend class WebSocketClosePayloadEncodeResult;
-    friend WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(
-        std::uint16_t, std::string_view) noexcept;
+    friend WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(std::uint16_t, std::string_view) noexcept;
 
-    explicit constexpr WebSocketClosePayloadEncodeFailure(
-        WebSocketClosePayloadEncodeError error) noexcept
+    explicit constexpr WebSocketClosePayloadEncodeFailure(WebSocketClosePayloadEncodeError error) noexcept
         : error_(error) {}
 
     WebSocketClosePayloadEncodeError error_;
@@ -68,20 +65,17 @@ public:
     [[nodiscard]] constexpr const WebSocketClosePayloadEncodeFailure* failure() const&& = delete;
 
 private:
-    friend WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(
-        std::uint16_t, std::string_view) noexcept;
+    friend WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(std::uint16_t, std::string_view) noexcept;
 
     explicit WebSocketClosePayloadEncodeResult(WebSocketEncodedClosePayload encoded) noexcept
         : value_(encoded) {}
 
-    explicit constexpr WebSocketClosePayloadEncodeResult(
-        WebSocketClosePayloadEncodeFailure failure) noexcept
+    explicit constexpr WebSocketClosePayloadEncodeResult(WebSocketClosePayloadEncodeFailure failure) noexcept
         : value_(failure) {}
 
     using Value = std::variant<WebSocketEncodedClosePayload, WebSocketClosePayloadEncodeFailure>;
     Value value_;
 };
 
-[[nodiscard]] WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(
-    std::uint16_t code, std::string_view reason) noexcept;
+[[nodiscard]] WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(std::uint16_t code, std::string_view reason) noexcept;
 }  // namespace ruvia::detail

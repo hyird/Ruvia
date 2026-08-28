@@ -18,8 +18,7 @@ public:
     // type that was not registered before App::run().
     template <typename T>
     [[nodiscard]] T& workerState() const {
-        return *static_cast<T*>(
-            static_cast<const Derived&>(*this).workerStateInstance(workerStateTypeKey<T>()));
+        return *static_cast<T*>(static_cast<const Derived&>(*this).workerStateInstance(workerStateTypeKey<T>()));
     }
 
 protected:

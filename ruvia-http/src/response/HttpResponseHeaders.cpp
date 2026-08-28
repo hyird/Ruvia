@@ -11,8 +11,7 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] bool overlapsHeaderStorage(
-    const HttpResponseHeader& header, std::string_view value) noexcept {
+[[nodiscard]] bool overlapsHeaderStorage(const HttpResponseHeader& header, std::string_view value) noexcept {
     const auto name = header.name();
     if (value.empty() || name.data() == nullptr) {
         return false;
@@ -26,8 +25,7 @@ namespace {
 
 }  // namespace
 
-HttpResponseHeader HttpResponseHeaders::makeOwnedHeader(
-    std::string_view name, std::string_view value, std::uint32_t knownBit) {
+HttpResponseHeader HttpResponseHeaders::makeOwnedHeader(std::string_view name, std::string_view value, std::uint32_t knownBit) {
     detail::validateResponseHeaderStorageSize(name.size(), value.size());
     const auto total = name.size() + value.size();
     char* bytes = nullptr;
@@ -36,12 +34,10 @@ HttpResponseHeader HttpResponseHeaders::makeOwnedHeader(
         std::memcpy(bytes, name.data(), name.size());
         std::memcpy(bytes + name.size(), value.data(), value.size());
     }
-    return detail::makeResponseHeader(bytes, static_cast<std::uint32_t>(name.size()),
-        static_cast<std::uint32_t>(value.size()), knownBit, true);
+    return detail::makeResponseHeader(bytes, static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(value.size()), knownBit, true);
 }
 
-HttpResponseHeader HttpResponseHeaders::makeUninitializedHeader(
-    std::string_view name, std::size_t valueSize, std::uint32_t knownBit) {
+HttpResponseHeader HttpResponseHeaders::makeUninitializedHeader(std::string_view name, std::size_t valueSize, std::uint32_t knownBit) {
     detail::validateResponseHeaderStorageSize(name.size(), valueSize);
     const auto total = name.size() + valueSize;
     char* bytes = nullptr;
@@ -49,12 +45,10 @@ HttpResponseHeader HttpResponseHeaders::makeUninitializedHeader(
         bytes = static_cast<char*>(resource_->allocate(total, 1));
         std::memcpy(bytes, name.data(), name.size());
     }
-    return detail::makeResponseHeader(bytes, static_cast<std::uint32_t>(name.size()),
-        static_cast<std::uint32_t>(valueSize), knownBit, true);
+    return detail::makeResponseHeader(bytes, static_cast<std::uint32_t>(name.size()), static_cast<std::uint32_t>(valueSize), knownBit, true);
 }
 
-std::optional<HttpResponseHeader> HttpResponseHeaders::makeStaticHeader(
-    std::string_view name, std::string_view value, std::uint32_t knownBit) noexcept {
+std::optional<HttpResponseHeader> HttpResponseHeaders::makeStaticHeader(std::string_view name, std::string_view value, std::uint32_t knownBit) noexcept {
     if (knownBit == 0) {
         return std::nullopt;
     }
@@ -67,8 +61,7 @@ std::optional<HttpResponseHeader> HttpResponseHeaders::makeStaticHeader(
 
 void HttpResponseHeaders::releaseHeader(HttpResponseHeader& header) noexcept {
     if (header.owned && header.bytes != nullptr) {
-        resource_->deallocate(const_cast<char*>(header.bytes),
-            static_cast<std::size_t>(header.nameSize) + header.valueSize, 1);
+        resource_->deallocate(const_cast<char*>(header.bytes), static_cast<std::size_t>(header.nameSize) + header.valueSize, 1);
     }
     header.bytes = nullptr;
     header.nameSize = 0;
@@ -102,29 +95,24 @@ HttpResponseHeader& HttpResponseHeaders::appendHeader(HttpResponseHeader header)
     }
 }
 
-HttpResponseHeader& HttpResponseHeaders::add(
-    std::string_view name, std::string_view value, std::uint32_t knownBit) {
+HttpResponseHeader& HttpResponseHeaders::add(std::string_view name, std::string_view value, std::uint32_t knownBit) {
     return appendHeader(makeOwnedHeader(name, value, knownBit));
 }
 
-HttpResponseHeader& HttpResponseHeaders::addStableView(
-    std::string_view name, std::string_view value, std::uint32_t knownBit) {
+HttpResponseHeader& HttpResponseHeaders::addStableView(std::string_view name, std::string_view value, std::uint32_t knownBit) {
     detail::validateResponseHeaderStorageSize(name.size(), value.size());
     const auto staticHeader = makeStaticHeader(name, value, knownBit);
     return appendHeader(staticHeader ? *staticHeader : makeOwnedHeader(name, value, knownBit));
 }
 
-HttpResponseHeader& HttpResponseHeaders::addUninitializedValue(
-    std::string_view name, std::size_t valueSize, std::uint32_t knownBit) {
+HttpResponseHeader& HttpResponseHeaders::addUninitializedValue(std::string_view name, std::size_t valueSize, std::uint32_t knownBit) {
     return appendHeader(makeUninitializedHeader(name, valueSize, knownBit));
 }
 
-HttpResponseHeader& HttpResponseHeaders::assignUninitializedValue(HttpResponseHeader& header,
-    std::string_view name, std::size_t valueSize, std::uint32_t knownBit) {
+HttpResponseHeader& HttpResponseHeaders::assignUninitializedValue(HttpResponseHeader& header, std::string_view name, std::size_t valueSize, std::uint32_t knownBit) {
     detail::validateResponseHeaderStorageSize(name.size(), valueSize);
     const auto total = name.size() + valueSize;
-    if (header.owned && header.bytes != nullptr && !overlapsHeaderStorage(header, name) &&
-        total == static_cast<std::size_t>(header.nameSize) + header.valueSize) {
+    if (header.owned && header.bytes != nullptr && !overlapsHeaderStorage(header, name) && total == static_cast<std::size_t>(header.nameSize) + header.valueSize) {
         auto* const bytes = const_cast<char*>(header.bytes);
         std::memcpy(bytes, name.data(), name.size());
         header.nameSize = static_cast<std::uint32_t>(name.size());
@@ -140,15 +128,12 @@ HttpResponseHeader& HttpResponseHeaders::assignUninitializedValue(HttpResponseHe
     return header;
 }
 
-bool HttpResponseHeaders::tryAssignOwnedInPlace(HttpResponseHeader& header, std::string_view name,
-    std::string_view value, std::uint32_t knownBit) noexcept {
+bool HttpResponseHeaders::tryAssignOwnedInPlace(HttpResponseHeader& header, std::string_view name, std::string_view value, std::uint32_t knownBit) noexcept {
     if (!detail::responseHeaderStorageSizeFits(name.size(), value.size())) {
         return false;
     }
     const auto total = name.size() + value.size();
-    if (!header.owned || header.bytes == nullptr || overlapsHeaderStorage(header, name) ||
-        overlapsHeaderStorage(header, value) ||
-        total != static_cast<std::size_t>(header.nameSize) + header.valueSize) {
+    if (!header.owned || header.bytes == nullptr || overlapsHeaderStorage(header, name) || overlapsHeaderStorage(header, value) || total != static_cast<std::size_t>(header.nameSize) + header.valueSize) {
         return false;
     }
     auto* const bytes = const_cast<char*>(header.bytes);
@@ -161,8 +146,7 @@ bool HttpResponseHeaders::tryAssignOwnedInPlace(HttpResponseHeader& header, std:
     return true;
 }
 
-void HttpResponseHeaders::assign(HttpResponseHeader& header, std::string_view name,
-    std::string_view value, std::uint32_t knownBit) {
+void HttpResponseHeaders::assign(HttpResponseHeader& header, std::string_view name, std::string_view value, std::uint32_t knownBit) {
     if (tryAssignOwnedInPlace(header, name, value, knownBit)) {
         return;
     }
@@ -171,8 +155,7 @@ void HttpResponseHeaders::assign(HttpResponseHeader& header, std::string_view na
     header = replacement;
 }
 
-void HttpResponseHeaders::assignStableView(HttpResponseHeader& header, std::string_view name,
-    std::string_view value, std::uint32_t knownBit) {
+void HttpResponseHeaders::assignStableView(HttpResponseHeader& header, std::string_view name, std::string_view value, std::uint32_t knownBit) {
     detail::validateResponseHeaderStorageSize(name.size(), value.size());
     const auto staticHeader = makeStaticHeader(name, value, knownBit);
     if (staticHeader) {

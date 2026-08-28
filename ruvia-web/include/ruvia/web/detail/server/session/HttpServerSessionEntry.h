@@ -25,8 +25,7 @@ namespace ruvia::detail {
 
 // Defined inline: this is a header, and a header may be included by more than
 // one translation unit. The member templates below need no such marking.
-inline Task<void> WebWorkerRuntime::handleSession(
-    HttpServerListener& listener, AcceptedConnectionLease connection) {
+inline Task<void> WebWorkerRuntime::handleSession(HttpServerListener& listener, AcceptedConnectionLease connection) {
     auto& socket = connection.socket();
     // Declared outside the try so the failure report below can name the peer.
     // It stays empty if the failure happened before the address was resolved.
@@ -51,11 +50,9 @@ inline Task<void> WebWorkerRuntime::handleSession(
                 // regardless of session activity -- severing long-lived TLS
                 // sessions (WebSocket, keep-alive, slow uploads, streaming).
                 ConnectionScanner::Entry handshakeEntry;
-                ConnectionScanner::Guard handshakeGuard(
-                    &connectionScanner_, handshakeEntry, socket);
+                ConnectionScanner::Guard handshakeGuard(&connectionScanner_, handshakeEntry, socket);
                 handshakeEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
-                const auto handshakeCompletion =
-                    co_await asyncAsio(TlsServerHandshakeInitiator{&tlsStream});
+                const auto handshakeCompletion = co_await asyncAsio(TlsServerHandshakeInitiator{&tlsStream});
                 if (handshakeCompletion.errorCode()) {
                     closeSocket(socket);
                     co_return;
@@ -63,8 +60,7 @@ inline Task<void> WebWorkerRuntime::handleSession(
             }
             std::pmr::string clientCertificate(memory_.allocator<char>());
             extractTlsClientCertificate(tlsStream.native_handle(), clientCertificate);
-            const auto tlsServices =
-                baseServices.withTlsTransport(remoteAddress, clientCertificate);
+            const auto tlsServices = baseServices.withTlsTransport(remoteAddress, clientCertificate);
             if (isHttp2AlpnSelected(tlsStream)) {
                 co_await handleHttp2Session(tlsStream, socket, tlsServices);
             } else {
@@ -73,8 +69,7 @@ inline Task<void> WebWorkerRuntime::handleSession(
             closeSocket(socket);
             co_return;
         }
-        co_await handleStreamSession(
-            listener, socket, socket, baseServices.withPlainTransport(remoteAddress));
+        co_await handleStreamSession(listener, socket, socket, baseServices.withPlainTransport(remoteAddress));
     } catch (...) {
         // Last-resort safety net: any exception that escapes the session
         // body (including bad_alloc, error-handler failures, or framework
@@ -92,8 +87,7 @@ inline Task<void> WebWorkerRuntime::handleSession(
 }
 
 template <typename Stream>
-Task<void> WebWorkerRuntime::handleHttp2Session(
-    Stream& stream, TcpSocket& socket, ContextServices services, std::string_view initialBytes) {
+Task<void> WebWorkerRuntime::handleHttp2Session(Stream& stream, TcpSocket& socket, ContextServices services, std::string_view initialBytes) {
     ConnectionScanner::Entry scannerEntry;
     ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
 

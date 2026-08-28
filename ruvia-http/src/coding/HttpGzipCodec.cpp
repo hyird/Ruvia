@@ -27,8 +27,7 @@ void gzipZfree(voidpf, voidpf address) noexcept {
 
 }  // namespace
 
-ContentDecodeAttempt decodeGzipContent(
-    std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
+ContentDecodeAttempt decodeGzipContent(std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
     z_stream stream{};
     stream.zalloc = &gzipZalloc;
@@ -49,8 +48,7 @@ ContentDecodeAttempt decodeGzipContent(
         if (stream.avail_in != 0 || supplied == input.size()) {
             return;
         }
-        const auto count = static_cast<uInt>(
-            std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
+        const auto count = static_cast<uInt>(std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
         stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
         stream.avail_in = count;
         supplied += count;
@@ -103,15 +101,13 @@ ContentDecodeAttempt decodeGzipContent(
     }
 }
 
-ContentEncodeAttempt encodeGzipContent(
-    std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
+ContentEncodeAttempt encodeGzipContent(std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
     z_stream stream{};
     stream.zalloc = &gzipZalloc;
     stream.zfree = &gzipZfree;
     stream.opaque = output.get_allocator().resource();
-    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) !=
-        Z_OK) {
+    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
         return HttpContentEncodeError::kEncoderFailure;
     }
     struct Guard final {
@@ -126,8 +122,7 @@ ContentEncodeAttempt encodeGzipContent(
         if (stream.avail_in != 0 || supplied == input.size()) {
             return;
         }
-        const auto count = static_cast<uInt>(
-            std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
+        const auto count = static_cast<uInt>(std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
         stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
         stream.avail_in = count;
         supplied += count;

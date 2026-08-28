@@ -48,20 +48,12 @@ private:
     std::int64_t startedAtMs_;
 };
 
-using WebSocketLivenessState = std::variant<WebSocketLivenessIdle, WebSocketSendingPing,
-    WebSocketAwaitingPong, WebSocketAwaitingPeerClose>;
+using WebSocketLivenessState = std::variant<WebSocketLivenessIdle, WebSocketSendingPing, WebSocketAwaitingPong, WebSocketAwaitingPeerClose>;
 
-[[nodiscard]] inline WebSocketLivenessDecision webSocketLivenessDecision(
-    const WebSocketLifecycleOptions& options, WsLivenessMode livenessMode,
-    const WebSocketLivenessState& state, bool writeActive, std::int64_t lastActiveMs,
-    std::int64_t now) noexcept {
+[[nodiscard]] inline WebSocketLivenessDecision webSocketLivenessDecision(const WebSocketLifecycleOptions& options, WsLivenessMode livenessMode, const WebSocketLivenessState& state, bool writeActive, std::int64_t lastActiveMs, std::int64_t now) noexcept {
     if (livenessMode != WsLivenessMode::kOpen) {
         const auto* close = std::get_if<WebSocketAwaitingPeerClose>(&state);
-        return livenessMode == WsLivenessMode::kAwaitingPeerClose && close != nullptr &&
-                       options.closeHandshakeTimeout.has_value() &&
-                       now - close->startedAtMs() >= options.closeHandshakeTimeout->count()
-                   ? WebSocketLivenessDecision::kAbortTransport
-                   : WebSocketLivenessDecision::kIdle;
+        return livenessMode == WsLivenessMode::kAwaitingPeerClose && close != nullptr && options.closeHandshakeTimeout.has_value() && now - close->startedAtMs() >= options.closeHandshakeTimeout->count() ? WebSocketLivenessDecision::kAbortTransport : WebSocketLivenessDecision::kIdle;
     }
 
     if (!options.heartbeat.pingInterval.has_value()) {
@@ -71,8 +63,7 @@ using WebSocketLivenessState = std::variant<WebSocketLivenessIdle, WebSocketSend
     const auto pingInterval = options.heartbeat.pingInterval->count();
     const auto pongTimeout = options.heartbeat.pongTimeout->count();
     if (const auto* pong = std::get_if<WebSocketAwaitingPong>(&state)) {
-        return now - pong->sentAtMs() >= pongTimeout ? WebSocketLivenessDecision::kAbortTransport
-                                                     : WebSocketLivenessDecision::kIdle;
+        return now - pong->sentAtMs() >= pongTimeout ? WebSocketLivenessDecision::kAbortTransport : WebSocketLivenessDecision::kIdle;
     }
     if (!std::holds_alternative<WebSocketLivenessIdle>(state)) {
         return WebSocketLivenessDecision::kIdle;

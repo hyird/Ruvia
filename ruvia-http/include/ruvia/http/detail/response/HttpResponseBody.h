@@ -105,9 +105,7 @@ public:
 private:
     friend class HttpResponseBody;
 
-    HttpOwnedResponseFile(std::pmr::memory_resource* resource, const std::filesystem::path& file,
-        std::uint64_t size, std::uint64_t offset, std::uint64_t length,
-        ResponseFileIdentity identity)
+    HttpOwnedResponseFile(std::pmr::memory_resource* resource, const std::filesystem::path& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity)
         : nativePath_(resource),
           size_(size),
           offset_(offset),
@@ -148,8 +146,7 @@ public:
 private:
     friend class HttpResponseBody;
 
-    constexpr HttpBorrowedResponseFile(const HttpNativePathChar* nativePath, std::uint64_t size,
-        std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) noexcept
+    constexpr HttpBorrowedResponseFile(const HttpNativePathChar* nativePath, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) noexcept
         : nativePath_(nativePath),
           size_(size),
           offset_(offset),
@@ -222,12 +219,10 @@ public:
 
     [[nodiscard]] std::optional<ResponseFileBody> file() const& noexcept {
         if (const auto* body = ownedFile()) {
-            return ResponseFileBody(body->nativePathCStr(), body->size(), body->offset(),
-                body->length(), body->identity());
+            return ResponseFileBody(body->nativePathCStr(), body->size(), body->offset(), body->length(), body->identity());
         }
         if (const auto* body = borrowedFile()) {
-            return ResponseFileBody(body->nativePathCStr(), body->size(), body->offset(),
-                body->length(), body->identity());
+            return ResponseFileBody(body->nativePathCStr(), body->size(), body->offset(), body->length(), body->identity());
         }
         return std::nullopt;
     }
@@ -246,9 +241,7 @@ public:
 private:
     friend class ::ruvia::HttpResponse;
 
-    using Value =
-        std::variant<HttpEmptyResponseBody, HttpBorrowedResponseBytes, HttpStaticResponseBytes,
-            HttpOwnedResponseBytes, HttpOwnedResponseFile, HttpBorrowedResponseFile>;
+    using Value = std::variant<HttpEmptyResponseBody, HttpBorrowedResponseBytes, HttpStaticResponseBytes, HttpOwnedResponseBytes, HttpOwnedResponseFile, HttpBorrowedResponseFile>;
 
     void setEmpty() noexcept {
         value_.emplace<HttpEmptyResponseBody>(HttpEmptyResponseBody{});
@@ -297,18 +290,13 @@ private:
         value_.emplace<HttpOwnedResponseBytes>(std::move(body));
     }
 
-    void setOwnedFile(std::pmr::memory_resource* resource, const std::filesystem::path& file,
-        std::uint64_t size, std::uint64_t offset, std::uint64_t length,
-        ResponseFileIdentity identity = ResponseFileIdentity::unchecked()) {
+    void setOwnedFile(std::pmr::memory_resource* resource, const std::filesystem::path& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity = ResponseFileIdentity::unchecked()) {
         HttpOwnedResponseFile body(resource, file, size, offset, length, identity);
         value_.emplace<HttpOwnedResponseFile>(std::move(body));
     }
 
-    void setBorrowedFile(const HttpNativePathChar* file, std::uint64_t size, std::uint64_t offset,
-        std::uint64_t length,
-        ResponseFileIdentity identity = ResponseFileIdentity::unchecked()) noexcept {
-        value_.emplace<HttpBorrowedResponseFile>(
-            HttpBorrowedResponseFile(file, size, offset, length, identity));
+    void setBorrowedFile(const HttpNativePathChar* file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity = ResponseFileIdentity::unchecked()) noexcept {
+        value_.emplace<HttpBorrowedResponseFile>(HttpBorrowedResponseFile(file, size, offset, length, identity));
     }
 
     Value value_;

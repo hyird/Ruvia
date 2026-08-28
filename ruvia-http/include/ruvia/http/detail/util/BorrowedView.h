@@ -20,8 +20,7 @@ template <typename T>
     using Value = std::remove_cv_t<T>;
     if constexpr (std::is_same_v<Value, std::nullptr_t>) {
         return {};
-    } else if constexpr (std::is_pointer_v<Value> &&
-                         std::is_same_v<std::remove_cv_t<std::remove_pointer_t<Value>>, char>) {
+    } else if constexpr (std::is_pointer_v<Value> && std::is_same_v<std::remove_cv_t<std::remove_pointer_t<Value>>, char>) {
         return httpBorrowedCStringView(value);
     } else {
         return std::string_view(value);
@@ -39,7 +38,6 @@ template <typename Traits, typename Allocator>
 inline constexpr bool kIsHttpOwningCharString<std::basic_string<char, Traits, Allocator>> = true;
 
 template <typename T>
-concept HttpTemporaryOwningCharString =
-    kIsHttpOwningCharString<std::remove_cvref_t<T>> && !std::is_lvalue_reference_v<T&&>;
+concept HttpTemporaryOwningCharString = kIsHttpOwningCharString<std::remove_cvref_t<T>> && !std::is_lvalue_reference_v<T&&>;
 
 }  // namespace ruvia::detail

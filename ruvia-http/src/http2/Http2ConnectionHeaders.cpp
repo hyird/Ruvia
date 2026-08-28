@@ -13,38 +13,22 @@
 
 namespace ruvia::detail {
 
-HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream,
-    Http2StreamHeaderDecodeTransaction& streamTransaction,
-    HpackDecoder::DecodeTransaction& hpackTransaction) {
+HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction) {
     Http2HeaderDecodeContext context{stream, &streamTransaction};
-    const auto result = decoder_.decode(
-        stream.remoteHeaderBlock(), &context,
-        [](void* target, std::string_view name, std::string_view value) {
-            return http2OnDecodedInitialHeader(
-                *static_cast<Http2HeaderDecodeContext*>(target), name, value);
-        },
-        hpackTransaction);
-    if (const auto status = http2ClassifyHeaderDecodeResult(result);
-        status != HeaderDecodeStatus::kOk) {
+    const auto result = decoder_.decode(stream.remoteHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction);
+    if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
     if (!stream.hasMethod()) {
         return HeaderDecodeStatus::kProtocolError;
     }
     if (stream.hasProtocol()) {
-        if (prefacePhase_ != PrefacePhase::kReady ||
-            stream.requestKnownMethod() != HttpKnownMethod::kConnect || !stream.hasScheme() ||
-            !stream.hasPath() || !stream.hasAuthority() ||
-            !http2IsValidRequestAuthority(stream.requestScheme(), stream.requestAuthority()) ||
-            !http2IsValidExtendedConnectPath(stream.requestScheme(), stream.requestPath()) ||
-            stream.remoteContent().allowedKnownLength() != nullptr) {
+        if (prefacePhase_ != PrefacePhase::kReady || stream.requestKnownMethod() != HttpKnownMethod::kConnect || !stream.hasScheme() || !stream.hasPath() || !stream.hasAuthority() || !http2IsValidRequestAuthority(stream.requestScheme(), stream.requestAuthority()) || !http2IsValidExtendedConnectPath(stream.requestScheme(), stream.requestPath()) || stream.remoteContent().allowedKnownLength() != nullptr) {
             return HeaderDecodeStatus::kProtocolError;
         }
         // RFC 8441 defines WebSocket extended CONNECT only for HTTP(S) URI
         // schemes. Other extended protocols retain the full RFC 3986 space.
-        if (stream.protocolIsWebSocket() &&
-            !httpAsciiEqualsIgnoreCase(stream.requestScheme(), "http") &&
-            !httpAsciiEqualsIgnoreCase(stream.requestScheme(), "https")) {
+        if (stream.protocolIsWebSocket() && !httpAsciiEqualsIgnoreCase(stream.requestScheme(), "http") && !httpAsciiEqualsIgnoreCase(stream.requestScheme(), "https")) {
             return HeaderDecodeStatus::kProtocolError;
         }
         if (!stream.beginExtendedConnect()) {
@@ -52,22 +36,13 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream,
         }
     } else if (stream.requestKnownMethod() == HttpKnownMethod::kConnect) {
         RequestTargetView connectTarget;
-        if (!stream.hasAuthority() || stream.hasScheme() || stream.hasPath() ||
-            stream.remoteContent().allowedKnownLength() != nullptr ||
-            !parseRequestTarget(
-                HttpKnownMethod::kConnect, stream.requestAuthority(), connectTarget)) {
+        if (!stream.hasAuthority() || stream.hasScheme() || stream.hasPath() || stream.remoteContent().allowedKnownLength() != nullptr || !parseRequestTarget(HttpKnownMethod::kConnect, stream.requestAuthority(), connectTarget)) {
             return HeaderDecodeStatus::kProtocolError;
         }
         if (!stream.beginStandardConnect()) {
             return HeaderDecodeStatus::kProtocolError;
         }
-    } else if (!stream.hasScheme() || !stream.hasPath() ||
-               (stream.hasAuthority() && !http2IsValidRequestAuthority(
-                                             stream.requestScheme(), stream.requestAuthority())) ||
-               !http2IsValidRegularRequestPath(
-                   stream.requestKnownMethod(), stream.requestScheme(), stream.requestPath()) ||
-               (!stream.hasAuthority() && http2RegularRequestRequiresAuthority(
-                                              stream.requestScheme(), stream.requestPath()))) {
+    } else if (!stream.hasScheme() || !stream.hasPath() || (stream.hasAuthority() && !http2IsValidRequestAuthority(stream.requestScheme(), stream.requestAuthority())) || !http2IsValidRegularRequestPath(stream.requestKnownMethod(), stream.requestScheme(), stream.requestPath()) || (!stream.hasAuthority() && http2RegularRequestRequiresAuthority(stream.requestScheme(), stream.requestPath()))) {
         return HeaderDecodeStatus::kProtocolError;
     }
     if (role_ == Http2Role::kServer && stream.requestKnownMethod() != HttpKnownMethod::kConnect) {
@@ -76,25 +51,20 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream,
             // A declared length is an explicit content signal, including zero.
             // Without a length, retain the open remote half for a legal empty
             // DATA(END_STREAM), but make non-empty DATA unrepresentable as content.
-            if (stream.remoteContent().allowedKnownLength() != nullptr ||
-                !stream.selectRemoteContentMetadataOnly()) {
+            if (stream.remoteContent().allowedKnownLength() != nullptr || !stream.selectRemoteContentMetadataOnly()) {
                 return HeaderDecodeStatus::kProtocolError;
             }
         } else if (contentSemantics == HttpRequestContentSemantics::kContentTypeRequired) {
             // A declared length (including zero) or an open peer send half is
             // explicit OPTIONS content in the same cases modeled by the HTTP/2
             // request writer. RFC 9110 section 9.3.7 requires a valid media type.
-            const bool explicitContent = stream.remoteContent().allowedKnownLength() != nullptr ||
-                                         stream.remoteReceive().headPending() != nullptr;
-            if (explicitContent && !stream.hasSingletonRequestHeader(singletonRequestHeaderBit(
-                                       RequestHeaderKind::kContentType))) {
+            const bool explicitContent = stream.remoteContent().allowedKnownLength() != nullptr || stream.remoteReceive().headPending() != nullptr;
+            if (explicitContent && !stream.hasSingletonRequestHeader(singletonRequestHeaderBit(RequestHeaderKind::kContentType))) {
                 return HeaderDecodeStatus::kProtocolError;
             }
         }
     }
-    const bool remoteHeadFinalized = stream.tunnel().pending() != nullptr
-                                         ? stream.finalizeRemoteConnectHead()
-                                         : stream.finalizeRemoteContentHead();
+    const bool remoteHeadFinalized = stream.tunnel().pending() != nullptr ? stream.finalizeRemoteConnectHead() : stream.finalizeRemoteContentHead();
     if (!remoteHeadFinalized) {
         return HeaderDecodeStatus::kProtocolError;
     }
@@ -107,46 +77,27 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream,
     return HeaderDecodeStatus::kOk;
 }
 
-HeaderDecodeStatus Http2Connection::decodeInitialHeaderBlock(Http2StreamState& stream,
-    Http2StreamHeaderDecodeTransaction& streamTransaction,
-    HpackDecoder::DecodeTransaction& hpackTransaction) {
-    return role_ == Http2Role::kClient
-               ? decodeResponseHeaderBlock(stream, streamTransaction, hpackTransaction)
-               : decodeHeaderBlock(stream, streamTransaction, hpackTransaction);
+HeaderDecodeStatus Http2Connection::decodeInitialHeaderBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction) {
+    return role_ == Http2Role::kClient ? decodeResponseHeaderBlock(stream, streamTransaction, hpackTransaction) : decodeHeaderBlock(stream, streamTransaction, hpackTransaction);
 }
 
-HeaderDecodeStatus Http2Connection::decodeRefusedHeaderBlock(
-    Http2StreamState& stream, HpackDecoder::DecodeTransaction& hpackTransaction) {
+HeaderDecodeStatus Http2Connection::decodeRefusedHeaderBlock(Http2StreamState& stream, HpackDecoder::DecodeTransaction& hpackTransaction) {
     Http2StreamHeaderDecodeTransaction transaction{stream, true};
     Http2HeaderDecodeContext context{stream, &transaction};
-    const auto result = decoder_.decode(
-        stream.remoteHeaderBlock(), &context,
-        [](void* target, std::string_view name, std::string_view value) {
-            return http2OnDecodedInitialHeader(
-                *static_cast<Http2HeaderDecodeContext*>(target), name, value);
-        },
-        hpackTransaction);
+    const auto result = decoder_.decode(stream.remoteHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction);
     return http2ClassifyHeaderDecodeResult(result);
 }
 
-HeaderDecodeStatus Http2Connection::decodeDiscardedHeaderBlock(
-    Http2StreamState& stream, HpackDecoder::DecodeTransaction& hpackTransaction) {
+HeaderDecodeStatus Http2Connection::decodeDiscardedHeaderBlock(Http2StreamState& stream, HpackDecoder::DecodeTransaction& hpackTransaction) {
     // Even a block whose HTTP semantics are no longer observable must be decoded in
     // full because HPACK's dynamic table is connection-scoped. Keep the decompressed
     // field-list budget, but deliberately avoid mutating request/response state.
     Http2HeaderDecodeContext context{stream};
-    const auto result = decoder_.decode(
-        stream.remoteHeaderBlock(), &context,
-        [](void* target, std::string_view name, std::string_view value) {
-            return http2AccumulateHeaderListBytes(
-                *static_cast<Http2HeaderDecodeContext*>(target), name, value);
-        },
-        hpackTransaction);
+    const auto result = decoder_.decode(stream.remoteHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2AccumulateHeaderListBytes(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction);
     return http2ClassifyHeaderDecodeResult(result);
 }
 
-bool Http2Connection::startDiscardedHeaderBlock(
-    const Http2FrameHeader& header, std::string_view fragment, DiscardedHeaderAction action) {
+bool Http2Connection::startDiscardedHeaderBlock(const Http2FrameHeader& header, std::string_view fragment, DiscardedHeaderAction action) {
     if (discardedHeaderStream_) {
         appendGoaway(Http2ErrorCode::kProtocolError, "overlapping discarded HEADERS block");
         return false;
@@ -183,9 +134,7 @@ bool Http2Connection::finishDiscardedHeaderBlock() {
     const auto streamId = discardedHeaderStream_->id();
     const auto action = discardedHeaderAction_;
     auto hpackTransaction = decoder_.beginTransaction();
-    const auto status = action == DiscardedHeaderAction::kRefuseStream
-                            ? decodeRefusedHeaderBlock(*discardedHeaderStream_, hpackTransaction)
-                            : decodeDiscardedHeaderBlock(*discardedHeaderStream_, hpackTransaction);
+    const auto status = action == DiscardedHeaderAction::kRefuseStream ? decodeRefusedHeaderBlock(*discardedHeaderStream_, hpackTransaction) : decodeDiscardedHeaderBlock(*discardedHeaderStream_, hpackTransaction);
 
     if (status == HeaderDecodeStatus::kCompressionError) {
         appendGoaway(Http2ErrorCode::kCompressionError, "invalid HPACK block");
@@ -206,8 +155,7 @@ bool Http2Connection::finishDiscardedHeaderBlock() {
     auto error = Http2ErrorCode::kProtocolError;
     if (action == DiscardedHeaderAction::kResetStreamClosed) {
         error = Http2ErrorCode::kStreamClosed;
-    } else if (action == DiscardedHeaderAction::kRefuseStream &&
-               status == HeaderDecodeStatus::kOk) {
+    } else if (action == DiscardedHeaderAction::kRefuseStream && status == HeaderDecodeStatus::kOk) {
         error = Http2ErrorCode::kRefusedStream;
     }
     auto* const liveStream = findStream(streamId);
@@ -229,27 +177,14 @@ bool Http2Connection::finishDiscardedHeaderBlock() {
     return true;
 }
 
-HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream,
-    Http2StreamHeaderDecodeTransaction& streamTransaction,
-    HpackDecoder::DecodeTransaction& hpackTransaction) {
+HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream, Http2StreamHeaderDecodeTransaction& streamTransaction, HpackDecoder::DecodeTransaction& hpackTransaction) {
     // A successful trailer block publishes exactly one terminal event. Reserve
     // it before HPACK/application-header decoding so a later vector growth cannot
     // leave the decoded stream half-committed without its message end.
     reserveEventSlots(1);
     Http2HeaderDecodeContext context{stream, &streamTransaction};
-    const auto result =
-        role_ == Http2Role::kServer
-            ? decoder_.decode(
-                  stream.remoteHeaderBlock(), &context,
-                  [](void* target, std::string_view name, std::string_view value) {
-                      return http2OnDecodedRequestTrailer(
-                          *static_cast<Http2HeaderDecodeContext*>(target), name, value);
-                  },
-                  hpackTransaction)
-            : decoder_.decode(stream.remoteHeaderBlock(), &context, http2OnDecodedResponseTrailer,
-                  hpackTransaction);
-    if (const auto status = http2ClassifyHeaderDecodeResult(result);
-        status != HeaderDecodeStatus::kOk) {
+    const auto result = role_ == Http2Role::kServer ? decoder_.decode(stream.remoteHeaderBlock(), &context, [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedRequestTrailer(*static_cast<Http2HeaderDecodeContext*>(target), name, value); }, hpackTransaction) : decoder_.decode(stream.remoteHeaderBlock(), &context, http2OnDecodedResponseTrailer, hpackTransaction);
+    if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
     if (!stream.remoteContent().terminalLengthValid()) {
@@ -265,14 +200,12 @@ HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream,
 
 void Http2Connection::reserveStreamCloseEffects(Http2StreamState& stream) {
     reserveEventSlots(1);
-    if (const auto debt = stream.windowDebt();
-        debt != 0 && connectionReceiveCredit_.readyAfter(debt)) {
+    if (const auto debt = stream.windowDebt(); debt != 0 && connectionReceiveCredit_.readyAfter(debt)) {
         output_.reserveAdditional(kHttp2WindowUpdateFrameBytes);
     }
 }
 
-bool Http2Connection::handleHeaderDecodeFailure(Http2StreamState& stream, HeaderDecodeStatus status,
-    HpackDecoder::DecodeTransaction* hpackTransaction) {
+bool Http2Connection::handleHeaderDecodeFailure(Http2StreamState& stream, HeaderDecodeStatus status, HpackDecoder::DecodeTransaction* hpackTransaction) {
     if (status == HeaderDecodeStatus::kCompressionError) {
         appendGoaway(Http2ErrorCode::kCompressionError, "invalid HPACK block");
         http2ResetHeaderBlock(stream);
@@ -306,14 +239,9 @@ void Http2Connection::emitRequestHeaders(Http2StreamState& stream) {
     // The head may be followed by one terminal event (message/tunnel end). Reserve
     // exactly the events this branch will publish; retaining one unused slot on
     // every non-terminal request would hide later allocation-failure retries.
-    const bool terminalEvent =
-        http2RemotePeerHalfClosed(stream) &&
-        !(role_ == Http2Role::kServer && stream.tunnel().pending() != nullptr);
+    const bool terminalEvent = http2RemotePeerHalfClosed(stream) && !(role_ == Http2Role::kServer && stream.tunnel().pending() != nullptr);
     reserveEventSlots(terminalEvent ? 2 : 1);
-    const auto requestContentSignal = stream.requestContentCanceled()
-                                          ? std::optional<HttpClientRequestContentSignal>(
-                                                HttpClientRequestContentSignal::kExchangeComplete)
-                                          : std::nullopt;
+    const auto requestContentSignal = stream.requestContentCanceled() ? std::optional<HttpClientRequestContentSignal>(HttpClientRequestContentSignal::kExchangeComplete) : std::nullopt;
     events_.push_back(Http2Event::messageHead(stream.id(), requestContentSignal));
     if (role_ == Http2Role::kServer && stream.tunnel().pending() != nullptr) {
         // CONNECT has no request content, but that fact alone says nothing about the

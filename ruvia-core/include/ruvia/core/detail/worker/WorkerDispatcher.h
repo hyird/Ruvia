@@ -33,9 +33,7 @@ public:
     [[nodiscard]] bool deferIfAttached(MoveOnlyFunction<void()> task);
     void deferOrTerminate(MoveOnlyFunction<void()> task) noexcept;
     void registerShutdownListener(const std::shared_ptr<WorkerShutdownListener>& listener);
-    void scheduleTimer(WorkerTimerRegistration& registration,
-        std::chrono::steady_clock::time_point deadline,
-        MoveOnlyFunction<void(WorkerTimerOutcome)> completion);
+    void scheduleTimer(WorkerTimerRegistration& registration, std::chrono::steady_clock::time_point deadline, MoveOnlyFunction<void(WorkerTimerOutcome)> completion);
     void requestTimerCancellation(std::size_t slot, std::uint64_t generation) noexcept;
     void cancelTimer(std::size_t slot, std::uint64_t generation) noexcept;
     void stopTimers() noexcept;
@@ -53,9 +51,7 @@ public:
     // context has drained but before that identity is cleared. Startup failures
     // enter the same first-failure path as handler failures. Shutdown is a
     // terminal cleanup hook and must not throw.
-    void runContext(MoveOnlyFunction<void()> startupHandler,
-        MoveOnlyFunction<void(std::exception_ptr)> failureHandler,
-        MoveOnlyFunction<void()> shutdownHandler);
+    void runContext(MoveOnlyFunction<void()> startupHandler, MoveOnlyFunction<void(std::exception_ptr)> failureHandler, MoveOnlyFunction<void()> shutdownHandler);
     void close() noexcept;
     // Called after worker activity is serialized with teardown (by a joined
     // pool thread, an attached context's terminal handler, or its context

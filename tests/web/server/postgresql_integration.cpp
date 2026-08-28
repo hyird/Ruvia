@@ -44,8 +44,7 @@ constexpr std::string_view kMigrationsTable = "ruvia_pg_integration_migrations";
 using ruvia::testing::dbRequire;
 using ruvia::testing::dbThrowsOn;
 
-ruvia::Task<void> runWithScanner(
-    ruvia::detail::ConnectionScanner& scanner, ruvia::Task<void> operation) {
+ruvia::Task<void> runWithScanner(ruvia::detail::ConnectionScanner& scanner, ruvia::Task<void> operation) {
     scanner.start();
     try {
         co_await std::move(operation);
@@ -64,14 +63,12 @@ void runTask(Factory&& factory) {
     ruvia::detail::ConnectionScanner scanner(worker, {});
     std::exception_ptr exception;
     asio::post(ioContext, [&] {
-        ruvia::detail::asyncStartTask(runWithScanner(scanner, factory(ioContext, worker, scanner)),
-            asio::bind_executor(ioContext.get_executor(),
-                [&exception, &attachment](ruvia::detail::TaskCompletionResult<void> result) {
-                    if (const auto* failure = result.failure()) {
-                        exception = failure->exception();
-                    }
-                    attachment.stop();
-                }));
+        ruvia::detail::asyncStartTask(runWithScanner(scanner, factory(ioContext, worker, scanner)), asio::bind_executor(ioContext.get_executor(), [&exception, &attachment](ruvia::detail::TaskCompletionResult<void> result) {
+            if (const auto* failure = result.failure()) {
+                exception = failure->exception();
+            }
+            attachment.stop();
+        }));
     });
     ioContext.run();
     if (exception != nullptr) {
@@ -79,11 +76,9 @@ void runTask(Factory&& factory) {
     }
 }
 
-ruvia::Task<void> withDatabase(asio::io_context& ioContext, const ruvia::WorkerHandle& worker,
-    ruvia::detail::ConnectionScanner& scanner, ruvia::DbConfig config, bool cleanupOnly) {
+ruvia::Task<void> withDatabase(asio::io_context& ioContext, const ruvia::WorkerHandle& worker, ruvia::detail::ConnectionScanner& scanner, ruvia::DbConfig config, bool cleanupOnly) {
     auto* resource = std::pmr::get_default_resource();
-    const std::array definitions{ruvia::detail::DbDefinition{
-        std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(config, resource)}};
+    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(config, resource)}};
     ruvia::detail::DbRegistry registry(ioContext, scanner, resource, definitions);
     co_await registry.connect();
     ruvia::detail::ScopedOperationScope operationScope;
@@ -96,16 +91,13 @@ ruvia::Task<void> withDatabase(asio::io_context& ioContext, const ruvia::WorkerH
         co_return;
     }
 
-    const std::array<ruvia::DbValue, 4> params{ruvia::DbValue{"hello"}, ruvia::DbValue{-42},
-        ruvia::DbValue{true}, ruvia::DbValue{nullptr}};
+    const std::array<ruvia::DbValue, 4> params{ruvia::DbValue{"hello"}, ruvia::DbValue{-42}, ruvia::DbValue{true}, ruvia::DbValue{nullptr}};
     auto typed = co_await db.query(
         "SELECT $1::text AS text_value, $2::bigint AS integer_value, "
         "$3::boolean AS boolean_value, $4::text AS nullable_value",
         std::span<const ruvia::DbValue>(params));
-    dbRequire(typed.size() == 1 && typed[0].size() == 4,
-        "typed PostgreSQL query returned the wrong shape");
-    dbRequire(typed[0]["text_value"].value() == std::optional<std::string_view>("hello"),
-        "text binding failed");
+    dbRequire(typed.size() == 1 && typed[0].size() == 4, "typed PostgreSQL query returned the wrong shape");
+    dbRequire(typed[0]["text_value"].value() == std::optional<std::string_view>("hello"), "text binding failed");
     dbRequire(typed[0]["integer_value"].as<std::int64_t>() == -42, "integer binding failed");
     dbRequire(typed[0]["boolean_value"].as<bool>() == true, "boolean binding failed");
     dbRequire(!typed[0]["nullable_value"].value().has_value(), "NULL binding failed");
@@ -126,8 +118,7 @@ ruvia::Task<void> withDatabase(asio::io_context& ioContext, const ruvia::WorkerH
         }
         dbRequire(cancelled, "active PostgreSQL query did not report kCancelled");
         auto recovered = co_await db.query("SELECT 1");
-        dbRequire(recovered[0][0].as<std::int64_t>() == 1,
-            "PostgreSQL did not reconnect after query cancellation");
+        dbRequire(recovered[0][0].as<std::int64_t>() == 1, "PostgreSQL did not reconnect after query cancellation");
     }
 
     {
@@ -145,18 +136,14 @@ ruvia::Task<void> withDatabase(asio::io_context& ioContext, const ruvia::WorkerH
         } catch (const ruvia::DbError& error) {
             cancelled = error.code() == ruvia::DbError::Code::kCancelled;
         }
-        dbRequire(cancelled && !transaction.active(),
-            "active PostgreSQL transaction did not fail with kCancelled");
+        dbRequire(cancelled && !transaction.active(), "active PostgreSQL transaction did not fail with kCancelled");
         auto recovered = co_await db.query("SELECT 1");
-        dbRequire(recovered[0][0].as<std::int64_t>() == 1,
-            "PostgreSQL did not reconnect after transaction cancellation");
+        dbRequire(recovered[0][0].as<std::int64_t>() == 1, "PostgreSQL did not reconnect after transaction cancellation");
     }
 
     {
         auto stop = std::make_shared<ruvia::StopSource>();
-        auto stream =
-            co_await db.withOptions({.stopToken = stop->token()})
-                .queryStream("SELECT i, pg_sleep(0.01) FROM generate_series(1, 1000) AS i");
+        auto stream = co_await db.withOptions({.stopToken = stop->token()}).queryStream("SELECT i, pg_sleep(0.01) FROM generate_series(1, 1000) AS i");
         asio::steady_timer cancel(ioContext, std::chrono::milliseconds(50));
         cancel.async_wait([stop](std::error_code error) {
             if (!error) {
@@ -170,11 +157,9 @@ ruvia::Task<void> withDatabase(asio::io_context& ioContext, const ruvia::WorkerH
         } catch (const ruvia::DbError& error) {
             cancelled = error.code() == ruvia::DbError::Code::kCancelled;
         }
-        dbRequire(
-            cancelled && !stream.active(), "active PostgreSQL stream did not fail with kCancelled");
+        dbRequire(cancelled && !stream.active(), "active PostgreSQL stream did not fail with kCancelled");
         auto recovered = co_await db.query("SELECT 1");
-        dbRequire(recovered[0][0].as<std::int64_t>() == 1,
-            "PostgreSQL did not reconnect after stream cancellation");
+        dbRequire(recovered[0][0].as<std::int64_t>() == 1, "PostgreSQL did not reconnect after stream cancellation");
     }
 
     // The same bindings passed as ordinary arguments must reach the server in
@@ -183,20 +168,15 @@ ruvia::Task<void> withDatabase(asio::io_context& ioContext, const ruvia::WorkerH
         "SELECT $1::text AS text_value, $2::bigint AS integer_value, "
         "$3::boolean AS boolean_value, $4::text AS nullable_value",
         "hello", -42, true, nullptr);
-    dbRequire(variadic.size() == 1 && variadic[0].size() == 4,
-        "variadic PostgreSQL query returned the wrong shape");
-    dbRequire(variadic[0]["text_value"].value() == std::optional<std::string_view>("hello"),
-        "variadic text binding failed");
-    dbRequire(
-        variadic[0]["integer_value"].as<std::int64_t>() == -42, "variadic integer binding failed");
+    dbRequire(variadic.size() == 1 && variadic[0].size() == 4, "variadic PostgreSQL query returned the wrong shape");
+    dbRequire(variadic[0]["text_value"].value() == std::optional<std::string_view>("hello"), "variadic text binding failed");
+    dbRequire(variadic[0]["integer_value"].as<std::int64_t>() == -42, "variadic integer binding failed");
     dbRequire(variadic[0]["boolean_value"].as<bool>() == true, "variadic boolean binding failed");
     dbRequire(!variadic[0]["nullable_value"].value().has_value(), "variadic NULL binding failed");
 
     {
         auto transaction = co_await db.beginTransaction();
-        (void)co_await transaction.execute(
-            "INSERT INTO ruvia_pg_integration_items(value) VALUES ($1)",
-            std::span<const ruvia::DbValue>(params.data(), 1));
+        (void)co_await transaction.execute("INSERT INTO ruvia_pg_integration_items(value) VALUES ($1)", std::span<const ruvia::DbValue>(params.data(), 1));
         co_await transaction.rollback();
     }
     auto count = co_await db.query("SELECT count(*) FROM ruvia_pg_integration_items");
@@ -204,45 +184,37 @@ ruvia::Task<void> withDatabase(asio::io_context& ioContext, const ruvia::WorkerH
 
     {
         auto transaction = co_await db.beginTransaction();
-        (void)co_await transaction.execute(
-            "INSERT INTO ruvia_pg_integration_items(value) VALUES ($1)",
-            std::span<const ruvia::DbValue>(params.data(), 1));
+        (void)co_await transaction.execute("INSERT INTO ruvia_pg_integration_items(value) VALUES ($1)", std::span<const ruvia::DbValue>(params.data(), 1));
         co_await transaction.commit();
     }
     auto committedCount = co_await db.query("SELECT count(*) FROM ruvia_pg_integration_items");
     dbRequire(committedCount[0][0].as<std::uint64_t>() == 1, "commit did not persist state");
     bool reportedConstraint = false;
     try {
-        (void)co_await db.execute(
-            "INSERT INTO ruvia_pg_integration_items(value) VALUES ($1)", "hello");
+        (void)co_await db.execute("INSERT INTO ruvia_pg_integration_items(value) VALUES ($1)", "hello");
     } catch (const ruvia::DbError& error) {
-        reportedConstraint = error.sqlState() == "23505" &&
-                             error.constraintName() == "uq_ruvia_pg_integration_items_value";
+        reportedConstraint = error.sqlState() == "23505" && error.constraintName() == "uq_ruvia_pg_integration_items_value";
     }
     dbRequire(reportedConstraint, "PostgreSQL unique violation lost its constraint name");
-    auto updated = co_await db.execute("UPDATE ruvia_pg_integration_items SET value = $1",
-        std::span<const ruvia::DbValue>(params.data(), 1));
+    auto updated = co_await db.execute("UPDATE ruvia_pg_integration_items SET value = $1", std::span<const ruvia::DbValue>(params.data(), 1));
     dbRequire(updated.affectedRows() == 1, "affected-row count is incorrect");
 
     bool rejectedCommandStream = false;
     try {
-        auto commandStream = co_await db.queryStream(
-            "UPDATE ruvia_pg_integration_items SET value = value WHERE value = 'missing'");
+        auto commandStream = co_await db.queryStream("UPDATE ruvia_pg_integration_items SET value = value WHERE value = 'missing'");
         (void)co_await commandStream.read();
     } catch (const std::invalid_argument&) {
         rejectedCommandStream = true;
     }
     dbRequire(rejectedCommandStream, "queryStream accepted non-row-producing SQL");
     auto afterRejectedStream = co_await db.query("SELECT 1");
-    dbRequire(afterRejectedStream[0][0].as<std::int64_t>() == 1,
-        "pool was not reusable after a rejected stream query");
+    dbRequire(afterRejectedStream[0][0].as<std::int64_t>() == 1, "pool was not reusable after a rejected stream query");
 
     auto stream = co_await db.queryStream("SELECT generate_series(1, 128) AS sequence_value");
     std::size_t streamed = 0;
     while (auto row = co_await stream.read()) {
         dbRequire(row->size() == 1, "streamed row has the wrong shape");
-        dbRequire((*row)["sequence_value"].as<std::int64_t>().has_value(),
-            "streamed row has no named value");
+        dbRequire((*row)["sequence_value"].as<std::int64_t>().has_value(), "streamed row has no named value");
         ++streamed;
     }
     dbRequire(streamed == 128, "single-row mode did not stream every row");
@@ -251,8 +223,7 @@ ruvia::Task<void> withDatabase(asio::io_context& ioContext, const ruvia::WorkerH
     dbRequire((co_await abandoned.read()).has_value(), "stream produced no first row");
     co_await abandoned.close();
     auto reconnected = co_await db.query("SELECT 1");
-    dbRequire(reconnected[0][0].as<std::int64_t>() == 1,
-        "pool did not reconnect after an abandoned stream");
+    dbRequire(reconnected[0][0].as<std::int64_t>() == 1, "pool did not reconnect after an abandoned stream");
     registry.closeNow();
 }
 
@@ -268,10 +239,7 @@ int main() {
 
     try {
         const auto config = testConfig();
-        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker,
-                    ruvia::detail::ConnectionScanner& scanner) {
-            return withDatabase(ioContext, worker, scanner, config, true);
-        });
+        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker, ruvia::detail::ConnectionScanner& scanner) { return withDatabase(ioContext, worker, scanner, config, true); });
 
         const std::array migrations{ruvia::DbMigration{{.id = "001_create_items",
             .sql = "CREATE TABLE ruvia_pg_integration_items ("
@@ -292,8 +260,7 @@ int main() {
                    "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
                    "value TEXT NOT NULL, note TEXT, "
                    "CONSTRAINT uq_ruvia_pg_integration_items_value UNIQUE (value))"}}};
-        dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }),
-            "an edited migration body was accepted");
+        dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }), "an edited migration body was accepted");
 
         // CREATE INDEX CONCURRENTLY is refused inside a transaction block, so
         // it reports whether the default wrap is really there -- and whether
@@ -301,25 +268,17 @@ int main() {
         const std::array wrapped{ruvia::DbMigration{{.id = "002_concurrent_index",
             .sql = "CREATE INDEX CONCURRENTLY ruvia_pg_integration_items_value_idx "
                    "ON ruvia_pg_integration_items (value)"}}};
-        dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, wrapped, options); }),
-            "a transactional migration did not run inside a transaction block");
+        dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, wrapped, options); }), "a transactional migration did not run inside a transaction block");
 
         const std::array unwrapped{ruvia::DbMigration{{.id = "002_concurrent_index",
             .sql = "CREATE INDEX CONCURRENTLY ruvia_pg_integration_items_value_idx "
                    "ON ruvia_pg_integration_items (value)",
             .atomicity = ruvia::DbMigrationAtomicity::kUnwrapped}}};
         const auto concurrent = ruvia::DbMigrator::migrate(config, unwrapped, options);
-        dbRequire(concurrent.applied().size() == 1,
-            "an unwrapped migration was not applied outside a transaction block");
+        dbRequire(concurrent.applied().size() == 1, "an unwrapped migration was not applied outside a transaction block");
 
-        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker,
-                    ruvia::detail::ConnectionScanner& scanner) {
-            return withDatabase(ioContext, worker, scanner, config, false);
-        });
-        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker,
-                    ruvia::detail::ConnectionScanner& scanner) {
-            return withDatabase(ioContext, worker, scanner, config, true);
-        });
+        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker, ruvia::detail::ConnectionScanner& scanner) { return withDatabase(ioContext, worker, scanner, config, false); });
+        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker, ruvia::detail::ConnectionScanner& scanner) { return withDatabase(ioContext, worker, scanner, config, true); });
         std::puts("PostgreSQL integration passed");
         return 0;
     } catch (const std::exception& error) {

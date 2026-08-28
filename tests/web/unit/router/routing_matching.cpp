@@ -56,10 +56,7 @@ RUVIA_TEST(compiled_route_plan_rejects_a_different_worker_endpoint_contract) {
 
     ruvia::detail::Router differentRouter;
     auto& different = ruvia::detail::RouterImpl::from(differentRouter);
-    different.registerResponseStreamRoute(HttpKnownMethod::kGet, path("/events"),
-        ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
-        std::span<const ControllerMiddlewareDescriptor>{},
-        std::span<const ControllerMiddlewareDescriptor>{});
+    different.registerResponseStreamRoute(HttpKnownMethod::kGet, path("/events"), ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     bool rejected = false;
     try {
         different.finalize(plan.get());
@@ -77,10 +74,7 @@ RUVIA_TEST(route_rejects_duplicate_validated_model_types_at_registration) {
 
     bool rejected = false;
     try {
-        impl.registerRoute(HttpKnownMethod::kPost, path("/duplicate-validated-model"),
-            RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered,
-            std::span(&controllerValidator, std::size_t{1}),
-            std::span(&routeValidator, std::size_t{1}));
+        impl.registerRoute(HttpKnownMethod::kPost, path("/duplicate-validated-model"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span(&controllerValidator, std::size_t{1}), std::span(&routeValidator, std::size_t{1}));
     } catch (const std::invalid_argument& error) {
         rejected = std::string_view(error.what()) == "duplicate validated model type on route";
     }
@@ -100,10 +94,7 @@ RUVIA_TEST(finalized_route_table_records_route_rate_limit_usage) {
         ruvia::detail::Router router;
         auto& impl = ruvia::detail::RouterImpl::from(router);
         const auto rateLimit = ruvia::detail::makeMiddlewareDescriptor<TestRouteRateLimit>();
-        impl.registerRoute(HttpKnownMethod::kGet, path("/limited"),
-            RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered,
-            std::span<const ControllerMiddlewareDescriptor>{},
-            std::span(&rateLimit, std::size_t{1}));
+        impl.registerRoute(HttpKnownMethod::kGet, path("/limited"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span(&rateLimit, std::size_t{1}));
         impl.finalize();
         RUVIA_CHECK(impl.routeTable().hasRouteRateLimit());
     }
@@ -128,9 +119,7 @@ RUVIA_TEST(finalized_route_table_carries_the_declared_body_limit) {
         ruvia::detail::Router router;
         auto& impl = ruvia::detail::RouterImpl::from(router);
         const auto limit = ruvia::detail::makeMiddlewareDescriptor<SmallBody>();
-        impl.registerRoute(HttpKnownMethod::kGet, path("/limited"),
-            RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered,
-            std::span<const ControllerMiddlewareDescriptor>{}, std::span(&limit, std::size_t{1}));
+        impl.registerRoute(HttpKnownMethod::kGet, path("/limited"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span(&limit, std::size_t{1}));
         impl.finalize();
         const auto resolution = impl.routeTable().resolve(HttpKnownMethod::kGet, "/limited");
         RUVIA_CHECK(resolution.resolved() != nullptr);
@@ -144,9 +133,7 @@ RUVIA_TEST(finalized_route_table_carries_the_declared_body_limit) {
         auto& impl = ruvia::detail::RouterImpl::from(router);
         const auto controllerLimit = ruvia::detail::makeMiddlewareDescriptor<SmallBody>();
         const auto routeLimit = ruvia::detail::makeMiddlewareDescriptor<SmallerBody>();
-        impl.registerRoute(HttpKnownMethod::kGet, path("/both"),
-            RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered,
-            std::span(&controllerLimit, std::size_t{1}), std::span(&routeLimit, std::size_t{1}));
+        impl.registerRoute(HttpKnownMethod::kGet, path("/both"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span(&controllerLimit, std::size_t{1}), std::span(&routeLimit, std::size_t{1}));
         impl.finalize();
         const auto resolution = impl.routeTable().resolve(HttpKnownMethod::kGet, "/both");
         RUVIA_CHECK(resolution.resolved() != nullptr);
@@ -176,10 +163,7 @@ RUVIA_TEST(finalized_route_table_carries_the_declared_deadline) {
         auto& impl = ruvia::detail::RouterImpl::from(router);
         const auto controllerDeadline = ruvia::detail::makeMiddlewareDescriptor<FastRoute>();
         const auto routeDeadline = ruvia::detail::makeMiddlewareDescriptor<SlowRoute>();
-        impl.registerRoute(HttpKnownMethod::kGet, path("/both"),
-            RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered,
-            std::span(&controllerDeadline, std::size_t{1}),
-            std::span(&routeDeadline, std::size_t{1}));
+        impl.registerRoute(HttpKnownMethod::kGet, path("/both"), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span(&controllerDeadline, std::size_t{1}), std::span(&routeDeadline, std::size_t{1}));
         impl.finalize();
         const auto resolution = impl.routeTable().resolve(HttpKnownMethod::kGet, "/both");
         RUVIA_CHECK(resolution.resolved() != nullptr);
@@ -264,8 +248,7 @@ RUVIA_TEST(routing_deep_wildcard_with_static_prefix_allowed) {
     RUVIA_CHECK(!finalizeConflicts({"/:section/live", "/health/:probe"}));
 
     // Guards the fix must NOT regress (these genuinely shadow -> still conflicts):
-    RUVIA_CHECK(
-        finalizeConflicts({"/a/*", "/a/:x"}));  // wildcard vs param sibling at a shared node
+    RUVIA_CHECK(finalizeConflicts({"/a/*", "/a/:x"}));  // wildcard vs param sibling at a shared node
     RUVIA_CHECK(finalizeConflicts({"/a/*", "/:x/b"}));  // after a static/param fork, the wildcard
         // steals the other route's direct-match path
     RUVIA_CHECK(finalizeConflicts({"/*", "/:x"}));                   // root wildcard vs param
@@ -307,10 +290,8 @@ RUVIA_TEST(routing_head_fallback_respects_static_priority_overlap) {
     addRoute(r.impl, HttpKnownMethod::kHead, "/health/:probe");  // explicit HEAD static branch
     r.finalize();
 
-    RUVIA_CHECK_EQ(
-        r.routePathOf(HttpKnownMethod::kHead, "/health/live"), std::string_view("/health/:probe"));
-    RUVIA_CHECK_EQ(
-        r.routePathOf(HttpKnownMethod::kHead, "/users/live"), std::string_view("/:section/live"));
+    RUVIA_CHECK_EQ(r.routePathOf(HttpKnownMethod::kHead, "/health/live"), std::string_view("/health/:probe"));
+    RUVIA_CHECK_EQ(r.routePathOf(HttpKnownMethod::kHead, "/users/live"), std::string_view("/:section/live"));
 }
 
 RUVIA_TEST(routing_explicit_dynamic_head_overrides_exact_get_fallback) {
@@ -319,8 +300,7 @@ RUVIA_TEST(routing_explicit_dynamic_head_overrides_exact_get_fallback) {
     addRoute(r.impl, HttpKnownMethod::kHead, "/:section/:probe");  // explicit HEAD route
     r.finalize();
 
-    RUVIA_CHECK_EQ(r.routePathOf(HttpKnownMethod::kHead, "/health/live"),
-        std::string_view("/:section/:probe"));
+    RUVIA_CHECK_EQ(r.routePathOf(HttpKnownMethod::kHead, "/health/live"), std::string_view("/:section/:probe"));
 }
 
 RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
@@ -344,11 +324,9 @@ RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
     const auto mask = methodNotAllowed->allowedMethods();
     RUVIA_CHECK((mask & bit(HttpKnownMethod::kGet)) != 0);
     RUVIA_CHECK((mask & bit(HttpKnownMethod::kPost)) != 0);
-    RUVIA_CHECK(
-        (mask & bit(HttpKnownMethod::kHead)) != 0);  // auto-registered alongside the GET route
-    RUVIA_CHECK((mask & bit(HttpKnownMethod::kPut)) == 0);  // belongs to /b, not /a
-    RUVIA_CHECK(
-        (mask & bit(HttpKnownMethod::kDelete)) == 0);  // the requested method is not echoed back
+    RUVIA_CHECK((mask & bit(HttpKnownMethod::kHead)) != 0);    // auto-registered alongside the GET route
+    RUVIA_CHECK((mask & bit(HttpKnownMethod::kPut)) == 0);     // belongs to /b, not /a
+    RUVIA_CHECK((mask & bit(HttpKnownMethod::kDelete)) == 0);  // the requested method is not echoed back
 
     // A path with no route at all is a 404 (not found), never a 405.
     const auto missing = r.impl.routeTable().resolve(HttpKnownMethod::kGet, "/nope");
@@ -451,19 +429,13 @@ RUVIA_TEST(url_for_builds_paths_from_registered_patterns) {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     for (const auto route : {"/users/:id", "/files/*", "/about", "/a/:x/b/:y"}) {
-        impl.registerRoute(HttpKnownMethod::kGet, path(route), RouteHandler(nullptr, &okHandler),
-            RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{},
-            std::span<const ControllerMiddlewareDescriptor>{});
+        impl.registerRoute(HttpKnownMethod::kGet, path(route), RouteHandler(nullptr, &okHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     }
     impl.finalize();
     const auto& table = impl.routeTable();
     auto* resource = std::pmr::get_default_resource();
 
-    const auto urlFor = [&](std::string_view pattern,
-                            std::initializer_list<std::string_view> values) {
-        return std::string(table.urlFor(
-            pattern, std::span<const std::string_view>(values.begin(), values.size()), resource));
-    };
+    const auto urlFor = [&](std::string_view pattern, std::initializer_list<std::string_view> values) { return std::string(table.urlFor(pattern, std::span<const std::string_view>(values.begin(), values.size()), resource)); };
 
     RUVIA_CHECK_EQ(urlFor("/users/:id", {"42"}), std::string("/users/42"));
     // Parameter values are percent-encoded as one path segment.
@@ -475,8 +447,7 @@ RUVIA_TEST(url_for_builds_paths_from_registered_patterns) {
     RUVIA_CHECK_EQ(urlFor("/about", {}), std::string("/about"));
     RUVIA_CHECK_EQ(urlFor("/a/:x/b/:y", {"1", "2"}), std::string("/a/1/b/2"));
 
-    const auto throws = [&](std::string_view pattern,
-                            std::initializer_list<std::string_view> values) {
+    const auto throws = [&](std::string_view pattern, std::initializer_list<std::string_view> values) {
         try {
             (void)urlFor(pattern, values);
         } catch (const std::invalid_argument&) {
@@ -495,13 +466,8 @@ RUVIA_TEST(url_for_builds_paths_from_registered_patterns) {
 RUVIA_TEST(context_url_for_uses_dispatch_bound_route_table) {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    impl.registerRoute(HttpKnownMethod::kGet, path("/echo"),
-        RouteHandler(nullptr, &urlForEchoHandler), RequestBodyMode::kBuffered,
-        std::span<const ControllerMiddlewareDescriptor>{},
-        std::span<const ControllerMiddlewareDescriptor>{});
-    impl.registerRoute(HttpKnownMethod::kGet, path("/users/:id"), RouteHandler(nullptr, &okHandler),
-        RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{},
-        std::span<const ControllerMiddlewareDescriptor>{});
+    impl.registerRoute(HttpKnownMethod::kGet, path("/echo"), RouteHandler(nullptr, &urlForEchoHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
+    impl.registerRoute(HttpKnownMethod::kGet, path("/users/:id"), RouteHandler(nullptr, &okHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.finalize();
     const auto& table = impl.routeTable();
 

@@ -7,9 +7,7 @@ RUVIA_TEST(context_parse_body_drops_prototype_pollution_keys) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     HttpRequestAccess::setBody(request, "__proto__.evil=1&safe=ok");
 
     RequestMemory requestMemory(worker);
@@ -62,9 +60,7 @@ RUVIA_TEST(context_parse_body_drops_proto_path_segments_without_trailing_dot) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     HttpRequestAccess::setBody(request, "__proto__=root&profile.__proto__=nested&profile.name=ok");
 
     RequestMemory requestMemory(worker);
@@ -75,9 +71,7 @@ RUVIA_TEST(context_parse_body_drops_proto_path_segments_without_trailing_dot) {
     bool rootProtoDropped = false;
     bool nestedProtoDropped = false;
     bool siblingKept = false;
-    asio::co_spawn(io,
-        parseProtoPathSegments(context, rootProtoDropped, nestedProtoDropped, siblingKept),
-        asio::detached);
+    asio::co_spawn(io, parseProtoPathSegments(context, rootProtoDropped, nestedProtoDropped, siblingKept), asio::detached);
     io.run();
 
     RUVIA_CHECK(rootProtoDropped);
@@ -89,9 +83,7 @@ RUVIA_TEST(context_parse_body_dotted_trailing_empty_segment_is_not_child) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     HttpRequestAccess::setBody(request, "profile.name.=bad");
 
     RequestMemory requestMemory(worker);
@@ -102,9 +94,7 @@ RUVIA_TEST(context_parse_body_dotted_trailing_empty_segment_is_not_child) {
     std::size_t childCount = 99;
     bool childFound = true;
     bool exactPathFound = false;
-    asio::co_spawn(io,
-        parseTrailingEmptyDotSegment(context, childCount, childFound, exactPathFound),
-        asio::detached);
+    asio::co_spawn(io, parseTrailingEmptyDotSegment(context, childCount, childFound, exactPathFound), asio::detached);
     io.run();
 
     RUVIA_CHECK_EQ(childCount, std::size_t{0});
@@ -116,9 +106,7 @@ RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     HttpRequestAccess::setBody(request, "tags[]=a&tags[]=b&x=1&x=2");
 
     RequestMemory requestMemory(worker);
@@ -133,8 +121,7 @@ RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
     bool tagsArrayName = false;
     std::size_t xSize = 0;
     std::string xValue;
-    asio::co_spawn(
-        io, parseArrayForm(context, tagsSize, tagsArrayName, xSize, xValue), asio::detached);
+    asio::co_spawn(io, parseArrayForm(context, tagsSize, tagsArrayName, xSize, xValue), asio::detached);
     io.run();
 
     RUVIA_CHECK_EQ(tagsSize, std::size_t{2});  // both array elements kept
@@ -147,9 +134,7 @@ RUVIA_TEST(context_parse_body_defaults_absent_part_content_type) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     // The "upload" part carries no Content-Type header.
     HttpRequestAccess::setBody(request,
         "--BOUNDARY\r\n"
@@ -175,9 +160,7 @@ RUVIA_TEST(context_parse_body_keeps_every_repeated_file_part) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     // A standard <input type=file name="photos" multiple> emits several parts
     // under one non-"[]" name; the default last-value policy must not collapse
     // them and silently drop uploads.
@@ -215,9 +198,7 @@ RUVIA_TEST(context_parse_body_treats_empty_filename_parameter_as_file) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     // The filename parameter is present even though its value is empty.
     // Classification as a file must depend on parameter presence, not string length.
     HttpRequestAccess::setBody(request,
@@ -246,9 +227,7 @@ RUVIA_TEST(context_parse_body_rejects_a_flood_of_fields) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     HttpRequestAccess::setBody(request, "a=1&b=2&c=3&d=4&e=5");  // five fields
 
     RequestMemory requestMemory(worker);
@@ -271,9 +250,7 @@ RUVIA_TEST(context_parse_body_multipart_field_cap_preempts_later_part_parsing) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     HttpRequestAccess::setBody(request,
         "--BOUNDARY\r\n"
         "Content-Disposition: form-data; name=\"first\"\r\n"
@@ -301,8 +278,7 @@ RUVIA_TEST(context_parse_body_multipart_field_cap_preempts_later_part_parsing) {
     };
 
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto future =
-        asio::co_spawn(io, ruvia::detail::taskAsAwaitable(parseStatus()), asio::use_future);
+    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(parseStatus()), asio::use_future);
     io.run();
 
     // The multipart form maxFields cap is a memory-amplification guard. It must
@@ -315,9 +291,7 @@ RUVIA_TEST(context_parse_body_all_retains_duplicates_and_selects_last_value) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     HttpRequestAccess::setBody(request, "x=first&x=last");
 
     RequestMemory requestMemory(worker);
@@ -329,9 +303,7 @@ RUVIA_TEST(context_parse_body_all_retains_duplicates_and_selects_last_value) {
     bool valueMultiple = false;
     bool valueArrayName = true;
     asio::io_context& io = ruvia::test::newTestIoContext();
-    asio::co_spawn(io,
-        parseAllRepeatedScalar(context, valueCount, selectedValue, valueMultiple, valueArrayName),
-        asio::detached);
+    asio::co_spawn(io, parseAllRepeatedScalar(context, valueCount, selectedValue, valueMultiple, valueArrayName), asio::detached);
     io.run();
 
     RUVIA_CHECK_EQ(valueCount, std::size_t{2});
@@ -344,9 +316,7 @@ RUVIA_TEST(context_parse_body_multipart_yields_text_field_and_file_blob) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     HttpRequestAccess::setBody(request,
         "--BOUNDARY\r\n"
         "Content-Disposition: form-data; name=\"name\"\r\n"
@@ -367,8 +337,7 @@ RUVIA_TEST(context_parse_body_multipart_yields_text_field_and_file_blob) {
     // content type, and bytes are all preserved through the RequestBlob.
     asio::io_context& io = ruvia::test::newTestIoContext();
     std::string nameValue, fileName, fileType, fileData;
-    asio::co_spawn(
-        io, parseMultipart(context, nameValue, fileName, fileType, fileData), asio::detached);
+    asio::co_spawn(io, parseMultipart(context, nameValue, fileName, fileType, fileData), asio::detached);
     io.run();
 
     RUVIA_CHECK_EQ(nameValue, std::string("value"));
@@ -381,8 +350,7 @@ RUVIA_TEST(context_parse_body_rejects_multipart_with_wrong_media_type) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/json"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/json"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     HttpRequestAccess::setBody(request, "{}");
 
     RequestMemory requestMemory(worker);
@@ -394,8 +362,7 @@ RUVIA_TEST(context_parse_body_rejects_multipart_with_wrong_media_type) {
         (void)co_await context.req().multipart();
         co_return;
     };
-    auto future =
-        asio::co_spawn(io, ruvia::detail::taskAsAwaitable(multipartTask()), asio::use_future);
+    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(multipartTask()), asio::use_future);
     io.run();
 
     bool rejected = false;
@@ -411,9 +378,7 @@ RUVIA_TEST(context_parse_body_rejects_malformed_urlencoded) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     HttpRequestAccess::setBody(request, "a=%zz");  // invalid percent-encoding
 
     RequestMemory requestMemory(worker);
@@ -438,9 +403,7 @@ RUVIA_TEST(context_parse_body_maps_multipart_failure_to_http_protocol_error) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     HttpRequestAccess::setBody(request,
         "--BOUNDARY\r\n"
         "Content-Disposition: form-data; name=\"field\"\r\n\r\n"
@@ -457,8 +420,7 @@ RUVIA_TEST(context_parse_body_maps_multipart_failure_to_http_protocol_error) {
     try {
         future.get();
     } catch (const ruvia::HttpProtocolError& error) {
-        mapped = error.status() == ruvia::http_status::kBadRequest &&
-                 error.what() == std::string_view("incomplete multipart body");
+        mapped = error.status() == ruvia::http_status::kBadRequest && error.what() == std::string_view("incomplete multipart body");
     }
     RUVIA_CHECK(mapped);
 }
@@ -467,9 +429,7 @@ RUVIA_TEST(context_parse_body_skips_empty_urlencoded_segments) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
     // Leading/trailing/consecutive '&' are empty segments the parser skips, yielding
     // no field. Because the field-vector reservation is sized from the delimiter
     // count, an all-'&' body would otherwise over-reserve massively; the reservation
@@ -486,8 +446,7 @@ RUVIA_TEST(context_parse_body_skips_empty_urlencoded_segments) {
     bool aPresent = false;
     bool bPresent = false;
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto future = asio::co_spawn(
-        io, parseScalarPair(context, aValue, aPresent, bValue, bPresent), asio::use_future);
+    auto future = asio::co_spawn(io, parseScalarPair(context, aValue, aPresent, bValue, bPresent), asio::use_future);
     io.run();
     future.get();
     RUVIA_CHECK(aPresent);

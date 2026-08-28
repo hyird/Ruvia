@@ -23,19 +23,13 @@ namespace {
 constexpr std::size_t kResponseBodyReadChunkBytes = std::size_t{16} * 1024;
 
 bool headerNameEquals(std::string_view left, std::string_view right) noexcept {
-    return left.size() == right.size() &&
-           std::equal(left.begin(), left.end(), right.begin(), [](char a, char b) {
-               return std::tolower(static_cast<unsigned char>(a)) ==
-                      std::tolower(static_cast<unsigned char>(b));
-           });
+    return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin(), [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); });
 }
 
 }  // namespace
 
-HttpClientResponse::HttpClientResponse(
-    std::pmr::memory_resource* resource, const WorkerHandle& worker, detail::HttpClientPool& pool)
-    : state_(detail::constructPmrObject<detail::HttpClientResponseState>(
-          detail::pmrResourceOrDefault(resource), worker, detail::pmrResourceOrDefault(resource))),
+HttpClientResponse::HttpClientResponse(std::pmr::memory_resource* resource, const WorkerHandle& worker, detail::HttpClientPool& pool)
+    : state_(detail::constructPmrObject<detail::HttpClientResponseState>(detail::pmrResourceOrDefault(resource), worker, detail::pmrResourceOrDefault(resource))),
       body_(state_) {
     state_->pool = &pool;
 }
@@ -60,8 +54,7 @@ HttpClientResponse& HttpClientResponse::operator=(HttpClientResponse&& other) no
     if (this == &other) {
         return *this;
     }
-    if (body_.operationScope_.hasPendingOperations() ||
-        other.body_.operationScope_.hasPendingOperations()) {
+    if (body_.operationScope_.hasPendingOperations() || other.body_.operationScope_.hasPendingOperations()) {
         std::terminate();
     }
     std::swap(state_, other.state_);
@@ -130,8 +123,7 @@ HttpClientResponseBody::~HttpClientResponseBody() {
 }
 
 bool HttpClientResponseBody::complete() const noexcept {
-    return state_ == nullptr || (state_->complete && state_->offset == state_->buffered.size() &&
-                                    state_->pending.empty());
+    return state_ == nullptr || (state_->complete && state_->offset == state_->buffered.size() && state_->pending.empty());
 }
 
 ScopedOperation<std::optional<std::string_view>> HttpClientResponseBody::read() {
@@ -153,8 +145,7 @@ Task<std::optional<std::string_view>> HttpClientResponseBody::readTask() {
         }
     } guard(readActive_);
     state_->incrementalRead = true;
-    while (
-        state_->offset == state_->buffered.size() && state_->pending.empty() && !state_->complete) {
+    while (state_->offset == state_->buffered.size() && state_->pending.empty() && !state_->complete) {
         state_->buffered.clear();
         state_->offset = 0;
         co_await state_->dataSignal.wait();
@@ -173,13 +164,11 @@ Task<std::optional<std::string_view>> HttpClientResponseBody::readTask() {
             std::rethrow_exception(state_->failure);
         }
         if (state_->errorCode) {
-            throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode),
-                "HTTP response body read failed");
+            throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode), "HTTP response body read failed");
         }
         co_return std::nullopt;
     }
-    const auto count =
-        std::min(kResponseBodyReadChunkBytes, state_->buffered.size() - state_->offset);
+    const auto count = std::min(kResponseBodyReadChunkBytes, state_->buffered.size() - state_->offset);
     const auto chunk = std::string_view(state_->buffered).substr(state_->offset, count);
     state_->offset += count;
     co_return chunk;
@@ -215,15 +204,13 @@ Task<std::pmr::string> HttpClientResponseBody::readAllTask(std::size_t maxBytes)
         std::rethrow_exception(state_->failure);
     }
     if (state_->errorCode) {
-        throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode),
-            "HTTP response body read failed");
+        throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode), "HTTP response body read failed");
     }
     const auto remaining = state_->buffered.size() - state_->offset;
     const auto totalRemaining = remaining + state_->pending.size();
     const auto effectiveLimit = std::min(maxBytes, state_->bufferedLimit);
     if (totalRemaining > effectiveLimit) {
-        throw HttpClientError(HttpClientError::Code::kResponseTooLarge,
-            "HTTP response body exceeds readAll byte limit");
+        throw HttpClientError(HttpClientError::Code::kResponseTooLarge, "HTTP response body exceeds readAll byte limit");
     }
     std::pmr::string result(state_->resource);
     result.assign(state_->buffered.data() + state_->offset, remaining);
@@ -253,8 +240,7 @@ Task<void> HttpClientResponseBody::pipeToTask(ResponseStreamWriter& output) {
     } guard(readActive_);
     state_->incrementalRead = true;
     for (;;) {
-        while (state_->offset == state_->buffered.size() && state_->pending.empty() &&
-               !state_->complete) {
+        while (state_->offset == state_->buffered.size() && state_->pending.empty() && !state_->complete) {
             state_->buffered.clear();
             state_->offset = 0;
             co_await state_->dataSignal.wait();
@@ -273,13 +259,11 @@ Task<void> HttpClientResponseBody::pipeToTask(ResponseStreamWriter& output) {
                 std::rethrow_exception(state_->failure);
             }
             if (state_->errorCode) {
-                throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode),
-                    "HTTP response body forwarding failed");
+                throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode), "HTTP response body forwarding failed");
             }
             co_return;
         }
-        const auto count =
-            std::min(kResponseBodyReadChunkBytes, state_->buffered.size() - state_->offset);
+        const auto count = std::min(kResponseBodyReadChunkBytes, state_->buffered.size() - state_->offset);
         const auto chunk = std::string_view(state_->buffered).substr(state_->offset, count);
         co_await output.write(chunk);
         state_->offset += count;
@@ -287,24 +271,18 @@ Task<void> HttpClientResponseBody::pipeToTask(ResponseStreamWriter& output) {
 }
 
 std::optional<std::string_view> HttpClientResponse::header(std::string_view name) const& noexcept {
-    const auto match = std::ranges::find_if(state_->headers,
-        [name](const auto& header) { return headerNameEquals(header.name(), name); });
-    return match == state_->headers.end() ? std::nullopt
-                                          : std::optional<std::string_view>(match->value());
+    const auto match = std::ranges::find_if(state_->headers, [name](const auto& header) { return headerNameEquals(header.name(), name); });
+    return match == state_->headers.end() ? std::nullopt : std::optional<std::string_view>(match->value());
 }
 
 std::optional<std::string_view> HttpClientResponse::trailer(std::string_view name) const& noexcept {
-    const auto match = std::ranges::find_if(state_->trailers,
-        [name](const auto& header) { return headerNameEquals(header.name(), name); });
-    return match == state_->trailers.end() ? std::nullopt
-                                           : std::optional<std::string_view>(match->value());
+    const auto match = std::ranges::find_if(state_->trailers, [name](const auto& header) { return headerNameEquals(header.name(), name); });
+    return match == state_->trailers.end() ? std::nullopt : std::optional<std::string_view>(match->value());
 }
 
 namespace detail {
 
-void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
-    bool contentSemanticsPresent, std::size_t maxDecodedBytes,
-    std::pmr::memory_resource* resource) {
+void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response, bool contentSemanticsPresent, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     if (!contentSemanticsPresent) {
         return;
     }
@@ -314,8 +292,7 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
     const auto parsedCoding = httpClientContentCodingOf(response.state_->headers);
     const auto* coding = parsedCoding.coding();
     if (coding == nullptr) {
-        throw HttpClientError(
-            HttpClientError::Code::kProtocolError, "unsupported HTTP response Content-Encoding");
+        throw HttpClientError(HttpClientError::Code::kProtocolError, "unsupported HTTP response Content-Encoding");
     }
     if (*coding == HttpContentCoding::kIdentity) {
         return;
@@ -324,8 +301,7 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
         response.state_->buffered.append(response.state_->pending);
         response.state_->pending.clear();
     }
-    auto decoded = decodeHttpContent(*coding, response.state_->buffered,
-        {.maxDecodedBytes = maxDecodedBytes, .resource = resource});
+    auto decoded = decodeHttpContent(*coding, response.state_->buffered, {.maxDecodedBytes = maxDecodedBytes, .resource = resource});
     if (auto* content = decoded.decoded()) {
         auto bytes = std::move(*content).takeBytes();
         response.state_->buffered.swap(bytes);
@@ -333,28 +309,23 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
     }
     const auto* failure = decoded.failure();
     if (failure != nullptr && failure->error() == HttpContentDecodeError::kDecodedSizeExceeded) {
-        throw HttpClientError(HttpClientError::Code::kResponseTooLarge,
-            "HTTP response exceeds configured byte limit");
+        throw HttpClientError(HttpClientError::Code::kResponseTooLarge, "HTTP response exceeds configured byte limit");
     }
     if (failure != nullptr && failure->error() == HttpContentDecodeError::kDecoderFailure) {
-        throw HttpClientError(
-            HttpClientError::Code::kProtocolError, "HTTP response content-coding decoder failed");
+        throw HttpClientError(HttpClientError::Code::kProtocolError, "HTTP response content-coding decoder failed");
     }
-    throw HttpClientError(
-        HttpClientError::Code::kProtocolError, "invalid HTTP response Content-Encoding");
+    throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid HTTP response Content-Encoding");
 }
 
 }  // namespace detail
 
-detail::HttpClientRequestStorage::HttpClientRequestStorage(
-    std::string_view method, std::string_view target, std::pmr::memory_resource* resource)
+detail::HttpClientRequestStorage::HttpClientRequestStorage(std::string_view method, std::string_view target, std::pmr::memory_resource* resource)
     : method_(method, detail::pmrResourceOrDefault(resource)),
       target_(target, detail::pmrResourceOrDefault(resource)),
       headers_(detail::pmrResourceOrDefault(resource)),
       body_(detail::pmrResourceOrDefault(resource)) {}
 
-detail::HttpClientRequestStorage& detail::HttpClientRequestStorage::appendHeader(
-    std::string_view name, std::string_view value) {
+detail::HttpClientRequestStorage& detail::HttpClientRequestStorage::appendHeader(std::string_view name, std::string_view value) {
     auto& header = headers_.emplace_back(name, value, headers_.get_allocator().resource());
     // HTTP field names are case-insensitive, but HTTP/2 requires their wire form
     // to be lowercase (RFC 9113 Section 8.2). Normalize once at the owning public
@@ -373,8 +344,7 @@ detail::HttpClientRequestStorage& detail::HttpClientRequestStorage::setBody(std:
     return *this;
 }
 
-HttpClientHandle::HttpClientHandle(detail::HttpClientPool& pool,
-    std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope) noexcept
+HttpClientHandle::HttpClientHandle(detail::HttpClientPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope) noexcept
     : detail::ScopedCapabilityNode(scope, &HttpClientHandle::expireCapability),
       pool_(&pool),
       resource_(resource) {}
@@ -393,11 +363,9 @@ HttpClientHandle HttpClientHandle::withOptions(OperationOptions options) const {
     return copy;
 }
 
-ScopedOperation<HttpClientResponse> HttpClientHandle::send(
-    const HttpClientRequestView& view) const {
+ScopedOperation<HttpClientResponse> HttpClientHandle::send(const HttpClientRequestView& view) const {
     requireActive();
-    detail::HttpClientRequestStorage request(
-        view.method.view(), view.target.view(), detail::pmrResourceOrDefault(resource_));
+    detail::HttpClientRequestStorage request(view.method.view(), view.target.view(), detail::pmrResourceOrDefault(resource_));
     for (const auto& header : view.headers) {
         request.appendHeader(header.name(), header.value());
     }
@@ -405,8 +373,7 @@ ScopedOperation<HttpClientResponse> HttpClientHandle::send(
         request.setBody(bytes->value());
     }
     detail::validateOperationOptions(options_);
-    return detail::makeScopedOperation(operationScope(),
-        pool_->execute(std::move(request), options_, detail::pmrResourceOrDefault(resource_)));
+    return detail::makeScopedOperation(operationScope(), pool_->execute(std::move(request), options_, detail::pmrResourceOrDefault(resource_)));
 }
 
 HttpClientStats HttpClientHandle::stats() const {

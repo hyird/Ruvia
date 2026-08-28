@@ -12,21 +12,16 @@
 namespace ruvia::detail {
 
 struct Http1InterimResponsePrepareResultAccess final {
-    [[nodiscard]] static constexpr Http1InterimResponsePrepareResult bufferTooSmall(
-        std::size_t requiredHeadBytes) noexcept {
-        return Http1InterimResponsePrepareResult(
-            Http1InterimResponseBufferTooSmall(requiredHeadBytes));
+    [[nodiscard]] static constexpr Http1InterimResponsePrepareResult bufferTooSmall(std::size_t requiredHeadBytes) noexcept {
+        return Http1InterimResponsePrepareResult(Http1InterimResponseBufferTooSmall(requiredHeadBytes));
     }
 
-    [[nodiscard]] static constexpr Http1InterimResponsePrepareResult failure(
-        Http1InterimResponsePrepareError error) noexcept {
+    [[nodiscard]] static constexpr Http1InterimResponsePrepareResult failure(Http1InterimResponsePrepareError error) noexcept {
         return Http1InterimResponsePrepareResult(Http1InterimResponsePrepareFailure(error));
     }
 
-    [[nodiscard]] static constexpr Http1InterimResponsePrepareResult prepared(
-        std::string_view head, Http1InterimConnectionDisposition connectionDisposition) noexcept {
-        return Http1InterimResponsePrepareResult(
-            PreparedHttp1InterimResponse(head, connectionDisposition));
+    [[nodiscard]] static constexpr Http1InterimResponsePrepareResult prepared(std::string_view head, Http1InterimConnectionDisposition connectionDisposition) noexcept {
+        return Http1InterimResponsePrepareResult(PreparedHttp1InterimResponse(head, connectionDisposition));
     }
 };
 
@@ -52,8 +47,7 @@ struct Http1InterimHeaderFacts final {
     return true;
 }
 
-[[nodiscard]] Http1InterimResponsePrepareError commonValidationError(
-    detail::HttpInterimResponseHeaderValidationStatus status) noexcept {
+[[nodiscard]] Http1InterimResponsePrepareError commonValidationError(detail::HttpInterimResponseHeaderValidationStatus status) noexcept {
     switch (status) {
         case detail::HttpInterimResponseHeaderValidationStatus::kInvalidHeader:
             return Http1InterimResponsePrepareError::kInvalidHeader;
@@ -71,23 +65,16 @@ struct Http1InterimHeaderFacts final {
     return Http1InterimResponsePrepareError::kInvalidHeader;
 }
 
-[[nodiscard]] bool analyzeHttp1Fields(const HttpInterimResponseHead& response,
-    Http1InterimHeaderFacts& facts, Http1InterimResponsePrepareError& error) noexcept {
+[[nodiscard]] bool analyzeHttp1Fields(const HttpInterimResponseHead& response, Http1InterimHeaderFacts& facts, Http1InterimResponsePrepareError& error) noexcept {
     for (const auto& header : response.headers()) {
         const auto name = header.name();
         if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
-            if (facts.connectionOptions.parseField(header.value(),
-                    detail::HttpFieldListRole::kSender, [](std::string_view option) noexcept {
-                        return !detail::httpConnectionOptionConflictsWithManagedField(option);
-                    }) != detail::HttpFieldListParseStatus::kOk) {
+            if (facts.connectionOptions.parseField(header.value(), detail::HttpFieldListRole::kSender, [](std::string_view option) noexcept { return !detail::httpConnectionOptionConflictsWithManagedField(option); }) != detail::HttpFieldListParseStatus::kOk) {
                 error = Http1InterimResponsePrepareError::kInvalidConnection;
                 return false;
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
-            if (facts.upgradeProtocols.parseField(header.value(),
-                    detail::HttpFieldListRole::kSender,
-                    [](const detail::HttpUpgradeProtocol&) noexcept { return true; }) !=
-                detail::HttpFieldListParseStatus::kOk) {
+            if (facts.upgradeProtocols.parseField(header.value(), detail::HttpFieldListRole::kSender, [](const detail::HttpUpgradeProtocol&) noexcept { return true; }) != detail::HttpFieldListParseStatus::kOk) {
                 error = Http1InterimResponsePrepareError::kInvalidUpgrade;
                 return false;
             }
@@ -96,9 +83,7 @@ struct Http1InterimHeaderFacts final {
             return false;
         }
 
-        if (!addHeadBytes(facts.wireBytes, name.size()) || !addHeadBytes(facts.wireBytes, 2) ||
-            !addHeadBytes(facts.wireBytes, header.value().size()) ||
-            !addHeadBytes(facts.wireBytes, kCrlf.size())) {
+        if (!addHeadBytes(facts.wireBytes, name.size()) || !addHeadBytes(facts.wireBytes, 2) || !addHeadBytes(facts.wireBytes, header.value().size()) || !addHeadBytes(facts.wireBytes, kCrlf.size())) {
             error = Http1InterimResponsePrepareError::kHeaderTooLarge;
             return false;
         }
@@ -119,8 +104,7 @@ void appendView(char*& cursor, std::string_view value) noexcept {
 
 }  // namespace
 
-std::string_view http1InterimResponsePrepareErrorMessage(
-    Http1InterimResponsePrepareError error) noexcept {
+std::string_view http1InterimResponsePrepareErrorMessage(Http1InterimResponsePrepareError error) noexcept {
     switch (error) {
         case Http1InterimResponsePrepareError::kInvalidHeader:
             return "invalid HTTP/1 interim response header";
@@ -148,30 +132,25 @@ std::string_view http1InterimResponsePrepareErrorMessage(
     return "invalid HTTP/1 interim response";
 }
 
-Http1InterimResponsePrepareResult Http1InterimResponseWriter::prepare(
-    const HttpInterimResponseHead& response, std::span<char> headBuffer) const noexcept {
+Http1InterimResponsePrepareResult Http1InterimResponseWriter::prepare(const HttpInterimResponseHead& response, std::span<char> headBuffer) const noexcept {
     if (response.headers().size() > kMaxHttpHeaderFields) {
-        return detail::Http1InterimResponsePrepareResultAccess::failure(
-            Http1InterimResponsePrepareError::kTooManyHeaders);
+        return detail::Http1InterimResponsePrepareResultAccess::failure(Http1InterimResponsePrepareError::kTooManyHeaders);
     }
     const auto commonValidation = detail::validateHttpInterimResponseHeaders(response);
     if (commonValidation != detail::HttpInterimResponseHeaderValidationStatus::kOk) {
-        return detail::Http1InterimResponsePrepareResultAccess::failure(
-            commonValidationError(commonValidation));
+        return detail::Http1InterimResponsePrepareResultAccess::failure(commonValidationError(commonValidation));
     }
 
     const auto reasonPhrase = httpReasonPhrase(response.status());
     const auto statusToken = detail::httpStatusCodeToken(response.status());
     Http1InterimHeaderFacts facts;
-    facts.wireBytes =
-        kHttp11StatusPrefix.size() + statusToken.size() + 1 + reasonPhrase.size() + kCrlf.size();
+    facts.wireBytes = kHttp11StatusPrefix.size() + statusToken.size() + 1 + reasonPhrase.size() + kCrlf.size();
     Http1InterimResponsePrepareError error = Http1InterimResponsePrepareError::kInvalidHeader;
     if (!analyzeHttp1Fields(response, facts, error)) {
         return detail::Http1InterimResponsePrepareResultAccess::failure(error);
     }
     if (!addHeadBytes(facts.wireBytes, kCrlf.size())) {
-        return detail::Http1InterimResponsePrepareResultAccess::failure(
-            Http1InterimResponsePrepareError::kHeaderTooLarge);
+        return detail::Http1InterimResponsePrepareResultAccess::failure(Http1InterimResponsePrepareError::kHeaderTooLarge);
     }
     if (headBuffer.size() < facts.wireBytes) {
         return detail::Http1InterimResponsePrepareResultAccess::bufferTooSmall(facts.wireBytes);
@@ -191,11 +170,7 @@ Http1InterimResponsePrepareResult Http1InterimResponseWriter::prepare(
     }
     appendView(cursor, kCrlf);
 
-    return detail::Http1InterimResponsePrepareResultAccess::prepared(
-        std::string_view(headBuffer.data(), facts.wireBytes),
-        facts.connectionOptions.close()
-            ? Http1InterimConnectionDisposition::kCloseAfterInterimResponse
-            : Http1InterimConnectionDisposition::kUnchanged);
+    return detail::Http1InterimResponsePrepareResultAccess::prepared(std::string_view(headBuffer.data(), facts.wireBytes), facts.connectionOptions.close() ? Http1InterimConnectionDisposition::kCloseAfterInterimResponse : Http1InterimConnectionDisposition::kUnchanged);
 }
 
 }  // namespace ruvia

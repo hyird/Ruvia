@@ -48,7 +48,6 @@ private:
 // Attach a Ruvia worker to a caller-owned io_context. The caller drives the
 // context with run() on exactly one thread and retains ownership of its
 // unrelated work and stop/restart policy.
-[[nodiscard]] EventLoopAttachment attachEventLoop(
-    asio::io_context& ioContext, EventLoopAttachmentOptions options = {});
+[[nodiscard]] EventLoopAttachment attachEventLoop(asio::io_context& ioContext, EventLoopAttachmentOptions options = {});
 
 }  // namespace ruvia

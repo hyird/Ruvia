@@ -36,18 +36,10 @@ Task<void> runHttp2SansIoWriter(Stream& stream, Http2SansIoSessionEngine& engine
             std::size_t writtenBytes = 0;
             bool writeDone = false;
             if constexpr (std::is_same_v<std::remove_cvref_t<Stream>, asio::ip::tcp::socket>) {
-                writeDone = tryPlainTcpSyncWrite(stream,
-                    asio::buffer(writeScratch.data(), writeScratch.size()), writeScratch.size(),
-                    writeError, writtenBytes);
+                writeDone = tryPlainTcpSyncWrite(stream, asio::buffer(writeScratch.data(), writeScratch.size()), writeScratch.size(), writeError, writtenBytes);
             }
             if (!writeDone) {
-                const auto writeCompletion = co_await asyncAsio(
-                    [&stream, &writeScratch, writtenBytes](auto handler) mutable {
-                        asio::async_write(stream,
-                            asio::buffer(writeScratch.data() + writtenBytes,
-                                writeScratch.size() - writtenBytes),
-                            std::move(handler));
-                    });
+                const auto writeCompletion = co_await asyncAsio([&stream, &writeScratch, writtenBytes](auto handler) mutable { asio::async_write(stream, asio::buffer(writeScratch.data() + writtenBytes, writeScratch.size() - writtenBytes), std::move(handler)); });
                 writeError = writeCompletion.errorCode();
             }
             if (writeError) {
@@ -65,17 +57,13 @@ Task<void> runHttp2SansIoWriter(Stream& stream, Http2SansIoSessionEngine& engine
 }
 
 template <typename Stream>
-Task<void> runHttp2SansIoSessionImpl(Stream& stream, asio::ip::tcp::socket& socket,
-    const RouteTable& routes, WorkerMemory& worker, Http2SansIoSessionContext session,
-    std::string_view initialBytes) {
+Task<void> runHttp2SansIoSessionImpl(Stream& stream, asio::ip::tcp::socket& socket, const RouteTable& routes, WorkerMemory& worker, Http2SansIoSessionContext session, std::string_view initialBytes) {
     auto executor = asio::any_io_executor(stream.get_executor());
     Http2SansIoSessionEngine engine(executor, socket, routes, worker, std::move(session));
 
     engine.beginConnection();
     try {
-        asio::co_spawn(executor, taskAsAwaitable(runHttp2SansIoWriter(stream, engine)),
-            [&engine](
-                std::exception_ptr exception) noexcept { engine.writerCompleted(exception); });
+        asio::co_spawn(executor, taskAsAwaitable(runHttp2SansIoWriter(stream, engine)), [&engine](std::exception_ptr exception) noexcept { engine.writerCompleted(exception); });
     } catch (...) {
         engine.terminate(std::make_error_code(std::errc::operation_canceled));
         throw;
@@ -96,29 +84,19 @@ Task<void> runHttp2SansIoSessionImpl(Stream& stream, asio::ip::tcp::socket& sock
             std::array<char, 4096> readBuffer;
             for (;;) {
                 engine.setInactivityPhase();
-                auto readCompletion =
-                    co_await asyncAsio<std::size_t>([&stream, &readBuffer](auto handler) mutable {
-                        stream.async_read_some(
-                            asio::buffer(readBuffer.data(), readBuffer.size()), std::move(handler));
-                    });
+                auto readCompletion = co_await asyncAsio<std::size_t>([&stream, &readBuffer](auto handler) mutable { stream.async_read_some(asio::buffer(readBuffer.data(), readBuffer.size()), std::move(handler)); });
                 const auto error = readCompletion.errorCode();
                 const auto bytesRead = readCompletion.result();
                 const bool workerStopped = !engine.workerRunning();
                 if (error || bytesRead == 0 || workerStopped) {
-                    readerTerminalError =
-                        error ? error
-                              : std::make_error_code(workerStopped ? std::errc::operation_canceled
-                                                                   : std::errc::connection_reset);
+                    readerTerminalError = error ? error : std::make_error_code(workerStopped ? std::errc::operation_canceled : std::errc::connection_reset);
                     break;
                 }
                 engine.touchActivity();
-                const auto result =
-                    engine.feedAndDrain(std::string_view(readBuffer.data(), bytesRead));
+                const auto result = engine.feedAndDrain(std::string_view(readBuffer.data(), bytesRead));
                 engine.wakeWriter();
-                if (result == Http2FeedResult::kConnectionNotStarted ||
-                    result == Http2FeedResult::kProtocolFailure || engine.writeFailed()) {
-                    if (result == Http2FeedResult::kConnectionNotStarted ||
-                        result == Http2FeedResult::kProtocolFailure) {
+                if (result == Http2FeedResult::kConnectionNotStarted || result == Http2FeedResult::kProtocolFailure || engine.writeFailed()) {
+                    if (result == Http2FeedResult::kConnectionNotStarted || result == Http2FeedResult::kProtocolFailure) {
                         readerTerminalError = std::make_error_code(std::errc::protocol_error);
                     }
                     break;
@@ -132,9 +110,7 @@ Task<void> runHttp2SansIoSessionImpl(Stream& stream, asio::ip::tcp::socket& sock
 
     if (!engine.terminated()) {
         if (!readerTerminalError) {
-            readerTerminalError = engine.connectionFailed() || initialInputRetained
-                                      ? std::make_error_code(std::errc::protocol_error)
-                                      : std::make_error_code(std::errc::connection_aborted);
+            readerTerminalError = engine.connectionFailed() || initialInputRetained ? std::make_error_code(std::errc::protocol_error) : std::make_error_code(std::errc::connection_aborted);
         }
         engine.terminate(readerTerminalError);
     }
@@ -155,17 +131,12 @@ Task<void> runHttp2SansIoSessionImpl(Stream& stream, asio::ip::tcp::socket& sock
 
 }  // namespace
 
-Task<void> runHttp2SansIoSession(asio::ip::tcp::socket& stream, const RouteTable& routes,
-    WorkerMemory& worker, Http2SansIoSessionContext session, std::string_view initialBytes) {
-    return runHttp2SansIoSessionImpl(
-        stream, stream, routes, worker, std::move(session), initialBytes);
+Task<void> runHttp2SansIoSession(asio::ip::tcp::socket& stream, const RouteTable& routes, WorkerMemory& worker, Http2SansIoSessionContext session, std::string_view initialBytes) {
+    return runHttp2SansIoSessionImpl(stream, stream, routes, worker, std::move(session), initialBytes);
 }
 
-Task<void> runHttp2SansIoSession(asio::ssl::stream<asio::ip::tcp::socket&>& stream,
-    const RouteTable& routes, WorkerMemory& worker, Http2SansIoSessionContext session,
-    std::string_view initialBytes) {
-    return runHttp2SansIoSessionImpl(
-        stream, stream.next_layer(), routes, worker, std::move(session), initialBytes);
+Task<void> runHttp2SansIoSession(asio::ssl::stream<asio::ip::tcp::socket&>& stream, const RouteTable& routes, WorkerMemory& worker, Http2SansIoSessionContext session, std::string_view initialBytes) {
+    return runHttp2SansIoSessionImpl(stream, stream.next_layer(), routes, worker, std::move(session), initialBytes);
 }
 
 }  // namespace ruvia::detail
