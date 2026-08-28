@@ -1,9 +1,7 @@
 #include "ruvia/web/redis/Redis.h"
 
-#include <algorithm>
 #include <optional>
 #include <ranges>
-#include <stdexcept>
 #include <utility>
 
 #include "ruvia/web/detail/redis/RedisRegistry.h"
@@ -16,16 +14,9 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
     : resource_(detail::pmrResourceOrDefault(resource)),
       pools_(resource_),
       aliasIndex_(resource_) {
+    validateCapabilityAliases(redis, "redis alias must not be empty", "duplicate redis alias");
     pools_.reserve(redis.size());
     for (const auto& definition : redis) {
-        if (definition.alias.empty()) {
-            throw std::invalid_argument("redis alias must not be empty");
-        }
-        if (std::ranges::any_of(pools_, [&definition](const Entry& entry) {
-                return std::string_view(entry.alias) == std::string_view(definition.alias);
-            })) {
-            throw std::invalid_argument("duplicate redis alias");
-        }
         pools_.emplace_back(definition.alias, definition.config, resource_);
         auto& entry = pools_.back();
         const auto generalSize = entry.config.poolSizePerWorker;
@@ -39,16 +30,8 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
             entry.config.commandTimeout, generalSize, resource_, worker);
         entry.blocking = makePmrObject<RedisPool>(
             resource_, ioContext, entry.config, std::nullopt, blockingSize, resource_, worker);
-        if (std::string_view(entry.alias) == kDefaultRedisAlias) {
-            defaultPoolIndex_ = pools_.size() - 1;
-        }
     }
-    aliasIndex_.resize(pools_.size());
-    for (std::size_t index = 0; index < aliasIndex_.size(); ++index) {
-        aliasIndex_[index] = index;
-    }
-    std::ranges::sort(aliasIndex_, {},
-        [this](std::size_t index) -> std::string_view { return pools_[index].alias; });
+    aliasIndex_.build(pools_);
 }
 
 RedisRegistry::~RedisRegistry() = default;
@@ -82,18 +65,18 @@ bool RedisRegistry::needsDeadlineScan() const noexcept {
 
 RedisHandle RedisRegistry::get(
     std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
-    if (!defaultPoolIndex_.has_value()) {
+    const auto defaultPoolIndex = aliasIndex_.defaultIndex();
+    if (!defaultPoolIndex.has_value()) {
         throw RedisError(RedisError::Code::kNotConfigured, "default redis is not configured");
     }
-    auto& entry = pools_[*defaultPoolIndex_];
+    auto& entry = pools_[*defaultPoolIndex];
     return RedisHandle(*entry.general, *entry.blocking, resource, operationScope);
 }
 
 RedisHandle RedisRegistry::get(std::string_view alias, std::pmr::memory_resource* resource,
     ScopedOperationScope& operationScope) const {
-    const auto match = std::ranges::lower_bound(aliasIndex_, alias, {},
-        [this](std::size_t index) -> std::string_view { return pools_[index].alias; });
-    if (match != aliasIndex_.end() && std::string_view(pools_[*match].alias) == alias) {
+    const auto match = aliasIndex_.find(pools_, alias);
+    if (match.has_value()) {
         auto& entry = pools_[*match];
         return RedisHandle(*entry.general, *entry.blocking, resource, operationScope);
     }

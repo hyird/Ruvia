@@ -382,11 +382,12 @@ ruvia_add_unit_suite(ruvia_web_unit_tests ruvia::web
     support/test_main.cpp
 
     # web/unit/app
+    web/unit/app/capability_alias.cpp
     web/unit/app/config_validation.cpp
     web/unit/app/dotenv_parser.cpp
+    web/unit/app/route_middleware_config.cpp
     web/unit/app/server_options_validation.cpp
     web/unit/app/testing_facade.cpp
-    web/unit/app/route_middleware_config.cpp
 
     # web/unit/auth
     web/unit/auth/cookie_signature.cpp

@@ -1,0 +1,125 @@
+#include "test_harness.h"
+
+#include <cstddef>
+#include <memory_resource>
+#include <new>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <asio/io_context.hpp>
+
+#include "ruvia/web/detail/client/HttpClientRegistry.h"
+#include "ruvia/web/detail/integration/CapabilityAlias.h"
+
+namespace {
+
+struct Entry final {
+    std::string alias;
+};
+
+class RejectingMemoryResource final : public std::pmr::memory_resource {
+public:
+    [[nodiscard]] std::size_t allocationCount() const noexcept {
+        return allocationCount_;
+    }
+
+private:
+    void* do_allocate(std::size_t, std::size_t) override {
+        ++allocationCount_;
+        throw std::bad_alloc();
+    }
+
+    void do_deallocate(void*, std::size_t, std::size_t) override {}
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::size_t allocationCount_{0};
+};
+
+[[nodiscard]] std::string validationFailure(const std::vector<Entry>& entries) {
+    try {
+        ruvia::detail::validateCapabilityAliases(entries, "alias is empty", "alias is duplicated");
+    } catch (const std::invalid_argument& error) {
+        return std::string(error.what());
+    }
+    return {};
+}
+
+}  // namespace
+
+RUVIA_TEST(capability_alias_validation_checks_the_complete_set_without_owner_state) {
+    bool rejectedEmptyAlias = false;
+    try {
+        ruvia::detail::validateCapabilityAlias({}, "alias is empty");
+    } catch (const std::invalid_argument& error) {
+        rejectedEmptyAlias = std::string_view(error.what()) == "alias is empty";
+    }
+    RUVIA_CHECK(rejectedEmptyAlias);
+
+    RUVIA_CHECK_EQ(
+        validationFailure({{"first"}, {""}, {"third"}}), std::string_view("alias is empty"));
+    RUVIA_CHECK_EQ(validationFailure({{"first"}, {"second"}, {"first"}}),
+        std::string_view("alias is duplicated"));
+    RUVIA_CHECK(validationFailure({{"first"}, {"second"}, {"third"}}).empty());
+}
+
+RUVIA_TEST(http_client_registry_rejects_alias_set_before_pool_allocation) {
+    auto* sourceResource = std::pmr::new_delete_resource();
+    const ruvia::HttpClientConfig config{
+        .scheme = ruvia::HttpScheme::kHttp,
+        .host = "example.test",
+    };
+    const ruvia::detail::HttpClientDefinition definitions[]{
+        {std::pmr::string("duplicate", sourceResource),
+            ruvia::detail::HttpClientConfigStorage(config, sourceResource)},
+        {std::pmr::string("duplicate", sourceResource),
+            ruvia::detail::HttpClientConfigStorage(config, sourceResource)},
+    };
+    asio::io_context ioContext;
+    ruvia::WorkerHandle worker;
+    RejectingMemoryResource ownerResource;
+
+    bool rejectedAsConfig = false;
+    try {
+        (void)ruvia::detail::HttpClientRegistry(ioContext, worker, &ownerResource, definitions);
+    } catch (const std::invalid_argument& error) {
+        rejectedAsConfig = std::string_view(error.what()) == "duplicate HTTP client alias";
+    }
+
+    RUVIA_CHECK(rejectedAsConfig);
+    RUVIA_CHECK_EQ(ownerResource.allocationCount(), std::size_t{0});
+}
+
+RUVIA_TEST(capability_alias_index_preserves_entry_order_and_finds_exact_names) {
+    const std::vector<Entry> entries{{"zeta"}, {"default"}, {"alpha"}, {"alpha-long"}};
+    ruvia::detail::CapabilityAliasIndex index(std::pmr::new_delete_resource());
+    index.build(entries);
+
+    RUVIA_CHECK_EQ(index.find(entries, "zeta").value_or(entries.size()), std::size_t{0});
+    RUVIA_CHECK_EQ(index.defaultIndex().value_or(entries.size()), std::size_t{1});
+    RUVIA_CHECK_EQ(index.find(entries, "alpha").value_or(entries.size()), std::size_t{2});
+    RUVIA_CHECK_EQ(index.find(entries, "alpha-long").value_or(entries.size()), std::size_t{3});
+    RUVIA_CHECK(!index.find(entries, "alp").has_value());
+    RUVIA_CHECK(!index.find(entries, "missing").has_value());
+}
+
+RUVIA_TEST(capability_alias_index_rejects_rebuild_after_entry_set_is_finalized) {
+    ruvia::detail::CapabilityAliasIndex index(std::pmr::new_delete_resource());
+    const std::vector<Entry> initial{{"old"}};
+    index.build(initial);
+    RUVIA_CHECK(index.find(initial, "old").has_value());
+    RUVIA_CHECK(!index.defaultIndex().has_value());
+
+    const std::vector<Entry> replacement{{"second"}, {"first"}};
+    bool rejected = false;
+    try {
+        index.build(replacement);
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+}

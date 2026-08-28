@@ -1,4 +1,5 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
+#include "ruvia/web/detail/integration/CapabilityAlias.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/detail/db/DbConfigStorage.h"
@@ -8,7 +9,6 @@
 #endif
 
 #include <memory_resource>
-#include <stdexcept>
 #include <utility>
 
 namespace ruvia {
@@ -33,9 +33,7 @@ void upsertDefinition(std::pmr::vector<Definition>& definitions, std::string_vie
 App& App::database(DbRegistrationConfig config) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot configure database while app is running", [&](detail::AppState& state) {
-            if (config.alias.empty()) {
-                throw std::invalid_argument("database alias must not be empty");
-            }
+            detail::validateCapabilityAlias(config.alias, "database alias must not be empty");
             auto storedConfig = detail::DbConfigStorage(config.config, detail::appResource());
             upsertDefinition(state.databases, config.alias, storedConfig,
                 [](std::string_view storedAlias, detail::DbConfigStorage&& definitionConfig) {
@@ -57,9 +55,7 @@ App& App::database(std::nullptr_t) {
 App& App::redis(RedisRegistrationConfig config) {
     return detail::mutateStoppedApp(*this, *state_, "cannot configure redis while app is running",
         [&](detail::AppState& state) {
-            if (config.alias.empty()) {
-                throw std::invalid_argument("redis alias must not be empty");
-            }
+            detail::validateCapabilityAlias(config.alias, "redis alias must not be empty");
             auto storedConfig = detail::RedisConfigStorage(config.config, detail::appResource());
             upsertDefinition(state.redis, config.alias, storedConfig,
                 [](std::string_view storedAlias, detail::RedisConfigStorage&& definitionConfig) {
@@ -79,9 +75,7 @@ App& App::redis(std::nullptr_t) {
 App& App::httpClient(HttpClientRegistrationConfig config) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot configure HTTP client while app is running", [&](detail::AppState& state) {
-            if (config.alias.empty()) {
-                throw std::invalid_argument("HTTP client alias must not be empty");
-            }
+            detail::validateCapabilityAlias(config.alias, "HTTP client alias must not be empty");
             auto storedConfig =
                 detail::HttpClientConfigStorage(config.config, detail::appResource());
             upsertDefinition(state.httpClients, config.alias, storedConfig,

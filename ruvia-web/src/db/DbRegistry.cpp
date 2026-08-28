@@ -102,8 +102,8 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_res
       clients_(resource_),
       aliasIndex_(resource_) {
     clients_.reserve(1);
-    add(ioContext, worker, kDefaultDbAlias, DbConfigStorage(defaultConfig, resource_));
-    buildAliasIndex();
+    add(ioContext, worker, kDefaultCapabilityAlias, DbConfigStorage(defaultConfig, resource_));
+    aliasIndex_.build(clients_);
 }
 
 detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource,
@@ -111,25 +111,19 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, std::pmr::memory_res
     : resource_(detail::pmrResourceOrDefault(resource)),
       clients_(resource_),
       aliasIndex_(resource_) {
+    validateCapabilityAliases(
+        databases, "database alias must not be empty", "duplicate database alias");
     clients_.reserve(databases.size());
     for (const auto& definition : databases) {
         add(ioContext, worker, definition.alias, DbConfigStorage(definition.config, resource_));
     }
-    buildAliasIndex();
+    aliasIndex_.build(clients_);
 }
 
 detail::DbRegistry::~DbRegistry() = default;
 
 void detail::DbRegistry::add(asio::io_context& ioContext, const WorkerHandle* worker,
     std::string_view alias, DbConfigStorage config) {
-    if (alias.empty()) {
-        throw std::invalid_argument("database alias must not be empty");
-    }
-    if (std::ranges::any_of(
-            clients_, [alias](const Entry& entry) { return entry.alias == alias; })) {
-        throw std::invalid_argument("duplicate database alias");
-    }
-
     PoolOwner owner;
     switch (config.driver) {
         case DbDriver::kUnspecified:
@@ -153,18 +147,6 @@ void detail::DbRegistry::add(asio::io_context& ioContext, const WorkerHandle* wo
     }
 
     clients_.push_back(Entry{std::pmr::string(alias, resource_), std::move(owner)});
-    if (std::string_view(clients_.back().alias) == kDefaultDbAlias) {
-        defaultClientIndex_ = clients_.size() - 1;
-    }
-}
-
-void detail::DbRegistry::buildAliasIndex() {
-    aliasIndex_.resize(clients_.size());
-    for (std::size_t index = 0; index < aliasIndex_.size(); ++index) {
-        aliasIndex_[index] = index;
-    }
-    std::ranges::sort(aliasIndex_, {},
-        [this](std::size_t index) -> std::string_view { return clients_[index].alias; });
 }
 
 Task<void> detail::DbRegistry::connect() {
@@ -198,18 +180,18 @@ bool detail::DbRegistry::needsDeadlineScan() const noexcept {
 
 DbHandle detail::DbRegistry::get(
     std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
-    if (!defaultClientIndex_.has_value()) {
+    const auto defaultClientIndex = aliasIndex_.defaultIndex();
+    if (!defaultClientIndex.has_value()) {
         throw DbError(
             DbError::Code::kNotConfigured, std::nullopt, "default database is not configured");
     }
-    return DbHandle(poolRef(clients_[*defaultClientIndex_].client), resource, operationScope);
+    return DbHandle(poolRef(clients_[*defaultClientIndex].client), resource, operationScope);
 }
 
 DbHandle detail::DbRegistry::get(std::string_view alias, std::pmr::memory_resource* resource,
     ScopedOperationScope& operationScope) const {
-    const auto match = std::ranges::lower_bound(aliasIndex_, alias, {},
-        [this](std::size_t index) -> std::string_view { return clients_[index].alias; });
-    if (match != aliasIndex_.end() && std::string_view(clients_[*match].alias) == alias) {
+    const auto match = aliasIndex_.find(clients_, alias);
+    if (match.has_value()) {
         return DbHandle(poolRef(clients_[*match].client), resource, operationScope);
     }
     throw DbError(DbError::Code::kNotConfigured, std::nullopt, "database is not configured");

@@ -1,9 +1,5 @@
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 
-#include <algorithm>
-#include <ranges>
-#include <stdexcept>
-
 #include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia::detail {
@@ -14,8 +10,9 @@ HttpClientRegistry::HttpClientRegistry(asio::io_context& ioContext, const Worker
       pools_(resource_),
       aliasIndex_(resource_) {
     pools_.reserve(1);
-    add(ioContext, worker, "default", HttpClientConfigStorage(defaultConfig, resource_));
-    buildAliasIndex();
+    add(ioContext, worker, kDefaultCapabilityAlias,
+        HttpClientConfigStorage(defaultConfig, resource_));
+    aliasIndex_.build(pools_);
 }
 
 HttpClientRequestView HttpClientRequestStorageAccess::view(
@@ -39,40 +36,24 @@ HttpClientRegistry::HttpClientRegistry(asio::io_context& ioContext, const Worker
     : resource_(pmrResourceOrDefault(resource)),
       pools_(resource_),
       aliasIndex_(resource_) {
+    validateCapabilityAliases(
+        definitions, "HTTP client alias must not be empty", "duplicate HTTP client alias");
     pools_.reserve(definitions.size());
     for (const auto& definition : definitions) {
         add(ioContext, worker, definition.alias,
             HttpClientConfigStorage(definition.config, resource_));
     }
-    buildAliasIndex();
+    aliasIndex_.build(pools_);
 }
 
 HttpClientRegistry::~HttpClientRegistry() = default;
 
 void HttpClientRegistry::add(asio::io_context& ioContext, const WorkerHandle& worker,
     std::string_view alias, HttpClientConfigStorage config) {
-    if (alias.empty()) {
-        throw std::invalid_argument("http client alias must not be empty");
-    }
-    if (std::ranges::any_of(pools_, [alias](const Entry& entry) { return entry.alias == alias; })) {
-        throw std::invalid_argument("duplicate http client alias");
-    }
     auto storedAlias = std::pmr::string(alias, resource_);
     auto pool =
         makePmrObject<HttpClientPool>(resource_, ioContext, worker, std::move(config), resource_);
     pools_.push_back(Entry{std::move(storedAlias), std::move(pool)});
-    if (pools_.back().alias == "default") {
-        defaultPoolIndex_ = pools_.size() - 1;
-    }
-}
-
-void HttpClientRegistry::buildAliasIndex() {
-    aliasIndex_.resize(pools_.size());
-    for (std::size_t i = 0; i < aliasIndex_.size(); ++i) {
-        aliasIndex_[i] = i;
-    }
-    std::ranges::sort(
-        aliasIndex_, {}, [this](std::size_t i) -> std::string_view { return pools_[i].alias; });
 }
 
 void HttpClientRegistry::closeNow() noexcept {
@@ -97,11 +78,12 @@ HttpClientHandle HttpClientRegistry::get(
     if (closing_) {
         throw HttpClientError(HttpClientError::Code::kClosing, "http client registry is closing");
     }
-    if (!defaultPoolIndex_) {
+    const auto defaultPoolIndex = aliasIndex_.defaultIndex();
+    if (!defaultPoolIndex.has_value()) {
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "fixed HTTP client is not configured");
     }
-    return HttpClientHandle(*pools_[*defaultPoolIndex_].pool, resource, scope);
+    return HttpClientHandle(*pools_[*defaultPoolIndex].pool, resource, scope);
 }
 
 HttpClientHandle HttpClientRegistry::get(std::string_view alias,
@@ -109,9 +91,8 @@ HttpClientHandle HttpClientRegistry::get(std::string_view alias,
     if (closing_) {
         throw HttpClientError(HttpClientError::Code::kClosing, "http client registry is closing");
     }
-    const auto found = std::ranges::lower_bound(aliasIndex_, alias, {},
-        [this](std::size_t index) -> std::string_view { return pools_[index].alias; });
-    if (found == aliasIndex_.end() || std::string_view(pools_[*found].alias) != alias) {
+    const auto found = aliasIndex_.find(pools_, alias);
+    if (!found.has_value()) {
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "named HTTP client is not configured");
     }

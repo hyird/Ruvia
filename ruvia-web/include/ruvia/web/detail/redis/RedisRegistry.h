@@ -1,9 +1,10 @@
 #pragma once
 
-#include "ruvia/web/redis/Redis.h"
-#include "ruvia/web/detail/redis/RedisConfigStorage.h"
-#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 #include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
+#include "ruvia/web/detail/integration/CapabilityAlias.h"
+#include "ruvia/web/detail/redis/RedisConfigStorage.h"
+#include "ruvia/web/redis/Redis.h"
 
 #ifndef RUVIA_ENABLE_REDIS
 
@@ -234,8 +235,7 @@ private:
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> pools_;
-    std::pmr::vector<std::size_t> aliasIndex_;
-    std::optional<std::size_t> defaultPoolIndex_;
+    CapabilityAliasIndex aliasIndex_;
 };
 
 }  // namespace ruvia::detail

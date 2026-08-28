@@ -3,6 +3,7 @@
 #include "ruvia/web/detail/db/DbMigrationChecksum.h"
 #include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbUtils.h"
+#include "ruvia/web/detail/integration/CapabilityAlias.h"
 #include "ruvia/web/db/Db.h"
 
 #include "ruvia/core/detail/io/AsioAwait.h"
@@ -296,8 +297,8 @@ public:
 
         auto lockName = buildMigrationLockName(config, resolved);
         const detail::DbDefinition databases[] = {
-            detail::DbDefinition{std::pmr::string(detail::kDefaultDbAlias.data(),
-                                     detail::kDefaultDbAlias.size(), resolved),
+            detail::DbDefinition{std::pmr::string(detail::kDefaultCapabilityAlias.data(),
+                                     detail::kDefaultCapabilityAlias.size(), resolved),
                 std::move(config)}};
         detail::DbRegistry registry(ioContext, resolved, databases);
         const detail::DbMigrationDeadlineScanner::Attachment scanning(scanner, registry);
