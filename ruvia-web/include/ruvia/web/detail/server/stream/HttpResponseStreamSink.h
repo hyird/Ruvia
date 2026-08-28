@@ -43,7 +43,7 @@ public:
           head_(head),
           trailers_(memory.resource()),
           scannerEntry_(scannerEntry),
-          worker_(&worker),
+          worker_(worker),
           kind_(kind),
           plan_(plan),
           connectionPlan_(plan.requestConnectionPlan().requireClose()),
@@ -150,7 +150,7 @@ private:
     }
 
     Task<TimerSleepResult> sleep(std::chrono::milliseconds duration, const StopToken& stopToken) {
-        const auto result = co_await sleepFor(*worker_, duration, stopToken);
+        const auto result = co_await sleepFor(worker_, duration, stopToken);
         if (result == TimerSleepResult::kElapsed) {
             scannerEntry_.touch();
         }
@@ -170,7 +170,7 @@ private:
             // or 304) then yields the worker thread each pass instead of
             // hard-spinning the event loop with no suspension point. The minimal
             // positive delay is required because a zero duration is await_ready.
-            static_cast<void>(co_await sleepFor(*worker_, std::chrono::steady_clock::duration(1)));
+            static_cast<void>(co_await sleepFor(worker_, std::chrono::steady_clock::duration(1)));
         }
         state_.ensureBodyAllowed();
 
@@ -281,7 +281,7 @@ private:
     ScannerEntry& scannerEntry_;
     // The connection/server owns an address-stable handle for the complete
     // route dispatch. Streaming must not acquire shared ownership per request.
-    const WorkerHandle* worker_;
+    const WorkerHandle& worker_;
     ResponseStreamKind kind_;
     Http1ResponseStreamPlan plan_;
     Http1ServerConnectionPlan connectionPlan_;

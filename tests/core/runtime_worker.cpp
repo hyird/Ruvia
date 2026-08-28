@@ -104,6 +104,7 @@ bool testWorkerSignalIsWorkerAffine() {
     const auto workerHandle = attachment.loop().handle();
     ruvia::detail::WorkerSignal firstSignal(workerHandle);
     ruvia::detail::WorkerSignal secondSignal(workerHandle);
+    const bool workerBorrowed = &firstSignal.worker() == &workerHandle;
     bool firstResumed = false;
     bool secondResumed = false;
     std::size_t remaining = 2;
@@ -120,7 +121,7 @@ bool testWorkerSignalIsWorkerAffine() {
         secondSignal.notify();
     });
     ioContext.run();
-    return invalidWorkerRejected && firstResumed && secondResumed;
+    return invalidWorkerRejected && workerBorrowed && firstResumed && secondResumed;
 }
 
 bool testWorkerSignalHasNoArbitraryWaiterLimit() {

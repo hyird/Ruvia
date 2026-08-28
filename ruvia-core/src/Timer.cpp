@@ -12,7 +12,7 @@ namespace {
 class SleepAwaiter final {
 public:
     SleepAwaiter(const WorkerHandle& worker, std::chrono::steady_clock::duration duration)
-        : worker_(&worker),
+        : worker_(worker),
           duration_(duration) {}
 
     [[nodiscard]] bool await_ready() const noexcept {
@@ -21,7 +21,7 @@ public:
 
     bool await_suspend(std::coroutine_handle<> continuation) {
         continuation_ = continuation;
-        detail::WorkerHandleAccess::scheduleTimer(*worker_, registration_,
+        detail::WorkerHandleAccess::scheduleTimer(worker_, registration_,
             detail::workerTimerDeadlineAfter(duration_),
             [this](detail::WorkerTimerOutcome outcome) {
                 outcome_ = outcome;
@@ -38,7 +38,7 @@ public:
     }
 
 private:
-    const WorkerHandle* worker_;
+    const WorkerHandle& worker_;
     std::chrono::steady_clock::duration duration_;
     std::coroutine_handle<> continuation_{};
     detail::WorkerTimerRegistration registration_;
@@ -49,7 +49,7 @@ class StoppableSleepAwaiter final {
 public:
     StoppableSleepAwaiter(const WorkerHandle& worker, std::chrono::steady_clock::duration duration,
         StopToken stopToken)
-        : worker_(&worker),
+        : worker_(worker),
           duration_(duration),
           stopToken_(std::move(stopToken)) {}
 
@@ -60,7 +60,7 @@ public:
 
     bool await_suspend(std::coroutine_handle<> continuation) {
         continuation_ = continuation;
-        detail::WorkerHandleAccess::scheduleTimer(*worker_, registration_,
+        detail::WorkerHandleAccess::scheduleTimer(worker_, registration_,
             detail::workerTimerDeadlineAfter(duration_),
             [this](detail::WorkerTimerOutcome outcome) {
                 outcome_ = outcome;
@@ -82,7 +82,7 @@ public:
     }
 
 private:
-    const WorkerHandle* worker_;
+    const WorkerHandle& worker_;
     std::chrono::steady_clock::duration duration_;
     StopToken stopToken_;
     std::coroutine_handle<> continuation_{};

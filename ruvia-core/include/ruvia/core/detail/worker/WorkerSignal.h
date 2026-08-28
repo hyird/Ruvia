@@ -37,6 +37,10 @@ public:
         return waitReserved(WaitReservation(*this));
     }
 
+    [[nodiscard]] const WorkerHandle& worker() const noexcept {
+        return worker_;
+    }
+
     void notify() noexcept;
 
 private:
@@ -46,15 +50,15 @@ private:
         kScheduled,
     };
 
-    [[nodiscard]] static const WorkerHandle* requireWorker(const WorkerHandle& worker) {
+    [[nodiscard]] static const WorkerHandle& requireWorker(const WorkerHandle& worker) {
         if (!worker.valid()) {
             throw std::invalid_argument("worker signal requires a valid worker");
         }
-        return &worker;
+        return worker;
     }
 
     void requireCurrentWorker() const {
-        if (!worker_->isCurrent()) {
+        if (!worker_.isCurrent()) {
             throw std::logic_error("worker signal operation must run on its worker");
         }
     }
@@ -135,7 +139,7 @@ private:
 
     // The owning session/connection keeps its stable worker handle alive until
     // every signal waiter and scheduled resumption has joined.
-    const WorkerHandle* worker_;
+    const WorkerHandle& worker_;
     Awaiter* waiters_{nullptr};
     std::size_t scheduledWaiters_{0};
     std::size_t reservedWaits_{0};
@@ -143,7 +147,7 @@ private:
 };
 
 inline void WorkerSignal::notify() noexcept {
-    if (!worker_->isCurrent()) {
+    if (!worker_.isCurrent()) {
         std::terminate();
     }
 
@@ -162,14 +166,14 @@ inline void WorkerSignal::notify() noexcept {
         // A detached intrusive node has no recoverable owner. Dispatch failure
         // is terminal instead of silently stranding the continuation.
         WorkerHandleAccess::deferOrTerminate(
-            *worker_, [this, waiter, continuation] { resumeScheduled(waiter, continuation); });
+            worker_, [this, waiter, continuation] { resumeScheduled(waiter, continuation); });
         waiter = next;
     }
 }
 
 inline void WorkerSignal::resumeScheduled(
     Awaiter* waiter, std::coroutine_handle<> continuation) noexcept {
-    if (!worker_->isCurrent() || waiter == nullptr || waiter->state != AwaitState::kScheduled ||
+    if (!worker_.isCurrent() || waiter == nullptr || waiter->state != AwaitState::kScheduled ||
         waiter->continuation != continuation || scheduledWaiters_ == 0) {
         std::terminate();
     }

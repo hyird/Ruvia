@@ -46,22 +46,17 @@ namespace ruvia::detail {
 class Http2SansIoResponseStreamSink final {
 public:
     Http2SansIoResponseStreamSink(Http2Connection& connection, std::uint32_t streamId,
-        ResponseStreamKind kind, const WorkerHandle& worker, WorkerSignal& writeSignal,
-        Http2SansIoStreamSignal& streamSignal, std::pmr::memory_resource* resource,
-        HttpKnownMethod requestMethod, HttpResponseCodingSelection responseCoding,
+        ResponseStreamKind kind, WorkerSignal& writeSignal, Http2SansIoStreamSignal& streamSignal,
+        std::pmr::memory_resource* resource, HttpKnownMethod requestMethod,
+        HttpResponseCodingSelection responseCoding,
         HttpResponseCodingAvailability responseCodingAvailability) noexcept
         : connection_(connection),
           streamId_(streamId),
           kind_(kind),
-          worker_(&worker),
           writeSignal_(writeSignal),
           streamSignal_(streamSignal),
           requestMethod_(requestMethod),
           compression_(resource, responseCoding, responseCodingAvailability) {}
-
-    Http2SansIoResponseStreamSink(Http2Connection&, std::uint32_t, ResponseStreamKind,
-        WorkerHandle&&, WorkerSignal&, Http2SansIoStreamSignal&, std::pmr::memory_resource*,
-        HttpKnownMethod, HttpResponseCodingSelection, HttpResponseCodingAvailability) = delete;
 
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
@@ -99,8 +94,8 @@ public:
             // rather than hard-spinning the event loop. A zero duration is
             // await_ready, so the minimal positive tick is what forces the
             // suspension (termination short-circuits it back to ready).
-            co_await Http2SansIoSleepAwaiter(
-                *worker_, streamSignal_.termination(), std::chrono::steady_clock::duration(1));
+            co_await Http2SansIoSleepAwaiter(writeSignal_.worker(), streamSignal_.termination(),
+                std::chrono::steady_clock::duration(1));
         }
         state_.ensureBodyAllowed();
         if (compression_.active()) {
@@ -160,7 +155,7 @@ public:
 
     Task<TimerSleepResult> sleep(std::chrono::milliseconds duration, const StopToken& stopToken) {
         co_return co_await Http2SansIoSleepAwaiter(
-            *worker_, streamSignal_.termination(), duration, stopToken);
+            writeSignal_.worker(), streamSignal_.termination(), duration, stopToken);
     }
 
     Task<void> end(std::span<const HttpHeaderView> trailers) {
@@ -275,9 +270,6 @@ private:
     std::uint32_t streamId_;
     ResponseStreamKind kind_;
     ResponseStreamState state_;
-    // Borrow the stable server-owned handle. Holding a value here would add a
-    // shared ownership operation for every streaming HTTP/2 request.
-    const WorkerHandle* worker_;
     WorkerSignal& writeSignal_;
     Http2SansIoStreamSignal& streamSignal_;
     HttpKnownMethod requestMethod_{HttpKnownMethod::kUnknown};

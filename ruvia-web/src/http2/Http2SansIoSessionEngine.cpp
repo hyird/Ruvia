@@ -363,8 +363,8 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
             failure->applyRequiredResponseHeaders(response);
         } else if (responseStreamEndpoint != nullptr) {
             Http2SansIoResponseStreamSink sink(connection_, streamId,
-                responseStreamEndpoint->kind(), baseServices.worker(), writeSignal_, *streamSignal,
-                workerResource(), request.knownMethod(), *responseCodingPolicy.selection(),
+                responseStreamEndpoint->kind(), writeSignal_, *streamSignal, workerResource(),
+                request.knownMethod(), *responseCodingPolicy.selection(),
                 responseCodingAvailability);
             auto result = co_await dispatchResponseStreamWith(sink, *routes_, request, *resolved,
                 requestMemory, dispatchServices, [this, streamId]() noexcept {
