@@ -32,7 +32,6 @@ using ruvia::Http1ParsedClientResponseHead;
 using ruvia::HttpClientRequestContentSignal;
 using ruvia::HttpClientResponseHead;
 using ruvia::HttpProtocolVersion;
-using ruvia::isValidHttpClientOriginTarget;
 
 template <typename T>
 concept HasAnyRvalueHttp1ClientResponseParseAccessor =

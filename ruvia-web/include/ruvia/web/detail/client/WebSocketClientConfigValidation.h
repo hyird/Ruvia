@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "ruvia/http/HttpClientRequestTarget.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
@@ -42,7 +43,7 @@ inline void validateWebSocketClientConfig(const WebSocketClientConfig& config) {
     if (config.port.has_value() && config.port.value() == 0) {
         throw std::invalid_argument("WebSocket client port must be greater than zero");
     }
-    if (config.target.empty() || config.target.front() != '/') {
+    if (!isValidHttpClientOriginTarget(config.target)) {
         throw std::invalid_argument("WebSocket client target must use origin-form");
     }
     if (config.maxMessageBytes == 0) {

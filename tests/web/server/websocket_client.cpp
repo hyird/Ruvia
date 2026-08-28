@@ -198,6 +198,11 @@ int main() {
             return 5;
         }
         invalidConfig.headers.clear();
+        invalidConfig.target = "/events#fragment";
+        if (!rejectsClientConfig(loop, invalidConfig)) {
+            return 6;
+        }
+        invalidConfig.target = "/";
         ruvia::WebSocketClient plainClientWithInactiveTlsConfig(loop, invalidConfig);
 
         WebSocketOrigin origin;

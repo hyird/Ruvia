@@ -232,6 +232,12 @@ RUVIA_TEST(websocket_client_config_is_validated_before_pmr_normalization) {
     RUVIA_CHECK(throwsInvalid(
         [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
     RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
+
+    config.connectTimeout = std::chrono::milliseconds{5000};
+    config.target = "/events#fragment";
+    RUVIA_CHECK(throwsInvalid(
+        [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
+    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 }
 
 RUVIA_TEST(websocket_client_config_storage_owns_normalized_strings) {
