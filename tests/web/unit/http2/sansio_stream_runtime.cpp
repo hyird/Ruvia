@@ -67,6 +67,7 @@ private:
 
 using ruvia::ProtocolByteLimit;
 using ruvia::detail::Http2BufferedRequestBody;
+using ruvia::detail::Http2BufferedResponseWriter;
 using ruvia::detail::Http2RequestBodyRuntime;
 using ruvia::detail::Http2SansIoBodyQueue;
 using ruvia::detail::Http2SansIoResponseStreamSink;
@@ -110,6 +111,8 @@ template <typename T>
 concept ExposesRvalueHttp2BodyQueuePop = requires(T&& queue) { std::move(queue).pop(); };
 
 static_assert(!HasDirectBodyModeSelection<Http2RequestBodyRuntime>);
+static_assert(!std::copy_constructible<Http2BufferedResponseWriter>);
+static_assert(!std::movable<Http2BufferedResponseWriter>);
 static_assert(!std::default_initializable<Http2RequestBodyRuntime>);
 static_assert(sizeof(Http2RequestBodyRuntime) <
               sizeof(Http2BufferedRequestBody) + sizeof(Http2StreamingRequestBody));

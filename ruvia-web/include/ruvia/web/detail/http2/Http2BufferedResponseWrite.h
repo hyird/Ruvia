@@ -222,6 +222,11 @@ public:
         Http2SansIoStreamRuntimeTable& streamRuntimes, WorkerMemory& worker,
         WorkerSignal& writeSignal) noexcept;
 
+    Http2BufferedResponseWriter(const Http2BufferedResponseWriter&) = delete;
+    Http2BufferedResponseWriter& operator=(const Http2BufferedResponseWriter&) = delete;
+    Http2BufferedResponseWriter(Http2BufferedResponseWriter&&) = delete;
+    Http2BufferedResponseWriter& operator=(Http2BufferedResponseWriter&&) = delete;
+
     [[nodiscard]] Task<Http2BufferedResponseWriteResult> write(std::uint32_t streamId,
         const HttpResponse& response, HttpBufferedResponseWritePlan writePlan);
 
@@ -232,10 +237,10 @@ private:
         std::uint32_t streamId, std::string_view chunk, Http2EndStream endStream);
     void wakeWriter() noexcept;
 
-    Http2Connection* connection_;
-    Http2SansIoStreamRuntimeTable* streamRuntimes_;
-    WorkerMemory* worker_;
-    WorkerSignal* writeSignal_;
+    Http2Connection& connection_;
+    Http2SansIoStreamRuntimeTable& streamRuntimes_;
+    WorkerMemory& worker_;
+    WorkerSignal& writeSignal_;
 };
 
 }  // namespace ruvia::detail

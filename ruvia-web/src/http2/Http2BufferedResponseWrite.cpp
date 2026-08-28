@@ -38,13 +38,13 @@ void submitResetNoThrow(
 Http2BufferedResponseWriter::Http2BufferedResponseWriter(Http2Connection& connection,
     Http2SansIoStreamRuntimeTable& streamRuntimes, WorkerMemory& worker,
     WorkerSignal& writeSignal) noexcept
-    : connection_(&connection),
-      streamRuntimes_(&streamRuntimes),
-      worker_(&worker),
-      writeSignal_(&writeSignal) {}
+    : connection_(connection),
+      streamRuntimes_(streamRuntimes),
+      worker_(worker),
+      writeSignal_(writeSignal) {}
 
 void Http2BufferedResponseWriter::wakeWriter() noexcept {
-    writeSignal_->notify();
+    writeSignal_.notify();
 }
 
 Task<Http2BufferedResponseWriter::DataWriteResult> Http2BufferedResponseWriter::writeData(
@@ -53,12 +53,12 @@ Task<Http2BufferedResponseWriter::DataWriteResult> Http2BufferedResponseWriter::
     // caller ownership and must retry this exact stable view after the older
     // queued input drains.
     for (;;) {
-        auto* runtime = streamRuntimes_->find(streamId);
+        auto* runtime = streamRuntimes_.find(streamId);
         auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
         if (signal != nullptr && signal->terminated()) {
             co_return DataWriteResult::kFailed;
         }
-        const auto result = connection_->submitData(streamId, chunk, endStream);
+        const auto result = connection_.submitData(streamId, chunk, endStream);
         wakeWriter();
         if (result == Http2DataSubmitStatus::kAccepted) {
             co_return DataWriteResult::kCompleted;
@@ -71,7 +71,7 @@ Task<Http2BufferedResponseWriter::DataWriteResult> Http2BufferedResponseWriter::
             result == Http2DataSubmitStatus::kContentLengthIncomplete) {
             co_return DataWriteResult::kFailed;
         }
-        const auto waitResult = co_await awaitHttp2SendWindow(*connection_, streamId, signal);
+        const auto waitResult = co_await awaitHttp2SendWindow(connection_, streamId, signal);
         if (waitResult.aborted() != nullptr) {
             co_return DataWriteResult::kPeerAborted;
         }
@@ -83,18 +83,18 @@ Task<Http2BufferedResponseWriter::DataWriteResult> Http2BufferedResponseWriter::
 
 Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
     std::uint32_t streamId, const HttpResponse& response, HttpBufferedResponseWritePlan writePlan) {
-    auto* stream = connection_->stream(streamId);
+    auto* stream = connection_.stream(streamId);
     if (stream == nullptr || stream->isAborted()) {
         co_return Http2BufferedResponseWriteResult::makePeerAbortedBeforeCommit();
     }
-    auto* runtime = streamRuntimes_->find(streamId);
+    auto* runtime = streamRuntimes_.find(streamId);
     auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
     if (signal != nullptr && signal->terminated()) {
         co_return Http2BufferedResponseWriteResult::makeFailedBeforeCommit();
     }
 
     const auto headResult =
-        connection_->submitResponseHead(streamId, response, std::move(writePlan));
+        connection_.submitResponseHead(streamId, response, std::move(writePlan));
     const auto* submittedHead = headResult.submitted();
     if (submittedHead == nullptr) {
         if (headResult.failure()->peerClosed()) {
@@ -102,7 +102,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
         }
         // Invalid final metadata cannot leave an open peer stream waiting for a
         // response that the transactional head submission rejected.
-        submitResetNoThrow(*connection_, streamId, Http2ErrorCode::kInternalError);
+        submitResetNoThrow(connection_, streamId, Http2ErrorCode::kInternalError);
         wakeWriter();
         co_return Http2BufferedResponseWriteResult::makeFailedBeforeCommit();
     }
@@ -123,16 +123,16 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
         }
         if (!ready) {
             // The committed Content-Length can no longer be honoured.
-            submitResetNoThrow(*connection_, streamId, Http2ErrorCode::kInternalError);
+            submitResetNoThrow(connection_, streamId, Http2ErrorCode::kInternalError);
             wakeWriter();
             co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
         }
 
-        std::pmr::string fileChunk(worker_->allocator<char>());
+        std::pmr::string fileChunk(worker_.allocator<char>());
         ensureFileChunkBuffer(fileChunk);
         std::uint64_t remaining = fileBody->length();
         while (remaining > 0) {
-            auto* live = connection_->stream(streamId);
+            auto* live = connection_.stream(streamId);
             if (live == nullptr || live->isAborted()) {
                 co_return Http2BufferedResponseWriteResult::makePeerAbortedAfterCommit(
                     committedStatus);
@@ -142,7 +142,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
             input.read(fileChunk.data(), static_cast<std::streamsize>(next));
             const auto readBytes = input.gcount();
             if (readBytes <= 0) {
-                submitResetNoThrow(*connection_, streamId, Http2ErrorCode::kInternalError);
+                submitResetNoThrow(connection_, streamId, Http2ErrorCode::kInternalError);
                 wakeWriter();
                 co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
             }
@@ -155,7 +155,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
                     committedStatus);
             }
             if (result == DataWriteResult::kFailed) {
-                submitResetNoThrow(*connection_, streamId, Http2ErrorCode::kInternalError);
+                submitResetNoThrow(connection_, streamId, Http2ErrorCode::kInternalError);
                 wakeWriter();
                 co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
             }
@@ -175,7 +175,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
             co_return Http2BufferedResponseWriteResult::makePeerAbortedAfterCommit(committedStatus);
         }
         if (result == DataWriteResult::kFailed) {
-            submitResetNoThrow(*connection_, streamId, Http2ErrorCode::kInternalError);
+            submitResetNoThrow(connection_, streamId, Http2ErrorCode::kInternalError);
             wakeWriter();
             co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
         }

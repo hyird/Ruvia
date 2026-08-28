@@ -69,7 +69,7 @@ Task<void> runHttp2SansIoSessionImpl(Stream& stream, asio::ip::tcp::socket& sock
     const RouteTable& routes, WorkerMemory& worker, Http2SansIoSessionContext session,
     std::string_view initialBytes) {
     auto executor = asio::any_io_executor(stream.get_executor());
-    Http2SansIoSessionEngine engine(executor, socket, routes, worker, session);
+    Http2SansIoSessionEngine engine(executor, socket, routes, worker, std::move(session));
 
     engine.beginConnection();
     try {
@@ -157,14 +157,15 @@ Task<void> runHttp2SansIoSessionImpl(Stream& stream, asio::ip::tcp::socket& sock
 
 Task<void> runHttp2SansIoSession(asio::ip::tcp::socket& stream, const RouteTable& routes,
     WorkerMemory& worker, Http2SansIoSessionContext session, std::string_view initialBytes) {
-    return runHttp2SansIoSessionImpl(stream, stream, routes, worker, session, initialBytes);
+    return runHttp2SansIoSessionImpl(
+        stream, stream, routes, worker, std::move(session), initialBytes);
 }
 
 Task<void> runHttp2SansIoSession(asio::ssl::stream<asio::ip::tcp::socket&>& stream,
     const RouteTable& routes, WorkerMemory& worker, Http2SansIoSessionContext session,
     std::string_view initialBytes) {
     return runHttp2SansIoSessionImpl(
-        stream, stream.next_layer(), routes, worker, session, initialBytes);
+        stream, stream.next_layer(), routes, worker, std::move(session), initialBytes);
 }
 
 }  // namespace ruvia::detail

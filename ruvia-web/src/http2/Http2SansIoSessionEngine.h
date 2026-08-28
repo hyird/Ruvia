@@ -35,6 +35,11 @@ public:
     Http2SansIoSessionEngine(asio::any_io_executor executor, asio::ip::tcp::socket& socket,
         const RouteTable& routes, WorkerMemory& worker, Http2SansIoSessionContext session);
 
+    Http2SansIoSessionEngine(const Http2SansIoSessionEngine&) = delete;
+    Http2SansIoSessionEngine& operator=(const Http2SansIoSessionEngine&) = delete;
+    Http2SansIoSessionEngine(Http2SansIoSessionEngine&&) = delete;
+    Http2SansIoSessionEngine& operator=(Http2SansIoSessionEngine&&) = delete;
+
     void beginConnection();
     void drainEvents();
     [[nodiscard]] Http2FeedResult feedAndDrain(std::string_view bytes);
@@ -68,9 +73,9 @@ private:
     void unpinStreamNoThrow(std::uint32_t streamId) noexcept;
 
     asio::any_io_executor executor_;
-    asio::ip::tcp::socket* socket_;
-    const RouteTable* routes_;
-    WorkerMemory* worker_;
+    asio::ip::tcp::socket& socket_;
+    const RouteTable& routes_;
+    WorkerMemory& worker_;
     Http2SansIoSessionContext session_;
     std::string_view remoteAddress_;
     Http2Connection connection_;
