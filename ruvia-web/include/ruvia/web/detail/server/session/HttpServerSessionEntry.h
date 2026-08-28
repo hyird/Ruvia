@@ -37,9 +37,7 @@ inline Task<void> WebWorkerRuntime::handleSession(
         if (!remoteEc) {
             assignRemoteAddress(remoteAddress, remoteEndpoint.address());
         }
-        ContextServices baseServices = capabilities_.contextServices()
-                                           .withWorker(workerRuntime_.handle())
-                                           .withStopToken(stopToken_);
+        ContextServices baseServices = capabilities_.contextServices().withStopToken(stopToken_);
         if (listener.tls() != nullptr) {
             asio::ssl::stream<TcpSocket&> tlsStream(socket, *listener.tlsContext);
             {

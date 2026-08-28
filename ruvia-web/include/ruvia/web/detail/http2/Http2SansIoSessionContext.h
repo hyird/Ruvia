@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <stdexcept>
+#include <utility>
 
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
@@ -16,8 +18,8 @@ namespace ruvia::detail {
 class Http2SansIoSessionContext final {
 public:
     Http2SansIoSessionContext(ContextServices services, const HttpServerOptions& options,
-        ConnectionScanner::Entry& scannerEntry, const HttpServerWorkerState& workerState) noexcept
-        : services_(services),
+        ConnectionScanner::Entry& scannerEntry, const HttpServerWorkerState& workerState)
+        : services_(requireServices(std::move(services))),
           options_(options),
           scannerEntry_(scannerEntry),
           workerState_(workerState) {}
@@ -39,6 +41,13 @@ public:
     }
 
 private:
+    [[nodiscard]] static ContextServices requireServices(ContextServices services) {
+        if (!services.worker().valid()) {
+            throw std::invalid_argument("HTTP/2 session requires a valid worker");
+        }
+        return services;
+    }
+
     ContextServices services_;
     const HttpServerOptions& options_;
     ConnectionScanner::Entry& scannerEntry_;

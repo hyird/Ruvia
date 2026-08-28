@@ -40,7 +40,7 @@ inline ruvia::ScopedOperation<std::string_view> makeExpiredContextTextRead() {
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
     ruvia::detail::HttpRequestAccess::setBody(request, "body");
     auto context = ruvia::detail::ContextAccess::make(
-        memory, request, ruvia::detail::ContextServices({}, nullptr, 1024));
+        memory, request, ruvia::detail::ContextServices{}.withMaxDecodedBodyBytes(1024));
     return context.req().text();
 }
 
@@ -68,8 +68,8 @@ inline ContextBodyReadObservation readContextGzipBody(
     }
     ruvia::detail::HttpRequestAccess::setBody(request, encoded);
 
-    auto context = ruvia::detail::ContextAccess::make(
-        memory, request, ruvia::detail::ContextServices({}, nullptr, maxDecodedBodyBytes));
+    auto context = ruvia::detail::ContextAccess::make(memory, request,
+        ruvia::detail::ContextServices{}.withMaxDecodedBodyBytes(maxDecodedBodyBytes));
     asio::io_context io(1);
     auto future = asio::co_spawn(
         io, ruvia::detail::taskAsAwaitable(readContextText(context)), asio::use_future);

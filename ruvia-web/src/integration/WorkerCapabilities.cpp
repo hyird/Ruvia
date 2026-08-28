@@ -1,17 +1,29 @@
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
 
+#include <stdexcept>
 #include <utility>
 
 #include "ruvia/web/detail/http/context/ContextServices.h"
 
 namespace ruvia::detail {
+namespace {
+
+[[nodiscard]] const WorkerHandle& requireWorkerCapabilitiesWorker(const WorkerHandle& worker) {
+    if (!worker.valid()) {
+        throw std::invalid_argument("worker capabilities require a valid worker");
+    }
+    return worker;
+}
+
+}  // namespace
 
 WorkerCapabilities::WorkerCapabilities(asio::io_context& ioContext, const WorkerHandle& worker,
     std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions,
     WorkerCapabilityOptions options, ConnectionScanner& scanner)
-    : databases_(ioContext, resource, definitions.databases, &worker),
-      redis_(ioContext, resource, definitions.redis, worker),
-      httpClients_(ioContext, worker, resource, definitions.httpClients),
+    : worker_(requireWorkerCapabilitiesWorker(worker)),
+      databases_(ioContext, resource, definitions.databases, &worker_),
+      redis_(ioContext, resource, definitions.redis, worker_),
+      httpClients_(ioContext, worker_, resource, definitions.httpClients),
       workerStates_(resource, definitions.workerStates),
       rateLimiter_(
           options.defaultRateLimit, options.routeRateLimits, options.rateLimitCapacity, resource),
@@ -54,9 +66,9 @@ void WorkerCapabilities::shutdownWorkerState() noexcept {
     workerStates_.shutdown();
 }
 
-ContextServices WorkerCapabilities::contextServices() noexcept {
+ContextServices WorkerCapabilities::contextServices() {
     ContextServices services(
-        clientRegistries(), &rateLimiter_, options_.maxDecodedBodyBytes, nullptr);
+        worker_, clientRegistries(), &rateLimiter_, options_.maxDecodedBodyBytes);
     services = services.withWorkerStates(workerStates_)
                    .withBlockingPool(options_.blockingPool)
                    .withPrecompressedStaticFiles(options_.precompressedStaticFiles)

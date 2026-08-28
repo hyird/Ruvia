@@ -86,7 +86,7 @@ Task<void> runHttp2ServerSession(
     (void)setup.socket;  // the sans-I/O session needs only the (possibly TLS) setup.stream
     co_await runHttp2SansIoSession(setup.stream, setup.routes, setup.memory,
         Http2SansIoSessionContext(
-            setup.services, setup.options, setup.scannerEntry, setup.workerState),
+            std::move(setup.services), setup.options, setup.scannerEntry, setup.workerState),
         initialBytes);
 }
 

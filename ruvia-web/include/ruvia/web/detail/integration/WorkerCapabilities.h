@@ -56,6 +56,8 @@ public:
     WorkerCapabilities(asio::io_context& ioContext, const WorkerHandle& worker,
         std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions,
         WorkerCapabilityOptions options, ConnectionScanner& scanner);
+    WorkerCapabilities(asio::io_context&, WorkerHandle&&, std::pmr::memory_resource*,
+        WorkerCapabilityDefinitions, WorkerCapabilityOptions, ConnectionScanner&) = delete;
 
     WorkerCapabilities(const WorkerCapabilities&) = delete;
     WorkerCapabilities& operator=(const WorkerCapabilities&) = delete;
@@ -66,13 +68,14 @@ public:
     void initializeWorkerState();
     void shutdownWorkerState() noexcept;
 
-    [[nodiscard]] ContextServices contextServices() noexcept;
+    [[nodiscard]] ContextServices contextServices();
     [[nodiscard]] WorkerClientRegistryView clientRegistries() noexcept;
     [[nodiscard]] const WorkerStateRegistry& workerStates() const noexcept;
     [[nodiscard]] RateLimiter& rateLimiter() noexcept;
     [[nodiscard]] BlockingPool* blockingPool() const noexcept;
 
 private:
+    const WorkerHandle& worker_;
     DbRegistry databases_;
     RedisRegistry redis_;
     ConnectionScanner::WorkerMaintenanceRegistration databaseDeadlineMaintenance_;

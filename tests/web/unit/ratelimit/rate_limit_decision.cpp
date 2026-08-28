@@ -72,7 +72,7 @@ RouteLimitResult runRouteLimit(
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     HttpRequestAccess::setResource(request, memory.resource());
-    ContextServices services({}, &limiter);
+    ContextServices services = ContextServices{}.withRateLimiter(limiter);
     auto context = ContextAccess::make(memory, request, scope, services);
 
     RouteLimitResult r;

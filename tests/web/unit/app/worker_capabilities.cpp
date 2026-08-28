@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <memory>
 #include <type_traits>
 
@@ -18,6 +19,9 @@ static_assert(!std::is_move_constructible_v<ruvia::detail::WorkerCapabilities>);
 static_assert(std::is_trivially_copyable_v<ruvia::detail::WorkerClientRegistryView>);
 static_assert(ruvia::detail::WorkerCapabilityOptions{}.rateLimitCapacity ==
               ruvia::kDefaultRateLimitCapacityPerWorker);
+static_assert(!std::constructible_from<ruvia::detail::WorkerCapabilities, asio::io_context&,
+    ruvia::WorkerHandle&&, std::pmr::memory_resource*, ruvia::detail::WorkerCapabilityDefinitions,
+    ruvia::detail::WorkerCapabilityOptions, ruvia::detail::ConnectionScanner&>);
 
 RUVIA_TEST(worker_capabilities_exposes_one_address_stable_capability_graph) {
     asio::io_context ioContext;
@@ -38,6 +42,7 @@ RUVIA_TEST(worker_capabilities_exposes_one_address_stable_capability_graph) {
     RUVIA_CHECK(requestClients.httpClients() == ownedClients.httpClients());
     RUVIA_CHECK(services.workerStates() == &capabilities.workerStates());
     RUVIA_CHECK(services.rateLimiter() == &capabilities.rateLimiter());
+    RUVIA_CHECK(&services.worker() == &worker);
     RUVIA_CHECK_EQ(services.maxDecodedBodyBytes(), ruvia::kDefaultMaxBufferedBodyBytes);
     RUVIA_CHECK(services.blockingPool() == nullptr);
 

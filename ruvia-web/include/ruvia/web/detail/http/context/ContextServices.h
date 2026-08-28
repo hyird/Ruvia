@@ -10,6 +10,7 @@
 #include "ruvia/core/StopToken.h"
 
 #include <cstddef>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -35,14 +36,16 @@ public:
     ContextServices() noexcept
         : connInfo_(ConnInfo::plain({})) {}
 
-    ContextServices(WorkerClientRegistryView clientRegistries, RateLimiter* rateLimiter = nullptr,
-        std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes,
-        const WorkerHandle* worker = nullptr) noexcept
+    ContextServices(const WorkerHandle& worker, WorkerClientRegistryView clientRegistries = {},
+        RateLimiter* rateLimiter = nullptr,
+        std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes)
         : clientRegistries_(clientRegistries),
           rateLimiter_(rateLimiter),
           maxDecodedBodyBytes_(maxDecodedBodyBytes),
-          worker_(worker),
+          worker_(&requireWorker(worker)),
           connInfo_(ConnInfo::plain({})) {}
+    ContextServices(WorkerHandle&&, WorkerClientRegistryView = {}, RateLimiter* = nullptr,
+        std::size_t = kDefaultMaxBufferedBodyBytes) = delete;
 
     [[nodiscard]] constexpr WorkerClientRegistryView clientRegistries() const noexcept {
         return clientRegistries_;
@@ -50,6 +53,12 @@ public:
 
     [[nodiscard]] RateLimiter* rateLimiter() const noexcept {
         return rateLimiter_;
+    }
+
+    [[nodiscard]] ContextServices withRateLimiter(RateLimiter& value) const noexcept {
+        auto services = *this;
+        services.rateLimiter_ = &value;
+        return services;
     }
 
     [[nodiscard]] const Env* env() const noexcept {
@@ -66,6 +75,12 @@ public:
         return maxDecodedBodyBytes_;
     }
 
+    [[nodiscard]] ContextServices withMaxDecodedBodyBytes(std::size_t value) const noexcept {
+        auto services = *this;
+        services.maxDecodedBodyBytes_ = value;
+        return services;
+    }
+
     [[nodiscard]] const WorkerHandle& worker() const noexcept {
         if (worker_ != nullptr) {
             return *worker_;
@@ -74,10 +89,15 @@ public:
         return invalidWorker;
     }
 
-    // The handle is connection-owned and outlives every ContextServices copy.
-    [[nodiscard]] ContextServices withWorker(const WorkerHandle& value) const noexcept {
+    // The worker runtime owns the address-stable handle and outlives every
+    // ContextServices copy used by one of its sessions.
+    [[nodiscard]] ContextServices withWorker(const WorkerHandle& value) const {
+        const auto& worker = requireWorker(value);
+        if (worker_ != nullptr && worker_ != &worker) {
+            throw std::logic_error("context services cannot change workers");
+        }
         auto services = *this;
-        services.worker_ = &value;
+        services.worker_ = &worker;
         return services;
     }
     ContextServices withWorker(WorkerHandle&&) const = delete;
@@ -249,6 +269,13 @@ public:
         std::string_view, std::basic_string<char, Traits, Allocator>&&) const = delete;
 
 private:
+    [[nodiscard]] static const WorkerHandle& requireWorker(const WorkerHandle& worker) {
+        if (!worker.valid()) {
+            throw std::invalid_argument("context services require a valid worker");
+        }
+        return worker;
+    }
+
     WorkerClientRegistryView clientRegistries_;
     RateLimiter* rateLimiter_{nullptr};
     const Env* env_{nullptr};

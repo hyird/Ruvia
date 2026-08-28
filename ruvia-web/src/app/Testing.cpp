@@ -276,8 +276,10 @@ TestResponse TestApp::request(const TestRequest& request) {
             "TestApp cannot dispatch a route with Deadline; use a loopback WebWorkerRuntime");
     }
 
-    detail::ContextServices services(
-        {}, impl_->rateLimiter ? &*impl_->rateLimiter : nullptr);
+    detail::ContextServices services;
+    if (impl_->rateLimiter.has_value()) {
+        services = services.withRateLimiter(*impl_->rateLimiter);
+    }
     services = services.withEnv(impl_->env).withWorkerStates(*impl_->workerStates);
 
     std::optional<HttpProtocolError> bodyLimitError;

@@ -1,7 +1,8 @@
 #pragma once
 
-#include <string_view>
 #include <memory>
+#include <string_view>
+#include <utility>
 
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
@@ -14,9 +15,9 @@ namespace ruvia::test {
 // installed runtime contract.
 class Http2SansIoSessionFixture final {
 public:
-    [[nodiscard]] detail::Http2SansIoSessionContext context(
-        detail::ContextServices services = {}) noexcept {
-        return detail::Http2SansIoSessionContext(services, options, scannerEntry, workerState);
+    [[nodiscard]] detail::Http2SansIoSessionContext context(detail::ContextServices services) {
+        return detail::Http2SansIoSessionContext(
+            std::move(services), options, scannerEntry, workerState);
     }
 
     detail::HttpServerOptions options;

@@ -3,6 +3,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/Context.h"
@@ -24,7 +25,9 @@
 #endif
 
 #include <chrono>
+#include <concepts>
 #include <cstdint>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -34,6 +37,8 @@
 #include <type_traits>
 #include <utility>
 
+#include <asio/io_context.hpp>
+
 namespace {
 
 template <typename Services>
@@ -41,6 +46,10 @@ concept HasBodyReaderAccessor = requires(const Services& services) { services.bo
 
 template <typename Services>
 concept HasBodyLoaderAccessor = requires(const Services& services) { services.bodyLoader(); };
+
+static_assert(!std::constructible_from<ruvia::detail::ContextServices, ruvia::WorkerHandle&&>);
+static_assert(!std::constructible_from<ruvia::detail::ContextServices,
+    ruvia::detail::WorkerClientRegistryView, ruvia::detail::RateLimiter*, std::size_t>);
 
 template <typename Services>
 concept HasWebSocketAccessor = requires(const Services& services) { services.webSocket(); };
@@ -234,12 +243,45 @@ RUVIA_TEST(context_request_body_source_has_one_active_alternative) {
 }
 
 RUVIA_TEST(context_services_borrows_address_stable_worker) {
-    const ruvia::WorkerHandle handle;
-    const ruvia::detail::ContextServices services(
-        {}, nullptr, ruvia::kDefaultMaxBufferedBodyBytes, &handle);
+    asio::io_context ioContext;
+    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
+    const auto handle = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    const ruvia::detail::ContextServices services(handle);
     const auto derived = services.withPlainTransport("127.0.0.1");
     RUVIA_CHECK(&services.worker() == &handle);
     RUVIA_CHECK(&derived.worker() == &handle);
+}
+
+RUVIA_TEST(context_services_rejects_an_invalid_worker_binding) {
+    const ruvia::WorkerHandle worker;
+    bool rejected = false;
+    try {
+        const ruvia::detail::ContextServices services(worker);
+        static_cast<void>(services);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(context_services_cannot_be_rebound_to_another_worker) {
+    asio::io_context firstIoContext;
+    asio::io_context secondIoContext;
+    const auto firstDispatcher =
+        std::make_shared<ruvia::detail::WorkerDispatcher>(firstIoContext, 8);
+    const auto secondDispatcher =
+        std::make_shared<ruvia::detail::WorkerDispatcher>(secondIoContext, 8);
+    const auto firstWorker = ruvia::detail::WorkerHandleAccess::make(firstDispatcher);
+    const auto secondWorker = ruvia::detail::WorkerHandleAccess::make(secondDispatcher);
+    const ruvia::detail::ContextServices services(firstWorker);
+
+    bool rejected = false;
+    try {
+        static_cast<void>(services.withWorker(secondWorker));
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
 }
 
 RUVIA_TEST(context_rejects_unconfigured_worker_clients_consistently) {

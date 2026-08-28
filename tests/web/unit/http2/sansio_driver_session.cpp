@@ -1,6 +1,12 @@
 #include "sansio_driver_fixture.h"
 
 #include <concepts>
+#include <memory>
+#include <stdexcept>
+
+#include <asio/io_context.hpp>
+
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 
 // Sans-I/O HTTP/2 driver: connection setup, round trips, multiplexing and teardown.
 
@@ -16,12 +22,26 @@ RUVIA_TEST(sansio_driver_h2_inactivity_phase_counts_predispatch_runtime) {
 }
 
 RUVIA_TEST(sansio_driver_h2_session_context_owns_complete_wiring) {
+    asio::io_context ioContext;
+    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     ruvia::detail::HttpServerOptions options;
     ruvia::detail::ConnectionScanner::Entry scannerEntry;
     auto workerState = ruvia::detail::HttpServerWorkerState::kRunning;
+
+    bool invalidWorkerRejected = false;
+    try {
+        const ruvia::detail::Http2SansIoSessionContext invalid(
+            ruvia::detail::ContextServices{}, options, scannerEntry, workerState);
+        static_cast<void>(invalid);
+    } catch (const std::invalid_argument&) {
+        invalidWorkerRejected = true;
+    }
+    RUVIA_CHECK(invalidWorkerRejected);
+
     const ruvia::detail::Http2SansIoSessionContext session(
-        ruvia::detail::ContextServices{}.withTlsTransport("192.0.2.1", "CN=test-client"), options,
-        scannerEntry, workerState);
+        ruvia::detail::ContextServices(worker).withTlsTransport("192.0.2.1", "CN=test-client"),
+        options, scannerEntry, workerState);
 
     RUVIA_CHECK(&session.options() == &options);
     RUVIA_CHECK(&session.scannerEntry() == &scannerEntry);
