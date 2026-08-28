@@ -3,6 +3,18 @@
 #include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia::detail {
+namespace {
+
+// This runs in the first member initializer so invalid input is rejected before
+// even implementation-specific PMR container bookkeeping can touch owner memory.
+[[nodiscard]] std::pmr::memory_resource* validatedHttpClientResource(
+    std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions) {
+    validateCapabilityAliases(
+        definitions, "HTTP client alias must not be empty", "duplicate HTTP client alias");
+    return pmrResourceOrDefault(resource);
+}
+
+}  // namespace
 
 HttpClientRegistry::HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
     std::pmr::memory_resource* resource, const HttpClientConfig& defaultConfig)
@@ -32,11 +44,9 @@ HttpClientRequestView HttpClientRequestStorageAccess::view(
 
 HttpClientRegistry::HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
     std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions)
-    : resource_(pmrResourceOrDefault(resource)),
+    : resource_(validatedHttpClientResource(resource, definitions)),
       pools_(resource_),
       aliasIndex_(resource_) {
-    validateCapabilityAliases(
-        definitions, "HTTP client alias must not be empty", "duplicate HTTP client alias");
     aliasIndex_.build(definitions);
     pools_.reserve(definitions.size());
     for (const auto& definition : definitions) {

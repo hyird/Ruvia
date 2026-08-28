@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <memory_resource>
-#include <new>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -33,19 +32,21 @@ struct TrackedState final {
 
 struct MissingState final {};
 
-class RejectingMemoryResource final : public std::pmr::memory_resource {
+class CountingMemoryResource final : public std::pmr::memory_resource {
 public:
     [[nodiscard]] std::size_t allocationCount() const noexcept {
         return allocationCount_;
     }
 
 private:
-    void* do_allocate(std::size_t, std::size_t) override {
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
         ++allocationCount_;
-        throw std::bad_alloc();
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
     }
 
-    void do_deallocate(void*, std::size_t, std::size_t) override {}
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
 
     [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
@@ -91,11 +92,11 @@ RUVIA_TEST(worker_state_registry_rejects_duplicate_types_before_factory_or_owner
             return StateInit{&destroyed, 2};
         }),
     };
-    RejectingMemoryResource resource;
-    ruvia::detail::WorkerStateRegistry registry(&resource, definitions);
+    CountingMemoryResource resource;
 
     bool rejected = false;
     try {
+        ruvia::detail::WorkerStateRegistry registry(&resource, definitions);
         registry.initialize();
     } catch (const std::invalid_argument& error) {
         rejected = std::string_view(error.what()) == "worker state type is already registered";

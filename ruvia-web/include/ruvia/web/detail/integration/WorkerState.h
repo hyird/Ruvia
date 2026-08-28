@@ -146,7 +146,7 @@ class WorkerStateRegistry final {
 public:
     WorkerStateRegistry(
         std::pmr::memory_resource* resource, std::span<const WorkerStateDefinition> definitions)
-        : resource_(pmrResourceOrDefault(resource)),
+        : resource_(validatedResource(resource, definitions)),
           definitions_(definitions),
           entries_(resource_),
           typeIndex_(resource_) {}
@@ -202,6 +202,14 @@ public:
     }
 
 private:
+    // Called from the first member initializer so malformed startup input cannot
+    // allocate container bookkeeping on standard libraries with debug proxies.
+    [[nodiscard]] static std::pmr::memory_resource* validatedResource(
+        std::pmr::memory_resource* resource, std::span<const WorkerStateDefinition> definitions) {
+        validateWorkerStateDefinitions(definitions);
+        return pmrResourceOrDefault(resource);
+    }
+
     struct InstanceEntry final {
         const void* typeKey{nullptr};
         void* instance{nullptr};
