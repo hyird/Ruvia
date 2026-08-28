@@ -190,7 +190,7 @@ DbHandle detail::DbRegistry::get(
 
 DbHandle detail::DbRegistry::get(std::string_view alias, std::pmr::memory_resource* resource,
     ScopedOperationScope& operationScope) const {
-    const auto match = aliasIndex_.find(clients_, alias);
+    const auto match = aliasIndex_.find(alias);
     if (match.has_value()) {
         return DbHandle(poolRef(clients_[*match].client), resource, operationScope);
     }

@@ -385,7 +385,7 @@ private:
         DbConfigStorage config);
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> clients_;
-    CapabilityAliasIndex aliasIndex_;
+    NamedCapabilityIndex aliasIndex_;
 };
 
 }  // namespace ruvia::detail

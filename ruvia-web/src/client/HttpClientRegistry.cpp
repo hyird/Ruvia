@@ -91,7 +91,7 @@ HttpClientHandle HttpClientRegistry::get(std::string_view alias,
     if (closing_) {
         throw HttpClientError(HttpClientError::Code::kClosing, "http client registry is closing");
     }
-    const auto found = aliasIndex_.find(pools_, alias);
+    const auto found = aliasIndex_.find(alias);
     if (!found.has_value()) {
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "named HTTP client is not configured");

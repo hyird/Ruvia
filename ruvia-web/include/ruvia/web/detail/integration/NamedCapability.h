@@ -71,38 +71,41 @@ void validateCapabilityAliases(
 
 // Immutable startup-built index shared by worker-local named capabilities.
 // Entries retain ownership of alias text and their order stays fixed after
-// build; request-time lookup performs one allocation-free binary search.
-class CapabilityAliasIndex final {
+// build; the index binds those aliases to their original positions so lookup
+// cannot accidentally use a different entry set. Request-time lookup performs
+// one allocation-free binary search.
+class NamedCapabilityIndex final {
 public:
-    explicit CapabilityAliasIndex(std::pmr::memory_resource* resource)
-        : indices_(pmrResourceOrDefault(resource)) {}
+    explicit NamedCapabilityIndex(std::pmr::memory_resource* resource)
+        : aliases_(pmrResourceOrDefault(resource)) {}
 
     template <typename Entries>
     void build(const Entries& entries) {
         if (built_) {
-            throw std::logic_error("capability alias index may only be built once");
+            throw std::logic_error("named capability index may only be built once");
         }
-        indices_.resize(entries.size());
-        for (std::size_t index = 0; index < indices_.size(); ++index) {
-            indices_[index] = index;
-            if (std::string_view(entries[index].alias) == kDefaultCapabilityAlias) {
-                defaultIndex_ = index;
+        std::pmr::vector<IndexedAlias> aliases(aliases_.get_allocator().resource());
+        aliases.reserve(entries.size());
+        std::optional<std::size_t> defaultIndex;
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const std::string_view alias = entries[index].alias;
+            aliases.push_back(IndexedAlias{alias, index});
+            if (alias == kDefaultCapabilityAlias) {
+                defaultIndex = index;
             }
         }
-        std::ranges::sort(indices_, {},
-            [&entries](std::size_t index) -> std::string_view { return entries[index].alias; });
+        std::ranges::sort(aliases, {}, &IndexedAlias::alias);
+        aliases_.swap(aliases);
+        defaultIndex_ = defaultIndex;
         built_ = true;
     }
 
-    template <typename Entries>
-    [[nodiscard]] std::optional<std::size_t> find(
-        const Entries& entries, std::string_view alias) const noexcept {
-        const auto match = std::ranges::lower_bound(indices_, alias, {},
-            [&entries](std::size_t index) -> std::string_view { return entries[index].alias; });
-        if (match == indices_.end() || std::string_view(entries[*match].alias) != alias) {
+    [[nodiscard]] std::optional<std::size_t> find(std::string_view alias) const noexcept {
+        const auto match = std::ranges::lower_bound(aliases_, alias, {}, &IndexedAlias::alias);
+        if (match == aliases_.end() || match->alias != alias) {
             return std::nullopt;
         }
-        return *match;
+        return match->index;
     }
 
     [[nodiscard]] std::optional<std::size_t> defaultIndex() const noexcept {
@@ -110,7 +113,12 @@ public:
     }
 
 private:
-    std::pmr::vector<std::size_t> indices_;
+    struct IndexedAlias final {
+        std::string_view alias;
+        std::size_t index;
+    };
+
+    std::pmr::vector<IndexedAlias> aliases_;
     std::optional<std::size_t> defaultIndex_;
     bool built_{false};
 };

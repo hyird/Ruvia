@@ -301,7 +301,7 @@ private:
         HttpClientConfigStorage config);
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> pools_;
-    CapabilityAliasIndex aliasIndex_;
+    NamedCapabilityIndex aliasIndex_;
     bool closing_{false};
 };
 

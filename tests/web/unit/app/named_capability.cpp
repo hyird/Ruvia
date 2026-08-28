@@ -32,6 +32,12 @@ struct ConfigStorage final {
 
 using Definition = ruvia::detail::NamedCapabilityDefinition<ConfigStorage>;
 
+template <typename Index>
+concept FindsAgainstExternalEntries = requires(
+    const Index& index, const std::vector<Entry>& entries) { index.find(entries, "alias"); };
+
+static_assert(!FindsAgainstExternalEntries<ruvia::detail::NamedCapabilityIndex>);
+
 class RejectingMemoryResource final : public std::pmr::memory_resource {
 public:
     [[nodiscard]] std::size_t allocationCount() const noexcept {
@@ -139,24 +145,24 @@ RUVIA_TEST(http_client_registry_rejects_alias_set_before_pool_allocation) {
     RUVIA_CHECK_EQ(ownerResource.allocationCount(), std::size_t{0});
 }
 
-RUVIA_TEST(capability_alias_index_preserves_entry_order_and_finds_exact_names) {
+RUVIA_TEST(named_capability_index_preserves_entry_order_and_finds_exact_names) {
     const std::vector<Entry> entries{{"zeta"}, {"default"}, {"alpha"}, {"alpha-long"}};
-    ruvia::detail::CapabilityAliasIndex index(std::pmr::new_delete_resource());
+    ruvia::detail::NamedCapabilityIndex index(std::pmr::new_delete_resource());
     index.build(entries);
 
-    RUVIA_CHECK_EQ(index.find(entries, "zeta").value_or(entries.size()), std::size_t{0});
+    RUVIA_CHECK_EQ(index.find("zeta").value_or(entries.size()), std::size_t{0});
     RUVIA_CHECK_EQ(index.defaultIndex().value_or(entries.size()), std::size_t{1});
-    RUVIA_CHECK_EQ(index.find(entries, "alpha").value_or(entries.size()), std::size_t{2});
-    RUVIA_CHECK_EQ(index.find(entries, "alpha-long").value_or(entries.size()), std::size_t{3});
-    RUVIA_CHECK(!index.find(entries, "alp").has_value());
-    RUVIA_CHECK(!index.find(entries, "missing").has_value());
+    RUVIA_CHECK_EQ(index.find("alpha").value_or(entries.size()), std::size_t{2});
+    RUVIA_CHECK_EQ(index.find("alpha-long").value_or(entries.size()), std::size_t{3});
+    RUVIA_CHECK(!index.find("alp").has_value());
+    RUVIA_CHECK(!index.find("missing").has_value());
 }
 
-RUVIA_TEST(capability_alias_index_rejects_rebuild_after_entry_set_is_finalized) {
-    ruvia::detail::CapabilityAliasIndex index(std::pmr::new_delete_resource());
+RUVIA_TEST(named_capability_index_rejects_rebuild_after_entry_set_is_finalized) {
+    ruvia::detail::NamedCapabilityIndex index(std::pmr::new_delete_resource());
     const std::vector<Entry> initial{{"old"}};
     index.build(initial);
-    RUVIA_CHECK(index.find(initial, "old").has_value());
+    RUVIA_CHECK(index.find("old").has_value());
     RUVIA_CHECK(!index.defaultIndex().has_value());
 
     const std::vector<Entry> replacement{{"second"}, {"first"}};
