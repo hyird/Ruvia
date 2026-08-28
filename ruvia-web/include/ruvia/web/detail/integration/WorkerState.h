@@ -7,8 +7,10 @@
 // single-threaded worker) to application-owned types: the instance is only
 // ever touched from its worker's thread, so it needs no synchronization.
 
+#include <algorithm>
 #include <cstddef>
 #include <exception>
+#include <functional>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
@@ -17,6 +19,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/core/memory/ProcessResource.h"
 
 namespace ruvia::detail {
@@ -85,6 +88,11 @@ public:
         return typeKey_;
     }
 
+    [[nodiscard]] bool valid() const noexcept {
+        return typeKey_ != nullptr && factory_ != nullptr && destroyFactory_ != nullptr &&
+               createInstance_ != nullptr && destroyInstance_ != nullptr;
+    }
+
 private:
     friend class WorkerStateRegistry;
 
@@ -101,18 +109,47 @@ private:
     DestroyInstance destroyInstance_{nullptr};
 };
 
+template <typename Definitions>
+void appendWorkerStateDefinition(Definitions& definitions, WorkerStateDefinition&& definition) {
+    if (!definition.valid()) {
+        throw std::invalid_argument("worker state definition is invalid");
+    }
+    for (const auto& existing : definitions) {
+        if (existing.typeKey() == definition.typeKey()) {
+            throw std::invalid_argument("worker state type is already registered");
+        }
+    }
+    definitions.push_back(std::move(definition));
+}
+
+template <typename Definitions>
+void validateWorkerStateDefinitions(const Definitions& definitions) {
+    for (std::size_t index = 0; index < definitions.size(); ++index) {
+        if (!definitions[index].valid()) {
+            throw std::invalid_argument("worker state definition is invalid");
+        }
+        for (std::size_t previous = 0; previous < index; ++previous) {
+            if (definitions[previous].typeKey() == definitions[index].typeKey()) {
+                throw std::invalid_argument("worker state type is already registered");
+            }
+        }
+    }
+}
+
 // The per-worker instances. WebWorkerRuntime explicitly initializes and
 // destroys the registry inside its active worker identity window; a throwing
 // factory fails startup before the worker dispatches callbacks or requests.
-// Lookup is a linear scan: the set is small, fixed after initialization, and
-// read-only afterwards.
+// Registration order remains the lifetime order (destruction is reversed),
+// while a separate immutable type index gives request-time lookup one
+// allocation-free binary search.
 class WorkerStateRegistry final {
 public:
     WorkerStateRegistry(
         std::pmr::memory_resource* resource, std::span<const WorkerStateDefinition> definitions)
-        : resource_(resource),
+        : resource_(pmrResourceOrDefault(resource)),
           definitions_(definitions),
-          entries_(resource) {}
+          entries_(resource_),
+          typeIndex_(resource_) {}
 
     WorkerStateRegistry(const WorkerStateRegistry&) = delete;
     WorkerStateRegistry& operator=(const WorkerStateRegistry&) = delete;
@@ -129,13 +166,17 @@ public:
         if (initialized_) {
             throw std::logic_error("worker state registry is already initialized");
         }
+        validateWorkerStateDefinitions(definitions_);
         entries_.reserve(definitions_.size());
+        typeIndex_.reserve(definitions_.size());
         try {
             for (const auto& definition : definitions_) {
-                entries_.push_back(Entry{definition.typeKey_,
+                entries_.push_back(InstanceEntry{definition.typeKey_,
                     definition.createInstance_(definition.factory_, resource_),
                     definition.destroyInstance_});
+                typeIndex_.push_back(TypeIndexEntry{definition.typeKey_, entries_.size() - 1});
             }
+            std::ranges::sort(typeIndex_, std::less<const void*>{}, &TypeIndexEntry::typeKey);
         } catch (...) {
             destroyEntries();
             throw;
@@ -152,22 +193,28 @@ public:
     }
 
     [[nodiscard]] void* instance(const void* typeKey) const noexcept {
-        for (const auto& entry : entries_) {
-            if (entry.typeKey == typeKey) {
-                return entry.instance;
-            }
+        const auto match = std::ranges::lower_bound(
+            typeIndex_, typeKey, std::less<const void*>{}, &TypeIndexEntry::typeKey);
+        if (match == typeIndex_.end() || match->typeKey != typeKey) {
+            return nullptr;
         }
-        return nullptr;
+        return entries_[match->entryIndex].instance;
     }
 
 private:
-    struct Entry final {
+    struct InstanceEntry final {
         const void* typeKey{nullptr};
         void* instance{nullptr};
         WorkerStateDefinition::DestroyInstance destroy{nullptr};
     };
 
+    struct TypeIndexEntry final {
+        const void* typeKey{nullptr};
+        std::size_t entryIndex{0};
+    };
+
     void destroyEntries() noexcept {
+        typeIndex_.clear();
         for (std::size_t i = entries_.size(); i > 0; --i) {
             auto& entry = entries_[i - 1];
             if (entry.instance != nullptr && entry.destroy != nullptr) {
@@ -179,7 +226,8 @@ private:
 
     std::pmr::memory_resource* resource_;
     std::span<const WorkerStateDefinition> definitions_;
-    std::pmr::vector<Entry> entries_;
+    std::pmr::vector<InstanceEntry> entries_;
+    std::pmr::vector<TypeIndexEntry> typeIndex_;
     bool initialized_{false};
 };
 
