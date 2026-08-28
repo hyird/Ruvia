@@ -1066,10 +1066,10 @@ validated original bytes through `raw()` for JSONB passthrough. See the compiled
 complete request/response, nested, array, default, and validation example.
 `RUVIA_RULE` adds route-level business constraints after structural validation.
 
-`TestApp` uses the production route graph and enforces route body and rate
-limits. It throws `std::logic_error` before dispatching a route with a
-`Deadline`, because its synchronous no-worker execution cannot simulate that
-timer without silently weakening production policy.
+`TestApp` uses the production route graph and one real Ruvia worker, preserving
+worker-local state, route body and rate limits, and `Deadline` cancellation.
+`request()` remains a synchronous test facade: it waits for the worker to finish
+dispatch and copies the response out of request-owned storage before returning.
 
 `SecurityHeadersConfig` uses `DefaultSecurityHeaderPolicy::kEmitDefault` for
 the built-in `nosniff`, `DENY`, and TLS-only HSTS defaults; use `kOmit` for any

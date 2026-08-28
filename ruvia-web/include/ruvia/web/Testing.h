@@ -185,8 +185,8 @@ public:
 
     // Dispatches one request through the production route table and returns
     // the copied-out response. Request-level failures become the same error
-    // responses a server would send. Throws std::logic_error when the selected
-    // route declares a Deadline, which cannot be simulated without a worker.
+    // responses a server would send. Handlers execute on one real Ruvia worker,
+    // including route Deadline cancellation and per-worker state semantics.
     [[nodiscard]] TestResponse request(const TestRequest& request);
 
 private:

@@ -14,11 +14,13 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/Timer.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Controller.h"
+#include "ruvia/web/Deadline.h"
 #include "ruvia/web/SecurityHeaders.h"
 #include "ruvia/web/Session.h"
 #include "ruvia/web/Testing.h"
@@ -119,6 +121,8 @@ public:
     RUVIA_GET("/whoami", whoami, TestingFacadeAuth);
     RUVIA_GET("/whoami-unbound", whoamiUnbound);
     RUVIA_GET("/report", report);
+    RUVIA_GET("/worker", worker);
+    RUVIA_GET("/deadline", deadline, ruvia::Deadline<20>);
     RUVIA_METHOD("PROPFIND", "/files", propfind);
     RUVIA_METHOD("PURGE", "/files", purge);
     RUVIA_METHOD("PROPFIND", "/dav-only", davOnly);
@@ -209,6 +213,19 @@ private:
         co_return c.json(report);
     }
 
+    ruvia::Task<ruvia::HttpResponse> worker(ruvia::Context& c) {
+        std::pmr::string state(c.resource());
+        state.append(c.worker().valid() ? "valid" : "invalid");
+        state.push_back('/');
+        state.append(c.worker().isCurrent() ? "current" : "foreign");
+        co_return c.body(std::move(state));
+    }
+
+    ruvia::Task<ruvia::HttpResponse> deadline(ruvia::Context& c) {
+        const auto result = co_await ruvia::sleepFor(c.worker(), std::chrono::hours(1), c.stopToken());
+        co_return c.body(result == ruvia::TimerSleepResult::kStopRequested && c.deadlineExceeded() ? std::string_view("deadline") : std::string_view("missed"));
+    }
+
     // No auth middleware on this route, so nothing is bound and the optional
     // lookup must say so rather than throw.
     ruvia::Task<ruvia::HttpResponse> whoamiUnbound(ruvia::Context& c) {
@@ -255,6 +272,12 @@ RUVIA_TEST(testing_facade_dispatches_routes_params_query_and_cookies) {
 
     const auto link = app.request(ruvia::TestRequest::get("/t/link"));
     RUVIA_CHECK_EQ(link.body(), std::string_view("/t/users/9"));
+
+    const auto worker = app.request(ruvia::TestRequest::get("/t/worker"));
+    RUVIA_CHECK_EQ(worker.body(), std::string_view("valid/current"));
+
+    const auto deadline = app.request(ruvia::TestRequest::get("/t/deadline"));
+    RUVIA_CHECK_EQ(deadline.body(), std::string_view("deadline"));
 
     // The automatic HEAD shadow answers with the GET status and no body.
     // Writer-synthesized framing headers (Content-Length, Date) are not part

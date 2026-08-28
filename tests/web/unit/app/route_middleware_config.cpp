@@ -137,15 +137,11 @@ RUVIA_TEST(route_body_limit_is_declared_through_the_type) {
     RUVIA_CHECK_EQ(rejected.status(), ruvia::http_status::kContentTooLarge);
 }
 
-RUVIA_TEST(test_app_explicitly_rejects_route_deadlines) {
+RUVIA_TEST(test_app_runs_routes_with_deadlines) {
     ruvia::TestApp app;
-    bool rejected = false;
-    try {
-        (void)app.request(ruvia::TestRequest::get("/route-config/deadline"));
-    } catch (const std::logic_error& error) {
-        rejected = std::string_view(error.what()).find("Deadline") != std::string_view::npos;
-    }
-    RUVIA_CHECK(rejected);
+    const auto response = app.request(ruvia::TestRequest::get("/route-config/deadline"));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(response.body(), std::string_view("deadline"));
 }
 
 RUVIA_TEST(route_middleware_list_mixes_bare_and_parameterized_types) {

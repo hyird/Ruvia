@@ -1,18 +1,17 @@
 #include "ruvia/web/Testing.h"
 
-#include <asio/co_spawn.hpp>
-#include <asio/io_context.hpp>
-#include <asio/use_future.hpp>
-
+#include <chrono>
+#include <exception>
 #include <memory>
 #include <memory_resource>
 #include <optional>
-#include <string>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpParseError.h"
@@ -29,9 +28,10 @@
 #include "ruvia/web/Dotenv.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/integration/WorkerCapabilities.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"
-#include "ruvia/web/detail/ratelimit/RateLimiter.h"
+#include "ruvia/web/detail/server/RequestDeadline.h"
 
 namespace ruvia {
 
@@ -50,6 +50,31 @@ void appendSyntheticHeaderLine(std::string& head, std::string_view name, std::st
     head.append("\r\n");
 }
 
+Task<void> startTestWorker(detail::ConnectionScanner& scanner, detail::WorkerCapabilities& capabilities) {
+    capabilities.initializeWorkerState();
+    scanner.start();
+    try {
+        co_await capabilities.connect();
+    } catch (...) {
+        scanner.stop();
+        capabilities.shutdownWorkerState();
+        throw;
+    }
+}
+
+Task<void> stopTestWorker(detail::ConnectionScanner& scanner, detail::WorkerCapabilities& capabilities) {
+    scanner.stop();
+    scanner.closeAll();
+    capabilities.closeNow();
+    try {
+        co_await capabilities.join();
+    } catch (...) {
+        capabilities.shutdownWorkerState();
+        throw;
+    }
+    capabilities.shutdownWorkerState();
+}
+
 }  // namespace
 
 struct TestApp::Impl final {
@@ -63,13 +88,30 @@ struct TestApp::Impl final {
     std::vector<std::pair<std::string, HttpNotFoundHandler>> prefixNotFoundHandlers;
     HttpErrorHandler errorHandler{nullptr};
     HttpNotFoundHandler notFoundHandler{nullptr};
-    std::optional<detail::WorkerStateRegistry> workerStates;
-    std::optional<detail::RateLimiter> rateLimiter;
+    EventLoopPool eventLoops{{.loopCount = 1}};
+    EventLoop eventLoop{eventLoops.loop(0)};
+    WorkerHandle worker{eventLoop.handle()};
+    std::optional<detail::ConnectionScanner> connectionScanner;
+    std::optional<detail::WorkerCapabilities> capabilities;
     bool finalized{false};
+    bool eventLoopStarted{false};
+    bool workerReady{false};
 
     ~Impl() {
-        if (workerStates) {
-            workerStates->shutdown();
+        if (workerReady) {
+            try {
+                eventLoop.start(stopTestWorker(*connectionScanner, *capabilities)).get();
+            } catch (...) {
+                std::terminate();
+            }
+        }
+        if (eventLoopStarted) {
+            eventLoops.stop();
+            try {
+                eventLoops.join();
+            } catch (...) {
+                std::terminate();
+            }
         }
     }
 
@@ -110,11 +152,19 @@ struct TestApp::Impl final {
             routes.setGlobalMiddlewares(globalMiddlewares);
         }
         routes.finalize();
-        if (routes.routeTable().hasRouteRateLimit()) {
-            rateLimiter.emplace(std::nullopt, detail::RouteRateLimitPresence::kPresent, 1024, memory.resource());
-        }
-        workerStates.emplace(memory.resource(), workerStateDefinitions);
-        workerStates->initialize();
+
+        connectionScanner.emplace(worker, detail::ConnectionScannerOptions{});
+        capabilities.emplace(eventLoop.ioContext(), worker, memory.resource(), detail::WorkerCapabilityDefinitions{.workerStates = workerStateDefinitions},
+            detail::WorkerCapabilityOptions{
+                .routeRateLimits = routes.routeTable().hasRouteRateLimit() ? detail::RouteRateLimitPresence::kPresent : detail::RouteRateLimitPresence::kAbsent,
+                .rateLimitCapacity = 1024,
+                .env = &env,
+            },
+            *connectionScanner);
+        eventLoops.start();
+        eventLoopStarted = true;
+        eventLoop.start(startTestWorker(*connectionScanner, *capabilities)).get();
+        workerReady = true;
     }
 };
 
@@ -251,15 +301,8 @@ TestResponse TestApp::request(const TestRequest& request) {
     const auto& routes = detail::RouterImpl::from(impl_->router).routeTable();
     const auto resolution = routes.resolve(parsed);
     const auto* resolved = resolution.resolved();
-    if (!parseError.has_value() && resolved != nullptr && resolved->route().deadlineMs() != 0) {
-        throw std::logic_error("TestApp cannot dispatch a route with Deadline; use a loopback WebWorkerRuntime");
-    }
 
-    detail::ContextServices services;
-    if (impl_->rateLimiter.has_value()) {
-        services = services.withRateLimiter(*impl_->rateLimiter);
-    }
-    services = services.withEnv(impl_->env).withWorkerStates(*impl_->workerStates);
+    const auto services = impl_->capabilities->contextServices();
 
     std::optional<HttpProtocolError> bodyLimitError;
     if (!parseError.has_value() && resolved != nullptr) {
@@ -269,20 +312,24 @@ TestResponse TestApp::request(const TestRequest& request) {
         }
     }
 
-    asio::io_context context(1);
-    auto dispatch = [&]() -> asio::awaitable<HttpResponse> {
+    auto dispatch = [&]() -> Task<HttpResponse> {
+        auto requestServices = services;
+        std::optional<detail::RequestDeadline> requestDeadline;
+        if (!parseError.has_value() && !bodyLimitError.has_value() && resolved != nullptr && resolved->route().deadlineMs() != 0) {
+            requestDeadline.emplace(requestServices.stopToken());
+            requestDeadline->arm(requestServices.worker(), std::chrono::milliseconds(resolved->route().deadlineMs()));
+            requestServices = requestServices.withStopToken(requestDeadline->token()).withRequestDeadline(&*requestDeadline);
+        }
         if (parseError.has_value()) {
             const auto error = httpParseProtocolError(*parseError);
-            co_return co_await detail::taskAsAwaitable(routes.handleError(parsed, requestMemory, HttpErrorInfo({.status = error.status(), .message = error.what()}), services));
+            co_return co_await routes.handleError(parsed, requestMemory, HttpErrorInfo({.status = error.status(), .message = error.what()}), requestServices);
         }
         if (bodyLimitError.has_value()) {
-            co_return co_await detail::taskAsAwaitable(routes.handleError(parsed, requestMemory, HttpErrorInfo({.status = bodyLimitError->status(), .message = bodyLimitError->what()}), services));
+            co_return co_await routes.handleError(parsed, requestMemory, HttpErrorInfo({.status = bodyLimitError->status(), .message = bodyLimitError->what()}), requestServices);
         }
-        co_return co_await detail::taskAsAwaitable(routes.dispatchBufferedResponse(parsed, resolution, requestMemory, detail::DocumentRootBinding::none(), services));
+        co_return co_await routes.dispatchBufferedResponse(parsed, resolution, requestMemory, detail::DocumentRootBinding::none(), requestServices);
     };
-    auto future = asio::co_spawn(context, dispatch(), asio::use_future);
-    context.run();
-    auto response = future.get();
+    auto response = impl_->eventLoop.start(dispatch()).get();
 
     // Copy everything out while the request arena is still alive.
     TestResponse result(response.status());
