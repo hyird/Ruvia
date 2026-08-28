@@ -36,13 +36,16 @@ class ContextServices final {
 public:
     ContextServices() = delete;
 
-    explicit ContextServices(const WorkerHandle& worker, WorkerClientRegistryView clientRegistries = WorkerClientRegistryView::detached(), RateLimiter* rateLimiter = nullptr, std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes)
+    ContextServices(const WorkerHandle& worker, const StopToken& stopToken, WorkerClientRegistryView clientRegistries = WorkerClientRegistryView::detached(), RateLimiter* rateLimiter = nullptr, std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes)
         : clientRegistries_(clientRegistries),
           rateLimiter_(rateLimiter),
           maxDecodedBodyBytes_(maxDecodedBodyBytes),
           worker_(requireWorker(worker)),
+          stopToken_(stopToken),
           connInfo_(ConnInfo::plain({})) {}
-    ContextServices(WorkerHandle&&, WorkerClientRegistryView = WorkerClientRegistryView::detached(), RateLimiter* = nullptr, std::size_t = kDefaultMaxBufferedBodyBytes) = delete;
+    ContextServices(WorkerHandle&&, const StopToken&, WorkerClientRegistryView = WorkerClientRegistryView::detached(), RateLimiter* = nullptr, std::size_t = kDefaultMaxBufferedBodyBytes) = delete;
+    ContextServices(const WorkerHandle&, StopToken&&, WorkerClientRegistryView = WorkerClientRegistryView::detached(), RateLimiter* = nullptr, std::size_t = kDefaultMaxBufferedBodyBytes) = delete;
+    ContextServices(WorkerHandle&&, StopToken&&, WorkerClientRegistryView = WorkerClientRegistryView::detached(), RateLimiter* = nullptr, std::size_t = kDefaultMaxBufferedBodyBytes) = delete;
 
     [[nodiscard]] constexpr WorkerClientRegistryView clientRegistries() const noexcept {
         return clientRegistries_;
@@ -83,19 +86,8 @@ public:
     }
 
     [[nodiscard]] const StopToken& stopToken() const noexcept {
-        if (stopToken_ != nullptr) {
-            return *stopToken_;
-        }
-        static const StopToken unstoppable;
-        return unstoppable;
+        return stopToken_.get();
     }
-
-    [[nodiscard]] ContextServices withStopToken(const StopToken& value) const noexcept {
-        auto services = *this;
-        services.stopToken_ = &value;
-        return services;
-    }
-    ContextServices withStopToken(StopToken&&) const = delete;
 
     [[nodiscard]] HttpErrorHandlerRef errorHandler() const noexcept {
         return errorHandler_;
@@ -117,21 +109,19 @@ public:
         return connInfo_;
     }
 
-    [[nodiscard]] ContextServices withRequestDeadline(const RequestDeadline* value) const noexcept {
-        auto services = *this;
-        services.requestDeadline_ = value;
-        return services;
-    }
+    [[nodiscard]] ContextServices withRequestDeadline(const RequestDeadline& value) const noexcept;
+    ContextServices withRequestDeadline(RequestDeadline&&) const = delete;
 
     [[nodiscard]] const RequestDeadline* requestDeadline() const noexcept {
         return requestDeadline_;
     }
 
-    [[nodiscard]] ContextServices withTrustedProxies(const TrustedProxySet* value) const noexcept {
+    [[nodiscard]] ContextServices withTrustedProxies(const TrustedProxySet& value) const noexcept {
         auto services = *this;
-        services.trustedProxies_ = value;
+        services.trustedProxies_ = &value;
         return services;
     }
+    ContextServices withTrustedProxies(TrustedProxySet&&) const = delete;
 
     [[nodiscard]] const TrustedProxySet* trustedProxies() const noexcept {
         return trustedProxies_;
@@ -203,9 +193,9 @@ public:
 
     // Process-wide and owned by App::run(), so it outlives every worker that
     // borrows it here.
-    [[nodiscard]] ContextServices withBlockingPool(BlockingPool* value) const noexcept {
+    [[nodiscard]] ContextServices withBlockingPool(BlockingPool& value) const noexcept {
         auto services = *this;
-        services.blockingPool_ = value;
+        services.blockingPool_ = &value;
         return services;
     }
 
@@ -255,10 +245,10 @@ private:
     RateLimiter* rateLimiter_{nullptr};
     const Env* env_{nullptr};
     std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};
-    // Request/session services borrow the address-stable server-owned handle.
-    // Every derived ContextServices value stays inside that server's dispatch.
+    // Request/session services borrow the address-stable server-owned worker
+    // handle and its stop token. Every derived value stays in that dispatch.
     std::reference_wrapper<const WorkerHandle> worker_;
-    const StopToken* stopToken_{nullptr};
+    std::reference_wrapper<const StopToken> stopToken_;
     HttpErrorHandlerRef errorHandler_{nullptr};
     HttpNotFoundHandlerRef notFoundHandler_{nullptr};
     const RouteTable* routes_{nullptr};

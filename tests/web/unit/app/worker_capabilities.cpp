@@ -30,9 +30,10 @@ RUVIA_TEST(worker_capabilities_exposes_one_address_stable_capability_graph) {
     ruvia::WorkerMemory memory;
     ruvia::detail::ConnectionScanner scanner(worker, {});
     ruvia::detail::WorkerCapabilities capabilities(ioContext, worker, memory.resource(), {}, {}, scanner);
+    const ruvia::StopToken stopToken;
 
     capabilities.initializeWorkerState();
-    const auto services = capabilities.contextServices();
+    const auto services = capabilities.contextServices(stopToken);
     const auto ownedClients = capabilities.clientRegistries();
     const auto requestClients = services.clientRegistries();
 
@@ -42,6 +43,7 @@ RUVIA_TEST(worker_capabilities_exposes_one_address_stable_capability_graph) {
     RUVIA_CHECK(services.workerStates() == &capabilities.workerStates());
     RUVIA_CHECK(services.rateLimiter() == &capabilities.rateLimiter());
     RUVIA_CHECK(&services.worker() == &worker);
+    RUVIA_CHECK(&services.stopToken() == &stopToken);
     RUVIA_CHECK_EQ(services.maxDecodedBodyBytes(), ruvia::kDefaultMaxBufferedBodyBytes);
     RUVIA_CHECK(services.blockingPool() == nullptr);
 

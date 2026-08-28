@@ -13,6 +13,7 @@
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http/SessionAccess.h"
 #include "ruvia/web/detail/http/request/RequestBodyLoader.h"
+#include "ruvia/web/detail/server/RequestDeadline.h"
 #include "ruvia/web/detail/http/StreamingAccess.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/websocket/WebSocketAccess.h"
@@ -48,7 +49,10 @@ concept HasBodyReaderAccessor = requires(const Services& services) { services.bo
 template <typename Services>
 concept HasBodyLoaderAccessor = requires(const Services& services) { services.bodyLoader(); };
 
-static_assert(!std::constructible_from<ruvia::detail::ContextServices, ruvia::WorkerHandle&&>);
+static_assert(!std::constructible_from<ruvia::detail::ContextServices, const ruvia::WorkerHandle&>);
+static_assert(std::constructible_from<ruvia::detail::ContextServices, const ruvia::WorkerHandle&, const ruvia::StopToken&>);
+static_assert(!std::constructible_from<ruvia::detail::ContextServices, ruvia::WorkerHandle&&, const ruvia::StopToken&>);
+static_assert(!std::constructible_from<ruvia::detail::ContextServices, const ruvia::WorkerHandle&, ruvia::StopToken&&>);
 static_assert(!std::constructible_from<ruvia::detail::ContextServices, ruvia::detail::WorkerClientRegistryView, ruvia::detail::RateLimiter*, std::size_t>);
 
 template <typename Services>
@@ -230,21 +234,25 @@ RUVIA_TEST(context_request_body_source_has_one_active_alternative) {
     RUVIA_CHECK(lazy.requestBodySource().lazy() != nullptr);
 }
 
-RUVIA_TEST(context_services_borrows_address_stable_worker) {
+RUVIA_TEST(context_services_borrows_address_stable_worker_and_stop_token) {
     asio::io_context ioContext;
     const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
     const auto handle = ruvia::detail::WorkerHandleAccess::make(dispatcher);
-    const ruvia::detail::ContextServices services(handle);
+    const ruvia::StopToken stopToken;
+    const ruvia::detail::ContextServices services(handle, stopToken);
     const auto derived = services.withPlainTransport("127.0.0.1");
     RUVIA_CHECK(&services.worker() == &handle);
     RUVIA_CHECK(&derived.worker() == &handle);
+    RUVIA_CHECK(&services.stopToken() == &stopToken);
+    RUVIA_CHECK(&derived.stopToken() == &stopToken);
 }
 
 RUVIA_TEST(context_services_rejects_an_invalid_worker_binding) {
     const ruvia::WorkerHandle worker;
+    const ruvia::StopToken stopToken;
     bool rejected = false;
     try {
-        const ruvia::detail::ContextServices services(worker);
+        const ruvia::detail::ContextServices services(worker, stopToken);
         static_cast<void>(services);
     } catch (const std::invalid_argument&) {
         rejected = true;
@@ -315,13 +323,27 @@ RUVIA_TEST(context_exposes_the_server_shutdown_stop_token) {
     auto request = makeRequest(memory.resource());
     ruvia::StopSource source;
     const auto token = source.token();
-    const auto services = ruvia::test::testContextServices().withStopToken(token);
+    const ruvia::detail::ContextServices services(ruvia::test::testWorkerHandle(), token);
     const auto context = ruvia::detail::ContextAccess::make(memory, request, services);
 
     RUVIA_CHECK(context.stopToken().stoppable());
     RUVIA_CHECK(!context.stopToken().stopRequested());
     source.requestStop();
     RUVIA_CHECK(context.stopToken().stopRequested());
+}
+
+RUVIA_TEST(context_services_bind_request_deadline_and_stop_token_atomically) {
+    ruvia::StopSource workerStop;
+    const auto workerToken = workerStop.token();
+    const ruvia::detail::ContextServices base(ruvia::test::testWorkerHandle(), workerToken);
+    ruvia::detail::RequestDeadline deadline(workerToken);
+
+    const auto request = base.withRequestDeadline(deadline);
+
+    RUVIA_CHECK(request.requestDeadline() == &deadline);
+    RUVIA_CHECK(&request.stopToken() == &deadline.token());
+    RUVIA_CHECK(base.requestDeadline() == nullptr);
+    RUVIA_CHECK(&base.stopToken() == &workerToken);
 }
 
 RUVIA_TEST(context_response_output_has_one_active_alternative) {

@@ -28,8 +28,9 @@ RUVIA_TEST(sansio_driver_h2_session_context_owns_complete_wiring) {
     ruvia::detail::HttpServerOptions options;
     ruvia::detail::ConnectionScanner::Entry scannerEntry;
     auto workerState = ruvia::detail::HttpServerWorkerState::kRunning;
+    const ruvia::StopToken stopToken;
 
-    const ruvia::detail::Http2SansIoSessionContext session(ruvia::detail::ContextServices(worker).withTlsTransport("192.0.2.1", "CN=test-client"), options, scannerEntry, workerState);
+    const ruvia::detail::Http2SansIoSessionContext session(ruvia::detail::ContextServices(worker, stopToken).withTlsTransport("192.0.2.1", "CN=test-client"), options, scannerEntry, workerState);
 
     RUVIA_CHECK(&session.options() == &options);
     RUVIA_CHECK(&session.scannerEntry() == &scannerEntry);
@@ -549,7 +550,7 @@ RUVIA_TEST(sansio_driver_h2_keepalive_requests_drains_connection) {
             ruvia::test::Http2SansIoSessionFixture fixture;
             const auto workerHandle = testWorker(io);
             fixture.options.maxRequestsPerConnection = 1;
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(sock, impl.routeTable(), worker, fixture.context(ruvia::detail::ContextServices(workerHandle).withPlainTransport("127.0.0.1"))));
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(sock, impl.routeTable(), worker, fixture.context(fixture.services(workerHandle).withPlainTransport("127.0.0.1"))));
         },
         asio::detached);
 
