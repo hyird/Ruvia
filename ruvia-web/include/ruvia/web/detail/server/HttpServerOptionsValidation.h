@@ -128,19 +128,19 @@ public:
 
 private:
     ValidatedHttpServerConfiguration(
-        std::span<const HttpServerListenerDefinition> listeners, HttpServerOptions options)
+        std::span<const HttpServerListenerDefinition> listeners, HttpServerOptions&& options)
         : listeners_(listeners),
           options_(std::move(options)) {}
 
     friend ValidatedHttpServerConfiguration validateHttpServerConfiguration(
-        std::span<const HttpServerListenerDefinition> listeners, HttpServerOptions options);
+        std::span<const HttpServerListenerDefinition> listeners, HttpServerOptions&& options);
 
     std::span<const HttpServerListenerDefinition> listeners_;
     HttpServerOptions options_;
 };
 
 [[nodiscard]] inline ValidatedHttpServerConfiguration validateHttpServerConfiguration(
-    std::span<const HttpServerListenerDefinition> listeners, HttpServerOptions options) {
+    std::span<const HttpServerListenerDefinition> listeners, HttpServerOptions&& options) {
     if (listeners.empty()) {
         throw std::invalid_argument("HTTP server worker requires at least one listener");
     }

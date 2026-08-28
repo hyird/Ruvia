@@ -59,6 +59,29 @@ private:
     std::size_t allocationCount_{0};
 };
 
+class CountingMemoryResource final : public std::pmr::memory_resource {
+public:
+    [[nodiscard]] std::size_t allocationCount() const noexcept {
+        return allocationCount_;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        ++allocationCount_;
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::size_t allocationCount_{0};
+};
+
 [[nodiscard]] std::string validationFailure(const std::vector<Entry>& entries) {
     try {
         ruvia::detail::validateCapabilityAliases(entries, "alias is empty", "alias is duplicated");
@@ -132,7 +155,7 @@ RUVIA_TEST(http_client_registry_rejects_alias_set_before_pool_allocation) {
     };
     asio::io_context ioContext;
     ruvia::WorkerHandle worker;
-    RejectingMemoryResource ownerResource;
+    CountingMemoryResource ownerResource;
 
     bool rejectedAsConfig = false;
     try {
