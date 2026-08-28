@@ -39,7 +39,7 @@ RedisPool::RedisPool(asio::io_context& ioContext, const RedisConfigStorage& conf
         connections_.emplace_back(ioContext_, resource_);
     }
     if (worker_ != nullptr) {
-        cancellationMailbox_ = std::make_shared<RedisOperationCancellationMailbox>(*this, *worker_);
+        cancellationMailbox_ = makeWorkerCancellationMailbox(*this, *worker_);
     }
 }
 

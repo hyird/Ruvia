@@ -156,7 +156,7 @@ HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& 
     for (std::size_t i = 0; i < config_.connectionCount; ++i) {
         connections_.emplace_back(ioContext_, tlsContext_, worker_, resource_);
     }
-    cancellationMailbox_ = std::make_shared<HttpClientOperationCancellationMailbox>(*this, worker_);
+    cancellationMailbox_ = makeWorkerCancellationMailbox(*this, worker_);
 }
 
 HttpClientPool::~HttpClientPool() {

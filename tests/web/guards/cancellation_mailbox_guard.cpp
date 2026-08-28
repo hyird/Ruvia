@@ -56,7 +56,7 @@ int main() {
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     CancellationOwner owner;
-    auto mailbox = std::make_shared<CancellationMailbox>(owner, worker);
+    auto mailbox = ruvia::detail::makeWorkerCancellationMailbox(owner, worker);
     ruvia::StopSource source;
     ruvia::StopRegistration registration;
 

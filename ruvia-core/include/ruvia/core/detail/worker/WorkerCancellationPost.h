@@ -5,10 +5,12 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
+#include <memory_resource>
 #include <type_traits>
 #include <utility>
 
 #include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/memory/ProcessResource.h"
 
 namespace ruvia::detail {
 
@@ -66,6 +68,17 @@ private:
     WorkerHandle worker_;
     std::uint64_t nextOperationId_{0};
 };
+
+// A queued cancellation can retain the mailbox after its worker-owned owner
+// and allocator are gone. Keep both the mailbox and its shared control block
+// in process memory so abandoned queue entries remain safe to release.
+template <typename Owner>
+[[nodiscard]] inline std::shared_ptr<WorkerCancellationMailbox<Owner>>
+makeWorkerCancellationMailbox(Owner& owner, const WorkerHandle& worker) {
+    using Mailbox = WorkerCancellationMailbox<Owner>;
+    return std::allocate_shared<Mailbox>(
+        std::pmr::polymorphic_allocator<Mailbox>(processResource()), owner, worker);
+}
 
 // A registered stop callback borrows the pool-owned mailbox and carries only an
 // opaque operation id. If cancellation actually happens, it retains the

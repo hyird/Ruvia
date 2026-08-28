@@ -22,7 +22,6 @@
 #include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
 #include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
-#include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/db/DbRows.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbHostResolution.h"
@@ -39,14 +38,6 @@ enum class DbSlotAbortReason : std::uint8_t {
 
 template <typename Pool>
 using DbOperationCancellationMailbox = WorkerCancellationMailbox<Pool>;
-
-template <typename Pool>
-[[nodiscard]] inline std::shared_ptr<DbOperationCancellationMailbox<Pool>>
-makeDbOperationCancellationMailbox(const WorkerHandle& worker, Pool& pool) {
-    using Mailbox = DbOperationCancellationMailbox<Pool>;
-    return std::allocate_shared<Mailbox>(
-        std::pmr::polymorphic_allocator<Mailbox>(processResource()), pool, worker);
-}
 
 template <typename Pool>
 class DbSlotCancellationGuard final {

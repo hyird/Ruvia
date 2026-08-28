@@ -48,7 +48,7 @@ detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, DbConfigStorage co
     slots_.reserve(1);
     slots_.emplace_back(ioContext_, resource_);
     if (worker_.valid()) {
-        cancellationMailbox_ = makeDbOperationCancellationMailbox(worker_, *this);
+        cancellationMailbox_ = makeWorkerCancellationMailbox(*this, worker_);
     }
 }
 
