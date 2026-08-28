@@ -59,6 +59,7 @@ public:
 #include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/detail/db/DbHostResolution.h"
+#include "ruvia/web/detail/integration/NamedCapability.h"
 
 struct st_mysql;
 struct st_mysql_res;
@@ -66,8 +67,6 @@ struct pg_conn;
 struct pg_result;
 
 namespace ruvia::detail {
-
-inline constexpr std::string_view kDefaultDbAlias = "default";
 
 struct DbSlotSocket;
 struct DbSlotSocketQuarantine;
@@ -376,20 +375,11 @@ public:
     using PoolOwner = std::variant<std::monostate, PostgreSqlPoolOwner>;
 #endif
 
-    struct Entry {
-        std::pmr::string alias;
-        PoolOwner client;
-    };
-
 private:
-    void add(asio::io_context& ioContext, const WorkerHandle* worker, std::string_view alias,
-        DbConfigStorage config);
-    void buildAliasIndex();
-
+    void add(asio::io_context& ioContext, const WorkerHandle* worker, DbConfigStorage config);
     std::pmr::memory_resource* resource_;
-    std::pmr::vector<Entry> clients_;
-    std::pmr::vector<std::size_t> aliasIndex_;
-    std::optional<std::size_t> defaultClientIndex_;
+    std::pmr::vector<PoolOwner> pools_;
+    NamedCapabilityIndex aliasIndex_;
 };
 
 }  // namespace ruvia::detail

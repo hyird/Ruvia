@@ -458,8 +458,6 @@ private:
 
 namespace detail {
 
-inline constexpr std::string_view kDefaultRedisAlias = "default";
-
 class RedisPool;
 struct RedisCommandExecutor;
 class RedisRegistry;

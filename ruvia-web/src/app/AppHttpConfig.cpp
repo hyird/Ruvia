@@ -132,15 +132,7 @@ App& App::useWorkerStateDefinition(detail::WorkerStateDefinition definition) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot register worker state while app is running",
         [&definition](detail::AppState& state) {
-            for (const auto& existing : state.workerStates) {
-                if (existing.typeKey() == definition.typeKey()) {
-                    // Two factories for one T cannot both win; the accessor
-                    // returns one instance per type. Fail loudly instead of
-                    // silently last-wins.
-                    throw std::invalid_argument("worker state type is already registered");
-                }
-            }
-            state.workerStates.push_back(std::move(definition));
+            detail::appendWorkerStateDefinition(state.workerStates, std::move(definition));
         });
 }
 

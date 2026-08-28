@@ -365,7 +365,7 @@ RUVIA_TEST(validated_server_configuration_requires_complete_validation) {
     HttpServerOptions invalidOptions;
     invalidOptions.maxBufferedBodyBytes = 0;
     RUVIA_CHECK(throwsInvalid([&listeners, &invalidOptions] {
-        (void)validateHttpServerConfiguration(listeners, invalidOptions);
+        (void)validateHttpServerConfiguration(listeners, std::move(invalidOptions));
     }));
 
     const auto configuration = validateHttpServerConfiguration(listeners, HttpServerOptions{});

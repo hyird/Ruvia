@@ -15,6 +15,14 @@
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/websocket/WebSocketAccess.h"
 
+#ifdef RUVIA_ENABLE_DATABASE
+#include "ruvia/web/db/Db.h"
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/Redis.h"
+#endif
+
 #include <chrono>
 #include <cstdint>
 #include <memory_resource>
@@ -228,10 +236,45 @@ RUVIA_TEST(context_request_body_source_has_one_active_alternative) {
 RUVIA_TEST(context_services_borrows_address_stable_worker) {
     const ruvia::WorkerHandle handle;
     const ruvia::detail::ContextServices services(
-        nullptr, nullptr, nullptr, ruvia::kDefaultMaxBufferedBodyBytes, &handle);
+        {}, nullptr, ruvia::kDefaultMaxBufferedBodyBytes, &handle);
     const auto derived = services.withPlainTransport("127.0.0.1");
     RUVIA_CHECK(&services.worker() == &handle);
     RUVIA_CHECK(&derived.worker() == &handle);
+}
+
+RUVIA_TEST(context_rejects_unconfigured_worker_clients_consistently) {
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = makeRequest(memory.resource());
+    auto context = ruvia::detail::ContextAccess::make(memory, request);
+
+    bool httpClientRejected = false;
+    try {
+        static_cast<void>(context.httpClient());
+    } catch (const ruvia::HttpClientError& error) {
+        httpClientRejected = error.code() == ruvia::HttpClientError::Code::kNotConfigured;
+    }
+    RUVIA_CHECK(httpClientRejected);
+
+#ifdef RUVIA_ENABLE_DATABASE
+    bool databaseRejected = false;
+    try {
+        static_cast<void>(context.db());
+    } catch (const ruvia::DbError& error) {
+        databaseRejected = error.code() == ruvia::DbError::Code::kNotConfigured;
+    }
+    RUVIA_CHECK(databaseRejected);
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+    bool redisRejected = false;
+    try {
+        static_cast<void>(context.redis());
+    } catch (const ruvia::RedisError& error) {
+        redisRejected = error.code() == ruvia::RedisError::Code::kNotConfigured;
+    }
+    RUVIA_CHECK(redisRejected);
+#endif
 }
 
 RUVIA_TEST(context_session_capability_requires_explicit_middleware_binding) {

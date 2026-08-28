@@ -9,12 +9,10 @@
 #include <mutex>
 
 #include "ruvia/web/WebWorker.h"
+#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 
 namespace ruvia::detail {
 
-class DbRegistry;
-class RedisRegistry;
-class HttpClientRegistry;
 class WorkerCapabilities;
 class WorkerStateRegistry;
 
@@ -53,9 +51,7 @@ private:
     asio::any_io_executor executor_;
     WorkerHandle worker_;
     std::pmr::memory_resource* resource_;
-    DbRegistry* databases_;
-    RedisRegistry* redis_;
-    HttpClientRegistry* httpClients_;
+    WorkerClientRegistryView clientRegistries_;
     const WorkerStateRegistry* workerStates_;
     BlockingPool* blockingPool_;
     MoveOnlyFunction<void(std::exception_ptr)> failed_;

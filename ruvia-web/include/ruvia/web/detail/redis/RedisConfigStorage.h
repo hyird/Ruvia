@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/integration/NamedCapability.h"
 #include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #include "ruvia/web/redis/RedisTypes.h"
 
@@ -79,9 +80,6 @@ private:
           tcpKeepAlive(source.tcpKeepAlive) {}
 };
 
-struct RedisDefinition final {
-    std::pmr::string alias;
-    RedisConfigStorage config;
-};
+using RedisDefinition = NamedCapabilityDefinition<RedisConfigStorage>;
 
 }  // namespace ruvia::detail

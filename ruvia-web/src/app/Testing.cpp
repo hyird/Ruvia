@@ -159,12 +159,7 @@ TestApp& TestApp::useMiddleware(detail::ControllerMiddlewareDescriptor descripto
 
 TestApp& TestApp::useWorkerStateDefinition(detail::WorkerStateDefinition definition) {
     impl_->requireConfigurable();
-    for (const auto& existing : impl_->workerStateDefinitions) {
-        if (existing.typeKey() == definition.typeKey()) {
-            throw std::invalid_argument("worker state type is already registered");
-        }
-    }
-    impl_->workerStateDefinitions.push_back(std::move(definition));
+    detail::appendWorkerStateDefinition(impl_->workerStateDefinitions, std::move(definition));
     return *this;
 }
 
@@ -282,7 +277,7 @@ TestResponse TestApp::request(const TestRequest& request) {
     }
 
     detail::ContextServices services(
-        nullptr, nullptr, impl_->rateLimiter ? &*impl_->rateLimiter : nullptr);
+        {}, impl_->rateLimiter ? &*impl_->rateLimiter : nullptr);
     services = services.withEnv(impl_->env).withWorkerStates(*impl_->workerStates);
 
     std::optional<HttpProtocolError> bodyLimitError;

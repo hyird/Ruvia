@@ -1,9 +1,10 @@
 #pragma once
 
-#include "ruvia/web/redis/Redis.h"
-#include "ruvia/web/detail/redis/RedisConfigStorage.h"
-#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 #include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
+#include "ruvia/web/detail/integration/NamedCapability.h"
+#include "ruvia/web/detail/redis/RedisConfigStorage.h"
+#include "ruvia/web/redis/Redis.h"
 
 #ifndef RUVIA_ENABLE_REDIS
 
@@ -218,12 +219,9 @@ private:
     using RedisPoolDeleter = PmrObjectDeleter<RedisPool>;
 
     struct Entry final {
-        Entry(std::string_view alias, const RedisConfigStorage& config,
-            std::pmr::memory_resource* resource)
-            : alias(alias, resource),
-              config(config, resource) {}
+        Entry(const RedisConfigStorage& config, std::pmr::memory_resource* resource)
+            : config(config, resource) {}
 
-        std::pmr::string alias;
         // Declared before the pools so their borrowed config reference remains
         // valid through pool destruction. The registry reserves the complete
         // entry set before construction, keeping this address stable at runtime.
@@ -234,8 +232,7 @@ private:
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> pools_;
-    std::pmr::vector<std::size_t> aliasIndex_;
-    std::optional<std::size_t> defaultPoolIndex_;
+    NamedCapabilityIndex aliasIndex_;
 };
 
 }  // namespace ruvia::detail

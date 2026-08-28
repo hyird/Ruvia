@@ -4,6 +4,7 @@
 #include "ruvia/web/detail/server/TrustedProxies.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/detail/http/context/ContextCapabilities.h"
+#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/StopToken.h"
@@ -25,9 +26,6 @@ class Env;
 
 namespace ruvia::detail {
 
-class DbRegistry;
-class RedisRegistry;
-class HttpClientRegistry;
 class RateLimiter;
 class RouteTable;
 class WorkerStateRegistry;
@@ -37,27 +35,17 @@ public:
     ContextServices() noexcept
         : connInfo_(ConnInfo::plain({})) {}
 
-    ContextServices(DbRegistry* db, RedisRegistry* redis, RateLimiter* rateLimiter = nullptr,
+    ContextServices(WorkerClientRegistryView clientRegistries, RateLimiter* rateLimiter = nullptr,
         std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes,
-        const WorkerHandle* worker = nullptr, HttpClientRegistry* httpClients = nullptr) noexcept
-        : db_(db),
-          redis_(redis),
-          httpClients_(httpClients),
+        const WorkerHandle* worker = nullptr) noexcept
+        : clientRegistries_(clientRegistries),
           rateLimiter_(rateLimiter),
           maxDecodedBodyBytes_(maxDecodedBodyBytes),
           worker_(worker),
           connInfo_(ConnInfo::plain({})) {}
 
-    [[nodiscard]] DbRegistry* db() const noexcept {
-        return db_;
-    }
-
-    [[nodiscard]] RedisRegistry* redis() const noexcept {
-        return redis_;
-    }
-
-    [[nodiscard]] HttpClientRegistry* httpClients() const noexcept {
-        return httpClients_;
+    [[nodiscard]] constexpr WorkerClientRegistryView clientRegistries() const noexcept {
+        return clientRegistries_;
     }
 
     [[nodiscard]] RateLimiter* rateLimiter() const noexcept {
@@ -261,9 +249,7 @@ public:
         std::string_view, std::basic_string<char, Traits, Allocator>&&) const = delete;
 
 private:
-    DbRegistry* db_{nullptr};
-    RedisRegistry* redis_{nullptr};
-    HttpClientRegistry* httpClients_{nullptr};
+    WorkerClientRegistryView clientRegistries_;
     RateLimiter* rateLimiter_{nullptr};
     const Env* env_{nullptr};
     std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};

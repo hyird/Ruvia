@@ -37,6 +37,7 @@
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/http/context/RequestBindings.h"
 #include "ruvia/web/detail/integration/BlockingCapability.h"
+#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 #include "ruvia/web/detail/integration/WorkerStateCapability.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/http/context/ContextCapabilities.h"
@@ -65,9 +66,6 @@ class DbHandle;
 class RedisHandle;
 #endif
 namespace detail {
-class DbRegistry;
-class RedisRegistry;
-class HttpClientRegistry;
 class RateLimiter;
 class RouteTable;
 class WorkerStateRegistry;
@@ -423,9 +421,7 @@ private:
     const std::string_view* paramNames_{nullptr};
     const std::string_view* paramValues_{nullptr};
     std::size_t paramCount_{0};
-    [[maybe_unused]] detail::DbRegistry* db_{nullptr};
-    [[maybe_unused]] detail::RedisRegistry* redis_{nullptr};
-    detail::HttpClientRegistry* httpClients_{nullptr};
+    detail::WorkerClientRegistryView clientRegistries_;
     detail::RateLimiter* rateLimiter_{nullptr};
     const Env* env_{nullptr};
     detail::HttpErrorHandlerRef errorHandler_{nullptr};

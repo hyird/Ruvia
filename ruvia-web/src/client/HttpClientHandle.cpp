@@ -430,21 +430,11 @@ HttpScheme HttpClientHandle::scheme() const {
 }
 
 HttpClientHandle Context::httpClient() const {
-    if (httpClients_ == nullptr) {
-        throw HttpClientError(
-            HttpClientError::Code::kNotConfigured, "http client is not configured");
-    }
-    return httpClients_->get(resource(), operationScope_)
-        .withOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+    return clientRegistries_.httpClient(resource(), operationScope_, stopToken_);
 }
 
 HttpClientHandle Context::httpClient(std::string_view alias) const {
-    if (httpClients_ == nullptr) {
-        throw HttpClientError(
-            HttpClientError::Code::kNotConfigured, "http client is not configured");
-    }
-    return httpClients_->get(alias, resource(), operationScope_)
-        .withOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
+    return clientRegistries_.httpClient(alias, resource(), operationScope_, stopToken_);
 }
 
 }  // namespace ruvia
