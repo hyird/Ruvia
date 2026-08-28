@@ -15,11 +15,11 @@
 
 namespace ruvia {
 
-WebWorkerContext::WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource,
+WebWorkerContext::WebWorkerContext(const WorkerHandle& worker, std::pmr::memory_resource* resource,
     detail::WorkerClientRegistryView clientRegistries,
     const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool,
     StopToken stopToken) noexcept
-    : worker_(std::move(worker)),
+    : worker_(&worker),
       resource_(detail::pmrResourceOrDefault(resource)),
       clientRegistries_(clientRegistries),
       workerStates_(workerStates),
@@ -43,7 +43,7 @@ void* WebWorkerContext::workerStateInstance(const void* typeKey) const {
 }
 
 const WorkerHandle& WebWorkerContext::worker() const& noexcept {
-    return worker_;
+    return *worker_;
 }
 
 std::pmr::memory_resource* WebWorkerContext::resource() const noexcept {

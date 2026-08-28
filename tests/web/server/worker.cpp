@@ -193,6 +193,38 @@ int testImmediateStopSignalsTask() {
     return 0;
 }
 
+int testContextsBorrowOneStableWorkerHandle() {
+    ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
+    ruvia::detail::WebWorkerRuntime server(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes);
+    auto worker = server.webWorker();
+    server.start();
+
+    std::promise<const ruvia::WorkerHandle*> firstObserved;
+    std::promise<const ruvia::WorkerHandle*> secondObserved;
+    auto firstFuture = firstObserved.get_future();
+    auto secondFuture = secondObserved.get_future();
+
+    const auto postProbe = [&](std::promise<const ruvia::WorkerHandle*>& observed) {
+        return worker.post([&observed](ruvia::WebWorkerContext& context) -> ruvia::Task<void> {
+            observed.set_value(&context.worker());
+            static_cast<void>(co_await ruvia::sleepFor(context.worker(), std::chrono::hours(1)));
+        });
+    };
+    if (postProbe(firstObserved) != ruvia::PostStatus::kAccepted ||
+        postProbe(secondObserved) != ruvia::PostStatus::kAccepted) {
+        server.stop();
+        server.join();
+        return 1;
+    }
+
+    const auto* first = firstFuture.get();
+    const auto* second = secondFuture.get();
+    server.stop();
+    server.join();
+    return first != nullptr && first == second ? 0 : 2;
+}
+
 int testHandleOutlivesServerAsTerminalEndpoint() {
     ruvia::WebWorkerHandle worker;
     {
@@ -266,6 +298,9 @@ int main() {
     }
     if (testImmediateStopSignalsTask() != 0) {
         return 3;
+    }
+    if (testContextsBorrowOneStableWorkerHandle() != 0) {
+        return 8;
     }
     if (testImmediateStopCancelsTimer() != 0) {
         return 4;

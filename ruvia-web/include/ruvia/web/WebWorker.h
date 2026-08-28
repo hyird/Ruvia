@@ -62,7 +62,7 @@ public:
 private:
     friend class detail::WebWorkerDispatch;
 
-    WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource,
+    WebWorkerContext(const WorkerHandle& worker, std::pmr::memory_resource* resource,
         detail::WorkerClientRegistryView clientRegistries,
         const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool,
         StopToken stopToken) noexcept;
@@ -72,13 +72,16 @@ private:
     friend class detail::WorkerStateCapability<WebWorkerContext>;
     [[nodiscard]] BlockingPool& blockingPool() const;
     [[nodiscard]] const WorkerHandle& blockingWorker() const noexcept {
-        return worker_;
+        return *worker_;
     }
     [[nodiscard]] StopToken blockingStopToken() const noexcept {
         return stopToken_;
     }
 
-    WorkerHandle worker_;
+    // WebWorkerDispatch owns this stable handle until every posted task has
+    // completed; contexts borrow it so starting a task does not copy endpoint
+    // ownership on the worker thread.
+    const WorkerHandle* worker_;
     std::pmr::memory_resource* resource_;
     detail::WorkerClientRegistryView clientRegistries_;
     const detail::WorkerStateRegistry* workerStates_;
