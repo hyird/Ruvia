@@ -12,6 +12,7 @@
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
+#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 #include "ruvia/web/detail/ratelimit/RateLimiter.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 
@@ -66,9 +67,7 @@ public:
     void shutdownWorkerState() noexcept;
 
     [[nodiscard]] ContextServices contextServices() noexcept;
-    [[nodiscard]] DbRegistry& databases() noexcept;
-    [[nodiscard]] RedisRegistry& redis() noexcept;
-    [[nodiscard]] HttpClientRegistry& httpClients() noexcept;
+    [[nodiscard]] WorkerClientRegistryView clientRegistries() noexcept;
     [[nodiscard]] const WorkerStateRegistry& workerStates() const noexcept;
     [[nodiscard]] RateLimiter& rateLimiter() noexcept;
     [[nodiscard]] BlockingPool* blockingPool() const noexcept;

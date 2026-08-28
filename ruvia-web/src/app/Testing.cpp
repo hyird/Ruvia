@@ -277,7 +277,7 @@ TestResponse TestApp::request(const TestRequest& request) {
     }
 
     detail::ContextServices services(
-        nullptr, nullptr, impl_->rateLimiter ? &*impl_->rateLimiter : nullptr);
+        {}, impl_->rateLimiter ? &*impl_->rateLimiter : nullptr);
     services = services.withEnv(impl_->env).withWorkerStates(*impl_->workerStates);
 
     std::optional<HttpProtocolError> bodyLimitError;

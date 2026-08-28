@@ -67,7 +67,7 @@ void WorkerCapabilities::shutdownWorkerState() noexcept {
 
 ContextServices WorkerCapabilities::contextServices() noexcept {
     ContextServices services(
-        &databases_, &redis_, &rateLimiter_, options_.maxDecodedBodyBytes, nullptr, &httpClients_);
+        clientRegistries(), &rateLimiter_, options_.maxDecodedBodyBytes, nullptr);
     services = services.withWorkerStates(workerStates_)
                    .withBlockingPool(options_.blockingPool)
                    .withPrecompressedStaticFiles(options_.precompressedStaticFiles)
@@ -78,16 +78,8 @@ ContextServices WorkerCapabilities::contextServices() noexcept {
     return services;
 }
 
-DbRegistry& WorkerCapabilities::databases() noexcept {
-    return databases_;
-}
-
-RedisRegistry& WorkerCapabilities::redis() noexcept {
-    return redis_;
-}
-
-HttpClientRegistry& WorkerCapabilities::httpClients() noexcept {
-    return httpClients_;
+WorkerClientRegistryView WorkerCapabilities::clientRegistries() noexcept {
+    return WorkerClientRegistryView(&databases_, &redis_, &httpClients_);
 }
 
 const WorkerStateRegistry& WorkerCapabilities::workerStates() const noexcept {

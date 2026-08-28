@@ -13,6 +13,7 @@
 
 static_assert(!std::is_copy_constructible_v<ruvia::detail::WorkerCapabilities>);
 static_assert(!std::is_move_constructible_v<ruvia::detail::WorkerCapabilities>);
+static_assert(std::is_trivially_copyable_v<ruvia::detail::WorkerClientRegistryView>);
 static_assert(ruvia::detail::WorkerCapabilityOptions{}.rateLimitCapacity ==
               ruvia::kDefaultRateLimitCapacityPerWorker);
 
@@ -26,10 +27,12 @@ RUVIA_TEST(worker_capabilities_exposes_one_address_stable_capability_graph) {
 
     capabilities.initializeWorkerState();
     const auto services = capabilities.contextServices();
+    const auto ownedClients = capabilities.clientRegistries();
+    const auto requestClients = services.clientRegistries();
 
-    RUVIA_CHECK(services.db() == &capabilities.databases());
-    RUVIA_CHECK(services.redis() == &capabilities.redis());
-    RUVIA_CHECK(services.httpClients() == &capabilities.httpClients());
+    RUVIA_CHECK(requestClients.databases() == ownedClients.databases());
+    RUVIA_CHECK(requestClients.redis() == ownedClients.redis());
+    RUVIA_CHECK(requestClients.httpClients() == ownedClients.httpClients());
     RUVIA_CHECK(services.workerStates() == &capabilities.workerStates());
     RUVIA_CHECK(services.rateLimiter() == &capabilities.rateLimiter());
     RUVIA_CHECK_EQ(services.maxDecodedBodyBytes(), ruvia::kDefaultMaxBufferedBodyBytes);
