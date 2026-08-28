@@ -17,6 +17,9 @@
 static_assert(!std::is_copy_constructible_v<ruvia::detail::WorkerCapabilities>);
 static_assert(!std::is_move_constructible_v<ruvia::detail::WorkerCapabilities>);
 static_assert(std::is_trivially_copyable_v<ruvia::detail::WorkerClientRegistryView>);
+static_assert(!std::is_default_constructible_v<ruvia::detail::WorkerClientRegistryView>);
+static_assert(!std::constructible_from<ruvia::detail::WorkerClientRegistryView, ruvia::detail::DbRegistry*, ruvia::detail::RedisRegistry*, ruvia::detail::HttpClientRegistry*>);
+static_assert(std::constructible_from<ruvia::detail::WorkerClientRegistryView, ruvia::detail::DbRegistry&, ruvia::detail::RedisRegistry&, ruvia::detail::HttpClientRegistry&>);
 static_assert(ruvia::detail::WorkerCapabilityOptions{}.rateLimitCapacity == ruvia::kDefaultRateLimitCapacityPerWorker);
 static_assert(!std::constructible_from<ruvia::detail::WorkerCapabilities, asio::io_context&, ruvia::WorkerHandle&&, std::pmr::memory_resource*, ruvia::detail::WorkerCapabilityDefinitions, ruvia::detail::WorkerCapabilityOptions, ruvia::detail::ConnectionScanner&>);
 
@@ -33,9 +36,9 @@ RUVIA_TEST(worker_capabilities_exposes_one_address_stable_capability_graph) {
     const auto ownedClients = capabilities.clientRegistries();
     const auto requestClients = services.clientRegistries();
 
-    RUVIA_CHECK(requestClients.databases() == ownedClients.databases());
-    RUVIA_CHECK(requestClients.redis() == ownedClients.redis());
-    RUVIA_CHECK(requestClients.httpClients() == ownedClients.httpClients());
+    RUVIA_CHECK(requestClients.attached());
+    RUVIA_CHECK(requestClients == ownedClients);
+    RUVIA_CHECK(!ruvia::detail::WorkerClientRegistryView::detached().attached());
     RUVIA_CHECK(services.workerStates() == &capabilities.workerStates());
     RUVIA_CHECK(services.rateLimiter() == &capabilities.rateLimiter());
     RUVIA_CHECK(&services.worker() == &worker);

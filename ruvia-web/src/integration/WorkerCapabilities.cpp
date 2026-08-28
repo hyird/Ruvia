@@ -68,7 +68,7 @@ ContextServices WorkerCapabilities::contextServices() {
 }
 
 WorkerClientRegistryView WorkerCapabilities::clientRegistries() noexcept {
-    return WorkerClientRegistryView(&databases_, &redis_, &httpClients_);
+    return WorkerClientRegistryView(databases_, redis_, httpClients_);
 }
 
 const WorkerStateRegistry& WorkerCapabilities::workerStates() const noexcept {

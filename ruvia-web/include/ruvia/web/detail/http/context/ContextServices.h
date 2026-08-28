@@ -36,13 +36,13 @@ public:
     ContextServices() noexcept
         : connInfo_(ConnInfo::plain({})) {}
 
-    ContextServices(const WorkerHandle& worker, WorkerClientRegistryView clientRegistries = {}, RateLimiter* rateLimiter = nullptr, std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes)
+    ContextServices(const WorkerHandle& worker, WorkerClientRegistryView clientRegistries = WorkerClientRegistryView::detached(), RateLimiter* rateLimiter = nullptr, std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes)
         : clientRegistries_(clientRegistries),
           rateLimiter_(rateLimiter),
           maxDecodedBodyBytes_(maxDecodedBodyBytes),
           worker_(&requireWorker(worker)),
           connInfo_(ConnInfo::plain({})) {}
-    ContextServices(WorkerHandle&&, WorkerClientRegistryView = {}, RateLimiter* = nullptr, std::size_t = kDefaultMaxBufferedBodyBytes) = delete;
+    ContextServices(WorkerHandle&&, WorkerClientRegistryView = WorkerClientRegistryView::detached(), RateLimiter* = nullptr, std::size_t = kDefaultMaxBufferedBodyBytes) = delete;
 
     [[nodiscard]] constexpr WorkerClientRegistryView clientRegistries() const noexcept {
         return clientRegistries_;
@@ -268,7 +268,7 @@ private:
         return worker;
     }
 
-    WorkerClientRegistryView clientRegistries_;
+    WorkerClientRegistryView clientRegistries_{WorkerClientRegistryView::detached()};
     RateLimiter* rateLimiter_{nullptr};
     const Env* env_{nullptr};
     std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <memory_resource>
 #include <string_view>
 
@@ -23,29 +24,26 @@ class HttpClientRegistry;
 class RedisRegistry;
 class ScopedOperationScope;
 
-// A copyable view of the client registries owned by one worker. Keeping the
-// three pointers together lets request and posted-job plumbing pass and retire
-// one complete worker-local client set as a single value.
+// A copyable view of the complete client registry set owned by one worker.
+// The only states are fully attached and explicitly detached: partial registry
+// graphs are not representable. Dispatch retirement detaches the view after all
+// posted work has joined, before the worker-owned registries are destroyed.
 class WorkerClientRegistryView final {
 public:
-    constexpr WorkerClientRegistryView() noexcept = default;
-
-    constexpr WorkerClientRegistryView(DbRegistry* databases, RedisRegistry* redis, HttpClientRegistry* httpClients) noexcept
-        : databases_(databases),
-          redis_(redis),
-          httpClients_(httpClients) {}
-
-    [[nodiscard]] constexpr DbRegistry* databases() const noexcept {
-        return databases_;
+    [[nodiscard]] static constexpr WorkerClientRegistryView detached() noexcept {
+        return WorkerClientRegistryView(nullptr);
     }
 
-    [[nodiscard]] constexpr RedisRegistry* redis() const noexcept {
-        return redis_;
+    constexpr WorkerClientRegistryView(DbRegistry& databases, RedisRegistry& redis, HttpClientRegistry& httpClients) noexcept
+        : databases_(&databases),
+          redis_(&redis),
+          httpClients_(&httpClients) {}
+
+    [[nodiscard]] constexpr bool attached() const noexcept {
+        return httpClients_ != nullptr;
     }
 
-    [[nodiscard]] constexpr HttpClientRegistry* httpClients() const noexcept {
-        return httpClients_;
-    }
+    friend constexpr bool operator==(const WorkerClientRegistryView&, const WorkerClientRegistryView&) noexcept = default;
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const;
@@ -61,6 +59,8 @@ public:
     [[nodiscard]] HttpClientHandle httpClient(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const;
 
 private:
+    explicit constexpr WorkerClientRegistryView(std::nullptr_t) noexcept {}
+
     DbRegistry* databases_{nullptr};
     RedisRegistry* redis_{nullptr};
     HttpClientRegistry* httpClients_{nullptr};

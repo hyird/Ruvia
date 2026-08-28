@@ -185,7 +185,7 @@ void WebWorkerDispatch::retire() noexcept {
     // Remove every callback/pointer into server-owned state before that state is
     // destroyed; terminal queries use only atomics and the stable WorkerHandle.
     failed_ = nullptr;
-    clientRegistries_ = {};
+    clientRegistries_ = WorkerClientRegistryView::detached();
     resource_ = nullptr;
     executor_ = asio::any_io_executor{};
 }
