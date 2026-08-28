@@ -19,8 +19,7 @@ using ruvia::detail::Http1ChunkDecodeBodyChunk;
 using ruvia::detail::Http1ChunkDecodeComplete;
 using ruvia::detail::Http1ChunkDecodeFailure;
 
-static_assert(std::same_as<decltype(std::declval<const ProtocolByteLimit&>().maximum()),
-    std::optional<std::size_t>>);
+static_assert(std::same_as<decltype(std::declval<const ProtocolByteLimit&>().maximum()), std::optional<std::size_t>>);
 using ruvia::detail::Http1ChunkDecodeNeedMore;
 using ruvia::detail::Http1ChunkDecodeResult;
 using ruvia::detail::Http1ChunkedBodyDecoder;
@@ -51,17 +50,12 @@ template <typename T>
 concept HasRvalueTrailers = requires(T&& result) { std::move(result).trailers(); };
 
 template <typename T>
-concept HasAnyRvalueHttp1ChunkDecodeAccessor =
-    requires(T&& result) { std::move(result).needMore(); } ||
-    requires(T&& result) { std::move(result).bodyChunk(); } ||
-    requires(T&& result) { std::move(result).complete(); } ||
-    requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueHttp1ChunkDecodeAccessor = requires(T&& result) { std::move(result).needMore(); } || requires(T&& result) { std::move(result).bodyChunk(); } || requires(T&& result) { std::move(result).complete(); } || requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
 concept HasRawDecodeError = requires(const T& result) { result.error(); };
 
-static_assert(std::same_as<decltype(std::declval<Http1ChunkedBodyDecoder&>().decode({})),
-    Http1ChunkDecodeResult>);
+static_assert(std::same_as<decltype(std::declval<Http1ChunkedBodyDecoder&>().decode({})), Http1ChunkDecodeResult>);
 static_assert(!std::default_initializable<Http1ChunkDecodeResult>);
 static_assert(!HasAnyRvalueHttp1ChunkDecodeAccessor<Http1ChunkDecodeResult>);
 static_assert(!HasLooseHttp1ChunkDecodeFields<Http1ChunkDecodeResult>);
@@ -79,8 +73,7 @@ static_assert(HasTrailers<Http1ChunkDecodeComplete>);
 static_assert(!HasTrailers<Http1ChunkDecodeFailure>);
 static_assert(!HasRvalueTrailers<Http1ChunkDecodeComplete>);
 static_assert(!HasRawDecodeError<Http1ChunkDecodeFailure>);
-static_assert(std::same_as<decltype(std::declval<const Http1ChunkDecodeFailure&>().protocolError()),
-    ruvia::HttpProtocolError>);
+static_assert(std::same_as<decltype(std::declval<const Http1ChunkDecodeFailure&>().protocolError()), ruvia::HttpProtocolError>);
 
 }  // namespace
 
@@ -113,21 +106,17 @@ RUVIA_TEST(chunked_body_decoder_reports_typed_size_and_limit_failures) {
     Http1ChunkedBodyDecoder invalid(ProtocolByteLimit::unlimited());
     const auto invalidResult = invalid.decode("xyz\r\n");
     RUVIA_CHECK(invalidResult.failure() != nullptr);
-    RUVIA_CHECK_EQ(
-        invalidResult.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
-    RUVIA_CHECK_EQ(std::string_view(invalidResult.failure()->protocolError().what()),
-        std::string_view("invalid chunked request body"));
+    RUVIA_CHECK_EQ(invalidResult.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
+    RUVIA_CHECK_EQ(std::string_view(invalidResult.failure()->protocolError().what()), std::string_view("invalid chunked request body"));
     const auto repeatedInvalid = invalid.decode("0\r\n\r\n");
     RUVIA_CHECK(repeatedInvalid.failure() != nullptr);
-    RUVIA_CHECK_EQ(
-        repeatedInvalid.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
+    RUVIA_CHECK_EQ(repeatedInvalid.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
     RUVIA_CHECK_EQ(repeatedInvalid.consumedBytes(), std::size_t{0});
 
     Http1ChunkedBodyDecoder singleLimit(ProtocolByteLimit::limited(10));
     const auto singleLimitResult = singleLimit.decode("b\r\n");
     RUVIA_CHECK(singleLimitResult.failure() != nullptr);
-    RUVIA_CHECK_EQ(singleLimitResult.failure()->protocolError().status(),
-        ruvia::http_status::kContentTooLarge);
+    RUVIA_CHECK_EQ(singleLimitResult.failure()->protocolError().status(), ruvia::http_status::kContentTooLarge);
 
     Http1ChunkedBodyDecoder accumulated(ProtocolByteLimit::limited(10));
     const std::string_view wire = "8\r\n12345678\r\n5\r\nabcde\r\n0\r\n\r\n";
@@ -135,8 +124,7 @@ RUVIA_TEST(chunked_body_decoder_reports_typed_size_and_limit_failures) {
     RUVIA_CHECK(first.bodyChunk() != nullptr);
     const auto second = accumulated.decode(wire.substr(first.consumedBytes()));
     RUVIA_CHECK(second.failure() != nullptr);
-    RUVIA_CHECK_EQ(
-        second.failure()->protocolError().status(), ruvia::http_status::kContentTooLarge);
+    RUVIA_CHECK_EQ(second.failure()->protocolError().status(), ruvia::http_status::kContentTooLarge);
 }
 
 RUVIA_TEST(chunked_body_decoder_separates_body_and_framing_budgets) {
@@ -159,8 +147,7 @@ RUVIA_TEST(chunked_body_decoder_separates_body_and_framing_budgets) {
     const auto first = framingFlood.decode(floodWire);
     RUVIA_CHECK(first.bodyChunk() != nullptr);
     if (const auto* chunk = first.bodyChunk()) {
-        const auto excessive =
-            framingFlood.decode(std::string_view(floodWire).substr(chunk->consumedBytes()));
+        const auto excessive = framingFlood.decode(std::string_view(floodWire).substr(chunk->consumedBytes()));
         RUVIA_CHECK(excessive.failure() != nullptr);
         if (const auto* failure = excessive.failure()) {
             RUVIA_CHECK_EQ(failure->protocolError().status(), ruvia::http_status::kContentTooLarge);
@@ -232,8 +219,7 @@ RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
     Http1ChunkedBodyDecoder delimiter(ProtocolByteLimit::limited(1024));
     const auto badDelimiter = delimiter.decode("1\r\nxXY");
     RUVIA_CHECK(badDelimiter.failure() != nullptr);
-    RUVIA_CHECK_EQ(
-        badDelimiter.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
+    RUVIA_CHECK_EQ(badDelimiter.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
 
     Http1ChunkedBodyDecoder trailer(ProtocolByteLimit::limited(1024));
     const auto badTrailer = trailer.decode("0\r\nContent-Length: 1\r\n\r\n");
@@ -242,8 +228,7 @@ RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
 }
 
 RUVIA_TEST(chunked_body_decoder_caps_each_size_line) {
-    Http1ChunkedBodyDecoder decoder(
-        ProtocolByteLimit::limited(ruvia::kDefaultMaxBufferedBodyBytes));
+    Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(ruvia::kDefaultMaxBufferedBodyBytes));
     std::string oversized = "1;x=";
     oversized.append(ruvia::kMaxHttpHeaderBytes, 'a');
     oversized.append("\r\n");
@@ -254,8 +239,7 @@ RUVIA_TEST(chunked_body_decoder_caps_each_size_line) {
         RUVIA_CHECK_EQ(failure->protocolError().status(), ruvia::http_status::kContentTooLarge);
     }
 
-    Http1ChunkedBodyDecoder boundary(
-        ProtocolByteLimit::limited(ruvia::kDefaultMaxBufferedBodyBytes));
+    Http1ChunkedBodyDecoder boundary(ProtocolByteLimit::limited(ruvia::kDefaultMaxBufferedBodyBytes));
     std::string accepted = "1;x=";
     // Reserve two bytes for the data delimiter and five for the terminal chunk.
     accepted.append(ruvia::kMaxHttpHeaderBytes - 7 - accepted.size() - 2, 'a');
@@ -263,8 +247,7 @@ RUVIA_TEST(chunked_body_decoder_caps_each_size_line) {
     const auto boundaryResult = boundary.decode(accepted);
     RUVIA_CHECK(boundaryResult.bodyChunk() != nullptr);
     if (const auto* body = boundaryResult.bodyChunk()) {
-        const auto terminal =
-            boundary.decode(std::string_view(accepted).substr(body->consumedBytes()));
+        const auto terminal = boundary.decode(std::string_view(accepted).substr(body->consumedBytes()));
         RUVIA_CHECK(terminal.complete() != nullptr);
     }
 }

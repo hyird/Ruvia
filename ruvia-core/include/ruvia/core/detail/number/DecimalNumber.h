@@ -107,9 +107,7 @@ namespace ruvia::detail {
         return true;
     }
 
-    auto decimalExponent = static_cast<long long>(explicitExponent) -
-                           static_cast<long long>(fractionalDigits) +
-                           static_cast<long long>(droppedDigits);
+    auto decimalExponent = static_cast<long long>(explicitExponent) - static_cast<long long>(fractionalDigits) + static_cast<long long>(droppedDigits);
     if (firstDroppedDigit >= 5) {
         ++mantissa;
         if (mantissa == 10000000000000000000ULL) {
@@ -118,8 +116,7 @@ namespace ruvia::detail {
         }
     }
 
-    const auto magnitude = static_cast<long double>(mantissa) *
-                           std::pow(10.0L, static_cast<long double>(decimalExponent));
+    const auto magnitude = static_cast<long double>(mantissa) * std::pow(10.0L, static_cast<long double>(decimalExponent));
     const auto parsed = static_cast<double>(magnitude);
     if (!std::isfinite(parsed) || parsed == 0.0) {
         return false;

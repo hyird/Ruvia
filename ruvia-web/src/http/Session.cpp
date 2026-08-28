@@ -54,8 +54,7 @@ std::optional<Session> Context::trySession() noexcept {
 
 namespace ruvia {
 
-SessionMiddleware::ConfigStorage::ValidatedConfig SessionMiddleware::ConfigStorage::validate(
-    const SessionConfig& source) {
+SessionMiddleware::ConfigStorage::ValidatedConfig SessionMiddleware::ConfigStorage::validate(const SessionConfig& source) {
     if (source.redisAlias.empty()) {
         throw std::invalid_argument("session Redis alias must not be empty");
     }
@@ -71,12 +70,10 @@ SessionMiddleware::ConfigStorage::ValidatedConfig SessionMiddleware::ConfigStora
     return ValidatedConfig{.source = &source};
 }
 
-SessionMiddleware::ConfigStorage::ConfigStorage(
-    const SessionConfig& source, std::pmr::memory_resource* resource)
+SessionMiddleware::ConfigStorage::ConfigStorage(const SessionConfig& source, std::pmr::memory_resource* resource)
     : ConfigStorage(validate(source), resource) {}
 
-SessionMiddleware::ConfigStorage::ConfigStorage(
-    ValidatedConfig validated, std::pmr::memory_resource* resource)
+SessionMiddleware::ConfigStorage::ConfigStorage(ValidatedConfig validated, std::pmr::memory_resource* resource)
     : redisAlias(validated.source->redisAlias, resource),
       cookieName(validated.source->cookieName, resource),
       keyPrefix(validated.source->keyPrefix, resource),
@@ -104,8 +101,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     co_await next();
 
     const auto& state = detail::SessionAccess::state(c);
-    if (state.untouched() != nullptr || state.unrecognized() != nullptr ||
-        state.loaded() != nullptr) {
+    if (state.untouched() != nullptr || state.unrecognized() != nullptr || state.loaded() != nullptr) {
         co_return;
     }
 
@@ -119,8 +115,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
             (void)(co_await c.redis(config_.redisAlias).del(key));
         }
         auto& response = detail::ContextAccess::responseStorage(c);
-        detail::appendExpiredSessionCookieHeader(
-            response, c.resource(), config_.cookieName, secure);
+        detail::appendExpiredSessionCookieHeader(response, c.resource(), config_.cookieName, secure);
         co_return;
     }
 
@@ -145,9 +140,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
         const auto tokenResult = detail::generateSecureToken(idBuffer);
         const auto* token = tokenResult.ready();
         if (token == nullptr) {
-            c.respond(c.error({.status = ruvia::http_status::kInternalServerError,
-                .code = "secure_random_failed",
-                .message = "secure token generation failed"}));
+            c.respond(c.error({.status = ruvia::http_status::kInternalServerError, .code = "secure_random_failed", .message = "secure token generation failed"}));
             co_return;
         }
         existingId = token->value();
@@ -178,8 +171,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
             }
             case detail::SessionCommitStep::kPublishCurrentCookie: {
                 auto& response = detail::ContextAccess::responseStorage(c);
-                detail::appendSessionCookieHeader(
-                    response, c.resource(), config_.cookieName, existingId, secure);
+                detail::appendSessionCookieHeader(response, c.resource(), config_.cookieName, existingId, secure);
                 break;
             }
         }

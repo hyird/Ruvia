@@ -18,8 +18,7 @@
 
 namespace ruvia::detail {
 
-Task<std::error_code> writeHttpResponseFile(asio::ip::tcp::socket& socket, WorkerMemory& memory,
-    std::pmr::string* reusableChunk, ResponseFileBody file) {
+Task<std::error_code> writeHttpResponseFile(asio::ip::tcp::socket& socket, WorkerMemory& memory, std::pmr::string* reusableChunk, ResponseFileBody file) {
 #if defined(__linux__)
     static_cast<void>(memory);
     static_cast<void>(reusableChunk);
@@ -31,8 +30,7 @@ Task<std::error_code> writeHttpResponseFile(asio::ip::tcp::socket& socket, Worke
     auto offset = static_cast<off_t>(file.offset());
     std::uint64_t remaining = file.length();
     while (remaining > 0) {
-        const auto nextSend =
-            static_cast<std::size_t>(std::min<std::uint64_t>(remaining, 0x7ffff000ULL));
+        const auto nextSend = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, 0x7ffff000ULL));
         const auto sent = ::sendfile(socket.native_handle(), input.get(), &offset, nextSend);
         if (sent > 0) {
             remaining -= static_cast<std::uint64_t>(sent);
@@ -45,9 +43,7 @@ Task<std::error_code> writeHttpResponseFile(asio::ip::tcp::socket& socket, Worke
             continue;
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            const auto waitCompletion = co_await asyncAsio([&socket](auto handler) mutable {
-                socket.async_wait(asio::ip::tcp::socket::wait_write, std::move(handler));
-            });
+            const auto waitCompletion = co_await asyncAsio([&socket](auto handler) mutable { socket.async_wait(asio::ip::tcp::socket::wait_write, std::move(handler)); });
             error = waitCompletion.errorCode();
             if (error) {
                 co_return error;
@@ -72,18 +68,14 @@ Task<std::error_code> writeHttpResponseFile(asio::ip::tcp::socket& socket, Worke
     }
     std::uint64_t remaining = file.length();
     while (remaining > 0) {
-        const auto nextSend = static_cast<DWORD>(std::min<std::uint64_t>(
-            remaining, static_cast<std::uint64_t>((std::numeric_limits<DWORD>::max)())));
-        if (::TransmitFile(socket.native_handle(), input.get(), nextSend, 0, nullptr, nullptr, 0) !=
-            FALSE) {
+        const auto nextSend = static_cast<DWORD>(std::min<std::uint64_t>(remaining, static_cast<std::uint64_t>((std::numeric_limits<DWORD>::max)())));
+        if (::TransmitFile(socket.native_handle(), input.get(), nextSend, 0, nullptr, nullptr, 0) != FALSE) {
             remaining -= nextSend;
             continue;
         }
         const auto socketError = ::WSAGetLastError();
         if (socketError == WSAEWOULDBLOCK) {
-            const auto waitCompletion = co_await asyncAsio([&socket](auto handler) mutable {
-                socket.async_wait(asio::ip::tcp::socket::wait_write, std::move(handler));
-            });
+            const auto waitCompletion = co_await asyncAsio([&socket](auto handler) mutable { socket.async_wait(asio::ip::tcp::socket::wait_write, std::move(handler)); });
             const auto waitError = waitCompletion.errorCode();
             if (waitError) {
                 co_return waitError;

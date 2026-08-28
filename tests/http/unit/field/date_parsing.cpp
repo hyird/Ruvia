@@ -71,13 +71,10 @@ RUVIA_TEST(http_parse_imf_fixdate) {
     // Malformed inputs are rejected.
     RUVIA_CHECK(!httpParseImfFixdate("bad").has_value());                            // wrong length
     RUVIA_CHECK(!httpParseImfFixdate("Foo, 06 Nov 1994 08:49:37 GMT").has_value());  // bad day-name
-    RUVIA_CHECK(
-        !httpParseImfFixdate("sun, 06 Nov 1994 08:49:37 GMT").has_value());  // case-sensitive
-    RUVIA_CHECK(
-        !httpParseImfFixdate("Sun  06 Nov 1994 08:49:37 GMT").has_value());  // bad separators
+    RUVIA_CHECK(!httpParseImfFixdate("sun, 06 Nov 1994 08:49:37 GMT").has_value());  // case-sensitive
+    RUVIA_CHECK(!httpParseImfFixdate("Sun  06 Nov 1994 08:49:37 GMT").has_value());  // bad separators
     RUVIA_CHECK(!httpParseImfFixdate("Sun, 06 Xxx 1994 08:49:37 GMT").has_value());  // bad month
-    RUVIA_CHECK(
-        !httpParseImfFixdate("Sun, 32 Nov 1994 08:49:37 GMT").has_value());  // day out of range
+    RUVIA_CHECK(!httpParseImfFixdate("Sun, 32 Nov 1994 08:49:37 GMT").has_value());  // day out of range
     RUVIA_CHECK(!httpParseImfFixdate("Sun, 06 Nov 1994 08:49:37 UTC").has_value());  // not GMT
 }
 
@@ -86,12 +83,9 @@ RUVIA_TEST(http_parse_http_date_accepts_all_three_formats) {
     // RFC 7231 section 7.1.1.1: a recipient MUST accept all three date formats.
     // The one canonical instant, written each way, resolves to the same second.
     constexpr std::time_t canonical{784111777};
-    RUVIA_CHECK_EQ(
-        httpParseHttpDate("Sun, 06 Nov 1994 08:49:37 GMT").value_or(-1), canonical);  // IMF-fixdate
-    RUVIA_CHECK_EQ(
-        httpParseHttpDate("Sunday, 06-Nov-94 08:49:37 GMT").value_or(-1), canonical);  // RFC 850
-    RUVIA_CHECK_EQ(
-        httpParseHttpDate("Sun Nov  6 08:49:37 1994").value_or(-1), canonical);  // asctime
+    RUVIA_CHECK_EQ(httpParseHttpDate("Sun, 06 Nov 1994 08:49:37 GMT").value_or(-1), canonical);   // IMF-fixdate
+    RUVIA_CHECK_EQ(httpParseHttpDate("Sunday, 06-Nov-94 08:49:37 GMT").value_or(-1), canonical);  // RFC 850
+    RUVIA_CHECK_EQ(httpParseHttpDate("Sun Nov  6 08:49:37 1994").value_or(-1), canonical);        // asctime
 
     // asctime with a two-digit day is not space-padded.
     RUVIA_CHECK(httpParseHttpDate("Sun Nov 16 08:49:37 1994").has_value());
@@ -106,14 +100,11 @@ RUVIA_TEST(http_parse_http_date_accepts_all_three_formats) {
 
     // A malformed instance of each obsolete format is rejected, not silently
     // coerced through the shared assembler.
-    RUVIA_CHECK(
-        !httpParseHttpDate("Funday, 06-Nov-94 08:49:37 GMT").has_value());    // bad long day-name
-    RUVIA_CHECK(!httpParseHttpDate("Foo Nov  6 08:49:37 1994").has_value());  // bad short day-name
-    RUVIA_CHECK(
-        !httpParseHttpDate("Sunday, 06-Xxx-94 08:49:37 GMT").has_value());  // bad month (RFC 850)
-    RUVIA_CHECK(
-        !httpParseHttpDate("Sunday, 06-Nov-94 08:49:37 UTC").has_value());    // not GMT (RFC 850)
-    RUVIA_CHECK(!httpParseHttpDate("Sun Xxx  6 08:49:37 1994").has_value());  // bad month (asctime)
+    RUVIA_CHECK(!httpParseHttpDate("Funday, 06-Nov-94 08:49:37 GMT").has_value());  // bad long day-name
+    RUVIA_CHECK(!httpParseHttpDate("Foo Nov  6 08:49:37 1994").has_value());        // bad short day-name
+    RUVIA_CHECK(!httpParseHttpDate("Sunday, 06-Xxx-94 08:49:37 GMT").has_value());  // bad month (RFC 850)
+    RUVIA_CHECK(!httpParseHttpDate("Sunday, 06-Nov-94 08:49:37 UTC").has_value());  // not GMT (RFC 850)
+    RUVIA_CHECK(!httpParseHttpDate("Sun Xxx  6 08:49:37 1994").has_value());        // bad month (asctime)
     RUVIA_CHECK(!httpParseHttpDate("garbage").has_value());
 }
 
@@ -142,17 +133,14 @@ RUVIA_TEST(imf_fixdate_parses_known_dates) {
 RUVIA_TEST(imf_fixdate_rejects_malformed) {
     using ruvia::detail::httpParseImfFixdate;
     RUVIA_CHECK(!httpParseImfFixdate("").has_value());
-    RUVIA_CHECK(
-        !httpParseImfFixdate("Thu, 01 Jan 1970 00:00:00").has_value());  // wrong length / no GMT
-    RUVIA_CHECK(
-        !httpParseImfFixdate("Thu, 01 Jan 1970 00:00:00 UTC").has_value());  // zone must be GMT
+    RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jan 1970 00:00:00").has_value());      // wrong length / no GMT
+    RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jan 1970 00:00:00 UTC").has_value());  // zone must be GMT
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jon 1970 00:00:00 GMT").has_value());  // bad month
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jan 1970 25:00:00 GMT").has_value());  // hour > 23
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 00 Jan 1970 00:00:00 GMT").has_value());  // day < 1
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 32 Jan 1970 00:00:00 GMT").has_value());  // day > 31
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jan 1970 00:60:00 GMT").has_value());  // minute > 59
-    RUVIA_CHECK(
-        !httpParseImfFixdate("Thu; 01 Jan 1970 00:00:00 GMT").has_value());  // wrong separator
+    RUVIA_CHECK(!httpParseImfFixdate("Thu; 01 Jan 1970 00:00:00 GMT").has_value());  // wrong separator
 
     // httpParseImfFixdate is the strict IMF-fixdate-only component: it MUST reject the
     // two obsolete HTTP-date formats. (RFC 9110 §5.6.7 requires a recipient to accept
@@ -166,8 +154,7 @@ RUVIA_TEST(imf_fixdate_rejects_malformed) {
 
 RUVIA_TEST(imf_fixdate_leap_second_boundary) {
     using ruvia::detail::httpParseImfFixdate;
-    RUVIA_CHECK(
-        httpParseImfFixdate("Thu, 01 Jan 1970 23:59:60 GMT").has_value());  // leap second allowed
+    RUVIA_CHECK(httpParseImfFixdate("Thu, 01 Jan 1970 23:59:60 GMT").has_value());   // leap second allowed
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jan 1970 23:59:61 GMT").has_value());  // 61 rejected
 }
 
@@ -201,8 +188,7 @@ RUVIA_TEST(http_format_date_known_vectors) {
 
 RUVIA_TEST(http_format_date_round_trips_with_parse) {
     using ruvia::detail::httpParseImfFixdate;
-    const std::time_t samples[] = {
-        0, 1, 59, 3661, 86400, 784111777, 1000000000, 1600000000, 2000000000, 2147483647};
+    const std::time_t samples[] = {0, 1, 59, 3661, 86400, 784111777, 1000000000, 1600000000, 2000000000, 2147483647};
     for (const auto sample : samples) {
         const auto formatted = formatDate(sample);
         RUVIA_CHECK_EQ(formatted.size(), std::size_t{29});

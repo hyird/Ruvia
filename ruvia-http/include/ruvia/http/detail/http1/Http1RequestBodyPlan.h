@@ -90,20 +90,15 @@ public:
         return expectations_;
     }
 
-    [[nodiscard]] HttpServerExpectationPlan expectationPlan(
-        HttpUnsupportedExpectationPolicy unsupportedPolicy) const noexcept {
-        return expectations_.serverPlan(requiresConsumption()
-                                            ? HttpRequestContentIndication::kWillFollow
-                                            : HttpRequestContentIndication::kNoContent,
-            unsupportedPolicy);
+    [[nodiscard]] HttpServerExpectationPlan expectationPlan(HttpUnsupportedExpectationPolicy unsupportedPolicy) const noexcept {
+        return expectations_.serverPlan(requiresConsumption() ? HttpRequestContentIndication::kWillFollow : HttpRequestContentIndication::kNoContent, unsupportedPolicy);
     }
 
 private:
     friend class detail::Http1ServerRequestParseState;
     friend class detail::Http1ServerRequestParser;
 
-    using Framing =
-        std::variant<Http1RequestWithoutBody, Http1KnownLengthRequestBody, Http1ChunkedRequestBody>;
+    using Framing = std::variant<Http1RequestWithoutBody, Http1KnownLengthRequestBody, Http1ChunkedRequestBody>;
 
     explicit Http1RequestBodyPlan(HttpRequestExpectations expectations) noexcept
         : Http1RequestBodyPlan(Framing(Http1RequestWithoutBody()), expectations) {}
@@ -111,8 +106,7 @@ private:
     Http1RequestBodyPlan(std::size_t contentLength, HttpRequestExpectations expectations) noexcept
         : Http1RequestBodyPlan(Framing(Http1KnownLengthRequestBody(contentLength)), expectations) {}
 
-    Http1RequestBodyPlan(
-        HttpTransferCodings transferCodings, HttpRequestExpectations expectations) noexcept
+    Http1RequestBodyPlan(HttpTransferCodings transferCodings, HttpRequestExpectations expectations) noexcept
         : Http1RequestBodyPlan(Framing(Http1ChunkedRequestBody(transferCodings)), expectations) {}
 
     Http1RequestBodyPlan(Framing framing, HttpRequestExpectations expectations) noexcept

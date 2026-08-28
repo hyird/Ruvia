@@ -1,6 +1,7 @@
 #pragma once
 
 #include "content_decoding_fixture.h"
+#include "context_services_fixture.h"
 #include "test_harness.h"
 
 #include <asio/co_spawn.hpp>
@@ -39,13 +40,11 @@ inline ruvia::ScopedOperation<std::string_view> makeExpiredContextTextRead() {
     ruvia::detail::HttpRequestAccess::reset(request);
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
     ruvia::detail::HttpRequestAccess::setBody(request, "body");
-    auto context = ruvia::detail::ContextAccess::make(
-        memory, request, ruvia::detail::ContextServices({}, nullptr, 1024));
+    auto context = ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices().withMaxDecodedBodyBytes(1024));
     return context.req().text();
 }
 
-inline ruvia::Task<void> awaitExpiredContextTextRead(
-    ruvia::ScopedOperation<std::string_view>& operation, bool& rejected) {
+inline ruvia::Task<void> awaitExpiredContextTextRead(ruvia::ScopedOperation<std::string_view>& operation, bool& rejected) {
     try {
         (void)co_await std::move(operation);
     } catch (const std::logic_error&) {
@@ -53,26 +52,21 @@ inline ruvia::Task<void> awaitExpiredContextTextRead(
     }
 }
 
-inline ContextBodyReadObservation readContextGzipBody(
-    std::string_view encoded, std::size_t maxDecodedBodyBytes) {
+inline ContextBodyReadObservation readContextGzipBody(std::string_view encoded, std::size_t maxDecodedBodyBytes) {
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
     auto request = ruvia::detail::HttpRequestAccess::make();
     ruvia::detail::HttpRequestAccess::reset(request);
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
-    const auto contentEncodingSlot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(
-        ruvia::detail::RequestKnownHeader::kContentEncoding);
-    if (!ruvia::detail::HttpRequestAccess::addHeader(
-            request, ruvia::HttpHeaderView{"Content-Encoding", "gzip"}, contentEncodingSlot)) {
+    const auto contentEncodingSlot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kContentEncoding);
+    if (!ruvia::detail::HttpRequestAccess::addHeader(request, ruvia::HttpHeaderView{"Content-Encoding", "gzip"}, contentEncodingSlot)) {
         throw std::runtime_error("test request rejected Content-Encoding");
     }
     ruvia::detail::HttpRequestAccess::setBody(request, encoded);
 
-    auto context = ruvia::detail::ContextAccess::make(
-        memory, request, ruvia::detail::ContextServices({}, nullptr, maxDecodedBodyBytes));
+    auto context = ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices().withMaxDecodedBodyBytes(maxDecodedBodyBytes));
     asio::io_context io(1);
-    auto future = asio::co_spawn(
-        io, ruvia::detail::taskAsAwaitable(readContextText(context)), asio::use_future);
+    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(readContextText(context)), asio::use_future);
     io.run();
 
     ContextBodyReadObservation observation;

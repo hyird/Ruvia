@@ -21,8 +21,7 @@ using ruvia::detail::setResponseHeaderAppend;
 
 RUVIA_TEST(response_header_make_splits_name_and_value) {
     const char blob[] = "Content-Typetext/html";  // 12-byte name + 9-byte value
-    const auto header =
-        makeResponseHeader(blob, 12, 9, ruvia::detail::kResponseHeaderContentType, false);
+    const auto header = makeResponseHeader(blob, 12, 9, ruvia::detail::kResponseHeaderContentType, false);
     RUVIA_CHECK_EQ(header.name(), std::string_view("Content-Type"));
     RUVIA_CHECK_EQ(header.value(), std::string_view("text/html"));
     RUVIA_CHECK_EQ(responseHeaderKnownBit(header), ruvia::detail::kResponseHeaderContentType);
@@ -37,8 +36,7 @@ RUVIA_TEST(response_header_value_range_points_into_blob) {
     RUVIA_CHECK(begin != nullptr);
     RUVIA_CHECK(end - begin == 5);
     RUVIA_CHECK(begin == blob + 5);  // in-place editable value region
-    RUVIA_CHECK_EQ(
-        std::string_view(begin, static_cast<std::size_t>(end - begin)), std::string_view("abcde"));
+    RUVIA_CHECK_EQ(std::string_view(begin, static_cast<std::size_t>(end - begin)), std::string_view("abcde"));
 }
 
 RUVIA_TEST(response_header_null_bytes_yield_null_ranges) {

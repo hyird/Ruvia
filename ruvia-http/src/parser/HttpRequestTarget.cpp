@@ -21,8 +21,7 @@ struct NormalizedHostUnit final {
     bool encodedReserved{false};
 };
 
-[[nodiscard]] bool nextNormalizedHostUnit(
-    std::string_view value, std::size_t& cursor, NormalizedHostUnit& output) noexcept {
+[[nodiscard]] bool nextNormalizedHostUnit(std::string_view value, std::size_t& cursor, NormalizedHostUnit& output) noexcept {
     if (cursor == value.size()) {
         return false;
     }
@@ -63,8 +62,7 @@ struct NormalizedHostUnit final {
 }  // namespace
 
 struct HttpAuthorityViewAccess final {
-    [[nodiscard]] static constexpr HttpAuthorityView make(
-        std::string_view host, HttpAuthorityPortKind portKind, std::uint16_t port = 0) noexcept {
+    [[nodiscard]] static constexpr HttpAuthorityView make(std::string_view host, HttpAuthorityPortKind portKind, std::uint16_t port = 0) noexcept {
         return HttpAuthorityView(host, portKind, port);
     }
 };
@@ -76,8 +74,7 @@ bool isValidRequestTargetBytes(std::string_view target) noexcept {
     for (std::size_t i = 0; i < target.size(); ++i) {
         const auto byte = static_cast<unsigned char>(target[i]);
         if (byte == '%') {
-            if (i + 2 >= target.size() || decodeHexNibble(target[i + 1]) < 0 ||
-                decodeHexNibble(target[i + 2]) < 0) {
+            if (i + 2 >= target.size() || decodeHexNibble(target[i + 1]) < 0 || decodeHexNibble(target[i + 2]) < 0) {
                 return false;
             }
             i += 2;
@@ -101,8 +98,7 @@ bool isValidOriginFormTarget(std::string_view target) noexcept {
     }
     const auto separator = target.find('?');
     const auto path = separator == std::string_view::npos ? target : target.substr(0, separator);
-    const auto query =
-        separator == std::string_view::npos ? std::string_view{} : target.substr(separator + 1);
+    const auto query = separator == std::string_view::npos ? std::string_view{} : target.substr(separator + 1);
     return isValidUriComponent(path, true, false) && isValidUriComponent(query, true, true);
 }
 
@@ -187,8 +183,7 @@ bool httpUriHostEquals(std::string_view left, std::string_view right) noexcept {
         if (!hasLeft || !hasRight) {
             return hasLeft == hasRight;
         }
-        if (leftUnit.byte != rightUnit.byte ||
-            leftUnit.encodedReserved != rightUnit.encodedReserved) {
+        if (leftUnit.byte != rightUnit.byte || leftUnit.encodedReserved != rightUnit.encodedReserved) {
             return false;
         }
     }
@@ -205,8 +200,7 @@ bool isValidHostHeader(std::string_view value) noexcept {
 bool isValidUriAuthority(std::string_view value) noexcept {
     auto hostAndPort = value;
     if (const auto delimiter = value.find('@'); delimiter != std::string_view::npos) {
-        if (!isValidUriUserinfo(value.substr(0, delimiter)) ||
-            value.find('@', delimiter + 1) != std::string_view::npos) {
+        if (!isValidUriUserinfo(value.substr(0, delimiter)) || value.find('@', delimiter + 1) != std::string_view::npos) {
             return false;
         }
         hostAndPort = value.substr(delimiter + 1);
@@ -245,16 +239,13 @@ bool isValidUriAuthority(std::string_view value) noexcept {
 }
 
 bool isValidUriScheme(std::string_view value) noexcept {
-    const auto isAlpha = [](unsigned char byte) noexcept {
-        return (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z');
-    };
+    const auto isAlpha = [](unsigned char byte) noexcept { return (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z'); };
     if (value.empty() || !isAlpha(static_cast<unsigned char>(value.front()))) {
         return false;
     }
     for (const auto c : value.substr(1)) {
         const auto byte = static_cast<unsigned char>(c);
-        if (!isAlpha(byte) && !(byte >= '0' && byte <= '9') && byte != '+' && byte != '-' &&
-            byte != '.') {
+        if (!isAlpha(byte) && !(byte >= '0' && byte <= '9') && byte != '+' && byte != '-' && byte != '.') {
             return false;
         }
     }
@@ -273,8 +264,7 @@ std::uint16_t httpUriSchemeDefaultPort(std::string_view scheme) noexcept {
 
 namespace {
 
-[[nodiscard]] bool parseAbsoluteTarget(
-    HttpKnownMethod method, std::string_view target, RequestTargetView& output) noexcept {
+[[nodiscard]] bool parseAbsoluteTarget(HttpKnownMethod method, std::string_view target, RequestTargetView& output) noexcept {
     // RFC 9112 section 3.2.2 defines absolute-form as the complete RFC 3986
     // absolute-URI grammar. Restricting this to HTTP(S) rejects valid proxy
     // requests such as ftp:// targets and every authority-less scheme.
@@ -284,15 +274,11 @@ namespace {
     }
 
     const auto scheme = target.substr(0, schemeEnd);
-    const bool httpScheme =
-        httpAsciiEqualsIgnoreCase(scheme, "http") || httpAsciiEqualsIgnoreCase(scheme, "https");
+    const bool httpScheme = httpAsciiEqualsIgnoreCase(scheme, "http") || httpAsciiEqualsIgnoreCase(scheme, "https");
     const auto remainder = target.substr(schemeEnd + 1);
     const auto querySeparator = remainder.find('?');
-    const auto hierarchy =
-        querySeparator == std::string_view::npos ? remainder : remainder.substr(0, querySeparator);
-    const auto query = querySeparator == std::string_view::npos
-                           ? std::string_view{}
-                           : remainder.substr(querySeparator + 1);
+    const auto hierarchy = querySeparator == std::string_view::npos ? remainder : remainder.substr(0, querySeparator);
+    const auto query = querySeparator == std::string_view::npos ? std::string_view{} : remainder.substr(querySeparator + 1);
     if (!isValidUriComponent(query, true, true)) {
         return false;
     }
@@ -302,19 +288,14 @@ namespace {
     if (hierarchy.starts_with("//")) {
         const auto authorityAndPath = hierarchy.substr(2);
         const auto pathSeparator = authorityAndPath.find('/');
-        const auto uriAuthority = pathSeparator == std::string_view::npos
-                                      ? authorityAndPath
-                                      : authorityAndPath.substr(0, pathSeparator);
-        path = pathSeparator == std::string_view::npos ? std::string_view{}
-                                                       : authorityAndPath.substr(pathSeparator);
+        const auto uriAuthority = pathSeparator == std::string_view::npos ? authorityAndPath : authorityAndPath.substr(0, pathSeparator);
+        path = pathSeparator == std::string_view::npos ? std::string_view{} : authorityAndPath.substr(pathSeparator);
         if (!isValidUriAuthority(uriAuthority) || !isValidUriComponent(path, true, false)) {
             return false;
         }
 
         const auto userinfoDelimiter = uriAuthority.find('@');
-        authority = userinfoDelimiter == std::string_view::npos
-                        ? uriAuthority
-                        : uriAuthority.substr(userinfoDelimiter + 1);
+        authority = userinfoDelimiter == std::string_view::npos ? uriAuthority : uriAuthority.substr(userinfoDelimiter + 1);
         // Host is the public, authoritative routing value installed by the
         // HTTP/1 parser. It therefore still has to fit the validated HTTP
         // authority representation even when the URI scheme is generic.
@@ -361,12 +342,10 @@ namespace {
 
 }  // namespace
 
-bool authorityMatchesHost(
-    std::string_view authority, std::string_view host, std::uint16_t defaultPort) noexcept {
+bool authorityMatchesHost(std::string_view authority, std::string_view host, std::uint16_t defaultPort) noexcept {
     const auto authorityParts = parseHttpAuthority(authority);
     const auto hostParts = parseHttpAuthority(host);
-    if (!authorityParts || !hostParts ||
-        !httpUriHostEquals(authorityParts->host(), hostParts->host())) {
+    if (!authorityParts || !hostParts || !httpUriHostEquals(authorityParts->host(), hostParts->host())) {
         return false;
     }
     // With no known scheme default, an omitted/empty port has no numeric value.
@@ -383,8 +362,7 @@ bool authorityMatchesHost(
     return authorityParts->effectivePort(defaultPort) == hostParts->effectivePort(defaultPort);
 }
 
-bool parseRequestTarget(
-    HttpKnownMethod method, std::string_view target, RequestTargetView& output) noexcept {
+bool parseRequestTarget(HttpKnownMethod method, std::string_view target, RequestTargetView& output) noexcept {
     if (target == "*") {
         if (method != HttpKnownMethod::kOptions) {
             return false;
@@ -418,10 +396,8 @@ bool parseRequestTarget(
         }
         const auto querySeparator = target.find('?');
         output.scheme = {};
-        output.path =
-            querySeparator == std::string_view::npos ? target : target.substr(0, querySeparator);
-        output.query = querySeparator == std::string_view::npos ? std::string_view{}
-                                                                : target.substr(querySeparator + 1);
+        output.path = querySeparator == std::string_view::npos ? target : target.substr(0, querySeparator);
+        output.query = querySeparator == std::string_view::npos ? std::string_view{} : target.substr(querySeparator + 1);
         output.authority = {};
         output.defaultPort = 0;
         output.form = HttpRequestTargetForm::kOrigin;

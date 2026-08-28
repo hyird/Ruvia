@@ -107,8 +107,7 @@ void WorkerDispatcher::defer(MoveOnlyFunction<void()> task) {
     if (!impl_->contextAttached) {
         throw std::runtime_error("worker execution context is detached");
     }
-    asio::post(impl_->ioContext,
-        [self = shared_from_this(), task = std::move(task)]() mutable { task(); });
+    asio::post(impl_->ioContext, [self = shared_from_this(), task = std::move(task)]() mutable { task(); });
 }
 
 bool WorkerDispatcher::deferIfAttached(MoveOnlyFunction<void()> task) {
@@ -119,8 +118,7 @@ bool WorkerDispatcher::deferIfAttached(MoveOnlyFunction<void()> task) {
     if (!impl_->contextAttached) {
         return false;
     }
-    asio::post(impl_->ioContext,
-        [self = shared_from_this(), task = std::move(task)]() mutable { task(); });
+    asio::post(impl_->ioContext, [self = shared_from_this(), task = std::move(task)]() mutable { task(); });
     return true;
 }
 
@@ -132,8 +130,7 @@ void WorkerDispatcher::deferOrTerminate(MoveOnlyFunction<void()> task) noexcept 
     }
 }
 
-void WorkerDispatcher::registerShutdownListener(
-    const std::shared_ptr<WorkerShutdownListener>& listener) {
+void WorkerDispatcher::registerShutdownListener(const std::shared_ptr<WorkerShutdownListener>& listener) {
     std::lock_guard lock(impl_->mutex);
     if (!impl_->accepting) {
         throw std::runtime_error("cannot register state on a stopping worker");
@@ -154,14 +151,11 @@ void WorkerDispatcher::runContext(MoveOnlyFunction<void(std::exception_ptr)> fai
     runContext({}, std::move(failureHandler), {});
 }
 
-void WorkerDispatcher::runContext(MoveOnlyFunction<void()> startupHandler,
-    MoveOnlyFunction<void(std::exception_ptr)> failureHandler,
-    MoveOnlyFunction<void()> shutdownHandler) {
+void WorkerDispatcher::runContext(MoveOnlyFunction<void()> startupHandler, MoveOnlyFunction<void(std::exception_ptr)> failureHandler, MoveOnlyFunction<void()> shutdownHandler) {
     CurrentWorkerGuard current(*this);
     bool failureDelivered = false;
     std::exception_ptr deferredFailure;
-    const auto handleFailure = [this, &failureDelivered, &deferredFailure, &failureHandler](
-                                   std::exception_ptr failure) {
+    const auto handleFailure = [this, &failureDelivered, &deferredFailure, &failureHandler](std::exception_ptr failure) {
         notifyStopping(beginStopping(true));
         abandonQueued();
         if (!failureDelivered) {

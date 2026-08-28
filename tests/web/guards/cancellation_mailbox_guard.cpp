@@ -56,17 +56,15 @@ int main() {
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     CancellationOwner owner;
-    auto mailbox = std::make_shared<CancellationMailbox>(owner, worker);
+    auto mailbox = ruvia::detail::makeWorkerCancellationMailbox(owner, worker);
     ruvia::StopSource source;
     ruvia::StopRegistration registration;
 
     const auto allocationsBeforeRegistration = allocationCount.load(std::memory_order_relaxed);
     const auto ownersBeforeRegistration = mailbox.use_count();
-    source.token().registerCallback(
-        registration, ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 41));
+    source.token().registerCallback(registration, ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 41));
     check(mailbox.use_count() == ownersBeforeRegistration);
-    ruvia::MoveOnlyFunction<void()> queuedDispatch(
-        ruvia::detail::WorkerCancellationDispatch<CancellationMailbox>(mailbox, 42));
+    ruvia::MoveOnlyFunction<void()> queuedDispatch(ruvia::detail::WorkerCancellationDispatch<CancellationMailbox>(mailbox, 42));
     check(allocationCount.load(std::memory_order_relaxed) == allocationsBeforeRegistration);
     registration.reset();
 
@@ -79,10 +77,11 @@ int main() {
 
     ruvia::StopSource onWorkerSource;
     ruvia::StopRegistration onWorkerRegistration;
-    onWorkerSource.token().registerCallback(onWorkerRegistration,
-        ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 44));
+    onWorkerSource.token().registerCallback(onWorkerRegistration, ruvia::detail::WorkerCancellationPost<CancellationMailbox>(mailbox, 44));
     bool observedInline = false;
+    bool observedOperationIds = false;
     ruvia::detail::WorkerHandleAccess::defer(worker, [&] {
+        observedOperationIds = mailbox->nextOperationId() == 1 && mailbox->nextOperationId() == 2;
         onWorkerSource.requestStop();
         observedInline = owner.lastOperationId == 44;
         ioContext.stop();
@@ -90,6 +89,7 @@ int main() {
     ioContext.restart();
     dispatcher->runContext();
     check(observedInline);
+    check(observedOperationIds);
 
     mailbox->detach(owner);
     ruvia::detail::WorkerCancellationDispatch<CancellationMailbox>(mailbox, 43)();

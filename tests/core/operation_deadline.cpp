@@ -16,14 +16,12 @@ bool operationDeadlineTransitionsAreExclusive() {
     }
 
     deadline.arm(now + std::chrono::seconds(1), DeadlineKind::kRead);
-    if (deadline.kind() == nullptr || *deadline.kind() != DeadlineKind::kRead ||
-        deadline.expire(now).has_value() || deadline.expired()) {
+    if (deadline.kind() == nullptr || *deadline.kind() != DeadlineKind::kRead || deadline.expire(now).has_value() || deadline.expired()) {
         return false;
     }
 
     const auto expiredKind = deadline.expire(now + std::chrono::seconds(1));
-    if (expiredKind != DeadlineKind::kRead || !deadline.expired() || deadline.kind() == nullptr ||
-        *deadline.kind() != DeadlineKind::kRead || !deadline.clear()) {
+    if (expiredKind != DeadlineKind::kRead || !deadline.expired() || deadline.kind() == nullptr || *deadline.kind() != DeadlineKind::kRead || !deadline.clear()) {
         return false;
     }
 
@@ -52,7 +50,5 @@ bool operationTimeoutUsesOneAbsoluteDeadline() {
 }  // namespace
 
 int main() {
-    return operationDeadlineTransitionsAreExclusive() && operationTimeoutUsesOneAbsoluteDeadline()
-               ? 0
-               : 1;
+    return operationDeadlineTransitionsAreExclusive() && operationTimeoutUsesOneAbsoluteDeadline() ? 0 : 1;
 }

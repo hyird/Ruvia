@@ -17,19 +17,14 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] std::string_view byteBodyView(std::span<const std::byte> body) noexcept {
-    return body.empty() ? std::string_view{}
-                        : std::string_view(reinterpret_cast<const char*>(body.data()), body.size());
+    return body.empty() ? std::string_view{} : std::string_view(reinterpret_cast<const char*>(body.data()), body.size());
 }
 
-[[nodiscard]] bool responseHasHeaderName(
-    const HttpResponse& response, std::string_view name) noexcept {
-    return std::ranges::any_of(response.headers(), [name](const auto& header) noexcept {
-        return detail::httpAsciiEqualsIgnoreCase(header.name(), name);
-    });
+[[nodiscard]] bool responseHasHeaderName(const HttpResponse& response, std::string_view name) noexcept {
+    return std::ranges::any_of(response.headers(), [name](const auto& header) noexcept { return detail::httpAsciiEqualsIgnoreCase(header.name(), name); });
 }
 
-[[nodiscard]] std::size_t responseHeaderValueCount(
-    const HttpResponse& response, std::string_view name, std::string_view value) noexcept {
+[[nodiscard]] std::size_t responseHeaderValueCount(const HttpResponse& response, std::string_view name, std::string_view value) noexcept {
     std::size_t count = 0;
     for (const auto& header : response.headers()) {
         if (detail::httpAsciiEqualsIgnoreCase(header.name(), name) && header.value() == value) {
@@ -39,12 +34,10 @@ namespace {
     return count;
 }
 
-[[nodiscard]] std::size_t headerOccurrenceThrough(
-    const HttpResponse& source, const HttpResponseHeader& target) noexcept {
+[[nodiscard]] std::size_t headerOccurrenceThrough(const HttpResponse& source, const HttpResponseHeader& target) noexcept {
     std::size_t count = 0;
     for (const auto& candidate : source.headers()) {
-        if (detail::httpAsciiEqualsIgnoreCase(candidate.name(), target.name()) &&
-            candidate.value() == target.value()) {
+        if (detail::httpAsciiEqualsIgnoreCase(candidate.name(), target.name()) && candidate.value() == target.value()) {
             ++count;
         }
         if (&candidate == &target) {
@@ -69,8 +62,7 @@ void mergeActiveResponseHeaders(HttpResponse& response, const HttpResponse& acti
         if (knownBit == detail::kResponseHeaderSetCookie) {
             detail::upsertResponseSetCookieValidated(response, value);
         } else if (detail::responseHeaderAppend(header)) {
-            if (responseHeaderValueCount(response, name, value) <
-                headerOccurrenceThrough(active, header)) {
+            if (responseHeaderValueCount(response, name, value) < headerOccurrenceThrough(active, header)) {
                 detail::appendResponseHeaderValidated(response, name, value, knownBit);
             }
         } else if (!responseHasHeaderName(response, name)) {
@@ -100,8 +92,7 @@ void assignActiveResponseHeaders(HttpResponse& response, const HttpResponse& act
             }
             detail::upsertResponseSetCookieValidated(response, value);
         } else if (detail::responseHeaderAppend(header)) {
-            if (responseHeaderValueCount(response, name, value) <
-                headerOccurrenceThrough(active, header)) {
+            if (responseHeaderValueCount(response, name, value) < headerOccurrenceThrough(active, header)) {
                 detail::appendResponseHeaderValidated(response, name, value, knownBit);
             }
         } else {
@@ -119,8 +110,7 @@ void Context::status(HttpStatusCode statusCode) {
 void* Context::workerStateInstance(const void* typeKey) const {
     auto* instance = workerStates_ == nullptr ? nullptr : workerStates_->instance(typeKey);
     if (instance == nullptr) {
-        throw std::logic_error(
-            "worker state type is not registered: call App::useWorkerState<T>() before App::run()");
+        throw std::logic_error("worker state type is not registered: call App::useWorkerState<T>() before App::run()");
     }
     return instance;
 }
@@ -132,13 +122,11 @@ BlockingPool& Context::blockingPool() const {
     return *blockingPool_;
 }
 
-std::pmr::string Context::urlFor(
-    std::string_view pattern, std::initializer_list<std::string_view> values) const {
+std::pmr::string Context::urlFor(std::string_view pattern, std::initializer_list<std::string_view> values) const {
     if (routes_ == nullptr) {
         throw std::logic_error("urlFor requires a route table bound to this context");
     }
-    return routes_->urlFor(
-        pattern, std::span<const std::string_view>(values.begin(), values.size()), resource());
+    return routes_->urlFor(pattern, std::span<const std::string_view>(values.begin(), values.size()), resource());
 }
 
 Context& Context::removeResponseHeader(std::string_view name) {
@@ -151,8 +139,7 @@ void Context::removeHeader(std::string_view name) {
 }
 
 void Context::header(std::string_view name, std::string_view value, HeaderOptions options) {
-    responseState_.activeResponse().header(
-        name, value, HttpResponse::HeaderOptions{.mode = options.mode});
+    responseState_.activeResponse().header(name, value, HttpResponse::HeaderOptions{.mode = options.mode});
 }
 
 void Context::storeResponse(HttpResponse&& response) {
@@ -295,8 +282,7 @@ Task<HttpResponse> Context::notFoundTask() {
         co_return co_await notFoundHandler_(*this);
     }
 
-    auto response = detail::makeDefaultErrorResponse(resource(),
-        HttpErrorInfo({.status = http_status::kNotFound, .message = "route not found"}));
+    auto response = detail::makeDefaultErrorResponse(resource(), HttpErrorInfo({.status = http_status::kNotFound, .message = "route not found"}));
     applyResponseState(response, http_status::kNotFound);
     co_return response;
 }
@@ -315,8 +301,7 @@ Context& Context::setStableResponseHeader(std::string_view name, std::string_vie
     return *this;
 }
 
-void Context::applyResponseState(
-    HttpResponse& response, std::optional<HttpStatusCode> statusCode) const {
+void Context::applyResponseState(HttpResponse& response, std::optional<HttpStatusCode> statusCode) const {
     const auto& activeResponse = responseState_.activeResponse();
     const auto finalStatusCode = statusCode.value_or(activeResponse.status());
     response.status(finalStatusCode);

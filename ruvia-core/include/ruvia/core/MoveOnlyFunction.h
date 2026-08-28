@@ -13,10 +13,7 @@ namespace ruvia {
 namespace detail {
 
 template <typename Result, typename Fn, typename... Args>
-concept MoveOnlyFunctionTarget =
-    (std::is_void_v<Result> &&
-        std::same_as<std::invoke_result_t<std::decay_t<Fn>&, Args...>, void>) ||
-    (!std::is_void_v<Result> && std::is_invocable_r_v<Result, std::decay_t<Fn>&, Args...>);
+concept MoveOnlyFunctionTarget = (std::is_void_v<Result> && std::same_as<std::invoke_result_t<std::decay_t<Fn>&, Args...>, void>) || (!std::is_void_v<Result> && std::is_invocable_r_v<Result, std::decay_t<Fn>&, Args...>);
 
 }  // namespace detail
 
@@ -30,8 +27,7 @@ public:
     MoveOnlyFunction(std::nullptr_t) noexcept {}
 
     template <typename Fn>
-        requires(!std::same_as<std::remove_cvref_t<Fn>, MoveOnlyFunction>) &&
-                detail::MoveOnlyFunctionTarget<Result, Fn, Args...>
+        requires(!std::same_as<std::remove_cvref_t<Fn>, MoveOnlyFunction>) && detail::MoveOnlyFunctionTarget<Result, Fn, Args...>
     MoveOnlyFunction(Fn&& fn) {
         using Stored = std::decay_t<Fn>;
         if constexpr (std::is_pointer_v<Stored> || std::is_member_pointer_v<Stored>) {
@@ -101,9 +97,7 @@ private:
     };
 
     template <typename Stored>
-    static constexpr bool fitsInline =
-        sizeof(Stored) <= kInlineSize && alignof(Stored) <= alignof(std::max_align_t) &&
-        std::is_nothrow_move_constructible_v<Stored>;
+    static constexpr bool fitsInline = sizeof(Stored) <= kInlineSize && alignof(Stored) <= alignof(std::max_align_t) && std::is_nothrow_move_constructible_v<Stored>;
 
     template <typename Stored>
     static Result invoke(void* object, Args&&... args) {
@@ -130,12 +124,10 @@ private:
     static void moveHeap(void*, void*) noexcept {}
 
     template <typename Stored>
-    static inline constexpr Operations inlineOperations{
-        &invoke<Stored>, &destroyInline<Stored>, &moveInline<Stored>};
+    static inline constexpr Operations inlineOperations{&invoke<Stored>, &destroyInline<Stored>, &moveInline<Stored>};
 
     template <typename Stored>
-    static inline constexpr Operations heapOperations{
-        &invoke<Stored>, &destroyHeap<Stored>, &moveHeap};
+    static inline constexpr Operations heapOperations{&invoke<Stored>, &destroyHeap<Stored>, &moveHeap};
 
     [[nodiscard]] bool isInline() const noexcept {
         return object_ == static_cast<const void*>(storage_);

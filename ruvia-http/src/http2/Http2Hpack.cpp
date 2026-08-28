@@ -48,8 +48,7 @@ HpackDecoder::DecodeTransaction HpackDecoder::beginTransaction() noexcept {
     return DecodeTransaction(*this);
 }
 
-HpackDecoder::StepResult HpackDecoder::decodeInteger(const unsigned char*& cursor,
-    const unsigned char* end, std::uint8_t prefixBits, std::uint32_t& value) const noexcept {
+HpackDecoder::StepResult HpackDecoder::decodeInteger(const unsigned char*& cursor, const unsigned char* end, std::uint8_t prefixBits, std::uint32_t& value) const noexcept {
     if (cursor == end || prefixBits == 0 || prefixBits > 8) {
         return HpackDecodeError::kNeedMore;
     }
@@ -88,8 +87,7 @@ HpackDecoder::StepResult HpackDecoder::decodeInteger(const unsigned char*& curso
     }
 }
 
-HpackDecoder::StepResult HpackDecoder::decodeString(const unsigned char*& cursor,
-    const unsigned char* end, std::pmr::string& scratch, std::string_view& value) {
+HpackDecoder::StepResult HpackDecoder::decodeString(const unsigned char*& cursor, const unsigned char* end, std::pmr::string& scratch, std::string_view& value) {
     if (cursor == end) {
         return HpackDecodeError::kNeedMore;
     }
@@ -116,12 +114,9 @@ HpackDecoder::StepResult HpackDecoder::decodeString(const unsigned char*& cursor
     return std::nullopt;
 }
 
-HpackDecoder::StepResult HpackDecoder::decodeLiteralHeader(const unsigned char*& cursor,
-    const unsigned char* end, std::uint8_t nameIndexPrefixBits, bool indexIntoDynamic, void* target,
-    HeaderCallback callback, bool& rejected) {
+HpackDecoder::StepResult HpackDecoder::decodeLiteralHeader(const unsigned char*& cursor, const unsigned char* end, std::uint8_t nameIndexPrefixBits, bool indexIntoDynamic, void* target, HeaderCallback callback, bool& rejected) {
     std::uint32_t nameIndex = 0;
-    if (const auto error = decodeInteger(cursor, end, nameIndexPrefixBits, nameIndex);
-        error.has_value()) {
+    if (const auto error = decodeInteger(cursor, end, nameIndexPrefixBits, nameIndex); error.has_value()) {
         return error;
     }
 
@@ -155,8 +150,7 @@ void HpackDecoder::releaseScratch() {
     clearPmrStringRetainingSmall(valueScratch_);
 }
 
-HpackDecodeResult HpackDecoder::decode(
-    std::string_view block, void* target, HeaderCallback callback) {
+HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, HeaderCallback callback) {
     auto transaction = beginTransaction();
     auto result = decode(block, target, callback, transaction);
     if (transaction.active()) {
@@ -165,15 +159,13 @@ HpackDecodeResult HpackDecoder::decode(
     return result;
 }
 
-HpackDecodeResult HpackDecoder::decode(
-    std::string_view block, void* target, HeaderCallback callback, DecodeTransaction& transaction) {
+HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, HeaderCallback callback, DecodeTransaction& transaction) {
     if (transaction.decoder_ != this || !transaction.active_) {
         std::terminate();
     }
     try {
         auto result = decodeBlock(block, target, callback);
-        if (const auto* failure = result.failure();
-            failure != nullptr && failure->error() != HpackDecodeError::kCallbackRejected) {
+        if (const auto* failure = result.failure(); failure != nullptr && failure->error() != HpackDecodeError::kCallbackRejected) {
             transaction.rollback();
         }
         return result;
@@ -186,8 +178,7 @@ HpackDecodeResult HpackDecoder::decode(
     }
 }
 
-HpackDecodeResult HpackDecoder::decodeBlock(
-    std::string_view block, void* target, HeaderCallback callback) {
+HpackDecodeResult HpackDecoder::decodeBlock(std::string_view block, void* target, HeaderCallback callback) {
     struct ScratchReleaseGuard final {
         HpackDecoder& decoder;
 
@@ -228,9 +219,7 @@ HpackDecodeResult HpackDecoder::decodeBlock(
         }
 
         if ((first & 0x40U) != 0) {
-            if (const auto error =
-                    decodeLiteralHeader(cursor, end, 6, true, target, callback, rejected);
-                error.has_value()) {
+            if (const auto error = decodeLiteralHeader(cursor, end, 6, true, target, callback, rejected); error.has_value()) {
                 return HpackDecodeResult(*error);
             }
             sawHeader = true;
@@ -262,9 +251,7 @@ HpackDecodeResult HpackDecoder::decodeBlock(
         }
 
         if ((first & 0xf0U) == 0x00U || (first & 0xf0U) == 0x10U) {
-            if (const auto error =
-                    decodeLiteralHeader(cursor, end, 4, false, target, callback, rejected);
-                error.has_value()) {
+            if (const auto error = decodeLiteralHeader(cursor, end, 4, false, target, callback, rejected); error.has_value()) {
                 return HpackDecodeResult(*error);
             }
             sawHeader = true;

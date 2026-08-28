@@ -61,8 +61,7 @@ public:
 
     [[nodiscard]] ValueT& ensure(std::pmr::memory_resource* resource) {
         if (!value_) {
-            value_.emplace(
-                detail::makeRequestValue<ValueT>(detail::ResolvedPmrResourceTag{}, resource));
+            value_.emplace(detail::makeRequestValue<ValueT>(detail::ResolvedPmrResourceTag{}, resource));
         }
         state_ = detail::ModelFieldState::kParsed;
         return *value_;

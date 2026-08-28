@@ -21,8 +21,7 @@ inline void closeSocket(asio::ip::tcp::socket& socket) noexcept {
 }
 
 inline void configureAcceptedSocket(asio::ip::tcp::socket& socket) noexcept {
-    configureTcpSocketOptions(
-        socket, TcpNoDelayPolicy::kEnable, TcpKeepAlivePolicy::kSystemDefault);
+    configureTcpSocketOptions(socket, TcpNoDelayPolicy::kEnable, TcpKeepAlivePolicy::kSystemDefault);
 }
 
 inline void assignRemoteAddress(std::pmr::string& output, const asio::ip::address& address) {

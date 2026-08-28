@@ -46,18 +46,14 @@ private:
     friend struct detail::ValidationIssueAccess;
 
     explicit ValidationIssue(ValidationIssueOptions options)
-        : ValidationIssue(detail::ResolvedPmrResourceTag{}, options.field.view(),
-              options.code.view(), options.message.view(),
-              detail::pmrResourceOrDefault(options.resource)) {}
+        : ValidationIssue(detail::ResolvedPmrResourceTag{}, options.field.view(), options.code.view(), options.message.view(), detail::pmrResourceOrDefault(options.resource)) {}
 
     ValidationIssue(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : field_(resource),
           code_(resource),
           message_(resource) {}
 
-    ValidationIssue(detail::ResolvedPmrResourceTag, std::string_view fieldName,
-        std::string_view codeValue, std::string_view messageValue,
-        std::pmr::memory_resource* resource)
+    ValidationIssue(detail::ResolvedPmrResourceTag, std::string_view fieldName, std::string_view codeValue, std::string_view messageValue, std::pmr::memory_resource* resource)
         : field_(fieldName, resource),
           code_(codeValue, resource),
           message_(messageValue, resource) {}
@@ -70,12 +66,8 @@ private:
 namespace detail {
 
 struct ValidationIssueAccess final {
-    [[nodiscard]] static ValidationIssue copy(
-        const ValidationIssue& issue, std::pmr::memory_resource* resource) {
-        return ValidationIssue({.field = issue.field(),
-            .code = issue.code(),
-            .message = issue.message(),
-            .resource = resource});
+    [[nodiscard]] static ValidationIssue copy(const ValidationIssue& issue, std::pmr::memory_resource* resource) {
+        return ValidationIssue({.field = issue.field(), .code = issue.code(), .message = issue.message(), .resource = resource});
     }
 };
 

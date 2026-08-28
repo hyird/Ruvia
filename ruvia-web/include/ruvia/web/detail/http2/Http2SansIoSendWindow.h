@@ -60,7 +60,6 @@ static_assert(sizeof(Http2SendWindowWaitResult) <= 2);
 // Wait until the HTTP core no longer owns queued DATA for this stream. The
 // Web-owned signal is only a wakeup edge; stream existence, abort, session end,
 // and queue state are re-checked together after every wake.
-[[nodiscard]] Task<Http2SendWindowWaitResult> awaitHttp2SendWindow(
-    Http2Connection& connection, std::uint32_t streamId, Http2SansIoStreamSignal* signal);
+[[nodiscard]] Task<Http2SendWindowWaitResult> awaitHttp2SendWindow(Http2Connection& connection, std::uint32_t streamId, Http2SansIoStreamSignal* signal);
 
 }  // namespace ruvia::detail

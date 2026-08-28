@@ -13,11 +13,9 @@ namespace ruvia::detail {
 
 struct HttpClientConfigStorage final {
     HttpClientConfigStorage(const HttpClientConfig& source, std::pmr::memory_resource* resource)
-        : HttpClientConfigStorage(
-              ValidatedConfigTag{}, validate(source), pmrResourceOrDefault(resource)) {}
+        : HttpClientConfigStorage(ValidatedConfigTag{}, validate(source), pmrResourceOrDefault(resource)) {}
 
-    HttpClientConfigStorage(
-        const HttpClientConfigStorage& source, std::pmr::memory_resource* resource)
+    HttpClientConfigStorage(const HttpClientConfigStorage& source, std::pmr::memory_resource* resource)
         : HttpClientConfigStorage(ValidatedConfigTag{}, source, pmrResourceOrDefault(resource)) {}
 
     std::pmr::string host;
@@ -47,8 +45,7 @@ private:
         return source;
     }
 
-    HttpClientConfigStorage(
-        ValidatedConfigTag, const HttpClientConfig& source, std::pmr::memory_resource* resource)
+    HttpClientConfigStorage(ValidatedConfigTag, const HttpClientConfig& source, std::pmr::memory_resource* resource)
         : host(source.host, resource),
           scheme(source.scheme),
           port(source.port.value_or(source.scheme == HttpScheme::kHttps ? 443 : 80)),
@@ -69,13 +66,11 @@ private:
           cookies(resource) {
         cookies.reserve(source.cookies.size());
         for (const auto& [name, value] : source.cookies) {
-            cookies.emplace_back(
-                std::pmr::string(name, resource), std::pmr::string(value, resource));
+            cookies.emplace_back(std::pmr::string(name, resource), std::pmr::string(value, resource));
         }
     }
 
-    HttpClientConfigStorage(ValidatedConfigTag, const HttpClientConfigStorage& source,
-        std::pmr::memory_resource* resource)
+    HttpClientConfigStorage(ValidatedConfigTag, const HttpClientConfigStorage& source, std::pmr::memory_resource* resource)
         : host(source.host, resource),
           scheme(source.scheme),
           port(source.port),
@@ -96,8 +91,7 @@ private:
           cookies(resource) {
         cookies.reserve(source.cookies.size());
         for (const auto& [name, value] : source.cookies) {
-            cookies.emplace_back(
-                std::pmr::string(name, resource), std::pmr::string(value, resource));
+            cookies.emplace_back(std::pmr::string(name, resource), std::pmr::string(value, resource));
         }
     }
 };
@@ -106,8 +100,7 @@ private:
     return config.port;
 }
 
-[[nodiscard]] inline std::pmr::string httpClientWireHost(
-    const HttpClientConfigStorage& config, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::pmr::string httpClientWireHost(const HttpClientConfigStorage& config, std::pmr::memory_resource* resource) {
     std::pmr::string host(pmrResourceOrDefault(resource));
     if (config.host.find(':') != std::string_view::npos) {
         host.reserve(config.host.size() + 2);

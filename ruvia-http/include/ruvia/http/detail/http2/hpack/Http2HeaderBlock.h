@@ -21,20 +21,17 @@ inline void http2ResetHeaderBlock(Http2StreamState& stream) {
     clearPmrStringRetainingSmall(stream.remoteHeaderBlock());
 }
 
-[[nodiscard]] inline bool http2AppendHeaderBlock(
-    Http2StreamState& stream, std::string_view fragment) {
+[[nodiscard]] inline bool http2AppendHeaderBlock(Http2StreamState& stream, std::string_view fragment) {
     auto& headerBlock = stream.remoteHeaderBlock();
     const auto current = headerBlock.size();
-    if (current > kMaxHttp2EncodedHeaderBlockBytes ||
-        fragment.size() > kMaxHttp2EncodedHeaderBlockBytes - current) {
+    if (current > kMaxHttp2EncodedHeaderBlockBytes || fragment.size() > kMaxHttp2EncodedHeaderBlockBytes - current) {
         return false;
     }
     headerBlock.append(fragment.data(), fragment.size());
     return true;
 }
 
-[[nodiscard]] inline bool http2StartHeaderBlock(
-    Http2StreamState& stream, std::string_view fragment) {
+[[nodiscard]] inline bool http2StartHeaderBlock(Http2StreamState& stream, std::string_view fragment) {
     http2ResetHeaderBlock(stream);
     return http2AppendHeaderBlock(stream, fragment);
 }

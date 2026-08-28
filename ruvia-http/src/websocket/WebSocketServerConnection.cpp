@@ -18,8 +18,7 @@ namespace {
     throw std::invalid_argument("invalid WebSocket compression mode");
 }
 
-[[nodiscard]] WebSocketTransportDisposition toPublic(
-    detail::WsTransportDisposition disposition) noexcept {
+[[nodiscard]] WebSocketTransportDisposition toPublic(detail::WsTransportDisposition disposition) noexcept {
     switch (disposition) {
         case detail::WsTransportDisposition::kKeepOpen:
             return WebSocketTransportDisposition::kKeepOpen;
@@ -114,10 +113,8 @@ WebSocketServerConnection::WebSocketServerConnection(WebSocketServerConnectionOp
     : impl_(std::make_unique<Impl>(options)) {}
 
 WebSocketServerConnection::~WebSocketServerConnection() = default;
-WebSocketServerConnection::WebSocketServerConnection(
-    WebSocketServerConnection&&) noexcept = default;
-WebSocketServerConnection& WebSocketServerConnection::operator=(
-    WebSocketServerConnection&&) noexcept = default;
+WebSocketServerConnection::WebSocketServerConnection(WebSocketServerConnection&&) noexcept = default;
+WebSocketServerConnection& WebSocketServerConnection::operator=(WebSocketServerConnection&&) noexcept = default;
 
 WebSocketFeedStatus WebSocketServerConnection::feed(std::string_view input) {
     if (impl_->connection.livenessMode() == detail::WsLivenessMode::kInactive) {
@@ -171,12 +168,10 @@ WebSocketAbortDisposition WebSocketServerConnection::abort() noexcept {
 WebSocketLivenessMode WebSocketServerConnection::livenessMode() const noexcept {
     return toPublic(impl_->connection.livenessMode());
 }
-WebSocketFrameSubmitStatus WebSocketServerConnection::submitFrame(
-    WebSocketOpcode opcode, std::string_view payload) {
+WebSocketFrameSubmitStatus WebSocketServerConnection::submitFrame(WebSocketOpcode opcode, std::string_view payload) {
     return toPublic(impl_->connection.submitFrame(opcode, payload));
 }
-WebSocketCloseSubmitStatus WebSocketServerConnection::submitClose(
-    std::uint16_t code, std::string_view reason) {
+WebSocketCloseSubmitStatus WebSocketServerConnection::submitClose(std::uint16_t code, std::string_view reason) {
     return toPublic(impl_->connection.submitClose(code, reason));
 }
 

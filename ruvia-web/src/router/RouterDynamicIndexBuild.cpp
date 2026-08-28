@@ -143,16 +143,12 @@ void detail::RouteTable::appendDynamicParamName(RouteEntry& route, std::string_v
         throw std::invalid_argument("route has too many parameters");
     }
 
-    const auto offset = names.empty()
-                            ? dynamicParamNames_.size()
-                            : static_cast<std::size_t>(names.data() - dynamicParamNames_.data());
+    const auto offset = names.empty() ? dynamicParamNames_.size() : static_cast<std::size_t>(names.data() - dynamicParamNames_.data());
     dynamicParamNames_.push_back(name);
-    route.setParamNames(
-        std::span<const std::string_view>(dynamicParamNames_.data() + offset, names.size() + 1));
+    route.setParamNames(std::span<const std::string_view>(dynamicParamNames_.data() + offset, names.size() + 1));
 }
 
-void detail::RouteTable::insertDynamic(
-    DynamicNode& root, RouteEntry& route, std::size_t routeIndex) {
+void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route, std::size_t routeIndex) {
     auto path = route.path();
     auto* node = &root;
     auto& plan = *ownedPlan_;
@@ -194,8 +190,7 @@ void detail::RouteTable::insertDynamic(
             if (childNode == nullptr) {
                 plan.dynamicNodeArena_.emplace_back(plan.resource_);
                 childNode = &plan.dynamicNodeArena_.back();
-                auto child =
-                    DynamicStaticChild{std::pmr::string(segment, plan.resource_), childNode};
+                auto child = DynamicStaticChild{std::pmr::string(segment, plan.resource_), childNode};
                 node->staticChildren.push_back(std::move(child));
             }
             node = childNode;
@@ -210,10 +205,7 @@ void detail::RouteTable::insertDynamic(
 }
 
 void detail::RouteTable::sortDynamicNode(DynamicNode& node) {
-    std::ranges::sort(
-        node.staticChildren, [](const DynamicStaticChild& left, const DynamicStaticChild& right) {
-            return std::string_view(left.segment) < std::string_view(right.segment);
-        });
+    std::ranges::sort(node.staticChildren, [](const DynamicStaticChild& left, const DynamicStaticChild& right) { return std::string_view(left.segment) < std::string_view(right.segment); });
     for (auto& child : node.staticChildren) {
         sortDynamicNode(*child.node);
     }
@@ -251,10 +243,8 @@ bool detail::RouteTable::sameDynamicShape(std::string_view left, std::string_vie
                 // This holds at any depth, not just the root: e.g. "/files/*" + "/files/public/:id"
                 // is fine, but
                 // "/a/*" + "/a/:x" conflicts.
-                const auto leftDynamic =
-                    leftSegment == "*" || (!leftSegment.empty() && leftSegment.front() == ':');
-                const auto rightDynamic =
-                    rightSegment == "*" || (!rightSegment.empty() && rightSegment.front() == ':');
+                const auto leftDynamic = leftSegment == "*" || (!leftSegment.empty() && leftSegment.front() == ':');
+                const auto rightDynamic = rightSegment == "*" || (!rightSegment.empty() && rightSegment.front() == ':');
                 if (!(leftDynamic && rightDynamic)) {
                     return false;
                 }

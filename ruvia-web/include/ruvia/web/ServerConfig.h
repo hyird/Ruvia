@@ -233,8 +233,7 @@ public:
 private:
     friend struct detail::AccessLogRecordAccess;
 
-    constexpr AccessLogRecord(const HttpRequest& request, std::string_view remoteAddress,
-        HttpStatusCode status, std::uint64_t durationMicros) noexcept
+    constexpr AccessLogRecord(const HttpRequest& request, std::string_view remoteAddress, HttpStatusCode status, std::uint64_t durationMicros) noexcept
         : request_(request),
           remoteAddress_(remoteAddress),
           status_(status),

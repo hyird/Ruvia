@@ -9,9 +9,18 @@
 #include <utility>
 
 namespace ruvia::detail {
+namespace {
 
-PostgreSqlPool::ConnectionSlot::ConnectionSlot(
-    asio::io_context& ioContext, std::pmr::memory_resource* resource)
+[[nodiscard]] const WorkerHandle& requirePostgreSqlWorker(const WorkerHandle& worker) {
+    if (!worker.valid()) {
+        throw std::invalid_argument("PostgreSQL pool requires a valid worker");
+    }
+    return worker;
+}
+
+}  // namespace
+
+PostgreSqlPool::ConnectionSlot::ConnectionSlot(asio::io_context& ioContext, std::pmr::memory_resource* resource)
     : resolver(ioContext),
       waitSocket(nullptr, SlotSocketDeleter{pmrResourceOrDefault(resource)}),
       socketQuarantine(makePmrObject<DbSlotSocketQuarantine>(processResource(), ioContext)) {}
@@ -30,33 +39,25 @@ PostgreSqlPool::ConnectionSlot::~ConnectionSlot() {
     }
 }
 PostgreSqlPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept = default;
-PostgreSqlPool::ConnectionSlot& PostgreSqlPool::ConnectionSlot::operator=(
-    ConnectionSlot&&) noexcept = default;
+PostgreSqlPool::ConnectionSlot& PostgreSqlPool::ConnectionSlot::operator=(ConnectionSlot&&) noexcept = default;
 
-PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, DbConfigStorage config,
-    std::pmr::memory_resource* resource, const WorkerHandle* worker)
+PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config, std::pmr::memory_resource* resource)
     : ioContext_(ioContext),
       config_(std::move(config)),
       resource_(pmrResourceOrDefault(resource)),
       slots_(resource_),
       scheduler_(1, resource_),
-      worker_(worker == nullptr ? WorkerHandle{} : *worker) {
+      worker_(requirePostgreSqlWorker(worker)),
+      cancellationMailbox_(makeWorkerCancellationMailbox(*this, worker_)) {
     if (config_.driver != DbDriver::kPostgreSql) {
         throw std::invalid_argument("PostgreSQL pool requires the PostgreSQL driver");
     }
     slots_.reserve(1);
     slots_.emplace_back(ioContext_, resource_);
-    if (worker_.valid()) {
-        slots_.back().cancellationState = makeDbOperationCancellationState(worker_, *this, 0);
-    }
 }
 
 PostgreSqlPool::~PostgreSqlPool() {
-    for (auto& slot : slots_) {
-        if (slot.cancellationState != nullptr) {
-            slot.cancellationState->detach(this);
-        }
-    }
+    cancellationMailbox_->detach(*this);
     closeNow();
 }
 
@@ -90,12 +91,7 @@ void PostgreSqlPool::scanDeadlines(std::chrono::steady_clock::time_point now) no
     }
 }
 
-bool PostgreSqlPool::needsDeadlineScan() const noexcept {
-    return true;
-}
-
-Task<std::size_t> PostgreSqlPool::acquireSlot(
-    const OperationTimeout& timeout, StopToken stopToken) {
+Task<std::size_t> PostgreSqlPool::acquireSlot(const OperationTimeout& timeout, StopToken stopToken) {
     return acquireDbSlot(*this, timeout, std::move(stopToken));
 }
 
@@ -135,27 +131,24 @@ void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
     slot.closeRequested = false;
 }
 
-void PostgreSqlPool::cancelOperation(std::size_t slotIndex, std::uint64_t generation) noexcept {
-    if (slotIndex >= slots_.size()) {
-        std::terminate();
-    }
-    auto& slot = slots_[slotIndex];
-    if (slot.operationGeneration != generation) {
+void PostgreSqlPool::cancelOperationById(std::uint64_t cancellationId) noexcept {
+    for (auto& slot : slots_) {
+        if (slot.cancellationId != cancellationId) {
+            continue;
+        }
+        slot.abortReason = DbSlotAbortReason::kCancelled;
+        closeSlot(slot);
         return;
     }
-    slot.abortReason = DbSlotAbortReason::kCancelled;
-    closeSlot(slot);
 }
 
 void PostgreSqlPool::throwIfCancelled(const ConnectionSlot& slot) const {
     if (slot.abortReason == DbSlotAbortReason::kCancelled) {
-        throw DbError(
-            DbError::Code::kCancelled, DbDriver::kPostgreSql, "database operation cancelled");
+        throw DbError(DbError::Code::kCancelled, DbDriver::kPostgreSql, "database operation cancelled");
     }
 }
 
-void PostgreSqlPool::setSlotDeadline(
-    ConnectionSlot& slot, std::optional<std::chrono::milliseconds> timeout) noexcept {
+void PostgreSqlPool::setSlotDeadline(ConnectionSlot& slot, std::optional<std::chrono::milliseconds> timeout) noexcept {
     if (!timeout.has_value() || timeout->count() <= 0) {
         slot.deadline.reset();
         return;

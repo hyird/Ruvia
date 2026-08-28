@@ -23,16 +23,12 @@ Http2StreamState makeStream() {
     return Http2StreamState(1, std::pmr::new_delete_resource());
 }
 
-[[nodiscard]] bool buildRequest(
-    Http2StreamState& stream, ruvia::HttpRequest& request, std::string_view body = {}) {
-    const auto result =
-        Http2RequestBuilder::build(stream, request, std::pmr::new_delete_resource(), body);
+[[nodiscard]] bool buildRequest(Http2StreamState& stream, ruvia::HttpRequest& request, std::string_view body = {}) {
+    const auto result = Http2RequestBuilder::build(stream, request, std::pmr::new_delete_resource(), body);
     return result.built() != nullptr;
 }
 
-void checkBuildFailure(ruvia::testing::TestContext& ruvia_ctx,
-    const Http2RequestBuildResult& result, ruvia::HttpStatusCode expectedStatus,
-    std::string_view expectedMessage) {
+void checkBuildFailure(ruvia::testing::TestContext& ruvia_ctx, const Http2RequestBuildResult& result, ruvia::HttpStatusCode expectedStatus, std::string_view expectedMessage) {
     RUVIA_CHECK(result.built() == nullptr);
     RUVIA_CHECK(result.failure() != nullptr);
     if (const auto* failure = result.failure()) {
@@ -91,8 +87,7 @@ RUVIA_TEST(h2_request_builder_target_is_path_and_splits_query) {
     auto stream = makeStream();
     stream.assignRequestPath("/search?q=hello&x=1");
     // For a non-CONNECT request the target is the :path pseudo-header verbatim.
-    RUVIA_CHECK_EQ(
-        Http2RequestBuilder::requestTarget(stream), std::string_view("/search?q=hello&x=1"));
+    RUVIA_CHECK_EQ(Http2RequestBuilder::requestTarget(stream), std::string_view("/search?q=hello&x=1"));
     // The path is everything before the first '?'.
     RUVIA_CHECK_EQ(Http2RequestBuilder::requestPath(stream), std::string_view("/search"));
 }
@@ -157,9 +152,7 @@ RUVIA_TEST(h2_request_builder_rejects_explicit_empty_http_path) {
     stream.assignRequestPath("");
     stream.markPath();
 
-    checkBuildFailure(ruvia_ctx,
-        Http2RequestBuilder::build(stream, request, std::pmr::new_delete_resource(), {}),
-        ruvia::http_status::kBadRequest, "invalid HTTP/2 request target");
+    checkBuildFailure(ruvia_ctx, Http2RequestBuilder::build(stream, request, std::pmr::new_delete_resource(), {}), ruvia::http_status::kBadRequest, "invalid HTTP/2 request target");
 }
 
 RUVIA_TEST(h2_request_builder_asterisk_form_target) {
@@ -174,10 +167,8 @@ RUVIA_TEST(h2_request_builder_rejects_non_options_asterisk_target) {
     auto stream = makeStream();
     stream.assignRequestMethod("GET");
     stream.assignRequestPath("*");
-    const auto failure =
-        Http2RequestBuilder::build(stream, request, std::pmr::new_delete_resource(), {});
-    checkBuildFailure(
-        ruvia_ctx, failure, ruvia::http_status::kBadRequest, "invalid HTTP/2 request target");
+    const auto failure = Http2RequestBuilder::build(stream, request, std::pmr::new_delete_resource(), {});
+    checkBuildFailure(ruvia_ctx, failure, ruvia::http_status::kBadRequest, "invalid HTTP/2 request target");
 
     auto optionsRequest = HttpRequestAccess::make();
     auto optionsStream = makeStream();
@@ -192,15 +183,11 @@ RUVIA_TEST(h2_request_builder_failure_owns_protocol_status_and_diagnostic) {
 
     auto missingMethod = makeStream();
     missingMethod.assignRequestPath("/");
-    checkBuildFailure(ruvia_ctx,
-        Http2RequestBuilder::build(missingMethod, request, std::pmr::new_delete_resource(), {}),
-        ruvia::http_status::kBadRequest, "missing HTTP/2 :method");
+    checkBuildFailure(ruvia_ctx, Http2RequestBuilder::build(missingMethod, request, std::pmr::new_delete_resource(), {}), ruvia::http_status::kBadRequest, "missing HTTP/2 :method");
 
     auto missingTarget = makeStream();
     missingTarget.assignRequestMethod("GET");
-    checkBuildFailure(ruvia_ctx,
-        Http2RequestBuilder::build(missingTarget, request, std::pmr::new_delete_resource(), {}),
-        ruvia::http_status::kBadRequest, "missing HTTP/2 request target");
+    checkBuildFailure(ruvia_ctx, Http2RequestBuilder::build(missingTarget, request, std::pmr::new_delete_resource(), {}), ruvia::http_status::kBadRequest, "missing HTTP/2 request target");
 
     auto tooManyHeaders = makeStream();
     tooManyHeaders.assignRequestMethod("GET");
@@ -208,12 +195,9 @@ RUVIA_TEST(h2_request_builder_failure_owns_protocol_status_and_diagnostic) {
     tooManyHeaders.assignRequestAuthority("example.com");
     tooManyHeaders.markAuthority();
     for (std::size_t i = 0; i < ruvia::kMaxHttpHeaderFields; ++i) {
-        RUVIA_CHECK(
-            tooManyHeaders.appendRemoteHeader("x-test", "value", RequestHeaderKind::kOther));
+        RUVIA_CHECK(tooManyHeaders.appendRemoteHeader("x-test", "value", RequestHeaderKind::kOther));
     }
-    checkBuildFailure(ruvia_ctx,
-        Http2RequestBuilder::build(tooManyHeaders, request, std::pmr::new_delete_resource(), {}),
-        ruvia::http_status::kRequestHeaderFieldsTooLarge, "too many HTTP/2 request headers");
+    checkBuildFailure(ruvia_ctx, Http2RequestBuilder::build(tooManyHeaders, request, std::pmr::new_delete_resource(), {}), ruvia::http_status::kRequestHeaderFieldsTooLarge, "too many HTTP/2 request headers");
 }
 
 RUVIA_TEST(h2_request_builder_empty_query_after_question_mark) {
@@ -232,8 +216,7 @@ RUVIA_TEST(h2_request_builder_standard_connect_keeps_authority_form_target) {
     RUVIA_CHECK(stream.beginStandardConnect());
 
     RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kConnect);
-    RUVIA_CHECK_EQ(
-        Http2RequestBuilder::requestTarget(stream), std::string_view("proxy.example:443"));
+    RUVIA_CHECK_EQ(Http2RequestBuilder::requestTarget(stream), std::string_view("proxy.example:443"));
     RUVIA_CHECK(buildRequest(stream, request));
     RUVIA_CHECK_EQ(request.method(), std::string_view("CONNECT"));
     RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kConnect);

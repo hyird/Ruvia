@@ -40,10 +40,7 @@ private:
 }  // namespace
 
 template <typename T>
-concept ExposesAnyRvalueModelStringBorrow =
-    requires { std::declval<const T&&>().view(); } || requires {
-        std::declval<const T&&>().data();
-    } || requires { static_cast<std::string_view>(std::declval<const T&&>()); };
+concept ExposesAnyRvalueModelStringBorrow = requires { std::declval<const T&&>().view(); } || requires { std::declval<const T&&>().data(); } || requires { static_cast<std::string_view>(std::declval<const T&&>()); };
 
 template <typename T>
 concept ExposesRvalueFixedStringView = requires { std::declval<const T&&>().view(); };

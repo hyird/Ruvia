@@ -23,8 +23,7 @@ inline void skipJsonWhitespace(std::string_view& input) noexcept {
     return true;
 }
 
-[[nodiscard]] inline bool consumeJsonLiteral(
-    std::string_view& input, std::string_view literal) noexcept {
+[[nodiscard]] inline bool consumeJsonLiteral(std::string_view& input, std::string_view literal) noexcept {
     skipJsonWhitespace(input);
     if (!input.starts_with(literal)) {
         return false;

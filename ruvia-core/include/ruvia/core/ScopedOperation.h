@@ -70,8 +70,7 @@ public:
 protected:
     ScopedCapabilityNode() noexcept
         : active_(false) {}
-    ScopedCapabilityNode(
-        ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept;
+    ScopedCapabilityNode(ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept;
     void requireActive() const;
     [[nodiscard]] ScopedOperationScope& operationScope() const;
     void bind(ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept;
@@ -190,9 +189,7 @@ private:
     ScopedOperation(detail::ScopedOperationScope& scope, Task<T> task)
         : detail::ScopedOperationNode(scope),
           task_(std::move(task)) {
-        setExpireCold([](detail::ScopedOperationNode& node) noexcept {
-            static_cast<ScopedOperation&>(node).task_.reset();
-        });
+        setExpireCold([](detail::ScopedOperationNode& node) noexcept { static_cast<ScopedOperation&>(node).task_.reset(); });
     }
 
     std::optional<Task<T>> task_;

@@ -10,6 +10,8 @@
 #include "ruvia/core/StopToken.h"
 
 #include <cstddef>
+#include <functional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -32,17 +34,15 @@ class WorkerStateRegistry;
 
 class ContextServices final {
 public:
-    ContextServices() noexcept
-        : connInfo_(ConnInfo::plain({})) {}
+    ContextServices() = delete;
 
-    ContextServices(WorkerClientRegistryView clientRegistries, RateLimiter* rateLimiter = nullptr,
-        std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes,
-        const WorkerHandle* worker = nullptr) noexcept
+    explicit ContextServices(const WorkerHandle& worker, WorkerClientRegistryView clientRegistries = WorkerClientRegistryView::detached(), RateLimiter* rateLimiter = nullptr, std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes)
         : clientRegistries_(clientRegistries),
           rateLimiter_(rateLimiter),
           maxDecodedBodyBytes_(maxDecodedBodyBytes),
-          worker_(worker),
+          worker_(requireWorker(worker)),
           connInfo_(ConnInfo::plain({})) {}
+    ContextServices(WorkerHandle&&, WorkerClientRegistryView = WorkerClientRegistryView::detached(), RateLimiter* = nullptr, std::size_t = kDefaultMaxBufferedBodyBytes) = delete;
 
     [[nodiscard]] constexpr WorkerClientRegistryView clientRegistries() const noexcept {
         return clientRegistries_;
@@ -50,6 +50,12 @@ public:
 
     [[nodiscard]] RateLimiter* rateLimiter() const noexcept {
         return rateLimiter_;
+    }
+
+    [[nodiscard]] ContextServices withRateLimiter(RateLimiter& value) const noexcept {
+        auto services = *this;
+        services.rateLimiter_ = &value;
+        return services;
     }
 
     [[nodiscard]] const Env* env() const noexcept {
@@ -66,21 +72,15 @@ public:
         return maxDecodedBodyBytes_;
     }
 
-    [[nodiscard]] const WorkerHandle& worker() const noexcept {
-        if (worker_ != nullptr) {
-            return *worker_;
-        }
-        static const WorkerHandle invalidWorker;
-        return invalidWorker;
-    }
-
-    // The handle is connection-owned and outlives every ContextServices copy.
-    [[nodiscard]] ContextServices withWorker(const WorkerHandle& value) const noexcept {
+    [[nodiscard]] ContextServices withMaxDecodedBodyBytes(std::size_t value) const noexcept {
         auto services = *this;
-        services.worker_ = &value;
+        services.maxDecodedBodyBytes_ = value;
         return services;
     }
-    ContextServices withWorker(WorkerHandle&&) const = delete;
+
+    [[nodiscard]] const WorkerHandle& worker() const noexcept {
+        return worker_.get();
+    }
 
     [[nodiscard]] const StopToken& stopToken() const noexcept {
         if (stopToken_ != nullptr) {
@@ -214,8 +214,7 @@ public:
     }
 
     // The registry is worker-owned and outlives every dispatched request.
-    [[nodiscard]] ContextServices withWorkerStates(
-        const WorkerStateRegistry& value) const noexcept {
+    [[nodiscard]] ContextServices withWorkerStates(const WorkerStateRegistry& value) const noexcept {
         auto services = *this;
         services.workerStates_ = &value;
         return services;
@@ -223,8 +222,7 @@ public:
 
     // Views borrow connection-owned storage and remain valid for every Context
     // created while that connection is dispatched.
-    [[nodiscard]] ContextServices withPlainTransport(
-        std::string_view remoteAddress) const noexcept {
+    [[nodiscard]] ContextServices withPlainTransport(std::string_view remoteAddress) const noexcept {
         auto services = *this;
         services.connInfo_ = ConnInfo::plain(remoteAddress);
         return services;
@@ -233,29 +231,33 @@ public:
     template <typename Traits, typename Allocator>
     ContextServices withPlainTransport(std::basic_string<char, Traits, Allocator>&&) const = delete;
 
-    [[nodiscard]] ContextServices withTlsTransport(std::string_view remoteAddress,
-        std::string_view clientCertificateSubject = {}) const noexcept {
+    [[nodiscard]] ContextServices withTlsTransport(std::string_view remoteAddress, std::string_view clientCertificateSubject = {}) const noexcept {
         auto services = *this;
         services.connInfo_ = ConnInfo::tls(remoteAddress, clientCertificateSubject);
         return services;
     }
 
     template <typename Traits, typename Allocator>
-    ContextServices withTlsTransport(
-        std::basic_string<char, Traits, Allocator>&&, std::string_view = {}) const = delete;
+    ContextServices withTlsTransport(std::basic_string<char, Traits, Allocator>&&, std::string_view = {}) const = delete;
 
     template <typename Traits, typename Allocator>
-    ContextServices withTlsTransport(
-        std::string_view, std::basic_string<char, Traits, Allocator>&&) const = delete;
+    ContextServices withTlsTransport(std::string_view, std::basic_string<char, Traits, Allocator>&&) const = delete;
 
 private:
-    WorkerClientRegistryView clientRegistries_;
+    [[nodiscard]] static const WorkerHandle& requireWorker(const WorkerHandle& worker) {
+        if (!worker.valid()) {
+            throw std::invalid_argument("context services require a valid worker");
+        }
+        return worker;
+    }
+
+    WorkerClientRegistryView clientRegistries_{WorkerClientRegistryView::detached()};
     RateLimiter* rateLimiter_{nullptr};
     const Env* env_{nullptr};
     std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};
     // Request/session services borrow the address-stable server-owned handle.
     // Every derived ContextServices value stays inside that server's dispatch.
-    const WorkerHandle* worker_{nullptr};
+    std::reference_wrapper<const WorkerHandle> worker_;
     const StopToken* stopToken_{nullptr};
     HttpErrorHandlerRef errorHandler_{nullptr};
     HttpNotFoundHandlerRef notFoundHandler_{nullptr};

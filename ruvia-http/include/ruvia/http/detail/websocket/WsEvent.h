@@ -159,18 +159,15 @@ public:
 private:
     friend class WsConnection;
 
-    using Value = std::variant<WsMessageEvent, WsPingEvent, WsPongEvent, WsCloseEvent,
-        WsProtocolErrorEvent, WsTransportEndEvent>;
+    using Value = std::variant<WsMessageEvent, WsPingEvent, WsPongEvent, WsCloseEvent, WsProtocolErrorEvent, WsTransportEndEvent>;
 
-    static_assert(
-        static_cast<std::size_t>(WsEventKind::kTransportEnd) + 1 == std::variant_size_v<Value>);
+    static_assert(static_cast<std::size_t>(WsEventKind::kTransportEnd) + 1 == std::variant_size_v<Value>);
 
     template <typename Event>
     explicit WsEvent(Event event) noexcept
         : value_(std::move(event)) {}
 
-    [[nodiscard]] static WsEvent message(
-        WebSocketOpcode opcode, std::string_view payload) noexcept {
+    [[nodiscard]] static WsEvent message(WebSocketOpcode opcode, std::string_view payload) noexcept {
         return WsEvent(WsMessageEvent(opcode, payload));
     }
 

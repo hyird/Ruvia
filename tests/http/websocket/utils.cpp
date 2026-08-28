@@ -61,8 +61,7 @@ RUVIA_TEST(websocket_frame_message_limit_exempts_control_frames) {
     RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kPing, 100, limit));
     RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kPong, 100, limit));
     RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kClose, 100, limit));
-    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(
-        WebSocketFrameKind::kText, 1'000'000, ProtocolByteLimit::unlimited()));
+    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kText, 1'000'000, ProtocolByteLimit::unlimited()));
 }
 
 RUVIA_TEST(websocket_message_size_limits) {

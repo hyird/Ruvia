@@ -9,13 +9,21 @@
 #include <utility>
 
 namespace ruvia {
+namespace {
 
-detail::MariaDbPool::ConnectionSlot::ConnectionSlot(
-    asio::io_context& ioContext, std::pmr::memory_resource* resource)
+[[nodiscard]] const WorkerHandle& requireMariaDbWorker(const WorkerHandle& worker) {
+    if (!worker.valid()) {
+        throw std::invalid_argument("MariaDB pool requires a valid worker");
+    }
+    return worker;
+}
+
+}  // namespace
+
+detail::MariaDbPool::ConnectionSlot::ConnectionSlot(asio::io_context& ioContext, std::pmr::memory_resource* resource)
     : resolver(ioContext),
       waitSocket(nullptr, SlotSocketDeleter{detail::pmrResourceOrDefault(resource)}),
-      socketQuarantine(detail::makePmrObject<detail::DbSlotSocketQuarantine>(
-          detail::processResource(), ioContext)) {}
+      socketQuarantine(detail::makePmrObject<detail::DbSlotSocketQuarantine>(detail::processResource(), ioContext)) {}
 
 detail::MariaDbPool::ConnectionSlot::~ConnectionSlot() {
     if (waitActive) {
@@ -31,33 +39,25 @@ detail::MariaDbPool::ConnectionSlot::~ConnectionSlot() {
     }
 }
 detail::MariaDbPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept = default;
-detail::MariaDbPool::ConnectionSlot& detail::MariaDbPool::ConnectionSlot::operator=(
-    ConnectionSlot&&) noexcept = default;
+detail::MariaDbPool::ConnectionSlot& detail::MariaDbPool::ConnectionSlot::operator=(ConnectionSlot&&) noexcept = default;
 
-detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, DbConfigStorage config,
-    std::pmr::memory_resource* resource, const WorkerHandle* worker)
+detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config, std::pmr::memory_resource* resource)
     : ioContext_(ioContext),
       config_(std::move(config)),
       resource_(detail::pmrResourceOrDefault(resource)),
       slots_(resource_),
       scheduler_(1, resource_),
-      worker_(worker == nullptr ? WorkerHandle{} : *worker) {
+      worker_(requireMariaDbWorker(worker)),
+      cancellationMailbox_(makeWorkerCancellationMailbox(*this, worker_)) {
     if (config_.driver != DbDriver::kMariaDb) {
         throw std::invalid_argument("MariaDB pool requires the MariaDB driver");
     }
     slots_.reserve(1);
     slots_.emplace_back(ioContext_, resource_);
-    if (worker_.valid()) {
-        slots_.back().cancellationState = makeDbOperationCancellationState(worker_, *this, 0);
-    }
 }
 
 detail::MariaDbPool::~MariaDbPool() {
-    for (auto& slot : slots_) {
-        if (slot.cancellationState != nullptr) {
-            slot.cancellationState->detach(this);
-        }
-    }
+    cancellationMailbox_->detach(*this);
     closeNow();
 }
 
@@ -99,12 +99,7 @@ void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point no
     }
 }
 
-bool detail::MariaDbPool::needsDeadlineScan() const noexcept {
-    return true;
-}
-
-Task<std::size_t> detail::MariaDbPool::acquireSlot(
-    const OperationTimeout& timeout, StopToken stopToken) {
+Task<std::size_t> detail::MariaDbPool::acquireSlot(const OperationTimeout& timeout, StopToken stopToken) {
     return detail::acquireDbSlot(*this, timeout, std::move(stopToken));
 }
 
@@ -132,8 +127,7 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
     }
 
     const auto* kind = slot.deadline.kind();
-    if (kind != nullptr && *kind == ConnectionSlot::DeadlineKind::kSocket &&
-        slot.waitSocket != nullptr) {
+    if (kind != nullptr && *kind == ConnectionSlot::DeadlineKind::kSocket && slot.waitSocket != nullptr) {
         slot.waitSocket->cancel();
     } else if (kind != nullptr && *kind == ConnectionSlot::DeadlineKind::kSleep) {
         auto handle = std::exchange(slot.deadlineContinuation, {});
@@ -160,28 +154,24 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
     slot.closeRequested = false;
 }
 
-void detail::MariaDbPool::cancelOperation(
-    std::size_t slotIndex, std::uint64_t generation) noexcept {
-    if (slotIndex >= slots_.size()) {
-        std::terminate();
-    }
-    auto& slot = slots_[slotIndex];
-    if (slot.operationGeneration != generation) {
+void detail::MariaDbPool::cancelOperationById(std::uint64_t cancellationId) noexcept {
+    for (auto& slot : slots_) {
+        if (slot.cancellationId != cancellationId) {
+            continue;
+        }
+        slot.abortReason = DbSlotAbortReason::kCancelled;
+        closeSlot(slot);
         return;
     }
-    slot.abortReason = DbSlotAbortReason::kCancelled;
-    closeSlot(slot);
 }
 
 void detail::MariaDbPool::throwIfCancelled(const ConnectionSlot& slot) const {
     if (slot.abortReason == DbSlotAbortReason::kCancelled) {
-        throw DbError(
-            DbError::Code::kCancelled, DbDriver::kMariaDb, "database operation cancelled");
+        throw DbError(DbError::Code::kCancelled, DbDriver::kMariaDb, "database operation cancelled");
     }
 }
 
-void detail::MariaDbPool::setSlotDeadline(ConnectionSlot& slot, std::chrono::milliseconds timeout,
-    ConnectionSlot::DeadlineKind kind) noexcept {
+void detail::MariaDbPool::setSlotDeadline(ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind) noexcept {
     if (timeout.count() <= 0) {
         slot.deadline.reset();
         return;

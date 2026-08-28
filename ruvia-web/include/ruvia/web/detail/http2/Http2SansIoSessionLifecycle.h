@@ -24,21 +24,15 @@ public:
     }
 
     [[nodiscard]] bool writeFailed() const noexcept {
-        return phase_ == Http2SansIoSessionPhase::kWriteFailed ||
-               phase_ == Http2SansIoSessionPhase::kStoppingAfterWriteFailure ||
-               phase_ == Http2SansIoSessionPhase::kWriterDoneAfterWriteFailure;
+        return phase_ == Http2SansIoSessionPhase::kWriteFailed || phase_ == Http2SansIoSessionPhase::kStoppingAfterWriteFailure || phase_ == Http2SansIoSessionPhase::kWriterDoneAfterWriteFailure;
     }
 
     [[nodiscard]] bool stopping() const noexcept {
-        return phase_ == Http2SansIoSessionPhase::kStopping ||
-               phase_ == Http2SansIoSessionPhase::kStoppingAfterWriteFailure ||
-               phase_ == Http2SansIoSessionPhase::kWriterDone ||
-               phase_ == Http2SansIoSessionPhase::kWriterDoneAfterWriteFailure;
+        return phase_ == Http2SansIoSessionPhase::kStopping || phase_ == Http2SansIoSessionPhase::kStoppingAfterWriteFailure || phase_ == Http2SansIoSessionPhase::kWriterDone || phase_ == Http2SansIoSessionPhase::kWriterDoneAfterWriteFailure;
     }
 
     [[nodiscard]] bool writerDone() const noexcept {
-        return phase_ == Http2SansIoSessionPhase::kWriterDone ||
-               phase_ == Http2SansIoSessionPhase::kWriterDoneAfterWriteFailure;
+        return phase_ == Http2SansIoSessionPhase::kWriterDone || phase_ == Http2SansIoSessionPhase::kWriterDoneAfterWriteFailure;
     }
 
     void markWriteFailed() noexcept {

@@ -13,9 +13,7 @@ using ruvia::detail::ChunkSizeLineStatus;
 // status, so tests can assert size and rejection together.
 std::size_t chunkSize(std::string_view line) {
     std::size_t size = 0;
-    return ruvia::detail::parseHttpChunkSizeLine(line, size) == ChunkSizeLineStatus::kOk
-               ? size
-               : std::string_view::npos;
+    return ruvia::detail::parseHttpChunkSizeLine(line, size) == ChunkSizeLineStatus::kOk ? size : std::string_view::npos;
 }
 
 ChunkSizeLineStatus chunkStatus(std::string_view line) {
@@ -67,8 +65,7 @@ RUVIA_TEST(chunk_extension_grammar_rejects_malformed) {
     RUVIA_CHECK(chunkStatus("10;=v") == ChunkSizeLineStatus::kInvalidExtension);
     RUVIA_CHECK(chunkStatus("10xyz") == ChunkSizeLineStatus::kInvalidExtension);
     RUVIA_CHECK(chunkStatus("10;a=\"unterminated") == ChunkSizeLineStatus::kInvalidExtension);
-    RUVIA_CHECK(
-        chunkStatus(std::string_view("10;a=b\x01", 7)) == ChunkSizeLineStatus::kInvalidExtension);
+    RUVIA_CHECK(chunkStatus(std::string_view("10;a=b\x01", 7)) == ChunkSizeLineStatus::kInvalidExtension);
 }
 
 RUVIA_TEST(chunk_extension_quoted_value_rejects_control_bytes) {
@@ -77,17 +74,13 @@ RUVIA_TEST(chunk_extension_quoted_value_rejects_control_bytes) {
     // control byte) in a quoted chunk-ext value would otherwise let an attacker
     // smuggle line-structure bytes past the validator -- both unescaped and
     // backslash-escaped forms must be rejected.
-    RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"b\x01\"", 8)) ==
-                ChunkSizeLineStatus::kInvalidExtension);
+    RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"b\x01\"", 8)) == ChunkSizeLineStatus::kInvalidExtension);
     // A bare CR/LF inside the quotes is the smuggling-relevant case.
-    RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"b\r\n\"", 9)) ==
-                ChunkSizeLineStatus::kInvalidExtension);
+    RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"b\r\n\"", 9)) == ChunkSizeLineStatus::kInvalidExtension);
     // An escaped control byte ('\' followed by a control char) is rejected too.
-    RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"\\\x01\"", 8)) ==
-                ChunkSizeLineStatus::kInvalidExtension);
+    RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"\\\x01\"", 8)) == ChunkSizeLineStatus::kInvalidExtension);
     // DEL (0x7F) is a control byte for this purpose and is rejected in quotes.
-    RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"\x7f\"", 7)) ==
-                ChunkSizeLineStatus::kInvalidExtension);
+    RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"\x7f\"", 7)) == ChunkSizeLineStatus::kInvalidExtension);
 }
 
 RUVIA_TEST(chunk_size_rejects_trailing_whitespace) {
@@ -95,15 +88,12 @@ RUVIA_TEST(chunk_size_rejects_trailing_whitespace) {
     // before a ";" or "=" inside a chunk-ext, never as trailing space between the
     // chunk-size (or chunk-ext) and the CRLF. Accepting it is the trailing-edge twin
     // of the leading-OWS smuggling vector and must be rejected symmetrically.
-    RUVIA_CHECK(chunkStatus("5 ") == ChunkSizeLineStatus::kInvalidExtension);   // SP after size
-    RUVIA_CHECK(chunkStatus("5\t") == ChunkSizeLineStatus::kInvalidExtension);  // HTAB after size
-    RUVIA_CHECK(chunkStatus("5  ") == ChunkSizeLineStatus::kInvalidExtension);  // multiple
-    RUVIA_CHECK(
-        chunkStatus("10;a=b ") == ChunkSizeLineStatus::kInvalidExtension);  // after ext value
-    RUVIA_CHECK(
-        chunkStatus("10;chunked ") == ChunkSizeLineStatus::kInvalidExtension);  // after bare ext
-    RUVIA_CHECK(chunkStatus("10;ext=\"a b\" ") ==
-                ChunkSizeLineStatus::kInvalidExtension);  // after quoted value
+    RUVIA_CHECK(chunkStatus("5 ") == ChunkSizeLineStatus::kInvalidExtension);               // SP after size
+    RUVIA_CHECK(chunkStatus("5\t") == ChunkSizeLineStatus::kInvalidExtension);              // HTAB after size
+    RUVIA_CHECK(chunkStatus("5  ") == ChunkSizeLineStatus::kInvalidExtension);              // multiple
+    RUVIA_CHECK(chunkStatus("10;a=b ") == ChunkSizeLineStatus::kInvalidExtension);          // after ext value
+    RUVIA_CHECK(chunkStatus("10;chunked ") == ChunkSizeLineStatus::kInvalidExtension);      // after bare ext
+    RUVIA_CHECK(chunkStatus("10;ext=\"a b\" ") == ChunkSizeLineStatus::kInvalidExtension);  // after quoted value
     // The valid BWS-around-delimiters forms must still parse (no trailing space).
     RUVIA_CHECK(chunkStatus("10 ; a = b") == ChunkSizeLineStatus::kOk);
     RUVIA_CHECK(chunkStatus("10;a=b;c=d") == ChunkSizeLineStatus::kOk);

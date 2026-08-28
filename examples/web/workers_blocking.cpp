@@ -65,10 +65,7 @@ private:
     // throws BlockingOperationRejected at the co_await, which the default error
     // path answers with 503.
     ruvia::Task<ruvia::HttpResponse> offload(ruvia::Context& c) {
-        const auto checksum = co_await c.runBlocking(
-            [input = std::string(c.req().query("input").value_or("default"))] {
-                return slowChecksum(input);
-            });
+        const auto checksum = co_await c.runBlocking([input = std::string(c.req().query("input").value_or("default"))] { return slowChecksum(input); });
         std::pmr::string body(c.resource());
         body.append("checksum=");
         body.append(std::to_string(checksum));
@@ -80,12 +77,9 @@ private:
     // the error path, and a deadline so one wedged call cannot pin the request
     // forever.
     ruvia::Task<ruvia::HttpResponse> offloadOrShed(ruvia::Context& c) {
-        auto result = co_await c.tryRunBlocking(std::chrono::seconds(2),
-            [input = std::string("expensive input")] { return slowChecksum(input); });
+        auto result = co_await c.tryRunBlocking(std::chrono::seconds(2), [input = std::string("expensive input")] { return slowChecksum(input); });
         if (!result.completed()) {
-            co_return c.error({.status = ruvia::http_status::kServiceUnavailable,
-                .code = "busy",
-                .message = ruvia::describeBlockingStatus(result.status())});
+            co_return c.error({.status = ruvia::http_status::kServiceUnavailable, .code = "busy", .message = ruvia::describeBlockingStatus(result.status())});
         }
         std::pmr::string body(c.resource());
         body.append("checksum=");
@@ -119,8 +113,7 @@ private:
 int main() {
     ruvia::app()
         .listen({.address = "0.0.0.0", .http = 8090})
-        .server({.workerCount = 2,
-            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .server({.workerCount = 2, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
         // Each worker builds its own WorkerStats before serving; the factory
         // form (useWorkerState<T>(fn)) covers non-default-constructible types.
         .useWorkerState<WorkerStats>()

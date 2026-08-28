@@ -13,8 +13,7 @@
 
 namespace ruvia::detail {
 
-SetCookiePlan::SetCookiePlan(
-    std::string_view name, std::string_view value, const CookieOptions& options)
+SetCookiePlan::SetCookiePlan(std::string_view name, std::string_view value, const CookieOptions& options)
     : name_(name),
       value_(value),
       path_(options.path),

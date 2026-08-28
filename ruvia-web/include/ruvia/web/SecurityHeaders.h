@@ -39,13 +39,11 @@ enum class SecurityHeaderConflictPolicy : std::uint8_t {
 };
 
 struct SecurityHeadersConfig final {
-    DefaultSecurityHeaderPolicy contentTypeOptionsHeader =
-        DefaultSecurityHeaderPolicy::kEmitDefault;
+    DefaultSecurityHeaderPolicy contentTypeOptionsHeader = DefaultSecurityHeaderPolicy::kEmitDefault;
     DefaultSecurityHeaderPolicy frameOptionsHeader = DefaultSecurityHeaderPolicy::kEmitDefault;
     // Emitted only for requests received over TLS. Plain HTTP responses must
     // never carry Strict-Transport-Security.
-    DefaultSecurityHeaderPolicy strictTransportSecurityHeader =
-        DefaultSecurityHeaderPolicy::kEmitDefault;
+    DefaultSecurityHeaderPolicy strictTransportSecurityHeader = DefaultSecurityHeaderPolicy::kEmitDefault;
     XssProtectionHeaderPolicy xssProtectionHeader = XssProtectionHeaderPolicy::kEmitDisabled;
 
     std::string contentSecurityPolicy{"default-src 'self'"};
@@ -79,8 +77,7 @@ public:
 
 private:
     struct StoredHeader final {
-        StoredHeader(
-            std::string_view name, std::string_view value, std::pmr::memory_resource* resource);
+        StoredHeader(std::string_view name, std::string_view value, std::pmr::memory_resource* resource);
 
         std::pmr::string name;
         std::pmr::string value;

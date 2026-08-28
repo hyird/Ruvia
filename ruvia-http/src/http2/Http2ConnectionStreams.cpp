@@ -24,8 +24,7 @@ namespace {
 // completed responses keep refilling the budget and never trip.
 constexpr std::uint32_t kHttp2MaxUnprocessedResets = 1000;
 constexpr char kHttp2RapidResetGoawayDebug[] = "excessive stream resets";
-constexpr std::size_t kHttp2RapidResetGoawayBytes =
-    kHttp2FrameHeaderBytes + 8 + sizeof(kHttp2RapidResetGoawayDebug) - 1;
+constexpr std::size_t kHttp2RapidResetGoawayBytes = kHttp2FrameHeaderBytes + 8 + sizeof(kHttp2RapidResetGoawayDebug) - 1;
 
 }  // namespace
 
@@ -99,12 +98,9 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
     // terminal transition and the table cannot leak an ownerless half-open stream.
     // Keep the pin until submitReset() finishes: if appending the RST_STREAM throws,
     // the caller still owns request-view storage and can retry unpinning.
-    const auto error = stream->localSend().endStreamCommitted() != nullptr
-                           ? Http2ErrorCode::kNoError
-                           : Http2ErrorCode::kCancel;
+    const auto error = stream->localSend().endStreamCommitted() != nullptr ? Http2ErrorCode::kNoError : Http2ErrorCode::kCancel;
     (void)submitReset(streamId, error);
-    if (auto* retainedStream = streams_.find(streamId);
-        retainedStream != nullptr && retainedStream->isAborted()) {
+    if (auto* retainedStream = streams_.find(streamId); retainedStream != nullptr && retainedStream->isAborted()) {
         flushWindowDebt(*retainedStream);
         releaseLocalRequestStream(*retainedStream);
         std::erase(pinnedStreams_, streamId);
@@ -115,16 +111,14 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
 }
 
 void Http2Connection::discardDeferredStreamState(std::uint32_t streamId) {
-    std::erase_if(pendingSends_,
-        [streamId](const Http2PendingSend& pending) { return pending.streamId == streamId; });
+    std::erase_if(pendingSends_, [streamId](const Http2PendingSend& pending) { return pending.streamId == streamId; });
     std::erase(drainedDataStreams_, streamId);
     if (auto* stream = streams_.find(streamId); stream != nullptr) {
         http2ReleaseLocalHeaderBlock(*stream);
     }
 }
 
-bool Http2Connection::closeStreamImpl(std::uint32_t streamId, Http2StreamCloseSource source,
-    Http2ErrorCode error, CloseNotification notification) {
+bool Http2Connection::closeStreamImpl(std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error, CloseNotification notification) {
     auto* stream = streams_.find(streamId);
     if (stream != nullptr && !stream->isAborted()) {
         // The terminal transition below is allocation-free only after its two
@@ -169,21 +163,17 @@ bool Http2Connection::closeStreamImpl(std::uint32_t streamId, Http2StreamCloseSo
     return true;
 }
 
-bool Http2Connection::closeStream(
-    std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error) {
+bool Http2Connection::closeStream(std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error) {
     return closeStreamImpl(streamId, source, error, CloseNotification::kEmitEvent);
 }
 
 bool Http2Connection::closeStreamByOwner(std::uint32_t streamId) {
-    return closeStreamImpl(streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kNoError,
-        CloseNotification::kOwnerAlreadyKnows);
+    return closeStreamImpl(streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kNoError, CloseNotification::kOwnerAlreadyKnows);
 }
 
-bool Http2Connection::wasClosedByPeerReset(
-    std::uint32_t streamId, const Http2StreamState* retainedStream) const noexcept {
+bool Http2Connection::wasClosedByPeerReset(std::uint32_t streamId, const Http2StreamState* retainedStream) const noexcept {
     if (retainedStream != nullptr) {
-        return retainedStream->isAborted() &&
-               retainedStream->localSend().aborted()->source() == Http2StreamCloseSource::kPeer;
+        return retainedStream->isAborted() && retainedStream->localSend().aborted()->source() == Http2StreamCloseSource::kPeer;
     }
     return closedStreams_.source(streamId) == Http2StreamCloseSource::kPeer;
 }
@@ -221,13 +211,11 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
         // stream lifecycle left to mutate and must not consume the rapid-reset budget.
         return true;
     }
-    const auto error = static_cast<Http2ErrorCode>(
-        http2Read32(reinterpret_cast<const unsigned char*>(payload.data())));
+    const auto error = static_cast<Http2ErrorCode>(http2Read32(reinterpret_cast<const unsigned char*>(payload.data())));
     // Rapid-reset budget (CVE-2023-44487): count peer resets and trip if they run too far
     // ahead of the responses this connection has actually let complete.
     const auto resetCountAfterThisFrame = static_cast<std::uint64_t>(peerResetStreams_) + 1U;
-    const auto resetBudget =
-        static_cast<std::uint64_t>(completedResponses_) + kHttp2MaxUnprocessedResets;
+    const auto resetBudget = static_cast<std::uint64_t>(completedResponses_) + kHttp2MaxUnprocessedResets;
     const bool rapidResetBudgetExceeded = resetCountAfterThisFrame > resetBudget;
     if (rapidResetBudgetExceeded) {
         std::size_t closeOutputBytes = 0;
@@ -262,16 +250,14 @@ Http2StreamState* Http2Connection::createStream(std::uint32_t streamId) {
     return streams_.create(streamId, peerSettings_.initialWindowSize());
 }
 
-std::optional<Http2RequestHeadSubmitError> Http2Connection::localRequestAdmissionError()
-    const noexcept {
+std::optional<Http2RequestHeadSubmitError> Http2Connection::localRequestAdmissionError() const noexcept {
     if (role_ != Http2Role::kClient) {
         return Http2RequestHeadSubmitError::kInvalidState;
     }
     if (prefacePhase_ == PrefacePhase::kNotStarted) {
         return Http2RequestHeadSubmitError::kConnectionNotStarted;
     }
-    if (localConnectionState_.fatalFailure() != nullptr || peerGoaway_.has_value() ||
-        nextLocalStreamId_ > 0x7fffffffU) {
+    if (localConnectionState_.fatalFailure() != nullptr || peerGoaway_.has_value() || nextLocalStreamId_ > 0x7fffffffU) {
         return Http2RequestHeadSubmitError::kConnectionUnavailable;
     }
     if (activeLocalRequestStreams_ >= peerSettings_.maxConcurrentStreams()) {

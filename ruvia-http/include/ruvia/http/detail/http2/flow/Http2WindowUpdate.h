@@ -17,8 +17,7 @@ enum class Http2WindowUpdateResult : std::uint8_t { kOk, kZeroIncrement, kOverfl
     return http2Read31(reinterpret_cast<const unsigned char*>(payload.data()));
 }
 
-[[nodiscard]] inline Http2WindowUpdateResult http2ApplyWindowUpdate(
-    std::int32_t& window, std::uint32_t increment) noexcept {
+[[nodiscard]] inline Http2WindowUpdateResult http2ApplyWindowUpdate(std::int32_t& window, std::uint32_t increment) noexcept {
     if (increment == 0) {
         return Http2WindowUpdateResult::kZeroIncrement;
     }

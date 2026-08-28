@@ -19,15 +19,12 @@ RUVIA_TEST(effective_handler_deadline_takes_the_stricter_scope) {
     // Neither declared.
     RUVIA_CHECK(effectiveHandlerDeadline(std::nullopt, 0) == 0ms);
     // Only one side declared.
-    RUVIA_CHECK(
-        effectiveHandlerDeadline(std::optional<std::chrono::milliseconds>(2000ms), 0) == 2000ms);
+    RUVIA_CHECK(effectiveHandlerDeadline(std::optional<std::chrono::milliseconds>(2000ms), 0) == 2000ms);
     RUVIA_CHECK(effectiveHandlerDeadline(std::nullopt, 500) == 500ms);
     // Both: a route may tighten...
-    RUVIA_CHECK(
-        effectiveHandlerDeadline(std::optional<std::chrono::milliseconds>(2000ms), 500) == 500ms);
+    RUVIA_CHECK(effectiveHandlerDeadline(std::optional<std::chrono::milliseconds>(2000ms), 500) == 500ms);
     // ...but never extend, which is the one composition rule.
-    RUVIA_CHECK(effectiveHandlerDeadline(std::optional<std::chrono::milliseconds>(2000ms), 30000) ==
-                2000ms);
+    RUVIA_CHECK(effectiveHandlerDeadline(std::optional<std::chrono::milliseconds>(2000ms), 30000) == 2000ms);
 }
 
 RUVIA_TEST(request_deadline_trips_on_worker_stop_without_claiming_it_elapsed) {

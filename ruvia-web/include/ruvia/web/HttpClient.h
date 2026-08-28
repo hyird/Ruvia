@@ -24,8 +24,7 @@ public:
     HttpClient& operator=(HttpClient&&) = delete;
 
     [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const;
-    [[nodiscard]] ScopedOperation<HttpClientResponse> send(
-        const HttpClientRequestView& request) const;
+    [[nodiscard]] ScopedOperation<HttpClientResponse> send(const HttpClientRequestView& request) const;
 
     // Idempotent and callable from any thread. Shutdown runs on the bound loop;
     // draining that loop is the lifecycle barrier.

@@ -16,8 +16,7 @@ struct DbResultAccess final {
         return DbRows(resource);
     }
 
-    [[nodiscard]] static constexpr DbExecResult makeExecResult(std::uint64_t affectedRows,
-        std::optional<std::uint64_t> lastInsertId = std::nullopt) noexcept {
+    [[nodiscard]] static constexpr DbExecResult makeExecResult(std::uint64_t affectedRows, std::optional<std::uint64_t> lastInsertId = std::nullopt) noexcept {
         return DbExecResult(affectedRows, lastInsertId);
     }
 
@@ -34,8 +33,7 @@ struct DbResultAccess final {
     }
 
     static void ownRawResult(DbRows& result, void* raw, void (*release)(void*) noexcept) noexcept {
-        if (raw == nullptr || release == nullptr ||
-            std::holds_alternative<DbRows::OwnedRawResult>(result.rawResult_)) {
+        if (raw == nullptr || release == nullptr || std::holds_alternative<DbRows::OwnedRawResult>(result.rawResult_)) {
             std::terminate();
         }
         result.rawResult_.template emplace<DbRows::OwnedRawResult>(raw, release);
@@ -45,13 +43,11 @@ struct DbResultAccess final {
         return DbField(nullptr, resource);
     }
 
-    [[nodiscard]] static DbField ownedField(
-        std::string_view value, std::pmr::memory_resource* resource) {
+    [[nodiscard]] static DbField ownedField(std::string_view value, std::pmr::memory_resource* resource) {
         return DbField(value, resource);
     }
 
-    [[nodiscard]] static DbField borrowedField(
-        std::string_view value, std::pmr::memory_resource* resource) {
+    [[nodiscard]] static DbField borrowedField(std::string_view value, std::pmr::memory_resource* resource) {
         return DbField::borrowed(value, resource);
     }
 
@@ -67,9 +63,7 @@ struct DbResultAccess final {
         return row.ownedColumnNames();
     }
 
-    [[nodiscard]] static DbRow borrowedRow(const DbField* fields, std::size_t size,
-        const std::pmr::string* columnNames, std::size_t columnCount,
-        std::pmr::memory_resource* resource) {
+    [[nodiscard]] static DbRow borrowedRow(const DbField* fields, std::size_t size, const std::pmr::string* columnNames, std::size_t columnCount, std::pmr::memory_resource* resource) {
         return DbRow(fields, size, columnNames, columnCount, resource);
     }
 };

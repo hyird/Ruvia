@@ -43,8 +43,7 @@ ruvia::Task<void> noTransformStreamHandler(void*, ruvia::Context& context) {
     co_await context.stream().end();
 }
 
-[[nodiscard]] std::string readHead(
-    asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
+[[nodiscard]] std::string readHead(asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
     const std::size_t n = asio::read_until(socket, buffer, "\r\n\r\n", ec);
     if (ec) {
         return {};
@@ -56,8 +55,7 @@ ruvia::Task<void> noTransformStreamHandler(void*, ruvia::Context& context) {
 
 [[nodiscard]] std::string lowered(std::string_view text) {
     std::string result(text);
-    std::transform(result.begin(), result.end(), result.begin(),
-        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return result;
 }
 
@@ -70,8 +68,7 @@ ruvia::Task<void> noTransformStreamHandler(void*, ruvia::Context& context) {
             return {};
         }
         std::size_t chunkSize = 0;
-        const auto parsed =
-            std::from_chars(wire.data() + offset, wire.data() + lineEnd, chunkSize, 16);
+        const auto parsed = std::from_chars(wire.data() + offset, wire.data() + lineEnd, chunkSize, 16);
         if (parsed.ec != std::errc{} || parsed.ptr != wire.data() + lineEnd) {
             return {};
         }
@@ -79,8 +76,7 @@ ruvia::Task<void> noTransformStreamHandler(void*, ruvia::Context& context) {
         if (chunkSize == 0) {
             return body;
         }
-        if (chunkSize > wire.size() - offset || wire.size() - offset - chunkSize < 2 ||
-            wire.substr(offset + chunkSize, 2) != "\r\n") {
+        if (chunkSize > wire.size() - offset || wire.size() - offset - chunkSize < 2 || wire.substr(offset + chunkSize, 2) != "\r\n") {
             return {};
         }
         body.append(wire.data() + offset, chunkSize);
@@ -121,25 +117,16 @@ int main() {
     std::pmr::string eventsPath("/events", std::pmr::get_default_resource());
     std::pmr::string ssePath("/sse", std::pmr::get_default_resource());
     std::pmr::string noTransformPath("/no-transform", std::pmr::get_default_resource());
-    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet,
-        std::pmr::string(eventsPath, std::pmr::get_default_resource()),
-        ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
-    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kHead, std::move(eventsPath),
-        ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
-    impl.registerSseRoute(ruvia::HttpKnownMethod::kGet,
-        std::pmr::string(ssePath, std::pmr::get_default_resource()),
-        ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
-    impl.registerSseRoute(ruvia::HttpKnownMethod::kHead, std::move(ssePath),
-        ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
-    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(noTransformPath),
-        ruvia::detail::RouteStreamHandler(nullptr, &noTransformStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string(eventsPath, std::pmr::get_default_resource()), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kHead, std::move(eventsPath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerSseRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string(ssePath, std::pmr::get_default_resource()), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerSseRoute(ruvia::HttpKnownMethod::kHead, std::move(ssePath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(noTransformPath), ruvia::detail::RouteStreamHandler(nullptr, &noTransformStreamHandler), {}, {});
     impl.finalize();
 
     ruvia::detail::HttpServerOptions options;
     options.compression.emplace();
-    ruvia::detail::WebWorkerRuntime server(
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {},
-        options);
+    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -157,10 +144,7 @@ int main() {
     asio::streambuf buffer;
 
     // Explicit HEAD of the generic streaming route: the streaming head, no body bytes.
-    asio::write(sock,
-        asio::buffer(std::string_view(
-            "HEAD /events HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n")),
-        ec);
+    asio::write(sock, asio::buffer(std::string_view("HEAD /events HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n")), ec);
     const auto eventsHead = lowered(readHead(sock, buffer, ec));
     if (!eventsHead.starts_with("http/1.1 200")) {
         fail(1, "explicit HEAD of a streaming route was not 200");
@@ -174,10 +158,7 @@ int main() {
 
     // Explicit HEAD of the SSE route mirrors the GET head, content type included.
     if (rc == 0) {
-        asio::write(sock,
-            asio::buffer(std::string_view(
-                "HEAD /sse HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n")),
-            ec);
+        asio::write(sock, asio::buffer(std::string_view("HEAD /sse HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n")), ec);
         const auto sseHead = lowered(readHead(sock, buffer, ec));
         if (!sseHead.starts_with("http/1.1 200")) {
             fail(5, "explicit HEAD of an SSE route was not 200");
@@ -193,10 +174,7 @@ int main() {
     // The connection stayed alive and correctly framed: a pipelined GET on the
     // same socket must still stream the full chunked body.
     if (rc == 0) {
-        asio::write(sock,
-            asio::buffer(std::string_view(
-                "GET /events HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n")),
-            ec);
+        asio::write(sock, asio::buffer(std::string_view("GET /events HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n")), ec);
         const auto getHead = lowered(readHead(sock, buffer, ec));
         if (!getHead.starts_with("http/1.1 200")) {
             fail(9, "GET after HEAD did not parse as a clean 200 response");
@@ -206,8 +184,7 @@ int main() {
             fail(11, "streaming GET did not advertise gzip");
         } else {
             asio::read_until(sock, buffer, "0\r\n\r\n", ec);
-            const std::string wireBody(asio::buffers_begin(buffer.data()),
-                asio::buffers_begin(buffer.data()) + buffer.size());
+            const std::string wireBody(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + buffer.size());
             const auto encoded = decodeChunked(wireBody);
             if (gzipDecode(encoded) != "tick-1tick-2") {
                 fail(12, "streaming GET body after HEAD was not a valid gzip stream");
@@ -221,9 +198,8 @@ int main() {
         asio::ip::tcp::socket rejectedSock(ctx);
         rejectedSock.connect(endpoint, ec);
         asio::write(rejectedSock,
-            asio::buffer(
-                std::string_view("GET /events HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: "
-                                 "identity;q=0, gzip;q=0, br;q=0, zstd;q=0\r\n\r\n")),
+            asio::buffer(std::string_view("GET /events HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: "
+                                          "identity;q=0, gzip;q=0, br;q=0, zstd;q=0\r\n\r\n")),
             ec);
         asio::streambuf rejectedBuffer;
         const auto rejectedHead = lowered(readHead(rejectedSock, rejectedBuffer, ec));

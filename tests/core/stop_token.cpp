@@ -69,8 +69,7 @@ static_assert(std::is_nothrow_move_constructible_v<ResetRegistrationOnMove>);
 RUVIA_TEST(stop_token_registration_runs_once) {
     ruvia::StopSource source;
     std::atomic_int calls{0};
-    auto registration = source.token().registerCallback(
-        [&calls] { calls.fetch_add(1, std::memory_order_relaxed); });
+    auto registration = source.token().registerCallback([&calls] { calls.fetch_add(1, std::memory_order_relaxed); });
     RUVIA_CHECK(registration.registered());
     source.requestStop();
     source.requestStop();
@@ -113,8 +112,7 @@ RUVIA_TEST(stop_token_registration_can_reset_during_synchronous_construction_cal
     std::atomic_int calls{0};
 
     auto token = ruvia::combineStopTokens(first.token(), second.token());
-    ResetRegistrationMoveState state{
-        &first, &registration, &moves, &calls, kMoveIntoCallbackState, nullptr, nullptr};
+    ResetRegistrationMoveState state{&first, &registration, &moves, &calls, kMoveIntoCallbackState, nullptr, nullptr};
     token.registerCallback(registration, ResetRegistrationOnMove(state));
 
     RUVIA_CHECK(first.stopRequested());
@@ -142,8 +140,7 @@ RUVIA_TEST(stop_token_registration_can_reset_when_stop_races_with_callback_const
     });
 
     auto token = ruvia::combineStopTokens(first.token(), second.token());
-    ResetRegistrationMoveState state{&first, &registration, &moves, &calls, kMoveIntoCallbackState,
-        &registrationPaused, &stopCompleted};
+    ResetRegistrationMoveState state{&first, &registration, &moves, &calls, kMoveIntoCallbackState, &registrationPaused, &stopCompleted};
     token.registerCallback(registration, ResetRegistrationOnMove(state));
     stopper.join();
 
@@ -168,10 +165,7 @@ RUVIA_TEST(combined_stop_registration_outlives_temporary_token) {
     ruvia::StopSource first;
     ruvia::StopSource second;
     int calls = 0;
-    auto registration =
-        ruvia::combineStopTokens(first.token(), second.token()).registerCallback([&calls] {
-            ++calls;
-        });
+    auto registration = ruvia::combineStopTokens(first.token(), second.token()).registerCallback([&calls] { ++calls; });
     RUVIA_CHECK(registration.registered());
     second.requestStop();
     first.requestStop();
@@ -183,8 +177,7 @@ RUVIA_TEST(combined_stop_registration_reuses_storage_after_token_dies) {
     ruvia::StopSource second;
     int calls = 0;
     ruvia::StopRegistration registration;
-    ruvia::combineStopTokens(first.token(), second.token())
-        .registerCallback(registration, [&calls] { ++calls; });
+    ruvia::combineStopTokens(first.token(), second.token()).registerCallback(registration, [&calls] { ++calls; });
     RUVIA_CHECK(registration.registered());
     first.requestStop();
     second.requestStop();
@@ -195,8 +188,7 @@ RUVIA_TEST(combined_stop_token_retains_nested_bridge) {
     ruvia::StopSource first;
     ruvia::StopSource second;
     ruvia::StopSource third;
-    auto nested = ruvia::combineStopTokens(
-        ruvia::combineStopTokens(first.token(), second.token()), third.token());
+    auto nested = ruvia::combineStopTokens(ruvia::combineStopTokens(first.token(), second.token()), third.token());
     first.requestStop();
     RUVIA_CHECK(nested.stopRequested());
 }

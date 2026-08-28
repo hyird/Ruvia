@@ -7,8 +7,7 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] bool precompressedVariantIsAtLeastAsNew(const detail::StaticRootEntryView& identity,
-    const detail::StaticRootEntryView& variant) noexcept {
+[[nodiscard]] bool precompressedVariantIsAtLeastAsNew(const detail::StaticRootEntryView& identity, const detail::StaticRootEntryView& variant) noexcept {
     if (variant.modifiedSeconds() != identity.modifiedSeconds()) {
         return variant.modifiedSeconds() > identity.modifiedSeconds();
     }
@@ -25,9 +24,7 @@ namespace {
 // presence alone cannot prove that its decoded bytes still describe the current
 // resource. Index lookups only (no per-request filesystem stat).
 
-std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const StaticRoot& root,
-    std::string_view relative, const HttpRequest& request, std::pmr::memory_resource* resource,
-    detail::StaticRootEntryView identity, detail::StaticFileSelectionMode mode) {
+std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const StaticRoot& root, std::string_view relative, const HttpRequest& request, std::pmr::memory_resource* resource, detail::StaticRootEntryView identity, detail::StaticFileSelectionMode mode) {
     if (mode == detail::StaticFileSelectionMode::kIdentityOnly) {
         return StaticFileRepresentation(identity, HttpContentCoding::kIdentity);
     }
@@ -60,11 +57,9 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
         variantPath.reserve(relative.size() + candidate.suffix.size());
         variantPath.assign(relative.data(), relative.size());
         variantPath.append(candidate.suffix.data(), candidate.suffix.size());
-        if (const auto entry = detail::StaticRootAccess::findVariant(root, variantPath);
-            entry.has_value()) {
+        if (const auto entry = detail::StaticRootAccess::findVariant(root, variantPath); entry.has_value()) {
             if (!precompressedVariantIsAtLeastAsNew(identity, *entry)) {
-                if (auto memoryVariant = identity.memoryVariant(candidate.contentCoding);
-                    memoryVariant.has_value()) {
+                if (auto memoryVariant = identity.memoryVariant(candidate.contentCoding); memoryVariant.has_value()) {
                     candidate.memoryVariant = *memoryVariant;
                     available.include(candidate.contentCoding);
                 }
@@ -74,8 +69,7 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
             available.include(candidate.contentCoding);
             continue;
         }
-        if (auto memoryVariant = identity.memoryVariant(candidate.contentCoding);
-            memoryVariant.has_value()) {
+        if (auto memoryVariant = identity.memoryVariant(candidate.contentCoding); memoryVariant.has_value()) {
             candidate.memoryVariant = *memoryVariant;
             available.include(candidate.contentCoding);
         }
@@ -90,10 +84,8 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
             if (candidate.contentCoding == selection->coding() && candidate.entry.has_value()) {
                 return StaticFileRepresentation(*candidate.entry, candidate.contentCoding);
             }
-            if (candidate.contentCoding == selection->coding() &&
-                candidate.memoryVariant.has_value()) {
-                return StaticFileRepresentation(
-                    identity, *candidate.memoryVariant, candidate.contentCoding);
+            if (candidate.contentCoding == selection->coding() && candidate.memoryVariant.has_value()) {
+                return StaticFileRepresentation(identity, *candidate.memoryVariant, candidate.contentCoding);
             }
         }
     }

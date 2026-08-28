@@ -40,8 +40,7 @@ private:
         std::size_t bytes = 0;
         auto reader = c.req().multipartReader();
         while (auto part = co_await reader.read()) {
-            if (part->phase() == ruvia::MultipartChunkPhase::kFirst ||
-                part->phase() == ruvia::MultipartChunkPhase::kComplete) {
+            if (part->phase() == ruvia::MultipartChunkPhase::kFirst || part->phase() == ruvia::MultipartChunkPhase::kComplete) {
                 ++parts;
             }
             bytes += part->body().size();
@@ -60,8 +59,7 @@ private:
         auto& stream = c.streamText();
         co_await stream.write("part 1\n");
         co_await stream.writeln("part 2");
-        if (co_await stream.sleep(std::chrono::milliseconds(20)) ==
-            ruvia::TimerSleepResult::kStopRequested) {
+        if (co_await stream.sleep(std::chrono::milliseconds(20)) == ruvia::TimerSleepResult::kStopRequested) {
             co_return;
         }
         if (!stream.aborted()) {
@@ -72,15 +70,11 @@ private:
     ruvia::Task<void> events(ruvia::Context& c) {
         auto events = c.streamSse();
         co_await events.write({.data = "connected", .event = "open", .id = "1"});
-        if (co_await events.sleep(std::chrono::milliseconds(20)) ==
-            ruvia::TimerSleepResult::kStopRequested) {
+        if (co_await events.sleep(std::chrono::milliseconds(20)) == ruvia::TimerSleepResult::kStopRequested) {
             co_return;
         }
         if (!events.aborted()) {
-            co_await events.write({.data = "heartbeat",
-                .event = "tick",
-                .id = "2",
-                .retry = std::chrono::milliseconds{3000}});
+            co_await events.write({.data = "heartbeat", .event = "tick", .id = "2", .retry = std::chrono::milliseconds{3000}});
         }
     }
 

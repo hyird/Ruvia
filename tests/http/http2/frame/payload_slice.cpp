@@ -13,14 +13,10 @@ namespace {
 using ruvia::detail::http2SliceTwoPartPayload;
 
 template <typename Input>
-concept AcceptsFirstPayloadPart = requires(Input&& input) {
-    http2SliceTwoPartPayload(std::forward<Input>(input), std::string_view{}, 0, 0);
-};
+concept AcceptsFirstPayloadPart = requires(Input&& input) { http2SliceTwoPartPayload(std::forward<Input>(input), std::string_view{}, 0, 0); };
 
 template <typename Input>
-concept AcceptsSecondPayloadPart = requires(Input&& input) {
-    http2SliceTwoPartPayload(std::string_view{}, std::forward<Input>(input), 0, 0);
-};
+concept AcceptsSecondPayloadPart = requires(Input&& input) { http2SliceTwoPartPayload(std::string_view{}, std::forward<Input>(input), 0, 0); };
 
 static_assert(!AcceptsFirstPayloadPart<std::string>);
 static_assert(!AcceptsFirstPayloadPart<const std::string>);

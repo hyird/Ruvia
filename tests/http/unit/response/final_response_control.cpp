@@ -29,29 +29,19 @@ static_assert(!std::default_initializable<Http1FinalResponseControlPlanFailure>)
 static_assert(!std::default_initializable<Http2FinalResponseControlPlanFailure>);
 static_assert(!std::default_initializable<Http1FinalResponseControlPlanResult>);
 static_assert(!std::default_initializable<Http2FinalResponseControlPlanResult>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http1FinalResponseControl&>().connectionOptions()),
-        ruvia::detail::HttpConnectionOptions>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http1FinalResponseControl&&>().connectionOptions()),
-        ruvia::detail::HttpConnectionOptions>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http1FinalResponseControl&>().upgradeProtocols()),
-        ruvia::detail::HttpUpgradeProtocols>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http1FinalResponseControl&&>().upgradeProtocols()),
-        ruvia::detail::HttpUpgradeProtocols>);
+static_assert(std::same_as<decltype(std::declval<const Http1FinalResponseControl&>().connectionOptions()), ruvia::detail::HttpConnectionOptions>);
+static_assert(std::same_as<decltype(std::declval<const Http1FinalResponseControl&&>().connectionOptions()), ruvia::detail::HttpConnectionOptions>);
+static_assert(std::same_as<decltype(std::declval<const Http1FinalResponseControl&>().upgradeProtocols()), ruvia::detail::HttpUpgradeProtocols>);
+static_assert(std::same_as<decltype(std::declval<const Http1FinalResponseControl&&>().upgradeProtocols()), ruvia::detail::HttpUpgradeProtocols>);
 
 bool isHttp1Failure(const HttpResponse& response, Http1FinalResponseControlPlanError error) {
     const auto result = http1FinalResponseControlPlan(response);
-    return result.control() == nullptr && result.failure() != nullptr &&
-           result.failure()->error() == error;
+    return result.control() == nullptr && result.failure() != nullptr && result.failure()->error() == error;
 }
 
 bool isHttp2Failure(const HttpResponse& response, Http2FinalResponseControlPlanError error) {
     const auto result = http2FinalResponseControlPlan(response);
-    return result.control() == nullptr && result.failure() != nullptr &&
-           result.failure()->error() == error;
+    return result.control() == nullptr && result.failure() != nullptr && result.failure()->error() == error;
 }
 
 void addUncheckedHeader(HttpResponse& response, std::string_view name, std::string_view value) {
@@ -64,10 +54,8 @@ void addUncheckedHeader(HttpResponse& response, std::string_view name, std::stri
 RUVIA_TEST(final_response_control_entry_points_own_only_their_protocol) {
     HttpResponse http1({.resource = std::pmr::get_default_resource()});
     http1.header("Connection", "close");
-    http1.header("Connection", "Upgrade",
-        HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
-    http1.header("Connection", "X-Hop",
-        HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
+    http1.header("Connection", "Upgrade", HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
+    http1.header("Connection", "X-Hop", HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
     http1.header("Upgrade", "websocket");
     http1.header("X-Hop", "value");
 
@@ -92,33 +80,27 @@ RUVIA_TEST(final_response_control_entry_points_own_only_their_protocol) {
 RUVIA_TEST(final_response_control_failure_never_exposes_protocol_alternative) {
     HttpResponse invalidConnection({.resource = std::pmr::get_default_resource()});
     addUncheckedHeader(invalidConnection, "Connection", ", close");
-    RUVIA_CHECK(isHttp1Failure(
-        invalidConnection, Http1FinalResponseControlPlanError::kInvalidConnectionField));
+    RUVIA_CHECK(isHttp1Failure(invalidConnection, Http1FinalResponseControlPlanError::kInvalidConnectionField));
 
     HttpResponse invalidUpgrade({.resource = std::pmr::get_default_resource()});
     addUncheckedHeader(invalidUpgrade, "Upgrade", "web socket");
-    RUVIA_CHECK(
-        isHttp1Failure(invalidUpgrade, Http1FinalResponseControlPlanError::kInvalidUpgradeField));
+    RUVIA_CHECK(isHttp1Failure(invalidUpgrade, Http1FinalResponseControlPlanError::kInvalidUpgradeField));
 
     HttpResponse missingUpgrade({.resource = std::pmr::get_default_resource()});
     missingUpgrade.status(ruvia::http_status::kUpgradeRequired);
-    RUVIA_CHECK(
-        isHttp1Failure(missingUpgrade, Http1FinalResponseControlPlanError::kUpgradeRequired));
-    RUVIA_CHECK(
-        isHttp2Failure(missingUpgrade, Http2FinalResponseControlPlanError::kUpgradeUnavailable));
+    RUVIA_CHECK(isHttp1Failure(missingUpgrade, Http1FinalResponseControlPlanError::kUpgradeRequired));
+    RUVIA_CHECK(isHttp2Failure(missingUpgrade, Http2FinalResponseControlPlanError::kUpgradeUnavailable));
 
     HttpResponse teResponseField({.resource = std::pmr::get_default_resource()});
     addUncheckedHeader(teResponseField, "TE", "trailers");
-    RUVIA_CHECK(
-        isHttp1Failure(teResponseField, Http1FinalResponseControlPlanError::kTeFieldForbidden));
+    RUVIA_CHECK(isHttp1Failure(teResponseField, Http1FinalResponseControlPlanError::kTeFieldForbidden));
 }
 
 RUVIA_TEST(final_response_control_rejects_end_to_end_connection_options) {
     for (const std::string_view option : {"content-length", "DATE", "Set-Cookie"}) {
         HttpResponse response({.resource = std::pmr::get_default_resource()});
         addUncheckedHeader(response, "Connection", option);
-        RUVIA_CHECK(
-            isHttp1Failure(response, Http1FinalResponseControlPlanError::kInvalidConnectionField));
+        RUVIA_CHECK(isHttp1Failure(response, Http1FinalResponseControlPlanError::kInvalidConnectionField));
     }
 }
 
@@ -138,7 +120,6 @@ RUVIA_TEST(final_response_control_rejects_every_http2_connection_specific_field)
         } else {
             response.header(name, value);
         }
-        RUVIA_CHECK(isHttp2Failure(
-            response, Http2FinalResponseControlPlanError::kConnectionSpecificFieldForbidden));
+        RUVIA_CHECK(isHttp2Failure(response, Http2FinalResponseControlPlanError::kConnectionSpecificFieldForbidden));
     }
 }

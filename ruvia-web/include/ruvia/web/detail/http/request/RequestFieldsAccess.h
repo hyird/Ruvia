@@ -10,8 +10,7 @@
 namespace ruvia::detail {
 
 struct RequestNameValueViewAccess final {
-    [[nodiscard]] static constexpr RequestNameValueView make(
-        std::string_view name, std::string_view value) noexcept {
+    [[nodiscard]] static constexpr RequestNameValueView make(std::string_view name, std::string_view value) noexcept {
         return RequestNameValueView(name, value);
     }
 

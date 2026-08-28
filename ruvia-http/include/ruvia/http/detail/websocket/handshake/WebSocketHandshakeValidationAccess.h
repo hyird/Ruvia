@@ -13,8 +13,7 @@ struct WebSocketHandshakeValidationResultAccess final {
         return WebSocketHandshakeValidationResult::makeInvalidRequest();
     }
 
-    [[nodiscard]] static constexpr WebSocketHandshakeValidationResult
-    unsupportedVersion() noexcept {
+    [[nodiscard]] static constexpr WebSocketHandshakeValidationResult unsupportedVersion() noexcept {
         return WebSocketHandshakeValidationResult::makeUnsupportedVersion();
     }
 };

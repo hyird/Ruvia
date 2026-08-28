@@ -15,13 +15,10 @@
 namespace ruvia::detail {
 
 template <typename MiddlewareT>
-concept VoidHandleMiddleware =
-    requires { static_cast<Task<void> (MiddlewareT::*)(Context&, Next&)>(&MiddlewareT::handle); };
+concept VoidHandleMiddleware = requires { static_cast<Task<void> (MiddlewareT::*)(Context&, Next&)>(&MiddlewareT::handle); };
 
 template <typename MiddlewareT>
-concept ResponseHandleMiddleware = requires {
-    static_cast<Task<HttpResponse> (MiddlewareT::*)(Context&, Next&)>(&MiddlewareT::handle);
-};
+concept ResponseHandleMiddleware = requires { static_cast<Task<HttpResponse> (MiddlewareT::*)(Context&, Next&)>(&MiddlewareT::handle); };
 
 template <typename MiddlewareT>
 [[nodiscard]] Task<void> invokeResponseMiddleware(void* target, Context& context, Next& next) {
@@ -52,12 +49,7 @@ template <typename MiddlewareT>
 // separate path: std::apply then calls the default constructor.
 template <typename MiddlewareT, typename ArgsT>
 [[nodiscard]] void* createMiddleware(const void* args) {
-    return std::apply(
-        [](const auto&... values) {
-            return static_cast<void*>(
-                constructPmrObject<MiddlewareT>(registrationResource(), values...));
-        },
-        *static_cast<const ArgsT*>(args));
+    return std::apply([](const auto&... values) { return static_cast<void*>(constructPmrObject<MiddlewareT>(registrationResource(), values...)); }, *static_cast<const ArgsT*>(args));
 }
 
 template <typename MiddlewareT>
@@ -136,28 +128,21 @@ template <typename MiddlewareT>
     if (text.empty()) {
         return {};
     }
-    const auto* stored =
-        constructPmrObject<std::pmr::string>(registrationResource(), text, registrationResource());
+    const auto* stored = constructPmrObject<std::pmr::string>(registrationResource(), text, registrationResource());
     return std::string_view(*stored);
 }
 
 template <typename MiddlewareT, typename... Args>
 [[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args) {
-    static_assert(std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>,
-        "middleware must derive from ruvia::Middleware<MiddlewareT>");
+    static_assert(std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>, "middleware must derive from ruvia::Middleware<MiddlewareT>");
     static_assert(std::is_final_v<MiddlewareT>, "middleware must be final");
     static_assert(std::is_constructible_v<MiddlewareT, const std::decay_t<Args>&...>,
         "middleware is not constructible from the arguments passed to use<T>(); a middleware "
         "registered without arguments must be default constructible");
 
     using ArgsT = std::tuple<std::decay_t<Args>...>;
-    const auto* stored =
-        constructPmrObject<ArgsT>(registrationResource(), std::forward<Args>(args)...);
-    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>,
-        &createMiddleware<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored,
-        middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>(),
-        middlewareRunsOnUnmatchedRequests<MiddlewareT>(), middlewareRequestBodyLimit<MiddlewareT>(),
-        middlewareDeadlineMs<MiddlewareT>());
+    const auto* stored = constructPmrObject<ArgsT>(registrationResource(), std::forward<Args>(args)...);
+    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddleware<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>(), middlewareRunsOnUnmatchedRequests<MiddlewareT>(), middlewareRequestBodyLimit<MiddlewareT>(), middlewareDeadlineMs<MiddlewareT>());
 }
 
 }  // namespace ruvia::detail

@@ -31,19 +31,15 @@ struct Http1RequestParseResultAccess final {
 
     // HttpRequest is a fixed-size collection of borrowed views. The result
     // copies it once into its own value object; no owning data is transferred.
-    [[nodiscard]] static Http1RequestParseResult parsed(const HttpRequest& request,
-        Http1RequestBodyPlan bodyPlan, std::string_view wireBody,
-        std::size_t consumedBytes) noexcept {
-        return Http1RequestParseResult(
-            Http1ParsedRequest(request, bodyPlan, wireBody, consumedBytes));
+    [[nodiscard]] static Http1RequestParseResult parsed(const HttpRequest& request, Http1RequestBodyPlan bodyPlan, std::string_view wireBody, std::size_t consumedBytes) noexcept {
+        return Http1RequestParseResult(Http1ParsedRequest(request, bodyPlan, wireBody, consumedBytes));
     }
 
     [[nodiscard]] static Http1RequestParseResult failure(HttpParseError error) noexcept {
         return Http1RequestParseResult(Http1RequestParseFailure(error));
     }
 
-    [[nodiscard]] static Http1RequestParseResult failure(
-        const Http1ServerRequestParseFailure& failure) noexcept;
+    [[nodiscard]] static Http1RequestParseResult failure(const Http1ServerRequestParseFailure& failure) noexcept;
 };
 
 class Http1ServerNeedRequestHead final {};
@@ -87,8 +83,7 @@ private:
         }
     }
 
-    constexpr Http1ServerNeedRequestBody(
-        std::size_t headerBytes, std::size_t requiredTotalBytes) noexcept
+    constexpr Http1ServerNeedRequestBody(std::size_t headerBytes, std::size_t requiredTotalBytes) noexcept
         : headerBytes_(headerBytes),
           requiredTotalBytes_(requiredTotalBytes) {
         if (headerBytes_ == 0 || (requiredTotalBytes_ && *requiredTotalBytes_ <= headerBytes_)) {
@@ -113,8 +108,7 @@ public:
 private:
     friend class Http1ServerRequestParser;
 
-    constexpr Http1ServerRequestMessageReady(
-        std::size_t headerBytes, std::size_t messageBytes) noexcept
+    constexpr Http1ServerRequestMessageReady(std::size_t headerBytes, std::size_t messageBytes) noexcept
         : headerBytes_(headerBytes),
           messageBytes_(messageBytes) {
         if (headerBytes_ == 0 || messageBytes_ < headerBytes_) {
@@ -133,10 +127,7 @@ public:
     }
 
     [[nodiscard]] constexpr Http1ServerRequestParseFailureSource source() const noexcept {
-        return error_ == HttpParseError::kInvalidRequestLine ||
-                       error_ == HttpParseError::kUnsupportedHttpVersion
-                   ? Http1ServerRequestParseFailureSource::kRequestLine
-                   : Http1ServerRequestParseFailureSource::kMessage;
+        return error_ == HttpParseError::kInvalidRequestLine || error_ == HttpParseError::kUnsupportedHttpVersion ? Http1ServerRequestParseFailureSource::kRequestLine : Http1ServerRequestParseFailureSource::kMessage;
     }
 
 private:
@@ -149,8 +140,7 @@ private:
     HttpParseError error_;
 };
 
-inline Http1RequestParseResult Http1RequestParseResultAccess::failure(
-    const Http1ServerRequestParseFailure& failure) noexcept {
+inline Http1RequestParseResult Http1RequestParseResultAccess::failure(const Http1ServerRequestParseFailure& failure) noexcept {
     return Http1RequestParseResult(Http1RequestParseFailure(failure.error_));
 }
 
@@ -197,8 +187,7 @@ private:
     // The heavy request/header storage stays in place across parse attempts.
     // Only this small progress value changes, so head/message/required/error
     // metadata exists solely in the alternative where it is meaningful.
-    using Progress = std::variant<Http1ServerNeedRequestHead, Http1ServerRequestHeadReady,
-        Http1ServerNeedRequestBody, Http1ServerRequestMessageReady, Http1ServerRequestParseFailure>;
+    using Progress = std::variant<Http1ServerNeedRequestHead, Http1ServerRequestHeadReady, Http1ServerNeedRequestBody, Http1ServerRequestMessageReady, Http1ServerRequestParseFailure>;
 
     Progress progress_{Http1ServerNeedRequestHead{}};
     HttpResponseCodingQualities responseCodingQualities;
@@ -208,8 +197,7 @@ class Http1ServerRequestParser final {
 public:
     // Hot-path entry point: `state` is reset and reused across read attempts, so
     // parsing an incomplete head never copies or re-zeroes the ~2.5KB state.
-    void parseHead(std::string_view buffer, Http1ServerRequestParseState& state,
-        std::size_t headerSearchOffset = 0) const noexcept;
+    void parseHead(std::string_view buffer, Http1ServerRequestParseState& state, std::size_t headerSearchOffset = 0) const noexcept;
 
     template <HttpTemporaryOwningCharString Buffer>
     void parseHead(Buffer&&, Http1ServerRequestParseState&, std::size_t = 0) const = delete;
@@ -222,10 +210,8 @@ public:
     Http1ServerRequestParseState parseMessage(Buffer&&) const = delete;
 
 private:
-    static void parseRequestHead(std::string_view buffer, std::size_t headerSearchOffset,
-        Http1ServerRequestParseState& state) noexcept;
-    static void parseMessageBody(
-        std::string_view buffer, Http1ServerRequestParseState& state) noexcept;
+    static void parseRequestHead(std::string_view buffer, std::size_t headerSearchOffset, Http1ServerRequestParseState& state) noexcept;
+    static void parseMessageBody(std::string_view buffer, Http1ServerRequestParseState& state) noexcept;
 };
 
 }  // namespace ruvia::detail

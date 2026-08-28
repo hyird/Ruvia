@@ -18,8 +18,7 @@ namespace ruvia::detail {
 
 class HttpByteRangeResolution;
 
-[[nodiscard]] inline HttpByteRangeResolution resolveHttpByteRange(
-    std::string_view fieldValue, std::uint64_t representationLength) noexcept;
+[[nodiscard]] inline HttpByteRangeResolution resolveHttpByteRange(std::string_view fieldValue, std::uint64_t representationLength) noexcept;
 
 class HttpByteRangeIgnored final {
 private:
@@ -85,8 +84,7 @@ public:
 private:
     friend HttpByteRangeResolution resolveHttpByteRange(std::string_view, std::uint64_t) noexcept;
 
-    using Value =
-        std::variant<HttpByteRangeIgnored, HttpByteRangeUnsatisfiable, HttpResolvedByteRange>;
+    using Value = std::variant<HttpByteRangeIgnored, HttpByteRangeUnsatisfiable, HttpResolvedByteRange>;
 
     template <typename Alternative>
     explicit constexpr HttpByteRangeResolution(Alternative alternative) noexcept
@@ -100,22 +98,19 @@ private:
         return HttpByteRangeResolution(HttpByteRangeUnsatisfiable());
     }
 
-    [[nodiscard]] static constexpr HttpByteRangeResolution makeResolved(
-        std::uint64_t offset, std::uint64_t length) noexcept {
+    [[nodiscard]] static constexpr HttpByteRangeResolution makeResolved(std::uint64_t offset, std::uint64_t length) noexcept {
         return HttpByteRangeResolution(HttpResolvedByteRange(offset, length));
     }
 
     Value value_;
 };
 
-[[nodiscard]] inline HttpByteRangeResolution resolveHttpByteRange(
-    std::string_view fieldValue, std::uint64_t representationLength) noexcept {
+[[nodiscard]] inline HttpByteRangeResolution resolveHttpByteRange(std::string_view fieldValue, std::uint64_t representationLength) noexcept {
     fieldValue = httpTrimOws(fieldValue);
 
     constexpr std::string_view unit = "bytes";
     constexpr std::size_t separatorOffset = unit.size();
-    if (fieldValue.size() <= separatorOffset + 1 || fieldValue[separatorOffset] != '=' ||
-        !httpAsciiEqualsIgnoreCase(fieldValue.substr(0, separatorOffset), unit)) {
+    if (fieldValue.size() <= separatorOffset + 1 || fieldValue[separatorOffset] != '=' || !httpAsciiEqualsIgnoreCase(fieldValue.substr(0, separatorOffset), unit)) {
         return HttpByteRangeResolution::makeIgnored();
     }
 
@@ -199,8 +194,7 @@ private:
     if (*start >= representationLength) {
         return HttpByteRangeResolution::makeUnsatisfiable();
     }
-    const auto clampedEnd =
-        last.empty() ? representationLength - 1 : std::min(end, representationLength - 1);
+    const auto clampedEnd = last.empty() ? representationLength - 1 : std::min(end, representationLength - 1);
     return HttpByteRangeResolution::makeResolved(*start, clampedEnd - *start + 1);
 }
 

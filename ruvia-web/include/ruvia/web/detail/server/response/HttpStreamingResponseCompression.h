@@ -22,8 +22,7 @@ namespace ruvia::detail {
 // was selected, whether the body is suppressed, or whether an encoder exists.
 class HttpStreamingResponseCompression final {
 public:
-    HttpStreamingResponseCompression(std::pmr::memory_resource* resource,
-        HttpResponseCodingSelection selection, HttpResponseCodingAvailability availability) noexcept
+    HttpStreamingResponseCompression(std::pmr::memory_resource* resource, HttpResponseCodingSelection selection, HttpResponseCodingAvailability availability) noexcept
         : selection_(selection),
           availability_(availability),
           encodedChunk_(pmrResourceOrDefault(resource)) {}
@@ -45,9 +44,7 @@ public:
             // Content-Encoding is still a separate representation claim. Do
             // not let this early identity path bypass its acceptability check.
             if (httpResponseCodingFallbackForbidden(selection_, requestMethod, response)) {
-                throw HttpError({.status = ruvia::http_status::kNotAcceptable,
-                    .code = "not_acceptable",
-                    .message = "no acceptable response content coding"});
+                throw HttpError({.status = ruvia::http_status::kNotAcceptable, .code = "not_acceptable", .message = "no acceptable response content coding"});
             }
             state_.emplace<Identity>();
             return;
@@ -60,9 +57,7 @@ public:
         // into an identity fallback or 406.
         if (availability_ == HttpResponseCodingAvailability::kIdentityOnly) {
             if (httpResponseCodingFallbackForbidden(selection_, requestMethod, response)) {
-                throw HttpError({.status = ruvia::http_status::kNotAcceptable,
-                    .code = "not_acceptable",
-                    .message = "no acceptable response content coding"});
+                throw HttpError({.status = ruvia::http_status::kNotAcceptable, .code = "not_acceptable", .message = "no acceptable response content coding"});
             }
             state_.emplace<Identity>();
             return;
@@ -70,9 +65,7 @@ public:
 
         if (!prepareStreamingResponseCompression(selection_, requestMethod, response, kind)) {
             if (httpResponseCodingFallbackForbidden(selection_, requestMethod, response)) {
-                throw HttpError({.status = ruvia::http_status::kNotAcceptable,
-                    .code = "not_acceptable",
-                    .message = "no acceptable response content coding"});
+                throw HttpError({.status = ruvia::http_status::kNotAcceptable, .code = "not_acceptable", .message = "no acceptable response content coding"});
             }
             state_.emplace<Identity>();
             return;
@@ -84,8 +77,7 @@ public:
     // responses retain their selected representation metadata but never create
     // an encoder for bytes that the protocol will not send.
     void activate(HttpResponseBodyPlan bodyPlan) {
-        if (std::holds_alternative<Identity>(state_) ||
-            std::holds_alternative<Suppressed>(state_)) {
+        if (std::holds_alternative<Identity>(state_) || std::holds_alternative<Suppressed>(state_)) {
             return;
         }
         const auto* pending = std::get_if<Pending>(&state_);

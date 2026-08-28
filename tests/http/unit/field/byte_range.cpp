@@ -33,30 +33,23 @@ concept HasByteRangeLengthAccessor = requires(const T& value) {
 };
 
 template <typename T>
-concept HasAnyRvalueByteRangeResolutionAccessor =
-    requires(T&& value) { std::move(value).ignored(); } || requires(T&& value) {
-        std::move(value).unsatisfiable();
-    } || requires(T&& value) { std::move(value).resolved(); };
+concept HasAnyRvalueByteRangeResolutionAccessor = requires(T&& value) { std::move(value).ignored(); } || requires(T&& value) { std::move(value).unsatisfiable(); } || requires(T&& value) { std::move(value).resolved(); };
 
 [[nodiscard]] bool isIgnoredRange(std::string_view value, std::uint64_t representationLength) {
     const auto resolution = resolveHttpByteRange(value, representationLength);
     return resolution.ignored() != nullptr;
 }
 
-[[nodiscard]] bool isUnsatisfiableRange(
-    std::string_view value, std::uint64_t representationLength) {
+[[nodiscard]] bool isUnsatisfiableRange(std::string_view value, std::uint64_t representationLength) {
     const auto resolution = resolveHttpByteRange(value, representationLength);
     return resolution.unsatisfiable() != nullptr;
 }
 
 static_assert(!std::default_initializable<HttpByteRangeResolution>);
 static_assert(!HasAnyRvalueByteRangeResolutionAccessor<HttpByteRangeResolution>);
-static_assert(std::same_as<decltype(std::declval<const HttpByteRangeResolution&>().ignored()),
-    const HttpByteRangeIgnored*>);
-static_assert(std::same_as<decltype(std::declval<const HttpByteRangeResolution&>().unsatisfiable()),
-    const HttpByteRangeUnsatisfiable*>);
-static_assert(std::same_as<decltype(std::declval<const HttpByteRangeResolution&>().resolved()),
-    const HttpResolvedByteRange*>);
+static_assert(std::same_as<decltype(std::declval<const HttpByteRangeResolution&>().ignored()), const HttpByteRangeIgnored*>);
+static_assert(std::same_as<decltype(std::declval<const HttpByteRangeResolution&>().unsatisfiable()), const HttpByteRangeUnsatisfiable*>);
+static_assert(std::same_as<decltype(std::declval<const HttpByteRangeResolution&>().resolved()), const HttpResolvedByteRange*>);
 static_assert(!HasByteRangeOutcomeField<HttpByteRangeResolution>);
 static_assert(!HasByteRangePayloadField<HttpByteRangeResolution>);
 static_assert(!HasByteRangeOffsetAccessor<HttpByteRangeResolution>);

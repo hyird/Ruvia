@@ -66,8 +66,7 @@ Task<void> requestBodyLoaderDiscardThunk(void* target) {
 
 template <typename Loader>
 [[nodiscard]] RequestBodyLoader makeRequestBodyLoaderFacade(Loader& loader) noexcept {
-    return RequestBodyLoader(
-        &loader, &requestBodyLoaderReadAllThunk<Loader>, &requestBodyLoaderDiscardThunk<Loader>);
+    return RequestBodyLoader(&loader, &requestBodyLoaderReadAllThunk<Loader>, &requestBodyLoaderDiscardThunk<Loader>);
 }
 
 template <typename Loader>

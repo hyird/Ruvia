@@ -23,9 +23,7 @@ using ruvia::detail::isValidResponseTrailerValue;
 using ruvia::detail::responseTrailerFieldValid;
 
 template <typename T>
-concept HasAnyRvalueTrailerSectionAccessor = requires(T&& result) {
-    std::move(result).section();
-} || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueTrailerSectionAccessor = requires(T&& result) { std::move(result).section(); } || requires(T&& result) { std::move(result).failure(); };
 
 static_assert(!HasAnyRvalueTrailerSectionAccessor<HttpResponseTrailerSectionResult>);
 static_assert(std::derived_from<HttpResponseTrailerSectionError, std::exception>);
@@ -108,10 +106,7 @@ RUVIA_TEST(response_trailer_forbidden_names) {
     RUVIA_CHECK(isForbiddenResponseTrailerName("Access-Control-Allow-Headers"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Access-Control-Max-Age"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Access-Control-Expose-Headers"));
-    for (const auto name : {"X-Content-Type-Options", "X-Frame-Options",
-             "Strict-Transport-Security", "X-XSS-Protection", "Content-Security-Policy",
-             "Content-Security-Policy-Report-Only", "Referrer-Policy", "Permissions-Policy",
-             "Clear-Site-Data", "WWW-Authenticate", "Content-Disposition"}) {
+    for (const auto name : {"X-Content-Type-Options", "X-Frame-Options", "Strict-Transport-Security", "X-XSS-Protection", "Content-Security-Policy", "Content-Security-Policy-Report-Only", "Referrer-Policy", "Permissions-Policy", "Clear-Site-Data", "WWW-Authenticate", "Content-Disposition"}) {
         RUVIA_CHECK(isForbiddenResponseTrailerName(name));
     }
     // Response control data (RFC 9110 §6.5.1) must be processed before the content
@@ -162,19 +157,16 @@ RUVIA_TEST(response_trailer_field_combined_rule) {
 }
 
 RUVIA_TEST(response_trailer_section_validation_is_all_fields_or_none) {
-    const std::array<ruvia::HttpHeaderView, 2> valid{ruvia::HttpHeaderView{"X-Trace-Id", "abc"},
-        ruvia::HttpHeaderView{"Server-Timing", "db;dur=5"}};
+    const std::array<ruvia::HttpHeaderView, 2> valid{ruvia::HttpHeaderView{"X-Trace-Id", "abc"}, ruvia::HttpHeaderView{"Server-Timing", "db;dur=5"}};
     const auto validResult = httpResponseTrailerSection(valid);
     RUVIA_CHECK(validResult.section() != nullptr);
     RUVIA_CHECK(validResult.failure() == nullptr);
 
-    const std::array<ruvia::HttpHeaderView, 2> mixed{
-        ruvia::HttpHeaderView{"X-Trace-Id", "abc"}, ruvia::HttpHeaderView{"Content-Length", "5"}};
+    const std::array<ruvia::HttpHeaderView, 2> mixed{ruvia::HttpHeaderView{"X-Trace-Id", "abc"}, ruvia::HttpHeaderView{"Content-Length", "5"}};
     const auto mixedResult = httpResponseTrailerSection(mixed);
     RUVIA_CHECK(mixedResult.section() == nullptr);
     RUVIA_CHECK(mixedResult.failure() != nullptr);
-    RUVIA_CHECK_EQ(std::string_view(mixedResult.failure()->exception().what()),
-        std::string_view("invalid HTTP response trailer section"));
+    RUVIA_CHECK_EQ(std::string_view(mixedResult.failure()->exception().what()), std::string_view("invalid HTTP response trailer section"));
     // An empty field sequence is the valid absence of a trailer section; the
     // submission API reports kEmpty separately when asked to submit one.
     const auto emptyResult = httpResponseTrailerSection({});

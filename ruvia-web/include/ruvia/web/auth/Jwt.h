@@ -62,8 +62,7 @@ private:
     using Text = std::variant<std::string, std::pmr::string>;
 
     [[nodiscard]] static std::string_view text(const Text& value) noexcept {
-        return std::visit(
-            [](const auto& stored) noexcept { return std::string_view(stored); }, value);
+        return std::visit([](const auto& stored) noexcept { return std::string_view(stored); }, value);
     }
 
     Text name_;
@@ -145,8 +144,7 @@ private:
 [[nodiscard]] std::pmr::string jwtSign(const JwtSignOptions& options);
 [[nodiscard]] JwtPayload jwtVerify(const JwtVerifyOptions& options);
 [[nodiscard]] JwtPayload jwtDecodeUnverified(JwtDecodeUnverifiedOptions options);
-[[nodiscard]] std::optional<std::string_view> jwtBearerToken(
-    std::string_view authorization) noexcept;
+[[nodiscard]] std::optional<std::string_view> jwtBearerToken(std::string_view authorization) noexcept;
 
 template <detail::HttpTemporaryOwningCharString Authorization>
 std::optional<std::string_view> jwtBearerToken(Authorization&&) = delete;

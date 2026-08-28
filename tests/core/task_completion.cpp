@@ -62,8 +62,7 @@ concept HasLooseCompletionFields = requires(Result& result) {
 };
 
 template <typename Result>
-concept HasRvalueCompletionBorrow = requires(Result&& result) { std::move(result).success(); } ||
-                                    requires(Result&& result) { std::move(result).failure(); };
+concept HasRvalueCompletionBorrow = requires(Result&& result) { std::move(result).success(); } || requires(Result&& result) { std::move(result).failure(); };
 
 static_assert(!std::default_initializable<ruvia::detail::TaskCompletionResult<int>>);
 static_assert(!std::default_initializable<ruvia::detail::TaskCompletionResult<void>>);
@@ -89,8 +88,7 @@ ruvia::Task<void> failVoid() {
     co_return;
 }
 
-bool hasFailureMessage(
-    const ruvia::detail::TaskCompletionFailure& failure, std::string_view expected) {
+bool hasFailureMessage(const ruvia::detail::TaskCompletionFailure& failure, std::string_view expected) {
     try {
         std::rethrow_exception(failure.exception());
     } catch (const std::runtime_error& error) {
@@ -107,39 +105,35 @@ int main() {
     int completed = 0;
     bool valid = true;
 
-    ruvia::detail::asyncStartTask(makeValue(),
-        asio::bind_executor(ioContext.get_executor(), [&completed, &valid](auto result) {
-            auto* success = result.success();
-            valid = valid && success != nullptr && result.failure() == nullptr;
-            if (success != nullptr) {
-                auto value = std::move(*success).takeValue();
-                valid = valid && value != nullptr && *value == 42;
-            }
-            ++completed;
-        }));
-    ruvia::detail::asyncStartTask(failValue(),
-        asio::bind_executor(ioContext.get_executor(), [&completed, &valid](auto result) {
-            const auto* failure = result.failure();
-            valid = valid && result.success() == nullptr && failure != nullptr;
-            if (failure != nullptr) {
-                valid = valid && hasFailureMessage(*failure, "value failure");
-            }
-            ++completed;
-        }));
-    ruvia::detail::asyncStartTask(completeVoid(),
-        asio::bind_executor(ioContext.get_executor(), [&completed, &valid](auto result) {
-            valid = valid && result.success() != nullptr && result.failure() == nullptr;
-            ++completed;
-        }));
-    ruvia::detail::asyncStartTask(failVoid(),
-        asio::bind_executor(ioContext.get_executor(), [&completed, &valid](auto result) {
-            const auto* failure = result.failure();
-            valid = valid && result.success() == nullptr && failure != nullptr;
-            if (failure != nullptr) {
-                valid = valid && hasFailureMessage(*failure, "void failure");
-            }
-            ++completed;
-        }));
+    ruvia::detail::asyncStartTask(makeValue(), asio::bind_executor(ioContext.get_executor(), [&completed, &valid](auto result) {
+        auto* success = result.success();
+        valid = valid && success != nullptr && result.failure() == nullptr;
+        if (success != nullptr) {
+            auto value = std::move(*success).takeValue();
+            valid = valid && value != nullptr && *value == 42;
+        }
+        ++completed;
+    }));
+    ruvia::detail::asyncStartTask(failValue(), asio::bind_executor(ioContext.get_executor(), [&completed, &valid](auto result) {
+        const auto* failure = result.failure();
+        valid = valid && result.success() == nullptr && failure != nullptr;
+        if (failure != nullptr) {
+            valid = valid && hasFailureMessage(*failure, "value failure");
+        }
+        ++completed;
+    }));
+    ruvia::detail::asyncStartTask(completeVoid(), asio::bind_executor(ioContext.get_executor(), [&completed, &valid](auto result) {
+        valid = valid && result.success() != nullptr && result.failure() == nullptr;
+        ++completed;
+    }));
+    ruvia::detail::asyncStartTask(failVoid(), asio::bind_executor(ioContext.get_executor(), [&completed, &valid](auto result) {
+        const auto* failure = result.failure();
+        valid = valid && result.success() == nullptr && failure != nullptr;
+        if (failure != nullptr) {
+            valid = valid && hasFailureMessage(*failure, "void failure");
+        }
+        ++completed;
+    }));
 
     ioContext.run();
 
@@ -148,14 +142,11 @@ int main() {
     // allocator, just like the surrounding co_spawn operation does.
     AllocationCounts successCounts;
     asio::io_context allocatedContext(1);
-    ruvia::detail::asyncStartTask(
-        completeVoid(), asio::bind_executor(allocatedContext.get_executor(),
-                            asio::bind_allocator(CountingAllocator<std::byte>(successCounts),
-                                [&completed](auto result) {
-                                    if (result.success() != nullptr) {
-                                        ++completed;
-                                    }
-                                })));
+    ruvia::detail::asyncStartTask(completeVoid(), asio::bind_executor(allocatedContext.get_executor(), asio::bind_allocator(CountingAllocator<std::byte>(successCounts), [&completed](auto result) {
+        if (result.success() != nullptr) {
+            ++completed;
+        }
+    })));
     valid = valid && successCounts.allocations != 0;
     allocatedContext.run();
     valid = valid && successCounts.allocations == successCounts.deallocations;
@@ -165,18 +156,14 @@ int main() {
     // that exception unwinds.
     AllocationCounts throwingCounts;
     asio::io_context throwingContext(1);
-    ruvia::detail::asyncStartTask(
-        completeVoid(), asio::bind_executor(throwingContext.get_executor(),
-                            asio::bind_allocator(CountingAllocator<std::byte>(throwingCounts),
-                                [](auto) { throw std::runtime_error("completion failed"); })));
+    ruvia::detail::asyncStartTask(completeVoid(), asio::bind_executor(throwingContext.get_executor(), asio::bind_allocator(CountingAllocator<std::byte>(throwingCounts), [](auto) { throw std::runtime_error("completion failed"); })));
     bool throwingHandlerObserved = false;
     try {
         throwingContext.run();
     } catch (const std::runtime_error& error) {
         throwingHandlerObserved = std::string_view(error.what()) == "completion failed";
     }
-    valid = valid && throwingHandlerObserved && throwingCounts.allocations != 0 &&
-            throwingCounts.allocations == throwingCounts.deallocations;
+    valid = valid && throwingHandlerObserved && throwingCounts.allocations != 0 && throwingCounts.allocations == throwingCounts.deallocations;
 
     return valid && completed == 5 ? 0 : 1;
 }

@@ -56,9 +56,7 @@ int main() {
     app.loadDotenv();
     app.use<GlobalHeaderMiddleware>();
 
-    const auto httpPort = app.env()
-                              .get<std::uint16_t>("RUVIA_HTTP_PORT")
-                              .value_or(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8087));
+    const auto httpPort = app.env().get<std::uint16_t>("RUVIA_HTTP_PORT").value_or(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8087));
     app.server({
         .workerCount = app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
         .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,

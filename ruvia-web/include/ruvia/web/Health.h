@@ -20,7 +20,6 @@ struct ReadinessResponseOptions final {
 
 [[nodiscard]] HttpResponse makeHealthResponse(Context& context);
 
-[[nodiscard]] HttpResponse makeReadinessResponse(
-    Context& context, ReadinessResponseOptions options = {});
+[[nodiscard]] HttpResponse makeReadinessResponse(Context& context, ReadinessResponseOptions options = {});
 
 }  // namespace ruvia

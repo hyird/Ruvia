@@ -44,11 +44,9 @@ using namespace ruvia::detail;
 
 constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
-std::string frame(
-    std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
+std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
     std::string bytes(kHttp2FrameHeaderBytes, '\0');
-    http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()),
-        static_cast<Http2FrameType>(type), flags, streamId);
+    http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()), static_cast<Http2FrameType>(type), flags, streamId);
     bytes.append(payload);
     return bytes;
 }
@@ -74,8 +72,7 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
-            co_await ruvia::detail::taskAsAwaitable(
-                ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
 
@@ -84,18 +81,15 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
         io,
         [&]() -> asio::awaitable<void> {
             tcp::socket sock(io);
-            co_await sock.async_connect(
-                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            co_await sock.async_connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
 
             auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_write(sock,
-                    asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_write(sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
                 (void)n;
                 co_return !ec;
             };
             auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_read(
-                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_read(sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
                 co_return !ec && n == size;
             };
 
@@ -113,9 +107,7 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
             HpackEncoder::encodeHeader(headerBlock, ":path", "/");
             HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
             HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
-            if (!co_await writeAll(
-                    frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1,
-                        std::string_view(headerBlock.data(), headerBlock.size())))) {
+            if (!co_await writeAll(frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1, std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
 
@@ -125,10 +117,8 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
             std::string data(Http2LocalSettings::kMaxFrameSize, 'x');
             auto remaining = dataBytes;
             while (remaining != 0) {
-                const auto chunkBytes =
-                    static_cast<std::size_t>(remaining < data.size() ? remaining : data.size());
-                if (!co_await writeAll(
-                        frame(0x0 /*DATA*/, 0, 1, std::string_view(data.data(), chunkBytes)))) {
+                const auto chunkBytes = static_cast<std::size_t>(remaining < data.size() ? remaining : data.size());
+                if (!co_await writeAll(frame(0x0 /*DATA*/, 0, 1, std::string_view(data.data(), chunkBytes)))) {
                     co_return;
                 }
                 remaining -= static_cast<std::uint32_t>(chunkBytes);
@@ -144,15 +134,13 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header =
-                    http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
                 }
                 if (header.type == 0x8 /*WINDOW_UPDATE*/ && header.streamId == 0) {
-                    increments.push_back(
-                        http2Read31(reinterpret_cast<const unsigned char*>(payload.data())));
+                    increments.push_back(http2Read31(reinterpret_cast<const unsigned char*>(payload.data())));
                 }
             }
         },
@@ -179,8 +167,7 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
-            co_await ruvia::detail::taskAsAwaitable(
-                ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
 
@@ -188,17 +175,14 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
         io,
         [&]() -> asio::awaitable<void> {
             tcp::socket sock(io);
-            co_await sock.async_connect(
-                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            co_await sock.async_connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
             auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_write(sock,
-                    asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_write(sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
                 (void)n;
                 co_return !ec;
             };
             auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_read(
-                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_read(sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
                 co_return !ec && n == size;
             };
 
@@ -218,9 +202,7 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
             HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
             HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
             HpackEncoder::encodeHeader(headerBlock, "content-length", "5");
-            if (!co_await writeAll(
-                    frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1,
-                        std::string_view(headerBlock.data(), headerBlock.size())))) {
+            if (!co_await writeAll(frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1, std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
 
@@ -232,19 +214,14 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header =
-                    http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
                 }
-                if (header.type == 0x3 /*RST_STREAM*/ && header.streamId == 1 &&
-                    payload.size() == 4) {
+                if (header.type == 0x3 /*RST_STREAM*/ && header.streamId == 1 && payload.size() == 4) {
                     const auto* bytes = reinterpret_cast<const unsigned char*>(payload.data());
-                    rstError = (static_cast<std::uint32_t>(bytes[0]) << 24) |
-                               (static_cast<std::uint32_t>(bytes[1]) << 16) |
-                               (static_cast<std::uint32_t>(bytes[2]) << 8) |
-                               static_cast<std::uint32_t>(bytes[3]);
+                    rstError = (static_cast<std::uint32_t>(bytes[0]) << 24) | (static_cast<std::uint32_t>(bytes[1]) << 16) | (static_cast<std::uint32_t>(bytes[2]) << 8) | static_cast<std::uint32_t>(bytes[3]);
                 }
             }
         },
@@ -292,11 +269,8 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
             auto handler = &largeHeaderNotFoundHandler;
-            routes.setNotFoundHandler(
-                ruvia::detail::CallbackAccess::bind<ruvia::Task<ruvia::HttpResponse>(
-                    ruvia::Context&)>(handler));
-            co_await ruvia::detail::taskAsAwaitable(
-                ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
+            routes.setNotFoundHandler(ruvia::detail::CallbackAccess::bind<ruvia::Task<ruvia::HttpResponse>(ruvia::Context&)>(handler));
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
 
@@ -304,18 +278,15 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
         io,
         [&]() -> asio::awaitable<void> {
             tcp::socket sock(io);
-            co_await sock.async_connect(
-                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            co_await sock.async_connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
 
             auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_write(sock,
-                    asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_write(sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
                 (void)n;
                 co_return !ec;
             };
             auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_read(
-                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_read(sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
                 co_return !ec && n == size;
             };
 
@@ -356,17 +327,13 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header =
-                    http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
                 }
-                frames.push_back(EmittedFrame{
-                    static_cast<std::uint8_t>(header.type), header.streamId, header.flags});
-                if ((header.type == 0x1 /*HEADERS*/ || header.type == 0x9 /*CONTINUATION*/) &&
-                    (header.flags & kHttp2FlagEndHeaders) != 0 &&
-                    (header.streamId == 1 || header.streamId == 3) && ++completedResponses == 2) {
+                frames.push_back(EmittedFrame{static_cast<std::uint8_t>(header.type), header.streamId, header.flags});
+                if ((header.type == 0x1 /*HEADERS*/ || header.type == 0x9 /*CONTINUATION*/) && (header.flags & kHttp2FlagEndHeaders) != 0 && (header.streamId == 1 || header.streamId == 3) && ++completedResponses == 2) {
                     break;
                 }
             }
@@ -399,8 +366,7 @@ ruvia::Task<ruvia::HttpResponse> truncatedFileBodyHandler(ruvia::Context& contex
     ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
     constexpr std::uint64_t declaredLength = 40000;
-    ruvia::detail::setResponseFileBody(response, std::filesystem::path(truncatedFileBodyPath()),
-        declaredLength, 0, declaredLength);
+    ruvia::detail::setResponseFileBody(response, std::filesystem::path(truncatedFileBodyPath()), declaredLength, 0, declaredLength);
     co_return response;
 }
 
@@ -418,8 +384,7 @@ ruvia::Task<ruvia::HttpResponse> missingFileBodyHandler(ruvia::Context& context)
     ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
     constexpr std::uint64_t declaredLength = 40000;
-    ruvia::detail::setResponseFileBody(
-        response, std::filesystem::path(missingFileBodyPath()), declaredLength, 0, declaredLength);
+    ruvia::detail::setResponseFileBody(response, std::filesystem::path(missingFileBodyPath()), declaredLength, 0, declaredLength);
     co_return response;
 }
 
@@ -430,8 +395,7 @@ ruvia::Task<ruvia::HttpResponse> missingFileBodyHandler(ruvia::Context& context)
 // shutdown_send) so the server must abort the stream while the connection is still
 // live; a watchdog closes the socket if the RST never arrives, so the neutered-fix
 // (mutation) case fails fast instead of blocking on the read forever.
-std::optional<std::uint32_t> rstErrorForFileBodyHandler(
-    ruvia::Task<ruvia::HttpResponse> (*handler)(ruvia::Context&)) {
+std::optional<std::uint32_t> rstErrorForFileBodyHandler(ruvia::Task<ruvia::HttpResponse> (*handler)(ruvia::Context&)) {
     asio::io_context& io = ruvia::test::newTestIoContext();
     std::optional<std::uint32_t> rstError;
 
@@ -444,11 +408,8 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
-            routes.setNotFoundHandler(
-                ruvia::detail::CallbackAccess::bind<ruvia::Task<ruvia::HttpResponse>(
-                    ruvia::Context&)>(handler));
-            co_await ruvia::detail::taskAsAwaitable(
-                ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
+            routes.setNotFoundHandler(ruvia::detail::CallbackAccess::bind<ruvia::Task<ruvia::HttpResponse>(ruvia::Context&)>(handler));
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
 
@@ -456,17 +417,14 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
         io,
         [&]() -> asio::awaitable<void> {
             tcp::socket sock(io);
-            co_await sock.async_connect(
-                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            co_await sock.async_connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
             auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_write(sock,
-                    asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_write(sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
                 (void)n;
                 co_return !ec;
             };
             auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_read(
-                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_read(sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
                 co_return !ec && n == size;
             };
 
@@ -482,9 +440,7 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
             HpackEncoder::encodeHeader(headerBlock, ":path", "/");
             HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
             HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
-            if (!co_await writeAll(
-                    frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1,
-                        std::string_view(headerBlock.data(), headerBlock.size())))) {
+            if (!co_await writeAll(frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1, std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
 
@@ -502,19 +458,14 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header =
-                    http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
                 }
-                if (header.type == 0x3 /*RST_STREAM*/ && header.streamId == 1 &&
-                    payload.size() == 4) {
+                if (header.type == 0x3 /*RST_STREAM*/ && header.streamId == 1 && payload.size() == 4) {
                     const auto* bytes = reinterpret_cast<const unsigned char*>(payload.data());
-                    rstError = (static_cast<std::uint32_t>(bytes[0]) << 24) |
-                               (static_cast<std::uint32_t>(bytes[1]) << 16) |
-                               (static_cast<std::uint32_t>(bytes[2]) << 8) |
-                               static_cast<std::uint32_t>(bytes[3]);
+                    rstError = (static_cast<std::uint32_t>(bytes[0]) << 24) | (static_cast<std::uint32_t>(bytes[1]) << 16) | (static_cast<std::uint32_t>(bytes[2]) << 8) | static_cast<std::uint32_t>(bytes[3]);
                     break;
                 }
             }
@@ -530,8 +481,7 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
 
 // Mid-body truncation: the served file is much shorter than the advertised length.
 std::optional<std::uint32_t> rstErrorForTruncatedFileBody() {
-    const auto filePath =
-        std::filesystem::temp_directory_path() / "ruvia_h2_truncated_body_test.bin";
+    const auto filePath = std::filesystem::temp_directory_path() / "ruvia_h2_truncated_body_test.bin";
     {
         std::ofstream out(filePath, std::ios::binary | std::ios::trunc);
         out << "short";  // 5 bytes on disk vs 40000 advertised
@@ -607,8 +557,7 @@ RUVIA_TEST(http2_headers_and_continuation_not_interleaved_across_streams) {
             if ((f.flags & ruvia::detail::kHttp2FlagEndHeaders) != 0) {
                 openStream = 0;
             }
-        } else if (f.type == 0x1 /*HEADERS*/ &&
-                   (f.flags & ruvia::detail::kHttp2FlagEndHeaders) == 0) {
+        } else if (f.type == 0x1 /*HEADERS*/ && (f.flags & ruvia::detail::kHttp2FlagEndHeaders) == 0) {
             openStream = f.streamId;
         }
     }

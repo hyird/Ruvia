@@ -23,16 +23,11 @@ public:
     [[nodiscard]] DbHandle withOptions(OperationOptions options) const;
 
     ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {}) const;
-    ScopedOperation<DbRows> query(
-        std::string_view sql, std::initializer_list<DbValue> params) const = delete;
-    ScopedOperation<DbExecResult> execute(
-        std::string_view sql, std::span<const DbValue> params = {}) const;
-    ScopedOperation<DbExecResult> execute(
-        std::string_view sql, std::initializer_list<DbValue> params) const = delete;
-    ScopedOperation<DbStreamResult> queryStream(
-        std::string_view sql, std::span<const DbValue> params = {}) const;
-    ScopedOperation<DbStreamResult> queryStream(
-        std::string_view sql, std::initializer_list<DbValue> params) const = delete;
+    ScopedOperation<DbRows> query(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
+    ScopedOperation<DbExecResult> execute(std::string_view sql, std::span<const DbValue> params = {}) const;
+    ScopedOperation<DbExecResult> execute(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
+    ScopedOperation<DbStreamResult> queryStream(std::string_view sql, std::span<const DbValue> params = {}) const;
+    ScopedOperation<DbStreamResult> queryStream(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
 
     // Bound parameters as ordinary arguments: query(sql, id, name). Each one is
     // converted to a DbValue and cloned into the prepared statement before the
@@ -51,16 +46,14 @@ public:
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbExecResult> execute(
-        std::string_view sql, Params&&... params) const {
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, Params&&... params) const {
         const DbValue values[]{detail::makeImmediateDbParameter(std::forward<Params>(params))...};
         return execute(sql, std::span<const DbValue>(values));
     }
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(
-        std::string_view sql, Params&&... params) const {
+    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(std::string_view sql, Params&&... params) const {
         const DbValue values[]{detail::makeImmediateDbParameter(std::forward<Params>(params))...};
         return queryStream(sql, std::span<const DbValue>(values));
     }
@@ -70,14 +63,9 @@ public:
 private:
     friend class detail::DbRegistry;
 
-    DbHandle(detail::DbPoolRef client, std::pmr::memory_resource* resource,
-        detail::ScopedOperationScope& operationScope) noexcept;
-    static Task<DbStreamResult> queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql,
-        std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
-        detail::ScopedOperationScope& operationScope, OperationOptions options);
-    static Task<DbTransaction> beginTransactionPrepared(detail::DbPoolRef client,
-        std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope,
-        OperationOptions options);
+    DbHandle(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;
+    static Task<DbStreamResult> queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope, OperationOptions options);
+    static Task<DbTransaction> beginTransactionPrepared(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope, OperationOptions options);
 
     detail::DbPoolRef client_;
     std::pmr::memory_resource* resource_;

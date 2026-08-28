@@ -29,12 +29,9 @@ public:
 
     [[nodiscard]] bool active() const noexcept;
     ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {});
-    ScopedOperation<DbRows> query(
-        std::string_view sql, std::initializer_list<DbValue> params) = delete;
-    ScopedOperation<DbExecResult> execute(
-        std::string_view sql, std::span<const DbValue> params = {});
-    ScopedOperation<DbExecResult> execute(
-        std::string_view sql, std::initializer_list<DbValue> params) = delete;
+    ScopedOperation<DbRows> query(std::string_view sql, std::initializer_list<DbValue> params) = delete;
+    ScopedOperation<DbExecResult> execute(std::string_view sql, std::span<const DbValue> params = {});
+    ScopedOperation<DbExecResult> execute(std::string_view sql, std::initializer_list<DbValue> params) = delete;
 
     // Bound parameters as ordinary arguments, with the same synchronous cloning
     // and the same temporary-safety as DbHandle::query()/execute().
@@ -61,8 +58,7 @@ private:
     friend class detail::PostgreSqlPool;
 
     struct Lease final {
-        Lease(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource,
-            OperationOptions options) noexcept;
+        Lease(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
 
         detail::DbPoolRef client;
         std::size_t slot;
@@ -70,8 +66,7 @@ private:
         OperationOptions options;
     };
 
-    DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource,
-        OperationOptions options) noexcept;
+    DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
     Task<DbRows> queryPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
     Task<DbExecResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
     Task<void> commitTask();

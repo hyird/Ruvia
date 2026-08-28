@@ -49,8 +49,7 @@ struct TaskFinalAwaiter final {
     }
 
     template <typename Promise>
-    [[nodiscard]] std::coroutine_handle<> await_suspend(
-        std::coroutine_handle<Promise> handle) const noexcept {
+    [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> handle) const noexcept {
         auto& promise = handle.promise();
         if (promise.completion_ != nullptr) {
             promise.completion_(promise.completionState_);
@@ -100,8 +99,7 @@ class TaskPromise final {
 public:
     using value_type = T;
 
-    static_assert(
-        !std::is_reference_v<T>, "ruvia::Task<T> does not support reference result types");
+    static_assert(!std::is_reference_v<T>, "ruvia::Task<T> does not support reference result types");
 
     TaskPromise() noexcept = default;
 

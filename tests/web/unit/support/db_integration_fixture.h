@@ -15,8 +15,7 @@
 
 namespace ruvia::testing {
 
-[[nodiscard]] inline std::string_view dbEnvironment(
-    const char* name, std::string_view fallback) noexcept {
+[[nodiscard]] inline std::string_view dbEnvironment(const char* name, std::string_view fallback) noexcept {
     const auto* value = std::getenv(name);
     return value != nullptr && *value != '\0' ? std::string_view(value) : fallback;
 }

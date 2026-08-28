@@ -12,7 +12,7 @@ namespace {
 class SleepAwaiter final {
 public:
     SleepAwaiter(const WorkerHandle& worker, std::chrono::steady_clock::duration duration)
-        : worker_(&worker),
+        : worker_(worker),
           duration_(duration) {}
 
     [[nodiscard]] bool await_ready() const noexcept {
@@ -21,24 +21,21 @@ public:
 
     bool await_suspend(std::coroutine_handle<> continuation) {
         continuation_ = continuation;
-        detail::WorkerHandleAccess::scheduleTimer(*worker_, registration_,
-            detail::workerTimerDeadlineAfter(duration_),
-            [this](detail::WorkerTimerOutcome outcome) {
-                outcome_ = outcome;
-                continuation_.resume();
-            });
+        detail::WorkerHandleAccess::scheduleTimer(worker_, registration_, detail::workerTimerDeadlineAfter(duration_), [this](detail::WorkerTimerOutcome outcome) {
+            outcome_ = outcome;
+            continuation_.resume();
+        });
         return true;
     }
 
     // A zero/negative duration never suspends and reports elapsed (the default),
     // so the caller sees a consistent result either way.
     TimerSleepResult await_resume() const noexcept {
-        return outcome_ == detail::WorkerTimerOutcome::kExpired ? TimerSleepResult::kElapsed
-                                                                : TimerSleepResult::kStopRequested;
+        return outcome_ == detail::WorkerTimerOutcome::kExpired ? TimerSleepResult::kElapsed : TimerSleepResult::kStopRequested;
     }
 
 private:
-    const WorkerHandle* worker_;
+    const WorkerHandle& worker_;
     std::chrono::steady_clock::duration duration_;
     std::coroutine_handle<> continuation_{};
     detail::WorkerTimerRegistration registration_;
@@ -47,42 +44,34 @@ private:
 
 class StoppableSleepAwaiter final {
 public:
-    StoppableSleepAwaiter(const WorkerHandle& worker, std::chrono::steady_clock::duration duration,
-        StopToken stopToken)
-        : worker_(&worker),
+    StoppableSleepAwaiter(const WorkerHandle& worker, std::chrono::steady_clock::duration duration, StopToken stopToken)
+        : worker_(worker),
           duration_(duration),
           stopToken_(std::move(stopToken)) {}
 
     [[nodiscard]] bool await_ready() const noexcept {
-        return duration_ <= std::chrono::steady_clock::duration::zero() ||
-               stopToken_.stopRequested();
+        return duration_ <= std::chrono::steady_clock::duration::zero() || stopToken_.stopRequested();
     }
 
     bool await_suspend(std::coroutine_handle<> continuation) {
         continuation_ = continuation;
-        detail::WorkerHandleAccess::scheduleTimer(*worker_, registration_,
-            detail::workerTimerDeadlineAfter(duration_),
-            [this](detail::WorkerTimerOutcome outcome) {
-                outcome_ = outcome;
-                continuation_.resume();
-            });
-        stopToken_.registerCallback(stopRegistration_,
-            [cancellation = registration_.cancellation()] { cancellation.cancel(); });
+        detail::WorkerHandleAccess::scheduleTimer(worker_, registration_, detail::workerTimerDeadlineAfter(duration_), [this](detail::WorkerTimerOutcome outcome) {
+            outcome_ = outcome;
+            continuation_.resume();
+        });
+        stopToken_.registerCallback(stopRegistration_, [cancellation = registration_.cancellation()] { cancellation.cancel(); });
         return true;
     }
 
     TimerSleepResult await_resume() const noexcept {
-        if (duration_ <= std::chrono::steady_clock::duration::zero() &&
-            !stopToken_.stopRequested()) {
+        if (duration_ <= std::chrono::steady_clock::duration::zero() && !stopToken_.stopRequested()) {
             return TimerSleepResult::kElapsed;
         }
-        return outcome_ == detail::WorkerTimerOutcome::kExpired && !stopToken_.stopRequested()
-                   ? TimerSleepResult::kElapsed
-                   : TimerSleepResult::kStopRequested;
+        return outcome_ == detail::WorkerTimerOutcome::kExpired && !stopToken_.stopRequested() ? TimerSleepResult::kElapsed : TimerSleepResult::kStopRequested;
     }
 
 private:
-    const WorkerHandle* worker_;
+    const WorkerHandle& worker_;
     std::chrono::steady_clock::duration duration_;
     StopToken stopToken_;
     std::coroutine_handle<> continuation_{};
@@ -95,16 +84,14 @@ private:
 
 }  // namespace
 
-Task<TimerSleepResult> sleepFor(
-    const WorkerHandle& worker, std::chrono::steady_clock::duration duration) {
+Task<TimerSleepResult> sleepFor(const WorkerHandle& worker, std::chrono::steady_clock::duration duration) {
     if (!worker.isCurrent()) {
         throw std::logic_error("sleepFor must run on its bound worker");
     }
     co_return co_await SleepAwaiter(worker, duration);
 }
 
-Task<TimerSleepResult> sleepFor(
-    const WorkerHandle& worker, std::chrono::steady_clock::duration duration, StopToken stopToken) {
+Task<TimerSleepResult> sleepFor(const WorkerHandle& worker, std::chrono::steady_clock::duration duration, StopToken stopToken) {
     if (!worker.isCurrent()) {
         throw std::logic_error("sleepFor must run on its bound worker");
     }

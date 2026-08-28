@@ -64,15 +64,13 @@ private:
     explicit constexpr HttpContentCodingFieldResult(HttpContentCoding coding) noexcept
         : value_(coding) {}
 
-    explicit constexpr HttpContentCodingFieldResult(
-        HttpUnsupportedContentCoding unsupported) noexcept
+    explicit constexpr HttpContentCodingFieldResult(HttpUnsupportedContentCoding unsupported) noexcept
         : value_(unsupported) {}
 
     explicit constexpr HttpContentCodingFieldResult(HttpInvalidContentCodingField invalid) noexcept
         : value_(invalid) {}
 
-    std::variant<HttpContentCoding, HttpUnsupportedContentCoding, HttpInvalidContentCodingField>
-        value_;
+    std::variant<HttpContentCoding, HttpUnsupportedContentCoding, HttpInvalidContentCodingField> value_;
 };
 
 // Parses one logical Content-Encoding field value using recipient list rules.

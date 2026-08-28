@@ -10,8 +10,7 @@ namespace ruvia::detail {
 // early-outs on the first differing byte, so the time taken does not leak how
 // far an attacker-supplied value matched the expected one. Unequal lengths are
 // reported immediately; that is not secret since these values are fixed-length.
-[[nodiscard]] inline bool constantTimeBytesEqual(
-    std::string_view left, std::string_view right) noexcept {
+[[nodiscard]] inline bool constantTimeBytesEqual(std::string_view left, std::string_view right) noexcept {
     if (left.size() != right.size()) {
         return false;
     }
