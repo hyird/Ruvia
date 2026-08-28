@@ -16,6 +16,13 @@ namespace {
         .count();
 }
 
+[[nodiscard]] WorkerHandle requireScannerWorker(WorkerHandle worker) {
+    if (!worker.valid()) {
+        throw std::invalid_argument("connection scanner requires a valid worker");
+    }
+    return worker;
+}
+
 void validateScannerTimeout(const std::optional<std::chrono::milliseconds>& timeout) {
     if (timeout.has_value() && timeout->count() <= 0) {
         throw std::invalid_argument(
@@ -155,7 +162,7 @@ ConnectionScanner::Guard::~Guard() {
 }
 
 ConnectionScanner::ConnectionScanner(WorkerHandle worker, ConnectionScannerOptions options)
-    : worker_(std::move(worker)),
+    : worker_(requireScannerWorker(std::move(worker))),
       options_(options),
       cachedNowMs_(steadyNowMs()) {
     if (options_.scanInterval.count() <= 0) {

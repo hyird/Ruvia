@@ -59,6 +59,11 @@ int main() {
     asio::io_context ioContext;
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 16);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    try {
+        ruvia::detail::ConnectionScanner invalid(ruvia::WorkerHandle{}, {});
+        return 100;
+    } catch (const std::invalid_argument&) {
+    }
     const auto rejects = [&worker](ruvia::detail::ConnectionScannerOptions options) {
         try {
             ruvia::detail::ConnectionScanner scanner(worker, std::move(options));
@@ -111,6 +116,9 @@ int main() {
         auto options = ruvia::detail::ConnectionScannerOptions{};
         options.scanInterval = std::chrono::milliseconds(1);
         ruvia::detail::ConnectionScanner scanner(worker, std::move(options));
+        if (scanner.worker().id() != worker.id()) {
+            return 101;
+        }
         WorkerMaintenanceProbe retryProbe;
         ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration retryRegistration;
         scanner.registerWorkerMaintenance(

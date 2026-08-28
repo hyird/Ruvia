@@ -78,7 +78,6 @@ private:
     const WorkerHandle& worker_;
     DbRegistry databases_;
     RedisRegistry redis_;
-    ConnectionScanner::WorkerMaintenanceRegistration databaseDeadlineMaintenance_;
     HttpClientRegistry httpClients_;
     WorkerStateRegistry workerStates_;
     RateLimiter rateLimiter_;

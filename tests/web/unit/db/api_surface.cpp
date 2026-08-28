@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <future>
 #include <initializer_list>
+#include <memory>
 #include <memory_resource>
 #include <new>
 #include <span>
@@ -16,13 +17,15 @@
 #include <type_traits>
 #include <utility>
 
-#include <asio/ip/tcp.hpp>
 #include <asio/co_spawn.hpp>
+#include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/db/DbClient.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
@@ -115,6 +118,19 @@ struct ClosingResolvePool final {
         ruvia::detail::DbConfigStorage(config, resource),
     };
 }
+
+class DbRegistryTestRuntime final {
+public:
+    DbRegistryTestRuntime()
+        : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8)),
+          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
+          scanner(worker, {}) {}
+
+    asio::io_context ioContext;
+    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
+    ruvia::WorkerHandle worker;
+    ruvia::detail::ConnectionScanner scanner;
+};
 
 class RejectingMemoryResource final : public std::pmr::memory_resource {
 public:
@@ -216,6 +232,8 @@ static_assert(AcceptsValidatedDbConfig<ruvia::DbConfig&>);
 static_assert(!AcceptsValidatedDbConfig<ruvia::DbConfig>);
 static_assert(!AcceptsValidatedDbConfig<const ruvia::DbConfig>);
 static_assert(std::constructible_from<ruvia::DbValue, ruvia::BorrowedText>);
+static_assert(!std::constructible_from<ruvia::detail::DbRegistry, asio::io_context&,
+    std::pmr::memory_resource*, std::span<const ruvia::detail::DbDefinition>>);
 
 template <typename String, typename Migration = ruvia::DbMigration>
 concept AcceptsAnyTemporaryDbMigrationText = requires(String&& value) {
@@ -769,7 +787,7 @@ RUVIA_TEST(db_query_rows_and_execution_metadata_have_independent_storage) {
 }
 
 RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
-    asio::io_context ioContext;
+    DbRegistryTestRuntime runtime;
 #ifdef RUVIA_ENABLE_MARIADB
     const auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
 #else
@@ -779,7 +797,8 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
         dbDefinition("analytics", config),
         dbDefinition("default", config),
     }};
-    ruvia::detail::DbRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
+    ruvia::detail::DbRegistry registry(
+        runtime.ioContext, runtime.scanner, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
 
     bool defaultResolved = true;
@@ -799,9 +818,9 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
 }
 
 RUVIA_TEST(db_registry_reports_typed_not_configured_error) {
-    asio::io_context ioContext;
-    ruvia::detail::DbRegistry registry(ioContext, std::pmr::get_default_resource(),
-        std::span<const ruvia::detail::DbDefinition>());
+    DbRegistryTestRuntime runtime;
+    ruvia::detail::DbRegistry registry(runtime.ioContext, runtime.scanner,
+        std::pmr::get_default_resource(), std::span<const ruvia::detail::DbDefinition>());
     ruvia::detail::ScopedOperationScope operationScope;
 
     bool defaultTyped = false;
@@ -835,7 +854,7 @@ RUVIA_TEST(db_config_is_direct_aggregate_without_factories) {
 RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
     TrackingResource sourceResource;
     std::pmr::unsynchronized_pool_resource targetResource;
-    asio::io_context ioContext;
+    DbRegistryTestRuntime runtime;
     std::optional<ruvia::detail::DbDefinition> definition;
     auto config = testDbConfig();
     config.host = std::string(80, 'h');
@@ -845,8 +864,8 @@ RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
     definition.emplace(dbDefinition("default", config, &sourceResource));
 
     std::optional<ruvia::detail::DbRegistry> registry;
-    registry.emplace(
-        ioContext, &targetResource, std::span<const ruvia::detail::DbDefinition>(&*definition, 1));
+    registry.emplace(runtime.ioContext, runtime.scanner, &targetResource,
+        std::span<const ruvia::detail::DbDefinition>(&*definition, 1));
     definition.reset();
     sourceResource.release();
     registry.reset();
@@ -855,14 +874,15 @@ RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
 }
 
 RUVIA_TEST(db_handle_copy_rejects_after_parent_scope_closes) {
-    asio::io_context ioContext;
+    DbRegistryTestRuntime runtime;
 #ifdef RUVIA_ENABLE_MARIADB
     const auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
 #else
     const auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
 #endif
     const std::array definitions{dbDefinition("default", config)};
-    ruvia::detail::DbRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
+    ruvia::detail::DbRegistry registry(
+        runtime.ioContext, runtime.scanner, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
     auto handle = registry.get(std::pmr::get_default_resource(), operationScope);
     auto copiedHandle = handle;

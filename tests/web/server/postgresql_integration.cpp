@@ -2,11 +2,13 @@
 
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 
 #include <asio/bind_executor.hpp>
 #include <asio/io_context.hpp>
+#include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
 #include <array>
@@ -20,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -41,20 +44,35 @@ constexpr std::string_view kMigrationsTable = "ruvia_pg_integration_migrations";
 using ruvia::testing::dbRequire;
 using ruvia::testing::dbThrowsOn;
 
+ruvia::Task<void> runWithScanner(
+    ruvia::detail::ConnectionScanner& scanner, ruvia::Task<void> operation) {
+    scanner.start();
+    try {
+        co_await std::move(operation);
+        scanner.stop();
+    } catch (...) {
+        scanner.stop();
+        throw;
+    }
+}
+
 template <typename Factory>
 void runTask(Factory&& factory) {
     asio::io_context ioContext(1);
     auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 64});
     const auto worker = attachment.loop().handle();
+    ruvia::detail::ConnectionScanner scanner(worker, {});
     std::exception_ptr exception;
-    ruvia::detail::asyncStartTask(factory(ioContext, worker),
-        asio::bind_executor(ioContext.get_executor(),
-            [&exception, &attachment](ruvia::detail::TaskCompletionResult<void> result) {
-                if (const auto* failure = result.failure()) {
-                    exception = failure->exception();
-                }
-                attachment.stop();
-            }));
+    asio::post(ioContext, [&] {
+        ruvia::detail::asyncStartTask(runWithScanner(scanner, factory(ioContext, worker, scanner)),
+            asio::bind_executor(ioContext.get_executor(),
+                [&exception, &attachment](ruvia::detail::TaskCompletionResult<void> result) {
+                    if (const auto* failure = result.failure()) {
+                        exception = failure->exception();
+                    }
+                    attachment.stop();
+                }));
+    });
     ioContext.run();
     if (exception != nullptr) {
         std::rethrow_exception(exception);
@@ -62,11 +80,11 @@ void runTask(Factory&& factory) {
 }
 
 ruvia::Task<void> withDatabase(asio::io_context& ioContext, const ruvia::WorkerHandle& worker,
-    ruvia::DbConfig config, bool cleanupOnly) {
+    ruvia::detail::ConnectionScanner& scanner, ruvia::DbConfig config, bool cleanupOnly) {
     auto* resource = std::pmr::get_default_resource();
     const std::array definitions{ruvia::detail::DbDefinition{
         std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(config, resource)}};
-    ruvia::detail::DbRegistry registry(ioContext, resource, definitions, &worker);
+    ruvia::detail::DbRegistry registry(ioContext, scanner, resource, definitions);
     co_await registry.connect();
     ruvia::detail::ScopedOperationScope operationScope;
     auto db = registry.get(resource, operationScope);
@@ -250,8 +268,9 @@ int main() {
 
     try {
         const auto config = testConfig();
-        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker) {
-            return withDatabase(ioContext, worker, config, true);
+        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker,
+                    ruvia::detail::ConnectionScanner& scanner) {
+            return withDatabase(ioContext, worker, scanner, config, true);
         });
 
         const std::array migrations{ruvia::DbMigration{{.id = "001_create_items",
@@ -293,11 +312,13 @@ int main() {
         dbRequire(concurrent.applied().size() == 1,
             "an unwrapped migration was not applied outside a transaction block");
 
-        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker) {
-            return withDatabase(ioContext, worker, config, false);
+        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker,
+                    ruvia::detail::ConnectionScanner& scanner) {
+            return withDatabase(ioContext, worker, scanner, config, false);
         });
-        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker) {
-            return withDatabase(ioContext, worker, config, true);
+        runTask([&](asio::io_context& ioContext, const ruvia::WorkerHandle& worker,
+                    ruvia::detail::ConnectionScanner& scanner) {
+            return withDatabase(ioContext, worker, scanner, config, true);
         });
         std::puts("PostgreSQL integration passed");
         return 0;

@@ -9,6 +9,16 @@
 #include <utility>
 
 namespace ruvia {
+namespace {
+
+[[nodiscard]] const WorkerHandle& requireMariaDbWorker(const WorkerHandle& worker) {
+    if (!worker.valid()) {
+        throw std::invalid_argument("MariaDB pool requires a valid worker");
+    }
+    return worker;
+}
+
+}  // namespace
 
 detail::MariaDbPool::ConnectionSlot::ConnectionSlot(
     asio::io_context& ioContext, std::pmr::memory_resource* resource)
@@ -34,28 +44,24 @@ detail::MariaDbPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept =
 detail::MariaDbPool::ConnectionSlot& detail::MariaDbPool::ConnectionSlot::operator=(
     ConnectionSlot&&) noexcept = default;
 
-detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, DbConfigStorage config,
-    std::pmr::memory_resource* resource, const WorkerHandle* worker)
+detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, const WorkerHandle& worker,
+    DbConfigStorage config, std::pmr::memory_resource* resource)
     : ioContext_(ioContext),
       config_(std::move(config)),
       resource_(detail::pmrResourceOrDefault(resource)),
       slots_(resource_),
       scheduler_(1, resource_),
-      worker_(worker == nullptr ? WorkerHandle{} : *worker) {
+      worker_(requireMariaDbWorker(worker)),
+      cancellationMailbox_(makeWorkerCancellationMailbox(*this, worker_)) {
     if (config_.driver != DbDriver::kMariaDb) {
         throw std::invalid_argument("MariaDB pool requires the MariaDB driver");
     }
     slots_.reserve(1);
     slots_.emplace_back(ioContext_, resource_);
-    if (worker_.valid()) {
-        cancellationMailbox_ = makeWorkerCancellationMailbox(*this, worker_);
-    }
 }
 
 detail::MariaDbPool::~MariaDbPool() {
-    if (cancellationMailbox_ != nullptr) {
-        cancellationMailbox_->detach(*this);
-    }
+    cancellationMailbox_->detach(*this);
     closeNow();
 }
 
@@ -95,10 +101,6 @@ void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point no
             }
         }
     }
-}
-
-bool detail::MariaDbPool::needsDeadlineScan() const noexcept {
-    return true;
 }
 
 Task<std::size_t> detail::MariaDbPool::acquireSlot(

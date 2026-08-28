@@ -148,6 +148,11 @@ public:
     ConnectionScanner(WorkerHandle worker, ConnectionScannerOptions options);
     ~ConnectionScanner() noexcept;
 
+    [[nodiscard]] const WorkerHandle& worker() const& noexcept {
+        return worker_;
+    }
+    const WorkerHandle& worker() const&& = delete;
+
     void start();
     void stop() noexcept;
     void registerWorkerMaintenance(WorkerMaintenanceRegistration& registration, void* target,

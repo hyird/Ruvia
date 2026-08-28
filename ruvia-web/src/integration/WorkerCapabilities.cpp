@@ -21,18 +21,13 @@ WorkerCapabilities::WorkerCapabilities(asio::io_context& ioContext, const Worker
     std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions,
     WorkerCapabilityOptions options, ConnectionScanner& scanner)
     : worker_(requireWorkerCapabilitiesWorker(worker)),
-      databases_(ioContext, resource, definitions.databases, &worker_),
+      databases_(ioContext, scanner, resource, definitions.databases),
       redis_(ioContext, resource, definitions.redis, worker_),
       httpClients_(ioContext, worker_, resource, definitions.httpClients),
       workerStates_(resource, definitions.workerStates),
       rateLimiter_(
           options.defaultRateLimit, options.routeRateLimits, options.rateLimitCapacity, resource),
-      options_(std::move(options)) {
-    if (databases_.needsDeadlineScan()) {
-        scanner.registerWorkerMaintenance(databaseDeadlineMaintenance_, &databases_,
-            [](void* target) noexcept { static_cast<DbRegistry*>(target)->scanDeadlines(); });
-    }
-}
+      options_(std::move(options)) {}
 
 Task<void> WorkerCapabilities::connect() {
     try {

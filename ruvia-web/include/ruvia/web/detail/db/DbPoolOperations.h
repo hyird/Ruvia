@@ -50,9 +50,6 @@ public:
         if (!stopToken.stoppable()) {
             return;
         }
-        if (pool.cancellationMailbox_ == nullptr) {
-            throw std::logic_error("cancellable database operation requires a valid worker");
-        }
         cancellationId_ = pool.cancellationMailbox_->nextOperationId();
         connection.cancellationId = cancellationId_;
         stopToken.registerCallback(
@@ -116,13 +113,9 @@ private:
 // noexcept path.
 template <typename Pool>
 Task<std::size_t> acquireDbSlot(Pool& pool, const OperationTimeout& timeout, StopToken stopToken) {
-    if (stopToken.stoppable() && !pool.worker_.valid()) {
-        throw std::logic_error("cancellable database operation requires a valid worker");
-    }
     const auto acquireTimeout = timeout.constrainedBy(pool.config_.acquireTimeout).remaining();
-    const auto result = pool.worker_.valid() ? co_await pool.scheduler_.acquire(acquireTimeout,
-                                                   std::move(stopToken), pool.worker_)
-                                             : co_await pool.scheduler_.acquire(acquireTimeout);
+    const auto result =
+        co_await pool.scheduler_.acquire(acquireTimeout, std::move(stopToken), pool.worker_);
     if (const auto* acquired = result.acquired()) {
         co_return acquired->index();
     }

@@ -9,6 +9,16 @@
 #include <utility>
 
 namespace ruvia::detail {
+namespace {
+
+[[nodiscard]] const WorkerHandle& requirePostgreSqlWorker(const WorkerHandle& worker) {
+    if (!worker.valid()) {
+        throw std::invalid_argument("PostgreSQL pool requires a valid worker");
+    }
+    return worker;
+}
+
+}  // namespace
 
 PostgreSqlPool::ConnectionSlot::ConnectionSlot(
     asio::io_context& ioContext, std::pmr::memory_resource* resource)
@@ -33,28 +43,24 @@ PostgreSqlPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept = defa
 PostgreSqlPool::ConnectionSlot& PostgreSqlPool::ConnectionSlot::operator=(
     ConnectionSlot&&) noexcept = default;
 
-PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, DbConfigStorage config,
-    std::pmr::memory_resource* resource, const WorkerHandle* worker)
+PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, const WorkerHandle& worker,
+    DbConfigStorage config, std::pmr::memory_resource* resource)
     : ioContext_(ioContext),
       config_(std::move(config)),
       resource_(pmrResourceOrDefault(resource)),
       slots_(resource_),
       scheduler_(1, resource_),
-      worker_(worker == nullptr ? WorkerHandle{} : *worker) {
+      worker_(requirePostgreSqlWorker(worker)),
+      cancellationMailbox_(makeWorkerCancellationMailbox(*this, worker_)) {
     if (config_.driver != DbDriver::kPostgreSql) {
         throw std::invalid_argument("PostgreSQL pool requires the PostgreSQL driver");
     }
     slots_.reserve(1);
     slots_.emplace_back(ioContext_, resource_);
-    if (worker_.valid()) {
-        cancellationMailbox_ = makeWorkerCancellationMailbox(*this, worker_);
-    }
 }
 
 PostgreSqlPool::~PostgreSqlPool() {
-    if (cancellationMailbox_ != nullptr) {
-        cancellationMailbox_->detach(*this);
-    }
+    cancellationMailbox_->detach(*this);
     closeNow();
 }
 
@@ -86,10 +92,6 @@ void PostgreSqlPool::scanDeadlines(std::chrono::steady_clock::time_point now) no
             slot.waitSocket->cancel();
         }
     }
-}
-
-bool PostgreSqlPool::needsDeadlineScan() const noexcept {
-    return true;
 }
 
 Task<std::size_t> PostgreSqlPool::acquireSlot(

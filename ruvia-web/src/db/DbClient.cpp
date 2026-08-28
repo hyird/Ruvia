@@ -32,7 +32,7 @@ DbClientState::DbClientState(EventLoop loop, const DbConfig& config)
       worker_(loop_.handle()),
       memory_(),
       scanner_(worker_, scannerOptions()),
-      databases_(loop_.ioContext(), memory_.resource(), config, &worker_) {}
+      databases_(loop_.ioContext(), scanner_, memory_.resource(), config) {}
 
 DbClientState::~DbClientState() {
     const auto phase = phase_.load(std::memory_order_acquire);
@@ -76,9 +76,7 @@ Task<void> DbClientState::connectOnWorker() {
         if (stopSource_.stopRequested() || !worker_.accepting()) {
             throw std::runtime_error("database client closed before connecting");
         }
-        if (databases_.needsDeadlineScan()) {
-            scanner_.start();
-        }
+        scanner_.start();
         co_await databases_.connect();
         expected = Phase::kConnecting;
         if (!phase_.compare_exchange_strong(expected, Phase::kConnected, std::memory_order_acq_rel,

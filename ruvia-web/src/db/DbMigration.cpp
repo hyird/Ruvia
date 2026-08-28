@@ -6,11 +6,11 @@
 #include "ruvia/web/detail/integration/NamedCapability.h"
 #include "ruvia/web/db/Db.h"
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/PmrObject.h"
 
-#include <asio/bind_executor.hpp>
-#include <asio/steady_timer.hpp>
+#include <asio/io_context.hpp>
 
 #include <openssl/evp.h>
 
@@ -20,86 +20,38 @@
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
-#include <system_error>
 #include <utility>
 
 namespace ruvia {
-namespace detail {
+namespace {
 
-// A migration runs on its own io_context, not on a worker, so nothing here is
-// driving the connection scanner an App installs. Without one every deadline a
-// pool arms is armed and never expires: OperationDeadline only becomes expired
-// when something calls expire(), and only the scanner does. The socket wait
-// under a stalled server then has nobody to cancel it, and migrate() blocks its
-// caller -- normally main(), before the service is listening -- for as long as
-// the server stays silent, whatever connectTimeout said.
-//
-// The scanner lives beside the io_context rather than inside the coroutine so
-// its lifetime cannot end while a tick is queued: the registry pointer is
-// cleared before the registry dies, and a tick that already ran finds nothing
-// to scan instead of a destroyed one.
-class DbMigrationDeadlineScanner final {
-public:
-    explicit DbMigrationDeadlineScanner(asio::io_context& ioContext)
-        : timer_(ioContext) {}
-
-    DbMigrationDeadlineScanner(const DbMigrationDeadlineScanner&) = delete;
-    DbMigrationDeadlineScanner& operator=(const DbMigrationDeadlineScanner&) = delete;
-
-    // Held by the coroutine for exactly as long as the registry it scans is
-    // alive, so an exception unwinding the migration detaches it too.
-    class Attachment final {
-    public:
-        Attachment(DbMigrationDeadlineScanner& scanner, DbRegistry& registry) noexcept
-            : scanner_(&scanner) {
-            scanner.attach(registry);
-        }
-
-        Attachment(const Attachment&) = delete;
-        Attachment& operator=(const Attachment&) = delete;
-
-        ~Attachment() {
-            scanner_->detach();
-        }
-
-    private:
-        DbMigrationDeadlineScanner* scanner_;
+[[nodiscard]] detail::ConnectionScannerOptions dbMigrationScannerOptions() {
+    return detail::ConnectionScannerOptions{
+        .scanInterval = std::chrono::milliseconds(20),
+        .idleTimeout = std::nullopt,
+        .initialReadTimeout = std::nullopt,
+        .payloadReadTimeout = std::nullopt,
+        .writeTimeout = std::nullopt,
     };
+}
+
+class DbMigrationScannerRun final {
+public:
+    explicit DbMigrationScannerRun(detail::ConnectionScanner& scanner)
+        : scanner_(scanner) {
+        scanner_.start();
+    }
+
+    DbMigrationScannerRun(const DbMigrationScannerRun&) = delete;
+    DbMigrationScannerRun& operator=(const DbMigrationScannerRun&) = delete;
+
+    ~DbMigrationScannerRun() {
+        scanner_.stop();
+    }
 
 private:
-    // Deadlines are configured in milliseconds, so the tick has to be well
-    // under the shortest one anybody would set. This runs only while a
-    // migration is in flight.
-    static constexpr auto kTick = std::chrono::milliseconds(20);
-
-    void attach(DbRegistry& registry) noexcept {
-        registry_ = &registry;
-        arm();
-    }
-
-    void detach() noexcept {
-        registry_ = nullptr;
-        timer_.cancel();
-    }
-
-    void arm() noexcept {
-        timer_.expires_after(kTick);
-        timer_.async_wait([this](const std::error_code& error) noexcept {
-            if (error || registry_ == nullptr) {
-                return;
-            }
-            registry_->scanDeadlines();
-            arm();
-        });
-    }
-
-    asio::steady_timer timer_;
-    DbRegistry* registry_{nullptr};
+    detail::ConnectionScanner& scanner_;
 };
-
-}  // namespace detail
-
-namespace {
 
 struct DbMigratorOptionsStorage final {
     DbMigratorOptionsStorage(const DbMigratorOptions& source, std::pmr::memory_resource* resource)
@@ -284,9 +236,8 @@ std::pmr::string detail::migrationChecksum(
 class detail::DbMigrationRunner final {
 public:
     [[nodiscard]] static Task<DbMigrationReport> run(asio::io_context& ioContext,
-        detail::DbMigrationDeadlineScanner& scanner, detail::DbConfigStorage config,
-        std::span<const DbMigration> migrations, DbMigratorOptionsStorage options,
-        std::pmr::memory_resource* resource) {
+        ConnectionScanner& scanner, DbConfigStorage config, std::span<const DbMigration> migrations,
+        DbMigratorOptionsStorage options, std::pmr::memory_resource* resource) {
         auto* resolved = detail::pmrResourceOrDefault(resource);
         const auto driver = config.driver;
 
@@ -300,8 +251,8 @@ public:
             detail::DbDefinition{std::pmr::string(detail::kDefaultCapabilityAlias.data(),
                                      detail::kDefaultCapabilityAlias.size(), resolved),
                 std::move(config)}};
-        detail::DbRegistry registry(ioContext, resolved, databases);
-        const detail::DbMigrationDeadlineScanner::Attachment scanning(scanner, registry);
+        detail::DbRegistry registry(ioContext, scanner, resolved, databases);
+        const DbMigrationScannerRun scanning(scanner);
         co_await registry.connect();
         detail::ScopedOperationScope operationScope;
         auto handle = registry.get(resolved, operationScope);
@@ -457,33 +408,31 @@ void DbMigrator::StorageDeleter::operator()(Storage* storage) const noexcept {
 
 namespace {
 
+Task<DbMigrationReport> stopMigrationLoopWhenDone(
+    EventLoopAttachment& attachment, Task<DbMigrationReport> operation) {
+    try {
+        auto report = co_await std::move(operation);
+        attachment.stop();
+        co_return report;
+    } catch (...) {
+        attachment.stop();
+        throw;
+    }
+}
+
 [[nodiscard]] DbMigrationReport runMigrations(detail::DbConfigStorage config,
     std::span<const DbMigration> migrations, DbMigratorOptionsStorage options,
     std::pmr::memory_resource* resource) {
     asio::io_context ioContext(1);
-    // Outlives the coroutine that attaches to it and is destroyed before the
-    // io_context, so no tick can observe either after it is gone.
-    detail::DbMigrationDeadlineScanner scanner(ioContext);
-    std::optional<DbMigrationReport> report;
-    std::exception_ptr exception;
-    detail::asyncStartTask(detail::DbMigrationRunner::run(ioContext, scanner, std::move(config),
-                               migrations, std::move(options), resource),
-        asio::bind_executor(ioContext.get_executor(),
-            [&report, &exception](detail::TaskCompletionResult<DbMigrationReport> completion) {
-                if (const auto* failure = completion.failure()) {
-                    exception = failure->exception();
-                } else {
-                    report.emplace(std::move(*completion.success()).takeValue());
-                }
-            }));
+    auto attachment = attachEventLoop(ioContext);
+    const auto loop = attachment.loop();
+    const auto worker = loop.handle();
+    detail::ConnectionScanner scanner(worker, dbMigrationScannerOptions());
+    auto result = loop.start(stopMigrationLoopWhenDone(
+        attachment, detail::DbMigrationRunner::run(ioContext, scanner, std::move(config),
+                        migrations, std::move(options), resource)));
     ioContext.run();
-    if (exception != nullptr) {
-        std::rethrow_exception(exception);
-    }
-    if (!report.has_value()) {
-        throw std::logic_error("database migration produced no report or exception");
-    }
-    return std::move(*report);
+    return result.get();
 }
 
 }  // namespace

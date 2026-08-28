@@ -1,15 +1,15 @@
 #include <chrono>
 #include <cstdint>
-#include <exception>
 #include <cstdio>
+#include <exception>
 #include <future>
 #include <system_error>
 #include <thread>
 #include <utility>
 
+#include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
-#include <asio/co_spawn.hpp>
 #include <asio/use_future.hpp>
 
 #include "ruvia/core/AsioTask.h"
@@ -54,6 +54,35 @@ private:
     std::thread thread_;
 };
 
+class SilentPeer final {
+public:
+    SilentPeer()
+        : acceptor_(io_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+          socket_(io_) {
+        acceptor_.async_accept(socket_, [](std::error_code) {});
+        thread_ = std::thread([this] { io_.run(); });
+    }
+
+    ~SilentPeer() {
+        std::error_code ignored;
+        acceptor_.close(ignored);
+        socket_.close(ignored);
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+
+private:
+    asio::io_context io_;
+    asio::ip::tcp::acceptor acceptor_;
+    asio::ip::tcp::socket socket_;
+    std::thread thread_;
+};
+
 [[nodiscard]] ruvia::DbConfig configure(ruvia::DbConfig config, std::uint16_t port) {
     config.host = "127.0.0.1";
     config.port = port;
@@ -85,6 +114,37 @@ bool attachedWorker(ruvia::DbConfig config) {
     return connectFailed && correctWorker;
 }
 
+bool connectDeadlineExpires(ruvia::DbConfig config) {
+    using namespace std::chrono_literals;
+
+    SilentPeer peer;
+    asio::io_context io;
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto loop = attachment.loop();
+    config = configure(std::move(config), peer.port());
+    config.connectTimeout = 100ms;
+    ruvia::DbClient client(loop, config);
+    auto connected =
+        asio::co_spawn(loop.executor(), ruvia::asAwaitable(client.connect()), asio::use_future);
+    std::thread runner([&] { io.run(); });
+
+    const bool completed = connected.wait_for(3s) == std::future_status::ready;
+    bool timedOut = false;
+    if (completed) {
+        try {
+            connected.get();
+        } catch (const ruvia::DbError& error) {
+            timedOut = error.code() == ruvia::DbError::Code::kTimeout;
+        } catch (...) {
+        }
+    }
+
+    client.close();
+    attachment.stop();
+    runner.join();
+    return completed && timedOut;
+}
+
 bool closeBeforeDispatch(ruvia::DbConfig config) {
     ruvia::EventLoopPool loops({.loopCount = 1});
     ruvia::DbClient client(loops.loop(0), std::move(config));
@@ -113,10 +173,16 @@ int main() {
         if (!attachedWorker(ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb})) {
             return 1;
         }
+        if (!connectDeadlineExpires(ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb})) {
+            return 2;
+        }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
         if (!attachedWorker(ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql})) {
-            return 2;
+            return 3;
+        }
+        if (!connectDeadlineExpires(ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql})) {
+            return 4;
         }
 #endif
 #ifdef RUVIA_ENABLE_MARIADB
@@ -124,7 +190,7 @@ int main() {
 #else
         if (!closeBeforeDispatch(ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql})) {
 #endif
-            return 3;
+            return 5;
         }
         return 0;
     } catch (const std::exception& error) {
