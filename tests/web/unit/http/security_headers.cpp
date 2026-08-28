@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "context_services_fixture.h"
 
 #include <array>
 #include <bit>
@@ -65,7 +66,10 @@ static_assert(!std::is_move_assignable_v<ruvia::SecurityHeadersMiddleware>);
 
 class SecurityContextFixture final {
 public:
-    explicit SecurityContextFixture(ContextServices services = {})
+    SecurityContextFixture()
+        : SecurityContextFixture(ruvia::test::testContextServices()) {}
+
+    explicit SecurityContextFixture(ContextServices services)
         : memory_(worker_),
           request_(makeRequest(memory_)),
           context_(ContextAccess::make(memory_, request_, services)) {}
@@ -95,7 +99,7 @@ private:
 }  // namespace
 
 RUVIA_TEST(security_headers_default_set) {
-    SecurityContextFixture fixture(ContextServices{}.withTlsTransport("192.0.2.1"));
+    SecurityContextFixture fixture(ruvia::test::testContextServices().withTlsTransport("192.0.2.1"));
     applySecurityHeaders(fixture.context(), SecurityHeadersConfig{});
     const auto& response = fixture.response();
 
@@ -111,11 +115,11 @@ RUVIA_TEST(security_headers_default_set) {
 }
 
 RUVIA_TEST(security_headers_emit_hsts_only_for_tls_contexts) {
-    SecurityContextFixture plain(ContextServices{}.withPlainTransport("192.0.2.1"));
+    SecurityContextFixture plain(ruvia::test::testContextServices().withPlainTransport("192.0.2.1"));
     applySecurityHeaders(plain.context());
     RUVIA_CHECK(!plain.response().header("Strict-Transport-Security").has_value());
 
-    SecurityContextFixture tls(ContextServices{}.withTlsTransport("192.0.2.2"));
+    SecurityContextFixture tls(ruvia::test::testContextServices().withTlsTransport("192.0.2.2"));
     applySecurityHeaders(tls.context());
     RUVIA_CHECK_EQ(tls.response().header("Strict-Transport-Security"), std::string_view("max-age=31536000; includeSubDomains"));
 }
@@ -247,11 +251,11 @@ RUVIA_TEST(security_headers_custom_hsts_is_still_tls_only) {
     options.strictTransportSecurityHeader = DefaultSecurityHeaderPolicy::kOmit;
     options.customHeaders = custom;
 
-    SecurityContextFixture plain(ContextServices{}.withPlainTransport("192.0.2.1"));
+    SecurityContextFixture plain(ruvia::test::testContextServices().withPlainTransport("192.0.2.1"));
     applySecurityHeaders(plain.context(), options);
     RUVIA_CHECK(!plain.response().header("Strict-Transport-Security").has_value());
 
-    SecurityContextFixture tls(ContextServices{}.withTlsTransport("192.0.2.2"));
+    SecurityContextFixture tls(ruvia::test::testContextServices().withTlsTransport("192.0.2.2"));
     applySecurityHeaders(tls.context(), options);
     RUVIA_CHECK_EQ(tls.response().header("Strict-Transport-Security"), std::string_view("max-age=1"));
 }

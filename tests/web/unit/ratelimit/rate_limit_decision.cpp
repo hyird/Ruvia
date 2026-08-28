@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "context_services_fixture.h"
 
 #include <chrono>
 #include <concepts>
@@ -71,7 +72,7 @@ RouteLimitResult runRouteLimit(RateLimiter& limiter, std::uintptr_t scope, const
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     HttpRequestAccess::setResource(request, memory.resource());
-    ContextServices services = ContextServices{}.withRateLimiter(limiter);
+    ContextServices services = ruvia::test::testContextServices().withRateLimiter(limiter);
     auto context = ContextAccess::make(memory, request, scope, services);
 
     RouteLimitResult r;

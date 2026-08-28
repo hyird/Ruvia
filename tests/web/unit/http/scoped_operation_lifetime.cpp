@@ -1,4 +1,5 @@
 #include "streaming_fixture.h"
+#include "context_services_fixture.h"
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
@@ -17,7 +18,7 @@ ruvia::ScopedOperation<ruvia::HttpResponse> makeExpiredNotFoundResponse() {
     auto request = ruvia::detail::HttpRequestAccess::make();
     ruvia::RequestMemory memory(worker);
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
-    auto context = ruvia::detail::ContextAccess::make(memory, request);
+    auto context = ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
     return context.notFound();
 }
 

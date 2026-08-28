@@ -1665,15 +1665,21 @@ concept HasDocumentRootBindingAccessor = requires(const T& documentRoot) {
 };
 
 template <typename T>
-concept HasSplitDocumentRootDispatch = requires(T& routes, const ruvia::HttpRequest& request, const ruvia::detail::RouteResolution& resolution, ruvia::RequestMemory& memory, const ruvia::StaticRoot* root, const ruvia::DocumentRootRuntimeConfig* runtimeOptions) { routes.dispatchBufferedResponse(request, resolution, memory, root, runtimeOptions, ruvia::detail::ContextServices{}); };
+concept HasSplitDocumentRootDispatch = requires(T& routes, const ruvia::HttpRequest& request, const ruvia::detail::RouteResolution& resolution, ruvia::RequestMemory& memory, const ruvia::StaticRoot* root, const ruvia::DocumentRootRuntimeConfig* runtimeOptions, ruvia::detail::ContextServices& services) { routes.dispatchBufferedResponse(request, resolution, memory, root, runtimeOptions, services); };
 
 template <typename T>
 concept HasRawDocumentRootDispatch = requires(T& routes, const ruvia::HttpRequest& request, const ruvia::detail::RouteResolution& resolution, ruvia::RequestMemory& memory, const ruvia::StaticRoot* root) { routes.dispatchBufferedResponse(request, resolution, memory, root); };
 
 template <typename T>
-concept HasCanonicalBufferedDispatch = requires(T& routes, const ruvia::HttpRequest& request, const ruvia::detail::RouteResolution& resolution, ruvia::RequestMemory& memory, ruvia::detail::DocumentRootBinding documentRoot) {
-    { routes.dispatchBufferedResponse(request, resolution, memory, std::move(documentRoot)) } -> std::same_as<ruvia::Task<ruvia::HttpResponse>>;
+concept HasCanonicalBufferedDispatch = requires(T& routes, const ruvia::HttpRequest& request, const ruvia::detail::RouteResolution& resolution, ruvia::RequestMemory& memory, ruvia::detail::DocumentRootBinding documentRoot, ruvia::detail::ContextServices& services) {
+    { routes.dispatchBufferedResponse(request, resolution, memory, std::move(documentRoot), services) } -> std::same_as<ruvia::Task<ruvia::HttpResponse>>;
 };
+
+template <typename T>
+concept HasContextlessDispatch = requires(T& routes, const ruvia::HttpRequest& request, ruvia::RequestMemory& memory) { routes.dispatch(request, memory); };
+
+template <typename T>
+concept HasContextlessBufferedDispatch = requires(T& routes, const ruvia::HttpRequest& request, const ruvia::detail::RouteResolution& resolution, ruvia::RequestMemory& memory, ruvia::detail::DocumentRootBinding documentRoot) { routes.dispatchBufferedResponse(request, resolution, memory, std::move(documentRoot)); };
 
 template <typename T>
 concept HasRawResponseCompressionCoding = requires(const ruvia::HttpRequest& request, T coding, ruvia::HttpResponse& response, const ruvia::detail::HttpServerOptions& options) { ruvia::detail::prepareBufferedHttpResponse(request, coding, response, options); };
@@ -2646,6 +2652,8 @@ static_assert(std::same_as<decltype(ruvia::detail::HttpServerOptions::DocumentRo
 static_assert(!HasSplitDocumentRootDispatch<ruvia::detail::RouteTable>);
 static_assert(!HasRawDocumentRootDispatch<ruvia::detail::RouteTable>);
 static_assert(HasCanonicalBufferedDispatch<ruvia::detail::RouteTable>);
+static_assert(!HasContextlessDispatch<ruvia::detail::RouteTable>);
+static_assert(!HasContextlessBufferedDispatch<ruvia::detail::RouteTable>);
 static_assert(std::is_aggregate_v<ruvia::CompressionConfig>);
 static_assert(std::is_aggregate_v<ruvia::CorsConfig>);
 static_assert(std::is_aggregate_v<ruvia::CorsOriginConfig>);

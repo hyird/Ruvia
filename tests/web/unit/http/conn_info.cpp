@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "context_services_fixture.h"
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
@@ -66,6 +67,7 @@ static_assert(!ExposesRvalueTransportPointer<ConnInfo>);
 static_assert(!std::is_default_constructible_v<PlainConnectionTransport>);
 static_assert(!std::is_default_constructible_v<TlsConnectionTransport>);
 static_assert(!std::is_default_constructible_v<ConnInfo>);
+static_assert(!std::is_default_constructible_v<ContextServices>);
 static_assert(std::is_nothrow_copy_constructible_v<ConnInfo>);
 static_assert(std::is_nothrow_move_constructible_v<ConnInfo>);
 static_assert(std::is_nothrow_copy_assignable_v<ConnInfo>);
@@ -78,7 +80,7 @@ static_assert(std::is_nothrow_move_assignable_v<ConnInfo>);
 }  // namespace
 
 RUVIA_TEST(conn_info_transport_has_one_active_alternative) {
-    const ContextServices defaults;
+    const auto defaults = ruvia::test::testContextServices();
     RUVIA_CHECK(defaults.connInfo().plain() != nullptr);
     RUVIA_CHECK(defaults.connInfo().tls() == nullptr);
     RUVIA_CHECK(defaults.connInfo().remote().address().empty());
@@ -114,13 +116,13 @@ RUVIA_TEST(context_preserves_typed_connection_info_for_handler) {
     HttpRequestAccess::setPath(request, "/resource");
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "example.test"}, HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kHost)));
 
-    const auto plainContext = ContextAccess::make(memory, request, ContextServices{}.withPlainTransport("192.0.2.44"));
+    const auto plainContext = ContextAccess::make(memory, request, ruvia::test::testContextServices().withPlainTransport("192.0.2.44"));
     const auto plainInfo = ruvia::getConnInfo(plainContext);
     RUVIA_CHECK(plainInfo.plain() != nullptr);
     RUVIA_CHECK(plainInfo.tls() == nullptr);
     RUVIA_CHECK_EQ(plainInfo.remote().address(), std::string_view("192.0.2.44"));
 
-    const auto tlsContext = ContextAccess::make(memory, request, ContextServices{}.withTlsTransport("198.51.100.55", "CN=request-client"));
+    const auto tlsContext = ContextAccess::make(memory, request, ruvia::test::testContextServices().withTlsTransport("198.51.100.55", "CN=request-client"));
     const auto tlsInfo = ruvia::getConnInfo(tlsContext);
     RUVIA_CHECK(tlsInfo.plain() == nullptr);
     RUVIA_CHECK(tlsInfo.tls() != nullptr);

@@ -1,5 +1,6 @@
 #include "test_io_context.h"
 #include "test_harness.h"
+#include "context_services_fixture.h"
 
 #include <array>
 #include <cstddef>
@@ -102,7 +103,7 @@ CsrfOutcome runCsrf(ruvia::CsrfProtection& csrf, std::string_view cookieName, st
         HttpRequestAccess::addHeader(request, HttpHeaderView{headerName, headerToken});
     }
     HttpRequestAccess::setResource(request, memory.resource());
-    auto context = ContextAccess::make(memory, request);
+    auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
 
     ruvia::detail::NextState::Control control;
     ruvia::detail::NextState state{};

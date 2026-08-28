@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "context_services_fixture.h"
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -199,7 +200,7 @@ Task<void> failAfterCommit(void* target, Context& context) {
         io,
         [&]() -> asio::awaitable<void> {
             try {
-                result.emplace(co_await ruvia::detail::taskAsAwaitable(ruvia::detail::dispatchResponseStreamWith(sink, routes, request, *resolved, requestMemory, {}, [peerAborted]() noexcept { return peerAborted; })));
+                result.emplace(co_await ruvia::detail::taskAsAwaitable(ruvia::detail::dispatchResponseStreamWith(sink, routes, request, *resolved, requestMemory, ruvia::test::testContextServices(), [peerAborted]() noexcept { return peerAborted; })));
             } catch (...) {
                 exception = std::current_exception();
             }

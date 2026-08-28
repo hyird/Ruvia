@@ -12,7 +12,7 @@ RUVIA_TEST(context_parse_body_drops_prototype_pollution_keys) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     // With dot-path parsing on, a field whose name traverses "__proto__." is
     // dropped (prototype-pollution defense for the nested-object binding) while a
@@ -33,7 +33,7 @@ RUVIA_TEST(context_parse_body_rejects_invalid_options) {
     HttpRequestAccess::reset(request);
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     ruvia::ContextRequest::ParseBodyOptions badRepeated;
     badRepeated.repeatedScalars = static_cast<ruvia::ContextRequest::RepeatedScalarPolicy>(42);
@@ -65,7 +65,7 @@ RUVIA_TEST(context_parse_body_drops_proto_path_segments_without_trailing_dot) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     asio::io_context& io = ruvia::test::newTestIoContext();
     bool rootProtoDropped = false;
@@ -88,7 +88,7 @@ RUVIA_TEST(context_parse_body_dotted_trailing_empty_segment_is_not_child) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     asio::io_context& io = ruvia::test::newTestIoContext();
     std::size_t childCount = 99;
@@ -111,7 +111,7 @@ RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     // With the default last-value policy, a "[]" field keeps every value and
     // still reports its explicit array name; a repeated scalar field is
@@ -145,7 +145,7 @@ RUVIA_TEST(context_parse_body_defaults_absent_part_content_type) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     asio::io_context& io = ruvia::test::newTestIoContext();
     std::string contentType;
@@ -179,7 +179,7 @@ RUVIA_TEST(context_parse_body_keeps_every_repeated_file_part) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     asio::io_context& io = ruvia::test::newTestIoContext();
     std::size_t count = 0;
@@ -211,7 +211,7 @@ RUVIA_TEST(context_parse_body_treats_empty_filename_parameter_as_file) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     asio::io_context& io = ruvia::test::newTestIoContext();
     bool isFile = false;
@@ -232,7 +232,7 @@ RUVIA_TEST(context_parse_body_rejects_a_flood_of_fields) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     // A body carrying more fields than maxFields is rejected with 413 before the
     // field vector can grow without bound.
@@ -264,7 +264,7 @@ RUVIA_TEST(context_parse_body_multipart_field_cap_preempts_later_part_parsing) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     auto parseStatus = [&context]() -> ruvia::Task<int> {
         try {
@@ -296,7 +296,7 @@ RUVIA_TEST(context_parse_body_all_retains_duplicates_and_selects_last_value) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     std::size_t valueCount = 0;
     std::string selectedValue;
@@ -331,7 +331,7 @@ RUVIA_TEST(context_parse_body_multipart_yields_text_field_and_file_blob) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     // A multipart body parses into a text field plus a file part whose filename,
     // content type, and bytes are all preserved through the RequestBlob.
@@ -355,7 +355,7 @@ RUVIA_TEST(context_parse_body_rejects_multipart_with_wrong_media_type) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     asio::io_context& io = ruvia::test::newTestIoContext();
     auto multipartTask = [&]() -> ruvia::Task<void> {
@@ -383,7 +383,7 @@ RUVIA_TEST(context_parse_body_rejects_malformed_urlencoded) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     // A malformed body must surface as an explicit 400 HttpError rather than a
     // silently-empty form or an exception that the router could misclassify.
@@ -411,7 +411,7 @@ RUVIA_TEST(context_parse_body_maps_multipart_failure_to_http_protocol_error) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     asio::io_context& io = ruvia::test::newTestIoContext();
     auto future = asio::co_spawn(io, parseBodyDiscard(context), asio::use_future);
@@ -439,7 +439,7 @@ RUVIA_TEST(context_parse_body_skips_empty_urlencoded_segments) {
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     std::string aValue;
     std::string bValue;

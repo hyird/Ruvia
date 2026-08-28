@@ -27,7 +27,7 @@ RUVIA_TEST(validated_model_binding_spans_next_and_unwinds_before_upstream_resume
         ruvia::detail::HttpRequestAccess::setBody(request, R"({"value":"ok"})");
 
         asio::io_context ioContext(1);
-        auto future = asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(impl.routeTable().dispatch(request, memory, {})), asio::use_future);
+        auto future = asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(impl.routeTable().dispatch(request, memory, ruvia::test::testContextServices())), asio::use_future);
         ioContext.run();
         const auto response = future.get();
         RUVIA_CHECK_EQ(response.status(), handlerThrows ? ruvia::http_status::kInternalServerError : ruvia::http_status::kOk);
@@ -147,7 +147,7 @@ RUVIA_TEST(global_middleware_prepends_to_every_route_chain) {
         ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
 
         asio::io_context ctx(1);
-        auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
+        auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, ruvia::test::testContextServices())), asio::use_future);
         ctx.run();
         auto response = future.get();
         const auto body = ruvia::detail::responseBody(response).bytes();
@@ -233,7 +233,7 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
         ctx,
         [&]() -> asio::awaitable<void> {
             try {
-                (void)co_await ruvia::detail::taskAsAwaitable(table.dispatchResponseStream(request, *resolved, memory, writer, {}));
+                (void)co_await ruvia::detail::taskAsAwaitable(table.dispatchResponseStream(request, *resolved, memory, writer, ruvia::test::testContextServices()));
             } catch (const std::exception&) {
                 threw = true;
             }

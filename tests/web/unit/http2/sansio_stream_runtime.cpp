@@ -1,6 +1,7 @@
 #include "test_io_context.h"
 #include "test_harness.h"
 #include "http2_connection_fixture.h"
+#include "context_services_fixture.h"
 
 #include <chrono>
 #include <concepts>
@@ -242,7 +243,7 @@ RUVIA_TEST(http2_stream_head_failure_aborts_precommit_state) {
     ruvia::detail::HttpRequestAccess::reset(request);
     ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
     ruvia::detail::HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ruvia::detail::ContextAccess::make(requestMemory, request);
+    auto context = ruvia::detail::ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     Http2SansIoResponseStreamSink sink(connection, 1, ruvia::detail::ResponseStreamKind::kGeneric, writeSignal, streamSignal, &resource, ruvia::HttpKnownMethod::kGet, identityResponseCoding(), ruvia::detail::HttpResponseCodingAvailability::kIdentityOnly);
     sink.bindContext(&context, &invalidStreamingHead);
@@ -309,7 +310,7 @@ RUVIA_TEST(http2_response_stream_empty_end_is_idempotent_after_late_termination)
     ruvia::detail::HttpRequestAccess::reset(request);
     ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
     ruvia::detail::HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ruvia::detail::ContextAccess::make(requestMemory, request);
+    auto context = ruvia::detail::ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     Http2SansIoResponseStreamSink sink(connection, 1, ruvia::detail::ResponseStreamKind::kGeneric, writeSignal, streamSignal, &resource, ruvia::HttpKnownMethod::kGet, identityResponseCoding(), ruvia::detail::HttpResponseCodingAvailability::kIdentityOnly);
     sink.bindContext(&context, &okStreamingHead);

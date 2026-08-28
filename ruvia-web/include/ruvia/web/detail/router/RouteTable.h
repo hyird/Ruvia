@@ -112,8 +112,8 @@ public:
     // makes 405 conditional on the method being "known by the origin server",
     // so a token nobody registered is 501 no matter what the target path holds.
     [[nodiscard]] bool recognizesMethodToken(std::string_view methodToken) const noexcept;
-    Task<HttpResponse> dispatch(const HttpRequest& request, RequestMemory& memory, ContextServices services = {}) const;
-    Task<HttpResponse> dispatch(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services = {}) const;
+    Task<HttpResponse> dispatch(const HttpRequest& request, RequestMemory& memory, ContextServices services) const;
+    Task<HttpResponse> dispatch(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services) const;
     // Canonical buffered-response application dispatch for every server
     // protocol. An unresolved route first consults the configured document
     // root, then falls through to 404/405/OPTIONS handling. Any failure escaping
@@ -122,13 +122,13 @@ public:
     // DocumentRootBinding::none() when no root is configured,
     // DocumentRootBinding::standalone(root) for an immutable root, or
     // DocumentRootBinding::configured(root) for a server-owned refreshing root.
-    Task<HttpResponse> dispatchBufferedResponse(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, DocumentRootBinding documentRoot, ContextServices services = {}, StaticFileSelectionMode staticFileMode = StaticFileSelectionMode::kIdentityOnly) const;
-    Task<HttpResponse> handleError(const HttpRequest& request, RequestMemory& memory, HttpErrorInfo error, ContextServices services = {}) const;
-    Task<HttpResponse> handleException(const HttpRequest& request, RequestMemory& memory, std::exception_ptr exception, ContextServices services = {}) const;
+    Task<HttpResponse> dispatchBufferedResponse(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, DocumentRootBinding documentRoot, ContextServices services, StaticFileSelectionMode staticFileMode = StaticFileSelectionMode::kIdentityOnly) const;
+    Task<HttpResponse> handleError(const HttpRequest& request, RequestMemory& memory, HttpErrorInfo error, ContextServices services) const;
+    Task<HttpResponse> handleException(const HttpRequest& request, RequestMemory& memory, std::exception_ptr exception, ContextServices services) const;
     // Absence means the bound output handled the request; a value is the one
     // buffered response produced before a response-stream commit.
-    Task<std::optional<HttpResponse>> dispatchResponseStream(const HttpRequest& request, const ResolvedRoute& route, RequestMemory& memory, ResponseStreamWriter& responseStream, ContextServices services = {}) const;
-    Task<std::optional<HttpResponse>> dispatchWebSocket(const HttpRequest& request, const ResolvedRoute& route, RequestMemory& memory, const RouteStreamHandler& handler, ContextServices services = {}) const;
+    Task<std::optional<HttpResponse>> dispatchResponseStream(const HttpRequest& request, const ResolvedRoute& route, RequestMemory& memory, ResponseStreamWriter& responseStream, ContextServices services) const;
+    Task<std::optional<HttpResponse>> dispatchWebSocket(const HttpRequest& request, const ResolvedRoute& route, RequestMemory& memory, const RouteStreamHandler& handler, ContextServices services) const;
 
     // App moves the first worker's compiled plan to process ownership, then
     // binds every later worker table to that same immutable lookup structure.

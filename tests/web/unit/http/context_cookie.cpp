@@ -8,7 +8,7 @@ RUVIA_TEST(context_set_cookie_serializes_all_attributes) {
     HttpRequestAccess::reset(request);
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     // The Set-Cookie serialization is a two-pass design: prepareSetCookie computes
     // an exact byte count, then writeSetCookie fills precisely that many bytes.
@@ -48,7 +48,7 @@ RUVIA_TEST(context_set_cookie_serializes_all_attributes) {
     HttpRequestAccess::reset(secureRequest);
     RequestMemory secureMemory(worker);
     HttpRequestAccess::setResource(secureRequest, secureMemory.resource());
-    auto secureContext = ContextAccess::make(secureMemory, secureRequest);
+    auto secureContext = ContextAccess::make(secureMemory, secureRequest, ruvia::test::testContextServices());
     secureContext.setCookie({.name = "sess", .value = "xyz", .attributes = secure});
     const auto secureResponse = secureContext.text("ok");
     RUVIA_CHECK_EQ(secureResponse.header("Set-Cookie"), std::string_view("__Secure-sess=xyz; Path=/app; Domain=example.com; "
@@ -61,7 +61,7 @@ RUVIA_TEST(context_set_cookie_preserves_same_name_different_path) {
     HttpRequestAccess::reset(request);
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     ruvia::CookieOptions root;
     root.path = "/";
@@ -97,7 +97,7 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     HttpRequestAccess::reset(writeRequest);
     RequestMemory writeMemory(worker);
     HttpRequestAccess::setResource(writeRequest, writeMemory.resource());
-    auto writeContext = ContextAccess::make(writeMemory, writeRequest);
+    auto writeContext = ContextAccess::make(writeMemory, writeRequest, ruvia::test::testContextServices());
 
     const ruvia::CookieOptions options{
         .path = "/",
@@ -118,7 +118,7 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     RUVIA_CHECK(HttpRequestAccess::addHeader(readRequest, HttpHeaderView{"Cookie", cookieField}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
     RequestMemory readMemory(worker);
     HttpRequestAccess::setResource(readRequest, readMemory.resource());
-    auto readContext = ContextAccess::make(readMemory, readRequest);
+    auto readContext = ContextAccess::make(readMemory, readRequest, ruvia::test::testContextServices());
 
     const auto verified = readContext.req().signedCookie({.name = "__Host-session", .secret = "secret"});
     RUVIA_CHECK(verified.has_value());
@@ -129,7 +129,7 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     HttpRequestAccess::reset(bareWriteRequest);
     RequestMemory bareWriteMemory(worker);
     HttpRequestAccess::setResource(bareWriteRequest, bareWriteMemory.resource());
-    auto bareWriteContext = ContextAccess::make(bareWriteMemory, bareWriteRequest);
+    auto bareWriteContext = ContextAccess::make(bareWriteMemory, bareWriteRequest, ruvia::test::testContextServices());
     bareWriteContext.setSignedCookie({.name = "plain", .value = "user-2", .secret = "secret"});
     const auto bareWriteResponse = bareWriteContext.text("ok");
     const std::string bare(bareWriteResponse.header("Set-Cookie").value_or(std::string_view{}));
@@ -140,7 +140,7 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     RUVIA_CHECK(HttpRequestAccess::addHeader(bareRequest, HttpHeaderView{"Cookie", bareField}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
     RequestMemory bareMemory(worker);
     HttpRequestAccess::setResource(bareRequest, bareMemory.resource());
-    auto bareContext = ContextAccess::make(bareMemory, bareRequest);
+    auto bareContext = ContextAccess::make(bareMemory, bareRequest, ruvia::test::testContextServices());
     const auto bareVerified = bareContext.req().signedCookie({.name = "plain", .secret = "secret"});
     RUVIA_CHECK(bareVerified.has_value());
     RUVIA_CHECK_EQ(*bareVerified, std::string_view("user-2"));
@@ -153,7 +153,7 @@ RUVIA_TEST(context_delete_cookie_with_prefix_is_response_only) {
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "__Host-session=user-1"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(requestMemory, request);
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
 
     const ruvia::CookieOptions options{
         .path = "/",

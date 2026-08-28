@@ -1,6 +1,7 @@
 #pragma once
 
 #include "test_harness.h"
+#include "context_services_fixture.h"
 
 #include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
@@ -302,7 +303,7 @@ inline std::string dispatchChain(std::span<const ControllerMiddlewareDescriptor>
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, ruvia::test::testContextServices())), asio::use_future);
     ctx.run();
     auto response = future.get();
     const auto body = ruvia::detail::responseBody(response).bytes();
@@ -388,7 +389,7 @@ inline EmptyStreamDispatchObservation dispatchEmptyStreamWith(const ControllerMi
         context,
         [&]() -> asio::awaitable<void> {
             try {
-                auto result = co_await ruvia::detail::taskAsAwaitable(table.dispatchResponseStream(request, *resolved, memory, writer, {}));
+                auto result = co_await ruvia::detail::taskAsAwaitable(table.dispatchResponseStream(request, *resolved, memory, writer, ruvia::test::testContextServices()));
                 observation.handled = !result.has_value();
                 if (result.has_value()) {
                     observation.buffered = true;
@@ -454,7 +455,7 @@ inline WebSocketDispatchObservation dispatchWebSocketWith(const ControllerMiddle
     WebSocketTerminalTarget terminalTarget{&observation, &webSocket};
     const auto terminal = ruvia::detail::RouteStreamHandler(&terminalTarget, &webSocketTerminal);
     asio::io_context context(1);
-    auto future = asio::co_spawn(context, ruvia::detail::taskAsAwaitable(table.dispatchWebSocket(request, *resolved, memory, terminal, {})), asio::use_future);
+    auto future = asio::co_spawn(context, ruvia::detail::taskAsAwaitable(table.dispatchWebSocket(request, *resolved, memory, terminal, ruvia::test::testContextServices())), asio::use_future);
     context.run();
     auto response = future.get();
     if (response.has_value()) {
@@ -533,7 +534,7 @@ inline HeadOnlyDispatchObservation dispatchHeadOnlyStream(std::span<const Contro
         context,
         [&]() -> asio::awaitable<void> {
             try {
-                auto result = co_await ruvia::detail::taskAsAwaitable(table.dispatchResponseStream(request, *resolved, memory, writer, {}));
+                auto result = co_await ruvia::detail::taskAsAwaitable(table.dispatchResponseStream(request, *resolved, memory, writer, ruvia::test::testContextServices()));
                 observation.handled = !result.has_value();
                 observation.buffered = result.has_value();
             } catch (...) {
@@ -627,7 +628,7 @@ inline DispatchResult dispatchOneToken(RouteHandler handler, std::string_view me
     ruvia::detail::HttpRequestAccess::setBody(request, body);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, ruvia::test::testContextServices())), asio::use_future);
     ctx.run();
     return extractDispatchResult(future.get());  // arena still alive here
 }
@@ -681,7 +682,7 @@ inline DispatchResult dispatchWithHandlersToken(RouteHandler handler, const Http
     ruvia::detail::HttpRequestAccess::setBody(request, body);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, ruvia::test::testContextServices())), asio::use_future);
     ctx.run();
     return extractDispatchResult(future.get());  // arena still alive here
 }
@@ -719,7 +720,7 @@ inline DispatchResult dispatchOn(const ruvia::detail::RouteTable& table, std::st
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, ruvia::test::testContextServices())), asio::use_future);
     ctx.run();
     return extractDispatchResult(future.get());  // arena still alive here
 }
@@ -779,7 +780,7 @@ inline DispatchResult dispatchBodyRequest(RouteHandler handler, std::string_view
     ruvia::detail::HttpRequestAccess::setBody(request, body);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, ruvia::test::testContextServices())), asio::use_future);
     ctx.run();
     return extractDispatchResult(future.get());
 }

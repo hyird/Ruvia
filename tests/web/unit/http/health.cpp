@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "context_services_fixture.h"
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
@@ -13,7 +14,7 @@ namespace {
 [[nodiscard]] ruvia::Context makeContext(ruvia::RequestMemory& memory, ruvia::HttpRequest& request) {
     ruvia::detail::HttpRequestAccess::reset(request);
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
-    return ruvia::detail::ContextAccess::make(memory, request);
+    return ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
 }
 
 }  // namespace

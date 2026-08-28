@@ -2,6 +2,7 @@
 
 #include "test_io_context.h"
 #include "test_harness.h"
+#include "context_services_fixture.h"
 
 #include <asio/co_spawn.hpp>
 #include <asio/use_future.hpp>

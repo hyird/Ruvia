@@ -1,6 +1,7 @@
 #pragma once
 
 #include "content_decoding_fixture.h"
+#include "context_services_fixture.h"
 #include "test_harness.h"
 
 #include <asio/co_spawn.hpp>
@@ -39,7 +40,7 @@ inline ruvia::ScopedOperation<std::string_view> makeExpiredContextTextRead() {
     ruvia::detail::HttpRequestAccess::reset(request);
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
     ruvia::detail::HttpRequestAccess::setBody(request, "body");
-    auto context = ruvia::detail::ContextAccess::make(memory, request, ruvia::detail::ContextServices{}.withMaxDecodedBodyBytes(1024));
+    auto context = ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices().withMaxDecodedBodyBytes(1024));
     return context.req().text();
 }
 
@@ -63,7 +64,7 @@ inline ContextBodyReadObservation readContextGzipBody(std::string_view encoded, 
     }
     ruvia::detail::HttpRequestAccess::setBody(request, encoded);
 
-    auto context = ruvia::detail::ContextAccess::make(memory, request, ruvia::detail::ContextServices{}.withMaxDecodedBodyBytes(maxDecodedBodyBytes));
+    auto context = ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices().withMaxDecodedBodyBytes(maxDecodedBodyBytes));
     asio::io_context io(1);
     auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(readContextText(context)), asio::use_future);
     io.run();

@@ -28,7 +28,7 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
     return response;
 }
 
-[[nodiscard]] std::optional<HttpResponse> selectDocumentRootFallback(const detail::DocumentRootBinding& documentRoot, const HttpRequest& request, RequestMemory& memory, detail::StaticFileSelectionMode staticFileMode) {
+[[nodiscard]] std::optional<HttpResponse> selectDocumentRootFallback(const detail::DocumentRootBinding& documentRoot, const HttpRequest& request, RequestMemory& memory, const detail::ContextServices& services, detail::StaticFileSelectionMode staticFileMode) {
     const auto* const root = documentRoot.root();
     if (root == nullptr || (request.knownMethod() != HttpKnownMethod::kGet && request.knownMethod() != HttpKnownMethod::kHead)) {
         return std::nullopt;
@@ -39,7 +39,7 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
         relative.remove_prefix(1);
     }
 
-    auto context = detail::ContextAccess::make(memory, request);
+    auto context = detail::ContextAccess::make(memory, request, services);
     try {
         if (staticFileMode == detail::StaticFileSelectionMode::kPrecompressed) {
             return detail::ContextAccess::staticFileWithPrecompressedVariants(context, *root, {.relativePath = relative});
@@ -89,7 +89,7 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& reques
     try {
         const auto* resolved = resolution.resolved();
         if (resolved == nullptr) {
-            if (auto documentResponse = selectDocumentRootFallback(documentRoot, request, memory, staticFileMode)) {
+            if (auto documentResponse = selectDocumentRootFallback(documentRoot, request, memory, services, staticFileMode)) {
                 co_return std::move(*documentResponse);
             }
             // One handleError co_await serves both rejection kinds: each

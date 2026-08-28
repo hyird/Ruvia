@@ -12,6 +12,7 @@
 
 static_assert(std::copy_constructible<ruvia::detail::Http2SansIoSessionContext>);
 static_assert(!std::assignable_from<ruvia::detail::Http2SansIoSessionContext&, const ruvia::detail::Http2SansIoSessionContext&>);
+static_assert(!std::default_initializable<ruvia::detail::ContextServices>);
 
 RUVIA_TEST(sansio_driver_h2_inactivity_phase_counts_predispatch_runtime) {
     using Phase = ruvia::detail::ConnectionScanner::Phase;
@@ -27,15 +28,6 @@ RUVIA_TEST(sansio_driver_h2_session_context_owns_complete_wiring) {
     ruvia::detail::HttpServerOptions options;
     ruvia::detail::ConnectionScanner::Entry scannerEntry;
     auto workerState = ruvia::detail::HttpServerWorkerState::kRunning;
-
-    bool invalidWorkerRejected = false;
-    try {
-        const ruvia::detail::Http2SansIoSessionContext invalid(ruvia::detail::ContextServices{}, options, scannerEntry, workerState);
-        static_cast<void>(invalid);
-    } catch (const std::invalid_argument&) {
-        invalidWorkerRejected = true;
-    }
-    RUVIA_CHECK(invalidWorkerRejected);
 
     const ruvia::detail::Http2SansIoSessionContext session(ruvia::detail::ContextServices(worker).withTlsTransport("192.0.2.1", "CN=test-client"), options, scannerEntry, workerState);
 
@@ -557,7 +549,7 @@ RUVIA_TEST(sansio_driver_h2_keepalive_requests_drains_connection) {
             ruvia::test::Http2SansIoSessionFixture fixture;
             const auto workerHandle = testWorker(io);
             fixture.options.maxRequestsPerConnection = 1;
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(sock, impl.routeTable(), worker, fixture.context(ruvia::detail::ContextServices{}.withPlainTransport("127.0.0.1").withWorker(workerHandle))));
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(sock, impl.routeTable(), worker, fixture.context(ruvia::detail::ContextServices(workerHandle).withPlainTransport("127.0.0.1"))));
         },
         asio::detached);
 

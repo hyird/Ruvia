@@ -10,6 +10,7 @@
 #include "ruvia/core/StopToken.h"
 
 #include <cstddef>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -33,14 +34,13 @@ class WorkerStateRegistry;
 
 class ContextServices final {
 public:
-    ContextServices() noexcept
-        : connInfo_(ConnInfo::plain({})) {}
+    ContextServices() = delete;
 
-    ContextServices(const WorkerHandle& worker, WorkerClientRegistryView clientRegistries = WorkerClientRegistryView::detached(), RateLimiter* rateLimiter = nullptr, std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes)
+    explicit ContextServices(const WorkerHandle& worker, WorkerClientRegistryView clientRegistries = WorkerClientRegistryView::detached(), RateLimiter* rateLimiter = nullptr, std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes)
         : clientRegistries_(clientRegistries),
           rateLimiter_(rateLimiter),
           maxDecodedBodyBytes_(maxDecodedBodyBytes),
-          worker_(&requireWorker(worker)),
+          worker_(requireWorker(worker)),
           connInfo_(ConnInfo::plain({})) {}
     ContextServices(WorkerHandle&&, WorkerClientRegistryView = WorkerClientRegistryView::detached(), RateLimiter* = nullptr, std::size_t = kDefaultMaxBufferedBodyBytes) = delete;
 
@@ -79,25 +79,8 @@ public:
     }
 
     [[nodiscard]] const WorkerHandle& worker() const noexcept {
-        if (worker_ != nullptr) {
-            return *worker_;
-        }
-        static const WorkerHandle invalidWorker;
-        return invalidWorker;
+        return worker_.get();
     }
-
-    // The worker runtime owns the address-stable handle and outlives every
-    // ContextServices copy used by one of its sessions.
-    [[nodiscard]] ContextServices withWorker(const WorkerHandle& value) const {
-        const auto& worker = requireWorker(value);
-        if (worker_ != nullptr && worker_ != &worker) {
-            throw std::logic_error("context services cannot change workers");
-        }
-        auto services = *this;
-        services.worker_ = &worker;
-        return services;
-    }
-    ContextServices withWorker(WorkerHandle&&) const = delete;
 
     [[nodiscard]] const StopToken& stopToken() const noexcept {
         if (stopToken_ != nullptr) {
@@ -274,7 +257,7 @@ private:
     std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};
     // Request/session services borrow the address-stable server-owned handle.
     // Every derived ContextServices value stays inside that server's dispatch.
-    const WorkerHandle* worker_{nullptr};
+    std::reference_wrapper<const WorkerHandle> worker_;
     const StopToken* stopToken_{nullptr};
     HttpErrorHandlerRef errorHandler_{nullptr};
     HttpNotFoundHandlerRef notFoundHandler_{nullptr};

@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "context_services_fixture.h"
 
 // Who the client is behind a reverse proxy. The header is attacker-controlled,
 // so the whole contract turns on the peer being one the deployment declared
@@ -78,7 +79,7 @@ RUVIA_TEST(conn_info_ignores_forwarding_headers_from_an_untrusted_peer) {
     HttpRequestAccess::setResource(request, memory.resource());
 
     // No trusted set at all: the default, and it must read nothing.
-    const auto context = ContextAccess::make(memory, request, ContextServices{}.withPlainTransport("198.51.100.7"));
+    const auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices().withPlainTransport("198.51.100.7"));
     const auto info = ruvia::getConnInfo(context);
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("198.51.100.7"));
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
@@ -86,7 +87,7 @@ RUVIA_TEST(conn_info_ignores_forwarding_headers_from_an_untrusted_peer) {
 
     // Configured, but this peer is not in it.
     const auto trusted = setOf({"10.0.0.0/8"});
-    const auto guarded = ContextAccess::make(memory, request, ContextServices{}.withPlainTransport("198.51.100.7").withTrustedProxies(&trusted));
+    const auto guarded = ContextAccess::make(memory, request, ruvia::test::testContextServices().withPlainTransport("198.51.100.7").withTrustedProxies(&trusted));
     const auto guardedInfo = ruvia::getConnInfo(guarded);
     RUVIA_CHECK_EQ(guardedInfo.client().address(), std::string_view("198.51.100.7"));
     RUVIA_CHECK(guardedInfo.scheme() == ruvia::HttpScheme::kHttp);
@@ -104,7 +105,7 @@ RUVIA_TEST(conn_info_resolves_client_from_a_trusted_peer_x_forwarded_headers) {
     HttpRequestAccess::setResource(request, memory.resource());
 
     const auto trusted = setOf({"10.0.0.0/8"});
-    const auto context = ContextAccess::make(memory, request, ContextServices{}.withPlainTransport("10.0.0.5").withTrustedProxies(&trusted));
+    const auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices().withPlainTransport("10.0.0.5").withTrustedProxies(&trusted));
     const auto info = ruvia::getConnInfo(context);
 
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
@@ -127,7 +128,7 @@ RUVIA_TEST(conn_info_prefers_rfc7239_forwarded_over_the_x_headers) {
     HttpRequestAccess::setResource(request, memory.resource());
 
     const auto trusted = setOf({"10.0.0.0/8"});
-    const auto context = ContextAccess::make(memory, request, ContextServices{}.withPlainTransport("10.0.0.5").withTrustedProxies(&trusted));
+    const auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices().withPlainTransport("10.0.0.5").withTrustedProxies(&trusted));
     const auto info = ruvia::getConnInfo(context);
 
     // Bracketed IPv6 with a port, unwrapped, and the X- header not consulted.
@@ -146,7 +147,7 @@ RUVIA_TEST(conn_info_keeps_transport_values_for_fields_the_proxy_omitted) {
     HttpRequestAccess::setResource(request, memory.resource());
 
     const auto trusted = setOf({"10.0.0.0/8"});
-    const auto context = ContextAccess::make(memory, request, ContextServices{}.withTlsTransport("10.0.0.5", "CN=proxy").withTrustedProxies(&trusted));
+    const auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices().withTlsTransport("10.0.0.5", "CN=proxy").withTrustedProxies(&trusted));
     const auto info = ruvia::getConnInfo(context);
 
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));

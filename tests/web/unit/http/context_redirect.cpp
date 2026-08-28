@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "context_services_fixture.h"
 
 #include <concepts>
 #include <cstdint>
@@ -42,7 +43,7 @@ using ruvia::detail::responseBody;
     HttpRequest request = HttpRequestAccess::make();            \
     HttpRequestAccess::reset(request);                          \
     HttpRequestAccess::setResource(request, memory.resource()); \
-    auto context = ContextAccess::make(memory, request)
+    auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices())
 
 template <typename Fn>
 bool throwsOn(Fn&& fn) {
@@ -66,7 +67,7 @@ RUVIA_TEST(context_connection_info_is_adapter_owned) {
     HttpRequestAccess::setPath(request, "/secure");
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "example.test"}, HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kHost)));
 
-    const auto services = ContextServices{}.withTlsTransport("203.0.113.7", "/CN=client");
+    const auto services = ruvia::test::testContextServices().withTlsTransport("203.0.113.7", "/CN=client");
     auto context = ContextAccess::make(memory, request, services);
     const auto info = ruvia::getConnInfo(context);
 
@@ -321,7 +322,7 @@ RUVIA_TEST(context_param_lookup_handles_unencoded_and_missing) {
     const std::string_view values[] = {"hello", "42"};
     RequestMemory memory(worker);
     HttpRequestAccess::setResource(request, memory.resource());
-    auto context = ContextAccess::make(memory, request, "/p/:slug/:id", names, values, std::size(names), 0);
+    auto context = ContextAccess::make(memory, request, "/p/:slug/:id", names, values, std::size(names), 0, ruvia::test::testContextServices());
 
     const auto slug = context.req().param("slug");
     RUVIA_CHECK(slug.has_value());

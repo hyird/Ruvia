@@ -307,7 +307,7 @@ RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, ruvia::test::testContextServices())), asio::use_future);
     ctx.run();
     const auto response = future.get();
 

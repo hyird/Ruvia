@@ -153,7 +153,7 @@ RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/ping", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(&connectionObservation, &tlsPongHandler), ruvia::detail::RequestBodyMode::kBuffered, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(tls, impl.routeTable(), worker, ruvia::detail::ContextServices{}.withTlsTransport("127.0.0.1")));
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareTlsHttp2SansIoSession(tls, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
 

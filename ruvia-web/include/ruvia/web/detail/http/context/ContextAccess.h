@@ -49,19 +49,19 @@ namespace ruvia::detail {
 class ContextWebSocketBinding;
 
 struct ContextAccess final {
-    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, ContextServices services = {}) noexcept {
+    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, ContextServices services) noexcept {
         return Context(memory, request, services);
     }
 
-    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, std::uintptr_t routeRateLimitScope, ContextServices services = {}) noexcept {
+    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, std::uintptr_t routeRateLimitScope, ContextServices services) noexcept {
         return Context(memory, request, {}, nullptr, nullptr, 0, routeRateLimitScope, services);
     }
 
-    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, std::uintptr_t routeRateLimitScope, ContextServices services = {}) noexcept {
+    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, std::uintptr_t routeRateLimitScope, ContextServices services) noexcept {
         return Context(memory, request, routePath, nullptr, nullptr, 0, routeRateLimitScope, services);
     }
 
-    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, const std::string_view* paramNames, const std::string_view* paramValues, std::size_t paramCount, std::uintptr_t routeRateLimitScope, ContextServices services = {}) noexcept {
+    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, const std::string_view* paramNames, const std::string_view* paramValues, std::size_t paramCount, std::uintptr_t routeRateLimitScope, ContextServices services) noexcept {
         return Context(memory, request, routePath, paramNames, paramValues, paramCount, routeRateLimitScope, services);
     }
 
