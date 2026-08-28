@@ -6,7 +6,9 @@
 #include <optional>
 #include <ranges>
 #include <stdexcept>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
@@ -19,6 +21,35 @@ inline void validateCapabilityAlias(std::string_view alias, const char* emptyMes
     if (alias.empty()) {
         throw std::invalid_argument(emptyMessage);
     }
+}
+
+// Every named worker capability has the same startup representation: an alias
+// plus configuration normalized into the owning PMR domain.
+template <typename Storage>
+struct NamedCapabilityDefinition final {
+    using ConfigStorage = Storage;
+
+    std::pmr::string alias;
+    Storage config;
+};
+
+// Validates and normalizes the replacement before mutating retained App state.
+// Existing aliases preserve registration order; new aliases take one owned PMR
+// copy of the name and configuration.
+template <typename Definition, typename SourceConfig>
+void upsertNamedCapabilityDefinition(std::pmr::vector<Definition>& definitions,
+    std::string_view alias, const SourceConfig& sourceConfig, const char* emptyMessage,
+    std::pmr::memory_resource* resource) {
+    validateCapabilityAlias(alias, emptyMessage);
+    auto* const resolved = pmrResourceOrDefault(resource);
+    typename Definition::ConfigStorage storedConfig(sourceConfig, resolved);
+    for (auto& definition : definitions) {
+        if (std::string_view(definition.alias) == alias) {
+            definition.config = std::move(storedConfig);
+            return;
+        }
+    }
+    definitions.push_back(Definition{std::pmr::string(alias, resolved), std::move(storedConfig)});
 }
 
 // Validates the complete startup alias set without allocating. Capability

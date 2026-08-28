@@ -2,7 +2,7 @@
 
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/worker/WorkerCancellationPost.h"
-#include "ruvia/web/detail/integration/CapabilityAlias.h"
+#include "ruvia/web/detail/integration/NamedCapability.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
 #include "ruvia/web/redis/Redis.h"
 

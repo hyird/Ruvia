@@ -59,7 +59,7 @@ public:
 #include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/detail/db/DbHostResolution.h"
-#include "ruvia/web/detail/integration/CapabilityAlias.h"
+#include "ruvia/web/detail/integration/NamedCapability.h"
 
 struct st_mysql;
 struct st_mysql_res;

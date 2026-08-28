@@ -11,13 +11,26 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
-#include "ruvia/web/detail/integration/CapabilityAlias.h"
+#include "ruvia/web/detail/integration/NamedCapability.h"
 
 namespace {
 
 struct Entry final {
     std::string alias;
 };
+
+struct ConfigSource final {
+    std::string value;
+};
+
+struct ConfigStorage final {
+    ConfigStorage(const ConfigSource& source, std::pmr::memory_resource* resource)
+        : value(source.value, resource) {}
+
+    std::pmr::string value;
+};
+
+using Definition = ruvia::detail::NamedCapabilityDefinition<ConfigStorage>;
 
 class RejectingMemoryResource final : public std::pmr::memory_resource {
 public:
@@ -51,7 +64,7 @@ private:
 
 }  // namespace
 
-RUVIA_TEST(capability_alias_validation_checks_the_complete_set_without_owner_state) {
+RUVIA_TEST(named_capability_alias_validation_checks_the_complete_set_without_owner_state) {
     bool rejectedEmptyAlias = false;
     try {
         ruvia::detail::validateCapabilityAlias({}, "alias is empty");
@@ -65,6 +78,38 @@ RUVIA_TEST(capability_alias_validation_checks_the_complete_set_without_owner_sta
     RUVIA_CHECK_EQ(validationFailure({{"first"}, {"second"}, {"first"}}),
         std::string_view("alias is duplicated"));
     RUVIA_CHECK(validationFailure({{"first"}, {"second"}, {"third"}}).empty());
+}
+
+RUVIA_TEST(named_capability_upsert_validates_normalizes_and_preserves_alias_order) {
+    RejectingMemoryResource rejectingResource;
+    std::pmr::vector<Definition> invalidDefinitions(std::pmr::new_delete_resource());
+    bool rejectedBeforeNormalization = false;
+    try {
+        ruvia::detail::upsertNamedCapabilityDefinition(invalidDefinitions, {},
+            ConfigSource{std::string(80, 'x')}, "alias is empty", &rejectingResource);
+    } catch (const std::invalid_argument& error) {
+        rejectedBeforeNormalization = std::string_view(error.what()) == "alias is empty";
+    }
+    RUVIA_CHECK(rejectedBeforeNormalization);
+    RUVIA_CHECK_EQ(rejectingResource.allocationCount(), std::size_t{0});
+    RUVIA_CHECK(invalidDefinitions.empty());
+
+    std::pmr::unsynchronized_pool_resource resource;
+    std::pmr::vector<Definition> definitions(&resource);
+    ruvia::detail::upsertNamedCapabilityDefinition(
+        definitions, "cache", ConfigSource{"first"}, "alias is empty", &resource);
+    ruvia::detail::upsertNamedCapabilityDefinition(
+        definitions, "events", ConfigSource{"second"}, "alias is empty", &resource);
+    ruvia::detail::upsertNamedCapabilityDefinition(
+        definitions, "cache", ConfigSource{"replacement"}, "alias is empty", &resource);
+
+    RUVIA_CHECK_EQ(definitions.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(definitions[0].alias, std::string_view("cache"));
+    RUVIA_CHECK_EQ(definitions[0].config.value, std::string_view("replacement"));
+    RUVIA_CHECK_EQ(definitions[1].alias, std::string_view("events"));
+    RUVIA_CHECK_EQ(definitions[1].config.value, std::string_view("second"));
+    RUVIA_CHECK(definitions[0].alias.get_allocator().resource() == &resource);
+    RUVIA_CHECK(definitions[0].config.value.get_allocator().resource() == &resource);
 }
 
 RUVIA_TEST(http_client_registry_rejects_alias_set_before_pool_allocation) {

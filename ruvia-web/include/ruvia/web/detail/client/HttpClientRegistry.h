@@ -26,7 +26,7 @@
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
-#include "ruvia/web/detail/integration/CapabilityAlias.h"
+#include "ruvia/web/detail/integration/NamedCapability.h"
 
 namespace ruvia::detail {
 

@@ -3,7 +3,7 @@
 #include "ruvia/web/detail/db/DbMigrationChecksum.h"
 #include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbUtils.h"
-#include "ruvia/web/detail/integration/CapabilityAlias.h"
+#include "ruvia/web/detail/integration/NamedCapability.h"
 #include "ruvia/web/db/Db.h"
 
 #include "ruvia/core/detail/io/AsioAwait.h"

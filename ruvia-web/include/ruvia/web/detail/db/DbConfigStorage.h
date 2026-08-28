@@ -9,6 +9,7 @@
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
+#include "ruvia/web/detail/integration/NamedCapability.h"
 
 namespace ruvia::detail {
 
@@ -68,9 +69,6 @@ private:
           acquireTimeout(source.acquireTimeout) {}
 };
 
-struct DbDefinition final {
-    std::pmr::string alias;
-    DbConfigStorage config;
-};
+using DbDefinition = NamedCapabilityDefinition<DbConfigStorage>;
 
 }  // namespace ruvia::detail
