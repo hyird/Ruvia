@@ -41,9 +41,6 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(
     std::uint64_t cancellationId = 0;
     StopRegistration stopRegistration;
     if (options.stopToken.stoppable()) {
-        if (cancellationMailbox_ == nullptr) {
-            std::terminate();
-        }
         cancellationId = cancellationMailbox_->nextOperationId();
         connection.cancellationId = cancellationId;
         options.stopToken.registerCallback(

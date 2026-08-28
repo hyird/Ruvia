@@ -12,13 +12,18 @@
 
 #include <memory_resource>
 #include <span>
+#include <stdexcept>
 
 namespace ruvia::detail {
 
 class RedisRegistry final {
 public:
     RedisRegistry(asio::io_context&, std::pmr::memory_resource*, std::span<const RedisDefinition>,
-        const WorkerHandle* = nullptr) {}
+        WorkerHandle worker) {
+        if (!worker.valid()) {
+            throw std::invalid_argument("redis registry requires a valid worker");
+        }
+    }
 
     RedisRegistry(const RedisRegistry&) = delete;
     RedisRegistry& operator=(const RedisRegistry&) = delete;
@@ -31,10 +36,6 @@ public:
     [[nodiscard]] bool empty() const noexcept {
         return true;
     }
-    [[nodiscard]] bool needsDeadlineScan() const noexcept {
-        return false;
-    }
-    void scanDeadlines() noexcept {}
 };
 
 }  // namespace ruvia::detail
@@ -85,12 +86,18 @@ class RedisPool final {
 public:
     RedisPool(asio::io_context& ioContext, const RedisConfigStorage& config,
         std::optional<std::chrono::milliseconds> commandTimeout, std::size_t poolSize,
-        std::pmr::memory_resource* resource = nullptr, const WorkerHandle* worker = nullptr);
+        const WorkerHandle& worker, std::pmr::memory_resource* resource = nullptr);
     RedisPool(asio::io_context&, RedisConfigStorage&&, std::optional<std::chrono::milliseconds>,
-        std::size_t, std::pmr::memory_resource* = nullptr, const WorkerHandle* = nullptr) = delete;
+        std::size_t, const WorkerHandle&, std::pmr::memory_resource* = nullptr) = delete;
     RedisPool(asio::io_context&, const RedisConfigStorage&&,
-        std::optional<std::chrono::milliseconds>, std::size_t, std::pmr::memory_resource* = nullptr,
-        const WorkerHandle* = nullptr) = delete;
+        std::optional<std::chrono::milliseconds>, std::size_t, const WorkerHandle&,
+        std::pmr::memory_resource* = nullptr) = delete;
+    RedisPool(asio::io_context&, const RedisConfigStorage&,
+        std::optional<std::chrono::milliseconds>, std::size_t, WorkerHandle&&,
+        std::pmr::memory_resource* = nullptr) = delete;
+    RedisPool(asio::io_context&, const RedisConfigStorage&,
+        std::optional<std::chrono::milliseconds>, std::size_t, const WorkerHandle&&,
+        std::pmr::memory_resource* = nullptr) = delete;
     ~RedisPool();
 
     RedisPool(const RedisPool&) = delete;
@@ -98,8 +105,6 @@ public:
 
     Task<void> connect();
     void closeNow() noexcept;
-    void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept;
-    [[nodiscard]] bool needsDeadlineScan() const noexcept;
     Task<RedisValue> executeOwned(std::pmr::vector<std::pmr::string> args,
         std::pmr::memory_resource* resource, OperationOptions options = {});
     Task<std::pmr::vector<RedisValue>> executePipeline(
@@ -179,7 +184,7 @@ private:
     void cancelOperationById(std::uint64_t cancellationId) noexcept;
     void throwIfAborted(const Connection& connection) const;
     asio::io_context& ioContext_;
-    const WorkerHandle* worker_;
+    const WorkerHandle& worker_;
     const RedisConfigStorage& config_;
     std::optional<std::chrono::milliseconds> commandTimeout_;
     std::pmr::memory_resource* resource_;
@@ -196,7 +201,7 @@ struct RedisCommandExecutor final {
 class RedisRegistry final {
 public:
     RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource,
-        std::span<const RedisDefinition> redis, const WorkerHandle* worker = nullptr);
+        std::span<const RedisDefinition> redis, WorkerHandle worker);
     ~RedisRegistry();
 
     RedisRegistry(const RedisRegistry&) = delete;
@@ -206,12 +211,10 @@ public:
     void closeNow() noexcept;
 
     [[nodiscard]] bool empty() const noexcept;
-    [[nodiscard]] bool needsDeadlineScan() const noexcept;
     [[nodiscard]] RedisHandle get(
         std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const;
     [[nodiscard]] RedisHandle get(std::string_view alias, std::pmr::memory_resource* resource,
         ScopedOperationScope& operationScope) const;
-    void scanDeadlines() noexcept;
 
 private:
     using RedisPoolDeleter = PmrObjectDeleter<RedisPool>;
@@ -228,6 +231,7 @@ private:
         std::unique_ptr<RedisPool, RedisPoolDeleter> blocking;
     };
 
+    WorkerHandle worker_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> pools_;
     NamedCapabilityIndex aliasIndex_;

@@ -1,7 +1,7 @@
 #include "ruvia/web/redis/Redis.h"
 
 #include <optional>
-#include <ranges>
+#include <stdexcept>
 #include <utility>
 
 #include "ruvia/web/detail/redis/RedisRegistry.h"
@@ -10,10 +10,14 @@ namespace ruvia {
 namespace detail {
 
 RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource,
-    std::span<const RedisDefinition> redis, const WorkerHandle* worker)
-    : resource_(detail::pmrResourceOrDefault(resource)),
+    std::span<const RedisDefinition> redis, WorkerHandle worker)
+    : worker_(std::move(worker)),
+      resource_(detail::pmrResourceOrDefault(resource)),
       pools_(resource_),
       aliasIndex_(resource_) {
+    if (!worker_.valid()) {
+        throw std::invalid_argument("redis registry requires a valid worker");
+    }
     validateCapabilityAliases(redis, "redis alias must not be empty", "duplicate redis alias");
     aliasIndex_.build(redis);
     pools_.reserve(redis.size());
@@ -28,9 +32,9 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
         // the ordinary pool's command timeout would cut long waits short and
         // repeatedly discard/reconnect BLOCK 0 sockets.
         entry.general = makePmrObject<RedisPool>(resource_, ioContext, entry.config,
-            entry.config.commandTimeout, generalSize, resource_, worker);
+            entry.config.commandTimeout, generalSize, worker_, resource_);
         entry.blocking = makePmrObject<RedisPool>(
-            resource_, ioContext, entry.config, std::nullopt, blockingSize, resource_, worker);
+            resource_, ioContext, entry.config, std::nullopt, blockingSize, worker_, resource_);
     }
 }
 
@@ -57,12 +61,6 @@ bool RedisRegistry::empty() const noexcept {
     return pools_.empty();
 }
 
-bool RedisRegistry::needsDeadlineScan() const noexcept {
-    return std::ranges::any_of(pools_, [](const Entry& entry) {
-        return entry.general->needsDeadlineScan() || entry.blocking->needsDeadlineScan();
-    });
-}
-
 RedisHandle RedisRegistry::get(
     std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
     const auto defaultPoolIndex = aliasIndex_.defaultIndex();
@@ -81,14 +79,6 @@ RedisHandle RedisRegistry::get(std::string_view alias, std::pmr::memory_resource
         return RedisHandle(*entry.general, *entry.blocking, resource, operationScope);
     }
     throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
-}
-
-void RedisRegistry::scanDeadlines() noexcept {
-    const auto now = std::chrono::steady_clock::now();
-    for (auto& entry : pools_) {
-        entry.general->scanDeadlines(now);
-        entry.blocking->scanDeadlines(now);
-    }
 }
 
 }  // namespace detail

@@ -5,6 +5,7 @@
 #include <concepts>
 #include <future>
 #include <initializer_list>
+#include <memory>
 #include <memory_resource>
 #include <new>
 #include <optional>
@@ -23,6 +24,7 @@
 #include <asio/use_future.hpp>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/redis/RedisHandle.h"
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
@@ -31,9 +33,46 @@
 
 namespace {
 
+using RedisDefinitions = std::span<const ruvia::detail::RedisDefinition>;
+
+static_assert(!std::constructible_from<ruvia::detail::RedisRegistry, asio::io_context&,
+    std::pmr::memory_resource*, RedisDefinitions>);
+static_assert(std::constructible_from<ruvia::detail::RedisRegistry, asio::io_context&,
+    std::pmr::memory_resource*, RedisDefinitions, ruvia::WorkerHandle>);
 static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
     ruvia::detail::RedisConfigStorage&&, std::optional<std::chrono::milliseconds>, std::size_t,
+    const ruvia::WorkerHandle&, std::pmr::memory_resource*>);
+static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
+    const ruvia::detail::RedisConfigStorage&, std::optional<std::chrono::milliseconds>, std::size_t,
+    std::pmr::memory_resource*>);
+static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
+    const ruvia::detail::RedisConfigStorage&, std::optional<std::chrono::milliseconds>, std::size_t,
     std::pmr::memory_resource*, const ruvia::WorkerHandle*>);
+static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
+    const ruvia::detail::RedisConfigStorage&, std::optional<std::chrono::milliseconds>, std::size_t,
+    ruvia::WorkerHandle, std::pmr::memory_resource*>);
+
+class RedisTestWorker final {
+public:
+    explicit RedisTestWorker(asio::io_context& ioContext)
+        : dispatcher_(std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 64)),
+          handle_(ruvia::detail::WorkerHandleAccess::make(dispatcher_)) {}
+
+    RedisTestWorker(const RedisTestWorker&) = delete;
+    RedisTestWorker& operator=(const RedisTestWorker&) = delete;
+
+    [[nodiscard]] const ruvia::WorkerHandle& handle() const noexcept {
+        return handle_;
+    }
+
+    void run() {
+        dispatcher_->runContext();
+    }
+
+private:
+    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher_;
+    ruvia::WorkerHandle handle_;
+};
 
 [[nodiscard]] ruvia::detail::RedisDefinition redisDefinition(std::string_view alias,
     const ruvia::RedisConfig& config = {},
@@ -495,10 +534,12 @@ RUVIA_TEST(redis_api_surface_uses_span_args_without_initializer_list_overloads) 
 RUVIA_TEST(
     redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_a_cancellation_bound) {
     asio::io_context ioContext;
+    RedisTestWorker worker(ioContext);
     ruvia::RedisConfig config;
     config.commandTimeout = std::chrono::milliseconds(1);
     const std::array definitions{redisDefinition("default", config)};
-    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
+    ruvia::detail::RedisRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope generalScope;
     auto redis = registry.get(std::pmr::get_default_resource(), generalScope);
     const std::array<std::string_view, 1> keys{"queue"};
@@ -583,11 +624,13 @@ RUVIA_TEST(
 
 RUVIA_TEST(redis_registry_derives_default_pool_from_owned_entry_index) {
     asio::io_context ioContext;
+    RedisTestWorker worker(ioContext);
     const std::array<ruvia::detail::RedisDefinition, 2> definitions{{
         redisDefinition("cache"),
         redisDefinition("default"),
     }};
-    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
+    ruvia::detail::RedisRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope operationScope;
 
     bool defaultResolved = true;
@@ -606,10 +649,22 @@ RUVIA_TEST(redis_registry_derives_default_pool_from_owned_entry_index) {
     RUVIA_CHECK(aliasResolved);
 }
 
+RUVIA_TEST(redis_registry_rejects_an_invalid_worker) {
+    asio::io_context ioContext;
+    const RedisDefinitions definitions;
+    const ruvia::WorkerHandle worker;
+
+    RUVIA_CHECK(throwsInvalidArgument([&] {
+        ruvia::detail::RedisRegistry registry(
+            ioContext, std::pmr::get_default_resource(), definitions, worker);
+    }));
+}
+
 RUVIA_TEST(redis_registry_owns_nested_pmr_configuration) {
     TrackingResource sourceResource;
     std::pmr::unsynchronized_pool_resource targetResource;
     asio::io_context ioContext;
+    RedisTestWorker worker(ioContext);
     std::optional<ruvia::detail::RedisDefinition> definition;
     ruvia::RedisConfig config{
         .host = std::string(80, 'h'),
@@ -623,7 +678,7 @@ RUVIA_TEST(redis_registry_owns_nested_pmr_configuration) {
 
     std::optional<ruvia::detail::RedisRegistry> registry;
     registry.emplace(ioContext, &targetResource,
-        std::span<const ruvia::detail::RedisDefinition>(&*definition, 1));
+        std::span<const ruvia::detail::RedisDefinition>(&*definition, 1), worker.handle());
     definition.reset();
     sourceResource.release();
     registry.reset();
@@ -633,8 +688,10 @@ RUVIA_TEST(redis_registry_owns_nested_pmr_configuration) {
 
 RUVIA_TEST(redis_request_capabilities_reject_after_parent_scope_closes) {
     asio::io_context ioContext;
+    RedisTestWorker worker(ioContext);
     const std::array definitions{redisDefinition("default")};
-    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
+    ruvia::detail::RedisRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope operationScope;
     auto handle = registry.get(std::pmr::get_default_resource(), operationScope);
     auto copiedHandle = handle;
@@ -705,8 +762,10 @@ RUVIA_TEST(redis_set_expiration_cannot_represent_conflicting_modes) {
 
 RUVIA_TEST(redis_expire_rejects_non_positive_ttl_before_io) {
     asio::io_context ioContext;
+    RedisTestWorker worker(ioContext);
     const std::array definitions{redisDefinition("default")};
-    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
+    ruvia::detail::RedisRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope operationScope;
     auto redis = registry.get(std::pmr::get_default_resource(), operationScope);
 
@@ -729,8 +788,10 @@ RUVIA_TEST(redis_expire_rejects_non_positive_ttl_before_io) {
 
 RUVIA_TEST(redis_multi_key_commands_reject_empty_key_spans_before_io) {
     asio::io_context ioContext;
+    RedisTestWorker worker(ioContext);
     const std::array definitions{redisDefinition("default")};
-    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
+    ruvia::detail::RedisRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope operationScope;
     auto redis = registry.get(std::pmr::get_default_resource(), operationScope);
     const std::span<const std::string_view> noKeys;
@@ -759,6 +820,7 @@ RUVIA_TEST(redis_transaction_errors_preserve_server_diagnostics) {
 RUVIA_TEST(redis_active_command_reports_pool_closing_instead_of_io_error) {
     StalledRedisCommandServer server;
     asio::io_context ioContext;
+    RedisTestWorker worker(ioContext);
     auto config = ruvia::RedisConfig{};
     config.host = "127.0.0.1";
     config.port = server.port();
@@ -766,7 +828,7 @@ RUVIA_TEST(redis_active_command_reports_pool_closing_instead_of_io_error) {
     auto* const resource = std::pmr::get_default_resource();
     const auto storedConfig = ruvia::detail::RedisConfigStorage(config, resource);
     ruvia::detail::RedisPool pool(
-        ioContext, storedConfig, storedConfig.commandTimeout, 1, resource);
+        ioContext, storedConfig, storedConfig.commandTimeout, 1, worker.handle(), resource);
 
     auto exercise = [&]() -> ruvia::Task<ruvia::RedisError::Code> {
         std::pmr::vector<std::pmr::string> args(resource);
@@ -781,7 +843,7 @@ RUVIA_TEST(redis_active_command_reports_pool_closing_instead_of_io_error) {
 
     auto result =
         asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
-    std::jthread runner([&ioContext] { ioContext.run(); });
+    std::jthread runner([&worker] { worker.run(); });
     server.waitUntilCommandRead();
     asio::post(ioContext, [&pool] { pool.closeNow(); });
 

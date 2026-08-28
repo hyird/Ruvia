@@ -5,32 +5,21 @@
 #include "ruvia/web/detail/http/context/ContextServices.h"
 
 namespace ruvia::detail {
-namespace {
-
-template <typename Registry>
-void registerDeadlineScan(ConnectionScanner& scanner,
-    ConnectionScanner::WorkerMaintenanceRegistration& registration, Registry& registry) noexcept {
-    if (!registry.needsDeadlineScan()) {
-        return;
-    }
-    scanner.registerWorkerMaintenance(registration, &registry,
-        [](void* target) noexcept { static_cast<Registry*>(target)->scanDeadlines(); });
-}
-
-}  // namespace
 
 WorkerCapabilities::WorkerCapabilities(asio::io_context& ioContext, const WorkerHandle& worker,
     std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions,
     WorkerCapabilityOptions options, ConnectionScanner& scanner)
     : databases_(ioContext, resource, definitions.databases, &worker),
-      redis_(ioContext, resource, definitions.redis, &worker),
+      redis_(ioContext, resource, definitions.redis, worker),
       httpClients_(ioContext, worker, resource, definitions.httpClients),
       workerStates_(resource, definitions.workerStates),
       rateLimiter_(
           options.defaultRateLimit, options.routeRateLimits, options.rateLimitCapacity, resource),
       options_(std::move(options)) {
-    registerDeadlineScan(scanner, databaseDeadlineMaintenance_, databases_);
-    registerDeadlineScan(scanner, redisDeadlineMaintenance_, redis_);
+    if (databases_.needsDeadlineScan()) {
+        scanner.registerWorkerMaintenance(databaseDeadlineMaintenance_, &databases_,
+            [](void* target) noexcept { static_cast<DbRegistry*>(target)->scanDeadlines(); });
+    }
 }
 
 Task<void> WorkerCapabilities::connect() {

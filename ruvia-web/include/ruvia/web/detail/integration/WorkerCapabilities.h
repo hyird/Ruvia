@@ -76,7 +76,6 @@ private:
     DbRegistry databases_;
     RedisRegistry redis_;
     ConnectionScanner::WorkerMaintenanceRegistration databaseDeadlineMaintenance_;
-    ConnectionScanner::WorkerMaintenanceRegistration redisDeadlineMaintenance_;
     HttpClientRegistry httpClients_;
     WorkerStateRegistry workerStates_;
     RateLimiter rateLimiter_;

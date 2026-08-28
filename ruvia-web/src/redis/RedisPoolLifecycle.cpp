@@ -1,10 +1,21 @@
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include <hiredis/hiredis.h>
 
+#include <stdexcept>
 #include <system_error>
 #include <utility>
 
 namespace ruvia::detail {
+namespace {
+
+[[nodiscard]] const WorkerHandle& requireRedisWorker(const WorkerHandle& worker) {
+    if (!worker.valid()) {
+        throw std::invalid_argument("redis pool requires a valid worker");
+    }
+    return worker;
+}
+
+}  // namespace
 
 void RedisReaderDeleter::operator()(redisReader* reader) const noexcept {
     if (reader != nullptr) {
@@ -26,20 +37,18 @@ RedisPool::Connection& RedisPool::Connection::operator=(Connection&&) noexcept =
 
 RedisPool::RedisPool(asio::io_context& ioContext, const RedisConfigStorage& config,
     std::optional<std::chrono::milliseconds> commandTimeout, std::size_t poolSize,
-    std::pmr::memory_resource* resource, const WorkerHandle* worker)
+    const WorkerHandle& worker, std::pmr::memory_resource* resource)
     : ioContext_(ioContext),
-      worker_(worker),
+      worker_(requireRedisWorker(worker)),
       config_(config),
       commandTimeout_(commandTimeout),
       resource_(detail::pmrResourceOrDefault(resource)),
       connections_(resource_),
-      scheduler_(poolSize, resource_) {
+      scheduler_(poolSize, resource_),
+      cancellationMailbox_(makeWorkerCancellationMailbox(*this, worker_)) {
     connections_.reserve(poolSize);
     for (std::size_t i = 0; i < poolSize; ++i) {
         connections_.emplace_back(ioContext_, resource_);
-    }
-    if (worker_ != nullptr) {
-        cancellationMailbox_ = makeWorkerCancellationMailbox(*this, *worker_);
     }
 }
 
@@ -57,9 +66,7 @@ Task<void> RedisPool::connect() {
 }
 
 void RedisPool::closeNow() noexcept {
-    if (cancellationMailbox_ != nullptr) {
-        cancellationMailbox_->detach(*this);
-    }
+    cancellationMailbox_->detach(*this);
     if (!scheduler_.close()) {
         return;
     }
@@ -69,31 +76,6 @@ void RedisPool::closeNow() noexcept {
         }
         close(connection);
     }
-}
-
-void RedisPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
-    scheduler_.scanDeadlines(now);
-
-    for (auto& connection : connections_) {
-        const auto kind = connection.deadline.expire(now);
-        if (!kind.has_value()) {
-            continue;
-        }
-        std::error_code ignored;
-        connection.deadlineTimer->cancel();
-        if (*kind == Connection::DeadlineKind::kResolve) {
-            connection.resolver.cancel();
-        } else if (*kind == Connection::DeadlineKind::kSocket) {
-            connection.socket.cancel(ignored);
-        }
-    }
-}
-
-bool RedisPool::needsDeadlineScan() const noexcept {
-    // Production pools have a WorkerHandle and arm exact timers for both
-    // configured and per-operation deadlines. A standalone pool without a
-    // worker retains the explicit scanDeadlines() fallback.
-    return worker_ == nullptr;
 }
 
 }  // namespace ruvia::detail
