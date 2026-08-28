@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
-#include <utility>
 
 namespace ruvia {
 
@@ -19,7 +18,7 @@ public:
         : detail::ScopedCapabilityNode(
               bodyReader.operationScope_, &MultipartReader::expireCapability),
           bodyReader_(&bodyReader),
-          parser_(std::move(options)) {}
+          parser_(options) {}
 
     MultipartReader(const MultipartReader&) = delete;
     MultipartReader& operator=(const MultipartReader&) = delete;

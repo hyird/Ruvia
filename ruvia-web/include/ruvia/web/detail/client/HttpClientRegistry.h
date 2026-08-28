@@ -239,10 +239,10 @@ private:
         std::string_view value, std::string_view path, std::string_view domain) noexcept;
     [[nodiscard]] bool cookieCapacityAvailable(
         std::size_t replacedBytes, std::size_t replacementBytes, bool adding) const noexcept;
-    void configureTls();
     void drainHttp2Events(Connection& connection);
     void failHttp2Session(Connection& connection, std::uint64_t generation,
-        std::error_code transportError, std::exception_ptr failure = {}) noexcept;
+        std::error_code transportError,
+        const std::exception_ptr& failure = std::exception_ptr{}) noexcept;
     void finishHttp2SessionTask(Connection& connection, std::uint64_t generation) noexcept;
     void submitHttp2Reset(Connection& connection, std::uint32_t streamId) noexcept;
     void cancelHttp2Stream(
@@ -276,6 +276,8 @@ private:
 class HttpClientRegistry final {
 public:
     HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
+        std::pmr::memory_resource* resource, const HttpClientConfig& defaultConfig);
+    HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
         std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions);
     ~HttpClientRegistry();
     HttpClientRegistry(const HttpClientRegistry&) = delete;
@@ -293,6 +295,11 @@ private:
         std::pmr::string alias;
         std::unique_ptr<HttpClientPool, PmrObjectDeleter<HttpClientPool>> pool;
     };
+
+    void add(asio::io_context& ioContext, const WorkerHandle& worker, std::string_view alias,
+        HttpClientConfigStorage config);
+    void buildAliasIndex();
+
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> pools_;
     std::pmr::vector<std::size_t> aliasIndex_;

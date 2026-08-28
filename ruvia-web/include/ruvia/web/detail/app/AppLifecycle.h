@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstdint>
+
 namespace ruvia::detail {
 
-enum class AppLifecycleState {
+enum class AppLifecycleState : std::uint8_t {
     kStopped,
     kPreparing,
     kStarting,
@@ -10,7 +12,7 @@ enum class AppLifecycleState {
     kStopping,
 };
 
-enum class AppStopRequest {
+enum class AppStopRequest : std::uint8_t {
     kIgnored,
     kRequested,
 };

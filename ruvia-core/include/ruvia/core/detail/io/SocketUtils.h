@@ -1,12 +1,15 @@
 #pragma once
 
-#include <asio/ip/tcp.hpp>
 #include <array>
 #include <charconv>
 #include <cstddef>
 #include <memory_resource>
 #include <string>
 #include <system_error>
+
+#include <asio/ip/tcp.hpp>
+
+#include "ruvia/core/detail/io/TcpSocketOptions.h"
 
 namespace ruvia::detail {
 
@@ -18,8 +21,8 @@ inline void closeSocket(asio::ip::tcp::socket& socket) noexcept {
 }
 
 inline void configureAcceptedSocket(asio::ip::tcp::socket& socket) noexcept {
-    std::error_code ignored;
-    socket.set_option(asio::ip::tcp::no_delay(true), ignored);
+    configureTcpSocketOptions(
+        socket, TcpNoDelayPolicy::kEnable, TcpKeepAlivePolicy::kSystemDefault);
 }
 
 inline void assignRemoteAddress(std::pmr::string& output, const asio::ip::address& address) {

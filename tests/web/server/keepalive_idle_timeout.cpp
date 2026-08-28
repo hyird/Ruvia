@@ -85,7 +85,9 @@ int main() {
             char buf[64];
             asio::steady_timer safety(ctx, kObserveWindow);
             safety.async_wait([&](const std::error_code& e) {
-                if (!e) socket.cancel();
+                if (!e) {
+                    socket.cancel();
+                }
             });
             socket.async_read_some(asio::buffer(buf), [&](const std::error_code& e, std::size_t) {
                 if (e && e != asio::error::operation_aborted) {

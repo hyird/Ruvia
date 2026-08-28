@@ -8,7 +8,7 @@ namespace {
 
 HttpServerListenerDefinition::TlsIdentity cloneTlsIdentity(
     const HttpServerListenerDefinition::TlsIdentity& source, std::pmr::memory_resource* resource) {
-    HttpServerListenerDefinition::TlsIdentity result(resource);
+    HttpServerListenerDefinition::TlsIdentity result(ResolvedPmrResourceTag{}, resource);
     result.certificateChainFile = source.certificateChainFile;
     result.privateKeyFile = source.privateKeyFile;
     result.privateKeyPassword = source.privateKeyPassword;
@@ -17,16 +17,16 @@ HttpServerListenerDefinition::TlsIdentity cloneTlsIdentity(
 
 HttpServerListenerDefinition::Tls cloneTls(
     const HttpServerListenerDefinition::Tls& source, std::pmr::memory_resource* resource) {
-    HttpServerListenerDefinition::Tls result(resource);
+    HttpServerListenerDefinition::Tls result(ResolvedPmrResourceTag{}, resource);
     result.identity = cloneTlsIdentity(source.identity, resource);
     if (source.clientCertificates.has_value()) {
-        auto& policy =
-            result.clientCertificates.emplace(resource, source.clientCertificates->requirement);
+        auto& policy = result.clientCertificates.emplace(
+            ResolvedPmrResourceTag{}, resource, source.clientCertificates->requirement);
         policy.verifyFile = source.clientCertificates->verifyFile;
     }
     result.sniIdentities.reserve(source.sniIdentities.size());
     for (const auto& configured : source.sniIdentities) {
-        auto& sni = result.sniIdentities.emplace_back(resource);
+        auto& sni = result.sniIdentities.emplace_back(ResolvedPmrResourceTag{}, resource);
         sni.host = configured.host;
         sni.identity = cloneTlsIdentity(configured.identity, resource);
     }
@@ -50,6 +50,11 @@ HttpServerListenerDefinition::Transport cloneTransport(
 }  // namespace
 
 HttpServerListener::HttpServerListener(asio::io_context& ioContext,
+    const HttpServerListenerDefinition& definition, std::pmr::memory_resource* resource)
+    : HttpServerListener(
+          ResolvedPmrResourceTag{}, ioContext, definition, pmrResourceOrDefault(resource)) {}
+
+HttpServerListener::HttpServerListener(ResolvedPmrResourceTag, asio::io_context& ioContext,
     const HttpServerListenerDefinition& definition, std::pmr::memory_resource* resource)
     : acceptor(ioContext),
       endpoint(definition.endpoint),

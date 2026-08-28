@@ -2,8 +2,6 @@
 
 #include <atomic>
 #include <memory>
-#include <memory_resource>
-#include <vector>
 
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/StopToken.h"
@@ -16,7 +14,7 @@ namespace ruvia::detail {
 
 class DbClientState final : public std::enable_shared_from_this<DbClientState> {
 public:
-    DbClientState(EventLoop loop, DbConfig config);
+    DbClientState(EventLoop loop, const DbConfig& config);
     ~DbClientState();
 
     DbClientState(const DbClientState&) = delete;
@@ -41,8 +39,6 @@ private:
     };
 
     [[nodiscard]] static EventLoop requireLoop(EventLoop loop);
-    [[nodiscard]] static std::pmr::vector<DbDefinition> makeDefinitions(
-        const DbConfig& config, std::pmr::memory_resource* resource);
     [[nodiscard]] static ConnectionScannerOptions scannerOptions();
 
     [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<DbClientState> state);
@@ -53,7 +49,6 @@ private:
     EventLoop loop_;
     WorkerHandle worker_;
     WorkerMemory memory_;
-    std::pmr::vector<DbDefinition> definitions_;
     ConnectionScanner scanner_;
     DbRegistry databases_;
     StopSource stopSource_;

@@ -17,7 +17,7 @@
 
 namespace ruvia::detail {
 
-inline constexpr std::size_t kBodyReadChunkBytes = 8 * 1024;
+inline constexpr std::size_t kBodyReadChunkBytes = std::size_t{8} * 1024;
 
 enum class TransferCodingDecodeError : std::uint8_t {
     kInvalidContent,

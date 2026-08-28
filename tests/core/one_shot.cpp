@@ -58,7 +58,8 @@ public:
 
     ThrowingMove(const ThrowingMove&) = delete;
     ThrowingMove& operator=(const ThrowingMove&) = delete;
-    ThrowingMove(ThrowingMove&& other) {
+    // This fixture intentionally models a move that can throw.
+    ThrowingMove(ThrowingMove&& other) noexcept(false) {
         if (throwOnMove) {
             throw std::runtime_error("requested move failure");
         }

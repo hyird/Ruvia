@@ -17,6 +17,7 @@
 #include <cerrno>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <stdexcept>
@@ -105,8 +106,7 @@ int copyPrivateKeyPassword(char* buffer, int bufferSize, int, void* userData) no
 [[nodiscard]] asio::error_code translateOpenSslError(unsigned long error) {
 #if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
     if (ERR_SYSTEM_ERROR(error)) {
-        return asio::error_code(
-            static_cast<int>(ERR_GET_REASON(error)), asio::error::get_system_category());
+        return asio::error_code(ERR_GET_REASON(error), asio::error::get_system_category());
     }
 #endif
     return asio::error_code(static_cast<int>(error), asio::error::get_ssl_category());
@@ -161,10 +161,15 @@ WebWorkerRuntime::WebWorkerRuntime(HttpServerListenerDefinition listener, const 
 
 WebWorkerRuntime::WebWorkerRuntime(std::span<const HttpServerListenerDefinition> listeners,
     const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
-    : WebWorkerRuntime(ValidatedOptionsTag{}, listeners, routes, capabilities,
-          validatedHttpServerOptions(std::move(options))) {}
+    : WebWorkerRuntime(
+          validateHttpServerConfiguration(listeners, std::move(options)), routes, capabilities) {}
 
-WebWorkerRuntime::WebWorkerRuntime(ValidatedOptionsTag,
+WebWorkerRuntime::WebWorkerRuntime(const ValidatedHttpServerConfiguration& configuration,
+    const RouteTable& routes, WorkerCapabilityDefinitions capabilities)
+    : WebWorkerRuntime(ValidatedConfigurationTag{}, configuration.listeners(), routes, capabilities,
+          configuration.options()) {}
+
+WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
     std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes,
     WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions)
     // One worker thread runs all I/O on this context; cross-thread access is
@@ -197,23 +202,19 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedOptionsTag,
           connectionScanner_),
       webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(),
           workerRuntime_.handle(), memory_.resource(), capabilities_,
-          [this](std::exception_ptr failure) { failWorker(std::move(failure)); })),
+          [this](const std::exception_ptr& failure) { failWorker(failure); })),
       workSetPool_(memory_) {
-    if (listeners.empty()) {
-        throw std::invalid_argument("HTTP server worker requires at least one listener");
-    }
     listeners_.reserve(listeners.size());
     for (const auto& listener : listeners) {
-        validateHttpServerListener(listener);
         listeners_.push_back(makePmrObject<HttpServerListener>(
             memory_.resource(), ioContext_, listener, memory_.resource()));
     }
     if (options_.documentRoot.refreshOptions() != nullptr) {
         const auto* configuredRoot = options_.documentRoot.root();
-        if (configuredRoot == nullptr) std::terminate();
-        auto rootOptions = StaticRootAccess::options(*configuredRoot);
-        ownedDocumentRoot_ = makePmrObject<StaticRoot>(
-            processResource(), configuredRoot->path(), std::move(rootOptions));
+        if (configuredRoot == nullptr) {
+            std::terminate();
+        }
+        ownedDocumentRoot_ = StaticRootAccess::clone(processResource(), *configuredRoot);
         const auto precompression = documentRootPrecompressionOptions(options_);
         if (precompression.enabled()) {
             StaticRootAccess::installPrecompressedVariants(
@@ -365,12 +366,12 @@ WebWorkerHandle WebWorkerRuntime::webWorker() const {
 void WebWorkerRuntime::configureAcceptor(HttpServerListener& listener) {
     std::error_code ec;
 
-    listener.acceptor.open(listener.endpoint.protocol(), ec);
+    (void)listener.acceptor.open(listener.endpoint.protocol(), ec);
     if (ec) {
         throw std::runtime_error("failed to open acceptor: " + ec.message());
     }
 
-    listener.acceptor.set_option(asio::socket_base::reuse_address(true), ec);
+    (void)listener.acceptor.set_option(asio::socket_base::reuse_address(true), ec);
     if (ec) {
         throw std::runtime_error("failed to enable SO_REUSEADDR: " + ec.message());
     }
@@ -386,12 +387,12 @@ void WebWorkerRuntime::configureAcceptor(HttpServerListener& listener) {
         "SO_REUSEPORT is required but not available on this platform/toolchain");
 #endif
 
-    listener.acceptor.bind(listener.endpoint, ec);
+    (void)listener.acceptor.bind(listener.endpoint, ec);
     if (ec) {
         throw std::runtime_error("failed to bind acceptor: " + ec.message());
     }
 
-    listener.acceptor.listen(asio::socket_base::max_listen_connections, ec);
+    (void)listener.acceptor.listen(asio::socket_base::max_listen_connections, ec);
     if (ec) {
         throw std::runtime_error("failed to listen: " + ec.message());
     }
@@ -469,9 +470,9 @@ void WebWorkerRuntime::stopOnContext() noexcept {
     workerRuntime_.close();
     std::error_code ignored;
     for (const auto& listener : listeners_) {
-        listener->acceptor.cancel(ignored);
+        (void)listener->acceptor.cancel(ignored);
         ignored.clear();
-        listener->acceptor.close(ignored);
+        (void)listener->acceptor.close(ignored);
         ignored.clear();
     }
     serveGate_.cancel(ignored);
@@ -482,7 +483,7 @@ void WebWorkerRuntime::stopOnContext() noexcept {
     workerRuntime_.stopTimers();
 }
 
-void WebWorkerRuntime::failWorker(std::exception_ptr failure) noexcept {
+void WebWorkerRuntime::failWorker(const std::exception_ptr& failure) noexcept {
     if (!workerCompletion_.recordWorkerFailure(failure)) {
         return;
     }
@@ -502,10 +503,10 @@ void WebWorkerRuntime::runIoContext() noexcept {
                 asio::co_spawn(ioContext_, taskAsAwaitable(runWorker()),
                     asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
             },
-            [this, &workerFailed](std::exception_ptr failure) noexcept {
+            [this, &workerFailed](const std::exception_ptr& failure) noexcept {
                 workerFailed = true;
                 (void)workerCompletion_.markStartupFailed(failure);
-                failWorker(std::move(failure));
+                failWorker(failure);
                 lifecycle_.completeStop();
                 workerState_ = HttpServerWorkerState::kStopped;
             },
@@ -584,7 +585,9 @@ Task<void> WebWorkerRuntime::runWorker() {
 
 Task<void> WebWorkerRuntime::staticRootRefreshLoop() {
     const auto* refreshOptions = options_.documentRoot.refreshOptions();
-    if (refreshOptions == nullptr) std::terminate();
+    if (refreshOptions == nullptr) {
+        std::terminate();
+    }
     const auto interval = refreshOptions->refreshInterval;
     const auto reclaimRetiredRoots = [this]() noexcept {
         std::erase_if(retiredDocumentRoots_, [](const DocumentRootPtr& root) {
@@ -618,7 +621,7 @@ Task<void> WebWorkerRuntime::staticRootRefreshLoop() {
         }
 
         std::filesystem::path rootPath;
-        StaticRootOptions rootOptions;
+        std::optional<StaticRootConfigStorage> rootConfig;
         try {
             // Both operations copy PMR-backed configuration. They are outside
             // tryRunBlocking because the source snapshot is worker-owned, but a
@@ -626,7 +629,7 @@ Task<void> WebWorkerRuntime::staticRootRefreshLoop() {
             // not a reason to terminate the listener and discard its last
             // complete index.
             rootPath = currentRoot->path();
-            rootOptions = StaticRootAccess::options(*currentRoot);
+            rootConfig.emplace(StaticRootAccess::copyConfig(*currentRoot, processResource()));
         } catch (...) {
             documentRootRefreshFailures_.fetch_add(1, std::memory_order_relaxed);
             continue;
@@ -635,9 +638,9 @@ Task<void> WebWorkerRuntime::staticRootRefreshLoop() {
         try {
             auto rebuilt = co_await ruvia::tryRunBlocking(*options_.blockingPool,
                 workerRuntime_.handle(),
-                [rootPath = std::move(rootPath), rootOptions = std::move(rootOptions)]() mutable {
-                    return makePmrObject<StaticRoot>(
-                        processResource(), rootPath, std::move(rootOptions));
+                [rootPath = std::move(rootPath), rootConfig = std::move(*rootConfig)]() mutable {
+                    return StaticRootAccess::make(
+                        processResource(), rootPath, std::move(rootConfig));
                 });
             if (!rebuilt.completed()) {
                 if (rebuilt.failed()) {

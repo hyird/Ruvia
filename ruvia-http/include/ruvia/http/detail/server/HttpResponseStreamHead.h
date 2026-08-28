@@ -121,7 +121,7 @@ class ResponseStreamHead final {
 public:
     ResponseStreamHead(HttpResponse response, ResponseStreamCommitPlan commitPlan)
         : response_(std::move(response)),
-          commitPlan_(std::move(commitPlan)) {}
+          commitPlan_(commitPlan) {}
 
     [[nodiscard]] HttpResponse& response() & noexcept {
         return response_;
@@ -204,7 +204,7 @@ private:
         setResponseHeaderStableView(response, "Cache-Control", "no-store");
     }
 
-    return ResponseStreamHead(std::move(response), std::move(commitPlan));
+    return ResponseStreamHead(std::move(response), commitPlan);
 }
 
 }  // namespace ruvia::detail

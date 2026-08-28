@@ -1,11 +1,12 @@
 #pragma once
 
 #include <exception>
+#include <cstdint>
 #include <utility>
 
 namespace ruvia::detail {
 
-enum class Http2SansIoSessionPhase {
+enum class Http2SansIoSessionPhase : std::uint8_t {
     kRunning,
     kWriteFailed,
     kStopping,

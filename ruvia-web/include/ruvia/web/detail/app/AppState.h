@@ -25,6 +25,7 @@
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
+#include "ruvia/web/detail/http/static/StaticRootConfigStorage.h"
 
 namespace ruvia::detail {
 
@@ -33,77 +34,23 @@ struct AppState;
 
 void applyServerConfig(AppState& state, const ServerConfig& config);
 
-struct AppStaticMimeType final {
-    explicit AppStaticMimeType(std::pmr::memory_resource* resource)
-        : extension(resource),
-          contentType(resource) {}
-
-    std::pmr::string extension;
-    std::pmr::string contentType;
-};
-
-struct AppStaticRootOptions final {
-    explicit AppStaticRootOptions(std::pmr::memory_resource* resource)
-        : cacheControl(resource),
-          indexFile(resource),
-          defaultContentType("application/octet-stream", resource),
-          mimeTypes(resource),
-          fileTypeExtensions(resource) {}
-
-    std::pmr::string cacheControl;
-    std::pmr::string indexFile;
-    std::pmr::string defaultContentType;
-    std::pmr::vector<AppStaticMimeType> mimeTypes;
-    StaticFileTypePolicy::Kind fileTypeKind{StaticFileTypePolicy::Kind::kDefaults};
-    std::pmr::vector<std::pmr::string> fileTypeExtensions;
-    StaticRangeRequestPolicy rangeRequests{StaticRangeRequestPolicy::kHonor};
-    StaticResponseValidatorPolicy responseValidators{StaticResponseValidatorPolicy::kEmit};
-    StaticDotfilePolicy dotfiles{StaticDotfilePolicy::kDeny};
-};
-
 struct AppDocumentRootConfig final {
-    explicit AppDocumentRootConfig(std::pmr::memory_resource* resource)
+    AppDocumentRootConfig(
+        std::pmr::memory_resource* resource, StaticRootConfigStorage configuredStaticOptions)
         : root(resource),
-          staticOptions(resource) {}
+          staticOptions(std::move(configuredStaticOptions)) {}
 
     NativePathString root;
-    AppStaticRootOptions staticOptions;
+    StaticRootConfigStorage staticOptions;
     DocumentRootRuntimeConfig runtime;
     StaticRootPrecompressionOptions precompression;
-};
-
-struct AppListenerConfig final {
-    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress,
-        std::uint16_t configuredPort, HttpServerListenerDefinition::PlainHttp)
-        : address(configuredAddress, resource),
-          port(configuredPort),
-          transport(std::in_place_type<HttpServerListenerDefinition::PlainHttp>) {}
-
-    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress,
-        std::uint16_t configuredPort, HttpServerListenerDefinition::Tls configuredTransport)
-        : address(configuredAddress, resource),
-          port(configuredPort),
-          transport(std::in_place_type<HttpServerListenerDefinition::Tls>,
-              std::move(configuredTransport)) {}
-
-    AppListenerConfig(std::pmr::memory_resource* resource, std::string_view configuredAddress,
-        std::uint16_t configuredPort,
-        HttpServerListenerDefinition::RedirectHttpToHttps configuredTransport)
-        : address(configuredAddress, resource),
-          port(configuredPort),
-          transport(std::in_place_type<HttpServerListenerDefinition::RedirectHttpToHttps>,
-              configuredTransport) {}
-
-    std::pmr::string address;
-    std::uint16_t port;
-    HttpServerListenerDefinition::Transport transport;
 };
 
 struct AppState final {
     AppState();
     ~AppState();
 
-    std::pmr::vector<AppListenerConfig> listeners{appResource()};
+    std::pmr::vector<HttpServerListenerDefinition> listeners{appResource()};
     std::size_t workerCount{0};
     ProcessSignalHandlerPolicy processSignalHandlers{ProcessSignalHandlerPolicy::kExternalOwner};
     AccessLogCallback accessLogCallback;

@@ -31,7 +31,13 @@ public:
     using PeriodicCheck = void (*)(void*, std::int64_t) noexcept;
     using WorkerMaintenanceCheck = void (*)(void*) noexcept;
 
-    enum class Phase { kIdle, kReadingInitial, kReadingPayload, kLongLived, kWriting };
+    enum class Phase : std::uint8_t {
+        kIdle,
+        kReadingInitial,
+        kReadingPayload,
+        kLongLived,
+        kWriting,
+    };
 
     class Entry;
 

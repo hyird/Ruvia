@@ -98,13 +98,17 @@ public:
           thread_([this, handler = std::move(handler)]() mutable {
               std::error_code error;
               auto socket = acceptor_.accept(error);
-              if (!error) handler(socket);
+              if (!error) {
+                  handler(socket);
+              }
           }) {}
 
     ~OneShotServer() {
         std::error_code ignored;
         acceptor_.close(ignored);
-        if (thread_.joinable()) thread_.join();
+        if (thread_.joinable()) {
+            thread_.join();
+        }
     }
 
     OneShotServer(const OneShotServer&) = delete;
@@ -129,7 +133,9 @@ public:
               for (unsigned exchange = 0; exchange < 2; ++exchange) {
                   std::error_code error;
                   auto socket = acceptor_.accept(error);
-                  if (error) return;
+                  if (error) {
+                      return;
+                  }
                   handler(socket, exchange);
               }
           }) {}
@@ -137,7 +143,9 @@ public:
     ~TwoShotServer() {
         std::error_code ignored;
         acceptor_.close(ignored);
-        if (thread_.joinable()) thread_.join();
+        if (thread_.joinable()) {
+            thread_.join();
+        }
     }
 
     TwoShotServer(const TwoShotServer&) = delete;
@@ -156,7 +164,9 @@ private:
 std::string readHead(asio::ip::tcp::socket& socket, std::error_code& error) {
     asio::streambuf input;
     const auto headBytes = asio::read_until(socket, input, "\r\n\r\n", error);
-    if (error) return {};
+    if (error) {
+        return {};
+    }
     const auto bytes = input.data();
     auto begin = asio::buffers_begin(bytes);
     std::string head(begin, begin + static_cast<std::ptrdiff_t>(headBytes));
@@ -164,15 +174,21 @@ std::string readHead(asio::ip::tcp::socket& socket, std::error_code& error) {
 
     constexpr std::string_view kContentLengthPrefix = "Content-Length: ";
     const auto contentLengthPosition = head.find(kContentLengthPrefix);
-    if (contentLengthPosition == std::string::npos) return head;
+    if (contentLengthPosition == std::string::npos) {
+        return head;
+    }
     const auto valueBegin = contentLengthPosition + kContentLengthPrefix.size();
     const auto valueEnd = head.find("\r\n", valueBegin);
-    if (valueEnd == std::string::npos) return head;
+    if (valueEnd == std::string::npos) {
+        return head;
+    }
     std::size_t contentLength = 0;
     const auto value = std::string_view(head).substr(valueBegin, valueEnd - valueBegin);
     const auto [parsedEnd, parseError] =
         std::from_chars(value.data(), value.data() + value.size(), contentLength);
-    if (parseError != std::errc{} || parsedEnd != value.data() + value.size()) return head;
+    if (parseError != std::errc{} || parsedEnd != value.data() + value.size()) {
+        return head;
+    }
 
     const auto bufferedBodyBytes = input.size() < contentLength ? input.size() : contentLength;
     input.consume(bufferedBodyBytes);
@@ -200,14 +216,16 @@ void writeResponse(
 std::string gzipContent(std::string_view body) {
     auto encoded = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, body,
         {.maxEncodedBytes = body.size() + 1024, .resource = std::pmr::get_default_resource()});
-    if (!encoded.encoded()) throw std::runtime_error("failed to encode test gzip body");
+    if (!encoded.encoded()) {
+        throw std::runtime_error("failed to encode test gzip body");
+    }
     const auto bytes = encoded.encoded()->bytes();
     return {bytes.data(), bytes.size()};
 }
 
 template <typename Exercise>
 int runClient(
-    ruvia::HttpClientConfig config, CountingResource& operationResource, Exercise exercise) {
+    const ruvia::HttpClientConfig& config, CountingResource& operationResource, Exercise exercise) {
     asio::io_context io;
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
@@ -274,7 +292,9 @@ int testOperationArena() {
     OneShotServer server([](asio::ip::tcp::socket& socket) {
         std::error_code error;
         (void)readHead(socket, error);
-        if (!error) writeResponse(socket, std::string(4096, 'r'));
+        if (!error) {
+            writeResponse(socket, std::string(4096, 'r'));
+        }
     });
     auto config = plainConfig(server.port());
     CountingResource operationResource;
@@ -288,9 +308,13 @@ int testOperationArena() {
                 .target = "/",
                 .headers = headers,
             });
-            if (resource->allocations() == before) co_return 1;
+            if (resource->allocations() == before) {
+                co_return 1;
+            }
             auto response = co_await std::move(operation);
-            if ((co_await response.body().readAll()).size() != 4096) co_return 2;
+            if ((co_await response.body().readAll()).size() != 4096) {
+                co_return 2;
+            }
             co_return 0;
         });
 }
@@ -299,7 +323,9 @@ int testResponseLimit() {
     OneShotServer server([](asio::ip::tcp::socket& socket) {
         std::error_code error;
         (void)readHead(socket, error);
-        if (!error) writeResponse(socket, std::string(128, 'x'));
+        if (!error) {
+            writeResponse(socket, std::string(128, 'x'));
+        }
     });
     auto config = plainConfig(server.port());
     config.maxResponseBytes = 16;
@@ -309,7 +335,7 @@ int testResponseLimit() {
             CountingResource*) -> ruvia::Task<int> {
             try {
                 auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-                auto response = co_await client.send(std::move(request));
+                auto response = co_await client.send(request);
                 (void)co_await response.body().readAll();
             } catch (const ruvia::HttpClientError& error) {
                 co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 0 : 2;
@@ -322,7 +348,9 @@ int testClosingInformationalResponse() {
     OneShotServer server([](asio::ip::tcp::socket& socket) {
         std::error_code error;
         (void)readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         constexpr std::string_view response =
             "HTTP/1.1 103 Early Hints\r\n"
             "Connection: close\r\n"
@@ -336,7 +364,7 @@ int testClosingInformationalResponse() {
             CountingResource*) -> ruvia::Task<int> {
             try {
                 auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-                (void)co_await client.send(std::move(request));
+                (void)co_await client.send(request);
             } catch (const ruvia::HttpClientError& error) {
                 co_return error.code() == ruvia::HttpClientError::Code::kProtocolError ? 0 : 2;
             }
@@ -349,11 +377,15 @@ int testTransferCodedResponse() {
     OneShotServer server([encoded](asio::ip::tcp::socket& socket) {
         std::error_code error;
         const auto request = readHead(socket, error);
-        if (error || request.find("te: gzip") == std::string::npos) return;
+        if (error || request.find("te: gzip") == std::string::npos) {
+            return;
+        }
         std::array<char, 32> sizeBytes{};
         const auto [sizeEnd, sizeError] = std::to_chars(
             sizeBytes.data(), sizeBytes.data() + sizeBytes.size(), encoded.size(), 16);
-        if (sizeError != std::errc{}) return;
+        if (sizeError != std::errc{}) {
+            return;
+        }
         std::string response =
             "HTTP/1.1 200 OK\r\n"
             "Transfer-Encoding: gzip, chunked\r\n"
@@ -384,7 +416,9 @@ int testContentEncodedResponse() {
     OneShotServer server([encoded](asio::ip::tcp::socket& socket) {
         std::error_code error;
         (void)readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         writeResponse(socket, encoded, "Content-Encoding: gzip\r\n");
     });
     auto config = plainConfig(server.port());
@@ -393,7 +427,7 @@ int testContentEncodedResponse() {
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
             CountingResource*) -> ruvia::Task<int> {
             auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto response = co_await client.send(std::move(request));
+            auto response = co_await client.send(request);
             co_return co_await response.body().readAll() == "decoded content body" ? 0 : 1;
         });
 }
@@ -404,7 +438,9 @@ int testContentEncodedResponseLimitAppliesAfterDecode() {
     OneShotServer server([encoded](asio::ip::tcp::socket& socket) {
         std::error_code error;
         (void)readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         writeResponse(socket, encoded, "Content-Encoding: gzip\r\n");
     });
     auto config = plainConfig(server.port());
@@ -415,7 +451,7 @@ int testContentEncodedResponseLimitAppliesAfterDecode() {
             CountingResource*) -> ruvia::Task<int> {
             try {
                 auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-                (void)co_await client.send(std::move(request));
+                (void)co_await client.send(request);
             } catch (const ruvia::HttpClientError& error) {
                 co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 0 : 2;
             }
@@ -444,7 +480,7 @@ int testWriteTimeout() {
                     .target = "/",
                     .content = ruvia::HttpClientRequestContentView::bytes(requestBody),
                 };
-                (void)co_await client.send(std::move(request));
+                (void)co_await client.send(request);
             } catch (const ruvia::HttpClientError& error) {
                 co_return error.code() == ruvia::HttpClientError::Code::kTimeout ? 0 : 2;
             }
@@ -455,7 +491,7 @@ int testWriteTimeout() {
 ruvia::Task<void> completeSlowRequest(const ruvia::HttpClientHandle& client, int& result) {
     try {
         auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-        auto response = co_await client.send(std::move(request));
+        auto response = co_await client.send(request);
         result = co_await response.body().readAll() == "ok" ? 1 : -1;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "slow negotiated request failed: %s\n", error.what());
@@ -466,7 +502,7 @@ ruvia::Task<void> completeSlowRequest(const ruvia::HttpClientHandle& client, int
 ruvia::Task<void> timeOutQueuedRequest(const ruvia::HttpClientHandle& client, int& result) {
     try {
         auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-        (void)co_await client.send(std::move(request));
+        (void)co_await client.send(request);
         result = -1;
     } catch (const ruvia::HttpClientError& error) {
         result = error.code() == ruvia::HttpClientError::Code::kTimeout ? 1 : -1;
@@ -478,7 +514,9 @@ int testNegotiatedHttp1AcquireTimeout() {
         std::error_code error;
         (void)readHead(socket, error);
         std::this_thread::sleep_for(150ms);
-        if (!error) writeResponse(socket, "ok");
+        if (!error) {
+            writeResponse(socket, "ok");
+        }
     });
     auto config = plainConfig(server.port());
     config.protocol = ruvia::HttpClientProtocol::kNegotiate;
@@ -539,7 +577,7 @@ int testConnectStopTokenCancellation() {
     auto config = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"};
     config.port = server.port();
     config.protocol = ruvia::HttpClientProtocol::kHttp1Only;
-    config.tlsPeerVerification = ruvia::HttpClientTlsPeerVerificationPolicy::kSkipVerification;
+    config.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification;
     config.connectTimeout = 2s;
     config.requestTimeout = 2s;
     CountingResource operationResource;
@@ -592,7 +630,7 @@ int testUserAgentConfigRejectsInvalidHeaderValue() {
 
 int testTlsPeerVerificationConfigRejectsInvalidPolicy() {
     auto config = plainConfig(1);
-    config.tlsPeerVerification = static_cast<ruvia::HttpClientTlsPeerVerificationPolicy>(0xFF);
+    config.tlsPeerVerification = static_cast<ruvia::TlsPeerVerificationPolicy>(0xFF);
     try {
         ruvia::detail::validateHttpClientConfig(config);
     } catch (const std::invalid_argument&) {
@@ -615,19 +653,24 @@ int testReceivedCookieConfigRejectsInvalidPolicy() {
 int testTcpSocketConfigRejectsInvalidPolicies() {
     auto config = plainConfig(1);
     config.tcpNoDelay = static_cast<ruvia::TcpNoDelayPolicy>(0xFF);
+    bool rejectedNoDelay = false;
     try {
         ruvia::detail::validateHttpClientConfig(config);
-        return 1;
     } catch (const std::invalid_argument&) {
+        rejectedNoDelay = true;
+    }
+    if (!rejectedNoDelay) {
+        return 1;
     }
     config.tcpNoDelay = ruvia::TcpNoDelayPolicy::kEnable;
     config.tcpKeepAlive = static_cast<ruvia::TcpKeepAlivePolicy>(0xFF);
+    bool rejectedKeepAlive = false;
     try {
         ruvia::detail::validateHttpClientConfig(config);
-        return 2;
     } catch (const std::invalid_argument&) {
+        rejectedKeepAlive = true;
     }
-    return 0;
+    return rejectedKeepAlive ? 0 : 2;
 }
 
 int testOperationOptionsRejectNonpositiveTimeout() {
@@ -646,14 +689,18 @@ int testOperationOptionsRejectNonpositiveTimeout() {
         [rejectsInvalidArgument](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
             CountingResource*) -> ruvia::Task<int> {
             if (!rejectsInvalidArgument(
-                    [&client] { (void)client.withOptions({.timeout = 0ms}).send({}); }))
+                    [&client] { (void)client.withOptions({.timeout = 0ms}).send({}); })) {
                 co_return 1;
+            }
             if (!rejectsInvalidArgument(
-                    [&client] { (void)client.withOptions({.timeout = -1ms}).send({}); }))
+                    [&client] { (void)client.withOptions({.timeout = -1ms}).send({}); })) {
                 co_return 2;
+            }
             co_return 0;
         });
-    if (scopedResult != 0) return scopedResult;
+    if (scopedResult != 0) {
+        return scopedResult;
+    }
 
     return 0;
 }
@@ -662,7 +709,9 @@ int testAutomaticCookieCapacity() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
         const auto head = readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         if (exchange == 0) {
             writeResponse(
                 socket, "seeded", "Set-Cookie: a=1; Path=/\r\nSet-Cookie: b=2; Path=/\r\n");
@@ -681,10 +730,12 @@ int testAutomaticCookieCapacity() {
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
             CountingResource*) -> ruvia::Task<int> {
             auto first = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto firstResponse = co_await client.send(std::move(first));
-            if (co_await firstResponse.body().readAll() != "seeded") co_return 1;
+            auto firstResponse = co_await client.send(first);
+            if (co_await firstResponse.body().readAll() != "seeded") {
+                co_return 1;
+            }
             auto second = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto secondResponse = co_await client.send(std::move(second));
+            auto secondResponse = co_await client.send(second);
             co_return co_await secondResponse.body().readAll() == "bounded" ? 0 : 2;
         });
 }
@@ -694,7 +745,9 @@ int testAutomaticCookieInsertionFailureDoesNotRetainPartialCookie() {
     TwoShotServer server([longPath](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
         const auto head = readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         if (exchange == 0) {
             writeResponse(socket, "seeded", "Set-Cookie: bad=1; Path=" + longPath + "\r\n");
             return;
@@ -728,7 +781,7 @@ int testAutomaticCookieInsertionFailureDoesNotRetainPartialCookie() {
         poolResource.failAllocationSizeRange(512, 2048);
         bool storageAllocationFailed = false;
         try {
-            (void)co_await operationClient.send(std::move(first));
+            (void)co_await operationClient.send(first);
         } catch (const std::bad_alloc&) {
             // Expected: the cookie storage allocation failed after the response
             // was parsed. The jar must remain as if that Set-Cookie was ignored.
@@ -737,11 +790,13 @@ int testAutomaticCookieInsertionFailureDoesNotRetainPartialCookie() {
         poolResource.disableFailures();
 
         auto second = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-        auto secondResponse = co_await operationClient.send(std::move(second));
+        auto secondResponse = co_await operationClient.send(second);
         scope.close();
         registry.closeNow();
         co_await registry.join();
-        if (!storageAllocationFailed) co_return 2;
+        if (!storageAllocationFailed) {
+            co_return 2;
+        }
         co_return co_await secondResponse.body().readAll() == "clean" ? 0 : 1;
     };
     auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(task()), asio::use_future);
@@ -757,7 +812,9 @@ int testCookieHostOnlyIdentity() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
         const auto head = readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         if (exchange == 0) {
             writeResponse(socket, "seeded",
                 "Set-Cookie: sid=host-only; Path=/\r\n"
@@ -779,10 +836,12 @@ int testCookieHostOnlyIdentity() {
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
             CountingResource*) -> ruvia::Task<int> {
             auto first = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto firstResponse = co_await client.send(std::move(first));
-            if (co_await firstResponse.body().readAll() != "seeded") co_return 1;
+            auto firstResponse = co_await client.send(first);
+            if (co_await firstResponse.body().readAll() != "seeded") {
+                co_return 1;
+            }
             auto second = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto secondResponse = co_await client.send(std::move(second));
+            auto secondResponse = co_await client.send(second);
             co_return co_await secondResponse.body().readAll() == "distinct" ? 0 : 2;
         });
 }
@@ -791,7 +850,9 @@ int testCookiePathOrdering() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
         const auto head = readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         if (exchange == 0) {
             writeResponse(socket, "seeded",
                 "Set-Cookie: sid=root; Path=/\r\n"
@@ -812,11 +873,13 @@ int testCookiePathOrdering() {
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
             CountingResource*) -> ruvia::Task<int> {
             auto first = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto firstResponse = co_await client.send(std::move(first));
-            if (co_await firstResponse.body().readAll() != "seeded") co_return 1;
+            auto firstResponse = co_await client.send(first);
+            if (co_await firstResponse.body().readAll() != "seeded") {
+                co_return 1;
+            }
             auto second =
                 ruvia::HttpClientRequestView{.method = "GET", .target = "/account/profile"};
-            auto secondResponse = co_await client.send(std::move(second));
+            auto secondResponse = co_await client.send(second);
             co_return co_await secondResponse.body().readAll() == "ordered" ? 0 : 2;
         });
 }
@@ -825,7 +888,9 @@ int testLargeCookieMaxAge() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
         const auto head = readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         if (exchange == 0) {
             writeResponse(socket, "seeded",
                 "Set-Cookie: long_lived=yes; Path=/; Max-Age=9223372036854775807\r\n");
@@ -841,10 +906,12 @@ int testLargeCookieMaxAge() {
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
             CountingResource*) -> ruvia::Task<int> {
             auto first = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto firstResponse = co_await client.send(std::move(first));
-            if (co_await firstResponse.body().readAll() != "seeded") co_return 1;
+            auto firstResponse = co_await client.send(first);
+            if (co_await firstResponse.body().readAll() != "seeded") {
+                co_return 1;
+            }
             auto second = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto secondResponse = co_await client.send(std::move(second));
+            auto secondResponse = co_await client.send(second);
             co_return co_await secondResponse.body().readAll() == "retained" ? 0 : 2;
         });
 }
@@ -853,7 +920,9 @@ int testNamelessResponseCookie() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
         const auto head = readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         if (exchange == 0) {
             writeResponse(socket, "seeded", "Set-Cookie: nameless-value; Path=/\r\n");
             return;
@@ -869,10 +938,12 @@ int testNamelessResponseCookie() {
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
             CountingResource*) -> ruvia::Task<int> {
             auto first = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto firstResponse = co_await client.send(std::move(first));
-            if (co_await firstResponse.body().readAll() != "seeded") co_return 1;
+            auto firstResponse = co_await client.send(first);
+            if (co_await firstResponse.body().readAll() != "seeded") {
+                co_return 1;
+            }
             auto second = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto secondResponse = co_await client.send(std::move(second));
+            auto secondResponse = co_await client.send(second);
             co_return co_await secondResponse.body().readAll() == "serialized" ? 0 : 2;
         });
 }
@@ -881,7 +952,9 @@ int testAutomaticCookieJarRejectsPairsThatCannotBeSerialized() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
         const auto head = readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         if (exchange == 0) {
             writeResponse(socket, "seeded",
                 "Set-Cookie: bad name=1; Path=/\r\n"
@@ -903,10 +976,12 @@ int testAutomaticCookieJarRejectsPairsThatCannotBeSerialized() {
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
             CountingResource*) -> ruvia::Task<int> {
             auto first = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto firstResponse = co_await client.send(std::move(first));
-            if (co_await firstResponse.body().readAll() != "seeded") co_return 1;
+            auto firstResponse = co_await client.send(first);
+            if (co_await firstResponse.body().readAll() != "seeded") {
+                co_return 1;
+            }
             auto second = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto secondResponse = co_await client.send(std::move(second));
+            auto secondResponse = co_await client.send(second);
             co_return co_await secondResponse.body().readAll() == "filtered" ? 0 : 2;
         });
 }
@@ -915,7 +990,9 @@ int testFarFutureCookieExpires() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
         const auto head = readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         if (exchange == 0) {
             writeResponse(socket, "seeded",
                 "Set-Cookie: future=yes; Path=/; Expires=Fri, 31 Dec 9999 23:59:59 GMT\r\n");
@@ -931,10 +1008,12 @@ int testFarFutureCookieExpires() {
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
             CountingResource*) -> ruvia::Task<int> {
             auto first = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto firstResponse = co_await client.send(std::move(first));
-            if (co_await firstResponse.body().readAll() != "seeded") co_return 1;
+            auto firstResponse = co_await client.send(first);
+            if (co_await firstResponse.body().readAll() != "seeded") {
+                co_return 1;
+            }
             auto second = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto secondResponse = co_await client.send(std::move(second));
+            auto secondResponse = co_await client.send(second);
             co_return co_await secondResponse.body().readAll() == "retained" ? 0 : 2;
         });
 }
@@ -943,7 +1022,9 @@ int testCookieStorageSecurityConstraints() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
         const auto head = readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         if (exchange == 0) {
             writeResponse(socket, "seeded",
                 "Set-Cookie: __SeCuRe-named=bad; Path=/\r\n"
@@ -963,10 +1044,12 @@ int testCookieStorageSecurityConstraints() {
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
             CountingResource*) -> ruvia::Task<int> {
             auto first = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto firstResponse = co_await client.send(std::move(first));
-            if (co_await firstResponse.body().readAll() != "seeded") co_return 1;
+            auto firstResponse = co_await client.send(first);
+            if (co_await firstResponse.body().readAll() != "seeded") {
+                co_return 1;
+            }
             auto second = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto secondResponse = co_await client.send(std::move(second));
+            auto secondResponse = co_await client.send(second);
             co_return co_await secondResponse.body().readAll() == "rejected" ? 0 : 2;
         });
 }
@@ -975,7 +1058,9 @@ int testIpCookieDomainSuffixRejection() {
     TwoShotServer server([](asio::ip::tcp::socket& socket, unsigned exchange) {
         std::error_code error;
         const auto head = readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         if (exchange == 0) {
             writeResponse(socket, "seeded",
                 "Set-Cookie: suffix=bad; Domain=0.0.1; Path=/\r\n"
@@ -993,10 +1078,12 @@ int testIpCookieDomainSuffixRejection() {
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
             CountingResource*) -> ruvia::Task<int> {
             auto first = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto firstResponse = co_await client.send(std::move(first));
-            if (co_await firstResponse.body().readAll() != "seeded") co_return 1;
+            auto firstResponse = co_await client.send(first);
+            if (co_await firstResponse.body().readAll() != "seeded") {
+                co_return 1;
+            }
             auto second = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto secondResponse = co_await client.send(std::move(second));
+            auto secondResponse = co_await client.send(second);
             co_return co_await secondResponse.body().readAll() == "restricted" ? 0 : 2;
         });
 }
@@ -1005,7 +1092,9 @@ int testHttp1ResponseTrailers() {
     OneShotServer server([](asio::ip::tcp::socket& socket) {
         std::error_code error;
         (void)readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         constexpr std::string_view response =
             "HTTP/1.1 200 OK\r\n"
             "Transfer-Encoding: chunked\r\n"
@@ -1025,10 +1114,13 @@ int testHttp1ResponseTrailers() {
         [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
             CountingResource*) -> ruvia::Task<int> {
             auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto response = co_await client.send(std::move(request));
-            if (co_await response.body().readAll() != "abc") co_return 1;
-            if (response.trailer("server-timing") != std::optional<std::string_view>("db;dur=4"))
+            auto response = co_await client.send(request);
+            if (co_await response.body().readAll() != "abc") {
+                co_return 1;
+            }
+            if (response.trailer("server-timing") != std::optional<std::string_view>("db;dur=4")) {
                 co_return 2;
+            }
             co_return response.trailer("x-trace") == std::optional<std::string_view>("done") ? 0
                                                                                              : 3;
         });
@@ -1038,7 +1130,9 @@ int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
     OneShotServer server([](asio::ip::tcp::socket& socket) {
         std::error_code error;
         (void)readHead(socket, error);
-        if (error) return;
+        if (error) {
+            return;
+        }
         constexpr std::string_view response =
             "HTTP/1.1 101 Switching Protocols\r\n"
             "Connection: Upgrade\r\n"
@@ -1062,11 +1156,17 @@ int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
                     .content = ruvia::HttpClientRequestContentView::bytes("payload"),
                 });
             } catch (const ruvia::HttpClientError& error) {
-                if (error.code() != ruvia::HttpClientError::Code::kProtocolError) co_return 1;
+                if (error.code() != ruvia::HttpClientError::Code::kProtocolError) {
+                    co_return 1;
+                }
                 const std::string_view message(error.what());
-                if (message == "HTTP tunnel and protocol upgrade responses require a dedicated API")
+                if (message ==
+                    "HTTP tunnel and protocol upgrade responses require a dedicated API") {
                     co_return 0;
-                if (message == "invalid Switching Protocols response") co_return 2;
+                }
+                if (message == "invalid Switching Protocols response") {
+                    co_return 2;
+                }
                 co_return 3;
             }
             co_return 4;

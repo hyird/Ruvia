@@ -53,7 +53,7 @@ public:
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/one", one, ConfiguredByType<2>);
     RUVIA_GET("/two", two, ConfiguredByTwoValues<10, 1000>);
-    RUVIA_GET("/limited", limited, ruvia::RateLimit<10, 1000>);
+    RUVIA_GET("/limited", limited, ruvia::RateLimit<10, 60'000>);
     RUVIA_POST("/small", small, ruvia::BodyLimit<16>);
     RUVIA_POST("/default", defaultBody);
     RUVIA_GET("/deadline", deadline, ruvia::Deadline<100>);

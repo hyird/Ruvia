@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -67,12 +68,52 @@ public:
     static constexpr bool ruviaRunsOnUnmatchedRequests = true;
 
     SecurityHeadersMiddleware();
-    explicit SecurityHeadersMiddleware(SecurityHeadersConfig config);
+    explicit SecurityHeadersMiddleware(const SecurityHeadersConfig& config);
+
+    SecurityHeadersMiddleware(const SecurityHeadersMiddleware&) = delete;
+    SecurityHeadersMiddleware& operator=(const SecurityHeadersMiddleware&) = delete;
+    SecurityHeadersMiddleware(SecurityHeadersMiddleware&&) = delete;
+    SecurityHeadersMiddleware& operator=(SecurityHeadersMiddleware&&) = delete;
 
     Task<void> handle(Context& context, Next& next);
 
 private:
-    SecurityHeadersConfig config_{};
+    struct StoredHeader final {
+        StoredHeader(
+            std::string_view name, std::string_view value, std::pmr::memory_resource* resource);
+
+        std::pmr::string name;
+        std::pmr::string value;
+    };
+
+    struct ConfigStorage final {
+        ConfigStorage(const SecurityHeadersConfig& source, std::pmr::memory_resource* resource);
+
+        bool emitContentTypeOptions;
+        bool emitFrameOptions;
+        bool emitStrictTransportSecurity;
+        bool emitDisabledXssProtection;
+        bool replaceExisting;
+        std::pmr::string contentSecurityPolicy;
+        std::pmr::string referrerPolicy;
+        std::pmr::string permissionsPolicy;
+        std::pmr::vector<StoredHeader> customHeaders;
+
+    private:
+        struct ValidatedConfig final {
+            const SecurityHeadersConfig* source;
+            bool emitContentTypeOptions;
+            bool emitFrameOptions;
+            bool emitStrictTransportSecurity;
+            bool emitDisabledXssProtection;
+            bool replaceExisting;
+        };
+
+        [[nodiscard]] static ValidatedConfig validate(const SecurityHeadersConfig& source);
+        ConfigStorage(ValidatedConfig source, std::pmr::memory_resource* resource);
+    };
+
+    ConfigStorage config_;
 };
 
 }  // namespace ruvia

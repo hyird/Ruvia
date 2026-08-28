@@ -13,14 +13,18 @@ HttpChunkTrailerParseResult HttpChunkTrailerParser::fail(HttpChunkScanError erro
 }
 
 HttpChunkTrailerParseResult HttpChunkTrailerParser::next() noexcept {
-    if (failure_) return HttpChunkTrailerParseResult(HttpChunkTrailerFailure(*failure_));
+    if (failure_) {
+        return HttpChunkTrailerParseResult(HttpChunkTrailerFailure(*failure_));
+    }
     if (cursor_ == 0 && trailers_.size() > kMaxHttpHeaderBytes) {
         return fail(HttpChunkScanError::kTooLarge);
     }
     if (cursor_ == trailers_.size()) {
         return HttpChunkTrailerParseResult(HttpChunkTrailerEnd());
     }
-    if (fieldCount_ == kMaxHttpHeaderFields) return fail(HttpChunkScanError::kTooLarge);
+    if (fieldCount_ == kMaxHttpHeaderFields) {
+        return fail(HttpChunkScanError::kTooLarge);
+    }
     ++fieldCount_;
 
     const auto lineEnd = trailers_.find("\r\n", cursor_);
@@ -51,8 +55,12 @@ std::optional<HttpChunkScanError> validateHttpChunkTrailers(std::string_view tra
     HttpChunkTrailerParser parser(trailers);
     for (;;) {
         const auto result = parser.next();
-        if (const auto* failure = result.failure()) return failure->error();
-        if (result.end()) return std::nullopt;
+        if (const auto* failure = result.failure()) {
+            return failure->error();
+        }
+        if (result.end()) {
+            return std::nullopt;
+        }
     }
 }
 

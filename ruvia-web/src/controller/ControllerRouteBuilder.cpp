@@ -99,8 +99,8 @@ void detail::ControllerRouteBuilder::registerRoute(HttpKnownMethod method, std::
     ControllerRouteHandler handler, RequestBodyMode bodyMode,
     std::span<const ControllerMiddlewareDescriptor> middlewares) const {
     RouterImpl::from(impl_->router())
-        .registerRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler),
-            bodyMode, impl_->middlewares(), middlewares);
+        .registerRoute(method, joinControllerPaths(impl_->prefix(), path), handler, bodyMode,
+            impl_->middlewares(), middlewares);
 }
 
 void detail::ControllerRouteBuilder::registerExtensionMethodRoute(std::string_view methodToken,
@@ -108,22 +108,22 @@ void detail::ControllerRouteBuilder::registerExtensionMethodRoute(std::string_vi
     std::span<const ControllerMiddlewareDescriptor> middlewares) const {
     RouterImpl::from(impl_->router())
         .registerExtensionMethodRoute(methodToken, joinControllerPaths(impl_->prefix(), path),
-            std::move(handler), bodyMode, impl_->middlewares(), middlewares);
+            handler, bodyMode, impl_->middlewares(), middlewares);
 }
 
 void detail::ControllerRouteBuilder::registerResponseStreamRoute(HttpKnownMethod method,
     std::string_view path, ControllerRouteStreamHandler handler,
     std::span<const ControllerMiddlewareDescriptor> middlewares) const {
     RouterImpl::from(impl_->router())
-        .registerResponseStreamRoute(method, joinControllerPaths(impl_->prefix(), path),
-            std::move(handler), impl_->middlewares(), middlewares);
+        .registerResponseStreamRoute(method, joinControllerPaths(impl_->prefix(), path), handler,
+            impl_->middlewares(), middlewares);
 }
 
 void detail::ControllerRouteBuilder::registerSseRoute(HttpKnownMethod method, std::string_view path,
     ControllerRouteStreamHandler handler,
     std::span<const ControllerMiddlewareDescriptor> middlewares) const {
     RouterImpl::from(impl_->router())
-        .registerSseRoute(method, joinControllerPaths(impl_->prefix(), path), std::move(handler),
+        .registerSseRoute(method, joinControllerPaths(impl_->prefix(), path), handler,
             impl_->middlewares(), middlewares);
 }
 
@@ -132,12 +132,12 @@ void detail::ControllerRouteBuilder::registerWebSocketRoute(HttpKnownMethod meth
     std::span<const ControllerMiddlewareDescriptor> middlewares,
     WebSocketRouteConfig webSocketConfig) const {
     RouterImpl::from(impl_->router())
-        .registerWebSocketRoute(method, joinControllerPaths(impl_->prefix(), path),
-            std::move(handler), impl_->middlewares(), middlewares, std::move(webSocketConfig));
+        .registerWebSocketRoute(method, joinControllerPaths(impl_->prefix(), path), handler,
+            impl_->middlewares(), middlewares, std::move(webSocketConfig));
 }
 
-detail::ControllerRouteBuilder detail::ControllerRouteBuilder::createScope(
-    std::string_view prefix, std::pmr::vector<ControllerMiddlewareDescriptor> middlewares) const {
+detail::ControllerRouteBuilder detail::ControllerRouteBuilder::createScope(std::string_view prefix,
+    const std::pmr::vector<ControllerMiddlewareDescriptor>& middlewares) const {
     auto merged = mergeMiddlewareDescriptors(impl_->middlewares(), middlewares);
     return ControllerRouteBuilder(impl_->router(), joinControllerPaths(impl_->prefix(), prefix),
         std::move(merged), OwnedPrefixTag{});

@@ -156,7 +156,7 @@ ConnectionScanner::Guard::~Guard() {
 
 ConnectionScanner::ConnectionScanner(WorkerHandle worker, ConnectionScannerOptions options)
     : worker_(std::move(worker)),
-      options_(std::move(options)),
+      options_(options),
       cachedNowMs_(steadyNowMs()) {
     if (options_.scanInterval.count() <= 0) {
         throw std::invalid_argument("connection scanner interval must be greater than zero");

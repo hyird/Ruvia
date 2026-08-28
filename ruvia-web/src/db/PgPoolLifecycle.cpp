@@ -1,5 +1,4 @@
 #include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbSlotSocket.h"
 #include "ruvia/web/detail/db/DbUtils.h"
 
@@ -42,7 +41,6 @@ PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, DbConfigStorage conf
       slots_(resource_),
       scheduler_(1, resource_),
       worker_(worker == nullptr ? WorkerHandle{} : *worker) {
-    validateDbConfig(config_);
     if (config_.driver != DbDriver::kPostgreSql) {
         throw std::invalid_argument("PostgreSQL pool requires the PostgreSQL driver");
     }

@@ -61,10 +61,10 @@ public:
         kClosing,
     };
 
-    DbError(Code code, std::optional<DbDriver> driver, std::string message,
+    DbError(Code code, std::optional<DbDriver> driver, const std::string& message,
         std::optional<std::int64_t> nativeCode = std::nullopt, std::string sqlState = {},
         std::string constraintName = {})
-        : std::runtime_error(std::move(message)),
+        : std::runtime_error(message),
           code_(code),
           driver_(driver),
           nativeCode_(nativeCode),
@@ -129,8 +129,8 @@ public:
         kOutOfRange,
     };
 
-    DbConversionError(Code code, std::string message)
-        : std::runtime_error(std::move(message)),
+    DbConversionError(Code code, const std::string& message)
+        : std::runtime_error(message),
           code_(code) {}
 
     [[nodiscard]] Code code() const noexcept {
@@ -209,6 +209,8 @@ private:
 
 public:
     DbField(DbField&& other) noexcept;
+    // A different PMR resource can require allocation during assignment.
+    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     DbField& operator=(DbField&& other);
 
     DbField(const DbField&) = delete;
@@ -290,6 +292,8 @@ private:
 
 public:
     DbRow(DbRow&& other) noexcept;
+    // A different PMR resource can require allocation during assignment.
+    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
     DbRow& operator=(DbRow&& other);
 
     DbRow(const DbRow&) = delete;

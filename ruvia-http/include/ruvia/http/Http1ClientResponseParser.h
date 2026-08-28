@@ -177,7 +177,7 @@ private:
         Http1ClientCloseDelimitedResponse>;
 
     explicit constexpr Http1ClientResponseWithZeroContent(Framing framing) noexcept
-        : framing_(std::move(framing)) {}
+        : framing_(framing) {}
 
     Framing framing_;
 };
@@ -261,7 +261,7 @@ private:
 
     Http1ClientResponsePlan(
         State state, std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept
-        : state_(std::move(state)),
+        : state_(state),
           requestContentSignal_(requestContentSignal) {}
 
     State state_;
@@ -336,7 +336,7 @@ private:
     Http1ParsedClientResponseHead(HttpClientResponseHead head, Http1ClientResponsePlan plan,
         std::size_t consumedBytes) noexcept
         : head_(std::move(head)),
-          plan_(std::move(plan)),
+          plan_(plan),
           consumedBytes_(consumedBytes) {}
 
     HttpClientResponseHead head_;
@@ -419,16 +419,16 @@ private:
     friend struct detail::Http1ClientResponseParseResultAccess;
 
     explicit Http1ClientResponseParseResult(Http1ClientResponseNeedMore state) noexcept
-        : state_(std::move(state)) {}
+        : state_(state) {}
 
     explicit Http1ClientResponseParseResult(Http1ParsedClientResponseHead state) noexcept
         : state_(std::move(state)) {}
 
     explicit Http1ClientResponseParseResult(Http1ClientResponseParseFailure state) noexcept
-        : state_(std::move(state)) {}
+        : state_(state) {}
 
     explicit Http1ClientResponseParseResult(Http1ClientResponseParseTerminal state) noexcept
-        : state_(std::move(state)) {}
+        : state_(state) {}
 
     std::variant<Http1ClientResponseNeedMore, Http1ParsedClientResponseHead,
         Http1ClientResponseParseFailure, Http1ClientResponseParseTerminal>

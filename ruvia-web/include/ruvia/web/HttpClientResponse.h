@@ -9,6 +9,7 @@
 
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpLimits.h"
 
 namespace ruvia {
 
@@ -36,7 +37,7 @@ public:
     // Collects the unread remainder of this same stream. maxBytes is a caller
     // bound in addition to the origin's transport bound.
     [[nodiscard]] ScopedOperation<std::pmr::string> readAll(
-        std::size_t maxBytes = 16 * 1024 * 1024);
+        std::size_t maxBytes = kDefaultMaxBufferedBodyBytes);
 
     // Copies this same stream into a controller response stream with natural
     // backpressure. This is the common forwarding path for both small and

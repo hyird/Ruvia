@@ -83,7 +83,7 @@ private:
     friend class RouteEndpoint;
 
     WebSocketRouteEndpoint(std::pmr::memory_resource* resource, RouteStreamHandler handler,
-        WebSocketRouteConfig options)
+        const WebSocketRouteConfig& options)
         : handler_(handler),
           subprotocols_(options.subprotocols, resource),
           lifecycle_(options.lifecycle) {}

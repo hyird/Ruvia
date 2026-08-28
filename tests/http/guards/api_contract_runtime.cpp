@@ -229,7 +229,9 @@ int main() {
     (void)publicConnectClient.consumeOutput(publicConnectClient.pendingOutput().size());
     const auto publicConnect = publicConnectClient.submitRequestHead(
         ruvia::Http2ConnectRequestHeadView{.authority = "example.test:443"});
-    if (publicConnect.submitted() == nullptr) return 63;
+    if (publicConnect.submitted() == nullptr) {
+        return 63;
+    }
     (void)publicConnectClient.submitReset(
         publicConnect.submitted()->streamId(), ruvia::Http2ErrorCode::kCancel);
 
@@ -244,8 +246,9 @@ int main() {
             .target = "/ws"});
     if (unavailableExtendedConnect.failure() == nullptr ||
         unavailableExtendedConnect.failure()->error() !=
-            ruvia::Http2RequestHeadSubmitError::kPeerCapabilityUnavailable)
+            ruvia::Http2RequestHeadSubmitError::kPeerCapabilityUnavailable) {
         return 64;
+    }
     constexpr std::array<char, 6> enableConnectProtocol{0, 8, 0, 0, 0, 1};
     static_assert(enableConnectProtocol.size() <= (std::numeric_limits<std::uint32_t>::max)());
     std::array<char, ruvia::kHttp2FrameHeaderBytes> enableConnectHeader{};
@@ -255,14 +258,17 @@ int main() {
     std::pmr::string enableConnectWire(&publicProtocolResource);
     enableConnectWire.append(enableConnectHeader.data(), enableConnectHeader.size());
     enableConnectWire.append(enableConnectProtocol.data(), enableConnectProtocol.size());
-    if (publicExtendedConnectClient.feed(enableConnectWire) != ruvia::Http2FeedResult::kAccepted)
+    if (publicExtendedConnectClient.feed(enableConnectWire) != ruvia::Http2FeedResult::kAccepted) {
         return 65;
+    }
     const auto publicExtendedConnect = publicExtendedConnectClient.submitRequestHead(
         ruvia::Http2ExtendedConnectRequestHeadView{.protocol = "custom",
             .scheme = "https",
             .authority = "example.test",
             .target = "/tunnel"});
-    if (publicExtendedConnect.submitted() == nullptr) return 66;
+    if (publicExtendedConnect.submitted() == nullptr) {
+        return 66;
+    }
     (void)publicExtendedConnectClient.submitReset(
         publicExtendedConnect.submitted()->streamId(), ruvia::Http2ErrorCode::kCancel);
 
@@ -287,7 +293,9 @@ int main() {
     appendPublicFrame(ruvia::Http2FrameType::kHeaders, 0x4, 1, publicRequestHead);
     appendPublicFrame(ruvia::Http2FrameType::kData, 0, 1, "a");
     appendPublicFrame(ruvia::Http2FrameType::kData, 0x1, 1, "b");
-    if (publicServer.feed(publicRequestWire) != ruvia::Http2FeedResult::kAccepted) return 62;
+    if (publicServer.feed(publicRequestWire) != ruvia::Http2FeedResult::kAccepted) {
+        return 62;
+    }
     auto publicRequestEvent = publicServer.nextEvent();
     auto firstChunkEvent = publicServer.nextEvent();
     auto secondChunkEvent = publicServer.nextEvent();
@@ -298,12 +306,15 @@ int main() {
     if (publicRequestHeadEvent == nullptr || publicRequestHeadEvent->request().method() != "POST" ||
         firstChunk == nullptr || firstChunk->bytes() != "a" || secondChunk == nullptr ||
         secondChunk->bytes() != "b" || !publicRequestEnd ||
-        publicRequestEnd->messageEnd() == nullptr)
+        publicRequestEnd->messageEnd() == nullptr) {
         return 62;
+    }
 
     auto otherPublicServer = ruvia::Http2Connection::server({.resource = &publicProtocolResource});
     (void)otherPublicServer.consumeOutput(otherPublicServer.pendingOutput().size());
-    if (otherPublicServer.feed(publicRequestWire) != ruvia::Http2FeedResult::kAccepted) return 62;
+    if (otherPublicServer.feed(publicRequestWire) != ruvia::Http2FeedResult::kAccepted) {
+        return 62;
+    }
     auto otherRequestEvent = otherPublicServer.nextEvent();
     auto otherFirstChunkEvent = otherPublicServer.nextEvent();
     auto otherSecondChunkEvent = otherPublicServer.nextEvent();
@@ -313,37 +324,45 @@ int main() {
         otherFirstChunkEvent ? otherFirstChunkEvent->messageBodyChunk() : nullptr;
     auto* otherSecondChunk =
         otherSecondChunkEvent ? otherSecondChunkEvent->messageBodyChunk() : nullptr;
-    if (otherRequestHead == nullptr || otherFirstChunk == nullptr || otherSecondChunk == nullptr)
+    if (otherRequestHead == nullptr || otherFirstChunk == nullptr || otherSecondChunk == nullptr) {
         return 62;
+    }
     auto foreignCredit = otherFirstChunk->takeCredit();
     if (publicServer.acknowledge(std::move(foreignCredit)) !=
             ruvia::Http2ReceivedDataAcknowledgeStatus::kInvalidCredit ||
         otherPublicServer.acknowledge(std::move(foreignCredit)) !=
             ruvia::Http2ReceivedDataAcknowledgeStatus::kAcknowledged ||
         otherPublicServer.acknowledge(otherSecondChunk->takeCredit()) !=
-            ruvia::Http2ReceivedDataAcknowledgeStatus::kAcknowledged)
+            ruvia::Http2ReceivedDataAcknowledgeStatus::kAcknowledged) {
         return 62;
+    }
     if (publicServer.release(std::move(*otherRequestHead)) !=
             ruvia::Http2ServerRequestReleaseStatus::kInvalidLease ||
         otherPublicServer.release(std::move(*otherRequestHead)) !=
-            ruvia::Http2ServerRequestReleaseStatus::kReleased)
+            ruvia::Http2ServerRequestReleaseStatus::kReleased) {
         return 62;
+    }
 
     auto firstCredit = firstChunk->takeCredit();
     if (publicServer.acknowledge(std::move(firstCredit)) !=
             ruvia::Http2ReceivedDataAcknowledgeStatus::kAcknowledged ||
         publicServer.acknowledge(std::move(firstCredit)) !=
-            ruvia::Http2ReceivedDataAcknowledgeStatus::kInvalidCredit)
+            ruvia::Http2ReceivedDataAcknowledgeStatus::kInvalidCredit) {
         return 62;
+    }
     if (publicServer.acknowledge(secondChunk->takeCredit()) !=
-        ruvia::Http2ReceivedDataAcknowledgeStatus::kAcknowledged)
+        ruvia::Http2ReceivedDataAcknowledgeStatus::kAcknowledged) {
         return 62;
+    }
     if (publicServer.release(std::move(*publicRequestHeadEvent)) !=
             ruvia::Http2ServerRequestReleaseStatus::kReleased ||
         publicServer.release(std::move(*publicRequestHeadEvent)) !=
-            ruvia::Http2ServerRequestReleaseStatus::kInvalidLease)
+            ruvia::Http2ServerRequestReleaseStatus::kInvalidLease) {
         return 62;
-    if (!publicRequestHeadEvent->request().method().empty()) return 62;
+    }
+    if (!publicRequestHeadEvent->request().method().empty()) {
+        return 62;
+    }
 
     bool invalidWebSocketCompressionRejected = false;
     try {
@@ -353,7 +372,9 @@ int main() {
     } catch (const std::invalid_argument&) {
         invalidWebSocketCompressionRejected = true;
     }
-    if (!invalidWebSocketCompressionRejected) return 60;
+    if (!invalidWebSocketCompressionRejected) {
+        return 60;
+    }
 
     ruvia::WebSocketServerConnection publicWebSocket({.resource = &publicProtocolResource});
     constexpr std::array<unsigned char, 6> websocketPayload{'p', 'u', 'b', 'l', 'i', 'c'};
@@ -361,18 +382,22 @@ int main() {
     std::array<char, 12> websocketFrame{};
     websocketFrame[0] = static_cast<char>(0x81);
     websocketFrame[1] = static_cast<char>(0x80 | websocketPayload.size());
-    for (std::size_t index = 0; index < websocketMask.size(); ++index)
+    for (std::size_t index = 0; index < websocketMask.size(); ++index) {
         websocketFrame[2 + index] = static_cast<char>(websocketMask[index]);
-    for (std::size_t index = 0; index < websocketPayload.size(); ++index)
+    }
+    for (std::size_t index = 0; index < websocketPayload.size(); ++index) {
         websocketFrame[6 + index] = static_cast<char>(
             websocketPayload[index] ^ websocketMask[index % websocketMask.size()]);
+    }
     if (publicWebSocket.feed(std::string_view(websocketFrame.data(), websocketFrame.size())) !=
-        ruvia::WebSocketFeedStatus::kAccepted)
+        ruvia::WebSocketFeedStatus::kAccepted) {
         return 60;
+    }
     const auto websocketEvent = publicWebSocket.nextEvent();
     if (!websocketEvent || websocketEvent->message() == nullptr ||
-        websocketEvent->message()->payload() != "public")
+        websocketEvent->message()->payload() != "public") {
         return 60;
+    }
     if (publicWebSocket.submitFrame(ruvia::WebSocketOpcode::kText, "public") !=
             ruvia::WebSocketFrameSubmitStatus::kAccepted ||
         publicWebSocket.outputPlan().bytes().empty()) {

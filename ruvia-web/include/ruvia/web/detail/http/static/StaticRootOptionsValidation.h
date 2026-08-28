@@ -23,6 +23,20 @@ namespace ruvia::detail {
 
 inline void validateStaticRootOptions(const StaticRootOptions& options) {
     (void)staticRootServesDotfiles(options.dotfiles);
+    switch (options.rangeRequests) {
+        case StaticRangeRequestPolicy::kIgnore:
+        case StaticRangeRequestPolicy::kHonor:
+            break;
+        default:
+            throw std::invalid_argument("invalid static range request policy");
+    }
+    switch (options.responseValidators) {
+        case StaticResponseValidatorPolicy::kOmit:
+        case StaticResponseValidatorPolicy::kEmit:
+            break;
+        default:
+            throw std::invalid_argument("invalid static response validator policy");
+    }
     if (!ruvia::isValidHttpHeaderValue(options.cacheControl) ||
         (!options.defaultContentType.empty() &&
             !ruvia::detail::isValidHttpContentTypeFieldValue(options.defaultContentType))) {

@@ -1,8 +1,12 @@
 #include <array>
+#include <atomic>
+#include <bit>
 #include <cstdio>
+#include <cstdint>
 #include <exception>
 #include <future>
 #include <istream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -32,14 +36,16 @@ public:
     ~WebSocketOrigin() {
         std::error_code ignored;
         acceptor_.close(ignored);
-        if (thread_.joinable()) thread_.join();
+        if (thread_.joinable()) {
+            thread_.join();
+        }
     }
 
     [[nodiscard]] std::uint16_t port() const {
         return acceptor_.local_endpoint().port();
     }
-    [[nodiscard]] bool receivedText() const noexcept {
-        return receivedText_;
+    [[nodiscard]] bool succeeded() const noexcept {
+        return succeeded_.load(std::memory_order_acquire);
     }
 
 private:
@@ -47,7 +53,9 @@ private:
         std::size_t cursor = request.find("\r\n") + 2;
         while (cursor < request.size()) {
             const auto end = request.find("\r\n", cursor);
-            if (end == cursor || end == std::string_view::npos) break;
+            if (end == cursor || end == std::string_view::npos) {
+                break;
+            }
             const auto line = request.substr(cursor, end - cursor);
             const auto colon = line.find(':');
             if (colon != std::string_view::npos &&
@@ -63,16 +71,20 @@ private:
         std::array<unsigned char, 2> head{};
         asio::read(socket, asio::buffer(head));
         if ((head[0] & 0x0FU) != expectedOpcode || (head[1] & 0x80U) == 0 ||
-            (head[1] & 0x7FU) > 125)
+            (head[1] & 0x7FU) > 125) {
             return {};
+        }
         const auto size = static_cast<std::size_t>(head[1] & 0x7FU);
         std::array<unsigned char, 4> mask{};
         asio::read(socket, asio::buffer(mask));
         std::string payload(size, '\0');
-        if (size != 0) asio::read(socket, asio::buffer(payload));
-        for (std::size_t i = 0; i < size; ++i)
+        if (size != 0) {
+            asio::read(socket, asio::buffer(payload));
+        }
+        for (std::size_t i = 0; i < size; ++i) {
             payload[i] =
                 static_cast<char>(static_cast<unsigned char>(payload[i]) ^ mask[i % mask.size()]);
+        }
         return payload;
     }
 
@@ -95,8 +107,9 @@ private:
                 asio::buffers_begin(buffer.data()), asio::buffers_end(buffer.data()));
             const auto key = header(request, "Sec-WebSocket-Key");
             if (key.empty() ||
-                !ruvia::detail::httpHasToken(header(request, "Upgrade"), "websocket"))
+                !ruvia::detail::httpHasToken(header(request, "Upgrade"), "websocket")) {
                 return;
+            }
             ruvia::detail::WebSocketAcceptKey accept{};
             ruvia::detail::encodeWebSocketAccept(accept, key);
             std::string response =
@@ -106,39 +119,88 @@ private:
             response += "\r\nSec-WebSocket-Protocol: chat\r\n\r\n";
             asio::write(socket, asio::buffer(response));
 
-            receivedText_ = readClientFrame(socket, 0x1) == "hello";
+            const bool receivedText = readClientFrame(socket, 0x1) == "hello";
             writeServerFrame(socket, 0x1, "world");
             const auto close = readClientFrame(socket, 0x8);
-            if (close.size() >= 2) writeServerFrame(socket, 0x8, close);
+            if (close.size() >= 2) {
+                writeServerFrame(socket, 0x8, close);
+            }
+            succeeded_.store(receivedText, std::memory_order_release);
         } catch (...) {
+            succeeded_.store(false, std::memory_order_release);
         }
     }
 
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     std::thread thread_;
-    bool receivedText_{false};
+    std::atomic_bool succeeded_{false};
 };
 
 ruvia::Task<int> exercise(ruvia::WebSocketClient& client, ruvia::WorkerId expectedWorker) {
     co_await client.connect();
     if (!client.connected() || !client.worker().isCurrent() ||
-        client.worker().id() != expectedWorker || client.subprotocol() != "chat")
+        client.worker().id() != expectedWorker || client.subprotocol() != "chat") {
         co_return 1;
+    }
     co_await client.text("hello");
     const auto message = co_await client.read();
-    if (!message.has_value() || !message->text() || message->payload() != "world") co_return 2;
+    if (!message.has_value() || !message->text() || message->payload() != "world") {
+        co_return 2;
+    }
     co_await client.close({.code = 1000});
     co_return 0;
+}
+
+bool rejectsClientConfig(const ruvia::EventLoop& loop, const ruvia::WebSocketClientConfig& config) {
+    try {
+        ruvia::WebSocketClient client(loop, config);
+        return false;
+    } catch (const std::invalid_argument&) {
+        return true;
+    }
 }
 
 }  // namespace
 
 int main() {
     try {
-        WebSocketOrigin origin;
         ruvia::EventLoopPool loops({.loopCount = 1});
         auto loop = loops.loop(0);
+        ruvia::WebSocketClientConfig invalidConfig{
+            .scheme = ruvia::WebSocketScheme::kWs,
+            .host = "127.0.0.1",
+            .port = 80,
+        };
+        invalidConfig.scheme = std::bit_cast<ruvia::WebSocketScheme>(std::uint8_t{255});
+        if (!rejectsClientConfig(loop, invalidConfig)) {
+            return 1;
+        }
+        invalidConfig.scheme = ruvia::WebSocketScheme::kWs;
+        invalidConfig.port = 0;
+        if (!rejectsClientConfig(loop, invalidConfig)) {
+            return 2;
+        }
+        invalidConfig.port = 80;
+        invalidConfig.tcpNoDelay = static_cast<ruvia::TcpNoDelayPolicy>(255);
+        if (!rejectsClientConfig(loop, invalidConfig)) {
+            return 3;
+        }
+        invalidConfig.tcpNoDelay = ruvia::TcpNoDelayPolicy::kEnable;
+        invalidConfig.certificateChainFile = "client.pem";
+        if (!rejectsClientConfig(loop, invalidConfig)) {
+            return 4;
+        }
+
+        invalidConfig.privateKeyFile = "client-key.pem";
+        invalidConfig.headers.emplace_back("X-Test", "safe\r\ninjected: true");
+        if (!rejectsClientConfig(loop, invalidConfig)) {
+            return 5;
+        }
+        invalidConfig.headers.clear();
+        ruvia::WebSocketClient plainClientWithInactiveTlsConfig(loop, invalidConfig);
+
+        WebSocketOrigin origin;
         ruvia::WebSocketClient client(loop, {
                                                 .scheme = ruvia::WebSocketScheme::kWs,
                                                 .host = "127.0.0.1",
@@ -153,18 +215,23 @@ int main() {
             ruvia::detail::asyncStartTask(exercise(client, loop.id()),
                 asio::bind_executor(loop.executor(),
                     [&completion](ruvia::detail::TaskCompletionResult<int> result) {
-                        if (auto* success = result.success())
+                        if (auto* success = result.success()) {
                             completion.set_value(std::move(*success).takeValue());
-                        else
+                        } else {
                             completion.set_exception(result.failure()->exception());
+                        }
                     }));
         });
-        if (!posted.accepted()) return 2;
+        if (!posted.accepted()) {
+            return 2;
+        }
         const auto result = future.get();
         loops.stop();
         loops.join();
-        if (result != 0) return 10 + result;
-        return origin.receivedText() ? 0 : 20;
+        if (result != 0) {
+            return 10 + result;
+        }
+        return origin.succeeded() ? 0 : 20;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "WebSocket client test failed: %s\n", error.what());
         return 100;

@@ -70,23 +70,31 @@ RUVIA_TEST(set_cookie_parser_exposes_client_storage_fields) {
 RUVIA_TEST(set_cookie_parser_accepts_user_agent_cookie_pair_grammar) {
     const auto nameless = ruvia::parseSetCookie("sid; Path=/");
     RUVIA_CHECK(nameless.has_value());
-    if (!nameless) return;
+    if (!nameless) {
+        return;
+    }
     RUVIA_CHECK(nameless->name().empty());
     RUVIA_CHECK(nameless->value() == "sid");
 
     const auto spacedName = ruvia::parseSetCookie("bad name=value");
     RUVIA_CHECK(spacedName.has_value());
-    if (!spacedName) return;
+    if (!spacedName) {
+        return;
+    }
     RUVIA_CHECK(spacedName->name() == "bad name");
 
     const auto spacedValue = ruvia::parseSetCookie("name=bad value");
     RUVIA_CHECK(spacedValue.has_value());
-    if (!spacedValue) return;
+    if (!spacedValue) {
+        return;
+    }
     RUVIA_CHECK(spacedValue->value() == "bad value");
 
     const auto emptyName = ruvia::parseSetCookie("=value");
     RUVIA_CHECK(emptyName.has_value());
-    if (!emptyName) return;
+    if (!emptyName) {
+        return;
+    }
     RUVIA_CHECK(emptyName->name().empty());
     RUVIA_CHECK(emptyName->value() == "value");
 }
@@ -106,7 +114,9 @@ RUVIA_TEST(set_cookie_parser_ignores_oversized_attribute_value) {
     value.append(1025, 'p');
     const auto parsed = ruvia::parseSetCookie(value);
     RUVIA_CHECK(parsed.has_value());
-    if (!parsed) return;
+    if (!parsed) {
+        return;
+    }
     RUVIA_CHECK(parsed->path().empty());
     RUVIA_CHECK(!parsed->has(ruvia::HttpSetCookieAttribute::kPath));
 }
@@ -114,14 +124,18 @@ RUVIA_TEST(set_cookie_parser_ignores_oversized_attribute_value) {
 RUVIA_TEST(set_cookie_parser_tracks_storage_security_attributes) {
     const auto parsed = ruvia::parseSetCookie("sid=abc; Path=relative; SameSite=None");
     RUVIA_CHECK(parsed.has_value());
-    if (!parsed) return;
+    if (!parsed) {
+        return;
+    }
     RUVIA_CHECK(parsed->has(ruvia::HttpSetCookieAttribute::kPath));
     RUVIA_CHECK(parsed->path() == "relative");
     RUVIA_CHECK(parsed->has(ruvia::HttpSetCookieAttribute::kSameSiteNone));
 
     const auto overridden = ruvia::parseSetCookie("sid=abc; SameSite=None; SameSite=Lax");
     RUVIA_CHECK(overridden.has_value());
-    if (!overridden) return;
+    if (!overridden) {
+        return;
+    }
     RUVIA_CHECK(!overridden->has(ruvia::HttpSetCookieAttribute::kSameSiteNone));
 }
 
@@ -167,12 +181,16 @@ RUVIA_TEST(set_cookie_parser_ignores_invalid_later_expires_attribute) {
 RUVIA_TEST(set_cookie_parser_uses_cookie_date_token_grammar) {
     const auto hyphenated = ruvia::parseSetCookie("sid=abc; Expires=Wed, 09-Jun-2021 10:18:14 GMT");
     RUVIA_CHECK(hyphenated.has_value());
-    if (!hyphenated) return;
+    if (!hyphenated) {
+        return;
+    }
     RUVIA_CHECK(hyphenated->expires() == ruvia::parseHttpDate("Wed, 09 Jun 2021 10:18:14 GMT"));
 
     const auto shortYear =
         ruvia::parseSetCookie("sid=abc; Expires=Thursday, 01-Jan-70 00:00:00 GMT");
     RUVIA_CHECK(shortYear.has_value());
-    if (!shortYear) return;
+    if (!shortYear) {
+        return;
+    }
     RUVIA_CHECK(shortYear->expires() == ruvia::parseHttpDate("Thu, 01 Jan 1970 00:00:00 GMT"));
 }

@@ -33,7 +33,7 @@ inline constexpr ConfigHostRules kSeparatedPortHostRules{
         colonCount += byte == ':' ? 1 : 0;
     }
 
-    return !(rules.rejectSingleColon && colonCount == 1);
+    return !rules.rejectSingleColon || colonCount != 1;
 }
 
 [[nodiscard]] inline bool isAsciiHostAlnum(unsigned char byte) noexcept {
@@ -86,7 +86,8 @@ inline constexpr ConfigHostRules kSeparatedPortHostRules{
         labelStart = end + 1;
     }
 
-    return !(sawDot && labels == 4 && allLabelsNumeric);
+    const bool isIpv4Address = sawDot && labels == 4 && allLabelsNumeric;
+    return !isIpv4Address;
 }
 
 inline void ensureConfigHost(std::string_view host, const char* emptyMessage,

@@ -8,6 +8,7 @@
 #include "ruvia/web/detail/model/Traits.h"
 #include "ruvia/core/memory/PmrResource.h"
 
+#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -256,7 +257,7 @@ private:
 
 namespace detail {
 
-enum class ModelInputKind { kJson, kForm, kFormFields };
+enum class ModelInputKind : std::uint8_t { kJson, kForm, kFormFields };
 
 class ModelInput final {
 public:

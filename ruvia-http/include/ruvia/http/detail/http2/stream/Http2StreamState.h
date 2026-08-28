@@ -440,7 +440,9 @@ public:
     }
 
     [[nodiscard]] bool setRemoteInitialHeaderCount(std::size_t count) noexcept {
-        if (remoteInitialHeaderCount_) return false;
+        if (remoteInitialHeaderCount_) {
+            return false;
+        }
         remoteInitialHeaderCount_ = count;
         return true;
     }

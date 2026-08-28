@@ -8,6 +8,7 @@
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 
@@ -43,7 +44,7 @@ public:
     // returning a view, so later network progress cannot invalidate that view.
     std::pmr::string pending;
     std::size_t offset{0};
-    std::size_t bufferedLimit{16 * 1024 * 1024};
+    std::size_t bufferedLimit{kDefaultMaxBufferedBodyBytes};
     std::exception_ptr failure;
     std::optional<std::uint8_t> errorCode;
     std::size_t references{1};

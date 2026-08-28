@@ -3,6 +3,7 @@
 #include "test_io_context.h"
 
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstdint>
 #include <concepts>
@@ -38,10 +39,12 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
+#include "ruvia/web/detail/http/static/StaticRootConfigStorage.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
 #include "ruvia/web/detail/server/file/HttpFileOpen.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/http/HttpContentCodec.h"
@@ -77,6 +80,67 @@ template <typename Result>
 }
 
 }  // namespace
+
+RUVIA_TEST(static_root_config_storage_normalizes_and_owns_public_configuration) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::optional<ruvia::detail::StaticRootConfigStorage> stored;
+    {
+        ruvia::StaticRootOptions options{
+            .cacheControl = "public, max-age=31536000, immutable, must-revalidate",
+            .indexFile = "a-deliberately-long-index-file-name-for-owned-storage.html",
+            .defaultContentType = "application/x-deliberately-long-default-content-type",
+            .mimeTypes =
+                {
+                    {.extension = "CUSTOM-B", .contentType = "application/x-custom-b-long"},
+                    {.extension = ".Custom-A", .contentType = "application/x-custom-a-long"},
+                },
+            .fileTypes =
+                {
+                    .kind = ruvia::StaticFileTypePolicy::Kind::kOnly,
+                    .extensions = {"CUSTOM-B", ".Custom-A", "custom-b"},
+                },
+            .rangeRequests = ruvia::StaticRangeRequestPolicy::kIgnore,
+            .responseValidators = ruvia::StaticResponseValidatorPolicy::kOmit,
+            .dotfiles = ruvia::StaticDotfilePolicy::kServe,
+        };
+        stored.emplace(ruvia::detail::makeStaticRootConfigStorage(options, &resource));
+    }
+
+    RUVIA_CHECK(stored.has_value());
+    RUVIA_CHECK(stored->cacheControl.get_allocator().resource() == &resource);
+    RUVIA_CHECK(stored->indexFile.get_allocator().resource() == &resource);
+    RUVIA_CHECK(stored->defaultContentType.get_allocator().resource() == &resource);
+    RUVIA_CHECK(stored->mimeTypes.get_allocator().resource() == &resource);
+    RUVIA_CHECK(stored->fileTypeExtensions.get_allocator().resource() == &resource);
+    RUVIA_CHECK_EQ(stored->mimeTypes.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(stored->mimeTypes[0].extension, ".custom-a");
+    RUVIA_CHECK_EQ(stored->mimeTypes[1].extension, ".custom-b");
+    RUVIA_CHECK(stored->mimeTypes[0].extension.get_allocator().resource() == &resource);
+    RUVIA_CHECK(stored->mimeTypes[0].contentType.get_allocator().resource() == &resource);
+    RUVIA_CHECK_EQ(stored->fileTypeExtensions.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(stored->fileTypeExtensions[0], "custom-a");
+    RUVIA_CHECK_EQ(stored->fileTypeExtensions[1], "custom-b");
+    RUVIA_CHECK(stored->fileTypeExtensions[0].get_allocator().resource() == &resource);
+
+    std::pmr::monotonic_buffer_resource copyResource;
+    ruvia::detail::StaticRootConfigStorage copy(*stored, &copyResource);
+    RUVIA_CHECK(copy.cacheControl.get_allocator().resource() == &copyResource);
+    RUVIA_CHECK(copy.mimeTypes[0].extension.get_allocator().resource() == &copyResource);
+    RUVIA_CHECK(copy.fileTypeExtensions[0].get_allocator().resource() == &copyResource);
+    RUVIA_CHECK_EQ(copy.mimeTypes[0].contentType, "application/x-custom-a-long");
+}
+
+RUVIA_TEST(static_root_config_storage_validates_before_owner_pmr_allocation) {
+    bool invalid = false;
+    try {
+        static_cast<void>(ruvia::detail::makeStaticRootConfigStorage(
+            {.fileTypes = {.kind = ruvia::StaticFileTypePolicy::Kind::kOnly}},
+            std::pmr::null_memory_resource()));
+    } catch (const std::invalid_argument&) {
+        invalid = true;
+    }
+    RUVIA_CHECK(invalid);
+}
 
 RUVIA_TEST(static_root_copies_public_mime_configuration_into_owned_storage) {
     namespace fs = std::filesystem;
@@ -292,17 +356,19 @@ RUVIA_TEST(document_root_snapshot_metadata_tracks_refresh) {
         ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot root(dir, std::move(options));
 
-    auto equivalentOptions = ruvia::detail::StaticRootAccess::options(root);
-    ruvia::StaticRoot equivalentRoot(dir, std::move(equivalentOptions));
-    RUVIA_CHECK(ruvia::detail::StaticRootAccess::sameSnapshot(root, equivalentRoot));
+    auto equivalentRoot =
+        ruvia::detail::StaticRootAccess::clone(ruvia::detail::processResource(), root);
+    RUVIA_CHECK(ruvia::detail::StaticRootAccess::sameSnapshot(root, *equivalentRoot));
 
-    auto clonedOptions = ruvia::detail::StaticRootAccess::options(root);
-    RUVIA_CHECK(clonedOptions.fileTypes.kind == ruvia::StaticFileTypePolicy::Kind::kAll);
+    auto clonedConfig =
+        ruvia::detail::StaticRootAccess::copyConfig(root, ruvia::detail::processResource());
+    RUVIA_CHECK(clonedConfig.fileTypeKind == ruvia::StaticFileTypePolicy::Kind::kAll);
 
     std::ofstream(dir / "new-file.txt") << "published on the next refresh";
-    ruvia::StaticRoot refreshed(dir, std::move(clonedOptions));
+    auto refreshed =
+        ruvia::detail::StaticRootAccess::make(ruvia::detail::processResource(), dir, clonedConfig);
     RUVIA_CHECK(ruvia::detail::StaticRootAccess::fingerprint(root) !=
-                ruvia::detail::StaticRootAccess::fingerprint(refreshed));
+                ruvia::detail::StaticRootAccess::fingerprint(*refreshed));
 
     fs::remove_all(dir);
 }
@@ -1671,7 +1737,18 @@ RUVIA_TEST(static_root_rejects_invalid_static_options_at_construction) {
         StaticRootOptions options;
         options.fileTypes =
             ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
-        options.dotfiles = static_cast<ruvia::StaticDotfilePolicy>(42);
+        options.dotfiles = std::bit_cast<ruvia::StaticDotfilePolicy>(std::uint8_t{42});
+        rejects(std::move(options));
+    }
+    {
+        StaticRootOptions options;
+        options.rangeRequests = std::bit_cast<ruvia::StaticRangeRequestPolicy>(std::uint8_t{42});
+        rejects(std::move(options));
+    }
+    {
+        StaticRootOptions options;
+        options.responseValidators =
+            std::bit_cast<ruvia::StaticResponseValidatorPolicy>(std::uint8_t{42});
         rejects(std::move(options));
     }
 

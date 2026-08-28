@@ -2,15 +2,13 @@
 
 #include <array>
 #include <algorithm>
-#include <charconv>
-#include <system_error>
 
 #include <asio/write.hpp>
 #include <asio/ssl/error.hpp>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
+#include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 #include "client/HttpClientResponseState.h"
 
@@ -24,12 +22,8 @@ namespace {
     const auto defaultPort = config.scheme == HttpScheme::kHttps ? 443 : 80;
     if (port != defaultPort) {
         authority.push_back(':');
-        std::array<char, 8> bytes{};
-        const auto [end, ec] = std::to_chars(bytes.data(), bytes.data() + bytes.size(), port);
-        if (ec != std::errc{})
-            throw HttpClientError(
-                HttpClientError::Code::kInvalidRequest, "invalid HTTP origin port");
-        authority.append(bytes.data(), end);
+        ClientPortTextBuffer portBuffer{};
+        authority.append(formatClientPort(port, portBuffer));
     }
     return authority;
 }
@@ -48,9 +42,10 @@ Task<void> HttpClientPool::initializeHttp2(
     std::array<char, 16384> input{};
     while (!connection.http2->receivedPeerSettings()) {
         const auto bytes = co_await readSome(connection, input, timeout);
-        if (bytes == 0)
+        if (bytes == 0) {
             throw HttpClientError(
                 HttpClientError::Code::kIoError, "upstream closed during HTTP/2 preface");
+        }
         const auto status = connection.http2->feed(std::string_view(input.data(), bytes));
         while (connection.http2->nextEvent()) {
         }
@@ -66,7 +61,9 @@ Task<void> HttpClientPool::initializeHttp2(
     }
     auto& runtime = *connection.http2Runtime;
     auto generation = ++runtime.generation;
-    if (generation == 0) generation = ++runtime.generation;
+    if (generation == 0) {
+        generation = ++runtime.generation;
+    }
     runtime.running = true;
     runtime.draining = false;
     runtime.failed = false;
@@ -94,7 +91,9 @@ Task<void> HttpClientPool::initializeHttp2(
 }
 
 void HttpClientPool::drainHttp2Events(Connection& connection) {
-    if (!connection.http2) return;
+    if (!connection.http2) {
+        return;
+    }
     auto& runtime = *connection.http2Runtime;
     const auto findPending = [&runtime](std::uint32_t streamId) -> Http2PendingStream* {
         const auto match =
@@ -106,9 +105,13 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
     const auto failPending = [this, &connection](Http2PendingStream& pending,
                                  std::uint32_t streamId, std::exception_ptr failure,
                                  bool resetStream) noexcept {
-        if (pending.complete || pending.failed()) return;
+        if (pending.complete || pending.failed()) {
+            return;
+        }
         pending.failure = std::move(failure);
-        if (resetStream) submitHttp2Reset(connection, streamId);
+        if (resetStream) {
+            submitHttp2Reset(connection, streamId);
+        }
         pending.signal.notify();
     };
     bool releasedData = false;
@@ -116,9 +119,12 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
         if (const auto* head = event->messageHead()) {
             auto* pending = findPending(head->streamId());
             auto* stream = connection.http2->stream(head->streamId());
-            if (pending == nullptr || stream == nullptr || pending->complete || pending->failed())
+            if (pending == nullptr || stream == nullptr || pending->complete || pending->failed()) {
                 continue;
-            if (!stream->responseStatus()) continue;  // Validated informational response.
+            }
+            if (!stream->responseStatus()) {
+                continue;  // Validated informational response.
+            }
             const auto responseHeaderCount =
                 stream->remoteInitialHeaderCount().value_or(stream->remoteHeaderCount());
             try {
@@ -193,7 +199,9 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                 } catch (...) {
                     failPending(*pending, end->streamId(), std::current_exception(), false);
                 }
-                if (pending->complete) pending->signal.notify();
+                if (pending->complete) {
+                    pending->signal.notify();
+                }
             }
             runtime.stateSignal.notify();
         } else if (const auto* closed = event->streamClosed()) {
@@ -217,13 +225,17 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
             runtime.stateSignal.notify();
         }
     }
-    if (releasedData || connection.http2->wantsWrite()) runtime.writeSignal.notify();
+    if (releasedData || connection.http2->wantsWrite()) {
+        runtime.writeSignal.notify();
+    }
 }
 
 void HttpClientPool::failHttp2Session(Connection& connection, std::uint64_t generation,
-    std::error_code transportError, std::exception_ptr failure) noexcept {
+    std::error_code transportError, const std::exception_ptr& failure) noexcept {
     auto& runtime = *connection.http2Runtime;
-    if (runtime.generation != generation || runtime.failed) return;
+    if (runtime.generation != generation || runtime.failed) {
+        return;
+    }
     runtime.failed = true;
     runtime.draining = true;
     connection.connected = false;
@@ -231,8 +243,8 @@ void HttpClientPool::failHttp2Session(Connection& connection, std::uint64_t gene
     connection.deadline.reset();
     std::error_code ignored;
     connection.resolver.cancel();
-    connection.stream.lowest_layer().cancel(ignored);
-    connection.stream.lowest_layer().close(ignored);
+    (void)connection.stream.lowest_layer().cancel(ignored);
+    (void)connection.stream.lowest_layer().close(ignored);
     auto pendingError = HttpClientError::Code::kIoError;
     switch (connection.abortReason) {
         case AbortReason::kTimeout:
@@ -273,9 +285,13 @@ void HttpClientPool::failHttp2Session(Connection& connection, std::uint64_t gene
 void HttpClientPool::finishHttp2SessionTask(
     Connection& connection, std::uint64_t generation) noexcept {
     auto& runtime = *connection.http2Runtime;
-    if (runtime.generation != generation || runtime.sessionTasks == 0) std::terminate();
+    if (runtime.generation != generation || runtime.sessionTasks == 0) {
+        std::terminate();
+    }
     --runtime.sessionTasks;
-    if (runtime.sessionTasks == 0) runtime.running = false;
+    if (runtime.sessionTasks == 0) {
+        runtime.running = false;
+    }
     runtime.stateSignal.notify();
 }
 
@@ -319,7 +335,9 @@ Task<void> HttpClientPool::runHttp2Reader(Connection& connection, std::uint64_t 
                         connection, generation, std::make_error_code(std::errc::protocol_error));
                     co_return;
                 }
-                if (status != Http2FeedResult::kEventsPending) break;
+                if (status != Http2FeedResult::kEventsPending) {
+                    break;
+                }
             }
         }
     } catch (...) {
@@ -375,7 +393,9 @@ Task<void> HttpClientPool::runHttp2Writer(Connection& connection, std::uint64_t 
                 }
                 bytesSent_ += completion.result();
             }
-            if (runtime.generation != generation || runtime.failed) co_return;
+            if (runtime.generation != generation || runtime.failed) {
+                co_return;
+            }
             co_await runtime.writeSignal.wait();
         }
     } catch (...) {
@@ -384,7 +404,9 @@ Task<void> HttpClientPool::runHttp2Writer(Connection& connection, std::uint64_t 
 }
 
 void HttpClientPool::submitHttp2Reset(Connection& connection, std::uint32_t streamId) noexcept {
-    if (streamId == 0 || !connection.http2) return;
+    if (streamId == 0 || !connection.http2) {
+        return;
+    }
     auto& runtime = *connection.http2Runtime;
     try {
         (void)connection.http2->submitReset(streamId, Http2ErrorCode::kCancel);
@@ -399,9 +421,13 @@ void HttpClientPool::cancelHttp2Stream(
     auto& runtime = *connection.http2Runtime;
     const auto match = std::ranges::find_if(runtime.pending,
         [requestId](const Http2PendingStream* pending) { return pending->requestId == requestId; });
-    if (match == runtime.pending.end()) return;
+    if (match == runtime.pending.end()) {
+        return;
+    }
     auto& pending = **match;
-    if (pending.complete || pending.failed() || pending.retryable) return;
+    if (pending.complete || pending.failed() || pending.retryable) {
+        return;
+    }
     pending.error = reason == AbortReason::kTimeout     ? HttpClientError::Code::kTimeout
                     : reason == AbortReason::kCancelled ? HttpClientError::Code::kCancelled
                                                         : HttpClientError::Code::kClosing;
@@ -411,7 +437,9 @@ void HttpClientPool::cancelHttp2Stream(
 }
 
 void HttpClientPool::Http2PendingRegistration::reset() noexcept {
-    if (!active_) return;
+    if (!active_) {
+        return;
+    }
     active_ = false;
     pool_.removeHttp2Pending(connection_, pending_);
 }
@@ -427,13 +455,15 @@ void HttpClientPool::removeHttp2Pending(
         }
     }
     const auto match = std::ranges::find(runtime.pending, &pending);
-    if (match == runtime.pending.end()) std::terminate();
+    if (match == runtime.pending.end()) {
+        std::terminate();
+    }
     runtime.pending.erase(match);
     runtime.stateSignal.notify();
     if (runtime.draining && runtime.pending.empty()) {
         std::error_code ignored;
-        connection.stream.lowest_layer().cancel(ignored);
-        connection.stream.lowest_layer().close(ignored);
+        (void)connection.stream.lowest_layer().cancel(ignored);
+        (void)connection.stream.lowest_layer().close(ignored);
         connection.connected = false;
         runtime.writeSignal.notify();
     }
@@ -450,7 +480,9 @@ Task<void> HttpClientPool::waitForHttp2SessionStop(
         }
         WorkerHandleAccess::scheduleTimer(worker_, deadlineTimer,
             workerTimerDeadlineAfter(*remaining), [&runtime](WorkerTimerOutcome outcome) noexcept {
-                if (outcome == WorkerTimerOutcome::kExpired) runtime.stateSignal.notify();
+                if (outcome == WorkerTimerOutcome::kExpired) {
+                    runtime.stateSignal.notify();
+                }
             });
     }
     std::uint64_t cancellationId = 0;
@@ -513,8 +545,8 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
         if (!connection.http2 || runtime.failed || runtime.draining) {
             if (runtime.draining && runtime.pending.empty()) {
                 std::error_code ignored;
-                connection.stream.lowest_layer().cancel(ignored);
-                connection.stream.lowest_layer().close(ignored);
+                (void)connection.stream.lowest_layer().cancel(ignored);
+                (void)connection.stream.lowest_layer().close(ignored);
                 connection.connected = false;
                 runtime.writeSignal.notify();
             }
@@ -528,7 +560,9 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
 
         Http2PendingStream pending(worker_, response);
         pending.requestId = ++runtime.nextRequestId;
-        if (pending.requestId == 0) pending.requestId = ++runtime.nextRequestId;
+        if (pending.requestId == 0) {
+            pending.requestId = ++runtime.nextRequestId;
+        }
         response.state_->http2 = true;
         response.state_->connectionIndex =
             static_cast<std::size_t>(&connection - connections_.data());
@@ -541,8 +575,9 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
                 workerTimerDeadlineAfter(*remaining),
                 [this, &connection, requestId = pending.requestId](
                     WorkerTimerOutcome outcome) noexcept {
-                    if (outcome == WorkerTimerOutcome::kExpired)
+                    if (outcome == WorkerTimerOutcome::kExpired) {
                         cancelHttp2Stream(connection, requestId, AbortReason::kTimeout);
+                    }
                 });
         }
         std::uint64_t cancellationId = 0;
@@ -567,10 +602,14 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
                 registration.reset();
             }
         } cancellationRegistrationGuard{pending, cancellationId, stopRegistration};
-        if (stopToken.stopRequested()) cancelOperationById(cancellationId);
+        if (stopToken.stopRequested()) {
+            cancelOperationById(cancellationId);
+        }
 
         for (;;) {
-            if (pending.failed()) break;
+            if (pending.failed()) {
+                break;
+            }
             if (timeout.expired()) {
                 pending.error = HttpClientError::Code::kTimeout;
                 break;
@@ -598,7 +637,9 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
             if (error == Http2RequestHeadSubmitError::kPeerStreamLimitReached ||
                 error == Http2RequestHeadSubmitError::kLocalStreamCapacityReached) {
                 co_await runtime.stateSignal.wait();
-                if (pending.failed()) break;
+                if (pending.failed()) {
+                    break;
+                }
                 continue;
             }
             if (error == Http2RequestHeadSubmitError::kConnectionUnavailable) {
@@ -609,20 +650,27 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
             break;
         }
 
-        while (!pending.complete && !pending.failed() && !pending.retryable)
+        while (!pending.complete && !pending.failed() && !pending.retryable) {
             co_await pending.signal.wait();
+        }
         deadlineTimer.cancel();
         const bool retryable = pending.retryable;
         const auto error = pending.error;
         const auto failure = pending.failure;
-        if (pending.complete && response.state_->http2DataPending)
+        if (pending.complete && response.state_->http2DataPending) {
             releaseResponseData(*response.state_);
+        }
         pendingRegistration.reset();
-        if (retryable && attempt == 0 && !timeout.expired()) continue;
-        if (retryable)
+        if (retryable && attempt == 0 && !timeout.expired()) {
+            continue;
+        }
+        if (retryable) {
             throw HttpClientError(HttpClientError::Code::kProtocolError,
                 "HTTP/2 request was not processed after GOAWAY");
-        if (failure != nullptr) std::rethrow_exception(failure);
+        }
+        if (failure != nullptr) {
+            std::rethrow_exception(failure);
+        }
         if (error) {
             switch (*error) {
                 case HttpClientError::Code::kTimeout:

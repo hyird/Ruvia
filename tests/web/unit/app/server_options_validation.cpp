@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <array>
 #include <chrono>
 #include <concepts>
 #include <exception>
@@ -13,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/web/detail/http/CorsOptions.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/detail/app/AppState.h"
 #include "ruvia/web/App.h"
@@ -50,6 +53,8 @@ private:
 
 using ruvia::detail::HttpServerListenerDefinition;
 using ruvia::detail::HttpServerOptions;
+using ruvia::detail::ValidatedHttpServerConfiguration;
+using ruvia::detail::validateHttpServerConfiguration;
 using ruvia::detail::validateHttpServerListener;
 using ruvia::detail::validateHttpServerOptions;
 
@@ -108,8 +113,9 @@ RUVIA_TEST(validate_server_options_accepts_defaults) {
     RUVIA_CHECK_EQ(
         HttpServerOptions{}.rateLimitCapacityPerWorker, ruvia::kDefaultRateLimitCapacityPerWorker);
     // An unconfigured server is bounded by default against connection floods.
-    RUVIA_CHECK(HttpServerOptions{}.maxConnections.has_value());
-    RUVIA_CHECK_EQ(*HttpServerOptions{}.maxConnections, std::size_t{1024});
+    const auto defaultMaxConnections = HttpServerOptions{}.maxConnections;
+    RUVIA_CHECK(defaultMaxConnections.has_value());
+    RUVIA_CHECK_EQ(defaultMaxConnections.value_or(0), std::size_t{1024});
     RUVIA_CHECK(!throwsInvalid([] { validateHttpServerOptions(HttpServerOptions{}); }));
 }
 
@@ -346,6 +352,49 @@ RUVIA_TEST(validate_server_options_enforces_nested_tls_material) {
     }
 }
 
+RUVIA_TEST(validated_server_configuration_requires_complete_validation) {
+    static_assert(!std::is_default_constructible_v<ValidatedHttpServerConfiguration>);
+    using AppListener = decltype(std::declval<ruvia::detail::AppState&>().listeners)::value_type;
+    static_assert(std::is_same_v<AppListener, HttpServerListenerDefinition>);
+
+    RUVIA_CHECK(throwsInvalid([] { (void)validateHttpServerConfiguration({}, {}); }));
+    const std::array listeners{
+        makeListener(HttpServerListenerDefinition::PlainHttp{}),
+    };
+
+    HttpServerOptions invalidOptions;
+    invalidOptions.maxBufferedBodyBytes = 0;
+    RUVIA_CHECK(throwsInvalid([&listeners, &invalidOptions] {
+        (void)validateHttpServerConfiguration(listeners, invalidOptions);
+    }));
+
+    const auto configuration = validateHttpServerConfiguration(listeners, HttpServerOptions{});
+    RUVIA_CHECK_EQ(configuration.listeners().size(), std::size_t{1});
+    RUVIA_CHECK(configuration.options().maxBufferedBodyBytes > 0);
+}
+
+RUVIA_TEST(web_internal_config_defaults_use_the_process_resource) {
+    auto* const expected = ruvia::detail::processResource();
+
+    const ruvia::detail::CorsOptions cors;
+    RUVIA_CHECK(cors.origin.get_allocator().resource() == expected);
+    RUVIA_CHECK(cors.requestHeaders.get_allocator().resource() == expected);
+    RUVIA_CHECK(cors.exposeHeaders.get_allocator().resource() == expected);
+
+    const HttpServerListenerDefinition::Tls tls;
+    RUVIA_CHECK(tls.identity.certificateChainFile.get_allocator().resource() == expected);
+    RUVIA_CHECK(tls.identity.privateKeyFile.get_allocator().resource() == expected);
+    RUVIA_CHECK(tls.identity.privateKeyPassword.get_allocator().resource() == expected);
+    RUVIA_CHECK(tls.sniIdentities.get_allocator().resource() == expected);
+
+    const HttpServerListenerDefinition::TlsClientCertificatePolicy clientCertificates;
+    RUVIA_CHECK(clientCertificates.verifyFile.get_allocator().resource() == expected);
+
+    const HttpServerListenerDefinition::Tls::SniIdentity sni;
+    RUVIA_CHECK(sni.host.get_allocator().resource() == expected);
+    RUVIA_CHECK(sni.identity.certificateChainFile.get_allocator().resource() == expected);
+}
+
 RUVIA_TEST(validate_server_options_requires_redirect_https_port) {
     auto listener = makeListener(HttpServerListenerDefinition::RedirectHttpToHttps{0});
     RUVIA_CHECK(throwsInvalid([&] { validateHttpServerListener(listener); }));
@@ -359,6 +408,7 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
 
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({}); }));
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = {}, .http = 8080}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "localhost", .http = 8080}); }));
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "127.0.0.1", .http = 0}); }));
     RUVIA_CHECK(throwsInvalid(
         [] { ruvia::app().listen({.address = "127.0.0.1", .http = 8080, .https = 8080}); }));
@@ -379,6 +429,21 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
             .address = "127.0.0.1",
             .http = 8080,
             .tls = {.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"},
+        });
+    }));
+    RUVIA_CHECK(throwsInvalid([] {
+        ruvia::app().listen({
+            .address = "127.0.0.1",
+            .https = 8443,
+            .tls =
+                {
+                    .certificateChainFile = "cert.pem",
+                    .privateKeyFile = "key.pem",
+                    .clientCertificates =
+                        {
+                            .requirement = ruvia::TlsClientCertificateRequirement::kRequired,
+                        },
+                },
         });
     }));
     RUVIA_CHECK(throwsInvalid([] {
@@ -438,7 +503,8 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
         accessState = state;
         ruvia::AccessLogCallback callback(
             [state](const ruvia::AccessLogRecord&) noexcept { (void)state; });
-        auto copy = callback;
+        // Copy ownership is the behavior under test.
+        const auto copy = callback;  // NOLINT(performance-unnecessary-copy-initialization)
         state.reset();
         RUVIA_CHECK(!accessState.expired());
         (void)copy;

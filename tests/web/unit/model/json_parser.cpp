@@ -119,7 +119,9 @@ RUVIA_TEST(model_json_parser_rejects_nested_structure_recursively) {
         ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<NestedModelEnvelope>(
             body, &resource);
     RUVIA_CHECK(partial.has_value());
-    if (!partial) return;
+    if (!partial) {
+        return;
+    }
 
     ruvia::Validator validator({.resource = &resource});
     ruvia::detail::ModelValidationAccess::validateStructure(*partial, {}, validator);

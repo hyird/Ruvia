@@ -74,7 +74,9 @@ private:
             using ElementT = typename T::value_type;
             if constexpr (JsonBody<std::remove_cvref_t<ElementT>>::value) {
                 for (const auto& element : value) {
-                    if (!structureValid(element)) return false;
+                    if (!structureValid(element)) {
+                        return false;
+                    }
                 }
             }
             return true;

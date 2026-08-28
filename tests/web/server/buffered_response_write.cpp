@@ -224,7 +224,11 @@ private:
     return runTask(context, writeHttpResponseFile(socket, memory, nullptr, fileBody));
 }
 
-enum class WriteScenario { kCompleted, kFailedBeforeCommit, kFailedAfterCommit };
+enum class WriteScenario : std::uint8_t {
+    kCompleted,
+    kFailedBeforeCommit,
+    kFailedAfterCommit,
+};
 
 [[nodiscard]] Http1BufferedResponseWriteResult runBufferedWrite(
     WriteScenario scenario, std::size_t bodyBytes = 7) {

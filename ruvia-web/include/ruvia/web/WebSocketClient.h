@@ -14,9 +14,11 @@
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/OperationOptions.h"
 #include "ruvia/core/ScopedOperation.h"
+#include "ruvia/core/TcpSocketOptions.h"
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/WebSocketProtocol.h"
-#include "ruvia/web/HttpClientTypes.h"
+#include "ruvia/web/TlsPeerVerification.h"
 #include "ruvia/web/WebSocket.h"
 
 namespace ruvia {
@@ -33,13 +35,12 @@ struct WebSocketClientConfig final {
     std::string target{"/"};
     std::vector<std::pair<std::string, std::string>> headers{};
     std::string subprotocols{};
-    std::size_t maxMessageBytes{16 * 1024 * 1024};
+    std::size_t maxMessageBytes{kDefaultMaxWebSocketMessageBytes};
     std::chrono::milliseconds connectTimeout{5000};
     std::optional<std::chrono::milliseconds> readTimeout{};
     std::optional<std::chrono::milliseconds> writeTimeout{30000};
     std::optional<std::chrono::milliseconds> closeHandshakeTimeout{5000};
-    HttpClientTlsPeerVerificationPolicy tlsPeerVerification{
-        HttpClientTlsPeerVerificationPolicy::kVerify};
+    TlsPeerVerificationPolicy tlsPeerVerification{TlsPeerVerificationPolicy::kVerify};
     TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
     TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kEnable};
     std::string caFile{};
@@ -66,8 +67,8 @@ public:
         kClosing,
     };
 
-    WebSocketClientError(Code code, std::string message)
-        : std::runtime_error(std::move(message)),
+    WebSocketClientError(Code code, std::string_view message)
+        : std::runtime_error(std::string(message)),
           code_(code) {}
 
     [[nodiscard]] Code code() const noexcept {
@@ -111,7 +112,7 @@ private:
 // is worker-affine and never migrates between event loops.
 class WebSocketClient final {
 public:
-    WebSocketClient(EventLoop loop, WebSocketClientConfig config);
+    WebSocketClient(EventLoop loop, const WebSocketClientConfig& config);
     ~WebSocketClient();
 
     WebSocketClient(const WebSocketClient&) = delete;

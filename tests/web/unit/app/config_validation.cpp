@@ -1,6 +1,9 @@
 #include "test_harness.h"
 
+#include <bit>
 #include <chrono>
+#include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -10,18 +13,50 @@
 
 #include "ruvia/web/App.h"
 #include "ruvia/core/detail/config/ConfigValidation.h"
+#include "ruvia/web/HttpClientTypes.h"
+#include "ruvia/web/detail/client/ClientTransport.h"
+#include "ruvia/web/detail/client/HttpClientConfigStorage.h"
+#include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
 #include "ruvia/web/detail/db/DbConfigStorage.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
 
 namespace {
 
+class CountingMemoryResource final : public std::pmr::memory_resource {
+public:
+    [[nodiscard]] std::size_t allocationCount() const noexcept {
+        return allocationCount_;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        ++allocationCount_;
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::size_t allocationCount_{0};
+};
+
+using ruvia::detail::ClientPortTextBuffer;
+using ruvia::detail::clientTransportConfigView;
 using ruvia::detail::ensureConfigHost;
 using ruvia::detail::ensureNonZeroPort;
 using ruvia::detail::ensurePositiveDuration;
 using ruvia::detail::ensurePositiveSize;
+using ruvia::detail::formatClientPort;
 using ruvia::detail::isValidConfigHost;
 using ruvia::detail::isValidSniHost;
 using ruvia::detail::kSeparatedPortHostRules;
+using ruvia::detail::validateClientOriginHost;
+using ruvia::detail::validateClientTransportConfig;
 
 // Returns the invalid_argument message a call throws, or empty if it does not.
 template <typename Fn>
@@ -108,6 +143,150 @@ RUVIA_TEST(config_ensure_host_throws_distinct_messages) {
         std::string("was-invalid"));
     RUVIA_CHECK(
         caughtMessage([] { ensureConfigHost("example.com", "was-empty", "was-invalid"); }).empty());
+}
+
+RUVIA_TEST(client_transport_validation_uses_one_host_and_policy_contract) {
+    RUVIA_CHECK(!throwsInvalid(
+        [] { validateClientOriginHost("example.com", "host is empty", "host is invalid"); }));
+    RUVIA_CHECK(!throwsInvalid(
+        [] { validateClientOriginHost("::1", "host is empty", "host is invalid"); }));
+    RUVIA_CHECK(throwsInvalid(
+        [] { validateClientOriginHost("host:443", "host is empty", "host is invalid"); }));
+    RUVIA_CHECK(throwsInvalid(
+        [] { validateClientOriginHost("[::1]", "host is empty", "host is invalid"); }));
+
+    ruvia::HttpClientConfig config;
+    RUVIA_CHECK(!throwsInvalid(
+        [&config] { validateClientTransportConfig(clientTransportConfigView(config)); }));
+
+    config.tcpNoDelay = std::bit_cast<ruvia::TcpNoDelayPolicy>(std::uint8_t{255});
+    RUVIA_CHECK(throwsInvalid(
+        [&config] { validateClientTransportConfig(clientTransportConfigView(config)); }));
+    config.tcpNoDelay = ruvia::TcpNoDelayPolicy::kEnable;
+    config.certificateChainFile = "client.pem";
+    RUVIA_CHECK(throwsInvalid(
+        [&config] { validateClientTransportConfig(clientTransportConfigView(config)); }));
+}
+
+RUVIA_TEST(client_transport_formats_the_complete_port_domain) {
+    ClientPortTextBuffer buffer{};
+    RUVIA_CHECK_EQ(formatClientPort(1, buffer), std::string_view("1"));
+    RUVIA_CHECK_EQ(formatClientPort(443, buffer), std::string_view("443"));
+    RUVIA_CHECK_EQ(formatClientPort(65'535, buffer), std::string_view("65535"));
+}
+
+RUVIA_TEST(client_transport_storage_owns_normalized_strings) {
+    std::pmr::unsynchronized_pool_resource resource;
+    std::optional<ruvia::detail::ClientTransportConfigStorage> storage;
+    {
+        ruvia::HttpClientConfig config;
+        config.caFile = std::string(80, 'c');
+        config.certificateChainFile = std::string(80, 'x');
+        config.privateKeyFile = std::string(80, 'k');
+        config.privateKeyPassword = std::string(80, 'p');
+        storage.emplace(clientTransportConfigView(config), &resource);
+    }
+
+    const auto view = storage->view();
+    const std::string expectedCaFile(80, 'c');
+    const std::string expectedCertificate(80, 'x');
+    const std::string expectedPrivateKey(80, 'k');
+    const std::string expectedPassword(80, 'p');
+    RUVIA_CHECK_EQ(view.caFile, std::string_view(expectedCaFile));
+    RUVIA_CHECK_EQ(view.certificateChainFile, std::string_view(expectedCertificate));
+    RUVIA_CHECK_EQ(view.privateKeyFile, std::string_view(expectedPrivateKey));
+    RUVIA_CHECK_EQ(view.privateKeyPassword, std::string_view(expectedPassword));
+}
+
+RUVIA_TEST(http_client_config_is_validated_before_pmr_normalization) {
+    ruvia::HttpClientConfig config;
+    config.host = "example.com";
+    config.caFile = std::string(128, 'c');
+    config.connectTimeout = std::chrono::milliseconds::zero();
+    CountingMemoryResource resource;
+
+    RUVIA_CHECK(
+        throwsInvalid([&] { (void)ruvia::detail::HttpClientConfigStorage(config, &resource); }));
+    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
+}
+
+RUVIA_TEST(http_client_config_rejects_overflowing_scheduler_capacity) {
+    ruvia::HttpClientConfig config;
+    config.host = "example.com";
+    config.connectionCount = 2;
+    config.maxConcurrentHttp2StreamsPerConnection = std::numeric_limits<std::size_t>::max();
+
+    RUVIA_CHECK(throwsInvalid([&] {
+        std::pmr::unsynchronized_pool_resource resource;
+        (void)ruvia::detail::HttpClientConfigStorage(config, &resource);
+    }));
+}
+
+RUVIA_TEST(websocket_client_config_is_validated_before_pmr_normalization) {
+    ruvia::WebSocketClientConfig config;
+    config.host = "example.com";
+    config.caFile = std::string(128, 'c');
+    config.connectTimeout = std::chrono::milliseconds::zero();
+    CountingMemoryResource resource;
+
+    RUVIA_CHECK(throwsInvalid(
+        [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
+    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
+}
+
+RUVIA_TEST(websocket_client_config_storage_owns_normalized_strings) {
+    std::pmr::unsynchronized_pool_resource resource;
+    std::optional<ruvia::detail::WebSocketClientConfigStorage> storage;
+    {
+        ruvia::WebSocketClientConfig config;
+        config.host = std::string(80, 'h');
+        config.target = "/" + std::string(80, 't');
+        config.headers.emplace_back("X-Test", std::string(80, 'v'));
+        config.subprotocols = "chat, superchat";
+        config.caFile = std::string(80, 'c');
+        config.userAgent = std::string(80, 'u');
+        storage.emplace(config, &resource);
+    }
+
+    RUVIA_CHECK(storage->host.get_allocator().resource() == &resource);
+    RUVIA_CHECK(storage->target.get_allocator().resource() == &resource);
+    RUVIA_CHECK(storage->headers.get_allocator().resource() == &resource);
+    RUVIA_CHECK(storage->headers.front().name.get_allocator().resource() == &resource);
+    RUVIA_CHECK(storage->headers.front().value.get_allocator().resource() == &resource);
+    RUVIA_CHECK(storage->subprotocols.get_allocator().resource() == &resource);
+    RUVIA_CHECK(storage->userAgent.get_allocator().resource() == &resource);
+    RUVIA_CHECK_EQ(std::string(storage->host), std::string(80, 'h'));
+    RUVIA_CHECK_EQ(std::string(storage->target), "/" + std::string(80, 't'));
+    RUVIA_CHECK_EQ(std::string(storage->headers.front().name), "X-Test");
+    RUVIA_CHECK_EQ(std::string(storage->headers.front().value), std::string(80, 'v'));
+    RUVIA_CHECK_EQ(std::string(storage->subprotocols), "chat, superchat");
+    RUVIA_CHECK_EQ(std::string(storage->userAgent), std::string(80, 'u'));
+}
+
+#if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
+RUVIA_TEST(database_config_is_validated_before_pmr_normalization) {
+#ifdef RUVIA_ENABLE_MARIADB
+    ruvia::DbConfig config{.driver = ruvia::DbDriver::kMariaDb};
+#else
+    ruvia::DbConfig config{.driver = ruvia::DbDriver::kPostgreSql};
+#endif
+    config.username = std::string(128, 'u');
+    config.connectTimeout = std::chrono::milliseconds::zero();
+    CountingMemoryResource resource;
+
+    RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::DbConfigStorage(config, &resource); }));
+    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
+}
+#endif
+
+RUVIA_TEST(redis_config_is_validated_before_pmr_normalization) {
+    ruvia::RedisConfig config;
+    config.username = std::string(128, 'u');
+    config.connectTimeout = std::chrono::milliseconds::zero();
+    CountingMemoryResource resource;
+
+    RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::RedisConfigStorage(config, &resource); }));
+    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 }
 
 RUVIA_TEST(app_document_root_rejects_invalid_static_options_at_configuration) {

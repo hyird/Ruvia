@@ -25,6 +25,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Testing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/WebWorker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/CookieSignature.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/ClientTransport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClient.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientHandle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientHttp1.cpp
@@ -57,6 +58,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Session.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticFileTypes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticFileVariant.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticRootConfigStorage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticRoot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2BufferedResponseWrite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSession.cpp

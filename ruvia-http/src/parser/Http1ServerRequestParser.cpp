@@ -330,7 +330,7 @@ Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer) const
     const auto wireBody =
         buffer.substr(message->headerBytes(), message->messageBytes() - message->headerBytes());
     return detail::Http1RequestParseResultAccess::parsed(
-        std::move(parsed.request), parsed.bodyPlan, wireBody, message->messageBytes());
+        parsed.request, parsed.bodyPlan, wireBody, message->messageBytes());
 }
 
 }  // namespace ruvia

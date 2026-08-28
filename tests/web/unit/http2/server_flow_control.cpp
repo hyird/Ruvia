@@ -100,8 +100,12 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
             };
 
             // Preface + empty client SETTINGS.
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) {
+                co_return;
+            }
 
             // A complete, body-less request on stream 1 (END_STREAM + END_HEADERS).
             std::pmr::string headerBlock(std::pmr::get_default_resource());
@@ -137,12 +141,15 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
             // Drain every frame the server emits, recording stream-0 WINDOW_UPDATEs.
             for (;;) {
                 char headerBytes[kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    break;
+                }
                 const auto header =
                     http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
+                }
                 if (header.type == 0x8 /*WINDOW_UPDATE*/ && header.streamId == 0) {
                     increments.push_back(
                         http2Read31(reinterpret_cast<const unsigned char*>(payload.data())));
@@ -195,8 +202,12 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) {
+                co_return;
+            }
 
             // content-length: 5 with END_STREAM on HEADERS: no DATA can ever arrive,
             // so the declared length can never be satisfied -> malformed (RFC 9113
@@ -218,12 +229,15 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
 
             for (;;) {
                 char headerBytes[kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    break;
+                }
                 const auto header =
                     http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
+                }
                 if (header.type == 0x3 /*RST_STREAM*/ && header.streamId == 1 &&
                     payload.size() == 4) {
                     const auto* bytes = reinterpret_cast<const unsigned char*>(payload.data());
@@ -305,8 +319,12 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) {
+                co_return;
+            }
 
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
@@ -319,7 +337,9 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
             std::string both;
             both += frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1, reqView);
             both += frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 3, reqView);
-            if (!co_await writeAll(both)) co_return;
+            if (!co_await writeAll(both)) {
+                co_return;
+            }
 
             asio::steady_timer watchdog(io);
             watchdog.expires_after(std::chrono::seconds(5));
@@ -333,12 +353,15 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
             std::size_t completedResponses = 0;
             for (;;) {
                 char headerBytes[kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    break;
+                }
                 const auto header =
                     http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
+                }
                 frames.push_back(EmittedFrame{
                     static_cast<std::uint8_t>(header.type), header.streamId, header.flags});
                 if ((header.type == 0x1 /*HEADERS*/ || header.type == 0x9 /*CONTINUATION*/) &&
@@ -447,8 +470,12 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) co_return;
-            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+            if (!co_await writeAll(kClientPreface)) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) {
+                co_return;
+            }
 
             std::pmr::string headerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
@@ -472,12 +499,15 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
 
             for (;;) {
                 char headerBytes[kHttp2FrameHeaderBytes];
-                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    break;
+                }
                 const auto header =
                     http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size()))
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
+                }
                 if (header.type == 0x3 /*RST_STREAM*/ && header.streamId == 1 &&
                     payload.size() == 4) {
                     const auto* bytes = reinterpret_cast<const unsigned char*>(payload.data());

@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/util/PmrResource.h"
+#include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/client/HttpClientContentEncoding.h"
 #include "ruvia/web/Context.h"
@@ -19,6 +19,8 @@
 
 namespace ruvia {
 namespace {
+
+constexpr std::size_t kResponseBodyReadChunkBytes = std::size_t{16} * 1024;
 
 bool headerNameEquals(std::string_view left, std::string_view right) noexcept {
     return left.size() == right.size() &&
@@ -33,8 +35,7 @@ bool headerNameEquals(std::string_view left, std::string_view right) noexcept {
 HttpClientResponse::HttpClientResponse(
     std::pmr::memory_resource* resource, const WorkerHandle& worker, detail::HttpClientPool& pool)
     : state_(detail::constructPmrObject<detail::HttpClientResponseState>(
-          detail::httpPmrResourceOrDefault(resource), worker,
-          detail::httpPmrResourceOrDefault(resource))),
+          detail::pmrResourceOrDefault(resource), worker, detail::pmrResourceOrDefault(resource))),
       body_(state_) {
     state_->pool = &pool;
 }
@@ -43,7 +44,9 @@ HttpClientResponse::HttpClientResponse(detail::HttpClientResponseState* state, b
     : state_(state),
       body_(state),
       consumer_(false) {
-    if (retain && state_ != nullptr) ++state_->references;
+    if (retain && state_ != nullptr) {
+        ++state_->references;
+    }
 }
 
 HttpClientResponse::HttpClientResponse(HttpClientResponse&& other) noexcept
@@ -54,10 +57,13 @@ HttpClientResponse::HttpClientResponse(HttpClientResponse&& other) noexcept
 }
 
 HttpClientResponse& HttpClientResponse::operator=(HttpClientResponse&& other) noexcept {
-    if (this == &other) return *this;
+    if (this == &other) {
+        return *this;
+    }
     if (body_.operationScope_.hasPendingOperations() ||
-        other.body_.operationScope_.hasPendingOperations())
+        other.body_.operationScope_.hasPendingOperations()) {
         std::terminate();
+    }
     std::swap(state_, other.state_);
     std::swap(consumer_, other.consumer_);
     body_.state_ = state_;
@@ -71,13 +77,20 @@ HttpClientResponse::~HttpClientResponse() {
 }
 
 void HttpClientResponse::release() noexcept {
-    if (state_ == nullptr) return;
+    if (state_ == nullptr) {
+        return;
+    }
     auto* state = std::exchange(state_, nullptr);
     body_.state_ = nullptr;
-    if (consumer_ && !state->complete && !state->abandoned && state->pool != nullptr)
+    if (consumer_ && !state->complete && !state->abandoned && state->pool != nullptr) {
         state->pool->abandonResponse(*state);
-    if (state->references == 0) std::terminate();
-    if (--state->references == 0) detail::destroyPmrObject(state, state->resource);
+    }
+    if (state->references == 0) {
+        std::terminate();
+    }
+    if (--state->references == 0) {
+        detail::destroyPmrObject(state, state->resource);
+    }
 }
 
 HttpStatusCode HttpClientResponse::status() const noexcept {
@@ -95,13 +108,18 @@ std::span<const HttpClientResponseHeader> HttpClientResponse::trailers() const& 
 
 HttpClientResponseBody::HttpClientResponseBody(HttpClientResponseBody&& other) noexcept
     : state_(std::exchange(other.state_, nullptr)) {
-    if (other.operationScope_.hasPendingOperations()) std::terminate();
+    if (other.operationScope_.hasPendingOperations()) {
+        std::terminate();
+    }
 }
 
 HttpClientResponseBody& HttpClientResponseBody::operator=(HttpClientResponseBody&& other) noexcept {
-    if (this == &other) return *this;
-    if (operationScope_.hasPendingOperations() || other.operationScope_.hasPendingOperations())
+    if (this == &other) {
+        return *this;
+    }
+    if (operationScope_.hasPendingOperations() || other.operationScope_.hasPendingOperations()) {
         std::terminate();
+    }
     state_ = std::exchange(other.state_, nullptr);
     readActive_ = false;
     return *this;
@@ -117,8 +135,9 @@ bool HttpClientResponseBody::complete() const noexcept {
 }
 
 ScopedOperation<std::optional<std::string_view>> HttpClientResponseBody::read() {
-    if (readActive_)
+    if (readActive_) {
         throw std::logic_error("HTTP client response body operation is already active");
+    }
     return detail::makeScopedOperation(operationScope_, readTask());
 }
 
@@ -141,30 +160,35 @@ Task<std::optional<std::string_view>> HttpClientResponseBody::readTask() {
         co_await state_->dataSignal.wait();
     }
     if (state_->offset == state_->buffered.size() && !state_->pending.empty()) {
-        if (state_->http2DataPending && state_->pool != nullptr)
+        if (state_->http2DataPending && state_->pool != nullptr) {
             state_->pool->releaseResponseData(*state_);
+        }
         state_->buffered.clear();
         state_->offset = 0;
         state_->buffered.swap(state_->pending);
         state_->spaceSignal.notify();
     }
     if (state_->offset == state_->buffered.size()) {
-        if (state_->failure) std::rethrow_exception(state_->failure);
-        if (state_->errorCode)
+        if (state_->failure) {
+            std::rethrow_exception(state_->failure);
+        }
+        if (state_->errorCode) {
             throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode),
                 "HTTP response body read failed");
+        }
         co_return std::nullopt;
     }
-    constexpr std::size_t kChunkBytes = 16 * 1024;
-    const auto count = std::min(kChunkBytes, state_->buffered.size() - state_->offset);
+    const auto count =
+        std::min(kResponseBodyReadChunkBytes, state_->buffered.size() - state_->offset);
     const auto chunk = std::string_view(state_->buffered).substr(state_->offset, count);
     state_->offset += count;
     co_return chunk;
 }
 
 ScopedOperation<std::pmr::string> HttpClientResponseBody::readAll(std::size_t maxBytes) {
-    if (readActive_)
+    if (readActive_) {
         throw std::logic_error("HTTP client response body operation is already active");
+    }
     return detail::makeScopedOperation(operationScope_, readAllTask(maxBytes));
 }
 
@@ -180,14 +204,20 @@ Task<std::pmr::string> HttpClientResponseBody::readAllTask(std::size_t maxBytes)
         }
     } guard(readActive_);
     state_->collectAll = true;
-    if (state_->http2DataPending && state_->pool != nullptr)
+    if (state_->http2DataPending && state_->pool != nullptr) {
         state_->pool->releaseResponseData(*state_);
+    }
     state_->spaceSignal.notify();
-    while (!state_->complete) co_await state_->dataSignal.wait();
-    if (state_->failure) std::rethrow_exception(state_->failure);
-    if (state_->errorCode)
+    while (!state_->complete) {
+        co_await state_->dataSignal.wait();
+    }
+    if (state_->failure) {
+        std::rethrow_exception(state_->failure);
+    }
+    if (state_->errorCode) {
         throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode),
             "HTTP response body read failed");
+    }
     const auto remaining = state_->buffered.size() - state_->offset;
     const auto totalRemaining = remaining + state_->pending.size();
     const auto effectiveLimit = std::min(maxBytes, state_->bufferedLimit);
@@ -204,8 +234,9 @@ Task<std::pmr::string> HttpClientResponseBody::readAllTask(std::size_t maxBytes)
 }
 
 ScopedOperation<void> HttpClientResponseBody::pipeTo(ResponseStreamWriter& output) {
-    if (readActive_)
+    if (readActive_) {
         throw std::logic_error("HTTP client response body operation is already active");
+    }
     return detail::makeScopedOperation(operationScope_, pipeToTask(output));
 }
 
@@ -221,7 +252,6 @@ Task<void> HttpClientResponseBody::pipeToTask(ResponseStreamWriter& output) {
         }
     } guard(readActive_);
     state_->incrementalRead = true;
-    constexpr std::size_t kChunkBytes = 16 * 1024;
     for (;;) {
         while (state_->offset == state_->buffered.size() && state_->pending.empty() &&
                !state_->complete) {
@@ -230,21 +260,26 @@ Task<void> HttpClientResponseBody::pipeToTask(ResponseStreamWriter& output) {
             co_await state_->dataSignal.wait();
         }
         if (state_->offset == state_->buffered.size() && !state_->pending.empty()) {
-            if (state_->http2DataPending && state_->pool != nullptr)
+            if (state_->http2DataPending && state_->pool != nullptr) {
                 state_->pool->releaseResponseData(*state_);
+            }
             state_->buffered.clear();
             state_->offset = 0;
             state_->buffered.swap(state_->pending);
             state_->spaceSignal.notify();
         }
         if (state_->offset == state_->buffered.size()) {
-            if (state_->failure) std::rethrow_exception(state_->failure);
-            if (state_->errorCode)
+            if (state_->failure) {
+                std::rethrow_exception(state_->failure);
+            }
+            if (state_->errorCode) {
                 throw HttpClientError(static_cast<HttpClientError::Code>(*state_->errorCode),
                     "HTTP response body forwarding failed");
+            }
             co_return;
         }
-        const auto count = std::min(kChunkBytes, state_->buffered.size() - state_->offset);
+        const auto count =
+            std::min(kResponseBodyReadChunkBytes, state_->buffered.size() - state_->offset);
         const auto chunk = std::string_view(state_->buffered).substr(state_->offset, count);
         co_await output.write(chunk);
         state_->offset += count;
@@ -273,7 +308,9 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
     if (!contentSemanticsPresent) {
         return;
     }
-    if (response.state_->incrementalRead) return;
+    if (response.state_->incrementalRead) {
+        return;
+    }
     const auto parsedCoding = httpClientContentCodingOf(response.state_->headers);
     const auto* coding = parsedCoding.coding();
     if (coding == nullptr) {
@@ -311,10 +348,10 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
 
 detail::HttpClientRequestStorage::HttpClientRequestStorage(
     std::string_view method, std::string_view target, std::pmr::memory_resource* resource)
-    : method_(method, detail::httpPmrResourceOrDefault(resource)),
-      target_(target, detail::httpPmrResourceOrDefault(resource)),
-      headers_(detail::httpPmrResourceOrDefault(resource)),
-      body_(detail::httpPmrResourceOrDefault(resource)) {}
+    : method_(method, detail::pmrResourceOrDefault(resource)),
+      target_(target, detail::pmrResourceOrDefault(resource)),
+      headers_(detail::pmrResourceOrDefault(resource)),
+      body_(detail::pmrResourceOrDefault(resource)) {}
 
 detail::HttpClientRequestStorage& detail::HttpClientRequestStorage::appendHeader(
     std::string_view name, std::string_view value) {
@@ -342,11 +379,7 @@ HttpClientHandle::HttpClientHandle(detail::HttpClientPool& pool,
       pool_(&pool),
       resource_(resource) {}
 
-HttpClientHandle::HttpClientHandle(const HttpClientHandle& other)
-    : detail::ScopedCapabilityNode(other),
-      pool_(other.pool_),
-      resource_(other.resource_),
-      options_(other.options_) {}
+HttpClientHandle::HttpClientHandle(const HttpClientHandle& other) = default;
 
 void HttpClientHandle::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
     static_cast<HttpClientHandle&>(capability).pool_ = nullptr;
@@ -364,12 +397,16 @@ ScopedOperation<HttpClientResponse> HttpClientHandle::send(
     const HttpClientRequestView& view) const {
     requireActive();
     detail::HttpClientRequestStorage request(
-        view.method.view(), view.target.view(), detail::httpPmrResourceOrDefault(resource_));
-    for (const auto& header : view.headers) request.appendHeader(header.name(), header.value());
-    if (const auto* bytes = view.content.borrowedBytes()) request.setBody(bytes->value());
+        view.method.view(), view.target.view(), detail::pmrResourceOrDefault(resource_));
+    for (const auto& header : view.headers) {
+        request.appendHeader(header.name(), header.value());
+    }
+    if (const auto* bytes = view.content.borrowedBytes()) {
+        request.setBody(bytes->value());
+    }
     detail::validateOperationOptions(options_);
     return detail::makeScopedOperation(operationScope(),
-        pool_->execute(std::move(request), options_, detail::httpPmrResourceOrDefault(resource_)));
+        pool_->execute(std::move(request), options_, detail::pmrResourceOrDefault(resource_)));
 }
 
 HttpClientStats HttpClientHandle::stats() const {
@@ -393,17 +430,19 @@ HttpScheme HttpClientHandle::scheme() const {
 }
 
 HttpClientHandle Context::httpClient() const {
-    if (httpClients_ == nullptr)
+    if (httpClients_ == nullptr) {
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "http client is not configured");
+    }
     return httpClients_->get(resource(), operationScope_)
         .withOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }
 
 HttpClientHandle Context::httpClient(std::string_view alias) const {
-    if (httpClients_ == nullptr)
+    if (httpClients_ == nullptr) {
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "http client is not configured");
+    }
     return httpClients_->get(alias, resource(), operationScope_)
         .withOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopToken_});
 }

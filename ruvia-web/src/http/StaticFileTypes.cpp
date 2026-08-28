@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <iterator>
 #include <string_view>
-#include <utility>
 
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 
@@ -44,8 +43,9 @@ inline constexpr std::string_view kDefaultStaticFileTypes[] = {
     "xsl",
 };
 
-const StaticMimeType* findStaticMimeType(
-    const std::vector<StaticMimeType>& mimeTypes, std::string_view extension) noexcept {
+const detail::StaticRootMimeTypeStorage* findStaticMimeType(
+    const std::pmr::vector<detail::StaticRootMimeTypeStorage>& mimeTypes,
+    std::string_view extension) noexcept {
     if (mimeTypes.size() <= kStaticRootLinearLookupLimit) {
         for (const auto& mime : mimeTypes) {
             if (mime.extension == extension) {
@@ -56,7 +56,9 @@ const StaticMimeType* findStaticMimeType(
     }
 
     const auto iter = std::ranges::lower_bound(mimeTypes, extension, std::ranges::less{},
-        [](const StaticMimeType& mime) noexcept { return std::string_view(mime.extension); });
+        [](const detail::StaticRootMimeTypeStorage& mime) noexcept {
+            return std::string_view(mime.extension);
+        });
     if (iter == mimeTypes.end() || std::string_view(iter->extension) != extension) {
         return nullptr;
     }
@@ -81,39 +83,8 @@ bool isValidStaticFileExtension(std::string_view extension) noexcept {
     return !extension.empty();
 }
 
-void normalizeMimeTypes(std::vector<StaticMimeType>& mimeTypes) {
-    for (auto& mime : mimeTypes) {
-        if (!mime.extension.starts_with('.')) {
-            mime.extension.insert(mime.extension.begin(), '.');
-        }
-        for (auto& c : mime.extension) {
-            if (c >= 'A' && c <= 'Z') {
-                c = static_cast<char>(c + ('a' - 'A'));
-            }
-        }
-    }
-    std::ranges::sort(mimeTypes, [](const StaticMimeType& left, const StaticMimeType& right) {
-        return left.extension < right.extension;
-    });
-}
-
-void normalizeFileTypes(std::vector<std::string>& fileTypes) {
-    for (auto& fileType : fileTypes) {
-        if (fileType.starts_with('.')) {
-            fileType.erase(fileType.begin());
-        }
-        for (auto& c : fileType) {
-            if (c >= 'A' && c <= 'Z') {
-                c = static_cast<char>(c + ('a' - 'A'));
-            }
-        }
-    }
-    std::ranges::sort(fileTypes);
-    fileTypes.erase(std::ranges::unique(fileTypes).begin(), fileTypes.end());
-}
-
-bool fileTypeAllowed(std::string_view extension, const StaticRootOptions& options) {
-    if (options.fileTypes.kind == StaticFileTypePolicy::Kind::kAll) {
+bool fileTypeAllowed(std::string_view extension, const StaticRootConfigStorage& config) {
+    if (config.fileTypeKind == StaticFileTypePolicy::Kind::kAll) {
         return true;
     }
 
@@ -121,26 +92,24 @@ bool fileTypeAllowed(std::string_view extension, const StaticRootOptions& option
         return false;
     }
     const auto value = extension.substr(1);
-    if (options.fileTypes.kind == StaticFileTypePolicy::Kind::kDefaults) {
+    if (config.fileTypeKind == StaticFileTypePolicy::Kind::kDefaults) {
         return std::ranges::binary_search(kDefaultStaticFileTypes, value);
     }
-    const auto& extensions = options.fileTypes.extensions;
-    return std::ranges::binary_search(extensions, value);
+    return std::ranges::binary_search(config.fileTypeExtensions, value);
 }
 
 std::pmr::string contentTypeFor(const std::filesystem::path& path, std::string_view extension,
-    const StaticRootOptions& options, std::pmr::memory_resource* resource) {
-    if (const auto* const mime = findStaticMimeType(options.mimeTypes, extension);
-        mime != nullptr) {
+    const StaticRootConfigStorage& config, std::pmr::memory_resource* resource) {
+    if (const auto* const mime = findStaticMimeType(config.mimeTypes, extension); mime != nullptr) {
         return std::pmr::string(mime->contentType, resource);
     }
 
     const auto guessed = detail::guessStaticFileContentType(path);
     if (guessed != std::string_view("application/octet-stream") ||
-        options.defaultContentType.empty()) {
+        config.defaultContentType.empty()) {
         return std::pmr::string(guessed, resource);
     }
-    return std::pmr::string(options.defaultContentType, resource);
+    return std::pmr::string(config.defaultContentType, resource);
 }
 
 }  // namespace detail

@@ -1,5 +1,4 @@
 #include "ruvia/web/detail/redis/RedisRegistry.h"
-#include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #include <hiredis/hiredis.h>
 
 #include <system_error>
@@ -25,15 +24,16 @@ RedisPool::Connection::~Connection() = default;
 RedisPool::Connection::Connection(Connection&&) noexcept = default;
 RedisPool::Connection& RedisPool::Connection::operator=(Connection&&) noexcept = default;
 
-RedisPool::RedisPool(asio::io_context& ioContext, RedisConfigStorage config, std::size_t poolSize,
+RedisPool::RedisPool(asio::io_context& ioContext, const RedisConfigStorage& config,
+    std::optional<std::chrono::milliseconds> commandTimeout, std::size_t poolSize,
     std::pmr::memory_resource* resource, const WorkerHandle* worker)
     : ioContext_(ioContext),
       worker_(worker),
-      config_(std::move(config)),
+      config_(config),
+      commandTimeout_(commandTimeout),
       resource_(detail::pmrResourceOrDefault(resource)),
       connections_(resource_),
       scheduler_(poolSize, resource_) {
-    validateRedisConfig(config_);
     connections_.reserve(poolSize);
     for (std::size_t i = 0; i < poolSize; ++i) {
         connections_.emplace_back(ioContext_, resource_);

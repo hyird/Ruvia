@@ -30,6 +30,8 @@ enum class Http2FrameType : std::uint8_t {
     kContinuation = 0x9,
 };
 
+// RFC 7540 serializes error codes as four-octet unsigned integers.
+// NOLINTNEXTLINE(performance-enum-size)
 enum class Http2ErrorCode : std::uint32_t {
     kNoError = 0x0,
     kProtocolError = 0x1,
@@ -47,6 +49,8 @@ enum class Http2ErrorCode : std::uint32_t {
     kHttp11Required = 0xd,
 };
 
+// HTTP/2 SETTINGS identifiers occupy two octets on the wire.
+// NOLINTNEXTLINE(performance-enum-size)
 enum class Http2SettingId : std::uint16_t {
     kHeaderTableSize = 0x1,
     kEnablePush = 0x2,

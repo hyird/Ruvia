@@ -5,7 +5,6 @@
 #include <exception>
 #include <optional>
 #include <string_view>
-#include <utility>
 #include <variant>
 
 #include "ruvia/http/Http1RequestBodyPlan.h"
@@ -76,11 +75,11 @@ public:
 private:
     friend struct detail::Http1RequestParseResultAccess;
 
-    // See Http1RequestParseResultAccess::parsed: HttpRequest moves are memcpys,
-    // so the only one on this path is the member initialization below.
-    Http1ParsedRequest(HttpRequest&& request, Http1RequestBodyPlan bodyPlan,
+    // HttpRequest contains only borrowed views and fixed-size metadata. Copy it
+    // once into the result so the ownership and lifetime contract stays explicit.
+    Http1ParsedRequest(const HttpRequest& request, Http1RequestBodyPlan bodyPlan,
         std::string_view wireBody, std::size_t consumedBytes) noexcept
-        : request_(std::move(request)),
+        : request_(request),
           bodyPlan_(bodyPlan),
           wireBody_(wireBody),
           consumedBytes_(consumedBytes) {}
@@ -132,13 +131,13 @@ private:
     friend struct detail::Http1RequestParseResultAccess;
 
     explicit Http1RequestParseResult(Http1RequestNeedMore state) noexcept
-        : state_(std::move(state)) {}
+        : state_(state) {}
 
     explicit Http1RequestParseResult(Http1ParsedRequest state) noexcept
-        : state_(std::move(state)) {}
+        : state_(state) {}
 
     explicit Http1RequestParseResult(Http1RequestParseFailure state) noexcept
-        : state_(std::move(state)) {}
+        : state_(state) {}
 
     std::variant<Http1RequestNeedMore, Http1ParsedRequest, Http1RequestParseFailure> state_;
 };

@@ -51,7 +51,7 @@ public:
     // registration silently changing meaning based on its first argument's type
     // is not a mistake worth allowing.
     template <typename MiddlewareT, typename... Args>
-    Derived& useAt(MiddlewareScopeOptions options, Args&&... args) {
+    Derived& useAt(const MiddlewareScopeOptions& options, Args&&... args) {
         // The unmatched-request chain is one contiguous block shared by every
         // 404/405/501, so it cannot carry per-prefix membership. Rejecting the
         // combination is better than silently dropping either half of it.

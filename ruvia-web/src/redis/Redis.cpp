@@ -1,12 +1,12 @@
 #include "ruvia/web/redis/Redis.h"
 
-#include "ruvia/web/detail/redis/RedisConfigValidation.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
 #include <algorithm>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 
 namespace ruvia {
 namespace detail {
@@ -26,24 +26,20 @@ RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resou
             })) {
             throw std::invalid_argument("duplicate redis alias");
         }
-        auto generalConfig = RedisConfigStorage(definition.config, resource_);
-        auto blockingConfig = RedisConfigStorage(definition.config, resource_);
-        validateRedisConfig(generalConfig);
-        const auto generalSize = generalConfig.poolSizePerWorker;
-        const auto blockingSize = generalConfig.blockingPoolSizePerWorker;
+        pools_.emplace_back(definition.alias, definition.config, resource_);
+        auto& entry = pools_.back();
+        const auto generalSize = entry.config.poolSizePerWorker;
+        const auto blockingSize = entry.config.blockingPoolSizePerWorker;
         // Redis blocking commands own their wait semantics. Typed finite waits
         // install a per-operation deadline with protocol grace, while infinite
         // waits require an explicit StopToken or operation timeout. Inheriting
         // the ordinary pool's command timeout would cut long waits short and
         // repeatedly discard/reconnect BLOCK 0 sockets.
-        blockingConfig.commandTimeout = std::nullopt;
-        auto general = makePmrObject<RedisPool>(
-            resource_, ioContext, std::move(generalConfig), generalSize, resource_, worker);
-        auto blocking = makePmrObject<RedisPool>(
-            resource_, ioContext, std::move(blockingConfig), blockingSize, resource_, worker);
-        pools_.push_back(Entry{std::pmr::string(definition.alias, resource_), std::move(general),
-            std::move(blocking)});
-        if (std::string_view(pools_.back().alias) == kDefaultRedisAlias) {
+        entry.general = makePmrObject<RedisPool>(resource_, ioContext, entry.config,
+            entry.config.commandTimeout, generalSize, resource_, worker);
+        entry.blocking = makePmrObject<RedisPool>(
+            resource_, ioContext, entry.config, std::nullopt, blockingSize, resource_, worker);
+        if (std::string_view(entry.alias) == kDefaultRedisAlias) {
             defaultPoolIndex_ = pools_.size() - 1;
         }
     }
