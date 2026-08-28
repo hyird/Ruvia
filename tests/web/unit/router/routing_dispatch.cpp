@@ -18,11 +18,11 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     }
     RUVIA_CHECK(rejected);
 
-    const auto rejectsSubprotocols = [](std::string_view subprotocols) {
+    const auto rejectsSubprotocols = [](std::vector<std::string> subprotocols) {
         ruvia::detail::Router router;
         auto& impl = ruvia::detail::RouterImpl::from(router);
         ruvia::WebSocketRouteConfig options;
-        options.subprotocols = subprotocols;
+        options.subprotocols = std::move(subprotocols);
         try {
             impl.registerWebSocketRoute(HttpKnownMethod::kGet, path("/invalid-ws-protocols"),
                 ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
@@ -30,22 +30,18 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
                 std::span<const ControllerMiddlewareDescriptor>{}, options);
         } catch (const std::invalid_argument& error) {
             return std::string_view(error.what()) ==
-                   "websocket subprotocols must be a list of at most 64 unique HTTP tokens";
+                   "websocket subprotocols must contain at most 64 unique HTTP tokens";
         }
         return false;
     };
-    RUVIA_CHECK(rejectsSubprotocols("chat, bad token"));
-    RUVIA_CHECK(rejectsSubprotocols("chat, chat"));
-    RUVIA_CHECK(rejectsSubprotocols(", ,"));
-    std::string tooManySubprotocols;
+    RUVIA_CHECK(rejectsSubprotocols({"bad token"}));
+    RUVIA_CHECK(rejectsSubprotocols({"chat", "chat"}));
+    RUVIA_CHECK(rejectsSubprotocols({""}));
+    std::vector<std::string> tooManySubprotocols;
     for (std::size_t i = 0; i <= ruvia::kMaxHttpHeaderFields; ++i) {
-        if (i != 0) {
-            tooManySubprotocols.append(", ");
-        }
-        tooManySubprotocols.append("protocol-");
-        tooManySubprotocols.append(std::to_string(i));
+        tooManySubprotocols.emplace_back("protocol-" + std::to_string(i));
     }
-    RUVIA_CHECK(rejectsSubprotocols(tooManySubprotocols));
+    RUVIA_CHECK(rejectsSubprotocols(std::move(tooManySubprotocols)));
 
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);

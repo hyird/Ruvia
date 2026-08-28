@@ -46,13 +46,6 @@ constexpr std::size_t kCloseHandshakeBufferBytes = std::size_t{4} * 1024;
     return loop;
 }
 
-[[nodiscard]] bool isOfferedSubprotocol(
-    std::string_view offers, std::string_view selected) noexcept {
-    return !httpFindHeaderToken(offers, [selected](std::string_view token) {
-        return token == selected;
-    }).empty();
-}
-
 [[nodiscard]] WebSocketClientError::Code transportErrorCode(bool secure) noexcept {
     return secure ? WebSocketClientError::Code::kTlsFailed : WebSocketClientError::Code::kIoError;
 }
@@ -383,8 +376,7 @@ void WebSocketClientState::validateHandshakeResponse(
     const bool valid = acceptHeaderCount == 1 && acceptMatches && hasUpgrade &&
                        hasConnectionUpgrade && extensionHeaderCount == 0 &&
                        protocolHeaderCount <= 1 &&
-                       (protocolHeaderCount == 0 ||
-                           isOfferedSubprotocol(config_.subprotocols, selectedSubprotocol));
+                       (protocolHeaderCount == 0 || config_.offersSubprotocol(selectedSubprotocol));
     if (!valid) {
         throw WebSocketClientError(
             WebSocketClientError::Code::kHandshakeRejected, "invalid WebSocket handshake response");
@@ -411,8 +403,8 @@ Task<void> WebSocketClientState::performHandshake(OperationOptions options) {
     headers.emplace_back("Connection", "Upgrade");
     headers.emplace_back("Sec-WebSocket-Key", keyView);
     headers.emplace_back("Sec-WebSocket-Version", "13");
-    if (!config_.subprotocols.empty()) {
-        headers.emplace_back("Sec-WebSocket-Protocol", config_.subprotocols);
+    if (!config_.subprotocolHeader.empty()) {
+        headers.emplace_back("Sec-WebSocket-Protocol", config_.subprotocolHeader);
     }
     if (!config_.userAgent.empty()) {
         headers.emplace_back("User-Agent", config_.userAgent);

@@ -12,7 +12,7 @@ public:
 
     RUVIA_ROUTES_BEGIN
     const auto chatOptions = ruvia::WebSocketRouteConfig{
-        .subprotocols = "chat.v1",
+        .subprotocols = {"chat.v1"},
         .lifecycle =
             {
                 .heartbeat =

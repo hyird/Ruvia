@@ -10,7 +10,7 @@ namespace ruvia {
 
 // Zero-copy text held by a configuration or message value that outlives the
 // call which set it -- cookie attributes, SSE fields, security header policies,
-// WebSocket subprotocols, Redis SCAN patterns, outbound request lines.
+// Redis SCAN patterns, outbound request lines.
 //
 // It is a std::string_view that refuses to be built from an owning temporary.
 // Those values are commonly stored and read back later, so binding one to a

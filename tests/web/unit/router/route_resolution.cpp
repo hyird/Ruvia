@@ -10,6 +10,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/HttpKnownMethod.h"
@@ -24,11 +25,6 @@ using ruvia::detail::RouteMatch;
 using ruvia::detail::RouteResolution;
 using ruvia::detail::RouteStreamHandler;
 using ruvia::detail::RouteTable;
-
-template <typename Text>
-concept WebSocketSubprotocolsAccepts = requires(ruvia::WebSocketRouteConfig& options, Text&& text) {
-    options.subprotocols = std::forward<Text>(text);
-};
 
 template <typename T>
 concept HasLooseRouteResolutionAccessors = requires(const T& value) {
@@ -59,12 +55,8 @@ static_assert(!std::is_move_assignable_v<RouteEntry>);
 static_assert(!std::is_polymorphic_v<RouteTable>);
 static_assert(!std::is_move_constructible_v<RouteTable>);
 static_assert(!std::is_move_assignable_v<RouteTable>);
-static_assert(WebSocketSubprotocolsAccepts<std::string&>);
-static_assert(WebSocketSubprotocolsAccepts<const std::pmr::string&>);
-static_assert(WebSocketSubprotocolsAccepts<std::string>);
-static_assert(WebSocketSubprotocolsAccepts<const std::string>);
-static_assert(WebSocketSubprotocolsAccepts<std::pmr::string>);
-static_assert(std::same_as<decltype(ruvia::WebSocketRouteConfig{}.subprotocols), std::string>);
+static_assert(
+    std::same_as<decltype(ruvia::WebSocketRouteConfig{}.subprotocols), std::vector<std::string>>);
 
 ruvia::Task<ruvia::HttpResponse> routeHandler(void*, ruvia::Context& context) {
     co_return ruvia::HttpResponse({.resource = context.resource()});
@@ -100,7 +92,7 @@ RUVIA_TEST(route_endpoint_binds_handler_shape_and_only_relevant_metadata) {
     RUVIA_CHECK(stream.responseStream()->kind() == ruvia::detail::ResponseStreamKind::kSse);
     RUVIA_CHECK(stream.requestBodyMode() == ruvia::detail::RequestBodyMode::kBuffered);
 
-    std::pmr::string sourceProtocols("chat, superchat", std::pmr::get_default_resource());
+    std::vector<std::string> sourceProtocols{"chat", "superchat"};
     ruvia::WebSocketRouteConfig options;
     options.subprotocols = sourceProtocols;
     options.lifecycle.heartbeat = {
@@ -108,11 +100,13 @@ RUVIA_TEST(route_endpoint_binds_handler_shape_and_only_relevant_metadata) {
     };
     const auto webSocket = RouteEndpoint::webSocket(std::pmr::get_default_resource(),
         RouteStreamHandler(nullptr, &streamRouteHandler), options);
-    sourceProtocols.assign("mutated");
+    sourceProtocols.front().assign("mutated");
     RUVIA_CHECK(webSocket.buffered() == nullptr);
     RUVIA_CHECK(webSocket.responseStream() == nullptr);
     RUVIA_CHECK(webSocket.webSocket() != nullptr);
-    RUVIA_CHECK(webSocket.webSocket()->subprotocols() == "chat, superchat");
+    RUVIA_CHECK_EQ(webSocket.webSocket()->subprotocols().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(webSocket.webSocket()->subprotocols()[0], std::string_view("chat"));
+    RUVIA_CHECK_EQ(webSocket.webSocket()->subprotocols()[1], std::string_view("superchat"));
     RUVIA_CHECK_EQ(
         webSocket.webSocket()->lifecycle().heartbeat.pingInterval->count(), std::int64_t{25});
     RUVIA_CHECK_EQ(

@@ -22,6 +22,7 @@
 #include <ruvia/http/HttpHeader.h>
 #include <ruvia/http/HttpClient.h>
 #include <ruvia/http/HttpClientRedirect.h>
+#include <ruvia/http/HttpClientRequestTarget.h>
 #include <ruvia/http/HttpContentCodec.h>
 #include <ruvia/http/HttpContentCoding.h>
 #include <ruvia/http/Http1ClientRequestWriter.h>

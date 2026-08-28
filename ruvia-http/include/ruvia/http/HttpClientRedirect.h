@@ -18,8 +18,6 @@
 
 namespace ruvia {
 
-[[nodiscard]] bool isValidHttpClientOriginTarget(std::string_view target) noexcept;
-
 [[nodiscard]] bool isHttpClientRedirectStatus(HttpStatusCode status) noexcept;
 
 class HttpClientResponseHeaderLookupResult;

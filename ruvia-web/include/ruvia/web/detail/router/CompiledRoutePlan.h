@@ -69,7 +69,7 @@ private:
         ResponseStreamKind responseStreamKind{ResponseStreamKind::kGeneric};
         RouteHandler::Invoke bufferedInvoke{nullptr};
         RouteStreamHandler::Invoke streamInvoke{nullptr};
-        std::pmr::string webSocketSubprotocols;
+        std::pmr::vector<std::pmr::string> webSocketSubprotocols;
         std::int64_t webSocketPingIntervalMs{-1};
         std::int64_t webSocketPongTimeoutMs{-1};
         std::int64_t webSocketCloseTimeoutMs{-1};

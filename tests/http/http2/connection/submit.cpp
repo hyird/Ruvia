@@ -1,5 +1,6 @@
 #include "http2_connection_fixture.h"
 
+#include <array>
 #include <new>
 
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
@@ -174,8 +175,9 @@ RUVIA_TEST(http2_connection_websocket_handshake_clears_staged_block_on_encoding_
                                          largeProtocol + "\r\n\r\n";
     const auto negotiationRequest =
         negotiationParser.parseMessage(std::string_view(negotiationBytes));
+    const std::array<std::string_view, 1> supportedProtocols{largeProtocol};
     auto negotiation = ruvia::detail::makeWebSocketServerNegotiation(negotiationRequest.request,
-        {.supportedSubprotocols = largeProtocol, .resource = &resource});
+        {.supportedSubprotocols = supportedProtocols, .resource = &resource});
 
     resource.rejectAllocations();
     bool allocationFailed = false;
@@ -194,7 +196,7 @@ RUVIA_TEST(http2_connection_websocket_handshake_clears_staged_block_on_encoding_
     resource.rejectAllocations(false);
     auto retryNegotiation =
         ruvia::detail::makeWebSocketServerNegotiation(negotiationRequest.request,
-            {.supportedSubprotocols = largeProtocol, .resource = &resource});
+            {.supportedSubprotocols = supportedProtocols, .resource = &resource});
     const auto retried = conn.submitWebSocketHandshake(1, std::move(retryNegotiation));
     RUVIA_CHECK(retried.submitted() != nullptr);
     RUVIA_CHECK(stream->localHeaderBlock().empty());

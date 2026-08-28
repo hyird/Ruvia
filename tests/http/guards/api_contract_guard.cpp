@@ -20,6 +20,7 @@
 #include <ruvia/http/HttpHeader.h>
 #include <ruvia/http/HttpClient.h>
 #include <ruvia/http/HttpClientRedirect.h>
+#include <ruvia/http/HttpClientRequestTarget.h>
 #include <ruvia/http/HttpContentCodec.h>
 #include <ruvia/http/HttpContentCoding.h>
 #include <ruvia/http/Http1ClientRequestWriter.h>
@@ -143,27 +144,22 @@ concept AcceptsAnyBorrowedHttpSubviewInput =
     requires(Input&& input) { ruvia::detail::httpTrimQuotes(std::forward<Input>(input)); } ||
     requires(Input&& input) {
         ruvia::detail::httpFindHeaderToken(std::forward<Input>(input), MatchAnyHeaderToken{});
-    } || requires(Input&& input) {
+    } ||
+    requires(Input&& input) {
         ruvia::detail::httpHeaderTokenBeforeParameters(std::forward<Input>(input));
-    } || requires(Input&& input) {
-        ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input));
-    } || requires(Input&& input) {
-        ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input));
-    } || requires(const ruvia::HttpRequest& request, Input&& input) {
-        ruvia::detail::chooseWebSocketSubprotocol(request, std::forward<Input>(input));
-    };
+    } ||
+    requires(Input&& input) { ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input)); } ||
+    requires(Input&& input) { ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input)); };
 
 template <typename Input>
-concept AcceptsAllBorrowedHttpSubviewInputs =
-    requires(const ruvia::HttpRequest& request, Input&& input) {
-        ruvia::detail::httpTrimOws(std::forward<Input>(input));
-        ruvia::detail::httpTrimQuotes(std::forward<Input>(input));
-        ruvia::detail::httpFindHeaderToken(std::forward<Input>(input), MatchAnyHeaderToken{});
-        ruvia::detail::httpHeaderTokenBeforeParameters(std::forward<Input>(input));
-        ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input));
-        ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input));
-        ruvia::detail::chooseWebSocketSubprotocol(request, std::forward<Input>(input));
-    };
+concept AcceptsAllBorrowedHttpSubviewInputs = requires(Input&& input) {
+    ruvia::detail::httpTrimOws(std::forward<Input>(input));
+    ruvia::detail::httpTrimQuotes(std::forward<Input>(input));
+    ruvia::detail::httpFindHeaderToken(std::forward<Input>(input), MatchAnyHeaderToken{});
+    ruvia::detail::httpHeaderTokenBeforeParameters(std::forward<Input>(input));
+    ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input));
+    ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input));
+};
 
 static_assert(!AcceptsAnyBorrowedHttpSubviewInput<std::string>);
 static_assert(!AcceptsAnyBorrowedHttpSubviewInput<const std::string>);
@@ -2980,12 +2976,12 @@ using WebSocketClientOfferHeaderValidator = bool (*)(
 template <typename T>
 concept HasPositionalWebSocketServerNegotiationFactory =
     requires(const ruvia::HttpRequest& request,
-        ApiGuardDependent<T, std::string_view> supportedSubprotocols,
+        ApiGuardDependent<T, std::span<const std::string_view>> supportedSubprotocols,
         ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
         ruvia::detail::makeWebSocketServerNegotiation(request, supportedSubprotocols);
     } ||
     requires(const ruvia::HttpRequest& request,
-        ApiGuardDependent<T, std::string_view> supportedSubprotocols,
+        ApiGuardDependent<T, std::span<const std::string_view>> supportedSubprotocols,
         ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
         ruvia::detail::makeWebSocketServerNegotiation(request, supportedSubprotocols, resource);
     };
@@ -2993,12 +2989,12 @@ concept HasPositionalWebSocketServerNegotiationFactory =
 template <typename T>
 concept HasPositionalWebSocketServerHandshakeFactory =
     requires(const ruvia::HttpRequest& request,
-        ApiGuardDependent<T, std::string_view> supportedSubprotocols,
+        ApiGuardDependent<T, std::span<const std::string_view>> supportedSubprotocols,
         ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
         ruvia::makeWebSocketServerHandshake(request, supportedSubprotocols);
     } ||
     requires(const ruvia::HttpRequest& request,
-        ApiGuardDependent<T, std::string_view> supportedSubprotocols,
+        ApiGuardDependent<T, std::span<const std::string_view>> supportedSubprotocols,
         ApiGuardDependent<T, std::pmr::memory_resource*> resource) {
         ruvia::makeWebSocketServerHandshake(request, supportedSubprotocols, resource);
     };
@@ -3011,11 +3007,11 @@ static_assert(std::is_aggregate_v<ruvia::detail::WebSocketServerNegotiationOptio
 static_assert(std::is_aggregate_v<ruvia::WebSocketServerHandshakeOptions>);
 static_assert(
     std::same_as<decltype(ruvia::detail::WebSocketServerNegotiationOptions{}.supportedSubprotocols),
-        std::string_view>);
+        std::span<const std::string_view>>);
 static_assert(std::same_as<decltype(ruvia::detail::WebSocketServerNegotiationOptions{}.resource),
     std::pmr::memory_resource*>);
 static_assert(std::same_as<decltype(ruvia::WebSocketServerHandshakeOptions{}.supportedSubprotocols),
-    std::string_view>);
+    std::span<const std::string_view>>);
 static_assert(std::same_as<decltype(ruvia::WebSocketServerHandshakeOptions{}.resource),
     std::pmr::memory_resource*>);
 static_assert(

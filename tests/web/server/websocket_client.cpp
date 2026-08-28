@@ -107,7 +107,8 @@ private:
                 asio::buffers_begin(buffer.data()), asio::buffers_end(buffer.data()));
             const auto key = header(request, "Sec-WebSocket-Key");
             if (key.empty() ||
-                !ruvia::detail::httpHasToken(header(request, "Upgrade"), "websocket")) {
+                !ruvia::detail::httpHasToken(header(request, "Upgrade"), "websocket") ||
+                header(request, "Sec-WebSocket-Protocol") != "chat, superchat") {
                 return;
             }
             ruvia::detail::WebSocketAcceptKey accept{};
@@ -198,6 +199,16 @@ int main() {
             return 5;
         }
         invalidConfig.headers.clear();
+        invalidConfig.target = "/events#fragment";
+        if (!rejectsClientConfig(loop, invalidConfig)) {
+            return 6;
+        }
+        invalidConfig.target = "/";
+        invalidConfig.subprotocols = {"chat", "chat"};
+        if (!rejectsClientConfig(loop, invalidConfig)) {
+            return 7;
+        }
+        invalidConfig.subprotocols.clear();
         ruvia::WebSocketClient plainClientWithInactiveTlsConfig(loop, invalidConfig);
 
         WebSocketOrigin origin;
@@ -206,7 +217,7 @@ int main() {
                                                 .host = "127.0.0.1",
                                                 .port = origin.port(),
                                                 .target = "/events",
-                                                .subprotocols = "chat, superchat",
+                                                .subprotocols = {"chat", "superchat"},
                                             });
         loops.start();
         std::promise<int> completion;

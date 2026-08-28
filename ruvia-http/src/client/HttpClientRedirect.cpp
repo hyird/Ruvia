@@ -1,5 +1,7 @@
 #include "ruvia/http/HttpClientRedirect.h"
 
+#include "ruvia/http/HttpClientRequestTarget.h"
+
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/http/detail/client/HttpOriginView.h"
@@ -152,10 +154,6 @@ void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
 }
 
 }  // namespace
-
-bool isValidHttpClientOriginTarget(std::string_view target) noexcept {
-    return detail::isValidOriginFormTarget(target);
-}
 
 bool isHttpClientRedirectStatus(HttpStatusCode status) noexcept {
     return status == http_status::kMovedPermanently || status == http_status::kFound ||
