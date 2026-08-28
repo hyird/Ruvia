@@ -336,7 +336,7 @@ ruvia::WebSocketClient client(loop, {
     .scheme = ruvia::WebSocketScheme::kWss,
     .host = "events.example.com",
     .target = "/v1/stream",
-    .subprotocols = "events.v1, events.v2",
+    .subprotocols = {"events.v1", "events.v2"},
 });
 
 auto completed = loop.start(consumeEvents(client));

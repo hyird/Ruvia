@@ -3,11 +3,11 @@
 #include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketSubprotocolSet.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 
 #include <algorithm>
-#include <array>
 #include <span>
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -17,53 +17,6 @@
 
 namespace ruvia::detail {
 namespace {
-
-class WebSocketSubprotocolSet final {
-public:
-    [[nodiscard]] bool appendList(std::string_view value) noexcept {
-        while (true) {
-            const auto comma = value.find(',');
-            const auto token =
-                httpTrimOws(comma == std::string_view::npos ? value : value.substr(0, comma));
-            if (!token.empty() && !append(token)) {
-                return false;
-            }
-            if (comma == std::string_view::npos) {
-                return true;
-            }
-            value.remove_prefix(comma + 1);
-        }
-    }
-
-    [[nodiscard]] bool contains(std::string_view protocol) const noexcept {
-        const auto protocols = std::span(protocols_).first(size_);
-        return std::ranges::find(protocols, protocol) != protocols.end();
-    }
-
-    [[nodiscard]] bool empty() const noexcept {
-        return size_ == 0;
-    }
-
-private:
-    [[nodiscard]] bool append(std::string_view protocol) noexcept {
-        for (const auto ch : protocol) {
-            if (!isHttpTokenChar(static_cast<unsigned char>(ch))) {
-                return false;
-            }
-        }
-        if (size_ == protocols_.size() || contains(protocol)) {
-            return false;
-        }
-        protocols_[size_++] = protocol;
-        return true;
-    }
-
-    // The request parser already caps the complete header field count at 64.
-    // Applying the same implementation limit to offered subprotocols keeps
-    // uniqueness validation bounded and allocation-free on the handshake path.
-    std::array<std::string_view, kMaxHttpHeaderFields> protocols_{};
-    std::size_t size_{0};
-};
 
 [[nodiscard]] bool appendWebSocketSubprotocolOffers(std::span<const HttpHeaderView> headers,
     WebSocketSubprotocolSet& protocols, bool& present) noexcept {
