@@ -140,6 +140,20 @@ RUVIA_TEST(static_root_config_storage_validates_before_owner_pmr_allocation) {
         invalid = true;
     }
     RUVIA_CHECK(invalid);
+
+    invalid = false;
+    try {
+        static_cast<void>(ruvia::detail::makeStaticRootConfigStorage(
+            {.mimeTypes =
+                    {
+                        {.extension = "CUSTOM", .contentType = "application/x-first"},
+                        {.extension = ".custom", .contentType = "application/x-second"},
+                    }},
+            std::pmr::null_memory_resource()));
+    } catch (const std::invalid_argument&) {
+        invalid = true;
+    }
+    RUVIA_CHECK(invalid);
 }
 
 RUVIA_TEST(static_root_copies_public_mime_configuration_into_owned_storage) {
@@ -1731,6 +1745,14 @@ RUVIA_TEST(static_root_rejects_invalid_static_options_at_construction) {
         mime.extension = std::string(invalidExtension);
         mime.contentType = "text/plain";
         options.mimeTypes.push_back(std::move(mime));
+        rejects(std::move(options));
+    }
+    {
+        StaticRootOptions options;
+        options.mimeTypes = {
+            {.extension = "CUSTOM", .contentType = "application/x-first"},
+            {.extension = ".custom", .contentType = "application/x-second"},
+        };
         rejects(std::move(options));
     }
     {

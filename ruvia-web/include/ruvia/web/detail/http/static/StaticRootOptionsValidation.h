@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <stdexcept>
 #include <string_view>
 
@@ -9,6 +10,33 @@
 #include "ruvia/web/detail/http/static/StaticFileTypes.h"
 
 namespace ruvia::detail {
+
+[[nodiscard]] inline bool staticFileExtensionsEquivalent(
+    std::string_view left, std::string_view right) noexcept {
+    if (left.starts_with('.')) {
+        left.remove_prefix(1);
+    }
+    if (right.starts_with('.')) {
+        right.remove_prefix(1);
+    }
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        auto leftCharacter = left[i];
+        auto rightCharacter = right[i];
+        if (leftCharacter >= 'A' && leftCharacter <= 'Z') {
+            leftCharacter = static_cast<char>(leftCharacter + ('a' - 'A'));
+        }
+        if (rightCharacter >= 'A' && rightCharacter <= 'Z') {
+            rightCharacter = static_cast<char>(rightCharacter + ('a' - 'A'));
+        }
+        if (leftCharacter != rightCharacter) {
+            return false;
+        }
+    }
+    return true;
+}
 
 [[nodiscard]] inline bool staticRootServesDotfiles(StaticDotfilePolicy policy) {
     switch (policy) {
@@ -42,11 +70,18 @@ inline void validateStaticRootOptions(const StaticRootOptions& options) {
             !ruvia::detail::isValidHttpContentTypeFieldValue(options.defaultContentType))) {
         throw std::invalid_argument("invalid static file header value");
     }
-    for (const auto& mime : options.mimeTypes) {
+    for (std::size_t i = 0; i < options.mimeTypes.size(); ++i) {
+        const auto& mime = options.mimeTypes[i];
         if (!ruvia::detail::isValidStaticFileExtension(mime.extension) ||
             mime.contentType.empty() ||
             !ruvia::detail::isValidHttpContentTypeFieldValue(mime.contentType)) {
             throw std::invalid_argument("invalid static file mime type");
+        }
+        for (std::size_t previous = 0; previous < i; ++previous) {
+            if (staticFileExtensionsEquivalent(
+                    options.mimeTypes[previous].extension, mime.extension)) {
+                throw std::invalid_argument("duplicate static file mime extension");
+            }
         }
     }
     switch (options.fileTypes.kind) {
