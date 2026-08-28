@@ -812,17 +812,17 @@ template <typename T>
 concept HasResponseStreamWriteOwnedAlias = requires(T& writer, std::pmr::string chunk) { writer.writeOwned(std::move(chunk)); };
 
 template <typename T>
-concept HasResponseStreamOwningWrite = requires { static_cast<ruvia::ScopedOperation<void> (T::*)(std::pmr::string&&)>(&T::write); };
+concept HasResponseStreamOwningWrite = requires { static_cast<ruvia::ScopedOperation<void> (T::*)(std::pmr::string&&)&>(&T::write); };
 
 template <typename T>
 concept HasWebSocketOwnedWriteAlias = requires(T& socket, std::pmr::string payload) { socket.textOwned(std::move(payload)); } || requires(T& socket, std::pmr::string payload) { socket.binaryOwned(std::move(payload)); } || requires(T& socket, std::pmr::string payload) { socket.pongOwned(std::move(payload)); } || requires(T& socket, std::pmr::string payload) { socket.pingOwned(std::move(payload)); };
 
 template <typename T>
 concept HasWebSocketOwningWrites = requires {
-    static_cast<ruvia::ScopedOperation<void> (T::*)(std::pmr::string&&)>(&T::text);
-    static_cast<ruvia::ScopedOperation<void> (T::*)(std::pmr::string&&)>(&T::binary);
-    static_cast<ruvia::ScopedOperation<void> (T::*)(std::pmr::string&&)>(&T::pong);
-    static_cast<ruvia::ScopedOperation<void> (T::*)(std::pmr::string&&)>(&T::ping);
+    static_cast<ruvia::ScopedOperation<void> (T::*)(std::pmr::string&&)&>(&T::text);
+    static_cast<ruvia::ScopedOperation<void> (T::*)(std::pmr::string&&)&>(&T::binary);
+    static_cast<ruvia::ScopedOperation<void> (T::*)(std::pmr::string&&)&>(&T::pong);
+    static_cast<ruvia::ScopedOperation<void> (T::*)(std::pmr::string&&)&>(&T::ping);
 };
 
 template <typename T>
@@ -3018,6 +3018,21 @@ static_assert(!HasContextCookieGenerator<ruvia::Context>);
 static_assert(!HasContextSignedCookieGenerator<ruvia::Context>);
 static_assert(HasResponseStreamOwningWrite<ruvia::ResponseStreamWriter>);
 static_assert(!HasResponseStreamWriteOwnedAlias<ruvia::ResponseStreamWriter>);
+template <typename Reader>
+concept HasRvalueBodyReaderOperation = requires(Reader&& reader) { std::move(reader).read(); };
+template <typename Writer>
+concept HasRvalueResponseStreamOperation = requires(Writer&& writer) { std::move(writer).write(std::string_view{}); } || requires(Writer&& writer) { std::move(writer).write(std::pmr::string{}); } || requires(Writer&& writer) { std::move(writer).writeln(std::string_view{}); } || requires(Writer&& writer) { std::move(writer).sleep(std::chrono::milliseconds{1}); } || requires(Writer&& writer) { std::move(writer).end(); };
+template <typename Socket>
+concept HasRvalueWebSocketOperation = requires(Socket&& socket) { std::move(socket).read(); } || requires(Socket&& socket) { std::move(socket).text(std::string_view{}); } || requires(Socket&& socket) { std::move(socket).text(std::pmr::string{}); } || requires(Socket&& socket) { std::move(socket).binary(std::string_view{}); } || requires(Socket&& socket) { std::move(socket).binary(std::pmr::string{}); } || requires(Socket&& socket) { std::move(socket).pong(std::string_view{}); } || requires(Socket&& socket) { std::move(socket).pong(std::pmr::string{}); } || requires(Socket&& socket) { std::move(socket).ping(); } || requires(Socket&& socket) { std::move(socket).ping(std::pmr::string{}); } || requires(Socket&& socket) { std::move(socket).close(); };
+template <typename Reader>
+concept HasRvalueMultipartReaderOperation = requires(Reader&& reader) { std::move(reader).read(); };
+template <typename Body>
+concept HasRvalueHttpClientResponseBodyOperation = requires(Body&& body) { std::move(body).read(); } || requires(Body&& body) { std::move(body).readAll(); } || requires(Body&& body, ruvia::ResponseStreamWriter& output) { std::move(body).pipeTo(output); };
+static_assert(!HasRvalueBodyReaderOperation<ruvia::BodyReader>);
+static_assert(!HasRvalueResponseStreamOperation<ruvia::ResponseStreamWriter>);
+static_assert(!HasRvalueWebSocketOperation<ruvia::WebSocket>);
+static_assert(!HasRvalueMultipartReaderOperation<ruvia::MultipartReader>);
+static_assert(!HasRvalueHttpClientResponseBodyOperation<ruvia::HttpClientResponseBody>);
 static_assert(std::is_same_v<decltype(std::declval<ruvia::ResponseStreamWriter&>().write(std::pmr::string{})), ruvia::ScopedOperation<void>>);
 static_assert(std::is_same_v<decltype(std::declval<ruvia::ResponseStreamWriter&>().writeln(std::string_view{})), ruvia::ScopedOperation<void>>);
 static_assert(HasWebSocketOwningWrites<ruvia::WebSocket>);
@@ -3046,6 +3061,9 @@ static_assert(!std::copy_constructible<ruvia::HttpClient>);
 static_assert(!std::move_constructible<ruvia::HttpClient>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClient&>().send(ruvia::HttpClientRequestView{})), ruvia::ScopedOperation<ruvia::HttpClientResponse>>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClient&>().worker()), const ruvia::WorkerHandle&>);
+template <typename Client>
+concept HasRvalueStandaloneHttpClientOperation = requires(Client&& client) { std::move(client).withOptions({}); } || requires(Client&& client) { std::move(client).send(ruvia::HttpClientRequestView{}); };
+static_assert(!HasRvalueStandaloneHttpClientOperation<ruvia::HttpClient>);
 static_assert(!HasDynamicHttpClientFactory<ruvia::HttpClientHandle>);
 static_assert(!HasHttpClientRequestBuilder<ruvia::HttpClientHandle>);
 static_assert(HasHttpClientWithOptions<ruvia::HttpClientHandle>);
@@ -3088,6 +3106,9 @@ static_assert(std::same_as<decltype(std::declval<ruvia::HttpClientConfig&>().max
 static_assert(!HasAliasedUseHttpClient<ruvia::App>);
 static_assert(!std::is_copy_constructible_v<ruvia::HttpClientResponse>);
 static_assert(std::is_move_constructible_v<ruvia::HttpClientResponse>);
+static_assert(!std::is_move_constructible_v<ruvia::HttpClientResponseBody>);
+static_assert(!std::is_move_assignable_v<ruvia::HttpClientResponseBody>);
+static_assert(!std::is_destructible_v<ruvia::HttpClientResponseBody>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientResponse&>().headers()), std::span<const ruvia::HttpClientResponseHeader>>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientResponse&>().trailers()), std::span<const ruvia::HttpClientResponseHeader>>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClientResponse&>().status()), ruvia::HttpStatusCode>);

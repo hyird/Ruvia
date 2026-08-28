@@ -232,7 +232,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         const auto handlerDeadline = effectiveHandlerDeadline(options.deadline ? std::optional{options.deadline->handler} : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
         if (handlerDeadline > std::chrono::milliseconds::zero()) {
             selectedRoute->armDeadline(baseServices.worker(), baseServices.stopToken(), handlerDeadline);
-            requestServices = baseServices.withStopToken(selectedRoute->deadline()->token()).withRequestDeadline(selectedRoute->deadline());
+            requestServices = baseServices.withRequestDeadline(*selectedRoute->deadline());
         }
 
         const auto expectationPlan = streamState->expectationPlan(HttpUnsupportedExpectationPolicy::kReject);

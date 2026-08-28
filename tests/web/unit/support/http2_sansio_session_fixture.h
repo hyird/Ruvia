@@ -15,6 +15,10 @@ namespace ruvia::test {
 // installed runtime contract.
 class Http2SansIoSessionFixture final {
 public:
+    [[nodiscard]] detail::ContextServices services(const WorkerHandle& worker) const {
+        return detail::ContextServices(worker, stopToken_);
+    }
+
     [[nodiscard]] detail::Http2SansIoSessionContext context(detail::ContextServices services) {
         return detail::Http2SansIoSessionContext(std::move(services), options, scannerEntry, workerState);
     }
@@ -22,6 +26,9 @@ public:
     detail::HttpServerOptions options;
     detail::ConnectionScanner::Entry scannerEntry;
     detail::HttpServerWorkerState workerState{detail::HttpServerWorkerState::kRunning};
+
+private:
+    StopToken stopToken_;
 };
 
 template <typename Stream, typename BindTransport>
@@ -29,7 +36,7 @@ Task<void> runBareHttp2SansIoSessionWith(Stream& stream, const detail::RouteTabl
     Http2SansIoSessionFixture fixture;
     auto dispatcher = std::make_shared<detail::WorkerDispatcher>(static_cast<asio::io_context&>(stream.get_executor().context()), 64);
     const auto workerHandle = detail::WorkerHandleAccess::make(dispatcher);
-    auto services = bindTransport(detail::ContextServices(workerHandle));
+    auto services = bindTransport(fixture.services(workerHandle));
     co_await detail::runHttp2SansIoSession(stream, routes, worker, fixture.context(services), initialBytes);
 }
 

@@ -119,14 +119,25 @@ public:
     WebSocketClient(WebSocketClient&&) = delete;
     WebSocketClient& operator=(WebSocketClient&&) = delete;
 
-    [[nodiscard]] Task<void> connect();
-    [[nodiscard]] WebSocketClientHandle withOptions(OperationOptions options) const;
-    [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read() const;
-    [[nodiscard]] ScopedOperation<void> text(std::string_view payload) const;
-    [[nodiscard]] ScopedOperation<void> binary(std::string_view payload) const;
-    [[nodiscard]] ScopedOperation<void> ping(std::string_view payload = {}) const;
-    [[nodiscard]] ScopedOperation<void> pong(std::string_view payload) const;
-    [[nodiscard]] ScopedOperation<void> close(WebSocketCloseOptions options) const;
+    // Connect tasks, handles, and operations all depend on this client's open
+    // lifecycle. A temporary would request shutdown immediately after creating
+    // one, so operation-producing APIs are lvalue-only.
+    [[nodiscard]] Task<void> connect() &;
+    Task<void> connect() && = delete;
+    [[nodiscard]] WebSocketClientHandle withOptions(OperationOptions options) const&;
+    WebSocketClientHandle withOptions(OperationOptions) const&& = delete;
+    [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read() const&;
+    ScopedOperation<std::optional<WebSocketMessage>> read() const&& = delete;
+    [[nodiscard]] ScopedOperation<void> text(std::string_view payload) const&;
+    ScopedOperation<void> text(std::string_view) const&& = delete;
+    [[nodiscard]] ScopedOperation<void> binary(std::string_view payload) const&;
+    ScopedOperation<void> binary(std::string_view) const&& = delete;
+    [[nodiscard]] ScopedOperation<void> ping(std::string_view payload = {}) const&;
+    ScopedOperation<void> ping(std::string_view = {}) const&& = delete;
+    [[nodiscard]] ScopedOperation<void> pong(std::string_view payload) const&;
+    ScopedOperation<void> pong(std::string_view) const&& = delete;
+    [[nodiscard]] ScopedOperation<void> close(WebSocketCloseOptions options) const&;
+    ScopedOperation<void> close(WebSocketCloseOptions) const&& = delete;
 
     // Immediate lifecycle shutdown, matching HttpClient::close(). Graceful RFC
     // 6455 close uses the typed overload above: co_await client.close({...}).

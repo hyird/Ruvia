@@ -26,7 +26,8 @@ public:
 
     /// Returns one typed chunk of the current multipart part. All views in the
     /// returned value remain valid only until the next read() call.
-    [[nodiscard]] ScopedOperation<std::optional<MultipartStreamPart>> read();
+    [[nodiscard]] ScopedOperation<std::optional<MultipartStreamPart>> read() &;
+    ScopedOperation<std::optional<MultipartStreamPart>> read() && = delete;
 
 private:
     enum class State : std::uint8_t {

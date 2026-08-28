@@ -164,27 +164,27 @@ DbClient::~DbClient() {
     state_->requestClose();
 }
 
-Task<void> DbClient::connect() {
+Task<void> DbClient::connect() & {
     return state_->connect();
 }
 
-DbHandle DbClient::withOptions(OperationOptions options) const {
+DbHandle DbClient::withOptions(OperationOptions options) const& {
     return state_->handle(std::move(options));
 }
 
-ScopedOperation<DbRows> DbClient::query(std::string_view sql, std::span<const DbValue> params) const {
+ScopedOperation<DbRows> DbClient::query(std::string_view sql, std::span<const DbValue> params) const& {
     return withOptions({}).query(sql, params);
 }
 
-ScopedOperation<DbExecResult> DbClient::execute(std::string_view sql, std::span<const DbValue> params) const {
+ScopedOperation<DbExecResult> DbClient::execute(std::string_view sql, std::span<const DbValue> params) const& {
     return withOptions({}).execute(sql, params);
 }
 
-ScopedOperation<DbStreamResult> DbClient::queryStream(std::string_view sql, std::span<const DbValue> params) const {
+ScopedOperation<DbStreamResult> DbClient::queryStream(std::string_view sql, std::span<const DbValue> params) const& {
     return withOptions({}).queryStream(sql, params);
 }
 
-ScopedOperation<DbTransaction> DbClient::beginTransaction() const {
+ScopedOperation<DbTransaction> DbClient::beginTransaction() const& {
     return withOptions({}).beginTransaction();
 }
 

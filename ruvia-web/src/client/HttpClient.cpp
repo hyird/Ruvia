@@ -149,11 +149,11 @@ HttpClient::~HttpClient() {
     state_->requestClose();
 }
 
-HttpClientHandle HttpClient::withOptions(OperationOptions options) const {
+HttpClientHandle HttpClient::withOptions(OperationOptions options) const& {
     return state_->handle(std::move(options));
 }
 
-ScopedOperation<HttpClientResponse> HttpClient::send(const HttpClientRequestView& request) const {
+ScopedOperation<HttpClientResponse> HttpClient::send(const HttpClientRequestView& request) const& {
     return withOptions({}).send(request);
 }
 

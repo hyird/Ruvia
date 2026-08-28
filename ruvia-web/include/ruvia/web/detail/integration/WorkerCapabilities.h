@@ -6,6 +6,7 @@
 #include <span>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/http/HttpLimits.h"
@@ -65,7 +66,8 @@ public:
     void initializeWorkerState();
     void shutdownWorkerState() noexcept;
 
-    [[nodiscard]] ContextServices contextServices();
+    [[nodiscard]] ContextServices contextServices(const StopToken& stopToken);
+    ContextServices contextServices(StopToken&&) = delete;
     [[nodiscard]] WorkerClientRegistryView clientRegistries() noexcept;
     [[nodiscard]] const WorkerStateRegistry& workerStates() const noexcept;
     [[nodiscard]] RateLimiter& rateLimiter() noexcept;

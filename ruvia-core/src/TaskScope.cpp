@@ -32,7 +32,7 @@ TaskScope::~TaskScope() {
     }
 }
 
-void TaskScope::spawn(Task<void> task) {
+void TaskScope::spawn(Task<void> task) & {
     if (!worker_.isCurrent()) {
         throw std::logic_error("task scope spawn must run on its bound worker");
     }
@@ -57,23 +57,23 @@ void TaskScope::spawn(Task<void> task) {
     node->task.start();
 }
 
-void TaskScope::requestStop() noexcept {
+void TaskScope::requestStop() & noexcept {
     stopSource_.requestStop();
 }
 
-StopToken TaskScope::stopToken() const noexcept {
+StopToken TaskScope::stopToken() const& noexcept {
     return stopSource_.token();
 }
 
-bool TaskScope::stopRequested() const noexcept {
+bool TaskScope::stopRequested() const& noexcept {
     return stopSource_.stopRequested();
 }
 
-std::size_t TaskScope::size() const noexcept {
+std::size_t TaskScope::size() const& noexcept {
     return active_;
 }
 
-Task<void> TaskScope::join() {
+Task<void> TaskScope::join() & {
     if (!worker_.isCurrent()) {
         throw std::logic_error("task scope join must run on its bound worker");
     }

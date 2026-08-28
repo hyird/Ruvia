@@ -97,7 +97,7 @@ void DbStreamResult::expireCapability(detail::ScopedCapabilityNode& capability) 
     result.reset();
 }
 
-ScopedOperation<std::optional<DbRow>> DbStreamResult::read() {
+ScopedOperation<std::optional<DbRow>> DbStreamResult::read() & {
     requireActive();
     return detail::makeScopedOperation(operationScope_, readTask());
 }
@@ -114,7 +114,7 @@ Task<std::optional<DbRow>> DbStreamResult::readTask() {
     co_return row;
 }
 
-ScopedOperation<void> DbStreamResult::close() {
+ScopedOperation<void> DbStreamResult::close() & {
     requireActive();
     return detail::makeScopedOperation(operationScope_, closeTask());
 }

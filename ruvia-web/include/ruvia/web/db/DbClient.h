@@ -35,38 +35,58 @@ public:
     // Lazy and worker-affine: start/await it on the bound event loop. Creating
     // more than one connect task is harmless; the first task that starts owns
     // the one allowed connection attempt and later starters fail.
-    [[nodiscard]] Task<void> connect();
+    [[nodiscard]] Task<void> connect() &;
+    Task<void> connect() && = delete;
 
-    [[nodiscard]] DbHandle withOptions(OperationOptions options) const;
+    // Handles and operations borrow this client's open lifecycle. A temporary
+    // client would begin pool shutdown at the end of the full expression.
+    [[nodiscard]] DbHandle withOptions(OperationOptions options) const&;
+    DbHandle withOptions(OperationOptions) const&& = delete;
 
-    [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {}) const;
-    [[nodiscard]] ScopedOperation<DbRows> query(std::string_view, std::initializer_list<DbValue>) const = delete;
+    [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {}) const&;
+    ScopedOperation<DbRows> query(std::string_view, std::span<const DbValue> = {}) const&& = delete;
+    [[nodiscard]] ScopedOperation<DbRows> query(std::string_view, std::initializer_list<DbValue>) const& = delete;
+    ScopedOperation<DbRows> query(std::string_view, std::initializer_list<DbValue>) const&& = delete;
 
-    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, std::span<const DbValue> params = {}) const;
-    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view, std::initializer_list<DbValue>) const = delete;
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, std::span<const DbValue> params = {}) const&;
+    ScopedOperation<DbExecResult> execute(std::string_view, std::span<const DbValue> = {}) const&& = delete;
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view, std::initializer_list<DbValue>) const& = delete;
+    ScopedOperation<DbExecResult> execute(std::string_view, std::initializer_list<DbValue>) const&& = delete;
 
-    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(std::string_view sql, std::span<const DbValue> params = {}) const;
-    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(std::string_view, std::initializer_list<DbValue>) const = delete;
+    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(std::string_view sql, std::span<const DbValue> params = {}) const&;
+    ScopedOperation<DbStreamResult> queryStream(std::string_view, std::span<const DbValue> = {}) const&& = delete;
+    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(std::string_view, std::initializer_list<DbValue>) const& = delete;
+    ScopedOperation<DbStreamResult> queryStream(std::string_view, std::initializer_list<DbValue>) const&& = delete;
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, Params&&... params) const {
+    [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, Params&&... params) const& {
         return withOptions({}).query(sql, std::forward<Params>(params)...);
     }
+    template <typename... Params>
+        requires detail::DbParameterPack<Params...>
+    ScopedOperation<DbRows> query(std::string_view, Params&&...) const&& = delete;
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, Params&&... params) const {
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, Params&&... params) const& {
         return withOptions({}).execute(sql, std::forward<Params>(params)...);
     }
+    template <typename... Params>
+        requires detail::DbParameterPack<Params...>
+    ScopedOperation<DbExecResult> execute(std::string_view, Params&&...) const&& = delete;
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(std::string_view sql, Params&&... params) const {
+    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(std::string_view sql, Params&&... params) const& {
         return withOptions({}).queryStream(sql, std::forward<Params>(params)...);
     }
+    template <typename... Params>
+        requires detail::DbParameterPack<Params...>
+    ScopedOperation<DbStreamResult> queryStream(std::string_view, Params&&...) const&& = delete;
 
-    [[nodiscard]] ScopedOperation<DbTransaction> beginTransaction() const;
+    [[nodiscard]] ScopedOperation<DbTransaction> beginTransaction() const&;
+    ScopedOperation<DbTransaction> beginTransaction() const&& = delete;
 
     // Idempotent and callable from any thread. Pool teardown runs on the bound
     // event loop; finish all operations before destroying the client.

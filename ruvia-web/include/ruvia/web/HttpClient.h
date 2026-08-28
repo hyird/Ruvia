@@ -23,8 +23,13 @@ public:
     HttpClient(HttpClient&&) = delete;
     HttpClient& operator=(HttpClient&&) = delete;
 
-    [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const;
-    [[nodiscard]] ScopedOperation<HttpClientResponse> send(const HttpClientRequestView& request) const;
+    // Handles and operations borrow this client's open lifecycle. Starting one
+    // from a temporary would immediately run the client destructor and begin
+    // shutdown, so only lvalue clients may create them.
+    [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const&;
+    HttpClientHandle withOptions(OperationOptions) const&& = delete;
+    [[nodiscard]] ScopedOperation<HttpClientResponse> send(const HttpClientRequestView& request) const&;
+    ScopedOperation<HttpClientResponse> send(const HttpClientRequestView&) const&& = delete;
 
     // Idempotent and callable from any thread. Shutdown runs on the bound loop;
     // draining that loop is the lifecycle barrier.

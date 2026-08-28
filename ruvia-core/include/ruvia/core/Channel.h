@@ -299,23 +299,33 @@ public:
         close();
     }
 
-    [[nodiscard]] Task<WorkerWaitResult<T>> receive() const {
+    // The task owns the shared state, but this receiver owns the receive side:
+    // destroying it closes every cold or running receive. Require a named
+    // owner so storing a task cannot silently turn a temporary receiver into
+    // an already-closed operation.
+    [[nodiscard]] Task<WorkerWaitResult<T>> receive() const& {
         return detail::receiveChannelState<T>(state_, std::nullopt, {});
     }
+    Task<WorkerWaitResult<T>> receive() const&& = delete;
 
-    [[nodiscard]] Task<WorkerWaitResult<T>> receive(StopToken stopToken) const {
+    [[nodiscard]] Task<WorkerWaitResult<T>> receive(StopToken stopToken) const& {
         return detail::receiveChannelState<T>(state_, std::nullopt, std::move(stopToken));
     }
+    Task<WorkerWaitResult<T>> receive(StopToken) const&& = delete;
 
     template <typename Rep, typename Period>
-    [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period> duration) const {
+    [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period> duration) const& {
         return detail::receiveChannelState<T>(state_, detail::workerTimerSaturatingDurationCast(duration), {});
     }
+    template <typename Rep, typename Period>
+    Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period>) const&& = delete;
 
     template <typename Rep, typename Period>
-    [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period> duration, StopToken stopToken) const {
+    [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period> duration, StopToken stopToken) const& {
         return detail::receiveChannelState<T>(state_, detail::workerTimerSaturatingDurationCast(duration), std::move(stopToken));
     }
+    template <typename Rep, typename Period>
+    Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period>, StopToken) const&& = delete;
 
     // The worker every receive must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from

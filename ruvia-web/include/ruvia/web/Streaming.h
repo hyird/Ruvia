@@ -46,7 +46,8 @@ public:
     /// until the NEXT read() call; copy it out if you need to retain it past then. An
     /// empty optional signals end-of-body. Only one read may be in flight; concurrent
     /// consumers are rejected because they cannot safely share the borrowed buffer.
-    [[nodiscard]] ScopedOperation<std::optional<std::string_view>> read();
+    [[nodiscard]] ScopedOperation<std::optional<std::string_view>> read() &;
+    ScopedOperation<std::optional<std::string_view>> read() && = delete;
 
 private:
     detail::CallableRef<std::optional<std::string_view>> read_;
@@ -67,26 +68,33 @@ public:
     /// before returning. Hot-path producers that already hold a buffer in
     /// request-owned storage can move it into the PMR-string overload to skip
     /// that copy.
-    ScopedOperation<void> write(std::string_view chunk);
+    ScopedOperation<void> write(std::string_view chunk) &;
+    ScopedOperation<void> write(std::string_view) && = delete;
 
     template <typename Text>
         requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
-    ScopedOperation<void> write(Text&& chunk) {
+    ScopedOperation<void> write(Text&& chunk) & {
         return write(std::string_view(std::forward<Text>(chunk)));
     }
+    template <typename Text>
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
+    ScopedOperation<void> write(Text&&) && = delete;
 
     /// Zero-copy write: takes ownership of an already-allocated chunk and
     /// transfers it into the output lane without copying. Build the chunk with
     /// a request-owned arena (Context::resource()) for hot-path streaming.
-    ScopedOperation<void> write(std::pmr::string&& chunk);
+    ScopedOperation<void> write(std::pmr::string&& chunk) &;
+    ScopedOperation<void> write(std::pmr::string&&) && = delete;
 
-    ScopedOperation<void> writeln(std::string_view chunk);
+    ScopedOperation<void> writeln(std::string_view chunk) &;
+    ScopedOperation<void> writeln(std::string_view) && = delete;
 
     /// Suspends the stream producer. The result is kElapsed for a normal
     /// delay, or kStopRequested when the owning worker is shutting down or the
     /// request's stop token trips. HTTP/2 peer termination remains reported as
     /// its transport error.
-    ScopedOperation<TimerSleepResult> sleep(std::chrono::milliseconds duration);
+    ScopedOperation<TimerSleepResult> sleep(std::chrono::milliseconds duration) &;
+    ScopedOperation<TimerSleepResult> sleep(std::chrono::milliseconds) && = delete;
 
     /// Whether the response stream can no longer be delivered. The signal is
     /// transport-dependent: on HTTP/2 it also turns true when the peer resets or
@@ -104,7 +112,8 @@ public:
     /// A non-empty section is never silently dropped when the selected HTTP
     /// version/method/status cannot represent trailers. If the stream is still
     /// uncommitted, that rejection occurs before the response head is emitted.
-    ScopedOperation<void> end(std::span<const HttpHeaderView> trailers = {});
+    ScopedOperation<void> end(std::span<const HttpHeaderView> trailers = {}) &;
+    ScopedOperation<void> end(std::span<const HttpHeaderView> = {}) && = delete;
 
 private:
     friend struct detail::StreamingAccess;

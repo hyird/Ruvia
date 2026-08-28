@@ -28,29 +28,41 @@ public:
     ~DbTransaction();
 
     [[nodiscard]] bool active() const noexcept;
-    ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {});
-    ScopedOperation<DbRows> query(std::string_view sql, std::initializer_list<DbValue> params) = delete;
-    ScopedOperation<DbExecResult> execute(std::string_view sql, std::span<const DbValue> params = {});
-    ScopedOperation<DbExecResult> execute(std::string_view sql, std::initializer_list<DbValue> params) = delete;
+    ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {}) &;
+    ScopedOperation<DbRows> query(std::string_view, std::span<const DbValue> = {}) && = delete;
+    ScopedOperation<DbRows> query(std::string_view, std::initializer_list<DbValue>) & = delete;
+    ScopedOperation<DbRows> query(std::string_view, std::initializer_list<DbValue>) && = delete;
+    ScopedOperation<DbExecResult> execute(std::string_view sql, std::span<const DbValue> params = {}) &;
+    ScopedOperation<DbExecResult> execute(std::string_view, std::span<const DbValue> = {}) && = delete;
+    ScopedOperation<DbExecResult> execute(std::string_view, std::initializer_list<DbValue>) & = delete;
+    ScopedOperation<DbExecResult> execute(std::string_view, std::initializer_list<DbValue>) && = delete;
 
     // Bound parameters as ordinary arguments, with the same synchronous cloning
     // and the same temporary-safety as DbHandle::query()/execute().
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, Params&&... params) {
+    [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, Params&&... params) & {
         const DbValue values[]{detail::makeImmediateDbParameter(std::forward<Params>(params))...};
         return query(sql, std::span<const DbValue>(values));
     }
+    template <typename... Params>
+        requires detail::DbParameterPack<Params...>
+    ScopedOperation<DbRows> query(std::string_view, Params&&...) && = delete;
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, Params&&... params) {
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, Params&&... params) & {
         const DbValue values[]{detail::makeImmediateDbParameter(std::forward<Params>(params))...};
         return execute(sql, std::span<const DbValue>(values));
     }
+    template <typename... Params>
+        requires detail::DbParameterPack<Params...>
+    ScopedOperation<DbExecResult> execute(std::string_view, Params&&...) && = delete;
 
-    ScopedOperation<void> commit();
-    ScopedOperation<void> rollback();
+    ScopedOperation<void> commit() &;
+    ScopedOperation<void> commit() && = delete;
+    ScopedOperation<void> rollback() &;
+    ScopedOperation<void> rollback() && = delete;
 
 private:
     friend class DbHandle;
