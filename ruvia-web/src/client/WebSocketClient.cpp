@@ -681,35 +681,35 @@ WebSocketClient::~WebSocketClient() {
     state_->requestClose();
 }
 
-Task<void> WebSocketClient::connect() {
+Task<void> WebSocketClient::connect() & {
     return state_->connect();
 }
 
-WebSocketClientHandle WebSocketClient::withOptions(OperationOptions options) const {
+WebSocketClientHandle WebSocketClient::withOptions(OperationOptions options) const& {
     return state_->handle(std::move(options));
 }
 
-ScopedOperation<std::optional<WebSocketMessage>> WebSocketClient::read() const {
+ScopedOperation<std::optional<WebSocketMessage>> WebSocketClient::read() const& {
     return withOptions({}).read();
 }
 
-ScopedOperation<void> WebSocketClient::text(std::string_view payload) const {
+ScopedOperation<void> WebSocketClient::text(std::string_view payload) const& {
     return withOptions({}).text(payload);
 }
 
-ScopedOperation<void> WebSocketClient::binary(std::string_view payload) const {
+ScopedOperation<void> WebSocketClient::binary(std::string_view payload) const& {
     return withOptions({}).binary(payload);
 }
 
-ScopedOperation<void> WebSocketClient::ping(std::string_view payload) const {
+ScopedOperation<void> WebSocketClient::ping(std::string_view payload) const& {
     return withOptions({}).ping(payload);
 }
 
-ScopedOperation<void> WebSocketClient::pong(std::string_view payload) const {
+ScopedOperation<void> WebSocketClient::pong(std::string_view payload) const& {
     return withOptions({}).pong(payload);
 }
 
-ScopedOperation<void> WebSocketClient::close(WebSocketCloseOptions options) const {
+ScopedOperation<void> WebSocketClient::close(WebSocketCloseOptions options) const& {
     return withOptions({}).close(options);
 }
 

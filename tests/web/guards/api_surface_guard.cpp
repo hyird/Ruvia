@@ -3046,6 +3046,9 @@ static_assert(!std::copy_constructible<ruvia::HttpClient>);
 static_assert(!std::move_constructible<ruvia::HttpClient>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClient&>().send(ruvia::HttpClientRequestView{})), ruvia::ScopedOperation<ruvia::HttpClientResponse>>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::HttpClient&>().worker()), const ruvia::WorkerHandle&>);
+template <typename Client>
+concept HasRvalueStandaloneHttpClientOperation = requires(Client&& client) { std::move(client).withOptions({}); } || requires(Client&& client) { std::move(client).send(ruvia::HttpClientRequestView{}); };
+static_assert(!HasRvalueStandaloneHttpClientOperation<ruvia::HttpClient>);
 static_assert(!HasDynamicHttpClientFactory<ruvia::HttpClientHandle>);
 static_assert(!HasHttpClientRequestBuilder<ruvia::HttpClientHandle>);
 static_assert(HasHttpClientWithOptions<ruvia::HttpClientHandle>);
