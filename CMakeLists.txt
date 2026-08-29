@@ -78,6 +78,14 @@ set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+
+function(ruvia_collect_cpp_sources out relative_dir)
+    file(GLOB_RECURSE _ruvia_sources CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.cpp")
+    list(SORT _ruvia_sources)
+    set(${out} ${_ruvia_sources} PARENT_SCOPE)
+endfunction()
+
 # Shared build/install helpers used by every Ruvia component.
 # The root lists no per-target build logic of its own. Functions capture
 # CMAKE_CURRENT_SOURCE_DIR at call time, so a component invoking these resolves
@@ -314,54 +322,6 @@ function(ruvia_install_generated_public_header component generated_header relati
         COMPONENT ${component}
     )
 endfunction()
-
-function(ruvia_assert_target_file_ownership target)
-    get_target_property(_ruvia_target_source_dir ${target} SOURCE_DIR)
-    cmake_path(NORMAL_PATH _ruvia_target_source_dir OUTPUT_VARIABLE _ruvia_target_root)
-    get_target_property(_ruvia_target_binary_dir ${target} BINARY_DIR)
-    cmake_path(NORMAL_PATH _ruvia_target_binary_dir
-        OUTPUT_VARIABLE _ruvia_target_binary_root)
-
-    get_target_property(_ruvia_target_sources ${target} SOURCES)
-    foreach(_ruvia_source IN LISTS _ruvia_target_sources)
-        if(_ruvia_source MATCHES "^\\$<")
-            continue()
-        endif()
-        if(IS_ABSOLUTE "${_ruvia_source}")
-            set(_ruvia_source_path "${_ruvia_source}")
-        else()
-            set(_ruvia_source_path "${_ruvia_target_source_dir}/${_ruvia_source}")
-        endif()
-        cmake_path(IS_PREFIX _ruvia_target_root
-            "${_ruvia_source_path}" NORMALIZE _ruvia_source_is_owned)
-        if(NOT _ruvia_source_is_owned)
-            message(FATAL_ERROR
-                "${target} cannot compile another target's source: ${_ruvia_source}")
-        endif()
-    endforeach()
-
-    get_target_property(_ruvia_target_include_dirs ${target} INCLUDE_DIRECTORIES)
-    foreach(_ruvia_include_dir IN LISTS _ruvia_target_include_dirs)
-        if(_ruvia_include_dir MATCHES "^\\$<INSTALL_INTERFACE:")
-            continue()
-        elseif(_ruvia_include_dir MATCHES "^\\$<BUILD_INTERFACE:(.*)>$")
-            set(_ruvia_include_path "${CMAKE_MATCH_1}")
-        elseif(_ruvia_include_dir MATCHES "^\\$<")
-            continue()
-        else()
-            set(_ruvia_include_path "${_ruvia_include_dir}")
-        endif()
-        cmake_path(IS_PREFIX _ruvia_target_root
-            "${_ruvia_include_path}" NORMALIZE _ruvia_include_is_owned)
-        cmake_path(IS_PREFIX _ruvia_target_binary_root
-            "${_ruvia_include_path}" NORMALIZE _ruvia_generated_include_is_owned)
-        if(NOT _ruvia_include_is_owned AND NOT _ruvia_generated_include_is_owned)
-            message(FATAL_ERROR
-                "${target} cannot add another target's private include directory: ${_ruvia_include_dir}")
-        endif()
-    endforeach()
-endfunction()
-
 
 foreach(_ruvia_component IN ITEMS core http web)
     string(TOUPPER ${_ruvia_component} _ruvia_component_upper)
