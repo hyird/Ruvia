@@ -1,10 +1,10 @@
 #include "test_harness.h"
+#include "memory_resource_fixture.h"
 
 #include <chrono>
 #include <cstddef>
 #include <concepts>
 #include <memory_resource>
-#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -26,27 +26,7 @@ namespace {
 using ruvia::CorsConfig;
 using ruvia::HttpResponse;
 using ruvia::detail::Http1ServerRequestParser;
-
-class RejectingMemoryResource final : public std::pmr::memory_resource {
-public:
-    [[nodiscard]] std::size_t allocationCount() const noexcept {
-        return allocationCount_;
-    }
-
-private:
-    void* do_allocate(std::size_t, std::size_t) override {
-        ++allocationCount_;
-        throw std::bad_alloc();
-    }
-
-    void do_deallocate(void*, std::size_t, std::size_t) override {}
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    std::size_t allocationCount_{0};
-};
+using ruvia::test::RejectingMemoryResource;
 
 void applyCorsHeaders(
     const ruvia::HttpRequest& request, HttpResponse& response, const CorsConfig& config) {
@@ -99,6 +79,7 @@ RUVIA_TEST(cors_rejects_the_entire_config_before_owner_allocation) {
         .requestHeaders = {.mode = ruvia::CorsRequestHeadersMode::kFixed},
     };
     RejectingMemoryResource resource;
+    resource.rejectAllocations();
 
     bool rejectedAsConfig = false;
     try {

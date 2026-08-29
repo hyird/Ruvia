@@ -1,50 +1,14 @@
 #include "test_harness.h"
+#include "memory_resource_fixture.h"
 
 #include <cstddef>
-#include <memory_resource>
 #include <utility>
 
 #include "ruvia/web/ModelTypes.h"
 
 namespace {
 
-class CountingMemoryResource final : public std::pmr::memory_resource {
-public:
-    [[nodiscard]] std::size_t liveAllocations() const noexcept {
-        return liveAllocations_;
-    }
-
-    [[nodiscard]] std::size_t allocations() const noexcept {
-        return allocations_;
-    }
-
-    [[nodiscard]] std::size_t deallocations() const noexcept {
-        return deallocations_;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        auto* const storage = upstream_->allocate(bytes, alignment);
-        ++liveAllocations_;
-        ++allocations_;
-        return storage;
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        upstream_->deallocate(pointer, bytes, alignment);
-        --liveAllocations_;
-        ++deallocations_;
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    std::pmr::memory_resource* upstream_{std::pmr::get_default_resource()};
-    std::size_t liveAllocations_{0};
-    std::size_t allocations_{0};
-    std::size_t deallocations_{0};
-};
+using ruvia::test::CountingMemoryResource;
 
 class TrackedValue final {
 public:
@@ -111,7 +75,7 @@ RUVIA_TEST(model_list_clear_and_destructor_release_owned_elements) {
 
     RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{0});
     RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocations(), resource.deallocations());
+    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
 }
 
 RUVIA_TEST(model_list_move_assignment_transfers_element_resource) {
@@ -144,6 +108,6 @@ RUVIA_TEST(model_list_move_assignment_transfers_element_resource) {
     RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{0});
     RUVIA_CHECK_EQ(sourceResource.liveAllocations(), std::size_t{0});
     RUVIA_CHECK_EQ(targetResource.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(sourceResource.allocations(), sourceResource.deallocations());
-    RUVIA_CHECK_EQ(targetResource.allocations(), targetResource.deallocations());
+    RUVIA_CHECK_EQ(sourceResource.allocationCount(), sourceResource.deallocationCount());
+    RUVIA_CHECK_EQ(targetResource.allocationCount(), targetResource.deallocationCount());
 }
