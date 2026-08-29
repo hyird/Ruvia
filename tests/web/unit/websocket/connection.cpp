@@ -157,6 +157,42 @@ RUVIA_TEST(websocket_transport_read_failure_preserves_error_and_aborts) {
     RUVIA_CHECK(state.aborted);
 }
 
+RUVIA_TEST(websocket_read_reservation_rejects_cold_overlap_and_releases) {
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    const auto workerHandle = testWorker(io);
+    RecordingTransportState state;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    WebSocketConnection<RecordingTransport> connection(RecordingTransport(io, state), workerHandle, scannerEntry, {}, ruvia::ProtocolByteLimit::limited(1024), memory.resource());
+
+    {
+        auto cold = connection.read();
+        bool rejected = false;
+        try {
+            auto overlapping = connection.read();
+            static_cast<void>(overlapping);
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+
+        bool closeRejected = false;
+        try {
+            auto closing = connection.close();
+            static_cast<void>(closing);
+        } catch (const std::logic_error&) {
+            closeRejected = true;
+        }
+        RUVIA_CHECK(closeRejected);
+    }
+
+    auto following = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(connection.read()), asio::use_future);
+    io.run();
+    const auto message = following.get();
+    RUVIA_CHECK(!message.has_value());
+    RUVIA_CHECK(!state.aborted);
+}
+
 RUVIA_TEST(websocket_session_finish_maps_chain_failure_to_1011) {
     asio::io_context& io = ruvia::test::newTestIoContext();
     const auto workerHandle = testWorker(io);
@@ -311,11 +347,10 @@ RUVIA_TEST(websocket_write_guard_rejects_overlap_and_releases_after_suspend) {
     RUVIA_CHECK(state.completeWrite != nullptr);
 
     io.restart();
-    auto overlapping = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(connection.write(WebSocketOpcode::kText, "overlap")), asio::use_future);
-    io.poll();
     bool rejected = false;
     try {
-        overlapping.get();
+        auto overlapping = connection.write(WebSocketOpcode::kText, "overlap");
+        static_cast<void>(overlapping);
     } catch (const std::logic_error&) {
         rejected = true;
     }
@@ -348,11 +383,10 @@ RUVIA_TEST(websocket_close_guard_rejects_write_until_close_flush_commits) {
     RUVIA_CHECK(state.completeWrite != nullptr);
 
     io.restart();
-    auto overlapping = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(connection.write(WebSocketOpcode::kText, "late")), asio::use_future);
-    io.poll();
     bool rejected = false;
     try {
-        overlapping.get();
+        auto overlapping = connection.write(WebSocketOpcode::kText, "late");
+        static_cast<void>(overlapping);
     } catch (const std::logic_error&) {
         rejected = true;
     }

@@ -80,6 +80,12 @@ private:
         kAdopt,
     };
 
+    enum class ReadPhase : std::uint8_t {
+        kIdle,
+        kReserved,
+        kActive,
+    };
+
     class WriteGuard final {
     public:
         WriteGuard(WebSocketConnection& connection, WritePhase phase, WriteClaim claim = WriteClaim::kAcquire)
@@ -110,30 +116,76 @@ private:
         WritePhase phase_;
     };
 
+    class WriteOperationLease final {
+    public:
+        explicit WriteOperationLease(bool& active)
+            : active_(&active) {
+            if (*active_) {
+                active_ = nullptr;
+                throw std::logic_error("concurrent websocket writes are not supported");
+            }
+            *active_ = true;
+        }
+
+        WriteOperationLease(const WriteOperationLease&) = delete;
+        WriteOperationLease& operator=(const WriteOperationLease&) = delete;
+        WriteOperationLease(WriteOperationLease&& other) noexcept
+            : active_(std::exchange(other.active_, nullptr)) {}
+        WriteOperationLease& operator=(WriteOperationLease&&) = delete;
+
+        ~WriteOperationLease() {
+            if (active_ != nullptr) {
+                *active_ = false;
+            }
+        }
+
+    private:
+        bool* active_;
+    };
+
     class ReadGuard final {
     public:
         explicit ReadGuard(WebSocketConnection& connection)
-            : connection_(connection) {
-            if (connection_.readActive_) {
+            : connection_(&connection) {
+            if (connection_->readPhase_ != ReadPhase::kIdle) {
+                connection_ = nullptr;
                 throw std::logic_error("concurrent websocket reads are not supported");
             }
-            connection_.readActive_ = true;
-        }
-
-        ~ReadGuard() {
-            connection_.readActive_ = false;
-            connection_.readerDoneSignal_.notify();
+            connection_->readPhase_ = ReadPhase::kReserved;
         }
 
         ReadGuard(const ReadGuard&) = delete;
         ReadGuard& operator=(const ReadGuard&) = delete;
+        ReadGuard(ReadGuard&& other) noexcept
+            : connection_(std::exchange(other.connection_, nullptr)) {}
+        ReadGuard& operator=(ReadGuard&&) = delete;
+
+        void start() {
+            if (connection_ == nullptr || connection_->readPhase_ != ReadPhase::kReserved) {
+                std::terminate();
+            }
+            connection_->readPhase_ = ReadPhase::kActive;
+        }
+
+        ~ReadGuard() {
+            if (connection_ != nullptr) {
+                const bool started = connection_->readPhase_ == ReadPhase::kActive;
+                connection_->readPhase_ = ReadPhase::kIdle;
+                if (started) {
+                    connection_->readerDoneSignal_.notify();
+                }
+            }
+        }
 
     private:
-        WebSocketConnection& connection_;
+        WebSocketConnection* connection_;
     };
 
     void finishWrite(WritePhase phase) noexcept;
     void heartbeatTick(std::int64_t now) noexcept;
+    Task<std::optional<WebSocketMessage>> readOwned(ReadGuard readGuard);
+    Task<void> writeOwned(WebSocketOpcode opcode, std::string_view payload, WriteOperationLease writeLease);
+    Task<void> closeOwned(::ruvia::WebSocketCloseOptions options, WriteOperationLease writeLease);
     Task<void> writeHeartbeatPing();
     Task<void> waitForHeartbeatWrite();
     Task<void> waitForWriteIdle();
@@ -152,7 +204,8 @@ private:
     WorkerSignal backgroundWriteSignal_;
     WorkerSignal readerDoneSignal_;
     WritePhase writePhase_{WritePhase::kIdle};
-    bool readActive_{false};
+    bool writeActive_{false};
+    ReadPhase readPhase_{ReadPhase::kIdle};
     WebSocketLivenessState livenessState_{WebSocketLivenessIdle{}};
     // Declared last so destruction unregisters before any callback target state
     // starts to disappear.
