@@ -38,6 +38,7 @@ public:
 
     void bindStop();
     [[nodiscard]] Task<void> connect();
+    [[nodiscard]] Task<void> shutdown();
     [[nodiscard]] WebSocketClientHandle handle(OperationOptions options);
     void abort() noexcept;
     void requestCancel() noexcept;
@@ -88,6 +89,7 @@ private:
     };
 
     [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<WebSocketClientState> state);
+    [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<WebSocketClientState> state);
     class ActivityLease;
     [[nodiscard]] static Task<std::optional<WebSocketMessage>> readOwned(std::shared_ptr<WebSocketClientState> state, OperationOptions options, ActivityLease activity);
     [[nodiscard]] static Task<void> writeOwned(std::shared_ptr<WebSocketClientState> state, WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options, ActivityLease activity);
@@ -98,6 +100,9 @@ private:
     [[nodiscard]] WsConnection& requireProtocol() noexcept;
     [[nodiscard]] std::uint16_t port() const noexcept;
     void closeOnWorker(AbortReason reason) noexcept;
+    void startCloseOnWorker() noexcept;
+    [[nodiscard]] Task<void> closeOnWorker();
+    void finishClose(const TaskCompletionResult<void>& result);
     void requestAbort(AbortReason reason) noexcept;
     [[nodiscard]] Task<void> establishTransport();
     [[nodiscard]] Task<void> performTlsHandshake();
@@ -105,6 +110,7 @@ private:
     void finishWrite(WritePhase phase) noexcept;
     [[nodiscard]] Task<void> waitForWriteIdle();
     [[nodiscard]] static Task<void> heartbeatOwned(std::shared_ptr<WebSocketClientState> state);
+    void finishHeartbeat() noexcept;
     void heartbeatTimerFired() noexcept;
     void armHeartbeatTimer(std::chrono::milliseconds delay);
     void touchActivity() noexcept;
@@ -131,6 +137,7 @@ private:
     asio::steady_timer writeTimer_;
     asio::steady_timer heartbeatTimer_;
     WorkerSignal writeSignal_;
+    WorkerSignal closeSignal_;
     std::pmr::string input_;
     std::optional<WsConnection> protocol_;
     std::pmr::string selectedSubprotocol_;
@@ -144,6 +151,11 @@ private:
     WritePhase writePhase_{WritePhase::kIdle};
     WebSocketLivenessState livenessState_{WebSocketLivenessIdle{}};
     std::int64_t lastActiveMs_{0};
+    bool connectInFlight_{false};
+    bool heartbeatInFlight_{false};
+    bool closeTaskStarted_{false};
+    bool closeComplete_{false};
+    std::exception_ptr closeFailure_;
     ScopedOperationScope operationScope_;
 };
 

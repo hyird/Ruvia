@@ -111,6 +111,7 @@ WebSocketClientState::WebSocketClientState(EventLoop loop, const WebSocketClient
       writeTimer_(loop_.ioContext()),
       heartbeatTimer_(loop_.ioContext()),
       writeSignal_(worker_),
+      closeSignal_(worker_),
       input_(memory_.allocator<char>()),
       selectedSubprotocol_(memory_.allocator<char>()) {
     if (config_.scheme == WebSocketScheme::kWss) {
@@ -121,7 +122,7 @@ WebSocketClientState::WebSocketClientState(EventLoop loop, const WebSocketClient
 
 WebSocketClientState::~WebSocketClientState() {
     const auto phase = phase_.load(std::memory_order_acquire);
-    if (phase != Phase::kClosed && phase != Phase::kFresh) {
+    if ((phase != Phase::kClosed && phase != Phase::kFresh) || (closeTaskStarted_ && !closeComplete_)) {
         std::terminate();
     }
 }
@@ -130,7 +131,7 @@ void WebSocketClientState::bindStop() {
     std::weak_ptr<WebSocketClientState> weak = shared_from_this();
     stopRegistration_ = loop_.onStop([weak = std::move(weak)] {
         if (const auto state = weak.lock()) {
-            state->closeOnWorker(AbortReason::kClosing);
+            state->startCloseOnWorker();
         }
     });
 }
@@ -264,8 +265,63 @@ void WebSocketClientState::requestCancel() noexcept {
     requestAbort(AbortReason::kCancelled);
 }
 
+Task<void> WebSocketClientState::shutdownOwned(std::shared_ptr<WebSocketClientState> state) {
+    if (!state->worker_.isCurrent()) {
+        throw std::logic_error("WebSocket client shutdown must run on its bound event loop");
+    }
+    state->startCloseOnWorker();
+    while (!state->closeComplete_) {
+        co_await state->closeSignal_.wait();
+    }
+    if (state->closeFailure_) {
+        std::rethrow_exception(state->closeFailure_);
+    }
+}
+
+void WebSocketClientState::startCloseOnWorker() noexcept {
+    if (!worker_.isCurrent()) {
+        std::terminate();
+    }
+    closeOnWorker(AbortReason::kClosing);
+    stopSource_.requestStop();
+    if (closeTaskStarted_ || closeComplete_) {
+        return;
+    }
+    closeTaskStarted_ = true;
+    try {
+        auto state = shared_from_this();
+        asyncStartTask(closeOnWorker(), asio::bind_executor(loop_.executor(), [state](const TaskCompletionResult<void>& result) { state->finishClose(result); }));
+    } catch (...) {
+        phase_.store(Phase::kClosed, std::memory_order_release);
+        std::terminate();
+    }
+}
+
+Task<void> WebSocketClientState::closeOnWorker() {
+    while (connectInFlight_ || heartbeatInFlight_) {
+        co_await closeSignal_.wait();
+    }
+    co_await operationScope_.closeAndJoin();
+}
+
+void WebSocketClientState::finishClose(const TaskCompletionResult<void>& result) {
+    phase_.store(Phase::kClosed, std::memory_order_release);
+    if (const auto* failed = result.failure()) {
+        closeFailure_ = failed->exception();
+    }
+    closeComplete_ = true;
+    closeSignal_.notify();
+    if (const auto* failed = result.failure()) {
+        std::rethrow_exception(failed->exception());
+    }
+}
+
 Task<void> WebSocketClientState::connect() {
     return connectOwned(shared_from_this());
+}
+
+Task<void> WebSocketClientState::shutdown() {
+    return shutdownOwned(shared_from_this());
 }
 
 Task<void> WebSocketClientState::establishTransport() {
@@ -319,20 +375,28 @@ Task<void> WebSocketClientState::connectOwned(std::shared_ptr<WebSocketClientSta
         throw WebSocketClientError(WebSocketClientError::Code::kInvalidState, "WebSocket client connect may only be started once");
     }
     state->abortReason_ = AbortReason::kNone;
+    state->connectInFlight_ = true;
     try {
         co_await state->establishTransport();
         co_await state->performHandshake({.timeout = state->config_.connectTimeout, .stopToken = state->stopSource_.token()});
         state->protocol_.emplace(state->input_, ProtocolByteLimit::limited(state->config_.maxMessageBytes), WebSocketCompression::kDisabled, WsConnectionRole::kClient, &WebSocketClientState::generateMask, nullptr);
         state->disarm(state->connectTimer_);
-        state->phase_.store(Phase::kOpen, std::memory_order_release);
+        auto open = Phase::kConnecting;
+        if (!state->phase_.compare_exchange_strong(open, Phase::kOpen, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            throw WebSocketClientError(WebSocketClientError::Code::kClosing, "WebSocket client closed while connecting");
+        }
         state->lastActiveMs_ = steadyNowMs();
         state->livenessState_ = WebSocketLivenessIdle{};
         if (state->config_.heartbeat.pingInterval.has_value()) {
             state->armHeartbeatTimer(*state->config_.heartbeat.pingInterval);
         }
+        state->connectInFlight_ = false;
+        state->closeSignal_.notify();
     } catch (...) {
         state->disarm(state->connectTimer_);
         state->closeOnWorker(state->abortReason_ == AbortReason::kNone ? AbortReason::kClosing : state->abortReason_);
+        state->connectInFlight_ = false;
+        state->closeSignal_.notify();
         throw;
     }
 }
@@ -413,33 +477,46 @@ void WebSocketClientState::heartbeatTimerFired() noexcept {
 
     livenessState_ = WebSocketSendingPing{};
     writePhase_ = WritePhase::kHeartbeat;
+    heartbeatInFlight_ = true;
     try {
         auto state = shared_from_this();
         asio::co_spawn(loop_.executor(), taskAsAwaitable(heartbeatOwned(std::move(state))), asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
+        finishHeartbeat();
         finishWrite(WritePhase::kHeartbeat);
         closeOnWorker(AbortReason::kClosing);
     }
 }
 
 Task<void> WebSocketClientState::heartbeatOwned(std::shared_ptr<WebSocketClientState> state) {
-    WriteGuard writeGuard(*state, WritePhase::kHeartbeat, WriteClaim::kAdopt);
-    try {
-        state->requireOpen();
-        const auto submitted = state->requireProtocol().submitFrame(WebSocketOpcode::kPing, {});
-        if (submitted != WsFrameSubmitStatus::kAccepted) {
-            throw WebSocketClientError(WebSocketClientError::Code::kProtocolError, "failed to submit WebSocket client heartbeat");
-        }
-        co_await state->flushOutput(OperationOptions{.stopToken = state->stopSource_.token()});
-        if (state->phase_.load(std::memory_order_acquire) == Phase::kOpen && std::holds_alternative<WebSocketSendingPing>(state->livenessState_)) {
-            state->livenessState_ = WebSocketAwaitingPong(state->lastActiveMs_);
-            state->armHeartbeatTimer(*state->config_.heartbeat.pongTimeout);
-        }
-    } catch (...) {
-        if (state->phase_.load(std::memory_order_acquire) != Phase::kClosed) {
-            state->closeOnWorker(AbortReason::kClosing);
+    {
+        WriteGuard writeGuard(*state, WritePhase::kHeartbeat, WriteClaim::kAdopt);
+        try {
+            state->requireOpen();
+            const auto submitted = state->requireProtocol().submitFrame(WebSocketOpcode::kPing, {});
+            if (submitted != WsFrameSubmitStatus::kAccepted) {
+                throw WebSocketClientError(WebSocketClientError::Code::kProtocolError, "failed to submit WebSocket client heartbeat");
+            }
+            co_await state->flushOutput(OperationOptions{.stopToken = state->stopSource_.token()});
+            if (state->phase_.load(std::memory_order_acquire) == Phase::kOpen && std::holds_alternative<WebSocketSendingPing>(state->livenessState_)) {
+                state->livenessState_ = WebSocketAwaitingPong(state->lastActiveMs_);
+                state->armHeartbeatTimer(*state->config_.heartbeat.pongTimeout);
+            }
+        } catch (...) {
+            if (state->phase_.load(std::memory_order_acquire) != Phase::kClosed) {
+                state->closeOnWorker(AbortReason::kClosing);
+            }
         }
     }
+    state->finishHeartbeat();
+}
+
+void WebSocketClientState::finishHeartbeat() noexcept {
+    if (!heartbeatInFlight_) {
+        std::terminate();
+    }
+    heartbeatInFlight_ = false;
+    closeSignal_.notify();
 }
 
 void WebSocketClientState::validateHandshakeResponse(const Http1ParsedClientResponseHead& response, std::string_view key) {
@@ -876,6 +953,10 @@ ScopedOperation<void> WebSocketClient::close(WebSocketCloseOptions options) cons
 
 void WebSocketClient::abort() noexcept {
     state_->abort();
+}
+
+Task<void> WebSocketClient::shutdown() & {
+    return state_->shutdown();
 }
 
 bool WebSocketClient::connected() const {

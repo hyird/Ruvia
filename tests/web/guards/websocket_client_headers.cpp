@@ -4,7 +4,7 @@
 #include <ruvia/web/WebSocketClient.h>
 
 template <typename Client>
-concept HasRvalueWebSocketClientOperation = requires(Client&& client) { std::move(client).connect(); } || requires(Client&& client) { std::move(client).withOptions({}); } || requires(Client&& client) { std::move(client).read(); } || requires(Client&& client) { std::move(client).text(std::string_view{}); } || requires(Client&& client) { std::move(client).binary(std::string_view{}); } || requires(Client&& client) { std::move(client).ping(); } || requires(Client&& client) { std::move(client).pong(std::string_view{}); } || requires(Client&& client) { std::move(client).close(ruvia::WebSocketCloseOptions{}); };
+concept HasRvalueWebSocketClientOperation = requires(Client&& client) { std::move(client).connect(); } || requires(Client&& client) { std::move(client).shutdown(); } || requires(Client&& client) { std::move(client).withOptions({}); } || requires(Client&& client) { std::move(client).read(); } || requires(Client&& client) { std::move(client).text(std::string_view{}); } || requires(Client&& client) { std::move(client).binary(std::string_view{}); } || requires(Client&& client) { std::move(client).ping(); } || requires(Client&& client) { std::move(client).pong(std::string_view{}); } || requires(Client&& client) { std::move(client).close(ruvia::WebSocketCloseOptions{}); };
 
 template <typename Client>
 concept HasNoArgumentClose = requires(Client& client) { client.close(); };
@@ -23,6 +23,7 @@ static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketClient&>(
 static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketClient&>().text(std::string_view{})), ruvia::ScopedOperation<void>>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::WebSocketClient&>().close(ruvia::WebSocketCloseOptions{})), ruvia::ScopedOperation<void>>);
 static_assert(std::same_as<decltype(std::declval<ruvia::WebSocketClient&>().abort()), void>);
+static_assert(std::same_as<decltype(std::declval<ruvia::WebSocketClient&>().shutdown()), ruvia::Task<void>>);
 static_assert(!HasNoArgumentClose<ruvia::WebSocketClient>);
 static_assert(!HasNoArgumentClose<ruvia::WebSocketClientHandle>);
 static_assert(!std::copy_constructible<ruvia::WebSocketClient>);

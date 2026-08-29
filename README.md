@@ -357,7 +357,9 @@ certificate fields as `HttpClientConfig`. `heartbeat` is optional; it sends Ping
 after an idle interval and aborts the transport when the matching Pong is not
 observed before `pongTimeout`. Omitting `pongTimeout` uses the ping interval.
 The application must keep a `read()` operation active so inbound control frames
-and messages can be consumed.
+and messages can be consumed. `abort()` only requests immediate transport
+termination; use `co_await client.shutdown()` on the bound event loop when the
+connect attempt, heartbeat task, and all client operations must be joined.
 
 `WebSocketMessage::payload()` borrows the client read buffer and remains valid
 only until the next `read()` on that connection. Copy it first when it must live
