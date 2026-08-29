@@ -244,7 +244,7 @@ void WebSocketClientState::requestAbort(AbortReason reason) noexcept {
     }
 }
 
-void WebSocketClientState::requestClose() noexcept {
+void WebSocketClientState::abort() noexcept {
     requestAbort(AbortReason::kClosing);
 }
 
@@ -682,7 +682,7 @@ ScopedOperation<void> WebSocketClientHandle::close(WebSocketCloseOptions options
 
 void WebSocketClientHandle::abort() noexcept {
     if (state_) {
-        state_->requestClose();
+        state_->abort();
     }
 }
 
@@ -692,7 +692,7 @@ WebSocketClient::WebSocketClient(EventLoop loop, const WebSocketClientConfig& co
 }
 
 WebSocketClient::~WebSocketClient() {
-    state_->requestClose();
+    state_->abort();
 }
 
 Task<void> WebSocketClient::connect() & {
@@ -727,8 +727,8 @@ ScopedOperation<void> WebSocketClient::close(WebSocketCloseOptions options) cons
     return withOptions({}).close(options);
 }
 
-void WebSocketClient::close() noexcept {
-    state_->requestClose();
+void WebSocketClient::abort() noexcept {
+    state_->abort();
 }
 
 bool WebSocketClient::connected() const {

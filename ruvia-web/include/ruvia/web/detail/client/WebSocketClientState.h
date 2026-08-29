@@ -34,7 +34,7 @@ public:
     void bindStop();
     [[nodiscard]] Task<void> connect();
     [[nodiscard]] WebSocketClientHandle handle(OperationOptions options);
-    void requestClose() noexcept;
+    void abort() noexcept;
     void requestCancel() noexcept;
     [[nodiscard]] bool connected();
     [[nodiscard]] std::string_view subprotocol();
