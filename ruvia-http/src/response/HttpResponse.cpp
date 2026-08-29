@@ -20,7 +20,8 @@ HttpResponse::HttpResponse()
     : HttpResponse(Options{}) {}
 
 HttpResponse::HttpResponse(Options options)
-    : HttpResponse(detail::HttpResolvedPmrResourceTag{}, detail::httpPmrResourceOrDefault(options.resource)) {}
+    : HttpResponse(detail::HttpResolvedPmrResourceTag{},
+          detail::httpPmrResourceOrDefault(options.resource)) {}
 
 HttpResponse::HttpResponse(detail::HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource)
     : headers_(detail::HttpResolvedPmrResourceTag{}, resource) {}
@@ -74,9 +75,12 @@ HttpResponse HttpResponse::cloneForTransaction() const {
     } else if (const auto* const ownedBytes = body_.ownedBytes()) {
         clone.body_.setCopy(clone.resource(), ownedBytes->bytes());
     } else if (const auto* const ownedFile = body_.ownedFile()) {
-        clone.body_.setOwnedFile(clone.resource(), detail::makePathFromHttpNativePath(ownedFile->nativePathCStr()), ownedFile->size(), ownedFile->offset(), ownedFile->length(), ownedFile->identity());
+        clone.body_.setOwnedFile(clone.resource(),
+            detail::makePathFromHttpNativePath(ownedFile->nativePathCStr()), ownedFile->size(),
+            ownedFile->offset(), ownedFile->length(), ownedFile->identity());
     } else if (const auto* const borrowedFile = body_.borrowedFile()) {
-        clone.body_.setBorrowedFile(borrowedFile->nativePathCStr(), borrowedFile->size(), borrowedFile->offset(), borrowedFile->length(), borrowedFile->identity());
+        clone.body_.setBorrowedFile(borrowedFile->nativePathCStr(), borrowedFile->size(),
+            borrowedFile->offset(), borrowedFile->length(), borrowedFile->identity());
     }
 
     return clone;
@@ -116,7 +120,8 @@ void HttpResponse::setBodyOwned(std::pmr::string&& value) {
     body_.setOwned(resource(), std::move(value));
 }
 
-void HttpResponse::replaceBodyWithContentEncoding(std::pmr::string&& value, std::string_view contentEncoding) {
+void HttpResponse::replaceBodyWithContentEncoding(
+    std::pmr::string&& value, std::string_view contentEncoding) {
     if (contentEncoding.empty()) {
         throw std::invalid_argument("encoded response body requires a content coding");
     }
@@ -164,23 +169,30 @@ void HttpResponse::replaceBodyWithContentEncoding(std::pmr::string&& value, std:
     headers_.reserve(headers_.size() + missingHeaders);
 
     try {
-        const auto stage = [&](std::size_t slot, std::string_view name, std::string_view fieldValue, std::uint32_t knownBit) {
+        const auto stage = [&](std::size_t slot, std::string_view name, std::string_view fieldValue,
+                               std::uint32_t knownBit) {
             const auto builtin = HttpResponseHeaders::makeStaticHeader(name, fieldValue, knownBit);
-            prepared[slot] = builtin ? *builtin : headers_.makeOwnedHeader(name, fieldValue, knownBit);
+            prepared[slot] =
+                builtin ? *builtin : headers_.makeOwnedHeader(name, fieldValue, knownBit);
             preparedActive[slot] = true;
         };
 
-        stage(kEncodingHeader, fields[kEncodingHeader].first, contentEncoding, fields[kEncodingHeader].second);
+        stage(kEncodingHeader, fields[kEncodingHeader].first, contentEncoding,
+            fields[kEncodingHeader].second);
         if (!weakEtag.empty()) {
             stage(kEtagHeader, fields[kEtagHeader].first, weakEtag, fields[kEtagHeader].second);
         }
 
         std::array<char, 32> lengthBuffer{};
-        const auto [lengthEnd, lengthError] = std::to_chars(lengthBuffer.data(), lengthBuffer.data() + lengthBuffer.size(), value.size());
+        const auto [lengthEnd, lengthError] = std::to_chars(
+            lengthBuffer.data(), lengthBuffer.data() + lengthBuffer.size(), value.size());
         if (lengthError != std::errc{}) {
             throw std::logic_error("failed to format encoded response length");
         }
-        stage(kLengthHeader, fields[kLengthHeader].first, std::string_view(lengthBuffer.data(), static_cast<std::size_t>(lengthEnd - lengthBuffer.data())), fields[kLengthHeader].second);
+        stage(kLengthHeader, fields[kLengthHeader].first,
+            std::string_view(
+                lengthBuffer.data(), static_cast<std::size_t>(lengthEnd - lengthBuffer.data())),
+            fields[kLengthHeader].second);
 
         // The encoded bytes use this response's resource. setOwned constructs
         // the new body alternative before replacing the old variant, so a
@@ -189,7 +201,8 @@ void HttpResponse::replaceBodyWithContentEncoding(std::pmr::string&& value, std:
         // phase and therefore form the publication point.
         body_.setOwned(resource(), std::move(value));
 
-        const auto commit = [&](std::size_t slot, std::string_view name, std::uint32_t knownBit) noexcept {
+        const auto commit = [&](std::size_t slot, std::string_view name,
+                                std::uint32_t knownBit) noexcept {
             if (auto* const existing = findHeaderForUpdate(name, knownBit)) {
                 const bool wasAppended = detail::responseHeaderAppend(*existing);
                 headers_.releaseHeader(*existing);
@@ -226,11 +239,13 @@ void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size) {
     setFileBody(std::move(file), size, 0, size);
 }
 
-void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
+void HttpResponse::setFileBody(
+    std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
     setFileBody(std::move(file), size, offset, length, detail::ResponseFileIdentity::unchecked());
 }
 
-void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, detail::ResponseFileIdentity identity) {
+void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset,
+    std::uint64_t length, detail::ResponseFileIdentity identity) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
@@ -245,7 +260,8 @@ void HttpResponse::setBorrowedFileBody(const std::filesystem::path& file, std::u
     setBorrowedFileBody(file, size, 0, size);
 }
 
-void HttpResponse::setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
+void HttpResponse::setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size,
+    std::uint64_t offset, std::uint64_t length) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
@@ -256,11 +272,13 @@ void HttpResponse::setBorrowedFileBody(const std::filesystem::path& file, std::u
     body_.setBorrowedFile(file.c_str(), size, offset, length);
 }
 
-void HttpResponse::setBorrowedNativeFileBody(const detail::HttpNativePathChar* file, std::uint64_t size) {
+void HttpResponse::setBorrowedNativeFileBody(
+    const detail::HttpNativePathChar* file, std::uint64_t size) {
     setBorrowedNativeFileBody(file, size, 0, size);
 }
 
-void HttpResponse::setBorrowedNativeFileBody(const detail::HttpNativePathChar* file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
+void HttpResponse::setBorrowedNativeFileBody(const detail::HttpNativePathChar* file,
+    std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
     if (file == nullptr || *file == detail::HttpNativePathChar{}) {
         throw std::invalid_argument("file response path must not be empty");
     }

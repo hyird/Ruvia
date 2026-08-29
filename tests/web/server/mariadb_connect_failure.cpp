@@ -39,7 +39,8 @@ namespace {
 
 int main() {
     asio::io_context peerContext(1);
-    asio::ip::tcp::acceptor acceptor(peerContext, asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0));
+    asio::ip::tcp::acceptor acceptor(
+        peerContext, asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0));
     const auto port = acceptor.local_endpoint().port();
     asio::ip::tcp::socket peerSocket(peerContext);
     asio::steady_timer watchdog(peerContext, std::chrono::seconds(5));
@@ -61,16 +62,19 @@ int main() {
     });
     std::thread peer([&] { peerContext.run(); });
 
-    static const std::array migrations{ruvia::DbMigration{{.id = "001_never_runs", .sql = "CREATE TABLE ruvia_never_runs (id INT)"}}};
+    static const std::array migrations{ruvia::DbMigration{
+        {.id = "001_never_runs", .sql = "CREATE TABLE ruvia_never_runs (id INT)"}}};
     bool threw = false;
     bool typed = false;
     std::string message;
     try {
-        (void)ruvia::DbMigrator::migrate(closedPeerConfig(port), std::span<const ruvia::DbMigration>(migrations));
+        (void)ruvia::DbMigrator::migrate(
+            closedPeerConfig(port), std::span<const ruvia::DbMigration>(migrations));
     } catch (const ruvia::DbError& error) {
         threw = true;
         message = error.what();
-        typed = error.code() == ruvia::DbError::Code::kConnectFailed && error.driver() == ruvia::DbDriver::kMariaDb && error.nativeCode().has_value();
+        typed = error.code() == ruvia::DbError::Code::kConnectFailed &&
+                error.driver() == ruvia::DbDriver::kMariaDb && error.nativeCode().has_value();
     } catch (const std::exception& error) {
         threw = true;
         message = error.what();
@@ -90,7 +94,8 @@ int main() {
         return 1;
     }
     if (!typed || message.find("[errno=") == std::string::npos) {
-        std::fprintf(stderr, "MariaDB handshake failure lost typed diagnostics: %s\n", message.c_str());
+        std::fprintf(
+            stderr, "MariaDB handshake failure lost typed diagnostics: %s\n", message.c_str());
         return 1;
     }
 

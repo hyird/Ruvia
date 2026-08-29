@@ -23,11 +23,13 @@ bool fieldValue(int c) noexcept {
 
 RUVIA_TEST(http_token_char_table) {
     // tchar = ALPHA / DIGIT / a fixed symbol set (RFC 7230 3.2.6).
-    for (const char c : {'a', 'z', 'A', 'Z', '0', '9', '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~'}) {
+    for (const char c : {'a', 'z', 'A', 'Z', '0', '9', '!', '#', '$', '%', '&', '\'', '*', '+', '-',
+             '.', '^', '_', '`', '|', '~'}) {
         RUVIA_CHECK(token(c));
     }
     // Separators, whitespace and controls are not tchar.
-    for (const char c : {'(', ')', '<', '>', '@', ',', ';', ':', '\\', '"', '/', '[', ']', '?', '=', '{', '}', ' ', '\t'}) {
+    for (const char c : {'(', ')', '<', '>', '@', ',', ';', ':', '\\', '"', '/', '[', ']', '?', '=',
+             '{', '}', ' ', '\t'}) {
         RUVIA_CHECK(!token(c));
     }
     RUVIA_CHECK(!isHttpTokenChar(0));
@@ -37,7 +39,8 @@ RUVIA_TEST(http_token_char_table) {
 
 RUVIA_TEST(http_field_value_char_table) {
     // Visible ASCII, space and HTAB are field-value chars; obs-text too.
-    for (const int c : {int{'a'}, int{'~'}, int{'0'}, int{' '}, int{'\t'}, int{'!'}, int{'@'}, 0x21, 0x7e, 0x80, 0xff}) {
+    for (const int c : {int{'a'}, int{'~'}, int{'0'}, int{' '}, int{'\t'}, int{'!'}, int{'@'}, 0x21,
+             0x7e, 0x80, 0xff}) {
         RUVIA_CHECK(fieldValue(c));
     }
     // CR, LF, NUL, other controls and DEL are rejected (response-splitting bytes).
@@ -72,5 +75,6 @@ RUVIA_TEST(request_header_kind_known_slot) {
     RUVIA_CHECK_EQ(requestHeaderKindKnownSlot(RequestHeaderKind::kOther), kRequestHeaderKindCount);
     RUVIA_CHECK_EQ(requestHeaderKindKnownSlot(RequestHeaderKind::kAccept), std::size_t{0});
     RUVIA_CHECK_EQ(requestHeaderKindKnownSlot(RequestHeaderKind::kAcceptEncoding), std::size_t{1});
-    RUVIA_CHECK_EQ(requestHeaderKindKnownSlot(RequestHeaderKind::kUserAgent), kRequestHeaderKindCount - 2);
+    RUVIA_CHECK_EQ(
+        requestHeaderKindKnownSlot(RequestHeaderKind::kUserAgent), kRequestHeaderKindCount - 2);
 }

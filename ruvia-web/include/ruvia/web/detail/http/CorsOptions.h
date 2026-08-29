@@ -28,6 +28,7 @@ private:
           exposeHeaders(resource) {}
 };
 
-[[nodiscard]] CorsOptions makeCorsOptions(const CorsConfig& config, std::pmr::memory_resource* resource);
+[[nodiscard]] CorsOptions makeCorsOptions(
+    const CorsConfig& config, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

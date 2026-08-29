@@ -93,7 +93,8 @@ RUVIA_TEST(http2_output_buffer_take_copies_only_the_pending_suffix) {
     std::pmr::monotonic_buffer_resource destinationResource;
     Http2OutputBuffer output(&outputResource);
     output.appendBytes("consumed-pending");
-    RUVIA_CHECK(output.consume(std::string_view("consumed-").size()) == Http2OutputConsumeStatus::kPending);
+    RUVIA_CHECK(
+        output.consume(std::string_view("consumed-").size()) == Http2OutputConsumeStatus::kPending);
 
     std::pmr::string destination(&destinationResource);
     output.take(destination);
@@ -111,7 +112,8 @@ RUVIA_TEST(http2_output_buffer_owns_reset_frame_serialization) {
     RUVIA_CHECK(header.type == static_cast<std::uint8_t>(Http2FrameType::kRstStream));
     RUVIA_CHECK_EQ(header.length, std::uint32_t{4});
     RUVIA_CHECK_EQ(header.streamId, std::uint32_t{9});
-    RUVIA_CHECK_EQ(http2Read32(bytes(pending.data()) + kHttp2FrameHeaderBytes), static_cast<std::uint32_t>(Http2ErrorCode::kCancel));
+    RUVIA_CHECK_EQ(http2Read32(bytes(pending.data()) + kHttp2FrameHeaderBytes),
+        static_cast<std::uint32_t>(Http2ErrorCode::kCancel));
 }
 
 #if !defined(_MSC_VER)

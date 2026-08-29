@@ -22,7 +22,8 @@ struct ModelValidationAccess final {
         model::visitModelFields(model, ModelT::ruviaSchema(), [&](const auto&, const auto& slot) {
             using SlotT = std::remove_cvref_t<decltype(slot)>;
             const auto state = slot.state();
-            if (state == ModelFieldState::kDuplicate || state == ModelFieldState::kInvalidType || (SlotT::required && state == ModelFieldState::kMissing)) {
+            if (state == ModelFieldState::kDuplicate || state == ModelFieldState::kInvalidType ||
+                (SlotT::required && state == ModelFieldState::kMissing)) {
                 valid = false;
                 return;
             }
@@ -34,30 +35,33 @@ struct ModelValidationAccess final {
     }
 
     template <typename ModelT, typename ValidatorT>
-    static void validateStructure(const ModelT& modelValue, std::string_view prefix, ValidatorT& validator) {
-        model::visitModelFields(modelValue, ModelT::ruviaSchema(), [&](const auto&, const auto& slot) {
-            using SlotT = std::remove_cvref_t<decltype(slot)>;
-            std::pmr::string path(validator.resource());
-            model::appendPath(path, prefix, slot.wireName());
+    static void validateStructure(
+        const ModelT& modelValue, std::string_view prefix, ValidatorT& validator) {
+        model::visitModelFields(
+            modelValue, ModelT::ruviaSchema(), [&](const auto&, const auto& slot) {
+                using SlotT = std::remove_cvref_t<decltype(slot)>;
+                std::pmr::string path(validator.resource());
+                model::appendPath(path, prefix, slot.wireName());
 
-            switch (slot.state()) {
-                case ModelFieldState::kDuplicate:
-                    validator.add(path, "duplicate", "is duplicated");
-                    return;
-                case ModelFieldState::kInvalidType:
-                    validator.add(path, "invalid_type", model::expectedTypeName<typename SlotT::value_type>());
-                    return;
-                case ModelFieldState::kMissing:
-                    if constexpr (SlotT::required) {
-                        validator.add(path, "required", "is required");
-                    }
-                    return;
-                case ModelFieldState::kParsed:
-                    break;
-            }
+                switch (slot.state()) {
+                    case ModelFieldState::kDuplicate:
+                        validator.add(path, "duplicate", "is duplicated");
+                        return;
+                    case ModelFieldState::kInvalidType:
+                        validator.add(path, "invalid_type",
+                            model::expectedTypeName<typename SlotT::value_type>());
+                        return;
+                    case ModelFieldState::kMissing:
+                        if constexpr (SlotT::required) {
+                            validator.add(path, "required", "is required");
+                        }
+                        return;
+                    case ModelFieldState::kParsed:
+                        break;
+                }
 
-            validateValueStructure(*slot.value(), path, validator);
-        });
+                validateValueStructure(*slot.value(), path, validator);
+            });
     }
 
 private:
@@ -82,7 +86,8 @@ private:
     }
 
     template <typename ValueT, typename ValidatorT>
-    static void validateValueStructure(const ValueT& value, std::string_view path, ValidatorT& validator) {
+    static void validateValueStructure(
+        const ValueT& value, std::string_view path, ValidatorT& validator) {
         using T = std::remove_cvref_t<ValueT>;
         if constexpr (JsonBody<T>::value) {
             validateStructure(value, path, validator);
@@ -122,12 +127,14 @@ public:
 
     [[nodiscard]] constexpr std::string_view requiredMessage() const noexcept {
         std::string_view result{"is required"};
-        std::apply([&result](const auto&... rules) { (setRequiredMessage(result, rules), ...); }, rules_);
+        std::apply(
+            [&result](const auto&... rules) { (setRequiredMessage(result, rules), ...); }, rules_);
         return result;
     }
 
     template <typename OptionalT, typename ValidatorT>
-    void validate(ModelFieldState state, const OptionalT& value, std::string_view path, ValidatorT& validator) const {
+    void validate(ModelFieldState state, const OptionalT& value, std::string_view path,
+        ValidatorT& validator) const {
         (void)state;
         if (!value) {
             if (required()) {
@@ -151,7 +158,10 @@ private:
 
     template <typename ValueT, typename ValidatorT>
     void validatePresent(const ValueT& value, std::string_view path, ValidatorT& validator) const {
-        std::apply([&value, path, &validator](const auto&... rules) { (validateRule(value, path, validator, rules), ...); }, rules_);
+        std::apply(
+            [&value, path, &validator](
+                const auto&... rules) { (validateRule(value, path, validator, rules), ...); },
+            rules_);
     }
 
     std::tuple<RuleTs...> rules_;

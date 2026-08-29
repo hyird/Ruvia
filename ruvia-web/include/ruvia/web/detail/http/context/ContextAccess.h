@@ -12,10 +12,14 @@
 
 namespace ruvia {
 
-inline Context::Context(RequestMemory& memory, const HttpRequest& request, detail::ContextServices services) noexcept
+inline Context::Context(
+    RequestMemory& memory, const HttpRequest& request, detail::ContextServices services) noexcept
     : Context(memory, request, {}, nullptr, nullptr, 0, 0, services) {}
 
-inline Context::Context(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, const std::string_view* paramNames, const std::string_view* paramValues, std::size_t paramCount, std::uintptr_t routeRateLimitScope, detail::ContextServices services) noexcept
+inline Context::Context(RequestMemory& memory, const HttpRequest& request,
+    std::string_view routePath, const std::string_view* paramNames,
+    const std::string_view* paramValues, std::size_t paramCount, std::uintptr_t routeRateLimitScope,
+    detail::ContextServices services) noexcept
     : memory_(memory),
       request_(request),
       connInfo_(services.resolveConnInfo(request)),
@@ -49,23 +53,33 @@ namespace ruvia::detail {
 class ContextWebSocketBinding;
 
 struct ContextAccess final {
-    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, ContextServices services) noexcept {
+    [[nodiscard]] static Context make(
+        RequestMemory& memory, const HttpRequest& request, ContextServices services) noexcept {
         return Context(memory, request, services);
     }
 
-    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, std::uintptr_t routeRateLimitScope, ContextServices services) noexcept {
+    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request,
+        std::uintptr_t routeRateLimitScope, ContextServices services) noexcept {
         return Context(memory, request, {}, nullptr, nullptr, 0, routeRateLimitScope, services);
     }
 
-    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, std::uintptr_t routeRateLimitScope, ContextServices services) noexcept {
-        return Context(memory, request, routePath, nullptr, nullptr, 0, routeRateLimitScope, services);
+    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request,
+        std::string_view routePath, std::uintptr_t routeRateLimitScope,
+        ContextServices services) noexcept {
+        return Context(
+            memory, request, routePath, nullptr, nullptr, 0, routeRateLimitScope, services);
     }
 
-    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, const std::string_view* paramNames, const std::string_view* paramValues, std::size_t paramCount, std::uintptr_t routeRateLimitScope, ContextServices services) noexcept {
-        return Context(memory, request, routePath, paramNames, paramValues, paramCount, routeRateLimitScope, services);
+    [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request,
+        std::string_view routePath, const std::string_view* paramNames,
+        const std::string_view* paramValues, std::size_t paramCount,
+        std::uintptr_t routeRateLimitScope, ContextServices services) noexcept {
+        return Context(memory, request, routePath, paramNames, paramValues, paramCount,
+            routeRateLimitScope, services);
     }
 
-    [[nodiscard]] static HttpResponse staticFileWithPrecompressedVariants(Context& context, const StaticRoot& root, StaticFileResponseOptions options) {
+    [[nodiscard]] static HttpResponse staticFileWithPrecompressedVariants(
+        Context& context, const StaticRoot& root, StaticFileResponseOptions options) {
         return context.staticFile(root, options, StaticFileSelectionMode::kPrecompressed);
     }
 
@@ -93,7 +107,8 @@ struct ContextAccess final {
         return context.requestStorage_ && context.requestStorage_->routeParams;
     }
 
-    [[nodiscard]] static const ContextRequestStorage* requestStorage(const Context& context) noexcept {
+    [[nodiscard]] static const ContextRequestStorage* requestStorage(
+        const Context& context) noexcept {
         return context.requestStorage_.get();
     }
 
@@ -105,7 +120,8 @@ struct ContextAccess final {
         return context.responseStorage();
     }
 
-    [[nodiscard]] static bool hasResponseHeader(const Context& context, std::string_view name) noexcept {
+    [[nodiscard]] static bool hasResponseHeader(
+        const Context& context, std::string_view name) noexcept {
         return context.responseState_.activeResponse().header(name).has_value();
     }
 
@@ -121,7 +137,8 @@ struct ContextAccess final {
         return context.takeResponse();
     }
 
-    [[nodiscard]] static HttpResponse streamingHead(const Context& context, std::string_view contentType = {}) {
+    [[nodiscard]] static HttpResponse streamingHead(
+        const Context& context, std::string_view contentType = {}) {
         return context.streamingHead(contentType);
     }
 
@@ -135,14 +152,19 @@ struct ContextAccess final {
     // True if a Set-Cookie whose value begins with `valuePrefix` (e.g. a cookie
     // name plus '=') is already queued on the context's pending response headers.
     // Lets a test observe a cookie set by middleware before any response is built.
-    [[nodiscard]] static bool hasPendingSetCookie(const Context& context, std::string_view valuePrefix) noexcept {
-        return std::ranges::any_of(context.responseState_.activeResponse().headers(), [valuePrefix](const auto& header) noexcept { return header.name() == "Set-Cookie" && header.value().starts_with(valuePrefix); });
+    [[nodiscard]] static bool hasPendingSetCookie(
+        const Context& context, std::string_view valuePrefix) noexcept {
+        return std::ranges::any_of(context.responseState_.activeResponse().headers(),
+            [valuePrefix](const auto& header) noexcept {
+                return header.name() == "Set-Cookie" && header.value().starts_with(valuePrefix);
+            });
     }
 
 private:
     friend class ContextWebSocketBinding;
 
-    [[nodiscard]] static ContextResponseOutput bindWebSocket(Context& context, WebSocket& webSocket) noexcept {
+    [[nodiscard]] static ContextResponseOutput bindWebSocket(
+        Context& context, WebSocket& webSocket) noexcept {
         auto previous = context.responseOutput_;
         context.responseOutput_ = ContextResponseOutput::webSocket(webSocket);
         return previous;

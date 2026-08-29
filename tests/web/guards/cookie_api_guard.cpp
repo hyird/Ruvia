@@ -24,37 +24,73 @@ namespace {
 int failures = 0;
 
 template <typename Text>
-concept CookiePathAccepts = requires(ruvia::CookieOptions& options, Text&& text) { options.path = std::forward<Text>(text); };
+concept CookiePathAccepts = requires(
+    ruvia::CookieOptions& options, Text&& text) { options.path = std::forward<Text>(text); };
 
 template <typename Text>
-concept CookieDomainAccepts = requires(ruvia::CookieOptions& options, Text&& text) { options.domain = std::forward<Text>(text); };
+concept CookieDomainAccepts = requires(
+    ruvia::CookieOptions& options, Text&& text) { options.domain = std::forward<Text>(text); };
 
 template <typename Name, typename Value, typename Options>
-concept CanConstructSetCookiePlan = requires(Name&& name, Value&& value, Options&& options) { ruvia::detail::SetCookiePlan(std::forward<Name>(name), std::forward<Value>(value), std::forward<Options>(options)); };
+concept CanConstructSetCookiePlan = requires(Name&& name, Value&& value, Options&& options) {
+    ruvia::detail::SetCookiePlan(
+        std::forward<Name>(name), std::forward<Value>(value), std::forward<Options>(options));
+};
 
 template <typename Context>
-concept HasContextSetCookiePositional = requires(Context& context) { context.setCookie(std::string_view{}, std::string_view{}); } || requires(Context& context, const ruvia::CookieOptions& options) { context.setCookie(std::string_view{}, std::string_view{}, options); };
+concept HasContextSetCookiePositional = requires(Context& context) {
+    context.setCookie(std::string_view{}, std::string_view{});
+} || requires(Context& context, const ruvia::CookieOptions& options) {
+    context.setCookie(std::string_view{}, std::string_view{}, options);
+};
 
 template <typename Context>
-concept HasContextSetSignedCookiePositional = requires(Context& context) { context.setSignedCookie(std::string_view{}, std::string_view{}, std::string_view{}); } || requires(Context& context, const ruvia::CookieOptions& options) { context.setSignedCookie(std::string_view{}, std::string_view{}, std::string_view{}, options); };
+concept HasContextSetSignedCookiePositional = requires(Context& context) {
+    context.setSignedCookie(std::string_view{}, std::string_view{}, std::string_view{});
+} || requires(Context& context, const ruvia::CookieOptions& options) {
+    context.setSignedCookie(std::string_view{}, std::string_view{}, std::string_view{}, options);
+};
 
 template <typename Context>
-concept HasContextDeleteCookiePositional = requires(Context& context) { context.deleteCookie(std::string_view{}); } || requires(Context& context, ruvia::CookieOptions options) { context.deleteCookie(std::string_view{}, options); };
+concept HasContextDeleteCookiePositional = requires(Context& context) {
+    context.deleteCookie(std::string_view{});
+} || requires(Context& context, ruvia::CookieOptions options) {
+    context.deleteCookie(std::string_view{}, options);
+};
 
 template <typename Request>
-concept HasContextRequestSignedCookiePositional = requires(const Request& request) { request.signedCookie(std::string_view{}, std::string_view{}); };
+concept HasContextRequestSignedCookiePositional = requires(
+    const Request& request) { request.signedCookie(std::string_view{}, std::string_view{}); };
 
 template <typename String>
-concept AcceptsAnyRvalueSetCookieOptionText = requires(String&& value) { ruvia::SetCookieOptions{.name = std::forward<String>(value), .value = "value"}; } || requires(String&& value) { ruvia::SetCookieOptions{.name = "name", .value = std::forward<String>(value)}; };
+concept AcceptsAnyRvalueSetCookieOptionText = requires(String&& value) {
+    ruvia::SetCookieOptions{.name = std::forward<String>(value), .value = "value"};
+} || requires(String&& value) {
+    ruvia::SetCookieOptions{.name = "name", .value = std::forward<String>(value)};
+};
 
 template <typename String>
-concept AcceptsAnyRvalueSetSignedCookieOptionText = requires(String&& value) { ruvia::SetSignedCookieOptions{.name = std::forward<String>(value), .value = "value", .secret = "secret"}; } || requires(String&& value) { ruvia::SetSignedCookieOptions{.name = "name", .value = std::forward<String>(value), .secret = "secret"}; } || requires(String&& value) { ruvia::SetSignedCookieOptions{.name = "name", .value = "value", .secret = std::forward<String>(value)}; };
+concept AcceptsAnyRvalueSetSignedCookieOptionText = requires(String&& value) {
+    ruvia::SetSignedCookieOptions{
+        .name = std::forward<String>(value), .value = "value", .secret = "secret"};
+} || requires(String&& value) {
+    ruvia::SetSignedCookieOptions{
+        .name = "name", .value = std::forward<String>(value), .secret = "secret"};
+} || requires(String&& value) {
+    ruvia::SetSignedCookieOptions{
+        .name = "name", .value = "value", .secret = std::forward<String>(value)};
+};
 
 template <typename String>
-concept AcceptsAnyRvalueDeleteCookieOptionText = requires(String&& value) { ruvia::DeleteCookieOptions{.name = std::forward<String>(value)}; };
+concept AcceptsAnyRvalueDeleteCookieOptionText =
+    requires(String&& value) { ruvia::DeleteCookieOptions{.name = std::forward<String>(value)}; };
 
 template <typename String>
-concept AcceptsAnyRvalueSignedCookieLookupOptionText = requires(String&& value) { ruvia::SignedCookieLookupOptions{.name = std::forward<String>(value), .secret = "secret"}; } || requires(String&& value) { ruvia::SignedCookieLookupOptions{.name = "name", .secret = std::forward<String>(value)}; };
+concept AcceptsAnyRvalueSignedCookieLookupOptionText = requires(String&& value) {
+    ruvia::SignedCookieLookupOptions{.name = std::forward<String>(value), .secret = "secret"};
+} || requires(String&& value) {
+    ruvia::SignedCookieLookupOptions{.name = "name", .secret = std::forward<String>(value)};
+};
 
 template <typename T>
 concept HasCookieHttpOnlyBoolean = requires(T& options) { options.httpOnly = true; };
@@ -77,10 +113,13 @@ static_assert(!CookiePathAccepts<std::pmr::string>);
 static_assert(!CookieDomainAccepts<std::pmr::string>);
 static_assert(CanConstructSetCookiePlan<std::string&, const std::string&, ruvia::CookieOptions&>);
 static_assert(!CanConstructSetCookiePlan<std::string, std::string_view, ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<std::string_view, const std::string, ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<std::pmr::string, std::string_view, ruvia::CookieOptions&>);
+static_assert(
+    !CanConstructSetCookiePlan<std::string_view, const std::string, ruvia::CookieOptions&>);
+static_assert(
+    !CanConstructSetCookiePlan<std::pmr::string, std::string_view, ruvia::CookieOptions&>);
 static_assert(!CanConstructSetCookiePlan<std::string_view, std::string_view, ruvia::CookieOptions>);
-static_assert(!CanConstructSetCookiePlan<std::string_view, std::string_view, const ruvia::CookieOptions>);
+static_assert(
+    !CanConstructSetCookiePlan<std::string_view, std::string_view, const ruvia::CookieOptions>);
 static_assert(std::is_aggregate_v<ruvia::SetCookieOptions>);
 static_assert(std::is_aggregate_v<ruvia::SetSignedCookieOptions>);
 static_assert(std::is_aggregate_v<ruvia::DeleteCookieOptions>);
@@ -93,7 +132,8 @@ static_assert(std::same_as<decltype(ruvia::SetSignedCookieOptions{}.value), ruvi
 static_assert(std::same_as<decltype(ruvia::SetSignedCookieOptions{}.secret), ruvia::BorrowedText>);
 static_assert(std::same_as<decltype(ruvia::DeleteCookieOptions{}.name), ruvia::BorrowedText>);
 static_assert(std::same_as<decltype(ruvia::SignedCookieLookupOptions{}.name), ruvia::BorrowedText>);
-static_assert(std::same_as<decltype(ruvia::SignedCookieLookupOptions{}.secret), ruvia::BorrowedText>);
+static_assert(
+    std::same_as<decltype(ruvia::SignedCookieLookupOptions{}.secret), ruvia::BorrowedText>);
 static_assert(!HasContextSetCookiePositional<ruvia::Context>);
 static_assert(!HasContextSetSignedCookiePositional<ruvia::Context>);
 static_assert(!HasContextDeleteCookiePositional<ruvia::Context>);
@@ -106,9 +146,11 @@ static_assert(!AcceptsAnyRvalueDeleteCookieOptionText<std::string>);
 static_assert(!AcceptsAnyRvalueDeleteCookieOptionText<std::pmr::string>);
 static_assert(!AcceptsAnyRvalueSignedCookieLookupOptionText<std::string>);
 static_assert(!AcceptsAnyRvalueSignedCookieLookupOptionText<std::pmr::string>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.httpOnly), ruvia::CookieAttributePolicy>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.httpOnly), ruvia::CookieAttributePolicy>);
 static_assert(std::same_as<decltype(ruvia::CookieOptions{}.secure), ruvia::CookieAttributePolicy>);
-static_assert(std::same_as<decltype(ruvia::CookieOptions{}.partitioned), ruvia::CookieAttributePolicy>);
+static_assert(
+    std::same_as<decltype(ruvia::CookieOptions{}.partitioned), ruvia::CookieAttributePolicy>);
 static_assert(!HasCookieHttpOnlyBoolean<ruvia::CookieOptions>);
 static_assert(!HasCookieSecureBoolean<ruvia::CookieOptions>);
 static_assert(!HasCookiePartitionedBoolean<ruvia::CookieOptions>);
@@ -147,8 +189,10 @@ void checkThrowsInvalidArgument(Callable&& callable) {
 
 // Full option serialization is deterministic: the fixed Expires renders a
 // fixed IMF-fixdate and typed attributes have one canonical wire spelling.
-void exerciseSetCookieSerialization(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
-    auto context = ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
+void exerciseSetCookieSerialization(
+    ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
+    auto context =
+        ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
     const ruvia::CookieOptions options{
         .sameSite = ruvia::CookieSameSite::kNone,
         .priority = ruvia::CookiePriority::kHigh,
@@ -166,8 +210,10 @@ void exerciseSetCookieSerialization(ruvia::RequestMemory& memory, const ruvia::H
           "HttpOnly; Secure; SameSite=None; Priority=High; Partitioned");
 }
 
-void exerciseSetCookieWritesResponseHeader(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
-    auto context = ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
+void exerciseSetCookieWritesResponseHeader(
+    ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
+    auto context =
+        ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
     const ruvia::CookieOptions options{
         .sameSite = ruvia::CookieSameSite::kLax,
         .httpOnly = ruvia::CookieAttributePolicy::kEmit,
@@ -177,50 +223,64 @@ void exerciseSetCookieWritesResponseHeader(ruvia::RequestMemory& memory, const r
     check(response.header("Set-Cookie") == "session=id; Path=/; HttpOnly; SameSite=Lax");
 }
 
-void exerciseCookieValidationThrows(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
-    auto context = ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
+void exerciseCookieValidationThrows(
+    ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
+    auto context =
+        ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
     checkThrowsInvalidArgument([&] { context.setCookie({.name = "bad;name", .value = "v"}); });
     checkThrowsInvalidArgument([&] { context.setCookie({.name = "name", .value = "va;lue"}); });
 
     const ruvia::CookieOptions hostWithoutSecure{
         .prefix = ruvia::CookiePrefix::kHost,
     };
-    checkThrowsInvalidArgument([&] { context.setCookie({.name = "n", .value = "v", .attributes = hostWithoutSecure}); });
+    checkThrowsInvalidArgument(
+        [&] { context.setCookie({.name = "n", .value = "v", .attributes = hostWithoutSecure}); });
 
     ruvia::CookieOptions hostWithDomain;
     hostWithDomain.prefix = ruvia::CookiePrefix::kHost;
     hostWithDomain.secure = ruvia::CookieAttributePolicy::kEmit;
     hostWithDomain.domain = "example.com";
-    checkThrowsInvalidArgument([&] { context.setCookie({.name = "n", .value = "v", .attributes = hostWithDomain}); });
+    checkThrowsInvalidArgument(
+        [&] { context.setCookie({.name = "n", .value = "v", .attributes = hostWithDomain}); });
 
     const ruvia::CookieOptions securePrefixWithoutSecure{
         .prefix = ruvia::CookiePrefix::kSecure,
     };
-    checkThrowsInvalidArgument([&] { context.setCookie({.name = "n", .value = "v", .attributes = securePrefixWithoutSecure}); });
+    checkThrowsInvalidArgument([&] {
+        context.setCookie({.name = "n", .value = "v", .attributes = securePrefixWithoutSecure});
+    });
 
     const ruvia::CookieOptions partitionedWithoutSecure{
         .partitioned = ruvia::CookieAttributePolicy::kEmit,
     };
-    checkThrowsInvalidArgument([&] { context.setCookie({.name = "n", .value = "v", .attributes = partitionedWithoutSecure}); });
+    checkThrowsInvalidArgument([&] {
+        context.setCookie({.name = "n", .value = "v", .attributes = partitionedWithoutSecure});
+    });
 
     ruvia::CookieOptions maxAgeTooLong;
     maxAgeTooLong.maxAge = std::chrono::seconds(34560001);
-    checkThrowsInvalidArgument([&] { context.setCookie({.name = "n", .value = "v", .attributes = maxAgeTooLong}); });
+    checkThrowsInvalidArgument(
+        [&] { context.setCookie({.name = "n", .value = "v", .attributes = maxAgeTooLong}); });
 
     ruvia::CookieOptions negativeMaxAge;
     negativeMaxAge.maxAge = std::chrono::seconds(-1);
-    checkThrowsInvalidArgument([&] { context.setCookie({.name = "n", .value = "v", .attributes = negativeMaxAge}); });
+    checkThrowsInvalidArgument(
+        [&] { context.setCookie({.name = "n", .value = "v", .attributes = negativeMaxAge}); });
 
     ruvia::CookieOptions expiresTooFar;
     expiresTooFar.expires = std::chrono::system_clock::now() + std::chrono::hours(24 * 401);
-    checkThrowsInvalidArgument([&] { context.setCookie({.name = "n", .value = "v", .attributes = expiresTooFar}); });
+    checkThrowsInvalidArgument(
+        [&] { context.setCookie({.name = "n", .value = "v", .attributes = expiresTooFar}); });
 
-    checkThrowsInvalidArgument([&] { context.setSignedCookie({.name = "n", .value = "v", .secret = ""}); });
+    checkThrowsInvalidArgument(
+        [&] { context.setSignedCookie({.name = "n", .value = "v", .secret = ""}); });
 }
 
-void exerciseSignedCookieRoundtrip(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
+void exerciseSignedCookieRoundtrip(
+    ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     constexpr std::string_view kSecret = "guard-secret";
-    auto writer = ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
+    auto writer =
+        ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
     writer.setSignedCookie({.name = "sid", .value = "hello", .secret = kSecret});
     auto response = writer.text("x");
     const std::string generated(response.header("Set-Cookie").value_or(std::string_view{}));
@@ -231,7 +291,8 @@ void exerciseSignedCookieRoundtrip(ruvia::RequestMemory& memory, const ruvia::Ht
     raw.append(cookiePair);
     raw.append("\r\n\r\n");
     const auto parsed = parsePublicRequest(raw);
-    auto reader = ruvia::detail::ContextAccess::make(memory, parsed, ruvia::test::testContextServices());
+    auto reader =
+        ruvia::detail::ContextAccess::make(memory, parsed, ruvia::test::testContextServices());
     const auto verified = reader.req().signedCookie({.name = "sid", .secret = kSecret});
     check(verified.has_value() && *verified == "hello");
     check(!reader.req().signedCookie({.name = "sid", .secret = "other-secret"}).has_value());
@@ -245,20 +306,23 @@ void exerciseSignedCookieRoundtrip(ruvia::RequestMemory& memory, const ruvia::Ht
     tampered.append(tamperedPair);
     tampered.append("\r\n\r\n");
     const auto tamperedParsed = parsePublicRequest(tampered);
-    auto tamperedReader = ruvia::detail::ContextAccess::make(memory, tamperedParsed, ruvia::test::testContextServices());
+    auto tamperedReader = ruvia::detail::ContextAccess::make(
+        memory, tamperedParsed, ruvia::test::testContextServices());
     check(!tamperedReader.req().signedCookie({.name = "sid", .secret = kSecret}).has_value());
 
     // A cookie without the fixed-width signature suffix is rejected, not parsed.
     std::string malformed("GET / HTTP/1.1\r\nHost: guard\r\nCookie: sid=no-signature\r\n\r\n");
     const auto malformedParsed = parsePublicRequest(malformed);
-    auto malformedReader = ruvia::detail::ContextAccess::make(memory, malformedParsed, ruvia::test::testContextServices());
+    auto malformedReader = ruvia::detail::ContextAccess::make(
+        memory, malformedParsed, ruvia::test::testContextServices());
     check(!malformedReader.req().signedCookie({.name = "sid", .secret = kSecret}).has_value());
 }
 
 void exerciseDeleteCookieUsesRequestFacadeForPreviousValue(ruvia::RequestMemory& memory) {
     std::string raw("GET / HTTP/1.1\r\nHost: guard\r\nCookie: legacy=old\r\n\r\n");
     const auto parsed = parsePublicRequest(raw);
-    auto context = ruvia::detail::ContextAccess::make(memory, parsed, ruvia::test::testContextServices());
+    auto context =
+        ruvia::detail::ContextAccess::make(memory, parsed, ruvia::test::testContextServices());
     const auto previous = context.req().cookie("legacy");
     check(previous.has_value() && *previous == "old");
     context.deleteCookie({.name = "legacy"});
@@ -270,8 +334,10 @@ void exerciseDeleteCookieUsesRequestFacadeForPreviousValue(ruvia::RequestMemory&
 }
 
 void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
-    auto context = ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
-    static constexpr std::array<std::byte, 3> bytes{std::byte{0x00}, std::byte{0x41}, std::byte{0xff}};
+    auto context =
+        ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
+    static constexpr std::array<std::byte, 3> bytes{
+        std::byte{0x00}, std::byte{0x41}, std::byte{0xff}};
     context.status(ruvia::http_status::kPartialContent);
     context.header("X-Bin", "1");
     auto response = context.body(std::span<const std::byte>(bytes));
@@ -280,7 +346,8 @@ void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest
     check(!response.header("Content-Type").has_value());
     const auto body = ruvia::detail::responseBody(response).bytes();
     check(body.size() == 3);
-    check(body.size() == 3 && body[0] == '\0' && body[1] == 'A' && static_cast<unsigned char>(body[2]) == 0xff);
+    check(body.size() == 3 && body[0] == '\0' && body[1] == 'A' &&
+          static_cast<unsigned char>(body[2]) == 0xff);
 }
 
 }  // namespace

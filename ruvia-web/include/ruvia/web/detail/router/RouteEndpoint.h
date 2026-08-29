@@ -15,6 +15,7 @@
 #include "ruvia/web/detail/util/CallableRef.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/detail/router/RouteModes.h"
+#include "ruvia/web/detail/websocket/WebSocketHeartbeatConfigValidation.h"
 // What a registered route runs, as one closed set of alternatives. Each
 // alternative carries the handler shape together with the route metadata only
 // that shape may have, so a route cannot claim a streaming or WebSocket mode
@@ -87,7 +88,8 @@ public:
 private:
     friend class RouteEndpoint;
 
-    WebSocketRouteEndpoint(std::pmr::memory_resource* resource, RouteStreamHandler handler, const WebSocketRouteConfig& options)
+    WebSocketRouteEndpoint(std::pmr::memory_resource* resource, RouteStreamHandler handler,
+        const WebSocketRouteConfig& options)
         : handler_(handler),
           subprotocolStorage_(resource),
           subprotocols_(resource),
@@ -118,17 +120,20 @@ public:
     RouteEndpoint(RouteEndpoint&&) noexcept = default;
     RouteEndpoint& operator=(RouteEndpoint&&) = delete;
 
-    [[nodiscard]] static RouteEndpoint buffered(RouteHandler handler, RequestBodyMode requestBodyMode) {
+    [[nodiscard]] static RouteEndpoint buffered(
+        RouteHandler handler, RequestBodyMode requestBodyMode) {
         if (!handler.valid()) {
             throw std::invalid_argument("route handler must not be empty");
         }
-        if (requestBodyMode != RequestBodyMode::kBuffered && requestBodyMode != RequestBodyMode::kStream) {
+        if (requestBodyMode != RequestBodyMode::kBuffered &&
+            requestBodyMode != RequestBodyMode::kStream) {
             throw std::invalid_argument("invalid route request-body mode");
         }
         return RouteEndpoint(BufferedRouteEndpoint(handler, requestBodyMode));
     }
 
-    [[nodiscard]] static RouteEndpoint responseStream(RouteStreamHandler handler, ResponseStreamKind kind) {
+    [[nodiscard]] static RouteEndpoint responseStream(
+        RouteStreamHandler handler, ResponseStreamKind kind) {
         if (!handler.valid()) {
             throw std::invalid_argument("route stream handler must not be empty");
         }
@@ -138,36 +143,27 @@ public:
         return RouteEndpoint(ResponseStreamRouteEndpoint(handler, kind));
     }
 
-    [[nodiscard]] static RouteEndpoint webSocket(std::pmr::memory_resource* resource, RouteStreamHandler handler, WebSocketRouteConfig options = {}) {
+    [[nodiscard]] static RouteEndpoint webSocket(std::pmr::memory_resource* resource,
+        RouteStreamHandler handler, WebSocketRouteConfig options = {}) {
         if (!handler.valid()) {
             throw std::invalid_argument("websocket route handler must not be empty");
         }
-        if (options.lifecycle.closeHandshakeTimeout.has_value() && options.lifecycle.closeHandshakeTimeout->count() <= 0) {
-            throw std::invalid_argument("websocket close-handshake timeout must be greater than zero");
+        if (options.lifecycle.closeHandshakeTimeout.has_value() &&
+            options.lifecycle.closeHandshakeTimeout->count() <= 0) {
+            throw std::invalid_argument(
+                "websocket close-handshake timeout must be greater than zero");
         }
-        if (!options.lifecycle.heartbeat.pingInterval.has_value()) {
-            if (options.lifecycle.heartbeat.pongTimeout.has_value()) {
-                throw std::invalid_argument("websocket pong timeout requires a ping interval");
-            }
-        } else {
-            if (options.lifecycle.heartbeat.pingInterval->count() <= 0) {
-                throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
-            }
-            auto& pongTimeout = options.lifecycle.heartbeat.pongTimeout;
-            if (!pongTimeout.has_value()) {
-                pongTimeout = options.lifecycle.heartbeat.pingInterval;
-            }
-            if (pongTimeout->count() <= 0) {
-                throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
-            }
-        }
+        options.lifecycle.heartbeat =
+            normalizeWebSocketHeartbeatConfig(options.lifecycle.heartbeat);
         WebSocketSubprotocolSet subprotocols;
         for (const auto& subprotocol : options.subprotocols) {
             if (!subprotocols.append(subprotocol)) {
-                throw std::invalid_argument("websocket subprotocols must contain at most 64 unique HTTP tokens");
+                throw std::invalid_argument(
+                    "websocket subprotocols must contain at most 64 unique HTTP tokens");
             }
         }
-        return RouteEndpoint(WebSocketRouteEndpoint(pmrResourceOrDefault(resource), handler, options));
+        return RouteEndpoint(
+            WebSocketRouteEndpoint(pmrResourceOrDefault(resource), handler, options));
     }
 
     [[nodiscard]] RouteEndpoint clone(std::pmr::memory_resource* resource) const {
@@ -209,7 +205,8 @@ public:
     }
 
 private:
-    using Value = std::variant<BufferedRouteEndpoint, ResponseStreamRouteEndpoint, WebSocketRouteEndpoint>;
+    using Value =
+        std::variant<BufferedRouteEndpoint, ResponseStreamRouteEndpoint, WebSocketRouteEndpoint>;
 
     template <typename Endpoint>
     explicit RouteEndpoint(Endpoint endpoint) noexcept

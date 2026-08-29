@@ -115,7 +115,8 @@ void App::stop() {
                 try {
                     worker.runtime->stop();
                 } catch (...) {
-                    detail::reportUnhandledFailure("web worker stop request", std::current_exception());
+                    detail::reportUnhandledFailure(
+                        "web worker stop request", std::current_exception());
                 }
             }
         }

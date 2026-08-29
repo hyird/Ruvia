@@ -33,7 +33,8 @@ public:
     // types only, so a configured middleware is registered here.
     template <typename MiddlewareT, typename... Args>
     Derived& use(Args&&... args) {
-        return self().useMiddleware(makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...));
+        return self().useMiddleware(
+            makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...));
     }
 
     // The same registration, scoped to a path prefix: the middleware runs only
@@ -58,7 +59,9 @@ public:
             "a middleware declaring ruviaRunsOnUnmatchedRequests cannot be path-scoped with "
             "useAt(); register it app-wide with use<T>()");
         const auto normalized = normalizeFallbackPrefix(options.prefix);
-        return self().useMiddleware(makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...).scopedTo(retainRegistrationText(normalized)));
+        return self().useMiddleware(
+            makeMiddlewareDescriptor<MiddlewareT>(std::forward<Args>(args)...)
+                .scopedTo(retainRegistrationText(normalized)));
     }
 
     // Worker-local user state: every worker builds its own T from the registered
@@ -68,7 +71,8 @@ public:
     // be shared across workers by the application. One registration per type.
     template <typename T, typename Factory>
     Derived& useWorkerState(Factory&& factory) {
-        return self().useWorkerStateDefinition(WorkerStateDefinition::make<T>(std::forward<Factory>(factory)));
+        return self().useWorkerStateDefinition(
+            WorkerStateDefinition::make<T>(std::forward<Factory>(factory)));
     }
 
     template <typename T>
@@ -99,7 +103,8 @@ private:
 // fallback is a route-like registration, so a duplicate normalized scope is a
 // configuration error rather than an order-dependent last-wins mutation.
 template <typename Handlers, typename Handler>
-[[nodiscard]] std::string_view validateFallbackPrefix(const Handlers& handlers, std::string_view prefix, const Handler& handler) {
+[[nodiscard]] std::string_view validateFallbackPrefix(
+    const Handlers& handlers, std::string_view prefix, const Handler& handler) {
     if (!handler) {
         throw std::invalid_argument("fallback handler must not be null");
     }

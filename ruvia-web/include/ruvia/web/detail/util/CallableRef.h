@@ -39,7 +39,9 @@ private:
 
 template <typename Result, typename... Args, typename Callable>
 [[nodiscard]] CallableRef<Result, Args...> makeCallableRef(Callable& callable) noexcept {
-    return CallableRef<Result, Args...>(&callable, [](void* target, Args... args) -> Task<Result> { return (*static_cast<Callable*>(target))(std::forward<Args>(args)...); });
+    return CallableRef<Result, Args...>(&callable, [](void* target, Args... args) -> Task<Result> {
+        return (*static_cast<Callable*>(target))(std::forward<Args>(args)...);
+    });
 }
 
 }  // namespace ruvia::detail

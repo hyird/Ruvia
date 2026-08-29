@@ -53,13 +53,14 @@ RUVIA_TEST(utf8_rejects_invalid_sequences) {
     RUVIA_CHECK(!isValidUtf8(bytes({0xF5, 0x80, 0x80, 0x80})));  // F5 lead, out of range
     RUVIA_CHECK(!isValidUtf8(bytes({0xC2})));                    // truncated 2-byte
     RUVIA_CHECK(!isValidUtf8(bytes({0xE2, 0x82})));              // truncated 3-byte
-    RUVIA_CHECK(!isValidUtf8(bytes({0xC2, 0xC2})));              // lead byte where a continuation was due
+    RUVIA_CHECK(!isValidUtf8(bytes({0xC2, 0xC2})));  // lead byte where a continuation was due
 }
 
 RUVIA_TEST(websocket_close_code_validity) {
     // RFC 6455 §7.4.1 plus the IANA-registered 1012-1014
     // (service restart / try again later / bad gateway).
-    for (const int code : {1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014}) {
+    for (const int code :
+        {1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014}) {
         RUVIA_CHECK(closeCodeValid(code));
     }
     RUVIA_CHECK(closeCodeValid(3000));  // registered range

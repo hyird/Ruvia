@@ -88,7 +88,8 @@ public:
     const HttpContentEncodeFailure* failure() const&& = delete;
 
 private:
-    friend HttpContentEncodeResult encodeHttpContent(HttpContentCoding, std::string_view, HttpContentEncodeOptions);
+    friend HttpContentEncodeResult encodeHttpContent(
+        HttpContentCoding, std::string_view, HttpContentEncodeOptions);
 
     using Value = std::variant<HttpEncodedContent, HttpContentEncodeFailure>;
 
@@ -96,7 +97,8 @@ private:
         return HttpContentEncodeResult(HttpEncodedContent(std::move(bytes)));
     }
 
-    [[nodiscard]] static HttpContentEncodeResult makeFailure(HttpContentEncodeError error) noexcept {
+    [[nodiscard]] static HttpContentEncodeResult makeFailure(
+        HttpContentEncodeError error) noexcept {
         return HttpContentEncodeResult(HttpContentEncodeFailure(error));
     }
 
@@ -111,9 +113,15 @@ private:
 
 // Produces one complete content-coded representation within the exact output
 // cap. Zero permits only a zero-byte encoding.
-[[nodiscard]] HttpContentEncodeResult encodeHttpContent(HttpContentCoding coding, std::string_view input, HttpContentEncodeOptions options);
+[[nodiscard]] HttpContentEncodeResult encodeHttpContent(
+    HttpContentCoding coding, std::string_view input, HttpContentEncodeOptions options);
 
-enum class HttpContentDecodeError : std::uint8_t { kUnsupportedCoding, kInvalidContent, kDecodedSizeExceeded, kDecoderFailure };
+enum class HttpContentDecodeError : std::uint8_t {
+    kUnsupportedCoding,
+    kInvalidContent,
+    kDecodedSizeExceeded,
+    kDecoderFailure
+};
 
 struct HttpContentDecodeOptions final {
     std::size_t maxDecodedBytes{};
@@ -186,7 +194,8 @@ public:
 
 private:
     friend struct detail::HttpContentDecodeResultAccess;
-    friend HttpContentDecodeResult decodeHttpContent(HttpContentCoding, std::string_view, HttpContentDecodeOptions);
+    friend HttpContentDecodeResult decodeHttpContent(
+        HttpContentCoding, std::string_view, HttpContentDecodeOptions);
 
     using Value = std::variant<HttpDecodedContent, HttpContentDecodeFailure>;
 
@@ -194,7 +203,8 @@ private:
         return HttpContentDecodeResult(HttpDecodedContent(std::move(bytes)));
     }
 
-    [[nodiscard]] static HttpContentDecodeResult makeFailure(HttpContentDecodeError error) noexcept {
+    [[nodiscard]] static HttpContentDecodeResult makeFailure(
+        HttpContentDecodeError error) noexcept {
         return HttpContentDecodeResult(HttpContentDecodeFailure(error));
     }
 
@@ -210,6 +220,7 @@ private:
 // gzip members and zstd frames are consumed through the end of input; Brotli
 // trailing bytes are rejected. The exact decoded-size cap applies across the
 // complete representation.
-[[nodiscard]] HttpContentDecodeResult decodeHttpContent(HttpContentCoding coding, std::string_view input, HttpContentDecodeOptions options);
+[[nodiscard]] HttpContentDecodeResult decodeHttpContent(
+    HttpContentCoding coding, std::string_view input, HttpContentDecodeOptions options);
 
 }  // namespace ruvia

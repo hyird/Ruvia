@@ -51,9 +51,12 @@ inline void validateDbConfig(const DbConfig& config) {
     }
 #endif
 
-    ensureConfigHost(config.host, "database host must not be empty", "database host is invalid", kSeparatedPortHostRules);
+    ensureConfigHost(config.host, "database host must not be empty", "database host is invalid",
+        kSeparatedPortHostRules);
     ensureNonZeroPort(configuredDbPort(config), "database port must not be zero");
-    ensurePositiveOptionalDurations("configured database timeouts must be greater than zero", config.connectTimeout, config.readTimeout, config.writeTimeout, config.queryTimeout, config.acquireTimeout);
+    ensurePositiveOptionalDurations("configured database timeouts must be greater than zero",
+        config.connectTimeout, config.readTimeout, config.writeTimeout, config.queryTimeout,
+        config.acquireTimeout);
 }
 
 [[nodiscard]] inline ValidatedDbConfigView validatedDbConfig(const DbConfig& config) {

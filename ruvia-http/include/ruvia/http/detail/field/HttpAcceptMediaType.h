@@ -13,7 +13,8 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline bool httpMediaRangeMatchesValidOffered(std::string_view range, std::string_view offered, const HttpMediaTypeParts& offeredParts) noexcept {
+[[nodiscard]] inline bool httpMediaRangeMatchesValidOffered(std::string_view range,
+    std::string_view offered, const HttpMediaTypeParts& offeredParts) noexcept {
     HttpMediaTypeParts rangeParts;
     if (!httpParseMediaTypeParts(range, true, rangeParts)) {
         return false;
@@ -22,19 +23,25 @@ namespace ruvia::detail {
     if (rangeParts.type != "*" && !httpAsciiEqualsIgnoreCase(rangeParts.type, offeredParts.type)) {
         return false;
     }
-    if (rangeParts.subtype != "*" && !httpAsciiEqualsIgnoreCase(rangeParts.subtype, offeredParts.subtype)) {
+    if (rangeParts.subtype != "*" &&
+        !httpAsciiEqualsIgnoreCase(rangeParts.subtype, offeredParts.subtype)) {
         return false;
     }
 
     // RFC 9110 section 12.5.1: media-type parameters are part of the media range
     // and must match the selected representation. q is skipped as the weight
     // wherever it appears; parameters on either side of it still participate.
-    return httpVisitMediaTypeParameters(range, true, [offered](std::string_view name, std::string_view value) noexcept { return httpOfferedMediaTypeHasParameter(offered, name, value); });
+    return httpVisitMediaTypeParameters(
+        range, true, [offered](std::string_view name, std::string_view value) noexcept {
+            return httpOfferedMediaTypeHasParameter(offered, name, value);
+        });
 }
 
-[[nodiscard]] inline bool httpMediaRangeMatches(std::string_view range, std::string_view offered) noexcept {
+[[nodiscard]] inline bool httpMediaRangeMatches(
+    std::string_view range, std::string_view offered) noexcept {
     HttpMediaTypeParts offeredParts;
-    return httpParseMediaType(offered, false, offeredParts) && httpMediaRangeMatchesValidOffered(range, offered, offeredParts);
+    return httpParseMediaType(offered, false, offeredParts) &&
+           httpMediaRangeMatchesValidOffered(range, offered, offeredParts);
 }
 
 [[nodiscard]] inline int httpMediaRangeSpecificity(std::string_view range) noexcept {
@@ -53,12 +60,13 @@ namespace ruvia::detail {
 
 [[nodiscard]] inline int httpMediaRangeParameterCount(std::string_view range) noexcept {
     int count = 0;
-    if (!httpVisitMediaTypeParameters(range, true, [&count](std::string_view, std::string_view) noexcept {
-            if (count < 0xFFFF) {
-                ++count;
-            }
-            return true;
-        })) {
+    if (!httpVisitMediaTypeParameters(
+            range, true, [&count](std::string_view, std::string_view) noexcept {
+                if (count < 0xFFFF) {
+                    ++count;
+                }
+                return true;
+            })) {
         return -1;
     }
     return count;
@@ -71,33 +79,37 @@ namespace ruvia::detail {
 // line into the SAME accumulator -- yielding the comma-joined result, including a
 // q=0 exclusion whose range is more specific than an accepting range on another
 // line -- without allocating to concatenate them.
-inline void httpAccumulateMediaTypeAcceptance(std::string_view accept, std::string_view offered, int& bestSpecificity, int& bestQuality) noexcept {
+inline void httpAccumulateMediaTypeAcceptance(std::string_view accept, std::string_view offered,
+    int& bestSpecificity, int& bestQuality) noexcept {
     HttpMediaTypeParts offeredParts;
     if (!httpParseMediaType(offered, false, offeredParts)) {
         return;
     }
-    httpVisitCommaSeparatedQuoted(accept, [offered, offeredParts, &bestSpecificity, &bestQuality](std::string_view item) noexcept {
-        if (httpMediaRangeMatchesValidOffered(item, offered, offeredParts)) {
-            const auto typeSpecificity = httpMediaRangeSpecificity(item);
-            const auto parameterCount = httpMediaRangeParameterCount(item);
-            if (typeSpecificity < 0 || parameterCount < 0) {
-                return true;
+    httpVisitCommaSeparatedQuoted(accept,
+        [offered, offeredParts, &bestSpecificity, &bestQuality](std::string_view item) noexcept {
+            if (httpMediaRangeMatchesValidOffered(item, offered, offeredParts)) {
+                const auto typeSpecificity = httpMediaRangeSpecificity(item);
+                const auto parameterCount = httpMediaRangeParameterCount(item);
+                if (typeSpecificity < 0 || parameterCount < 0) {
+                    return true;
+                }
+                // Type/subtype precedence dominates any number of parameters;
+                // within the same range shape, more matching parameters are more
+                // specific.
+                const auto specificity = (typeSpecificity << 16) | parameterCount;
+                const auto quality = httpQualityParameter(item);
+                if (specificity > bestSpecificity ||
+                    (specificity == bestSpecificity && quality > bestQuality)) {
+                    bestSpecificity = specificity;
+                    bestQuality = quality;
+                }
             }
-            // Type/subtype precedence dominates any number of parameters;
-            // within the same range shape, more matching parameters are more
-            // specific.
-            const auto specificity = (typeSpecificity << 16) | parameterCount;
-            const auto quality = httpQualityParameter(item);
-            if (specificity > bestSpecificity || (specificity == bestSpecificity && quality > bestQuality)) {
-                bestSpecificity = specificity;
-                bestQuality = quality;
-            }
-        }
-        return true;
-    });
+            return true;
+        });
 }
 
-[[nodiscard]] inline bool httpAcceptsMediaType(std::string_view accept, std::string_view offered) noexcept {
+[[nodiscard]] inline bool httpAcceptsMediaType(
+    std::string_view accept, std::string_view offered) noexcept {
     if (accept.empty()) {
         HttpMediaTypeParts offeredParts;
         return httpParseMediaType(offered, false, offeredParts);

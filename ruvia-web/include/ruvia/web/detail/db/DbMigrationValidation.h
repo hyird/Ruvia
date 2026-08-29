@@ -25,23 +25,27 @@ namespace ruvia::detail {
     constexpr auto kMillisecondsPerSecond = std::int64_t{1000};
     constexpr auto kMaxSeconds = std::chrono::milliseconds::max().count() / kMillisecondsPerSecond;
     if (timeout.count() > kMaxSeconds) {
-        throw std::invalid_argument("database migration lock timeout cannot be represented as PostgreSQL milliseconds");
+        throw std::invalid_argument(
+            "database migration lock timeout cannot be represented as PostgreSQL milliseconds");
     }
-    return static_cast<std::uint64_t>(timeout.count()) * static_cast<std::uint64_t>(kMillisecondsPerSecond);
+    return static_cast<std::uint64_t>(timeout.count()) *
+           static_cast<std::uint64_t>(kMillisecondsPerSecond);
 }
 
 // A migration table name is a SQL identifier that cannot be parameterized, so it
 // is restricted to the selected backend's identifier byte limit and
 // [A-Za-z0-9_] before being quoted -- the sole defense against SQL injection
 // via a misconfigured table name.
-[[nodiscard]] inline bool isValidMigrationTableName(std::string_view name, DbDriver driver) noexcept {
+[[nodiscard]] inline bool isValidMigrationTableName(
+    std::string_view name, DbDriver driver) noexcept {
     const auto maxBytes = driver == DbDriver::kPostgreSql ? 63U : 64U;
     if (name.empty() || name.size() > maxBytes) {
         return false;
     }
     for (const auto ch : name) {
         const auto c = static_cast<unsigned char>(ch);
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+            c == '_') {
             continue;
         }
         return false;
@@ -64,7 +68,8 @@ namespace ruvia::detail {
 // apart, so one list would produce two different schemas. New tables pin a
 // binary collation, but a table created before that still compares loosely, so
 // the ambiguity is refused at the source instead.
-[[nodiscard]] inline bool migrationIdsCollide(std::string_view left, std::string_view right) noexcept {
+[[nodiscard]] inline bool migrationIdsCollide(
+    std::string_view left, std::string_view right) noexcept {
     if (left.size() != right.size()) {
         return false;
     }
@@ -90,14 +95,17 @@ namespace ruvia::detail {
 // backend syntax error pointing at the second statement, which reads like the
 // SQL is wrong rather than the packaging. A trailing separator is accepted by
 // both, so only a separator with statement text after it is refused.
-[[nodiscard]] inline std::size_t skipMigrationTrailingComment(std::string_view sql, std::size_t index, DbDriver driver) noexcept {
+[[nodiscard]] inline std::size_t skipMigrationTrailingComment(
+    std::string_view sql, std::size_t index, DbDriver driver) noexcept {
     if (index >= sql.size()) {
         return index;
     }
     if (driver == DbDriver::kMariaDb && sql[index] == '#') {
         return skipSqlLineComment(sql, index + 1);
     }
-    if (driver == DbDriver::kMariaDb ? isMariaDbDoubleDashComment(sql, index) : (sql[index] == '-' && index + 1 < sql.size() && sql[index + 1] == '-')) {
+    if (driver == DbDriver::kMariaDb
+            ? isMariaDbDoubleDashComment(sql, index)
+            : (sql[index] == '-' && index + 1 < sql.size() && sql[index + 1] == '-')) {
         return skipSqlLineComment(sql, index + 2);
     }
     if (sql[index] == '/' && index + 1 < sql.size() && sql[index + 1] == '*') {
@@ -106,7 +114,8 @@ namespace ruvia::detail {
     return index;
 }
 
-[[nodiscard]] inline bool hasTrailingSqlOnly(std::string_view sql, std::size_t after, DbDriver driver) noexcept {
+[[nodiscard]] inline bool hasTrailingSqlOnly(
+    std::string_view sql, std::size_t after, DbDriver driver) noexcept {
     for (auto index = after; index < sql.size();) {
         if (!isSqlWhitespace(sql[index])) {
             const auto next = skipMigrationTrailingComment(sql, index, driver);
@@ -121,7 +130,8 @@ namespace ruvia::detail {
     return true;
 }
 
-[[nodiscard]] inline bool hasMigrationStatementText(std::string_view sql, DbDriver driver) noexcept {
+[[nodiscard]] inline bool hasMigrationStatementText(
+    std::string_view sql, DbDriver driver) noexcept {
     for (auto index = std::size_t{0}; index < sql.size();) {
         if (isSqlWhitespace(sql[index]) || sql[index] == ';') {
             ++index;
@@ -137,7 +147,8 @@ namespace ruvia::detail {
     return false;
 }
 
-[[nodiscard]] inline std::size_t findMigrationStatementSeparator(std::string_view sql, DbDriver driver) {
+[[nodiscard]] inline std::size_t findMigrationStatementSeparator(
+    std::string_view sql, DbDriver driver) {
     switch (driver) {
         case DbDriver::kMariaDb:
             return findSqlSyntaxByte(sql, ';');
@@ -169,18 +180,22 @@ inline void validateMigrationList(std::span<const DbMigration> migrations, DbDri
             throw std::invalid_argument("database migration id must not exceed 190 bytes");
         }
         if (hasSurroundingWhitespace(migration.id())) {
-            throw std::invalid_argument("database migration id must not begin or end with whitespace");
+            throw std::invalid_argument(
+                "database migration id must not begin or end with whitespace");
         }
         if (!hasMigrationStatementText(migration.sql(), driver)) {
             throw std::invalid_argument("database migration SQL must not be empty");
         }
         const auto separator = findMigrationStatementSeparator(migration.sql(), driver);
-        if (separator != std::string_view::npos && !hasTrailingSqlOnly(migration.sql(), separator + 1, driver)) {
-            throw std::invalid_argument("database migration must contain exactly one SQL statement");
+        if (separator != std::string_view::npos &&
+            !hasTrailingSqlOnly(migration.sql(), separator + 1, driver)) {
+            throw std::invalid_argument(
+                "database migration must contain exactly one SQL statement");
         }
         for (std::size_t j = i + 1; j < migrations.size(); ++j) {
             if (migrationIdsCollide(migrations[j].id(), migration.id())) {
-                throw std::invalid_argument("database migration ids must be unique, including case");
+                throw std::invalid_argument(
+                    "database migration ids must be unique, including case");
             }
         }
     }

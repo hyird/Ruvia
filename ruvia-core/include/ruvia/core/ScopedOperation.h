@@ -33,6 +33,11 @@ public:
     ScopedOperationScope& operator=(ScopedOperationScope&&) = delete;
 
     void close() noexcept;
+    // Expires cold operations, waits for every running operation to complete,
+    // then expires capabilities. The caller must run this on the execution
+    // context that owns the scope.
+    [[nodiscard]] Task<void> closeAndJoin() &;
+    Task<void> closeAndJoin() && = delete;
     [[nodiscard]] bool active() const noexcept {
         return active_;
     }
@@ -48,12 +53,19 @@ public:
 private:
     friend class ScopedOperationNode;
     friend class ScopedCapabilityNode;
+    struct JoinAwaiter;
+    void expireForJoin() noexcept;
+    void expireCapabilities() noexcept;
+    void resumeJoiner() noexcept;
     void link(ScopedOperationNode& operation) noexcept;
     void unlink(ScopedOperationNode& operation) noexcept;
 
     ScopedOperationNode* head_{nullptr};
     ScopedCapabilityNode* capabilityHead_{nullptr};
+    std::coroutine_handle<> joinContinuation_{};
     bool active_{true};
+    bool joinStarted_{false};
+    bool joinComplete_{false};
 };
 
 // Intrusive, allocation-free capability lifetime. Moving a public capability
@@ -70,7 +82,8 @@ public:
 protected:
     ScopedCapabilityNode() noexcept
         : active_(false) {}
-    ScopedCapabilityNode(ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept;
+    ScopedCapabilityNode(
+        ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept;
     void requireActive() const;
     [[nodiscard]] ScopedOperationScope& operationScope() const;
     void bind(ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept;
@@ -189,7 +202,9 @@ private:
     ScopedOperation(detail::ScopedOperationScope& scope, Task<T> task)
         : detail::ScopedOperationNode(scope),
           task_(std::move(task)) {
-        setExpireCold([](detail::ScopedOperationNode& node) noexcept { static_cast<ScopedOperation&>(node).task_.reset(); });
+        setExpireCold([](detail::ScopedOperationNode& node) noexcept {
+            static_cast<ScopedOperation&>(node).task_.reset();
+        });
     }
 
     std::optional<Task<T>> task_;

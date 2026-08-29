@@ -337,6 +337,10 @@ ruvia::WebSocketClient client(loop, {
     .host = "events.example.com",
     .target = "/v1/stream",
     .subprotocols = {"events.v1", "events.v2"},
+    .heartbeat = {
+        .pingInterval = std::chrono::seconds(30),
+        .pongTimeout = std::chrono::seconds(10),
+    },
 });
 
 auto completed = loop.start(consumeEvents(client));
@@ -349,7 +353,13 @@ The driver automatically answers Ping, completes peer-initiated Close, enforces
 one concurrent read and one concurrent write, bounds complete messages, and
 closes the transport when an operation is cancelled or times out. `wss` verifies
 the peer certificate and host name by default and supports the same CA and client
-certificate fields as `HttpClientConfig`.
+certificate fields as `HttpClientConfig`. `heartbeat` is optional; it sends Ping
+after an idle interval and aborts the transport when the matching Pong is not
+observed before `pongTimeout`. Omitting `pongTimeout` uses the ping interval.
+The application must keep a `read()` operation active so inbound control frames
+and messages can be consumed. `abort()` only requests immediate transport
+termination; use `co_await client.shutdown()` on the bound event loop when the
+connect attempt, heartbeat task, and all client operations must be joined.
 
 `WebSocketMessage::payload()` borrows the client read buffer and remains valid
 only until the next `read()` on that connection. Copy it first when it must live
@@ -467,16 +477,24 @@ ruvia::HttpClient client(loop, {
     .host = "api.example.com",
 });
 
+ruvia::Task<void> shutdownClient(ruvia::HttpClient& client) {
+    co_await client.shutdown();
+}
+
 auto completed = loop.start(callUpstream(client));
 loops.start();
 completed.get();
+auto stopped = loop.start(shutdownClient(client));
+stopped.get();
 ```
 
 Construction creates no thread and opens no connection. The first `send()`
 connects lazily on the bound loop; retries, cancellation, timeouts and protocol
 selection use the same runtime as `Context::httpClient()`. Operations must be
-created and awaited on that loop. `close()` is idempotent and may be called from
-any thread; draining the event loop is the shutdown barrier.
+created and awaited on that loop. `close()` is idempotent, may be called from any
+thread, and immediately requests cancellation without waiting. Use
+`co_await client.shutdown()` on the bound loop when the client teardown must be
+complete before the loop or its owning memory is destroyed.
 
 Database clients are first-class event-loop objects. They do not require an HTTP
 `App`, request `Context`, server worker, or an aggregate worker service. Bind
@@ -493,6 +511,10 @@ ruvia::Task<void> runWorkerJob(ruvia::DbClient& db) {
     // Use rows on this same worker.
 }
 
+ruvia::Task<void> shutdownDatabase(ruvia::DbClient& db) {
+    co_await db.shutdown();
+}
+
 ruvia::EventLoopPool loops({.loopCount = 1});
 auto loop = loops.loop(0);
 
@@ -506,8 +528,8 @@ loops.start();
 ready.get();
 auto done = loop.start(runWorkerJob(db));
 done.get();
-
-db.close();
+auto stopped = loop.start(shutdownDatabase(db));
+stopped.get();
 loops.stop();
 loops.join();
 ```
@@ -515,9 +537,10 @@ loops.join();
 `DbClient::connect()` is a lazy `Task<void>` and must run on its bound loop, just
 like every later database operation; `EventLoop::start()` owns each top-level
 completion. Result, stream, and transaction
-values remain worker-affine and must finish before the owning client and event
-loop are destroyed. `close()` is idempotent; `EventLoopPool::join()` (or the
-attached context owner's equivalent drain) is the shutdown barrier. App handlers use
+values remain worker-affine. `close()` is idempotent, may be called from any
+thread, and immediately requests cancellation without waiting; await
+`db.shutdown()` when teardown must complete before the owning client or event
+loop is destroyed. App handlers use
 `Context::httpClient()` and `Context::db()` as worker-local convenience views.
 Enable `RUVIA_ENABLE_POSTGRESQL` or `RUVIA_ENABLE_MARIADB` for `DbClient` and
 link `ruvia::web`; `ruvia::core` keeps no HTTP-client or database dependency.

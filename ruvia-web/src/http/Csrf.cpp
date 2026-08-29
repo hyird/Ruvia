@@ -34,7 +34,8 @@ SecureTokenResult generateSecureToken(std::span<char> buffer) noexcept {
 
 namespace ruvia {
 
-CsrfProtection::ConfigStorage::ValidatedConfig CsrfProtection::ConfigStorage::validate(const CsrfProtectionConfig& source) {
+CsrfProtection::ConfigStorage::ValidatedConfig CsrfProtection::ConfigStorage::validate(
+    const CsrfProtectionConfig& source) {
     if (!isValidHttpHeaderName(source.cookieName)) {
         throw std::invalid_argument("CSRF cookie name must be a valid HTTP token");
     }
@@ -44,10 +45,12 @@ CsrfProtection::ConfigStorage::ValidatedConfig CsrfProtection::ConfigStorage::va
     return ValidatedConfig{.source = &source};
 }
 
-CsrfProtection::ConfigStorage::ConfigStorage(const CsrfProtectionConfig& source, std::pmr::memory_resource* resource)
+CsrfProtection::ConfigStorage::ConfigStorage(
+    const CsrfProtectionConfig& source, std::pmr::memory_resource* resource)
     : ConfigStorage(validate(source), resource) {}
 
-CsrfProtection::ConfigStorage::ConfigStorage(ValidatedConfig validated, std::pmr::memory_resource* resource)
+CsrfProtection::ConfigStorage::ConfigStorage(
+    ValidatedConfig validated, std::pmr::memory_resource* resource)
     : cookieName(validated.source->cookieName, resource),
       headerName(validated.source->headerName, resource) {}
 
@@ -59,12 +62,16 @@ CsrfProtection::CsrfProtection(const CsrfProtectionConfig& config)
 
 Task<void> CsrfProtection::handle(Context& c, Next& next) {
     const auto method = c.req().knownMethod();
-    const bool safe = method == HttpKnownMethod::kGet || method == HttpKnownMethod::kHead || method == HttpKnownMethod::kOptions;
+    const bool safe = method == HttpKnownMethod::kGet || method == HttpKnownMethod::kHead ||
+                      method == HttpKnownMethod::kOptions;
     const auto cookie = c.req().cookie(config_.cookieName);
     if (!safe) {
         const auto header = c.req().header(config_.headerName);
-        if (!cookie || cookie->empty() || !header || header->empty() || !detail::csrfTokensEqual(*cookie, *header)) {
-            c.respond(c.error({.status = ruvia::http_status::kForbidden, .code = "csrf_token_mismatch", .message = "CSRF token missing or invalid"}));
+        if (!cookie || cookie->empty() || !header || header->empty() ||
+            !detail::csrfTokensEqual(*cookie, *header)) {
+            c.respond(c.error({.status = ruvia::http_status::kForbidden,
+                .code = "csrf_token_mismatch",
+                .message = "CSRF token missing or invalid"}));
             co_return;
         }
     } else if (!cookie || cookie->empty()) {
@@ -79,14 +86,17 @@ Task<void> CsrfProtection::handle(Context& c, Next& next) {
         const auto tokenResult = detail::generateSecureToken(buffer);
         const auto* token = tokenResult.ready();
         if (token == nullptr) {
-            c.respond(c.error({.status = ruvia::http_status::kInternalServerError, .code = "secure_random_failed", .message = "secure token generation failed"}));
+            c.respond(c.error({.status = ruvia::http_status::kInternalServerError,
+                .code = "secure_random_failed",
+                .message = "secure token generation failed"}));
             co_return;
         }
         const auto connection = getConnInfo(c);
         const CookieOptions options{
             .path = "/",
             .sameSite = CookieSameSite::kLax,
-            .secure = connection.tls() != nullptr ? CookieAttributePolicy::kEmit : CookieAttributePolicy::kOmit,
+            .secure = connection.tls() != nullptr ? CookieAttributePolicy::kEmit
+                                                  : CookieAttributePolicy::kOmit,
         };
         c.setCookie({.name = config_.cookieName, .value = token->value(), .attributes = options});
     }

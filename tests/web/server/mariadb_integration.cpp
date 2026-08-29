@@ -75,7 +75,8 @@ void exerciseMigrations(const ruvia::DbConfig& config) {
         .sql = "CREATE TABLE IF NOT EXISTS ruvia_mariadb_integration_migrated ("
                "id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, value VARCHAR(128) NOT "
                "NULL)"}}};
-    dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }), "an edited migration body was accepted");
+    dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }),
+        "an edited migration body was accepted");
 }
 
 void exerciseRejectedCredentials(const ruvia::DbConfig& config) {
@@ -91,13 +92,17 @@ void exerciseRejectedCredentials(const ruvia::DbConfig& config) {
         message = error.what();
     }
     dbRequire(threw, "MariaDB accepted deliberately invalid credentials");
-    dbRequire(message.find("mysql_real_connect") != std::string::npos, "MariaDB credential cleanup replaced the mysql_real_connect error");
-    dbRequire(message.find("[errno=") != std::string::npos, "MariaDB credential failure omitted the driver errno");
+    dbRequire(message.find("mysql_real_connect") != std::string::npos,
+        "MariaDB credential cleanup replaced the mysql_real_connect error");
+    dbRequire(message.find("[errno=") != std::string::npos,
+        "MariaDB credential failure omitted the driver errno");
 }
 
-ruvia::Task<void> exercise(asio::io_context& ioContext, const ruvia::WorkerHandle& worker, ruvia::detail::ConnectionScanner& scanner, unsigned& ticks) {
+ruvia::Task<void> exercise(asio::io_context& ioContext, const ruvia::WorkerHandle& worker,
+    ruvia::detail::ConnectionScanner& scanner, unsigned& ticks) {
     auto* resource = std::pmr::get_default_resource();
-    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(testConfig(), resource)}};
+    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource),
+        ruvia::detail::DbConfigStorage(testConfig(), resource)}};
     ruvia::detail::DbRegistry registry(ioContext, scanner, resource, definitions);
     co_await registry.connect();
     ruvia::detail::ScopedOperationScope operationScope;
@@ -123,7 +128,8 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, const ruvia::WorkerHandl
         }
         dbRequire(cancelled, "active MariaDB query did not report kCancelled");
         auto recovered = co_await db.query("SELECT 1");
-        dbRequire(recovered[0][0].as<std::int64_t>() == 1, "MariaDB did not reconnect after query cancellation");
+        dbRequire(recovered[0][0].as<std::int64_t>() == 1,
+            "MariaDB did not reconnect after query cancellation");
     }
 
     {
@@ -141,9 +147,11 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, const ruvia::WorkerHandl
         } catch (const ruvia::DbError& error) {
             cancelled = error.code() == ruvia::DbError::Code::kCancelled;
         }
-        dbRequire(cancelled && !transaction.active(), "active MariaDB transaction did not fail with kCancelled");
+        dbRequire(cancelled && !transaction.active(),
+            "active MariaDB transaction did not fail with kCancelled");
         auto recovered = co_await db.query("SELECT 1");
-        dbRequire(recovered[0][0].as<std::int64_t>() == 1, "MariaDB did not reconnect after transaction cancellation");
+        dbRequire(recovered[0][0].as<std::int64_t>() == 1,
+            "MariaDB did not reconnect after transaction cancellation");
     }
 
     {
@@ -156,7 +164,8 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, const ruvia::WorkerHandl
         });
         bool cancelled = false;
         try {
-            auto stream = co_await db.withOptions({.stopToken = stop->token()}).queryStream("SELECT seq, SLEEP(0.01) FROM seq_1_to_1000");
+            auto stream = co_await db.withOptions({.stopToken = stop->token()})
+                              .queryStream("SELECT seq, SLEEP(0.01) FROM seq_1_to_1000");
             while (co_await stream.read()) {
             }
         } catch (const ruvia::DbError& error) {
@@ -164,7 +173,8 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, const ruvia::WorkerHandl
         }
         dbRequire(cancelled, "active MariaDB stream did not report kCancelled");
         auto recovered = co_await db.query("SELECT 1");
-        dbRequire(recovered[0][0].as<std::int64_t>() == 1, "MariaDB did not reconnect after stream cancellation");
+        dbRequire(recovered[0][0].as<std::int64_t>() == 1,
+            "MariaDB did not reconnect after stream cancellation");
     }
 
     (void)co_await db.execute("DROP TABLE IF EXISTS ruvia_mariadb_integration_items");
@@ -172,63 +182,83 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, const ruvia::WorkerHandl
         "CREATE TABLE ruvia_mariadb_integration_items (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, "
         "name VARCHAR(64) NOT NULL, n BIGINT NOT NULL)");
 
-    const std::array<ruvia::DbValue, 2> item{ruvia::DbValue{std::string_view("a'b?c")}, ruvia::DbValue{std::int64_t{-42}}};
-    auto inserted = co_await db.execute("INSERT INTO ruvia_mariadb_integration_items(name, n) VALUES (?, ?)", std::span<const ruvia::DbValue>(item));
+    const std::array<ruvia::DbValue, 2> item{
+        ruvia::DbValue{std::string_view("a'b?c")}, ruvia::DbValue{std::int64_t{-42}}};
+    auto inserted =
+        co_await db.execute("INSERT INTO ruvia_mariadb_integration_items(name, n) VALUES (?, ?)",
+            std::span<const ruvia::DbValue>(item));
     dbRequire(inserted.affectedRows() == 1, "insert affected-row count is incorrect");
     dbRequire(inserted.lastInsertId() == 1, "last insert id is incorrect");
 
     // '?' in the value is data; the one placeholder outside the literal takes
     // the parameter.
-    auto typed = co_await db.query("SELECT name, n FROM ruvia_mariadb_integration_items WHERE name = ?", std::span<const ruvia::DbValue>(item.data(), 1));
+    auto typed =
+        co_await db.query("SELECT name, n FROM ruvia_mariadb_integration_items WHERE name = ?",
+            std::span<const ruvia::DbValue>(item.data(), 1));
     dbRequire(typed.size() == 1 && typed[0].size() == 2, "typed query returned the wrong shape");
-    dbRequire(typed[0]["name"].value() == std::optional<std::string_view>("a'b?c"), "text binding round trip failed");
+    dbRequire(typed[0]["name"].value() == std::optional<std::string_view>("a'b?c"),
+        "text binding round trip failed");
     dbRequire(typed[0]["n"].as<std::int64_t>() == -42, "integer binding round trip failed");
 
     // The same lookup with the parameters passed as ordinary arguments: both
     // bindings must reach the server in order and with their types intact, and
     // the '?' inside the value must still travel as data.
-    auto variadic = co_await db.query("SELECT name, n FROM ruvia_mariadb_integration_items WHERE name = ? AND n = ?", std::string_view("a'b?c"), std::int64_t{-42});
-    dbRequire(variadic.size() == 1 && variadic[0].size() == 2, "variadic query returned the wrong shape");
-    dbRequire(variadic[0]["name"].value() == std::optional<std::string_view>("a'b?c"), "variadic text binding round trip failed");
-    dbRequire(variadic[0]["n"].as<std::int64_t>() == -42, "variadic integer binding round trip failed");
+    auto variadic = co_await db.query(
+        "SELECT name, n FROM ruvia_mariadb_integration_items WHERE name = ? AND n = ?",
+        std::string_view("a'b?c"), std::int64_t{-42});
+    dbRequire(
+        variadic.size() == 1 && variadic[0].size() == 2, "variadic query returned the wrong shape");
+    dbRequire(variadic[0]["name"].value() == std::optional<std::string_view>("a'b?c"),
+        "variadic text binding round trip failed");
+    dbRequire(
+        variadic[0]["n"].as<std::int64_t>() == -42, "variadic integer binding round trip failed");
 
     // The variadic write path, round-tripped so the row count the assertions
     // below depend on is unchanged.
-    auto variadicUpdate = co_await db.execute("UPDATE ruvia_mariadb_integration_items SET n = ? WHERE name = ?", std::int64_t{-43}, std::string_view("a'b?c"));
-    dbRequire(variadicUpdate.affectedRows() == 1, "variadic update affected-row count is incorrect");
-    (void)co_await db.execute("UPDATE ruvia_mariadb_integration_items SET n = ? WHERE name = ?", std::int64_t{-42}, std::string_view("a'b?c"));
+    auto variadicUpdate =
+        co_await db.execute("UPDATE ruvia_mariadb_integration_items SET n = ? WHERE name = ?",
+            std::int64_t{-43}, std::string_view("a'b?c"));
+    dbRequire(
+        variadicUpdate.affectedRows() == 1, "variadic update affected-row count is incorrect");
+    (void)co_await db.execute("UPDATE ruvia_mariadb_integration_items SET n = ? WHERE name = ?",
+        std::int64_t{-42}, std::string_view("a'b?c"));
 
     {
         auto transaction = co_await db.beginTransaction();
         auto pending = transaction.query("SELECT 1");
         auto moved = std::move(transaction);
         auto rows = co_await std::move(pending);
-        dbRequire(rows[0][0].as<std::int64_t>() == 1, "transaction operation did not survive its owner move");
+        dbRequire(rows[0][0].as<std::int64_t>() == 1,
+            "transaction operation did not survive its owner move");
         co_await moved.rollback();
     }
 
     bool rejectedCommandStream = false;
     try {
-        (void)co_await db.queryStream("UPDATE ruvia_mariadb_integration_items SET n = n WHERE name = 'missing'");
+        (void)co_await db.queryStream(
+            "UPDATE ruvia_mariadb_integration_items SET n = n WHERE name = 'missing'");
     } catch (const std::invalid_argument&) {
         rejectedCommandStream = true;
     }
     dbRequire(rejectedCommandStream, "queryStream accepted non-row-producing SQL");
     auto afterRejectedStream = co_await db.query("SELECT 1");
-    dbRequire(afterRejectedStream[0][0].as<std::int64_t>() == 1, "pool was not reusable after a rejected stream query");
+    dbRequire(afterRejectedStream[0][0].as<std::int64_t>() == 1,
+        "pool was not reusable after a rejected stream query");
 
     // Larger than one socket read, so the async path has to suspend and resume
     // several times to assemble the result.
     (void)co_await db.execute(
         "INSERT INTO ruvia_mariadb_integration_items(name, n) SELECT CONCAT('bulk-', seq), seq "
         "FROM seq_1_to_2000");
-    auto bulk = co_await db.query("SELECT id, name, n FROM ruvia_mariadb_integration_items ORDER BY id");
+    auto bulk =
+        co_await db.query("SELECT id, name, n FROM ruvia_mariadb_integration_items ORDER BY id");
     dbRequire(bulk.size() == 2001, "bulk result is missing rows");
     dbRequire(bulk[2000]["n"].as<std::int64_t>() == 2000, "bulk result ends on the wrong row");
 
     {
         auto transaction = co_await db.beginTransaction();
-        (void)co_await transaction.execute("INSERT INTO ruvia_mariadb_integration_items(name, n) VALUES ('rolled', 1)");
+        (void)co_await transaction.execute(
+            "INSERT INTO ruvia_mariadb_integration_items(name, n) VALUES ('rolled', 1)");
         co_await transaction.rollback();
     }
     auto afterRollback = co_await db.query("SELECT count(*) FROM ruvia_mariadb_integration_items");
@@ -236,13 +266,15 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, const ruvia::WorkerHandl
 
     {
         auto transaction = co_await db.beginTransaction();
-        (void)co_await transaction.execute("INSERT INTO ruvia_mariadb_integration_items(name, n) VALUES ('kept', 2)");
+        (void)co_await transaction.execute(
+            "INSERT INTO ruvia_mariadb_integration_items(name, n) VALUES ('kept', 2)");
         co_await transaction.commit();
     }
     auto afterCommit = co_await db.query("SELECT count(*) FROM ruvia_mariadb_integration_items");
     dbRequire(afterCommit[0][0].as<std::uint64_t>() == 2002, "commit did not persist state");
 
-    auto stream = co_await db.queryStream("SELECT id FROM ruvia_mariadb_integration_items ORDER BY id");
+    auto stream =
+        co_await db.queryStream("SELECT id FROM ruvia_mariadb_integration_items ORDER BY id");
     std::size_t streamed = 0;
     while (auto row = co_await stream.read()) {
         dbRequire(row->size() == 1, "streamed row has the wrong shape");
@@ -256,7 +288,8 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, const ruvia::WorkerHandl
         auto pending = source.read();
         auto moved = std::move(source);
         auto row = co_await std::move(pending);
-        dbRequire(row.has_value() && (*row)[0].as<std::int64_t>() == 1, "stream operation did not survive its owner move");
+        dbRequire(row.has_value() && (*row)[0].as<std::int64_t>() == 1,
+            "stream operation did not survive its owner move");
         co_await moved.close();
     }
 
@@ -317,15 +350,18 @@ int main() {
     std::exception_ptr failure;
     asio::post(ioContext, [&] {
         scanner.start();
-        ruvia::detail::asyncStartTask(exercise(ioContext, worker, scanner, ticks), asio::bind_executor(ioContext.get_executor(), [&failure, &stopped, &heartbeat, &attachment, &scanner](ruvia::detail::TaskCompletionResult<void> result) {
-            scanner.stop();
-            if (const auto* error = result.failure()) {
-                failure = error->exception();
-            }
-            stopped = true;
-            heartbeat.cancel();
-            attachment.stop();
-        }));
+        ruvia::detail::asyncStartTask(exercise(ioContext, worker, scanner, ticks),
+            asio::bind_executor(
+                ioContext.get_executor(), [&failure, &stopped, &heartbeat, &attachment, &scanner](
+                                              ruvia::detail::TaskCompletionResult<void> result) {
+                    scanner.stop();
+                    if (const auto* error = result.failure()) {
+                        failure = error->exception();
+                    }
+                    stopped = true;
+                    heartbeat.cancel();
+                    attachment.stop();
+                }));
     });
     ioContext.run();
 

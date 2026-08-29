@@ -20,7 +20,8 @@ namespace {
 
 }  // namespace
 
-PostgreSqlPool::ConnectionSlot::ConnectionSlot(asio::io_context& ioContext, std::pmr::memory_resource* resource)
+PostgreSqlPool::ConnectionSlot::ConnectionSlot(
+    asio::io_context& ioContext, std::pmr::memory_resource* resource)
     : resolver(ioContext),
       waitSocket(nullptr, SlotSocketDeleter{pmrResourceOrDefault(resource)}),
       socketQuarantine(makePmrObject<DbSlotSocketQuarantine>(processResource(), ioContext)) {}
@@ -39,9 +40,11 @@ PostgreSqlPool::ConnectionSlot::~ConnectionSlot() {
     }
 }
 PostgreSqlPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept = default;
-PostgreSqlPool::ConnectionSlot& PostgreSqlPool::ConnectionSlot::operator=(ConnectionSlot&&) noexcept = default;
+PostgreSqlPool::ConnectionSlot& PostgreSqlPool::ConnectionSlot::operator=(
+    ConnectionSlot&&) noexcept = default;
 
-PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config, std::pmr::memory_resource* resource)
+PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, const WorkerHandle& worker,
+    DbConfigStorage config, std::pmr::memory_resource* resource)
     : ioContext_(ioContext),
       config_(std::move(config)),
       resource_(pmrResourceOrDefault(resource)),
@@ -91,7 +94,8 @@ void PostgreSqlPool::scanDeadlines(std::chrono::steady_clock::time_point now) no
     }
 }
 
-Task<std::size_t> PostgreSqlPool::acquireSlot(const OperationTimeout& timeout, StopToken stopToken) {
+Task<std::size_t> PostgreSqlPool::acquireSlot(
+    const OperationTimeout& timeout, StopToken stopToken) {
     return acquireDbSlot(*this, timeout, std::move(stopToken));
 }
 
@@ -144,11 +148,13 @@ void PostgreSqlPool::cancelOperationById(std::uint64_t cancellationId) noexcept 
 
 void PostgreSqlPool::throwIfCancelled(const ConnectionSlot& slot) const {
     if (slot.abortReason == DbSlotAbortReason::kCancelled) {
-        throw DbError(DbError::Code::kCancelled, DbDriver::kPostgreSql, "database operation cancelled");
+        throw DbError(
+            DbError::Code::kCancelled, DbDriver::kPostgreSql, "database operation cancelled");
     }
 }
 
-void PostgreSqlPool::setSlotDeadline(ConnectionSlot& slot, std::optional<std::chrono::milliseconds> timeout) noexcept {
+void PostgreSqlPool::setSlotDeadline(
+    ConnectionSlot& slot, std::optional<std::chrono::milliseconds> timeout) noexcept {
     if (!timeout.has_value() || timeout->count() <= 0) {
         slot.deadline.reset();
         return;

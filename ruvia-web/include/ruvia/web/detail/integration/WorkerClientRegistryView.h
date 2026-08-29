@@ -34,7 +34,8 @@ public:
         return WorkerClientRegistryView(nullptr);
     }
 
-    constexpr WorkerClientRegistryView(DbRegistry& databases, RedisRegistry& redis, HttpClientRegistry& httpClients) noexcept
+    constexpr WorkerClientRegistryView(
+        DbRegistry& databases, RedisRegistry& redis, HttpClientRegistry& httpClients) noexcept
         : databases_(&databases),
           redis_(&redis),
           httpClients_(&httpClients) {}
@@ -43,20 +44,28 @@ public:
         return httpClients_ != nullptr;
     }
 
-    friend constexpr bool operator==(const WorkerClientRegistryView&, const WorkerClientRegistryView&) noexcept = default;
+    friend constexpr bool operator==(
+        const WorkerClientRegistryView&, const WorkerClientRegistryView&) noexcept = default;
 
 #ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] DbHandle db(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const;
-    [[nodiscard]] DbHandle db(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const;
+    [[nodiscard]] DbHandle db(std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope, const StopToken& stopToken) const;
+    [[nodiscard]] DbHandle db(std::string_view alias, std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope, const StopToken& stopToken) const;
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] RedisHandle redis(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const;
-    [[nodiscard]] RedisHandle redis(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const;
+    [[nodiscard]] RedisHandle redis(std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope, const StopToken& stopToken) const;
+    [[nodiscard]] RedisHandle redis(std::string_view alias, std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope, const StopToken& stopToken) const;
 #endif
 
-    [[nodiscard]] HttpClientHandle httpClient(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const;
-    [[nodiscard]] HttpClientHandle httpClient(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const;
+    [[nodiscard]] HttpClientHandle httpClient(std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope, const StopToken& stopToken) const;
+    [[nodiscard]] HttpClientHandle httpClient(std::string_view alias,
+        std::pmr::memory_resource* resource, ScopedOperationScope& operationScope,
+        const StopToken& stopToken) const;
 
 private:
     explicit constexpr WorkerClientRegistryView(std::nullptr_t) noexcept {}

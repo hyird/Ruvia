@@ -26,7 +26,8 @@ public:
     explicit OneShotOrigin(std::string_view body)
         : acceptor_(io_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
           socket_(io_),
-          response_("HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + std::string(body)),
+          response_("HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) +
+                    "\r\nConnection: close\r\n\r\n" + std::string(body)),
           thread_([this] { serve(); }) {}
 
     ~OneShotOrigin() {
@@ -50,12 +51,14 @@ private:
             if (error) {
                 return;
             }
-            asio::async_read_until(socket_, request_, "\r\n\r\n", [this](std::error_code readError, std::size_t) {
-                if (readError) {
-                    return;
-                }
-                asio::async_write(socket_, asio::buffer(response_), [](std::error_code, std::size_t) {});
-            });
+            asio::async_read_until(
+                socket_, request_, "\r\n\r\n", [this](std::error_code readError, std::size_t) {
+                    if (readError) {
+                        return;
+                    }
+                    asio::async_write(
+                        socket_, asio::buffer(response_), [](std::error_code, std::size_t) {});
+                });
         });
         io_.run();
     }
@@ -78,7 +81,8 @@ private:
     return config;
 }
 
-ruvia::Task<int> send(ruvia::HttpClient& client, ruvia::WorkerId worker, std::string_view expected) {
+ruvia::Task<int> send(
+    ruvia::HttpClient& client, ruvia::WorkerId worker, std::string_view expected) {
     auto response = co_await client.send({.target = "/worker"});
     {
         auto discarded = response.body().read();
@@ -94,19 +98,30 @@ ruvia::Task<int> send(ruvia::HttpClient& client, ruvia::WorkerId worker, std::st
     }
     auto moved = std::move(response);
     const auto body = co_await std::move(operation);
-    const bool valid = competingReadRejected && client.worker().isCurrent() && client.worker().id() == worker && client.host() == "127.0.0.1" && moved.status() == ruvia::http_status::kOk && body == expected;
+    const bool valid = competingReadRejected && client.worker().isCurrent() &&
+                       client.worker().id() == worker && client.host() == "127.0.0.1" &&
+                       moved.status() == ruvia::http_status::kOk && body == expected;
     co_return valid ? 0 : 1;
 }
 
-void start(const ruvia::EventLoop& loop, ruvia::HttpClient& client, std::string_view expected, std::promise<int>& completion) {
+ruvia::Task<void> shutdownClient(ruvia::HttpClient& client) {
+    auto cold = client.send({.target = "/never"});
+    static_cast<void>(cold);
+    co_await client.shutdown();
+}
+
+void start(const ruvia::EventLoop& loop, ruvia::HttpClient& client, std::string_view expected,
+    std::promise<int>& completion) {
     try {
-        ruvia::detail::asyncStartTask(send(client, loop.id(), expected), asio::bind_executor(loop.executor(), [&completion](ruvia::detail::TaskCompletionResult<int> result) {
-            if (auto* success = result.success()) {
-                completion.set_value(std::move(*success).takeValue());
-            } else {
-                completion.set_exception(result.failure()->exception());
-            }
-        }));
+        ruvia::detail::asyncStartTask(send(client, loop.id(), expected),
+            asio::bind_executor(
+                loop.executor(), [&completion](ruvia::detail::TaskCompletionResult<int> result) {
+                    if (auto* success = result.success()) {
+                        completion.set_value(std::move(*success).takeValue());
+                    } else {
+                        completion.set_exception(result.failure()->exception());
+                    }
+                }));
     } catch (...) {
         completion.set_exception(std::current_exception());
     }
@@ -128,10 +143,11 @@ int pooledWorker() {
         return 2;
     }
     const auto result = future.get();
-    const auto closing = loop.post([&] { client.close(); });
+    auto shutdownTask = loop.start(shutdownClient(client));
+    shutdownTask.get();
     loops.stop();
     loops.join();
-    return closing == ruvia::PostStatus::kAccepted ? result : 3;
+    return result;
 }
 
 int attachedWorker() {
@@ -151,10 +167,11 @@ int attachedWorker() {
         return 2;
     }
     const auto result = future.get();
-    const auto closing = loop.post([&] { client.close(); });
+    auto shutdownTask = loop.start(shutdownClient(client));
+    shutdownTask.get();
     attachment.stop();
     thread.join();
-    return closing == ruvia::PostStatus::kAccepted ? result : 3;
+    return result;
 }
 
 }  // namespace

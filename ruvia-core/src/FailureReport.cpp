@@ -71,10 +71,13 @@ struct RateDecision final {
 
 void writeLine(std::string_view context, std::string_view what, std::size_t suppressed) noexcept {
     if (suppressed == 0) {
-        std::fprintf(stderr, "ruvia: %.*s failed: %.*s\n", static_cast<int>(context.size()), context.data(), static_cast<int>(what.size()), what.data());
+        std::fprintf(stderr, "ruvia: %.*s failed: %.*s\n", static_cast<int>(context.size()),
+            context.data(), static_cast<int>(what.size()), what.data());
         return;
     }
-    std::fprintf(stderr, "ruvia: %.*s failed: %.*s (+%zu suppressed)\n", static_cast<int>(context.size()), context.data(), static_cast<int>(what.size()), what.data(), suppressed);
+    std::fprintf(stderr, "ruvia: %.*s failed: %.*s (+%zu suppressed)\n",
+        static_cast<int>(context.size()), context.data(), static_cast<int>(what.size()),
+        what.data(), suppressed);
 }
 
 }  // namespace

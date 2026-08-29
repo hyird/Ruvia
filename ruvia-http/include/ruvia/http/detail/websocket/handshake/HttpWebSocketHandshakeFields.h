@@ -17,9 +17,12 @@ namespace detail {
 // an HttpRequest. It applies the same cross-field uniqueness and list grammar
 // as the two request validators above, so HTTP/2 WebSocket CONNECT cannot emit
 // an offer that the server path would reject.
-[[nodiscard]] bool webSocketClientOfferHeadersValid(std::span<const HttpHeaderView> headers) noexcept;
-[[nodiscard]] bool webSocketProtocolOffered(const HttpRequest& request, std::string_view protocol) noexcept;
-[[nodiscard]] std::string_view chooseWebSocketSubprotocol(const HttpRequest& request, std::span<const std::string_view> supported) noexcept;
+[[nodiscard]] bool webSocketClientOfferHeadersValid(
+    std::span<const HttpHeaderView> headers) noexcept;
+[[nodiscard]] bool webSocketProtocolOffered(
+    const HttpRequest& request, std::string_view protocol) noexcept;
+[[nodiscard]] std::string_view chooseWebSocketSubprotocol(
+    const HttpRequest& request, std::span<const std::string_view> supported) noexcept;
 
 }  // namespace detail
 }  // namespace ruvia

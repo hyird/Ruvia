@@ -18,7 +18,8 @@ namespace ruvia::detail {
 
 struct ModelJsonAccess final {
     template <typename ModelT>
-    [[nodiscard]] static std::optional<ModelT> parseOwned(std::string_view body, std::pmr::memory_resource* resource) {
+    [[nodiscard]] static std::optional<ModelT> parseOwned(
+        std::string_view body, std::pmr::memory_resource* resource) {
         return ModelT::ruviaParseJsonBodyOwned(body, resource);
     }
 
@@ -60,7 +61,8 @@ template <typename ValueT>
         }
         return size;
     } else {
-        static_assert(alwaysFalse<T>, "JSON output must use Ruvia scalar types or RUVIA_RESPONSE_MODEL");
+        static_assert(
+            alwaysFalse<T>, "JSON output must use Ruvia scalar types or RUVIA_RESPONSE_MODEL");
     }
 }
 
@@ -110,7 +112,8 @@ void appendJsonValue(std::pmr::string& output, const ValueT& value) {
     } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
         appendJsonSequence(output, value);
     } else {
-        static_assert(alwaysFalse<T>, "JSON output must use Ruvia scalar types or RUVIA_RESPONSE_MODEL");
+        static_assert(
+            alwaysFalse<T>, "JSON output must use Ruvia scalar types or RUVIA_RESPONSE_MODEL");
     }
 }
 

@@ -49,7 +49,8 @@ public:
 private:
     template <typename ControllerT>
     friend void registerControllerInstance(Router& router, ControllerStore& controllerLifetimes);
-    friend void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes, std::span<const ControllerRegistrar> registrars);
+    friend void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes,
+        std::span<const ControllerRegistrar> registrars);
 
     template <typename T, typename... Args>
     T& emplace(Args&&... args) {
@@ -95,17 +96,33 @@ private:
     template <typename ControllerT>
     friend class ControllerRegistrationAccess;
 
-    ControllerRouteBuilder(Router& router, std::string_view prefix, std::pmr::vector<ControllerMiddlewareDescriptor> middlewares = std::pmr::vector<ControllerMiddlewareDescriptor>(registrationResource()));
+    ControllerRouteBuilder(Router& router, std::string_view prefix,
+        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
+            std::pmr::vector<ControllerMiddlewareDescriptor>(registrationResource()));
 
-    void registerRoute(HttpKnownMethod method, std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> middlewares = {}) const;
-    void registerExtensionMethodRoute(std::string_view methodToken, std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> middlewares = {}) const;
-    void registerResponseStreamRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares = {}) const;
-    void registerSseRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares = {}) const;
-    void registerWebSocketRoute(HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares = {}, WebSocketRouteConfig webSocketConfig = {}) const;
-    [[nodiscard]] ControllerRouteBuilder createScope(std::string_view prefix, const std::pmr::vector<ControllerMiddlewareDescriptor>& middlewares = std::pmr::vector<ControllerMiddlewareDescriptor>(registrationResource())) const;
+    void registerRoute(HttpKnownMethod method, std::string_view path,
+        ControllerRouteHandler handler, RequestBodyMode bodyMode,
+        std::span<const ControllerMiddlewareDescriptor> middlewares = {}) const;
+    void registerExtensionMethodRoute(std::string_view methodToken, std::string_view path,
+        ControllerRouteHandler handler, RequestBodyMode bodyMode,
+        std::span<const ControllerMiddlewareDescriptor> middlewares = {}) const;
+    void registerResponseStreamRoute(HttpKnownMethod method, std::string_view path,
+        ControllerRouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> middlewares = {}) const;
+    void registerSseRoute(HttpKnownMethod method, std::string_view path,
+        ControllerRouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> middlewares = {}) const;
+    void registerWebSocketRoute(HttpKnownMethod method, std::string_view path,
+        ControllerRouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> middlewares = {},
+        WebSocketRouteConfig webSocketConfig = {}) const;
+    [[nodiscard]] ControllerRouteBuilder createScope(std::string_view prefix,
+        const std::pmr::vector<ControllerMiddlewareDescriptor>& middlewares =
+            std::pmr::vector<ControllerMiddlewareDescriptor>(registrationResource())) const;
 
     struct OwnedPrefixTag final {};
-    ControllerRouteBuilder(Router& router, std::pmr::string prefix, std::pmr::vector<ControllerMiddlewareDescriptor> middlewares, OwnedPrefixTag);
+    ControllerRouteBuilder(Router& router, std::pmr::string prefix,
+        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares, OwnedPrefixTag);
 
     class Impl;
     struct ImplDeleter final {
@@ -119,6 +136,7 @@ private:
 // build seals this registry; loading a controller-bearing module afterwards is
 // a startup contract error instead of silently changing only later workers.
 [[nodiscard]] std::pmr::vector<ControllerRegistrar> sealControllerRegistrars();
-void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes, std::span<const ControllerRegistrar> registrars);
+void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes,
+    std::span<const ControllerRegistrar> registrars);
 
 }  // namespace ruvia::detail

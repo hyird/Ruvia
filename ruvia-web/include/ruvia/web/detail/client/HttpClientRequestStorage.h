@@ -50,7 +50,8 @@ private:
         std::pmr::string value;
     };
 
-    HttpClientRequestStorage(std::string_view method, std::string_view target, std::pmr::memory_resource* resource);
+    HttpClientRequestStorage(
+        std::string_view method, std::string_view target, std::pmr::memory_resource* resource);
 
     std::pmr::string method_;
     std::pmr::string target_;

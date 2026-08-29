@@ -14,10 +14,13 @@ namespace ruvia {
 
 namespace {
 
-[[nodiscard]] detail::StaticRootPrecompressionOptions makeStaticRootPrecompressionOptions(const DocumentRootConfig& config) {
-    detail::ensurePositiveSize(config.precompressMinBytes, "document root precompression minimum size must be greater than zero");
+[[nodiscard]] detail::StaticRootPrecompressionOptions makeStaticRootPrecompressionOptions(
+    const DocumentRootConfig& config) {
+    detail::ensurePositiveSize(config.precompressMinBytes,
+        "document root precompression minimum size must be greater than zero");
     if (config.precompressMaxBytes < config.precompressMinBytes) {
-        throw std::invalid_argument("document root precompression maximum size must not be smaller than the minimum size");
+        throw std::invalid_argument(
+            "document root precompression maximum size must not be smaller than the minimum size");
     }
     return detail::StaticRootPrecompressionOptions{
         .gzip = config.precompressGzip,
@@ -31,53 +34,71 @@ namespace {
 }  // namespace
 
 App& App::compression(CompressionConfig config) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change compression config while app is running", [config = std::move(config)](detail::AppState& state) mutable {
-        detail::ensurePositiveSize(config.minBytes, "compression minimum size must be greater than zero");
-        if (config.syncBytes < config.minBytes) {
-            throw std::invalid_argument("compression synchronous size must not be smaller than the minimum size");
-        }
-        if (config.maxBytes < config.syncBytes) {
-            throw std::invalid_argument("compression maximum size must not be smaller than the synchronous size");
-        }
-        state.options.compression = std::move(config);
-    });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot change compression config while app is running",
+        [config = std::move(config)](detail::AppState& state) mutable {
+            detail::ensurePositiveSize(
+                config.minBytes, "compression minimum size must be greater than zero");
+            if (config.syncBytes < config.minBytes) {
+                throw std::invalid_argument(
+                    "compression synchronous size must not be smaller than the minimum size");
+            }
+            if (config.maxBytes < config.syncBytes) {
+                throw std::invalid_argument(
+                    "compression maximum size must not be smaller than the synchronous size");
+            }
+            state.options.compression = std::move(config);
+        });
 }
 
 App& App::compression(std::nullptr_t) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change compression config while app is running", [](detail::AppState& state) { state.options.compression.reset(); });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot change compression config while app is running",
+        [](detail::AppState& state) { state.options.compression.reset(); });
 }
 
 App& App::cors(CorsConfig config) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change CORS config while app is running", [&config](detail::AppState& state) { state.options.cors = detail::makeCorsOptions(config, detail::appResource()); });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot change CORS config while app is running", [&config](detail::AppState& state) {
+            state.options.cors = detail::makeCorsOptions(config, detail::appResource());
+        });
 }
 
 App& App::cors(std::nullptr_t) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change CORS config while app is running", [](detail::AppState& state) { state.options.cors.reset(); });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot change CORS config while app is running",
+        [](detail::AppState& state) { state.options.cors.reset(); });
 }
 
 App& App::documentRoot(DocumentRootConfig config) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change document root while app is running", [&config](detail::AppState& state) {
-        if (config.root.empty()) {
-            throw std::invalid_argument("document root must not be empty");
-        }
-        detail::ensurePositiveDuration(config.runtime.refreshInterval, "document root refresh interval must be greater than zero");
-        if (config.staticOptions.indexFile.empty()) {
-            config.staticOptions.indexFile = "index.html";
-        }
-        detail::validateStaticRootOptions(config.staticOptions);
-        const auto precompression = makeStaticRootPrecompressionOptions(config);
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot change document root while app is running", [&config](detail::AppState& state) {
+            if (config.root.empty()) {
+                throw std::invalid_argument("document root must not be empty");
+            }
+            detail::ensurePositiveDuration(config.runtime.refreshInterval,
+                "document root refresh interval must be greater than zero");
+            if (config.staticOptions.indexFile.empty()) {
+                config.staticOptions.indexFile = "index.html";
+            }
+            detail::validateStaticRootOptions(config.staticOptions);
+            const auto precompression = makeStaticRootPrecompressionOptions(config);
 
-        detail::AppDocumentRootConfig replacement(detail::appResource(), detail::storeValidatedStaticRootConfig(config.staticOptions, detail::appResource()));
-        detail::assignNativePath(replacement.root, config.root);
-        replacement.runtime = config.runtime;
-        replacement.precompression = precompression;
+            detail::AppDocumentRootConfig replacement(
+                detail::appResource(), detail::storeValidatedStaticRootConfig(
+                                           config.staticOptions, detail::appResource()));
+            detail::assignNativePath(replacement.root, config.root);
+            replacement.runtime = config.runtime;
+            replacement.precompression = precompression;
 
-        state.documentRootConfig = std::move(replacement);
-    });
+            state.documentRootConfig = std::move(replacement);
+        });
 }
 
 App& App::documentRoot(std::nullptr_t) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change document root while app is running", [](detail::AppState& state) { state.documentRootConfig.reset(); });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot change document root while app is running",
+        [](detail::AppState& state) { state.documentRootConfig.reset(); });
 }
 
 App& App::useMiddleware(detail::ControllerMiddlewareDescriptor descriptor) {
@@ -90,27 +111,43 @@ App& App::useMiddleware(detail::ControllerMiddlewareDescriptor descriptor) {
         // such payload. Attach RUVIA_VALIDATE_* middlewares per route instead.
         throw std::invalid_argument("validator middleware binds to a route and cannot be app-wide");
     }
-    return detail::mutateStoppedApp(*this, *state_, "cannot add app middleware while app is running", [descriptor](detail::AppState& state) { state.globalMiddlewares.push_back(descriptor); });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot add app middleware while app is running",
+        [descriptor](detail::AppState& state) { state.globalMiddlewares.push_back(descriptor); });
 }
 
 App& App::blockingPool(BlockingPoolOptions config) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change the blocking pool while app is running", [&config](detail::AppState& state) { state.blockingPool = config; });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot change the blocking pool while app is running",
+        [&config](detail::AppState& state) { state.blockingPool = config; });
 }
 
 App& App::blockingPool(std::nullptr_t) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change the blocking pool while app is running", [](detail::AppState& state) { state.blockingPool.reset(); });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot change the blocking pool while app is running",
+        [](detail::AppState& state) { state.blockingPool.reset(); });
 }
 
 App& App::useWorkerStateDefinition(detail::WorkerStateDefinition definition) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot register worker state while app is running", [&definition](detail::AppState& state) { detail::appendWorkerStateDefinition(state.workerStates, std::move(definition)); });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot register worker state while app is running",
+        [&definition](detail::AppState& state) {
+            detail::appendWorkerStateDefinition(state.workerStates, std::move(definition));
+        });
 }
 
 App& App::onError(HttpErrorHandler handler) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [handler = std::move(handler)](detail::AppState& state) mutable { state.errorHandler = std::move(handler); });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot change error handler while app is running",
+        [handler = std::move(handler)](
+            detail::AppState& state) mutable { state.errorHandler = std::move(handler); });
 }
 
 App& App::onNotFound(HttpNotFoundHandler handler) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [handler = std::move(handler)](detail::AppState& state) mutable { state.notFoundHandler = std::move(handler); });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot change not found handler while app is running",
+        [handler = std::move(handler)](
+            detail::AppState& state) mutable { state.notFoundHandler = std::move(handler); });
 }
 
 namespace {
@@ -126,11 +163,21 @@ void appendPrefixHandler(Handlers& handlers, std::string_view prefix, Handler ha
 }  // namespace
 
 App& App::onError(ScopedErrorHandlerOptions options) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change error handler while app is running", [options = std::move(options)](detail::AppState& state) mutable { appendPrefixHandler(state.prefixErrorHandlers, options.prefix, std::move(options.handler)); });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot change error handler while app is running",
+        [options = std::move(options)](detail::AppState& state) mutable {
+            appendPrefixHandler(
+                state.prefixErrorHandlers, options.prefix, std::move(options.handler));
+        });
 }
 
 App& App::onNotFound(ScopedNotFoundHandlerOptions options) {
-    return detail::mutateStoppedApp(*this, *state_, "cannot change not found handler while app is running", [options = std::move(options)](detail::AppState& state) mutable { appendPrefixHandler(state.prefixNotFoundHandlers, options.prefix, std::move(options.handler)); });
+    return detail::mutateStoppedApp(*this, *state_,
+        "cannot change not found handler while app is running",
+        [options = std::move(options)](detail::AppState& state) mutable {
+            appendPrefixHandler(
+                state.prefixNotFoundHandlers, options.prefix, std::move(options.handler));
+        });
 }
 
 }  // namespace ruvia

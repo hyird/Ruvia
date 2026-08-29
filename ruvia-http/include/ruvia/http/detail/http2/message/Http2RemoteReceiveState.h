@@ -136,7 +136,8 @@ private:
     }
 
     [[nodiscard]] bool canAcceptConnect() const noexcept {
-        return headPending() != nullptr || headEndStreamPending() != nullptr || connectPending() != nullptr || connectPendingEndStream() != nullptr;
+        return headPending() != nullptr || headEndStreamPending() != nullptr ||
+               connectPending() != nullptr || connectPendingEndStream() != nullptr;
     }
 
     [[nodiscard]] bool acceptConnect() noexcept {
@@ -220,10 +221,12 @@ public:
     }
     [[nodiscard]] constexpr const Http2RemoteHeadPending* headPending() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2RemoteHeadEndStreamPending* headEndStreamPending() const& noexcept {
+    [[nodiscard]] constexpr const Http2RemoteHeadEndStreamPending* headEndStreamPending()
+        const& noexcept {
         return std::get_if<Http2RemoteHeadEndStreamPending>(&state_);
     }
-    [[nodiscard]] constexpr const Http2RemoteHeadEndStreamPending* headEndStreamPending() const&& = delete;
+    [[nodiscard]] constexpr const Http2RemoteHeadEndStreamPending* headEndStreamPending() const&& =
+        delete;
 
     [[nodiscard]] constexpr const Http2RemoteContentOpen* contentOpen() const& noexcept {
         return std::get_if<Http2RemoteContentOpen>(&state_);
@@ -235,15 +238,19 @@ public:
     }
     [[nodiscard]] constexpr const Http2RemoteConnectPending* connectPending() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2RemoteConnectPendingEndStream* connectPendingEndStream() const& noexcept {
+    [[nodiscard]] constexpr const Http2RemoteConnectPendingEndStream* connectPendingEndStream()
+        const& noexcept {
         return std::get_if<Http2RemoteConnectPendingEndStream>(&state_);
     }
-    [[nodiscard]] constexpr const Http2RemoteConnectPendingEndStream* connectPendingEndStream() const&& = delete;
+    [[nodiscard]] constexpr const Http2RemoteConnectPendingEndStream* connectPendingEndStream()
+        const&& = delete;
 
-    [[nodiscard]] constexpr const Http2RemoteConnectRejectedAwaitingEndStream* connectRejectedAwaitingEndStream() const& noexcept {
+    [[nodiscard]] constexpr const Http2RemoteConnectRejectedAwaitingEndStream*
+    connectRejectedAwaitingEndStream() const& noexcept {
         return std::get_if<Http2RemoteConnectRejectedAwaitingEndStream>(&state_);
     }
-    [[nodiscard]] constexpr const Http2RemoteConnectRejectedAwaitingEndStream* connectRejectedAwaitingEndStream() const&& = delete;
+    [[nodiscard]] constexpr const Http2RemoteConnectRejectedAwaitingEndStream*
+    connectRejectedAwaitingEndStream() const&& = delete;
 
     [[nodiscard]] constexpr const Http2RemoteTunnelOpen* tunnelOpen() const& noexcept {
         return std::get_if<Http2RemoteTunnelOpen>(&state_);
@@ -261,7 +268,10 @@ public:
     [[nodiscard]] constexpr const Http2RemoteAborted* aborted() const&& = delete;
 
 private:
-    using State = std::variant<Http2RemoteHeadPending, Http2RemoteHeadEndStreamPending, Http2RemoteContentOpen, Http2RemoteConnectPending, Http2RemoteConnectPendingEndStream, Http2RemoteConnectRejectedAwaitingEndStream, Http2RemoteTunnelOpen, Http2RemoteEndStream, Http2RemoteAborted>;
+    using State = std::variant<Http2RemoteHeadPending, Http2RemoteHeadEndStreamPending,
+        Http2RemoteContentOpen, Http2RemoteConnectPending, Http2RemoteConnectPendingEndStream,
+        Http2RemoteConnectRejectedAwaitingEndStream, Http2RemoteTunnelOpen, Http2RemoteEndStream,
+        Http2RemoteAborted>;
 
     State state_;
 };

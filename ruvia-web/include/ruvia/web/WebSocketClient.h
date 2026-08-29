@@ -39,7 +39,10 @@ struct WebSocketClientConfig final {
     std::chrono::milliseconds connectTimeout{5000};
     std::optional<std::chrono::milliseconds> readTimeout{};
     std::optional<std::chrono::milliseconds> writeTimeout{30000};
+    // After a local Close is sent, the maximum time to wait for the peer Close.
+    // nullopt disables this guard.
     std::optional<std::chrono::milliseconds> closeHandshakeTimeout{5000};
+    WebSocketHeartbeatConfig heartbeat{};
     TlsPeerVerificationPolicy tlsPeerVerification{TlsPeerVerificationPolicy::kVerify};
     TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
     TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kEnable};
@@ -99,7 +102,8 @@ public:
 
 private:
     friend class detail::WebSocketClientState;
-    WebSocketClientHandle(std::shared_ptr<detail::WebSocketClientState> state, detail::ScopedOperationScope& scope, OperationOptions options) noexcept;
+    WebSocketClientHandle(std::shared_ptr<detail::WebSocketClientState> state,
+        detail::ScopedOperationScope& scope, OperationOptions options) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
     std::shared_ptr<detail::WebSocketClientState> state_;
@@ -139,9 +143,16 @@ public:
     [[nodiscard]] ScopedOperation<void> close(WebSocketCloseOptions options) const&;
     ScopedOperation<void> close(WebSocketCloseOptions) const&& = delete;
 
-    // Immediate lifecycle shutdown. Graceful RFC 6455 close uses the typed
-    // overload above: co_await client.close({...}).
+    // Idempotent and callable from any thread. This only requests immediate
+    // transport termination. Graceful RFC 6455 close uses the typed overload
+    // above: co_await client.close({...}). Use shutdown() when completion must
+    // be awaited.
     void abort() noexcept;
+    // Requests immediate transport shutdown, joins an in-flight connect and
+    // all worker-bound operations, and completes on the bound loop after
+    // teardown has finished.
+    [[nodiscard]] Task<void> shutdown() &;
+    Task<void> shutdown() && = delete;
 
     [[nodiscard]] bool connected() const;
     [[nodiscard]] std::string_view subprotocol() const&;

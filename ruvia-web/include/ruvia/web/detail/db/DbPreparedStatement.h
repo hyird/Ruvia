@@ -18,6 +18,7 @@ struct PreparedDbStatement final {
     std::pmr::vector<DbValue> params;
 };
 
-[[nodiscard]] PreparedDbStatement prepareDbStatement(std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
+[[nodiscard]] PreparedDbStatement prepareDbStatement(
+    std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia

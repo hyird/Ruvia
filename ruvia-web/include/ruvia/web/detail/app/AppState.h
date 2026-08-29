@@ -35,7 +35,8 @@ struct AppState;
 void applyServerConfig(AppState& state, const ServerConfig& config);
 
 struct AppDocumentRootConfig final {
-    AppDocumentRootConfig(std::pmr::memory_resource* resource, StaticRootConfigStorage configuredStaticOptions)
+    AppDocumentRootConfig(
+        std::pmr::memory_resource* resource, StaticRootConfigStorage configuredStaticOptions)
         : root(resource),
           staticOptions(std::move(configuredStaticOptions)) {}
 
@@ -58,8 +59,10 @@ struct AppState final {
     std::optional<AppDocumentRootConfig> documentRootConfig;
     HttpErrorHandler errorHandler{nullptr};
     HttpNotFoundHandler notFoundHandler{nullptr};
-    std::pmr::vector<std::pair<std::pmr::string, HttpErrorHandler>> prefixErrorHandlers{appResource()};
-    std::pmr::vector<std::pair<std::pmr::string, HttpNotFoundHandler>> prefixNotFoundHandlers{appResource()};
+    std::pmr::vector<std::pair<std::pmr::string, HttpErrorHandler>> prefixErrorHandlers{
+        appResource()};
+    std::pmr::vector<std::pair<std::pmr::string, HttpNotFoundHandler>> prefixNotFoundHandlers{
+        appResource()};
     std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewares{appResource()};
     std::pmr::vector<WorkerStateDefinition> workerStates{appResource()};
     std::optional<BlockingPoolOptions> blockingPool{std::in_place};

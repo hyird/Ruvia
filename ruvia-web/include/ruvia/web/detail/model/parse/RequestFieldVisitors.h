@@ -17,20 +17,24 @@ template <typename Visitor>
     return visitUrlEncodedPairs(body, std::forward<Visitor>(visitor));
 }
 
-[[nodiscard]] inline bool formFieldNameEquals(std::string_view encodedName, std::string_view field) noexcept {
+[[nodiscard]] inline bool formFieldNameEquals(
+    std::string_view encodedName, std::string_view field) noexcept {
     return urlComponentEquals(encodedName, field, UrlDecodeMode::kForm);
 }
 
 template <typename Visitor>
-[[nodiscard]] bool visitFormObjectFields(ResolvedPmrResourceTag, std::string_view body, std::pmr::memory_resource* resource, Visitor&& visitor) {
+[[nodiscard]] bool visitFormObjectFields(ResolvedPmrResourceTag, std::string_view body,
+    std::pmr::memory_resource* resource, Visitor&& visitor) {
     bool valid = true;
     auto& visitorRef = visitor;
-    const bool completed = visitRawFormFields(body, [&](std::string_view name, std::string_view value) {
+    const bool completed = visitRawFormFields(body, [&](std::string_view name,
+                                                        std::string_view value) {
         if (!hasFormEncoding(name)) {
             return dispatchJsonObjectFieldVisitor(visitorRef, name, value);
         }
 
-        auto decodedName = decodeUrlComponent(name, {.mode = UrlDecodeMode::kForm, .resource = resource});
+        auto decodedName =
+            decodeUrlComponent(name, {.mode = UrlDecodeMode::kForm, .resource = resource});
         if (!decodedName.has_value()) {
             valid = false;
             return false;
@@ -41,8 +45,10 @@ template <typename Visitor>
 }
 
 template <typename Visitor>
-[[nodiscard]] bool visitFormObjectFields(std::string_view body, std::pmr::memory_resource* resource, Visitor&& visitor) {
-    return visitFormObjectFields(ResolvedPmrResourceTag{}, body, pmrResourceOrDefault(resource), std::forward<Visitor>(visitor));
+[[nodiscard]] bool visitFormObjectFields(
+    std::string_view body, std::pmr::memory_resource* resource, Visitor&& visitor) {
+    return visitFormObjectFields(ResolvedPmrResourceTag{}, body, pmrResourceOrDefault(resource),
+        std::forward<Visitor>(visitor));
 }
 
 template <typename Visitor>

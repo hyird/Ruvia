@@ -41,7 +41,9 @@ std::string_view JwtPayload::audience() const& noexcept {
     return audiences_.empty() ? std::string_view{} : std::string_view(audiences_.front());
 }
 bool JwtPayload::hasAudience(std::string_view audience) const noexcept {
-    return std::ranges::find(audiences_, audience, [](const auto& value) noexcept { return std::string_view(value); }) != audiences_.end();
+    return std::ranges::find(audiences_, audience, [](const auto& value) noexcept {
+        return std::string_view(value);
+    }) != audiences_.end();
 }
 std::string_view JwtPayload::id() const& noexcept {
     return id_;
@@ -70,7 +72,8 @@ std::optional<std::string_view> JwtPayload::claim(std::string_view name) const& 
 
 std::pmr::string jwtSign(const JwtSignOptions& options) {
     validateJwtCustomClaims(options.claims);
-    if ((options.expiresIn.has_value() && options.expiresIn->count() < 0) || (options.notBeforeDelay.has_value() && options.notBeforeDelay->count() < 0)) {
+    if ((options.expiresIn.has_value() && options.expiresIn->count() < 0) ||
+        (options.notBeforeDelay.has_value() && options.notBeforeDelay->count() < 0)) {
         throw std::invalid_argument("JWT signing time offsets must not be negative");
     }
     auto* resolved = detail::pmrResourceOrDefault(options.resource);
@@ -97,10 +100,12 @@ std::pmr::string jwtSign(const JwtSignOptions& options) {
     }
     detail::jwtAppendJsonMember(payload, first, "iat", detail::jwtEpochSeconds(now));
     if (options.expiresIn.has_value()) {
-        detail::jwtAppendJsonMember(payload, first, "exp", detail::jwtEpochSeconds(detail::jwtTimeWithOffset(now, *options.expiresIn)));
+        detail::jwtAppendJsonMember(payload, first, "exp",
+            detail::jwtEpochSeconds(detail::jwtTimeWithOffset(now, *options.expiresIn)));
     }
     if (options.notBeforeDelay.has_value()) {
-        detail::jwtAppendJsonMember(payload, first, "nbf", detail::jwtEpochSeconds(detail::jwtTimeWithOffset(now, *options.notBeforeDelay)));
+        detail::jwtAppendJsonMember(payload, first, "nbf",
+            detail::jwtEpochSeconds(detail::jwtTimeWithOffset(now, *options.notBeforeDelay)));
     }
     for (const auto& claim : options.claims) {
         detail::jwtAppendJsonMember(payload, first, claim.name(), claim.value());
@@ -123,18 +128,21 @@ JwtPayload jwtVerify(const JwtVerifyOptions& options) {
     if (options.leeway.count() < 0) {
         throw std::invalid_argument("JWT verification leeway must not be negative");
     }
-    if (options.expirationClaim != JwtExpirationClaimPolicy::kRequire && options.expirationClaim != JwtExpirationClaimPolicy::kAllowMissing) {
+    if (options.expirationClaim != JwtExpirationClaimPolicy::kRequire &&
+        options.expirationClaim != JwtExpirationClaimPolicy::kAllowMissing) {
         throw std::invalid_argument("JWT expiration claim policy is invalid");
     }
     auto* resolved = detail::pmrResourceOrDefault(options.resource);
     const auto token = options.token.view();
     const auto parts = detail::jwtSplitToken(token);
-    const auto expected = detail::jwtHmacSign(options.algorithm, options.secret, parts.signingInput, resolved);
+    const auto expected =
+        detail::jwtHmacSign(options.algorithm, options.secret, parts.signingInput, resolved);
     if (!detail::jwtConstantTimeEquals(expected, parts.signature)) {
         throw std::runtime_error("JWT signature verification failed");
     }
     const auto header = detail::jwtBase64UrlDecode(parts.header, resolved);
-    if (detail::jwtParseJoseAlgorithm(header, resolved) != detail::jwtAlgorithmName(options.algorithm)) {
+    if (detail::jwtParseJoseAlgorithm(header, resolved) !=
+        detail::jwtAlgorithmName(options.algorithm)) {
         throw std::runtime_error("JWT algorithm mismatch");
     }
     const auto payloadJson = detail::jwtBase64UrlDecode(parts.payload, resolved);
@@ -146,7 +154,8 @@ JwtPayload jwtVerify(const JwtVerifyOptions& options) {
     if (payload.expiresAt() && detail::jwtTokenExpired(now, *payload.expiresAt(), options.leeway)) {
         throw std::runtime_error("JWT token is expired");
     }
-    if (payload.notBefore() && detail::jwtTokenNotYetValid(now, *payload.notBefore(), options.leeway)) {
+    if (payload.notBefore() &&
+        detail::jwtTokenNotYetValid(now, *payload.notBefore(), options.leeway)) {
         throw std::runtime_error("JWT token is not yet valid");
     }
     if (!options.issuer.empty() && payload.issuer() != options.issuer) {
@@ -175,7 +184,8 @@ std::optional<std::string_view> jwtBearerToken(std::string_view authorization) n
         return std::nullopt;
     }
     for (std::size_t i = 0; i < scheme.size(); ++i) {
-        const auto left = authorization[i] >= 'A' && authorization[i] <= 'Z' ? authorization[i] + 32 : authorization[i];
+        const auto left = authorization[i] >= 'A' && authorization[i] <= 'Z' ? authorization[i] + 32
+                                                                             : authorization[i];
         const auto right = scheme[i] >= 'A' && scheme[i] <= 'Z' ? scheme[i] + 32 : scheme[i];
         if (left != right) {
             return std::nullopt;

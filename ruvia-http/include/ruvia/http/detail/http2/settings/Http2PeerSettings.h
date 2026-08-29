@@ -12,7 +12,13 @@
 
 namespace ruvia::detail {
 
-enum class Http2PeerSettingError : std::uint8_t { kInvalidEnablePush, kInvalidInitialWindow, kInvalidMaxFrameSize, kInvalidEnableConnectProtocol, kInvalidEnableConnectProtocolTransition };
+enum class Http2PeerSettingError : std::uint8_t {
+    kInvalidEnablePush,
+    kInvalidInitialWindow,
+    kInvalidMaxFrameSize,
+    kInvalidEnableConnectProtocol,
+    kInvalidEnableConnectProtocolTransition
+};
 
 class Http2PeerSettingApplyResult;
 
@@ -69,10 +75,12 @@ public:
     }
     [[nodiscard]] constexpr const Http2PeerSettingApplied* applied() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2PeerInitialWindowChange* initialWindowChange() const& noexcept {
+    [[nodiscard]] constexpr const Http2PeerInitialWindowChange* initialWindowChange()
+        const& noexcept {
         return std::get_if<Http2PeerInitialWindowChange>(&value_);
     }
-    [[nodiscard]] constexpr const Http2PeerInitialWindowChange* initialWindowChange() const&& = delete;
+    [[nodiscard]] constexpr const Http2PeerInitialWindowChange* initialWindowChange() const&& =
+        delete;
 
     [[nodiscard]] constexpr const Http2PeerSettingFailure* failure() const& noexcept {
         return std::get_if<Http2PeerSettingFailure>(&value_);
@@ -82,7 +90,8 @@ public:
 private:
     friend class Http2PeerSettings;
 
-    using Value = std::variant<Http2PeerSettingApplied, Http2PeerInitialWindowChange, Http2PeerSettingFailure>;
+    using Value = std::variant<Http2PeerSettingApplied, Http2PeerInitialWindowChange,
+        Http2PeerSettingFailure>;
 
     template <typename Alternative>
     explicit constexpr Http2PeerSettingApplyResult(Alternative alternative) noexcept
@@ -92,11 +101,13 @@ private:
         return Http2PeerSettingApplyResult(Http2PeerSettingApplied());
     }
 
-    [[nodiscard]] static constexpr Http2PeerSettingApplyResult makeInitialWindowChange(std::int64_t delta) noexcept {
+    [[nodiscard]] static constexpr Http2PeerSettingApplyResult makeInitialWindowChange(
+        std::int64_t delta) noexcept {
         return Http2PeerSettingApplyResult(Http2PeerInitialWindowChange(delta));
     }
 
-    [[nodiscard]] static constexpr Http2PeerSettingApplyResult makeFailure(Http2PeerSettingError error) noexcept {
+    [[nodiscard]] static constexpr Http2PeerSettingApplyResult makeFailure(
+        Http2PeerSettingError error) noexcept {
         return Http2PeerSettingApplyResult(Http2PeerSettingFailure(error));
     }
 
@@ -112,16 +123,21 @@ struct Http2SettingEntry final {
     return payload.size() % 6 == 0;
 }
 
-[[nodiscard]] inline Http2SettingEntry http2ReadSettingEntry(std::string_view payload, std::size_t offset) noexcept {
+[[nodiscard]] inline Http2SettingEntry http2ReadSettingEntry(
+    std::string_view payload, std::size_t offset) noexcept {
     const auto* data = reinterpret_cast<const unsigned char*>(payload.data() + offset);
-    return Http2SettingEntry{.id = static_cast<Http2SettingId>(http2Read16(data)), .value = http2Read32(data + 2)};
+    return Http2SettingEntry{
+        .id = static_cast<Http2SettingId>(http2Read16(data)), .value = http2Read32(data + 2)};
 }
 
-[[nodiscard]] inline Http2ErrorCode http2PeerSettingErrorCode(Http2PeerSettingError error) noexcept {
-    return error == Http2PeerSettingError::kInvalidInitialWindow ? Http2ErrorCode::kFlowControlError : Http2ErrorCode::kProtocolError;
+[[nodiscard]] inline Http2ErrorCode http2PeerSettingErrorCode(
+    Http2PeerSettingError error) noexcept {
+    return error == Http2PeerSettingError::kInvalidInitialWindow ? Http2ErrorCode::kFlowControlError
+                                                                 : Http2ErrorCode::kProtocolError;
 }
 
-[[nodiscard]] inline std::string_view http2PeerSettingErrorMessage(Http2PeerSettingError error) noexcept {
+[[nodiscard]] inline std::string_view http2PeerSettingErrorMessage(
+    Http2PeerSettingError error) noexcept {
     switch (error) {
         case Http2PeerSettingError::kInvalidEnablePush:
             return "invalid ENABLE_PUSH";
@@ -173,14 +189,16 @@ public:
         maxHeaderListSize_ = candidate.maxHeaderListSize_;
     }
 
-    [[nodiscard]] Http2PeerSettingApplyResult apply(Http2SettingId id, std::uint32_t value) noexcept {
+    [[nodiscard]] Http2PeerSettingApplyResult apply(
+        Http2SettingId id, std::uint32_t value) noexcept {
         switch (id) {
             case Http2SettingId::kHeaderTableSize:
                 headerTableSize_ = value;
                 return Http2PeerSettingApplyResult::makeApplied();
             case Http2SettingId::kEnablePush:
                 if (value > 1 || (localRole_ == Http2Role::kClient && value == 1)) {
-                    return Http2PeerSettingApplyResult::makeFailure(Http2PeerSettingError::kInvalidEnablePush);
+                    return Http2PeerSettingApplyResult::makeFailure(
+                        Http2PeerSettingError::kInvalidEnablePush);
                 }
                 return Http2PeerSettingApplyResult::makeApplied();
             case Http2SettingId::kMaxConcurrentStreams:
@@ -188,7 +206,8 @@ public:
                 return Http2PeerSettingApplyResult::makeApplied();
             case Http2SettingId::kInitialWindowSize: {
                 if (!std::in_range<std::int32_t>(value)) {
-                    return Http2PeerSettingApplyResult::makeFailure(Http2PeerSettingError::kInvalidInitialWindow);
+                    return Http2PeerSettingApplyResult::makeFailure(
+                        Http2PeerSettingError::kInvalidInitialWindow);
                 }
                 const auto delta = static_cast<std::int64_t>(value) - initialWindowSize_;
                 initialWindowSize_ = static_cast<std::int32_t>(value);
@@ -196,7 +215,8 @@ public:
             }
             case Http2SettingId::kMaxFrameSize:
                 if (value < kHttp2DefaultMaxFrameSize || value > kHttp2MaxFrameSizeLimit) {
-                    return Http2PeerSettingApplyResult::makeFailure(Http2PeerSettingError::kInvalidMaxFrameSize);
+                    return Http2PeerSettingApplyResult::makeFailure(
+                        Http2PeerSettingError::kInvalidMaxFrameSize);
                 }
                 maxFrameSize_ = value;
                 return Http2PeerSettingApplyResult::makeApplied();
@@ -205,10 +225,12 @@ public:
                 return Http2PeerSettingApplyResult::makeApplied();
             case Http2SettingId::kEnableConnectProtocol:
                 if (value != 0 && value != 1) {
-                    return Http2PeerSettingApplyResult::makeFailure(Http2PeerSettingError::kInvalidEnableConnectProtocol);
+                    return Http2PeerSettingApplyResult::makeFailure(
+                        Http2PeerSettingError::kInvalidEnableConnectProtocol);
                 }
                 if (enableConnectProtocol_ && value == 0) {
-                    return Http2PeerSettingApplyResult::makeFailure(Http2PeerSettingError::kInvalidEnableConnectProtocolTransition);
+                    return Http2PeerSettingApplyResult::makeFailure(
+                        Http2PeerSettingError::kInvalidEnableConnectProtocolTransition);
                 }
                 enableConnectProtocol_ = value == 1;
                 return Http2PeerSettingApplyResult::makeApplied();

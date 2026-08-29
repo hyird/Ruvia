@@ -9,7 +9,8 @@
 namespace ruvia::detail {
 
 void ensureMysqlThreadInitialized();
-[[nodiscard]] bool setMysqlTimeout(st_mysql& connection, mysql_option option, std::optional<std::chrono::milliseconds> timeout) noexcept;
+[[nodiscard]] bool setMysqlTimeout(st_mysql& connection, mysql_option option,
+    std::optional<std::chrono::milliseconds> timeout) noexcept;
 
 enum class MysqlWaitDeadlineSource : std::uint8_t {
     kNone,
@@ -22,6 +23,8 @@ struct MysqlWaitDeadline final {
     MysqlWaitDeadlineSource source{MysqlWaitDeadlineSource::kNone};
 };
 
-[[nodiscard]] MysqlWaitDeadline selectMysqlWaitDeadline(std::optional<std::chrono::milliseconds> operationTimeout, std::optional<std::chrono::milliseconds> driverTimeout) noexcept;
+[[nodiscard]] MysqlWaitDeadline selectMysqlWaitDeadline(
+    std::optional<std::chrono::milliseconds> operationTimeout,
+    std::optional<std::chrono::milliseconds> driverTimeout) noexcept;
 
 }  // namespace ruvia::detail

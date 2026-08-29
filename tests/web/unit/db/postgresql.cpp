@@ -74,7 +74,8 @@ RUVIA_TEST(postgresql_parameter_encoding_preserves_types_and_null) {
         ruvia::DbValue{1.25},
         ruvia::DbValue{true},
     };
-    auto encoded = ruvia::detail::encodePostgreSqlParams(std::span<const ruvia::DbValue>(params), std::pmr::get_default_resource());
+    auto encoded = ruvia::detail::encodePostgreSqlParams(
+        std::span<const ruvia::DbValue>(params), std::pmr::get_default_resource());
     RUVIA_CHECK(encoded.values.size() == params.size());
     RUVIA_CHECK(encoded.lengths.size() == params.size());
     RUVIA_CHECK(encoded.values[0] == nullptr);
@@ -93,13 +94,21 @@ RUVIA_TEST(postgresql_parameter_encoding_preserves_types_and_null) {
 
 RUVIA_TEST(postgresql_parameter_encoding_rejects_embedded_nul_text_params) {
     const std::string text("a\0b", 3);
-    const std::array<ruvia::DbValue, 1> params{ruvia::DbValue{std::string_view(text.data(), text.size())}};
-    RUVIA_CHECK(throwsInvalidArgument([&] { (void)ruvia::detail::encodePostgreSqlParams(std::span<const ruvia::DbValue>(params), std::pmr::get_default_resource()); }));
+    const std::array<ruvia::DbValue, 1> params{
+        ruvia::DbValue{std::string_view(text.data(), text.size())}};
+    RUVIA_CHECK(throwsInvalidArgument([&] {
+        (void)ruvia::detail::encodePostgreSqlParams(
+            std::span<const ruvia::DbValue>(params), std::pmr::get_default_resource());
+    }));
 }
 
 RUVIA_TEST(postgresql_parameter_encoding_rejects_non_finite_double) {
-    const std::array<ruvia::DbValue, 1> params{ruvia::DbValue{std::numeric_limits<double>::infinity()}};
-    RUVIA_CHECK(throwsInvalidArgument([&] { (void)ruvia::detail::encodePostgreSqlParams(std::span<const ruvia::DbValue>(params), std::pmr::get_default_resource()); }));
+    const std::array<ruvia::DbValue, 1> params{
+        ruvia::DbValue{std::numeric_limits<double>::infinity()}};
+    RUVIA_CHECK(throwsInvalidArgument([&] {
+        (void)ruvia::detail::encodePostgreSqlParams(
+            std::span<const ruvia::DbValue>(params), std::pmr::get_default_resource());
+    }));
 }
 
 RUVIA_TEST(postgresql_parameter_encoding_uses_explicit_memory_resource) {
@@ -115,7 +124,8 @@ RUVIA_TEST(postgresql_parameter_encoding_uses_explicit_memory_resource) {
     {
         DefaultResourceGuard guard(&rejectingDefault);
         try {
-            auto encoded = ruvia::detail::encodePostgreSqlParams(std::span<const ruvia::DbValue>(params), &explicitResource);
+            auto encoded = ruvia::detail::encodePostgreSqlParams(
+                std::span<const ruvia::DbValue>(params), &explicitResource);
             RUVIA_CHECK(encoded.values.size() == params.size());
             RUVIA_CHECK(std::string_view(encoded.values[0]) == text);
             RUVIA_CHECK(std::string_view(encoded.values[1]) == "18446744073709551615");
@@ -129,6 +139,8 @@ RUVIA_TEST(postgresql_parameter_encoding_uses_explicit_memory_resource) {
 RUVIA_TEST(postgresql_migration_identifier_uses_63_byte_limit) {
     using ruvia::detail::isValidMigrationTableName;
     constexpr auto driver = ruvia::DbDriver::kPostgreSql;
-    RUVIA_CHECK(isValidMigrationTableName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", driver));
-    RUVIA_CHECK(!isValidMigrationTableName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", driver));
+    RUVIA_CHECK(isValidMigrationTableName(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", driver));
+    RUVIA_CHECK(!isValidMigrationTableName(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", driver));
 }

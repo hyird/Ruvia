@@ -32,7 +32,8 @@ class RouteTable;
 // dispatch, route execution, stream lifetime, and joins compile once.
 class Http2SansIoSessionEngine final {
 public:
-    Http2SansIoSessionEngine(asio::any_io_executor executor, asio::ip::tcp::socket& socket, const RouteTable& routes, WorkerMemory& worker, Http2SansIoSessionContext session);
+    Http2SansIoSessionEngine(asio::any_io_executor executor, asio::ip::tcp::socket& socket,
+        const RouteTable& routes, WorkerMemory& worker, Http2SansIoSessionContext session);
 
     Http2SansIoSessionEngine(const Http2SansIoSessionEngine&) = delete;
     Http2SansIoSessionEngine& operator=(const Http2SansIoSessionEngine&) = delete;

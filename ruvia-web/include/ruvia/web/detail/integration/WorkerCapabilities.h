@@ -54,8 +54,11 @@ struct WorkerCapabilityOptions final {
 // boundary; none of these registries is process-global or shared by workers.
 class WorkerCapabilities final {
 public:
-    WorkerCapabilities(asio::io_context& ioContext, const WorkerHandle& worker, std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions, WorkerCapabilityOptions options, ConnectionScanner& scanner);
-    WorkerCapabilities(asio::io_context&, WorkerHandle&&, std::pmr::memory_resource*, WorkerCapabilityDefinitions, WorkerCapabilityOptions, ConnectionScanner&) = delete;
+    WorkerCapabilities(asio::io_context& ioContext, const WorkerHandle& worker,
+        std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions,
+        WorkerCapabilityOptions options, ConnectionScanner& scanner);
+    WorkerCapabilities(asio::io_context&, WorkerHandle&&, std::pmr::memory_resource*,
+        WorkerCapabilityDefinitions, WorkerCapabilityOptions, ConnectionScanner&) = delete;
 
     WorkerCapabilities(const WorkerCapabilities&) = delete;
     WorkerCapabilities& operator=(const WorkerCapabilities&) = delete;

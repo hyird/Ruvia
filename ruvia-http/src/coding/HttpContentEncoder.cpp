@@ -30,7 +30,8 @@ void gzipFree(voidpf, voidpf address) noexcept {
     zlibPmrFree(address);
 }
 
-[[nodiscard]] bool appendOutput(std::pmr::string& output, const char* bytes, std::size_t size) noexcept {
+[[nodiscard]] bool appendOutput(
+    std::pmr::string& output, const char* bytes, std::size_t size) noexcept {
     try {
         output.append(bytes, size);
         return true;
@@ -71,7 +72,8 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
     }
 }
 
-[[nodiscard]] bool initializeEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& impl, std::pmr::memory_resource* resource) {
+[[nodiscard]] bool initializeEncoderState(
+    HttpContentCoding coding, HttpContentEncoder::Impl& impl, std::pmr::memory_resource* resource) {
     switch (coding) {
         case HttpContentCoding::kIdentity:
             return true;
@@ -79,26 +81,35 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
             impl.gzip.zalloc = &gzipAllocate;
             impl.gzip.zfree = &gzipFree;
             impl.gzip.opaque = resource;
-            return deflateInit2(&impl.gzip, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) == Z_OK;
+            return deflateInit2(&impl.gzip, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8,
+                       Z_DEFAULT_STRATEGY) == Z_OK;
         case HttpContentCoding::kBrotli:
             impl.brotli = BrotliEncoderCreateInstance(&pmrCodecAllocate, &pmrCodecFree, resource);
-            return impl.brotli != nullptr && BrotliEncoderSetParameter(impl.brotli, BROTLI_PARAM_QUALITY, 5) == BROTLI_TRUE;
+            return impl.brotli != nullptr &&
+                   BrotliEncoderSetParameter(impl.brotli, BROTLI_PARAM_QUALITY, 5) == BROTLI_TRUE;
         case HttpContentCoding::kZstd: {
-            impl.zstd = ZSTD_createCCtx_advanced(ZSTD_customMem{&pmrCodecAllocate, &pmrCodecFree, resource});
-            return impl.zstd != nullptr && ZSTD_isError(ZSTD_CCtx_setParameter(impl.zstd, ZSTD_c_compressionLevel, ZSTD_CLEVEL_DEFAULT)) == 0 && ZSTD_isError(ZSTD_CCtx_setParameter(impl.zstd, ZSTD_c_windowLog, 23)) == 0;
+            impl.zstd = ZSTD_createCCtx_advanced(
+                ZSTD_customMem{&pmrCodecAllocate, &pmrCodecFree, resource});
+            return impl.zstd != nullptr &&
+                   ZSTD_isError(ZSTD_CCtx_setParameter(
+                       impl.zstd, ZSTD_c_compressionLevel, ZSTD_CLEVEL_DEFAULT)) == 0 &&
+                   ZSTD_isError(ZSTD_CCtx_setParameter(impl.zstd, ZSTD_c_windowLog, 23)) == 0;
         }
     }
     return false;
 }
 
-[[nodiscard]] HttpContentEncodeStep encodeGzip(HttpContentEncoder::Impl& impl, std::string_view input, std::pmr::string& output, bool flush) {
+[[nodiscard]] HttpContentEncodeStep encodeGzip(
+    HttpContentEncoder::Impl& impl, std::string_view input, std::pmr::string& output, bool flush) {
     std::size_t supplied = 0;
     const auto operation = flush ? Z_SYNC_FLUSH : Z_NO_FLUSH;
     std::array<char, 16384> buffer{};
     for (;;) {
         if (impl.gzip.avail_in == 0 && supplied < input.size()) {
-            const auto count = static_cast<uInt>(std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
-            impl.gzip.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
+            const auto count = static_cast<uInt>(
+                std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
+            impl.gzip.next_in =
+                reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
             impl.gzip.avail_in = count;
             supplied += count;
         }
@@ -122,7 +133,8 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
     }
 }
 
-[[nodiscard]] HttpContentEncodeStep finishGzip(HttpContentEncoder::Impl& impl, std::pmr::string& output) {
+[[nodiscard]] HttpContentEncodeStep finishGzip(
+    HttpContentEncoder::Impl& impl, std::pmr::string& output) {
     std::array<char, 16384> buffer{};
     for (;;) {
         impl.gzip.next_in = nullptr;
@@ -143,7 +155,8 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
     }
 }
 
-[[nodiscard]] HttpContentEncodeStep encodeBrotli(HttpContentEncoder::Impl& impl, std::string_view input, std::pmr::string& output, BrotliEncoderOperation operation) {
+[[nodiscard]] HttpContentEncodeStep encodeBrotli(HttpContentEncoder::Impl& impl,
+    std::string_view input, std::pmr::string& output, BrotliEncoderOperation operation) {
     std::size_t availableInput = input.size();
     const auto* nextInput = reinterpret_cast<const std::uint8_t*>(input.data());
     std::array<std::uint8_t, 16384> buffer{};
@@ -151,7 +164,8 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
         std::size_t availableOutput = buffer.size();
         auto* nextOutput = buffer.data();
         const auto beforeInput = availableInput;
-        if (BrotliEncoderCompressStream(impl.brotli, operation, &availableInput, &nextInput, &availableOutput, &nextOutput, nullptr) != BROTLI_TRUE) {
+        if (BrotliEncoderCompressStream(impl.brotli, operation, &availableInput, &nextInput,
+                &availableOutput, &nextOutput, nullptr) != BROTLI_TRUE) {
             return HttpContentEncodeStep::kFailure;
         }
         const auto produced = buffer.size() - availableOutput;
@@ -159,7 +173,8 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
             return HttpContentEncodeStep::kFailure;
         }
         const bool pending = BrotliEncoderHasMoreOutput(impl.brotli) == BROTLI_TRUE;
-        if (operation == BROTLI_OPERATION_FINISH && BrotliEncoderIsFinished(impl.brotli) == BROTLI_TRUE) {
+        if (operation == BROTLI_OPERATION_FINISH &&
+            BrotliEncoderIsFinished(impl.brotli) == BROTLI_TRUE) {
             return HttpContentEncodeStep::kFinished;
         }
         if (availableInput == 0 && !pending) {
@@ -171,13 +186,15 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
     }
 }
 
-[[nodiscard]] HttpContentEncodeStep encodeZstd(HttpContentEncoder::Impl& impl, std::string_view input, std::pmr::string& output, ZSTD_EndDirective operation) {
+[[nodiscard]] HttpContentEncodeStep encodeZstd(HttpContentEncoder::Impl& impl,
+    std::string_view input, std::pmr::string& output, ZSTD_EndDirective operation) {
     ZSTD_inBuffer inputBuffer{input.data(), input.size(), 0};
     std::array<char, 16384> buffer{};
     for (;;) {
         ZSTD_outBuffer outputBuffer{buffer.data(), buffer.size(), 0};
         const auto beforeInput = inputBuffer.pos;
-        const auto remaining = ZSTD_compressStream2(impl.zstd, &outputBuffer, &inputBuffer, operation);
+        const auto remaining =
+            ZSTD_compressStream2(impl.zstd, &outputBuffer, &inputBuffer, operation);
         if (ZSTD_isError(remaining) != 0) {
             return HttpContentEncodeStep::kFailure;
         }
@@ -187,7 +204,8 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
         if (operation == ZSTD_e_end && remaining == 0 && inputBuffer.pos == inputBuffer.size) {
             return HttpContentEncodeStep::kFinished;
         }
-        if (operation != ZSTD_e_end && inputBuffer.pos == inputBuffer.size && outputBuffer.pos < buffer.size() && (operation == ZSTD_e_continue || remaining == 0)) {
+        if (operation != ZSTD_e_end && inputBuffer.pos == inputBuffer.size &&
+            outputBuffer.pos < buffer.size() && (operation == ZSTD_e_continue || remaining == 0)) {
             return HttpContentEncodeStep::kProducedOrPending;
         }
         if (outputBuffer.pos == 0 && inputBuffer.pos == beforeInput) {
@@ -198,7 +216,8 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
 
 }  // namespace
 
-HttpContentEncoder::HttpContentEncoder(HttpContentCoding coding, std::pmr::memory_resource* resource)
+HttpContentEncoder::HttpContentEncoder(
+    HttpContentCoding coding, std::pmr::memory_resource* resource)
     : coding_(coding),
       resource_(httpPmrResourceOrDefault(resource)),
       impl_(nullptr) {
@@ -235,7 +254,8 @@ HttpContentEncoder::~HttpContentEncoder() {
     allocator.deallocate(impl_, 1);
 }
 
-HttpContentEncodeStep HttpContentEncoder::write(std::string_view input, std::pmr::string& output, bool flush) {
+HttpContentEncodeStep HttpContentEncoder::write(
+    std::string_view input, std::pmr::string& output, bool flush) {
     if (finished_ || failed_) {
         return HttpContentEncodeStep::kFailure;
     }
@@ -260,7 +280,8 @@ HttpContentEncodeStep HttpContentEncoder::write(std::string_view input, std::pmr
             result = encodeGzip(*impl_, input, output, flush);
             break;
         case HttpContentCoding::kBrotli:
-            result = encodeBrotli(*impl_, input, output, flush ? BROTLI_OPERATION_FLUSH : BROTLI_OPERATION_PROCESS);
+            result = encodeBrotli(
+                *impl_, input, output, flush ? BROTLI_OPERATION_FLUSH : BROTLI_OPERATION_PROCESS);
             break;
         case HttpContentCoding::kZstd:
             result = encodeZstd(*impl_, input, output, flush ? ZSTD_e_flush : ZSTD_e_continue);

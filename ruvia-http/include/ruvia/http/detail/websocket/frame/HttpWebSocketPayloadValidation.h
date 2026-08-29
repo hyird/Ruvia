@@ -16,5 +16,6 @@ namespace ruvia::detail {
 [[nodiscard]] bool isValidUtf8(std::string_view value) noexcept;
 
 // The protocol failure a Close payload commits, or nullopt when it is legal.
-[[nodiscard]] std::optional<WebSocketProtocolFailure> webSocketClosePayloadFailure(std::string_view payload) noexcept;
+[[nodiscard]] std::optional<WebSocketProtocolFailure> webSocketClosePayloadFailure(
+    std::string_view payload) noexcept;
 }  // namespace ruvia::detail

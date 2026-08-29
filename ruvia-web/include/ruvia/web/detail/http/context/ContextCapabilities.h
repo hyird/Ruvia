@@ -58,7 +58,8 @@ public:
     constexpr ContextRequestBodySource() noexcept
         : value_(ContextBufferedRequestBodySource{}) {}
 
-    [[nodiscard]] static constexpr ContextRequestBodySource lazy(RequestBodyLoader& loader) noexcept {
+    [[nodiscard]] static constexpr ContextRequestBodySource lazy(
+        RequestBodyLoader& loader) noexcept {
         return ContextRequestBodySource(ContextLazyRequestBodySource(loader));
     }
 
@@ -82,7 +83,8 @@ public:
     [[nodiscard]] constexpr const ContextStreamingRequestBodySource* streaming() const&& = delete;
 
 private:
-    using Value = std::variant<ContextBufferedRequestBodySource, ContextLazyRequestBodySource, ContextStreamingRequestBodySource>;
+    using Value = std::variant<ContextBufferedRequestBodySource, ContextLazyRequestBodySource,
+        ContextStreamingRequestBodySource>;
 
     template <typename Source>
     explicit constexpr ContextRequestBodySource(Source source) noexcept
@@ -135,7 +137,8 @@ public:
     constexpr ContextResponseOutput() noexcept
         : value_(ContextBufferedResponseOutput{}) {}
 
-    [[nodiscard]] static constexpr ContextResponseOutput responseStream(ResponseStreamWriter& writer) noexcept {
+    [[nodiscard]] static constexpr ContextResponseOutput responseStream(
+        ResponseStreamWriter& writer) noexcept {
         return ContextResponseOutput(ContextResponseStreamOutput(writer));
     }
 
@@ -159,7 +162,8 @@ public:
     [[nodiscard]] constexpr const ContextWebSocketOutput* webSocket() const&& = delete;
 
 private:
-    using Value = std::variant<ContextBufferedResponseOutput, ContextResponseStreamOutput, ContextWebSocketOutput>;
+    using Value = std::variant<ContextBufferedResponseOutput, ContextResponseStreamOutput,
+        ContextWebSocketOutput>;
 
     template <typename Output>
     explicit constexpr ContextResponseOutput(Output output) noexcept

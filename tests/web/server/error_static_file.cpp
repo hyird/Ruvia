@@ -28,7 +28,8 @@ namespace {
 
 constexpr std::string_view kErrorBody = "file-backed error response\n";
 
-[[nodiscard]] std::string readHead(asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
+[[nodiscard]] std::string readHead(
+    asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
     const std::size_t n = asio::read_until(socket, buffer, "\r\n\r\n", ec);
     if (ec) {
         return {};
@@ -41,9 +42,11 @@ constexpr std::string_view kErrorBody = "file-backed error response\n";
 struct FileErrorHandler final {
     ruvia::StaticRoot* root{nullptr};
 
-    ruvia::Task<ruvia::HttpResponse> operator()(ruvia::Context& context, ruvia::HttpErrorInfo info) const {
+    ruvia::Task<ruvia::HttpResponse> operator()(
+        ruvia::Context& context, ruvia::HttpErrorInfo info) const {
         context.status(info.status());
-        co_return context.staticFile(*root, {.relativePath = "error.txt", .contentType = "text/plain"});
+        co_return context.staticFile(
+            *root, {.relativePath = "error.txt", .contentType = "text/plain"});
     }
 };
 
@@ -51,7 +54,10 @@ struct FileErrorHandler final {
 
 int main() {
     namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() / ("ruvia_error_static_file_test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto dir =
+        fs::temp_directory_path() /
+        ("ruvia_error_static_file_test_" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     fs::create_directories(dir);
     {
         std::ofstream f(dir / "error.txt");
@@ -70,7 +76,9 @@ int main() {
     options.documentRoot = ruvia::detail::HttpServerOptions::DocumentRoot::standalone(root);
     options.compression.emplace();
 
-    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
+    ruvia::detail::WebWorkerRuntime server(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {},
+        options);
     server.start();
 
     int rc = 0;

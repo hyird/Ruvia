@@ -29,7 +29,8 @@ namespace {
 
 std::uint16_t availablePort() {
     asio::io_context context;
-    asio::ip::tcp::acceptor acceptor(context, asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    asio::ip::tcp::acceptor acceptor(
+        context, asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     return acceptor.local_endpoint().port();
 }
 
@@ -38,8 +39,10 @@ std::uint16_t availablePort() {
 int main() {
     auto& app = ruvia::app();
     const auto failingPort = availablePort();
-    const auto missingCertificate = std::filesystem::temp_directory_path() / ("ruvia_missing_certificate_" + std::to_string(failingPort));
-    const auto missingPrivateKey = std::filesystem::temp_directory_path() / ("ruvia_missing_private_key_" + std::to_string(failingPort));
+    const auto missingCertificate = std::filesystem::temp_directory_path() /
+                                    ("ruvia_missing_certificate_" + std::to_string(failingPort));
+    const auto missingPrivateKey = std::filesystem::temp_directory_path() /
+                                   ("ruvia_missing_private_key_" + std::to_string(failingPort));
     std::filesystem::remove(missingCertificate);
     std::filesystem::remove(missingPrivateKey);
     app.listen({.address = "127.0.0.1",
@@ -49,7 +52,8 @@ int main() {
                            .certificateChainFile = missingCertificate,
                            .privateKeyFile = missingPrivateKey,
                        }})
-        .server({.workerCount = 1, .memoryPool = {.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes}});
+        .server({.workerCount = 1,
+            .memoryPool = {.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes}});
 
     bool preparationFailed = false;
     try {
@@ -61,13 +65,15 @@ int main() {
         return 1;
     }
 
-    const auto staticRootPath = std::filesystem::temp_directory_path() / "ruvia_app_startup_retry_static_root";
+    const auto staticRootPath =
+        std::filesystem::temp_directory_path() / "ruvia_app_startup_retry_static_root";
     std::filesystem::remove_all(staticRootPath);
     std::filesystem::create_directories(staticRootPath);
     std::ofstream(staticRootPath / "index.html") << "ok";
     ruvia::DocumentRootConfig documentRoot;
     documentRoot.root = staticRootPath;
-    documentRoot.staticOptions.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
+    documentRoot.staticOptions.fileTypes =
+        ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     documentRoot.staticOptions.mimeTypes.push_back(ruvia::StaticMimeType{
         .extension = ".custom",
         .contentType = "text/x-custom",
@@ -77,7 +83,8 @@ int main() {
     bool started = false;
     std::size_t stopCalls = 0;
     app.listen({.address = "127.0.0.1", .http = availablePort()})
-        .server({.workerCount = 1, .memoryPool = {.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes * 2}})
+        .server({.workerCount = 1,
+            .memoryPool = {.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes * 2}})
         .onStart([&] {
             started = true;
             app.stop();

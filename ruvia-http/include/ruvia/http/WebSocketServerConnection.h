@@ -18,8 +18,22 @@ namespace ruvia {
 
 enum class WebSocketTransportDisposition : std::uint8_t { kKeepOpen, kEndTransport };
 enum class WebSocketLivenessMode : std::uint8_t { kOpen, kAwaitingPeerClose, kInactive };
-enum class WebSocketFrameSubmitStatus : std::uint8_t { kAccepted, kNotOpen, kInvalidOpcode, kMessageTooLarge, kInvalidTextPayload, kControlFrameTooLarge };
-enum class WebSocketCloseSubmitStatus : std::uint8_t { kAccepted, kAlreadyClosing, kClosed, kInvalidCode, kInvalidReason, kReasonTooLarge };
+enum class WebSocketFrameSubmitStatus : std::uint8_t {
+    kAccepted,
+    kNotOpen,
+    kInvalidOpcode,
+    kMessageTooLarge,
+    kInvalidTextPayload,
+    kControlFrameTooLarge
+};
+enum class WebSocketCloseSubmitStatus : std::uint8_t {
+    kAccepted,
+    kAlreadyClosing,
+    kClosed,
+    kInvalidCode,
+    kInvalidReason,
+    kReasonTooLarge
+};
 enum class WebSocketAbortDisposition : std::uint8_t { kAbortTransport, kNoTransportAction };
 enum class WebSocketOutputConsumeStatus : std::uint8_t { kPending, kDrained, kOutOfRange };
 enum class WebSocketFeedStatus : std::uint8_t { kAccepted, kInactive };
@@ -41,7 +55,8 @@ public:
 
 private:
     friend class WebSocketServerConnection;
-    constexpr WebSocketOutputPlan(std::string_view bytes, WebSocketTransportDisposition disposition) noexcept
+    constexpr WebSocketOutputPlan(
+        std::string_view bytes, WebSocketTransportDisposition disposition) noexcept
         : bytes_(bytes),
           disposition_(disposition) {}
 
@@ -49,7 +64,14 @@ private:
     WebSocketTransportDisposition disposition_;
 };
 
-enum class WebSocketEventKind : std::uint8_t { kMessage, kPing, kPong, kClose, kProtocolError, kTransportEnd };
+enum class WebSocketEventKind : std::uint8_t {
+    kMessage,
+    kPing,
+    kPong,
+    kClose,
+    kProtocolError,
+    kTransportEnd
+};
 
 class WebSocketMessageEvent final {
 public:
@@ -160,12 +182,15 @@ public:
 
 private:
     friend class WebSocketServerConnection;
-    using Value = std::variant<WebSocketMessageEvent, WebSocketPingEvent, WebSocketPongEvent, WebSocketCloseEvent, WebSocketProtocolErrorEvent, WebSocketTransportEndEvent>;
-    static_assert(static_cast<std::size_t>(WebSocketEventKind::kTransportEnd) + 1 == std::variant_size_v<Value>);
+    using Value = std::variant<WebSocketMessageEvent, WebSocketPingEvent, WebSocketPongEvent,
+        WebSocketCloseEvent, WebSocketProtocolErrorEvent, WebSocketTransportEndEvent>;
+    static_assert(static_cast<std::size_t>(WebSocketEventKind::kTransportEnd) + 1 ==
+                  std::variant_size_v<Value>);
     template <typename Event>
     explicit WebSocketEvent(Event event) noexcept
         : value_(std::move(event)) {}
-    [[nodiscard]] static WebSocketEvent message(WebSocketOpcode opcode, std::string_view payload) noexcept {
+    [[nodiscard]] static WebSocketEvent message(
+        WebSocketOpcode opcode, std::string_view payload) noexcept {
         return WebSocketEvent(WebSocketMessageEvent(opcode, payload));
     }
     [[nodiscard]] static WebSocketEvent ping(std::string_view payload) noexcept {
@@ -174,7 +199,8 @@ private:
     [[nodiscard]] static WebSocketEvent pong(std::string_view payload) noexcept {
         return WebSocketEvent(WebSocketPongEvent(payload));
     }
-    [[nodiscard]] static WebSocketEvent close(std::uint16_t code, std::string_view reason) noexcept {
+    [[nodiscard]] static WebSocketEvent close(
+        std::uint16_t code, std::string_view reason) noexcept {
         return WebSocketEvent(WebSocketCloseEvent(code, reason));
     }
     [[nodiscard]] static WebSocketEvent protocolError(std::uint16_t code) noexcept {
@@ -210,8 +236,10 @@ public:
     void notifyTransportEof() noexcept;
     [[nodiscard]] WebSocketAbortDisposition abort() noexcept;
     [[nodiscard]] WebSocketLivenessMode livenessMode() const noexcept;
-    [[nodiscard]] WebSocketFrameSubmitStatus submitFrame(WebSocketOpcode opcode, std::string_view payload);
-    [[nodiscard]] WebSocketCloseSubmitStatus submitClose(std::uint16_t code, std::string_view reason);
+    [[nodiscard]] WebSocketFrameSubmitStatus submitFrame(
+        WebSocketOpcode opcode, std::string_view payload);
+    [[nodiscard]] WebSocketCloseSubmitStatus submitClose(
+        std::uint16_t code, std::string_view reason);
 
 private:
     class Impl;

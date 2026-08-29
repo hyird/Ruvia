@@ -52,7 +52,8 @@ std::error_code DbSlotSocket::ensureAssigned(NativeSocket fd) noexcept {
     WSAPROTOCOL_INFOW protocolInfo{};
     int protocolInfoSize = static_cast<int>(sizeof(protocolInfo));
     const auto source = static_cast<SOCKET>(fd);
-    if (::getsockopt(source, SOL_SOCKET, SO_PROTOCOL_INFOW, reinterpret_cast<char*>(&protocolInfo), &protocolInfoSize) == SOCKET_ERROR) {
+    if (::getsockopt(source, SOL_SOCKET, SO_PROTOCOL_INFOW, reinterpret_cast<char*>(&protocolInfo),
+            &protocolInfoSize) == SOCKET_ERROR) {
         return std::error_code(WSAGetLastError(), std::system_category());
     }
     if (protocolInfo.iAddressFamily == AF_INET) {

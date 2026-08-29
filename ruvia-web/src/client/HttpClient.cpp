@@ -22,10 +22,12 @@ HttpClientState::HttpClientState(EventLoop loop, const HttpClientConfig& config)
     : loop_(requireLoop(std::move(loop))),
       worker_(loop_.handle()),
       memory_(),
-      clients_(loop_.ioContext(), worker_, memory_.resource(), config) {}
+      clients_(loop_.ioContext(), worker_, memory_.resource(), config),
+      closeSignal_(worker_) {}
 
 HttpClientState::~HttpClientState() {
-    if (phase_.load(std::memory_order_acquire) != Phase::kClosed || operationScope_.hasPendingOperations()) {
+    if (phase_.load(std::memory_order_acquire) != Phase::kClosed || !closeComplete_ ||
+        operationScope_.hasPendingOperations()) {
         std::terminate();
     }
 }
@@ -41,13 +43,16 @@ void HttpClientState::bindStop() {
     } catch (...) {
         clients_.closeNow();
         phase_.store(Phase::kClosed, std::memory_order_release);
+        closeComplete_ = true;
         throw;
     }
 }
 
 HttpClientHandle HttpClientState::handle(OperationOptions options) {
     requireOpenOnWorker();
-    options = mergeOperationOptions(OperationOptions{.timeout = std::nullopt, .stopToken = stopSource_.token()}, std::move(options));
+    options = mergeOperationOptions(
+        OperationOptions{.timeout = std::nullopt, .stopToken = stopSource_.token()},
+        std::move(options));
     return clients_.get(memory_.resource(), operationScope_).withOptions(std::move(options));
 }
 
@@ -84,7 +89,8 @@ void HttpClientState::requireOpenOnWorker() const {
 void HttpClientState::requestClose() noexcept {
     stopSource_.requestStop();
     auto expected = Phase::kOpen;
-    if (!phase_.compare_exchange_strong(expected, Phase::kClosing, std::memory_order_acq_rel, std::memory_order_acquire)) {
+    if (!phase_.compare_exchange_strong(
+            expected, Phase::kClosing, std::memory_order_acq_rel, std::memory_order_acquire)) {
         return;
     }
     if (worker_.isCurrent()) {
@@ -92,7 +98,8 @@ void HttpClientState::requestClose() noexcept {
         return;
     }
     try {
-        if (!WorkerHandleAccess::deferIfAttached(worker_, [state = shared_from_this()] { state->startCloseOnWorker(); })) {
+        if (!WorkerHandleAccess::deferIfAttached(
+                worker_, [state = shared_from_this()] { state->startCloseOnWorker(); })) {
             if (phase_.load(std::memory_order_acquire) != Phase::kClosed) {
                 std::terminate();
             }
@@ -104,12 +111,30 @@ void HttpClientState::requestClose() noexcept {
     }
 }
 
+Task<void> HttpClientState::shutdown() {
+    return shutdownOwned(shared_from_this());
+}
+
+Task<void> HttpClientState::shutdownOwned(std::shared_ptr<HttpClientState> state) {
+    if (!state->worker_.isCurrent()) {
+        throw std::logic_error("HTTP client shutdown must run on its bound event loop");
+    }
+    state->startCloseOnWorker();
+    while (!state->closeComplete_) {
+        co_await state->closeSignal_.wait();
+    }
+    if (state->closeFailure_) {
+        std::rethrow_exception(state->closeFailure_);
+    }
+}
+
 void HttpClientState::startCloseOnWorker() noexcept {
     if (!worker_.isCurrent()) {
         std::terminate();
     }
     auto expected = Phase::kOpen;
-    (void)phase_.compare_exchange_strong(expected, Phase::kClosing, std::memory_order_acq_rel, std::memory_order_acquire);
+    (void)phase_.compare_exchange_strong(
+        expected, Phase::kClosing, std::memory_order_acq_rel, std::memory_order_acquire);
     stopSource_.requestStop();
     clients_.closeNow();
     if (closeTaskStarted_ || phase_.load(std::memory_order_acquire) == Phase::kClosed) {
@@ -118,7 +143,9 @@ void HttpClientState::startCloseOnWorker() noexcept {
     closeTaskStarted_ = true;
     try {
         auto state = shared_from_this();
-        asyncStartTask(closeOnWorker(), asio::bind_executor(loop_.executor(), [state](const TaskCompletionResult<void>& result) { state->finishClose(result); }));
+        asyncStartTask(closeOnWorker(),
+            asio::bind_executor(loop_.executor(),
+                [state](const TaskCompletionResult<void>& result) { state->finishClose(result); }));
     } catch (...) {
         phase_.store(Phase::kClosed, std::memory_order_release);
         std::terminate();
@@ -127,10 +154,16 @@ void HttpClientState::startCloseOnWorker() noexcept {
 
 Task<void> HttpClientState::closeOnWorker() {
     co_await clients_.join();
+    co_await operationScope_.closeAndJoin();
 }
 
 void HttpClientState::finishClose(const TaskCompletionResult<void>& result) {
     phase_.store(Phase::kClosed, std::memory_order_release);
+    if (const auto* failed = result.failure()) {
+        closeFailure_ = failed->exception();
+    }
+    closeComplete_ = true;
+    closeSignal_.notify();
     if (const auto* failed = result.failure()) {
         std::rethrow_exception(failed->exception());
     }
@@ -159,6 +192,10 @@ ScopedOperation<HttpClientResponse> HttpClient::send(const HttpClientRequestView
 
 void HttpClient::close() noexcept {
     state_->requestClose();
+}
+
+Task<void> HttpClient::shutdown() & {
+    return state_->shutdown();
 }
 
 HttpClientStats HttpClient::stats() const {

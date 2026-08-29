@@ -69,7 +69,8 @@ private:
 // One owner prevents Context from representing a half-built query cache.
 class RequestQueryCache final {
 public:
-    RequestQueryCache(std::pmr::vector<std::pmr::string>&& storage, RequestNameValueList&& fields, RequestQueryValues&& values) noexcept
+    RequestQueryCache(std::pmr::vector<std::pmr::string>&& storage, RequestNameValueList&& fields,
+        RequestQueryValues&& values) noexcept
         : storage_(std::move(storage)),
           fields_(std::move(fields)),
           values_(std::move(values)) {}

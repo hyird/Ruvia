@@ -40,9 +40,11 @@ RUVIA_TEST(http2_settings_initial_window_size) {
     const auto invalid = settings.apply(Http2SettingId::kInitialWindowSize, 0x80000000U);
     RUVIA_CHECK(invalid.failure() != nullptr);
     RUVIA_CHECK(invalid.failure()->error() == Http2PeerSettingError::kInvalidInitialWindow);
-    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidInitialWindow) == Http2ErrorCode::kFlowControlError);
+    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidInitialWindow) ==
+                Http2ErrorCode::kFlowControlError);
     // A non-flow error maps to PROTOCOL_ERROR.
-    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidEnablePush) == Http2ErrorCode::kProtocolError);
+    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidEnablePush) ==
+                Http2ErrorCode::kProtocolError);
 }
 
 RUVIA_TEST(http2_settings_max_frame_size_bounds) {
@@ -81,7 +83,8 @@ RUVIA_TEST(http2_settings_enable_connect_protocol) {
     // Once enabled it must not be turned off (RFC 8441).
     const auto disabled = settings.apply(Http2SettingId::kEnableConnectProtocol, 0);
     RUVIA_CHECK(disabled.failure() != nullptr);
-    RUVIA_CHECK(disabled.failure()->error() == Http2PeerSettingError::kInvalidEnableConnectProtocolTransition);
+    RUVIA_CHECK(disabled.failure()->error() ==
+                Http2PeerSettingError::kInvalidEnableConnectProtocolTransition);
     // A value other than 0/1 is invalid.
     const auto invalid = settings.apply(Http2SettingId::kEnableConnectProtocol, 2);
     RUVIA_CHECK(invalid.failure() != nullptr);

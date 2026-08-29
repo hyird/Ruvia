@@ -136,7 +136,8 @@ public:
 
     [[nodiscard]] DbMigrationReport migrate(std::span<const DbMigration> migrations) const;
 
-    [[nodiscard]] static DbMigrationReport migrate(const DbConfig& config, std::span<const DbMigration> migrations, const DbMigratorOptions& options = {});
+    [[nodiscard]] static DbMigrationReport migrate(const DbConfig& config,
+        std::span<const DbMigration> migrations, const DbMigratorOptions& options = {});
 
 private:
     class Storage;
@@ -146,7 +147,8 @@ private:
     };
     using StorageOwner = std::unique_ptr<Storage, StorageDeleter>;
 
-    [[nodiscard]] static StorageOwner makeStorage(const DbConfig& config, const DbMigratorOptions& options);
+    [[nodiscard]] static StorageOwner makeStorage(
+        const DbConfig& config, const DbMigratorOptions& options);
 
     StorageOwner storage_;
 };

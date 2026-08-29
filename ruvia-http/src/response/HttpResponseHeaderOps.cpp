@@ -33,12 +33,17 @@ void writeUnsignedHeaderValue(HttpResponseHeader& header, std::uint64_t value) {
 void validateConnectionControlField(std::string_view name, std::string_view value) {
     if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
         detail::HttpConnectionOptions options;
-        if (options.parseField(value, detail::HttpFieldListRole::kSender, [](std::string_view option) noexcept { return !detail::httpConnectionOptionConflictsWithManagedField(option); }) != detail::HttpFieldListParseStatus::kOk) {
+        if (options.parseField(
+                value, detail::HttpFieldListRole::kSender, [](std::string_view option) noexcept {
+                    return !detail::httpConnectionOptionConflictsWithManagedField(option);
+                }) != detail::HttpFieldListParseStatus::kOk) {
             throw std::invalid_argument("invalid HTTP Connection header");
         }
     } else if (detail::httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
         detail::HttpUpgradeProtocols protocols;
-        if (protocols.parseField(value, detail::HttpFieldListRole::kSender, [](const detail::HttpUpgradeProtocol&) noexcept { return true; }) != detail::HttpFieldListParseStatus::kOk) {
+        if (protocols.parseField(value, detail::HttpFieldListRole::kSender,
+                [](const detail::HttpUpgradeProtocol&) noexcept { return true; }) !=
+            detail::HttpFieldListParseStatus::kOk) {
             throw std::invalid_argument("invalid HTTP Upgrade header");
         }
     } else if (detail::httpAsciiEqualsIgnoreCase(name, "TE")) {
@@ -60,21 +65,26 @@ void validateConnectionControlField(std::string_view name, std::string_view valu
 
 void HttpResponse::recordKnownHeaderIndex(std::uint32_t knownBit, std::size_t index) noexcept {
     knownHeaderBits_ |= knownBit;
-    detail::recordResponseHeaderIndex(knownHeaderIndexes_, detail::responseKnownHeaderSlot(knownBit), index);
+    detail::recordResponseHeaderIndex(
+        knownHeaderIndexes_, detail::responseKnownHeaderSlot(knownBit), index);
 }
 
-HttpResponseHeader* HttpResponse::findHeaderForUpdate(std::string_view key, std::uint32_t knownBit) noexcept {
+HttpResponseHeader* HttpResponse::findHeaderForUpdate(
+    std::string_view key, std::uint32_t knownBit) noexcept {
     return const_cast<HttpResponseHeader*>(std::as_const(*this).findHeaderForRead(key, knownBit));
 }
 
-const HttpResponseHeader* HttpResponse::findHeaderForRead(std::string_view key, std::uint32_t knownBit) const noexcept {
+const HttpResponseHeader* HttpResponse::findHeaderForRead(
+    std::string_view key, std::uint32_t knownBit) const noexcept {
     const auto* const begin = headers_.begin();
     const auto* const end = headers_.end();
-    const auto* const header = detail::findResponseHeaderIndexed(begin, end, knownHeaderIndexes_, detail::responseKnownHeaderSlot(knownBit), key, knownBit);
+    const auto* const header = detail::findResponseHeaderIndexed(
+        begin, end, knownHeaderIndexes_, detail::responseKnownHeaderSlot(knownBit), key, knownBit);
     return header == end ? nullptr : header;
 }
 
-HttpResponseHeader& HttpResponse::prepareHeaderValueStorage(std::string_view key, std::size_t valueSize, std::uint32_t knownBit) {
+HttpResponseHeader& HttpResponse::prepareHeaderValueStorage(
+    std::string_view key, std::size_t valueSize, std::uint32_t knownBit) {
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {
         const bool wasAppended = detail::responseHeaderAppend(*header);
         headers_.assignUninitializedValue(*header, key, valueSize, knownBit);
@@ -93,7 +103,8 @@ std::string_view HttpResponse::knownHeaderValue(std::uint32_t bit) const noexcep
 }
 
 std::optional<std::string_view> HttpResponse::header(std::string_view name) const& noexcept {
-    if (const auto* const found = findHeaderForRead(name, detail::classifyResponseHeaderName(name))) {
+    if (const auto* const found =
+            findHeaderForRead(name, detail::classifyResponseHeaderName(name))) {
         return found->value();
     }
     return std::nullopt;
@@ -110,7 +121,8 @@ void HttpResponse::rebuildKnownHeaderIndex() noexcept {
             continue;
         }
         knownHeaderBits_ |= knownBit;
-        detail::recordResponseHeaderIndex(knownHeaderIndexes_, detail::responseKnownHeaderSlot(knownBit), static_cast<std::size_t>(cursor - begin));
+        detail::recordResponseHeaderIndex(knownHeaderIndexes_,
+            detail::responseKnownHeaderSlot(knownBit), static_cast<std::size_t>(cursor - begin));
     }
 }
 
@@ -130,13 +142,16 @@ void HttpResponse::header(std::string_view key, std::string_view value, HeaderOp
     }
     validateConnectionControlField(key, value);
     const auto knownBit = detail::classifyResponseHeaderName(key);
-    if (knownBit == detail::kResponseHeaderContentType && !detail::isValidHttpContentTypeFieldValue(value)) {
+    if (knownBit == detail::kResponseHeaderContentType &&
+        !detail::isValidHttpContentTypeFieldValue(value)) {
         throw std::invalid_argument("invalid HTTP Content-Type header");
     }
-    if (knownBit == detail::kResponseHeaderContentEncoding && !detail::isValidHttpContentEncodingFieldValue(value, detail::HttpFieldListRole::kSender)) {
+    if (knownBit == detail::kResponseHeaderContentEncoding &&
+        !detail::isValidHttpContentEncodingFieldValue(value, detail::HttpFieldListRole::kSender)) {
         throw std::invalid_argument("invalid HTTP Content-Encoding header");
     }
-    if (detail::httpAsciiEqualsIgnoreCase(key, "Trailer") && !detail::isValidHttpResponseTrailerFieldValue(value, detail::HttpFieldListRole::kSender)) {
+    if (detail::httpAsciiEqualsIgnoreCase(key, "Trailer") &&
+        !detail::isValidHttpResponseTrailerFieldValue(value, detail::HttpFieldListRole::kSender)) {
         throw std::invalid_argument("invalid HTTP Trailer header");
     }
     if (responseHeaderModeAppends(options.mode)) {
@@ -161,7 +176,8 @@ void HttpResponse::removeHeader(std::string_view key) {
     (void)removeHeaderValidated(key, detail::classifyResponseHeaderName(key));
 }
 
-void HttpResponse::setHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit) {
+void HttpResponse::setHeaderValidated(
+    std::string_view key, std::string_view value, std::uint32_t knownBit) {
     detail::validateResponseHeaderStorageSize(key.size(), value.size());
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {
         const bool wasAppended = detail::responseHeaderAppend(*header);
@@ -177,7 +193,8 @@ void HttpResponse::setHeaderValidated(std::string_view key, std::string_view val
     recordKnownHeaderIndex(knownBit, index);
 }
 
-void HttpResponse::appendHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit) {
+void HttpResponse::appendHeaderValidated(
+    std::string_view key, std::string_view value, std::uint32_t knownBit) {
     detail::validateResponseHeaderStorageSize(key.size(), value.size());
     if (detail::responseHeaderAppendForbidden(knownBit)) {
         throw std::invalid_argument("HTTP response header cannot be appended");
@@ -204,7 +221,8 @@ void HttpResponse::appendHeaderValidated(std::string_view key, std::string_view 
     recordKnownHeaderIndex(knownBit, index);
 }
 
-HttpResponseHeader& HttpResponse::appendHeaderUninitializedValue(std::string_view key, std::size_t valueSize, std::uint32_t knownBit) {
+HttpResponseHeader& HttpResponse::appendHeaderUninitializedValue(
+    std::string_view key, std::size_t valueSize, std::uint32_t knownBit) {
     detail::validateResponseHeaderStorageSize(key.size(), valueSize);
     const auto index = headers_.size();
     auto& header = headers_.addUninitializedValue(key, valueSize, knownBit);
@@ -213,7 +231,8 @@ HttpResponseHeader& HttpResponse::appendHeaderUninitializedValue(std::string_vie
     return header;
 }
 
-HttpResponseHeader& HttpResponse::collapseResponseHeaders(HttpResponseHeader& retained, std::string_view key, std::uint32_t knownBit) noexcept {
+HttpResponseHeader& HttpResponse::collapseResponseHeaders(
+    HttpResponseHeader& retained, std::string_view key, std::uint32_t knownBit) noexcept {
     auto* const begin = headers_.begin();
     auto* const end = headers_.end();
     auto* const retainedAddress = &retained;
@@ -221,7 +240,8 @@ HttpResponseHeader& HttpResponse::collapseResponseHeaders(HttpResponseHeader& re
     auto* write = begin;
     for (auto* read = begin; read != end; ++read) {
         const auto headerKnownBit = detail::responseHeaderKnownBit(*read);
-        const bool matches = knownBit != 0 ? headerKnownBit == knownBit : detail::httpAsciiEqualsIgnoreCase(read->name(), key);
+        const bool matches = knownBit != 0 ? headerKnownBit == knownBit
+                                           : detail::httpAsciiEqualsIgnoreCase(read->name(), key);
         if (matches && read != retainedAddress) {
             headers_.releaseHeader(*read);
             continue;
@@ -249,7 +269,8 @@ bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t kno
 
     for (auto* read = begin; read != end; ++read) {
         const auto headerKnownBit = detail::responseHeaderKnownBit(*read);
-        const bool matches = knownBit != 0 ? headerKnownBit == knownBit : detail::httpAsciiEqualsIgnoreCase(read->name(), key);
+        const bool matches = knownBit != 0 ? headerKnownBit == knownBit
+                                           : detail::httpAsciiEqualsIgnoreCase(read->name(), key);
         if (matches) {
             headers_.releaseHeader(*read);
             removed = true;
@@ -287,7 +308,8 @@ void HttpResponse::setHeaderStableView(std::string_view key, std::string_view va
     recordKnownHeaderIndex(knownBit, index);
 }
 
-void HttpResponse::setHeaderUnsigned(std::string_view key, std::uint64_t value, std::uint32_t knownBit) {
+void HttpResponse::setHeaderUnsigned(
+    std::string_view key, std::uint64_t value, std::uint32_t knownBit) {
     auto& header = prepareHeaderValueStorage(key, detail::httpUnsignedDecimalSize(value), knownBit);
     writeUnsignedHeaderValue(header, value);
 }

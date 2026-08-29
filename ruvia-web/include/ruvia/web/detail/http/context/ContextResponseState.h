@@ -85,7 +85,8 @@ public:
     HttpResponse& activeResponse() && = delete;
 
     [[nodiscard]] const HttpResponse& activeResponse() const& noexcept {
-        return std::visit([](const auto& state) -> const HttpResponse& { return state.response(); }, value_);
+        return std::visit(
+            [](const auto& state) -> const HttpResponse& { return state.response(); }, value_);
     }
     const HttpResponse& activeResponse() const&& = delete;
 

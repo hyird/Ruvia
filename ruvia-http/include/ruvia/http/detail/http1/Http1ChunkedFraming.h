@@ -38,7 +38,8 @@ private:
     std::size_t offset_{storage_.size()};
 };
 
-inline void appendHttp1TrailerSection(std::pmr::string& output, const HttpResponseTrailerSection& section) {
+inline void appendHttp1TrailerSection(
+    std::pmr::string& output, const HttpResponseTrailerSection& section) {
     for (const auto& trailer : section.fields()) {
         output.append(trailer.name().data(), trailer.name().size());
         output.append(": ");

@@ -10,7 +10,8 @@ DbValue::DbValue(std::nullptr_t)
     : storage_(std::monostate{}) {}
 
 DbValue::DbValue(const char* value)
-    : storage_(value == nullptr ? Storage(std::monostate{}) : Storage(std::in_place_type<BorrowedText>, value)) {}
+    : storage_(value == nullptr ? Storage(std::monostate{})
+                                : Storage(std::in_place_type<BorrowedText>, value)) {}
 
 DbValue::DbValue(std::string_view value)
     : storage_(std::in_place_type<BorrowedText>, value) {}
@@ -27,7 +28,8 @@ detail::DbValueType DbValue::type() const noexcept {
             using Value = std::remove_cvref_t<decltype(value)>;
             if constexpr (std::is_same_v<Value, std::monostate>) {
                 return detail::DbValueType::kNull;
-            } else if constexpr (std::is_same_v<Value, BorrowedText> || std::is_same_v<Value, std::pmr::string>) {
+            } else if constexpr (std::is_same_v<Value, BorrowedText> ||
+                                 std::is_same_v<Value, std::pmr::string>) {
                 return detail::DbValueType::kString;
             } else if constexpr (std::is_same_v<Value, std::int64_t>) {
                 return detail::DbValueType::kSigned;
@@ -133,7 +135,8 @@ DbRow::DbRow(std::pmr::memory_resource* resource)
       storage_(std::in_place_type<OwnedFields>, resource_),
       columnNames_(std::in_place_type<OwnedColumnNames>, resource_) {}
 
-DbRow::DbRow(const DbField* fields, std::size_t size, const std::pmr::string* columnNames, std::size_t columnCount, std::pmr::memory_resource* resource)
+DbRow::DbRow(const DbField* fields, std::size_t size, const std::pmr::string* columnNames,
+    std::size_t columnCount, std::pmr::memory_resource* resource)
     : resource_(detail::pmrResourceOrDefault(resource)),
       storage_(std::in_place_type<BorrowedFields>, fields, size),
       columnNames_(std::in_place_type<BorrowedColumnNames>, columnNames, columnCount) {}
@@ -144,13 +147,15 @@ DbRow::DbRow(DbRow&& other) noexcept
           if (auto* owned = std::get_if<OwnedFields>(&other.storage_)) {
               return Storage(std::in_place_type<OwnedFields>, std::move(*owned));
           }
-          return Storage(std::in_place_type<BorrowedFields>, std::get<BorrowedFields>(other.storage_));
+          return Storage(
+              std::in_place_type<BorrowedFields>, std::get<BorrowedFields>(other.storage_));
       }()),
       columnNames_([&other]() noexcept -> ColumnNameStorage {
           if (auto* owned = std::get_if<OwnedColumnNames>(&other.columnNames_)) {
               return ColumnNameStorage(std::in_place_type<OwnedColumnNames>, std::move(*owned));
           }
-          return ColumnNameStorage(std::in_place_type<BorrowedColumnNames>, std::get<BorrowedColumnNames>(other.columnNames_));
+          return ColumnNameStorage(std::in_place_type<BorrowedColumnNames>,
+              std::get<BorrowedColumnNames>(other.columnNames_));
       }()) {
     other.storage_.emplace<OwnedFields>(other.resource_);
     other.columnNames_.emplace<OwnedColumnNames>(other.resource_);
@@ -179,7 +184,8 @@ DbRow& DbRow::operator=(DbRow&& other) {
             columnNames_.emplace<OwnedColumnNames>(std::move(replacement));
         }
     } else {
-        columnNames_.emplace<BorrowedColumnNames>(std::get<BorrowedColumnNames>(other.columnNames_));
+        columnNames_.emplace<BorrowedColumnNames>(
+            std::get<BorrowedColumnNames>(other.columnNames_));
     }
     other.storage_.emplace<OwnedFields>(other.resource_);
     other.columnNames_.emplace<OwnedColumnNames>(other.resource_);
@@ -292,7 +298,8 @@ const DbRow& DbRows::front() const& noexcept {
 DbMigrationReport::DbMigrationReport(std::pmr::memory_resource* resource)
     : DbMigrationReport(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
 
-DbMigrationReport::DbMigrationReport(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+DbMigrationReport::DbMigrationReport(
+    detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
     : applied_(resource),
       skipped_(resource) {}
 

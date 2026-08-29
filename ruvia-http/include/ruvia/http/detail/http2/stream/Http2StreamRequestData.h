@@ -18,7 +18,8 @@ public:
     using HeaderCheckpoint = Http2HeaderList::Checkpoint;
 
     explicit Http2StreamRequestData(std::pmr::memory_resource* resource = nullptr)
-        : Http2StreamRequestData(HttpResolvedPmrResourceTag{}, httpPmrResourceOrDefault(resource)) {}
+        : Http2StreamRequestData(HttpResolvedPmrResourceTag{}, httpPmrResourceOrDefault(resource)) {
+    }
 
     [[nodiscard]] std::string_view method() const& noexcept {
         return method_;
@@ -105,7 +106,9 @@ public:
     [[nodiscard]] bool appendCookieHeaderValue(std::string_view value, bool hasExistingCookie) {
         constexpr std::string_view kCookieSeparator = "; ";
         const auto separatorBytes = hasExistingCookie ? kCookieSeparator.size() : 0;
-        if (value.size() > kMaxHttpHeaderBytes || cookie_.size() > kMaxHttpHeaderBytes - separatorBytes || cookie_.size() + separatorBytes > kMaxHttpHeaderBytes - value.size()) {
+        if (value.size() > kMaxHttpHeaderBytes ||
+            cookie_.size() > kMaxHttpHeaderBytes - separatorBytes ||
+            cookie_.size() + separatorBytes > kMaxHttpHeaderBytes - value.size()) {
             return false;
         }
 
@@ -131,7 +134,8 @@ public:
     }
     [[nodiscard]] Http2StoredHeaderView headerAt(std::size_t) const&& = delete;
 
-    [[nodiscard]] bool appendHeader(std::string_view name, std::string_view value, RequestHeaderKind kind) {
+    [[nodiscard]] bool appendHeader(
+        std::string_view name, std::string_view value, RequestHeaderKind kind) {
         return headers_.append(name, value, kind);
     }
 

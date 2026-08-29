@@ -72,10 +72,12 @@ RUVIA_TEST(cookie_signature_rejects_unrepresentable_lengths) {
     std::array<char, ruvia::detail::kCookieSignatureSize> output{};
 
     if constexpr (sizeof(std::size_t) > sizeof(std::uint32_t)) {
-        const auto oversizedNameSize = static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)()) + 1;
+        const auto oversizedNameSize =
+            static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)()) + 1;
         bool rejected = false;
         try {
-            ruvia::detail::writeCookieSignature(output.data(), "secret", std::string_view("x", oversizedNameSize), "value");
+            ruvia::detail::writeCookieSignature(
+                output.data(), "secret", std::string_view("x", oversizedNameSize), "value");
         } catch (const std::length_error&) {
             rejected = true;
         }
@@ -83,19 +85,23 @@ RUVIA_TEST(cookie_signature_rejects_unrepresentable_lengths) {
     }
 
     if constexpr (sizeof(std::size_t) > sizeof(int)) {
-        const auto oversizedSecretSize = static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
+        const auto oversizedSecretSize =
+            static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
         bool rejected = false;
         try {
-            ruvia::detail::writeCookieSignature(output.data(), std::string_view("x", oversizedSecretSize), "name", "value");
+            ruvia::detail::writeCookieSignature(
+                output.data(), std::string_view("x", oversizedSecretSize), "name", "value");
         } catch (const std::length_error&) {
             rejected = true;
         }
         RUVIA_CHECK(rejected);
 
-        const auto oversizedMessageSize = static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
+        const auto oversizedMessageSize =
+            static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
         rejected = false;
         try {
-            ruvia::detail::writeCookieSignature(output.data(), "secret", "name", std::string_view("x", oversizedMessageSize));
+            ruvia::detail::writeCookieSignature(
+                output.data(), "secret", "name", std::string_view("x", oversizedMessageSize));
         } catch (const std::length_error&) {
             rejected = true;
         }

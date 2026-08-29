@@ -58,7 +58,9 @@ namespace {
         return false;
     }
     if (value.front() != '"') {
-        return std::ranges::all_of(value, [](char ch) noexcept { return detail::isHttpTokenChar(static_cast<unsigned char>(ch)); });
+        return std::ranges::all_of(value, [](char ch) noexcept {
+            return detail::isHttpTokenChar(static_cast<unsigned char>(ch));
+        });
     }
     if (value.size() < 2 || value.back() != '"') {
         return false;
@@ -70,10 +72,13 @@ namespace {
                 return false;
             }
             const auto escaped = static_cast<unsigned char>(value[cursor]);
-            if (escaped != '\t' && escaped != ' ' && (escaped < 0x21 || escaped > 0x7e) && escaped < 0x80) {
+            if (escaped != '\t' && escaped != ' ' && (escaped < 0x21 || escaped > 0x7e) &&
+                escaped < 0x80) {
                 return false;
             }
-        } else if (ch == '"' || (ch != '\t' && ch != ' ' && ch != 0x21 && (ch < 0x23 || ch > 0x5b) && (ch < 0x5d || ch > 0x7e) && ch < 0x80)) {
+        } else if (ch == '"' ||
+                   (ch != '\t' && ch != ' ' && ch != 0x21 && (ch < 0x23 || ch > 0x5b) &&
+                       (ch < 0x5d || ch > 0x7e) && ch < 0x80)) {
             return false;
         }
     }
@@ -124,7 +129,8 @@ void CacheControlFieldParser::update(std::string_view value) noexcept {
 
         if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "no-store")) {
             value_.set(CacheControlDirective::kNoStore);
-        } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) && detail::httpAsciiEqualsIgnoreCase(name, "no-cache")) {
+        } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) &&
+                   detail::httpAsciiEqualsIgnoreCase(name, "no-cache")) {
             value_.set(CacheControlDirective::kNoCache);
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "no-transform")) {
             value_.set(CacheControlDirective::kNoTransform);
@@ -132,7 +138,8 @@ void CacheControlFieldParser::update(std::string_view value) noexcept {
             value_.set(CacheControlDirective::kMustRevalidate);
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "proxy-revalidate")) {
             value_.set(CacheControlDirective::kProxyRevalidate);
-        } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) && detail::httpAsciiEqualsIgnoreCase(name, "private")) {
+        } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) &&
+                   detail::httpAsciiEqualsIgnoreCase(name, "private")) {
             value_.set(CacheControlDirective::kPrivate);
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "public")) {
             value_.set(CacheControlDirective::kPublic);

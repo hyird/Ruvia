@@ -32,7 +32,8 @@ namespace {
 
 struct SilentPeer final {
     asio::io_context ioContext{1};
-    asio::ip::tcp::acceptor acceptor{ioContext, asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0)};
+    asio::ip::tcp::acceptor acceptor{
+        ioContext, asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0)};
     asio::ip::tcp::socket socket{ioContext};
     asio::steady_timer watchdog{ioContext, std::chrono::seconds(5)};
     std::array<char, 1> input{};
@@ -47,14 +48,15 @@ struct SilentPeer final {
 
     template <typename OnAccepted>
     void start(OnAccepted onAccepted) {
-        acceptor.async_accept(socket, [this, onAccepted = std::move(onAccepted)](std::error_code error) mutable {
-            if (error) {
-                return;
-            }
-            accepted = true;
-            onAccepted();
-            readUntilClosed();
-        });
+        acceptor.async_accept(
+            socket, [this, onAccepted = std::move(onAccepted)](std::error_code error) mutable {
+                if (error) {
+                    return;
+                }
+                accepted = true;
+                onAccepted();
+                readUntilClosed();
+            });
         watchdog.expires_after(std::chrono::seconds(5));
         watchdog.async_wait([this](std::error_code error) {
             if (!error) {
@@ -108,9 +110,11 @@ private:
     return config;
 }
 
-ruvia::Task<void> runCancelledQuery(ruvia::detail::DbRegistry& registry, ruvia::StopToken stopToken, std::optional<ruvia::DbError::Code>& code, std::string& message) {
+ruvia::Task<void> runCancelledQuery(ruvia::detail::DbRegistry& registry, ruvia::StopToken stopToken,
+    std::optional<ruvia::DbError::Code>& code, std::string& message) {
     ruvia::detail::ScopedOperationScope operationScope;
-    auto db = registry.get(std::pmr::get_default_resource(), operationScope).withOptions(ruvia::OperationOptions{.stopToken = std::move(stopToken)});
+    auto db = registry.get(std::pmr::get_default_resource(), operationScope)
+                  .withOptions(ruvia::OperationOptions{.stopToken = std::move(stopToken)});
     try {
         (void)co_await db.query("SELECT 1");
     } catch (const ruvia::DbError& error) {
@@ -120,7 +124,8 @@ ruvia::Task<void> runCancelledQuery(ruvia::detail::DbRegistry& registry, ruvia::
     registry.closeNow();
 }
 
-ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry, std::optional<ruvia::DbError::Code>& code, std::string& message) {
+ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry,
+    std::optional<ruvia::DbError::Code>& code, std::string& message) {
     try {
         co_await registry.connect();
     } catch (const ruvia::DbError& error) {
@@ -141,7 +146,8 @@ ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry, std::op
     ruvia::detail::ConnectionScanner scanner(worker, {});
     auto* resource = std::pmr::get_default_resource();
     const auto config = silentPeerConfig(peer.port());
-    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(config, resource)}};
+    const std::array definitions{ruvia::detail::DbDefinition{
+        std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(config, resource)}};
     ruvia::detail::DbRegistry registry(ioContext, scanner, resource, definitions);
     std::optional<ruvia::DbError::Code> code;
     std::string message;
@@ -149,13 +155,16 @@ ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry, std::op
     peer.start([&stopSource] { stopSource.requestStop(); });
     asio::post(ioContext, [&] {
         scanner.start();
-        ruvia::detail::asyncStartTask(runCancelledQuery(registry, stopSource.token(), code, message), asio::bind_executor(ioContext.get_executor(), [&](ruvia::detail::TaskCompletionResult<void> result) {
-            scanner.stop();
-            if (const auto* error = result.failure()) {
-                failure = error->exception();
-            }
-            attachment.stop();
-        }));
+        ruvia::detail::asyncStartTask(
+            runCancelledQuery(registry, stopSource.token(), code, message),
+            asio::bind_executor(
+                ioContext.get_executor(), [&](ruvia::detail::TaskCompletionResult<void> result) {
+                    scanner.stop();
+                    if (const auto* error = result.failure()) {
+                        failure = error->exception();
+                    }
+                    attachment.stop();
+                }));
     });
     ioContext.run();
     peer.join();
@@ -192,7 +201,8 @@ ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry, std::op
     ruvia::detail::ConnectionScanner scanner(worker, {});
     auto* resource = std::pmr::get_default_resource();
     const auto config = silentPeerConfig(peer.port());
-    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(config, resource)}};
+    const std::array definitions{ruvia::detail::DbDefinition{
+        std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(config, resource)}};
     std::optional<ruvia::DbError::Code> code;
     std::string message;
     std::exception_ptr failure;
@@ -219,15 +229,17 @@ ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry, std::op
         });
         asio::post(ioContext, [&] {
             scanner.start();
-            ruvia::detail::asyncStartTask(runClosingConnect(registry, code, message), asio::bind_executor(ioContext.get_executor(), [&](ruvia::detail::TaskCompletionResult<void> result) {
-                scanner.stop();
-                ++completions;
-                taskCompleted = true;
-                if (const auto* error = result.failure()) {
-                    failure = error->exception();
-                }
-                attachment.stop();
-            }));
+            ruvia::detail::asyncStartTask(runClosingConnect(registry, code, message),
+                asio::bind_executor(ioContext.get_executor(),
+                    [&](ruvia::detail::TaskCompletionResult<void> result) {
+                        scanner.stop();
+                        ++completions;
+                        taskCompleted = true;
+                        if (const auto* error = result.failure()) {
+                            failure = error->exception();
+                        }
+                        attachment.stop();
+                    }));
         });
         ioContext.run();
 
@@ -256,7 +268,8 @@ ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry, std::op
         return false;
     }
     if (code != ruvia::DbError::Code::kClosing) {
-        std::fprintf(stderr, "active MariaDB handshake did not report kClosing: %s\n", message.c_str());
+        std::fprintf(
+            stderr, "active MariaDB handshake did not report kClosing: %s\n", message.c_str());
         return false;
     }
     if (!peer.accepted || !peer.disconnected) {

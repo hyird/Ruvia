@@ -61,7 +61,8 @@ public:
     explicit ExternalContextClaim(asio::io_context& ioContext)
         : service_(&asio::use_service<ExternalContextAttachmentService>(ioContext)) {
         if (!service_->claim()) {
-            throw std::invalid_argument("an io_context can have only one Ruvia event loop attachment");
+            throw std::invalid_argument(
+                "an io_context can have only one Ruvia event loop attachment");
         }
     }
 
@@ -95,7 +96,8 @@ private:
 // (the off-worker path) is reported the same way.
 class EventLoopStopListener final : public detail::WorkerShutdownListener {
 public:
-    EventLoopStopListener(WorkerHandle worker, MoveOnlyFunction<void()> callback, detail::EventLoopFailureSink failureSink)
+    EventLoopStopListener(WorkerHandle worker, MoveOnlyFunction<void()> callback,
+        detail::EventLoopFailureSink failureSink)
         : worker_(std::move(worker)),
           callback_(std::move(callback)),
           failureSink_(std::move(failureSink)) {}
@@ -110,14 +112,18 @@ public:
             return;
         }
         try {
-            detail::WorkerHandleAccess::defer(worker_, [callback = std::move(callback), failureSink = failureSink_]() mutable noexcept { runCallback(callback, failureSink); });
+            detail::WorkerHandleAccess::defer(worker_,
+                [callback = std::move(callback), failureSink = failureSink_]() mutable noexcept {
+                    runCallback(callback, failureSink);
+                });
         } catch (...) {
             report(failureSink_, std::current_exception());
         }
     }
 
 private:
-    static void report(const detail::EventLoopFailureSink& sink, std::exception_ptr failure) noexcept {
+    static void report(
+        const detail::EventLoopFailureSink& sink, std::exception_ptr failure) noexcept {
         if (sink) {
             sink(std::move(failure));
             return;
@@ -126,7 +132,8 @@ private:
         detail::reportUnhandledFailure("event loop stop callback", failure);
     }
 
-    static void runCallback(MoveOnlyFunction<void()>& callback, const detail::EventLoopFailureSink& sink) noexcept {
+    static void runCallback(
+        MoveOnlyFunction<void()>& callback, const detail::EventLoopFailureSink& sink) noexcept {
         try {
             callback();
         } catch (...) {
@@ -147,8 +154,10 @@ struct EventLoopState final {
     using ContextOwnership = std::variant<std::unique_ptr<asio::io_context>, ExternalContextClaim>;
 
     explicit EventLoopState(std::size_t mailboxCapacity)
-        : contextOwnership(std::in_place_type<std::unique_ptr<asio::io_context>>, std::make_unique<asio::io_context>()),
-          ioContext(std::addressof(**std::get_if<std::unique_ptr<asio::io_context>>(&contextOwnership))),
+        : contextOwnership(std::in_place_type<std::unique_ptr<asio::io_context>>,
+              std::make_unique<asio::io_context>()),
+          ioContext(
+              std::addressof(**std::get_if<std::unique_ptr<asio::io_context>>(&contextOwnership))),
           work(asio::make_work_guard(*ioContext)),
           runtime(*ioContext, mailboxCapacity) {}
 
@@ -229,7 +238,8 @@ void ExternalContextAttachmentService::releaseClaim() noexcept {
     claimed_ = false;
 }
 
-void ExternalContextAttachmentService::retain(std::shared_ptr<detail::EventLoopState> state) noexcept {
+void ExternalContextAttachmentService::retain(
+    std::shared_ptr<detail::EventLoopState> state) noexcept {
     const std::lock_guard lock(mutex_);
     state_ = std::move(state);
 }
@@ -266,7 +276,8 @@ void ExternalContextAttachmentService::shutdown() {
 
 }  // namespace
 
-EventLoopStopRegistration::EventLoopStopRegistration(std::shared_ptr<detail::WorkerShutdownListener> listener) noexcept
+EventLoopStopRegistration::EventLoopStopRegistration(
+    std::shared_ptr<detail::WorkerShutdownListener> listener) noexcept
     : listener_(std::move(listener)) {}
 
 bool EventLoopStopRegistration::valid() const noexcept {
@@ -328,7 +339,8 @@ EventLoopStopRegistration EventLoop::registerStopCallback(MoveOnlyFunction<void(
     if (!callback) {
         throw std::invalid_argument("event loop stop callback must be callable");
     }
-    auto listener = std::make_shared<EventLoopStopListener>(state_->runtime.handle(), std::move(callback), state_->failureSink);
+    auto listener = std::make_shared<EventLoopStopListener>(
+        state_->runtime.handle(), std::move(callback), state_->failureSink);
     detail::WorkerHandleAccess::registerShutdownListener(state_->runtime.handle(), listener);
     return EventLoopStopRegistration(std::move(listener));
 }
@@ -357,7 +369,8 @@ void EventLoopAttachment::stop() noexcept {
     }
 }
 
-EventLoopAttachment attachEventLoop(asio::io_context& ioContext, EventLoopAttachmentOptions options) {
+EventLoopAttachment attachEventLoop(
+    asio::io_context& ioContext, EventLoopAttachmentOptions options) {
     auto state = std::make_shared<detail::EventLoopState>(ioContext, options.mailboxCapacity);
     state->retainExternalContext(state);
     return EventLoopAttachment(std::move(state));
@@ -376,7 +389,9 @@ struct EventLoopPool::Impl {
             // shutdown) become the pool's first failure, which join() rethrows.
             // The sink holds the record, not the pool: a loop handle may outlive
             // this Impl, and a sink capturing `this` would outlive it too.
-            loops.back()->failureSink = [record = failureRecord](std::exception_ptr failure) { record->record(std::move(failure)); };
+            loops.back()->failureSink = [record = failureRecord](std::exception_ptr failure) {
+                record->record(std::move(failure));
+            };
         }
     }
 
@@ -490,7 +505,8 @@ void EventLoopPool::stop() noexcept {
 }
 
 void EventLoopPool::join() {
-    if (std::ranges::any_of(impl_->loops, [](const auto& loop) { return loop->runtime.handle().isCurrent(); })) {
+    if (std::ranges::any_of(
+            impl_->loops, [](const auto& loop) { return loop->runtime.handle().isCurrent(); })) {
         throw std::logic_error("cannot join an event loop pool from one of its workers");
     }
     impl_->stop();

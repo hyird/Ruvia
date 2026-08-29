@@ -105,7 +105,8 @@ public:
         void touch() noexcept;
         void setPhase(Phase nextPhase) noexcept;
         [[nodiscard]] std::int64_t lastActiveMs() const noexcept;
-        void registerPeriodicCheck(PeriodicCheckRegistration& registration, void* target, PeriodicCheck tick) noexcept;
+        void registerPeriodicCheck(
+            PeriodicCheckRegistration& registration, void* target, PeriodicCheck tick) noexcept;
 
     private:
         friend class ConnectionScanner;
@@ -154,7 +155,8 @@ public:
 
     void start();
     void stop() noexcept;
-    void registerWorkerMaintenance(WorkerMaintenanceRegistration& registration, void* target, WorkerMaintenanceCheck check) noexcept;
+    void registerWorkerMaintenance(WorkerMaintenanceRegistration& registration, void* target,
+        WorkerMaintenanceCheck check) noexcept;
     void registerEntry(Entry& entry, asio::ip::tcp::socket& socket) noexcept;
     void unregisterEntry(Entry& entry) noexcept;
     void closeAll() noexcept;

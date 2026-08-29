@@ -35,13 +35,36 @@ concept HasValueSemanticRequestExpectations = requires(const T& value, const T&&
 static_assert(HasValueSemanticRequestExpectations<Http2StreamState>);
 
 template <typename T>
-concept ExposesRvalueHttp2StreamRequestStateStorage = requires(T&& state) { std::move(state).responseStatus(); };
+concept ExposesRvalueHttp2StreamRequestStateStorage =
+    requires(T&& state) { std::move(state).responseStatus(); };
 
 template <typename T>
-concept ExposesRvalueHttp2StreamHeaderBlocksStorage = requires(T&& blocks) { std::move(blocks).request(); } || requires(const T&& blocks) { std::move(blocks).request(); } || requires(T&& blocks) { std::move(blocks).response(); } || requires(const T&& blocks) { std::move(blocks).response(); };
+concept ExposesRvalueHttp2StreamHeaderBlocksStorage =
+    requires(T&& blocks) { std::move(blocks).request(); } ||
+    requires(const T&& blocks) { std::move(blocks).request(); } ||
+    requires(T&& blocks) { std::move(blocks).response(); } ||
+    requires(const T&& blocks) { std::move(blocks).response(); };
 
 template <typename T>
-concept ExposesRvalueHttp2StreamStateStorage = requires(T&& stream) { std::move(stream).receiveWindowCredit(); } || requires(T&& stream) { std::move(stream).remoteHeaderBlock(); } || requires(const T&& stream) { std::move(stream).remoteHeaderBlock(); } || requires(T&& stream) { std::move(stream).localHeaderBlock(); } || requires(const T&& stream) { std::move(stream).localHeaderBlock(); } || requires(T&& stream) { std::move(stream).remoteContent(); } || requires(T&& stream) { std::move(stream).localContent(); } || requires(T&& stream) { std::move(stream).localSend(); } || requires(T&& stream) { std::move(stream).remoteReceive(); } || requires(T&& stream) { std::move(stream).requestMethod(); } || requires(T&& stream) { std::move(stream).requestAuthority(); } || requires(T&& stream) { std::move(stream).requestPath(); } || requires(T&& stream) { std::move(stream).requestProtocol(); } || requires(T&& stream) { std::move(stream).requestCookie(); } || requires(T&& stream) { std::move(stream).remoteHeaderAt(std::size_t{}); } || requires(T&& stream) { std::move(stream).requestScheme(); } || requires(T&& stream) { std::move(stream).tunnel(); } || requires(T&& stream) { std::move(stream).responseStatus(); };
+concept ExposesRvalueHttp2StreamStateStorage =
+    requires(T&& stream) { std::move(stream).receiveWindowCredit(); } ||
+    requires(T&& stream) { std::move(stream).remoteHeaderBlock(); } ||
+    requires(const T&& stream) { std::move(stream).remoteHeaderBlock(); } ||
+    requires(T&& stream) { std::move(stream).localHeaderBlock(); } ||
+    requires(const T&& stream) { std::move(stream).localHeaderBlock(); } ||
+    requires(T&& stream) { std::move(stream).remoteContent(); } ||
+    requires(T&& stream) { std::move(stream).localContent(); } ||
+    requires(T&& stream) { std::move(stream).localSend(); } ||
+    requires(T&& stream) { std::move(stream).remoteReceive(); } ||
+    requires(T&& stream) { std::move(stream).requestMethod(); } ||
+    requires(T&& stream) { std::move(stream).requestAuthority(); } ||
+    requires(T&& stream) { std::move(stream).requestPath(); } ||
+    requires(T&& stream) { std::move(stream).requestProtocol(); } ||
+    requires(T&& stream) { std::move(stream).requestCookie(); } ||
+    requires(T&& stream) { std::move(stream).remoteHeaderAt(std::size_t{}); } ||
+    requires(T&& stream) { std::move(stream).requestScheme(); } ||
+    requires(T&& stream) { std::move(stream).tunnel(); } ||
+    requires(T&& stream) { std::move(stream).responseStatus(); };
 
 static_assert(!ExposesRvalueHttp2StreamRequestStateStorage<Http2StreamRequestState>);
 static_assert(!ExposesRvalueHttp2StreamHeaderBlocksStorage<Http2StreamHeaderBlocks>);
@@ -470,7 +493,8 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
     RUVIA_CHECK(http2OnDecodedInitialHeader(zeroLengthContext, "expect", "100-continue"));
     RUVIA_CHECK(http2OnDecodedInitialHeader(zeroLengthContext, "content-length", "0"));
     RUVIA_CHECK(zeroLength.finalizeRemoteContentHead());
-    const auto zeroLengthPlan = zeroLength.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
+    const auto zeroLengthPlan =
+        zeroLength.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
     RUVIA_CHECK(zeroLengthPlan.noAction() != nullptr);
     RUVIA_CHECK(zeroLengthPlan.sendContinue() == nullptr);
 
@@ -479,15 +503,19 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
     RUVIA_CHECK(http2OnDecodedInitialHeader(completedLengthContext, "expect", "100-continue"));
     RUVIA_CHECK(http2OnDecodedInitialHeader(completedLengthContext, "content-length", "1"));
     RUVIA_CHECK(completedLength.finalizeRemoteContentHead());
-    const auto pendingLengthPlan = completedLength.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
+    const auto pendingLengthPlan =
+        completedLength.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
     RUVIA_CHECK(pendingLengthPlan.sendContinue() != nullptr);
-    RUVIA_CHECK(completedLength.accountRemoteContent(1) == ruvia::detail::Http2RemoteContentAccountingResult::kAccepted);
-    const auto completedLengthPlan = completedLength.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(completedLength.accountRemoteContent(1) ==
+                ruvia::detail::Http2RemoteContentAccountingResult::kAccepted);
+    const auto completedLengthPlan =
+        completedLength.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
     RUVIA_CHECK(completedLengthPlan.noAction() != nullptr);
 
     Http2StreamState extension(3, res());
     Http2HeaderDecodeContext extensionContext{extension};
-    RUVIA_CHECK(http2OnDecodedInitialHeader(extensionContext, "expect", "100-continue, custom-feature"));
+    RUVIA_CHECK(
+        http2OnDecodedInitialHeader(extensionContext, "expect", "100-continue, custom-feature"));
     RUVIA_CHECK(extension.finalizeRemoteContentHead());
     const auto extensionPlan = extension.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
     RUVIA_CHECK(extensionPlan.rejection() != nullptr);
@@ -505,11 +533,16 @@ RUVIA_TEST(h2_headers_trailer_rejects_pseudo_and_invalid) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
     RUVIA_CHECK(http2OnDecodedRequestTrailer(ctx, "x-trace-id", "abc"));
-    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, ":method", "GET"));       // no pseudo-headers in trailers
-    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "connection", "close"));  // forbidden framing field
-    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "host", "example.com"));  // routing is header-only
-    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "content-length", "0"));  // framing is header-only
-    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "te", "trailers"));       // connection option is header-only
+    RUVIA_CHECK(
+        !http2OnDecodedRequestTrailer(ctx, ":method", "GET"));  // no pseudo-headers in trailers
+    RUVIA_CHECK(
+        !http2OnDecodedRequestTrailer(ctx, "connection", "close"));  // forbidden framing field
+    RUVIA_CHECK(
+        !http2OnDecodedRequestTrailer(ctx, "host", "example.com"));  // routing is header-only
+    RUVIA_CHECK(
+        !http2OnDecodedRequestTrailer(ctx, "content-length", "0"));  // framing is header-only
+    RUVIA_CHECK(
+        !http2OnDecodedRequestTrailer(ctx, "te", "trailers"));  // connection option is header-only
     RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "trailer", "x-checksum"));
     RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "content-type", "text/plain"));
     RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "origin", "https://app.example"));

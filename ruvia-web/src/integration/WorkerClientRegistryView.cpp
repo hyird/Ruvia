@@ -27,49 +27,64 @@ namespace {
 }  // namespace
 
 #ifdef RUVIA_ENABLE_DATABASE
-DbHandle WorkerClientRegistryView::db(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const {
+DbHandle WorkerClientRegistryView::db(std::pmr::memory_resource* resource,
+    ScopedOperationScope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw DbError(DbError::Code::kNotConfigured, std::nullopt, "database is not configured");
     }
-    return databases_->get(resource, operationScope).withOptions(contextOperationOptions(stopToken));
+    return databases_->get(resource, operationScope)
+        .withOptions(contextOperationOptions(stopToken));
 }
 
-DbHandle WorkerClientRegistryView::db(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const {
+DbHandle WorkerClientRegistryView::db(std::string_view alias, std::pmr::memory_resource* resource,
+    ScopedOperationScope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw DbError(DbError::Code::kNotConfigured, std::nullopt, "database is not configured");
     }
-    return databases_->get(alias, resource, operationScope).withOptions(contextOperationOptions(stopToken));
+    return databases_->get(alias, resource, operationScope)
+        .withOptions(contextOperationOptions(stopToken));
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-RedisHandle WorkerClientRegistryView::redis(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const {
+RedisHandle WorkerClientRegistryView::redis(std::pmr::memory_resource* resource,
+    ScopedOperationScope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
     return redis_->get(resource, operationScope).withOptions(contextOperationOptions(stopToken));
 }
 
-RedisHandle WorkerClientRegistryView::redis(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const {
+RedisHandle WorkerClientRegistryView::redis(std::string_view alias,
+    std::pmr::memory_resource* resource, ScopedOperationScope& operationScope,
+    const StopToken& stopToken) const {
     if (!attached()) {
         throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
-    return redis_->get(alias, resource, operationScope).withOptions(contextOperationOptions(stopToken));
+    return redis_->get(alias, resource, operationScope)
+        .withOptions(contextOperationOptions(stopToken));
 }
 #endif
 
-HttpClientHandle WorkerClientRegistryView::httpClient(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const {
+HttpClientHandle WorkerClientRegistryView::httpClient(std::pmr::memory_resource* resource,
+    ScopedOperationScope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
-        throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
+        throw HttpClientError(
+            HttpClientError::Code::kNotConfigured, "http client is not configured");
     }
-    return httpClients_->get(resource, operationScope).withOptions(contextOperationOptions(stopToken));
+    return httpClients_->get(resource, operationScope)
+        .withOptions(contextOperationOptions(stopToken));
 }
 
-HttpClientHandle WorkerClientRegistryView::httpClient(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope, const StopToken& stopToken) const {
+HttpClientHandle WorkerClientRegistryView::httpClient(std::string_view alias,
+    std::pmr::memory_resource* resource, ScopedOperationScope& operationScope,
+    const StopToken& stopToken) const {
     if (!attached()) {
-        throw HttpClientError(HttpClientError::Code::kNotConfigured, "http client is not configured");
+        throw HttpClientError(
+            HttpClientError::Code::kNotConfigured, "http client is not configured");
     }
-    return httpClients_->get(alias, resource, operationScope).withOptions(contextOperationOptions(stopToken));
+    return httpClients_->get(alias, resource, operationScope)
+        .withOptions(contextOperationOptions(stopToken));
 }
 
 }  // namespace ruvia::detail

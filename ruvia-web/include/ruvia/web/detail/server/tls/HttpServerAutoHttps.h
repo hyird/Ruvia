@@ -40,7 +40,8 @@ inline void appendHttpsPort(std::pmr::string& location, std::uint16_t httpsPort)
     }
 
     std::array<char, 5> portBuffer{};
-    const auto [end, ec] = std::to_chars(portBuffer.data(), portBuffer.data() + portBuffer.size(), httpsPort);
+    const auto [end, ec] =
+        std::to_chars(portBuffer.data(), portBuffer.data() + portBuffer.size(), httpsPort);
     if (ec != std::errc{}) {
         throw std::logic_error("failed to format HTTPS redirect port");
     }
@@ -49,18 +50,22 @@ inline void appendHttpsPort(std::pmr::string& location, std::uint16_t httpsPort)
     location.append(portBuffer.data(), static_cast<std::size_t>(end - portBuffer.data()));
 }
 
-inline HttpResponse makeAutoHttpsRedirectResponse(const HttpRequest& request, RequestMemory& memory, std::uint16_t httpsPort) {
+inline HttpResponse makeAutoHttpsRedirectResponse(
+    const HttpRequest& request, RequestMemory& memory, std::uint16_t httpsPort) {
     HttpResponse response({.resource = memory.resource()});
     response.status(ruvia::http_status::kPermanentRedirect);
 
-    const auto host = hostWithoutExplicitPort(requestKnownHeader(request, RequestKnownHeader::kHost));
+    const auto host =
+        hostWithoutExplicitPort(requestKnownHeader(request, RequestKnownHeader::kHost));
     auto path = request.path();
     if (path.empty() || path.front() != '/') {
         path = "/";
     }
 
     std::pmr::string location(memory.allocator<char>());
-    location.reserve(std::string_view("https://").size() + host.size() + (httpsPort == 443 ? 0U : 6U) + path.size() + (request.queryString().empty() ? 0U : 1U + request.queryString().size()));
+    location.reserve(std::string_view("https://").size() + host.size() +
+                     (httpsPort == 443 ? 0U : 6U) + path.size() +
+                     (request.queryString().empty() ? 0U : 1U + request.queryString().size()));
     location.append("https://");
     location.append(host.data(), host.size());
     appendHttpsPort(location, httpsPort);
