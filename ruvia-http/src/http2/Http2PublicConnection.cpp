@@ -3,6 +3,7 @@
 #include <array>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <variant>
 
@@ -15,14 +16,15 @@
 
 namespace ruvia::detail {
 
-// One allocation per public connection, never per request or DATA event. Events
-// retain this endpoint intrusively, so its address cannot be recycled while a
-// stale lease/credit still exists. Detaching the target makes destruction safe
-// when an event outlives its connection.
+// Events retain this endpoint intrusively, so its address cannot be recycled while
+// a stale lease/credit still exists. Detaching the target makes destruction safe
+// when an event outlives its connection. The endpoint also retains the connection
+// storage after owner destruction because request and body views can still refer to it.
 class Http2ConnectionOwnerEndpoint final {
 public:
     using AbandonRequest = void (*)(void*, std::uint32_t) noexcept;
     using AbandonCredit = void (*)(void*, std::uint32_t, std::uint32_t) noexcept;
+    using DestroyStorage = void (*)(void*) noexcept;
 
     Http2ConnectionOwnerEndpoint(
         void* target, AbandonRequest abandonRequest, AbandonCredit abandonCredit) noexcept
@@ -33,11 +35,21 @@ public:
     void retain() noexcept {
         ++references_;
     }
+    void retainStorage(void* storage, DestroyStorage destroyStorage) noexcept {
+        if (retainedStorage_ != nullptr || storage == nullptr || destroyStorage == nullptr) {
+            std::terminate();
+        }
+        retainedStorage_ = storage;
+        destroyStorage_ = destroyStorage;
+    }
     void release() noexcept {
         if (references_ == 0) {
             std::terminate();
         }
         if (--references_ == 0) {
+            if (retainedStorage_ != nullptr) {
+                destroyStorage_(retainedStorage_);
+            }
             delete this;
         }
     }
@@ -60,6 +72,8 @@ private:
     void* target_;
     AbandonRequest abandonRequest_;
     AbandonCredit abandonCredit_;
+    void* retainedStorage_{nullptr};
+    DestroyStorage destroyStorage_{nullptr};
 };
 
 }  // namespace ruvia::detail
@@ -307,20 +321,37 @@ using RequestHeadSubmitOutcome = std::variant<std::uint32_t, Http2RequestHeadSub
 
 class Http2Connection::Impl final {
 public:
+    struct Storage final {
+        Storage(std::pmr::memory_resource* requested, Http2Role publicRole)
+            : resource(detail::httpPmrResourceOrDefault(requested)),
+              role(publicRole),
+              connection(resource, toInternal(publicRole)) {}
+
+        std::pmr::memory_resource* resource;
+        Http2Role role;
+        detail::Http2Connection connection;
+    };
+
     Impl(std::pmr::memory_resource* requested, Http2Role publicRole)
-        : resource(detail::httpPmrResourceOrDefault(requested)),
+        : storage(std::make_unique<Storage>(requested, publicRole)),
+          resource(storage->resource),
           role(publicRole),
-          connection(resource, toInternal(publicRole)),
+          connection(storage->connection),
           endpoint(new detail::Http2ConnectionOwnerEndpoint(
               this, &Impl::abandonRequestThunk, &Impl::abandonCreditThunk)) {}
 
     ~Impl() {
         endpoint->detach();
+        endpoint->retainStorage(storage.release(), &Impl::destroyStorage);
         endpoint->release();
     }
 
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
+
+    static void destroyStorage(void* raw) noexcept {
+        delete static_cast<Storage*>(raw);
+    }
 
     enum class DeferredReleaseKind : std::uint8_t { kAfterCredits, kAbandon };
     struct DeferredRelease final {
@@ -499,9 +530,10 @@ public:
         }
     }
 
+    std::unique_ptr<Storage> storage;
     std::pmr::memory_resource* resource;
     Http2Role role;
-    detail::Http2Connection connection;
+    detail::Http2Connection& connection;
     detail::Http2ConnectionOwnerEndpoint* endpoint;
     std::array<DeferredRelease, detail::Http2LocalSettings::kMaxConcurrentStreams>
         deferredReleases{};
