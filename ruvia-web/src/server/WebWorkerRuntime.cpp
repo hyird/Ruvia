@@ -30,13 +30,11 @@
 #endif
 
 #include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/core/Timer.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 
 namespace ruvia::detail {
@@ -176,8 +174,8 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
     : ioContext_(ASIO_CONCURRENCY_HINT_UNSAFE_IO),
-      serveGate_(ioContext_, std::chrono::steady_clock::time_point::max()),
       workerRuntime_(ioContext_, validatedOptions.workerMailboxCapacity),
+      serveSignal_(workerRuntime_.handle()),
       routes_(routes),
       memory_(validatedOptions.memoryConfig),
       listeners_(memory_.resource()),
@@ -308,8 +306,7 @@ void WebWorkerRuntime::requestServe() {
             return;
         }
         serveRequested_ = true;
-        std::error_code ignored;
-        serveGate_.cancel(ignored);
+        serveSignal_.notify();
     });
 }
 
@@ -475,7 +472,7 @@ void WebWorkerRuntime::stopOnContext() noexcept {
         (void)listener->acceptor.close(ignored);
         ignored.clear();
     }
-    serveGate_.cancel(ignored);
+    serveSignal_.notify();
     ignored.clear();
     connectionScanner_.stop();
     connectionScanner_.closeAll();
@@ -539,11 +536,8 @@ Task<void> WebWorkerRuntime::runWorker() {
         co_await capabilities_.connect();
         (void)workerCompletion_.markStartupReady();
 
-        const auto serveCompletion = co_await asyncAsio(
-            [this](auto handler) mutable { serveGate_.async_wait(std::move(handler)); });
-        const auto serveError = serveCompletion.errorCode();
-        if (serveError && serveError != asio::error::operation_aborted) {
-            throw std::system_error(serveError, "web worker serve gate failed");
+        while (!serveRequested_ && httpServerWorkerRunning(workerState_)) {
+            co_await serveSignal_.wait();
         }
         if (!serveRequested_ || !httpServerWorkerRunning(workerState_)) {
             workerCompletion_.markServingAborted();
