@@ -51,6 +51,85 @@ RUVIA_TEST(body_reader_rejects_concurrent_consumers_of_one_borrowed_buffer) {
     RUVIA_CHECK(secondRejected);
 }
 
+RUVIA_TEST(websocket_rejects_overlapping_cold_operations) {
+    CaptureWebSocket capture;
+    auto socket = ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
+
+    {
+        auto cold = socket.read();
+        bool readRejected = false;
+        bool closeRejected = false;
+        try {
+            auto overlapping = socket.read();
+            static_cast<void>(overlapping);
+        } catch (const std::logic_error&) {
+            readRejected = true;
+        }
+        try {
+            auto overlapping = socket.close();
+            static_cast<void>(overlapping);
+        } catch (const std::logic_error&) {
+            closeRejected = true;
+        }
+        RUVIA_CHECK(readRejected);
+        RUVIA_CHECK(closeRejected);
+    }
+
+    {
+        auto cold = socket.text("cold");
+        bool writeRejected = false;
+        bool closeRejected = false;
+        try {
+            auto overlapping = socket.binary("overlap");
+            static_cast<void>(overlapping);
+        } catch (const std::logic_error&) {
+            writeRejected = true;
+        }
+        try {
+            auto overlapping = socket.close();
+            static_cast<void>(overlapping);
+        } catch (const std::logic_error&) {
+            closeRejected = true;
+        }
+        RUVIA_CHECK(writeRejected);
+        RUVIA_CHECK(closeRejected);
+    }
+
+    {
+        auto cold = socket.close();
+        bool readRejected = false;
+        bool writeRejected = false;
+        bool closeRejected = false;
+        try {
+            auto overlapping = socket.read();
+            static_cast<void>(overlapping);
+        } catch (const std::logic_error&) {
+            readRejected = true;
+        }
+        try {
+            auto overlapping = socket.text("overlap");
+            static_cast<void>(overlapping);
+        } catch (const std::logic_error&) {
+            writeRejected = true;
+        }
+        try {
+            auto overlapping = socket.close();
+            static_cast<void>(overlapping);
+        } catch (const std::logic_error&) {
+            closeRejected = true;
+        }
+        RUVIA_CHECK(readRejected);
+        RUVIA_CHECK(writeRejected);
+        RUVIA_CHECK(closeRejected);
+    }
+
+    asio::io_context io(1);
+    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(writeStoredTemporaryWebSocketPayload(socket)), asio::use_future);
+    io.run();
+    future.get();
+    RUVIA_CHECK_EQ(capture.writes.size(), std::size_t{1});
+}
+
 RUVIA_TEST(response_stream_rejects_overlapping_output_operations) {
     asio::io_context io(1);
     SuspendedStreamSink sink;
