@@ -574,6 +574,8 @@ void HttpClientPool::cancelOperation(
     connection.resolver.cancel();
     (void)connection.stream.lowest_layer().cancel(ignored);
     (void)connection.stream.lowest_layer().close(ignored);
+    connection.connected = false;
+    connection.protocol = WireProtocol::kUnknown;
     connection.http2Runtime->writeSignal.notify();
     connection.http2Runtime->stateSignal.notify();
 }
@@ -919,12 +921,10 @@ Task<void> HttpClientPool::executeRequestInto(
     try {
         co_await ensureConnected(connection, timeout, acquireTimeout, options.stopToken);
         if (connection.protocol == WireProtocol::kHttp2) {
-            // This lease now shares a multiplexed session with background
-            // drivers and possibly other requests. A request-local failure must
-            // not discard that shared connection.
+            // This lease now shares a multiplexed session with background drivers
+            // and possibly other requests. A request-local failure must not
+            // discard that shared connection.
             discardConnection = false;
-        }
-        if (connection.protocol == WireProtocol::kHttp2) {
             co_await executeHttp2(connection, request, timeout, options.stopToken, response);
         } else {
             // A negotiated HTTP/1 connection can have several operations that
@@ -939,92 +939,125 @@ Task<void> HttpClientPool::executeRequestInto(
                 throw HttpClientError(
                     HttpClientError::Code::kQueueFull, "HTTP client request buffer is full");
             }
-            ++runtime.http1Operations;
-            if (mustBuffer) {
-                --requestsInFlight_;
-                ++requestsBuffered_;
-            }
-            struct H1Operation final {
-                HttpClientPool& pool;
-                Http2Runtime& runtime;
-                bool buffered;
-                ~H1Operation() {
-                    if (buffered) {
-                        --pool.requestsBuffered_;
-                        ++pool.requestsInFlight_;
+            bool retryAsHttp2 = false;
+            {
+                ++runtime.http1Operations;
+                if (mustBuffer) {
+                    --requestsInFlight_;
+                    ++requestsBuffered_;
+                }
+                struct H1Operation final {
+                    HttpClientPool& pool;
+                    Http2Runtime& runtime;
+                    bool buffered;
+                    ~H1Operation() {
+                        if (buffered) {
+                            --pool.requestsBuffered_;
+                            ++pool.requestsInFlight_;
+                        }
+                        if (runtime.http1Operations == 0) {
+                            std::terminate();
+                        }
+                        --runtime.http1Operations;
                     }
-                    if (runtime.http1Operations == 0) {
-                        std::terminate();
+                } h1Operation{*this, runtime, mustBuffer};
+                auto h1Acquired = co_await connection.http2Runtime->http1Scheduler.acquire(
+                    acquireTimeout.remaining(), options.stopToken, worker_);
+                if (h1Operation.buffered) {
+                    --requestsBuffered_;
+                    ++requestsInFlight_;
+                    h1Operation.buffered = false;
+                }
+                if (h1Acquired.timedOut()) {
+                    throw HttpClientError(
+                        HttpClientError::Code::kTimeout, "HTTP/1 connection acquire timed out");
+                }
+                if (h1Acquired.cancelled()) {
+                    throw HttpClientError(
+                        HttpClientError::Code::kCancelled, "HTTP/1 request cancelled");
+                }
+                if (!h1Acquired.acquired()) {
+                    throw HttpClientError(
+                        HttpClientError::Code::kClosing, "HTTP client pool is closing");
+                }
+                const auto h1Slot = h1Acquired.acquired()->index();
+                struct H1Release final {
+                    PoolLeaseScheduler& scheduler;
+                    std::size_t slot;
+                    ~H1Release() {
+                        (void)scheduler.release(slot);
                     }
-                    --runtime.http1Operations;
-                }
-            } h1Operation{*this, runtime, mustBuffer};
-            auto h1Acquired = co_await connection.http2Runtime->http1Scheduler.acquire(
-                acquireTimeout.remaining(), options.stopToken, worker_);
-            if (h1Operation.buffered) {
-                --requestsBuffered_;
-                ++requestsInFlight_;
-                h1Operation.buffered = false;
-            }
-            if (h1Acquired.timedOut()) {
-                throw HttpClientError(
-                    HttpClientError::Code::kTimeout, "HTTP/1 connection acquire timed out");
-            }
-            if (h1Acquired.cancelled()) {
-                throw HttpClientError(
-                    HttpClientError::Code::kCancelled, "HTTP/1 request cancelled");
-            }
-            if (!h1Acquired.acquired()) {
-                throw HttpClientError(
-                    HttpClientError::Code::kClosing, "HTTP client pool is closing");
-            }
-            const auto h1Slot = h1Acquired.acquired()->index();
-            struct H1Release final {
-                PoolLeaseScheduler& scheduler;
-                std::size_t slot;
-                ~H1Release() {
-                    (void)scheduler.release(slot);
-                }
-            } h1Release{connection.http2Runtime->http1Scheduler, h1Slot};
-            discardConnection = true;
-            connection.abortReason = AbortReason::kNone;
-            ++connection.generation;
-            if (connection.generation == 0) {
-                ++connection.generation;
-            }
-            struct H1CancellationGeneration final {
-                Connection& connection;
-                ~H1CancellationGeneration() {
-                    ++connection.generation;
-                }
-            } cancellationGeneration{connection};
-            connection.cancellationId = 0;
-            std::uint64_t cancellationId = 0;
-            StopRegistration stopRegistration;
-            if (options.stopToken.stoppable()) {
-                cancellationId = cancellationMailbox_->nextOperationId();
-                connection.cancellationId = cancellationId;
-                state->cancellationId = cancellationId;
-                options.stopToken.registerCallback(stopRegistration,
-                    WorkerCancellationPost<HttpClientOperationCancellationMailbox>(
-                        cancellationMailbox_, cancellationId));
-            }
-            struct H1CancellationRegistrationGuard final {
-                Connection& connection;
-                std::uint64_t cancellationId;
-                StopRegistration& registration;
+                } h1Release{connection.http2Runtime->http1Scheduler, h1Slot};
 
-                ~H1CancellationRegistrationGuard() {
-                    if (connection.cancellationId == cancellationId) {
-                        connection.cancellationId = 0;
-                    }
-                    registration.reset();
+                // A previous HTTP/1 exchange may have closed this connection while
+                // this request waited for the serial exchange slot. Reconnect only
+                // after acquiring that slot, so the connection cannot be replaced
+                // underneath an active HTTP/1 exchange.
+                discardConnection = true;
+                try {
+                    co_await ensureConnected(
+                        connection, timeout, acquireTimeout, options.stopToken);
+                } catch (...) {
+                    close(connection);
+                    discardConnection = false;
+                    throw;
                 }
-            } cancellationRegistrationGuard{connection, cancellationId, stopRegistration};
-            if (options.stopToken.stopRequested()) {
-                cancelOperationById(cancellationId);
+                if (connection.protocol == WireProtocol::kHttp2) {
+                    retryAsHttp2 = true;
+                } else {
+                    connection.abortReason = AbortReason::kNone;
+                    ++connection.generation;
+                    if (connection.generation == 0) {
+                        ++connection.generation;
+                    }
+                    struct H1CancellationGeneration final {
+                        Connection& connection;
+                        ~H1CancellationGeneration() {
+                            ++connection.generation;
+                        }
+                    } cancellationGeneration{connection};
+                    connection.cancellationId = 0;
+                    std::uint64_t cancellationId = 0;
+                    StopRegistration stopRegistration;
+                    if (options.stopToken.stoppable()) {
+                        cancellationId = cancellationMailbox_->nextOperationId();
+                        connection.cancellationId = cancellationId;
+                        state->cancellationId = cancellationId;
+                        options.stopToken.registerCallback(stopRegistration,
+                            WorkerCancellationPost<HttpClientOperationCancellationMailbox>(
+                                cancellationMailbox_, cancellationId));
+                    }
+                    struct H1CancellationRegistrationGuard final {
+                        Connection& connection;
+                        std::uint64_t cancellationId;
+                        StopRegistration& registration;
+
+                        ~H1CancellationRegistrationGuard() {
+                            if (connection.cancellationId == cancellationId) {
+                                connection.cancellationId = 0;
+                            }
+                            registration.reset();
+                        }
+                    } cancellationRegistrationGuard{connection, cancellationId, stopRegistration};
+                    if (options.stopToken.stopRequested()) {
+                        cancelOperationById(cancellationId);
+                    }
+                    try {
+                        co_await executeHttp1(connection, request, timeout, response);
+                    } catch (...) {
+                        // Release the serial exchange slot only after the failed
+                        // request has invalidated its connection. Pool handoff
+                        // resumes the next waiter synchronously.
+                        close(connection);
+                        discardConnection = false;
+                        throw;
+                    }
+                }
             }
-            co_await executeHttp1(connection, request, timeout, response);
+            if (retryAsHttp2) {
+                discardConnection = false;
+                co_await executeHttp2(connection, request, timeout, options.stopToken, response);
+            }
         }
         retainResponseCookies(request, response);
         --requestsInFlight_;

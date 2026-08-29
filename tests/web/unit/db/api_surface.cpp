@@ -415,12 +415,14 @@ concept HasVariadicOwningLvalueParams =
 
 static_assert(HasVariadicOwningLvalueParams<ruvia::DbHandle>);
 static_assert(HasVariadicOwningLvalueParams<ruvia::DbTransaction>);
+static_assert(std::default_initializable<ruvia::DbConfig>);
+static_assert(std::is_aggregate_v<ruvia::DbConfig>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::DbConfig&>().driver), ruvia::DbDriver>);
+static_assert(!HasMariaDbFactory<ruvia::DbConfig>);
+static_assert(!HasPostgreSqlFactory<ruvia::DbConfig>);
 
 }  // namespace
-
-RUVIA_TEST(db_api_surface_uses_span_params_without_initializer_list_overloads) {
-    RUVIA_CHECK(true);
-}
 
 RUVIA_TEST(db_operation_options_validate_and_compose_restrictions) {
     RUVIA_CHECK(throwsOn([] {
@@ -619,10 +621,6 @@ RUVIA_TEST(db_slot_socket_releases_before_driver_socket_closes) {
     std::error_code readError;
     (void)peerSocket.read_some(asio::buffer(byte), readError);
     RUVIA_CHECK(readError == asio::error::eof || readError == asio::error::connection_reset);
-}
-
-RUVIA_TEST(db_api_surface_accepts_variadic_params_without_absorbing_sequences) {
-    RUVIA_CHECK(true);
 }
 
 RUVIA_TEST(db_prepared_statement_rejects_blank_sql_before_io) {
@@ -942,16 +940,6 @@ RUVIA_TEST(db_registry_reports_typed_not_configured_error) {
     RUVIA_CHECK(aliasTyped);
 }
 
-RUVIA_TEST(db_config_is_direct_aggregate_without_factories) {
-    static_assert(std::default_initializable<ruvia::DbConfig>);
-    static_assert(std::is_aggregate_v<ruvia::DbConfig>);
-    static_assert(
-        std::same_as<decltype(std::declval<const ruvia::DbConfig&>().driver), ruvia::DbDriver>);
-    static_assert(!HasMariaDbFactory<ruvia::DbConfig>);
-    static_assert(!HasPostgreSqlFactory<ruvia::DbConfig>);
-    RUVIA_CHECK(true);
-}
-
 RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
     TrackingResource sourceResource;
     std::pmr::unsynchronized_pool_resource targetResource;
@@ -1059,7 +1047,6 @@ RUVIA_TEST(db_migrator_copies_public_configuration) {
     // the caller's resource rather than their public std::string allocators.
     RUVIA_CHECK(targetResource.allocationCount() >= 6);
     migrator.reset();
-    RUVIA_CHECK(true);
 }
 
 RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {
