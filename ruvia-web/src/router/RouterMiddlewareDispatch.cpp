@@ -35,6 +35,19 @@ void storeNextAfterResponseError(Context& context) {
                          .message = "next() called after respond()"})));
 }
 
+[[nodiscard]] bool validateNextInvocation(detail::NextState& state) {
+    auto& context = *state.context;
+    if (state.invocation != detail::NextState::Invocation::kReady) {
+        storeRepeatedNextError(context);
+        return false;
+    }
+    if (detail::ContextAccess::hasResponse(context)) {
+        storeNextAfterResponseError(context);
+        return false;
+    }
+    return true;
+}
+
 detail::NextState::Control* makeNextControl(Context& context) {
     auto* control = static_cast<detail::NextState::Control*>(context.resource()->allocate(
         sizeof(detail::NextState::Control), alignof(detail::NextState::Control)));
@@ -120,15 +133,10 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
 }
 
 Task<void> detail::RouteTable::invokeMiddlewareContinuation(NextState state) {
+    if (!validateNextInvocation(state)) {
+        co_return;
+    }
     auto* context = state.context;
-    if (state.invocation != detail::NextState::Invocation::kReady) {
-        storeRepeatedNextError(*context);
-        co_return;
-    }
-    if (detail::ContextAccess::hasResponse(*context)) {
-        storeNextAfterResponseError(*context);
-        co_return;
-    }
     const auto* table = state.table;
     const auto* route = state.route;
     std::exception_ptr exception;
@@ -188,15 +196,10 @@ Task<void> detail::RouteTable::invokeUnmatchedMiddlewareAt(
 }
 
 Task<void> detail::RouteTable::invokeUnmatchedMiddlewareContinuation(NextState state) {
+    if (!validateNextInvocation(state)) {
+        co_return;
+    }
     auto* context = state.context;
-    if (state.invocation != detail::NextState::Invocation::kReady) {
-        storeRepeatedNextError(*context);
-        co_return;
-    }
-    if (detail::ContextAccess::hasResponse(*context)) {
-        storeNextAfterResponseError(*context);
-        co_return;
-    }
     const auto* table = state.table;
     const auto* terminal =
         static_cast<const RouteTable::UnmatchedTerminal*>(state.unmatchedTerminal);
@@ -237,15 +240,10 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(const RouteEntry& route,
 }
 
 Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(NextState state) {
+    if (!validateNextInvocation(state)) {
+        co_return;
+    }
     auto* context = state.context;
-    if (state.invocation != detail::NextState::Invocation::kReady) {
-        storeRepeatedNextError(*context);
-        co_return;
-    }
-    if (detail::ContextAccess::hasResponse(*context)) {
-        storeNextAfterResponseError(*context);
-        co_return;
-    }
     const auto* table = state.table;
     const auto* route = state.route;
     auto* chain = state.streamChain;

@@ -12,6 +12,7 @@
 #include <chrono>
 #include <coroutine>
 #include <exception>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -138,8 +139,20 @@ Task<void> detail::MariaDbPool::connectUnlocked(
     }
 }
 
-Task<void> detail::MariaDbPool::runMysqlQuery(
-    ConnectionSlot& slot, std::string_view sql, const OperationTimeout& deadline) {
+Task<detail::OperationTimeout> detail::MariaDbPool::runMysqlStatement(ConnectionSlot& slot,
+    std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource,
+    const OperationTimeout& operationTimeout) {
+    throwIfCancelled(slot);
+    if (!slot.connected) {
+        co_await connectUnlocked(slot, operationTimeout);
+    }
+    const OperationTimeout deadline = operationTimeout.constrainedBy(config_.queryTimeout);
+    std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
+    if (!params.empty()) {
+        interpolatedSql = interpolateSql(*slot.connection, sql, params, resource);
+        sql = interpolatedSql;
+    }
+
     auto& connection = *slot.connection;
     validateMariaDbSqlLength(sql.size());
     int queryResult = 0;
@@ -152,7 +165,7 @@ Task<void> detail::MariaDbPool::runMysqlQuery(
     if (queryResult != 0) {
         throw mysqlError(connection, "mysql_real_query", DbError::Code::kStatementFailed);
     }
-    co_return;
+    co_return deadline;
 }
 
 Task<st_mysql_res*> detail::MariaDbPool::storeMysqlResult(
@@ -215,21 +228,7 @@ Task<int> detail::MariaDbPool::waitForMysql(
 
             void await_resume() const noexcept {}
         };
-        struct ActiveWait final {
-            explicit ActiveWait(ConnectionSlot& value) noexcept
-                : slot(value) {
-                if (slot.waitActive) {
-                    std::terminate();
-                }
-                slot.waitActive = true;
-            }
-
-            ~ActiveWait() {
-                slot.waitActive = false;
-            }
-
-            ConnectionSlot& slot;
-        } activeWait(slot);
+        DbSlotActiveWaitGuard activeWait(slot);
         co_await DeadlineAwaiter{slot};
         clearSlotDeadline(slot);
         throwIfCancelled(slot);
@@ -360,28 +359,12 @@ Task<int> detail::MariaDbPool::waitForMysql(
         }
     };
 
-    struct ActiveWait final {
-        explicit ActiveWait(ConnectionSlot& value) noexcept
-            : slot(value) {
-            if (slot.waitActive) {
-                std::terminate();
-            }
-            slot.waitActive = true;
-        }
-
-        ~ActiveWait() {
-            slot.waitActive = false;
-        }
-
-        ConnectionSlot& slot;
-    };
-
     int result = MYSQL_WAIT_TIMEOUT;
     bool expired = false;
     std::error_code socketFailure;
     std::exception_ptr waitFailure;
     {
-        ActiveWait activeWait(slot);
+        DbSlotActiveWaitGuard activeWait(slot);
         try {
             result = co_await SocketWaitAwaiter{slot, *slot.waitSocket, status, socketFailure, {},
                 MYSQL_WAIT_TIMEOUT, 0, false, {}};

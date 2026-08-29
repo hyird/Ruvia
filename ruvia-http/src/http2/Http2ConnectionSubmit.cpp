@@ -118,6 +118,19 @@ void Http2Connection::appendResponseHeaderFrames(
     }
 }
 
+void Http2Connection::commitConnectResponseHead(
+    Http2StreamState& stream, bool terminalRemoteHalf) {
+    appendResponseHeaderFrames(
+        stream, std::string_view(stream.localHeaderBlock()), Http2EndStream::kKeepOpen);
+    (void)stream.acceptConnect();
+    stream.beginLocalContentUnbounded();
+    (void)stream.openLocalConnectTunnel();
+    http2ReleaseLocalHeaderBlock(stream);
+    if (terminalRemoteHalf) {
+        events_.push_back(Http2Event::tunnelEnd(stream.id()));
+    }
+}
+
 Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
     std::uint32_t streamId, const HttpResponse& response, HttpBufferedResponseWritePlan writePlan) {
     auto* stream = findStream(streamId);
@@ -388,15 +401,7 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
     if (!appendHttp2ResponseHeaders(*stream, response, *headPlan, *http2Control)) {
         return Http2SubmitStatus::kInvalidMessage;
     }
-    appendResponseHeaderFrames(
-        *stream, std::string_view(stream->localHeaderBlock()), Http2EndStream::kKeepOpen);
-    (void)stream->acceptConnect();
-    stream->beginLocalContentUnbounded();
-    (void)stream->openLocalConnectTunnel();
-    http2ReleaseLocalHeaderBlock(*stream);
-    if (terminalRemoteHalf) {
-        events_.push_back(Http2Event::tunnelEnd(streamId));
-    }
+    commitConnectResponseHead(*stream, terminalRemoteHalf);
     return Http2SubmitStatus::kAccepted;
 }
 
@@ -418,15 +423,7 @@ Http2WebSocketHandshakeSubmitResult Http2Connection::submitWebSocketHandshake(
         reserveEventSlots(1);
     }
     http2EncodeWebSocketHandshakeHeaders(stream->localHeaderBlock(), negotiation);
-    appendResponseHeaderFrames(
-        *stream, std::string_view(stream->localHeaderBlock()), Http2EndStream::kKeepOpen);
-    (void)stream->acceptConnect();
-    stream->beginLocalContentUnbounded();
-    (void)stream->openLocalConnectTunnel();
-    http2ReleaseLocalHeaderBlock(*stream);
-    if (terminalRemoteHalf) {
-        events_.push_back(Http2Event::tunnelEnd(streamId));
-    }
+    commitConnectResponseHead(*stream, terminalRemoteHalf);
     return Http2WebSocketHandshakeSubmitResult::makeSubmitted(std::move(negotiation));
 }
 

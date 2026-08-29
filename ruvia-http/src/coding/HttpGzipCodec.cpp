@@ -25,15 +25,32 @@ void gzipZfree(voidpf, voidpf address) noexcept {
     zlibPmrFree(address);
 }
 
+[[nodiscard]] z_stream makeGzipStream(std::pmr::memory_resource* resource) noexcept {
+    z_stream stream{};
+    stream.zalloc = &gzipZalloc;
+    stream.zfree = &gzipZfree;
+    stream.opaque = resource;
+    return stream;
+}
+
+inline void refillGzipInput(
+    z_stream& stream, std::string_view input, std::size_t& supplied) noexcept {
+    if (stream.avail_in != 0 || supplied == input.size()) {
+        return;
+    }
+    const auto count = static_cast<uInt>(
+        std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
+    stream.avail_in = count;
+    supplied += count;
+}
+
 }  // namespace
 
 ContentDecodeAttempt decodeGzipContent(
     std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    z_stream stream{};
-    stream.zalloc = &gzipZalloc;
-    stream.zfree = &gzipZfree;
-    stream.opaque = output.get_allocator().resource();
+    auto stream = makeGzipStream(output.get_allocator().resource());
     if (inflateInit2(&stream, 15 + 16) != Z_OK) {
         return HttpContentDecodeError::kDecoderFailure;
     }
@@ -45,20 +62,9 @@ ContentDecodeAttempt decodeGzipContent(
     } guard{&stream};
 
     std::size_t supplied = 0;
-    const auto refill = [&]() noexcept {
-        if (stream.avail_in != 0 || supplied == input.size()) {
-            return;
-        }
-        const auto count = static_cast<uInt>(
-            std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
-        stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
-        stream.avail_in = count;
-        supplied += count;
-    };
-
     char buffer[16384];
     for (;;) {
-        refill();
+        refillGzipInput(stream, input, supplied);
         const auto beforeInput = stream.avail_in;
         stream.next_out = reinterpret_cast<Bytef*>(buffer);
         stream.avail_out = static_cast<uInt>(sizeof(buffer));
@@ -72,7 +78,7 @@ ContentDecodeAttempt decodeGzipContent(
             // RFC 1952 gzip data is a series of members. Preserve any input
             // already supplied to zlib, reset only the member state, and keep
             // decoding until the exact HTTP content boundary is consumed.
-            refill();
+            refillGzipInput(stream, input, supplied);
             if (stream.avail_in == 0 && supplied == input.size()) {
                 return output;
             }
@@ -106,10 +112,7 @@ ContentDecodeAttempt decodeGzipContent(
 ContentEncodeAttempt encodeGzipContent(
     std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    z_stream stream{};
-    stream.zalloc = &gzipZalloc;
-    stream.zfree = &gzipZfree;
-    stream.opaque = output.get_allocator().resource();
+    auto stream = makeGzipStream(output.get_allocator().resource());
     if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) !=
         Z_OK) {
         return HttpContentEncodeError::kEncoderFailure;
@@ -122,19 +125,8 @@ ContentEncodeAttempt encodeGzipContent(
     } guard{&stream};
 
     std::size_t supplied = 0;
-    const auto refill = [&]() noexcept {
-        if (stream.avail_in != 0 || supplied == input.size()) {
-            return;
-        }
-        const auto count = static_cast<uInt>(
-            std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
-        stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
-        stream.avail_in = count;
-        supplied += count;
-    };
-
     for (;;) {
-        refill();
+        refillGzipInput(stream, input, supplied);
         if (output.size() == maxEncodedBytes) {
             if (stream.avail_in == 0 && supplied == input.size()) {
                 Bytef probe{};

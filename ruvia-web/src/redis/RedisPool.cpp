@@ -4,11 +4,9 @@
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
 #include "ruvia/core/detail/worker/WorkerCancellationPost.h"
-#include <asio/error.hpp>
 
 #include <limits>
 #include <stdexcept>
-#include <system_error>
 #include <utility>
 
 namespace ruvia {
@@ -34,28 +32,8 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(
     ArgSource args, OperationOptions options, std::pmr::memory_resource* resource) {
     const OperationTimeout operationTimeout(options.timeout);
     const auto index = co_await acquire(operationTimeout, options.stopToken);
-    ConnectionGuard guard(*this, index);
+    ConnectionGuard guard(*this, index, options.stopToken);
     auto& connection = guard.connection();
-    connection.abortReason = Connection::AbortReason::kNone;
-    connection.cancellationId = 0;
-    std::uint64_t cancellationId = 0;
-    StopRegistration stopRegistration;
-    if (options.stopToken.stoppable()) {
-        cancellationId = cancellationMailbox_->nextOperationId();
-        connection.cancellationId = cancellationId;
-        options.stopToken.registerCallback(
-            stopRegistration, WorkerCancellationPost<RedisOperationCancellationMailbox>(
-                                  cancellationMailbox_, cancellationId));
-    }
-    if (options.stopToken.stopRequested()) {
-        cancelOperationById(cancellationId);
-    }
-    auto finishCancellation = [&]() noexcept {
-        if (connection.cancellationId == cancellationId) {
-            connection.cancellationId = 0;
-        }
-        stopRegistration.reset();
-    };
     try {
         if (!connection.connected) {
             co_await connect(connection, &operationTimeout);
@@ -67,21 +45,12 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(
         connection.writeBuffer.reserve(respCommandSerializedSize(argSpan));
         appendRespCommand(connection.writeBuffer, argSpan);
         const auto deadline = operationTimeout.constrainedBy(commandTimeout_);
-        const auto writeEc = co_await asyncSocketWrite(connection, deadline);
-        throwIfAborted(connection);
-        if (writeEc) {
-            if (writeEc == asio::error::timed_out) {
-                throw RedisError(RedisError::Code::kTimeout, "redis command timed out");
-            }
-            throw RedisError(RedisError::Code::kIoError, writeEc.message());
-        }
+        co_await asyncSocketWrite(connection, deadline);
 
         auto reply = co_await readReply(connection, deadline, resource);
         throwIfAborted(connection);
-        finishCancellation();
         co_return reply;
     } catch (...) {
-        finishCancellation();
         guard.discard();
         throw;
     }
@@ -99,31 +68,8 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
 
     const OperationTimeout operationTimeout(options.timeout);
     const auto index = co_await acquire(operationTimeout, options.stopToken);
-    ConnectionGuard guard(*this, index);
+    ConnectionGuard guard(*this, index, options.stopToken);
     auto& connection = guard.connection();
-    connection.abortReason = Connection::AbortReason::kNone;
-    connection.cancellationId = 0;
-    std::uint64_t cancellationId = 0;
-    StopRegistration stopRegistration;
-    if (options.stopToken.stoppable()) {
-        if (cancellationMailbox_ == nullptr) {
-            std::terminate();
-        }
-        cancellationId = cancellationMailbox_->nextOperationId();
-        connection.cancellationId = cancellationId;
-        options.stopToken.registerCallback(
-            stopRegistration, WorkerCancellationPost<RedisOperationCancellationMailbox>(
-                                  cancellationMailbox_, cancellationId));
-    }
-    if (options.stopToken.stopRequested()) {
-        cancelOperationById(cancellationId);
-    }
-    auto finishCancellation = [&]() noexcept {
-        if (connection.cancellationId == cancellationId) {
-            connection.cancellationId = 0;
-        }
-        stopRegistration.reset();
-    };
     try {
         if (!connection.connected) {
             co_await connect(connection, &operationTimeout);
@@ -147,24 +93,15 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
         }
 
         const auto deadline = operationTimeout.constrainedBy(commandTimeout_);
-        const auto writeEc = co_await asyncSocketWrite(connection, deadline);
-        throwIfAborted(connection);
-        if (writeEc) {
-            if (writeEc == asio::error::timed_out) {
-                throw RedisError(RedisError::Code::kTimeout, "redis command timed out");
-            }
-            throw RedisError(RedisError::Code::kIoError, writeEc.message());
-        }
+        co_await asyncSocketWrite(connection, deadline);
 
         while (replies.size() < commands.size()) {
             replies.emplace_back(co_await readReply(connection, deadline, resolved));
             throwIfAborted(connection);
         }
 
-        finishCancellation();
         co_return replies;
     } catch (...) {
-        finishCancellation();
         guard.discard();
         throw;
     }

@@ -110,6 +110,23 @@ void assignActiveResponseHeaders(HttpResponse& response, const HttpResponse& act
     }
 }
 
+template <auto ApplyActiveHeaders>
+void finalizeContextResponse(detail::ContextResponseState& state, HttpResponse&& response) {
+    if (&response == &state.activeResponse()) {
+        state.finalizeActive();
+        return;
+    }
+    if (state.activeResponse().headers().empty()) {
+        state.finalize(std::move(response));
+        return;
+    }
+    // Keep the clone disposable until the complete header transaction succeeds.
+    HttpResponse staged = detail::HttpResponseHeaderStateAccess::cloneForTransaction(response);
+    ApplyActiveHeaders(staged, state.activeResponse());
+    response = std::move(staged);
+    state.finalize(std::move(response));
+}
+
 }  // namespace
 
 void Context::status(HttpStatusCode statusCode) {
@@ -156,38 +173,11 @@ void Context::header(std::string_view name, std::string_view value, HeaderOption
 }
 
 void Context::storeResponse(HttpResponse&& response) {
-    if (&response == &responseState_.activeResponse()) {
-        responseState_.finalizeActive();
-        return;
-    }
-    if (responseState_.activeResponse().headers().empty()) {
-        responseState_.finalize(std::move(response));
-        return;
-    }
-    // Stage a complete clone before merging. A moved staging response cannot
-    // provide rollback: a failed merge may already have published some header
-    // descriptors into that staging object. The clone stays disposable until
-    // every allocation and merge operation succeeds; the final move assignment
-    // is the publication point.
-    HttpResponse staged = detail::HttpResponseHeaderStateAccess::cloneForTransaction(response);
-    mergeActiveResponseHeaders(staged, responseState_.activeResponse());
-    response = std::move(staged);
-    responseState_.finalize(std::move(response));
+    finalizeContextResponse<mergeActiveResponseHeaders>(responseState_, std::move(response));
 }
 
 void Context::storeAssignedResponse(HttpResponse&& response) {
-    if (&response == &responseState_.activeResponse()) {
-        responseState_.finalizeActive();
-        return;
-    }
-    if (responseState_.activeResponse().headers().empty()) {
-        responseState_.finalize(std::move(response));
-        return;
-    }
-    HttpResponse staged = detail::HttpResponseHeaderStateAccess::cloneForTransaction(response);
-    assignActiveResponseHeaders(staged, responseState_.activeResponse());
-    response = std::move(staged);
-    responseState_.finalize(std::move(response));
+    finalizeContextResponse<assignActiveResponseHeaders>(responseState_, std::move(response));
 }
 
 HttpResponse Context::body(std::string_view body) const {

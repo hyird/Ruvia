@@ -23,8 +23,10 @@
 namespace ruvia {
 
 namespace detail {
+class Http2Connection;
 class Http2ConnectionOwnerEndpoint;
-}
+class Http2RequestHeadSubmitResult;
+}  // namespace detail
 
 enum class Http2Role : std::uint8_t { kServer,
     kClient };
@@ -628,6 +630,8 @@ public:
     [[nodiscard]] std::optional<Http2ErrorCode> connectionError() const noexcept;
 
 private:
+    [[nodiscard]] static Http2RequestHeadSubmitResult pinSubmittedRequest(
+        detail::Http2Connection& connection, const detail::Http2RequestHeadSubmitResult& result);
     explicit Http2Connection(std::pmr::memory_resource* resource, Http2Role role);
     class Impl;
     std::unique_ptr<Impl> impl_;

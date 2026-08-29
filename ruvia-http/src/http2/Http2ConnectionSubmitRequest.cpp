@@ -1,6 +1,7 @@
 #include "ruvia/http/detail/http2/Http2Connection.h"
 
 #include <algorithm>
+#include <memory_resource>
 #include <utility>
 
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
@@ -172,6 +173,13 @@ struct Http2OutboundRequestHeaderFacts final {
     return sawVersion && webSocketClientOfferHeadersValid(headers);
 }
 
+void http2EncodeOutboundRequestHeaders(
+    std::pmr::string& block, std::span<const HttpHeaderView> headers) {
+    for (const auto& header : headers) {
+        HpackEncoder::encodeHeader(block, header.name(), header.value());
+    }
+}
+
 }  // namespace
 
 Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(std::string_view method,
@@ -221,20 +229,10 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(std::stri
             Http2RequestHeadSubmitError::kInvalidMessage);
     }
 
-    auto* stream = admitLocalRequestStream();
-    if (stream == nullptr) {
-        return Http2RequestHeadSubmitResult::makeFailure(
-            Http2RequestHeadSubmitError::kLocalStreamCapacityReached);
-    }
-    const auto streamId = stream->id();
-    const auto rollback = [this, streamId]() noexcept {
-        (void)streams_.remove(streamId);
-        nextLocalStreamId_ -= 2;
-    };
-    try {
-        stream->assignRequestMethod(method);
-        stream->assignRequestScheme(scheme);
-        auto& block = stream->localHeaderBlock();
+    return submitLocalRequestHead([&](Http2StreamState& stream) {
+        stream.assignRequestMethod(method);
+        stream.assignRequestScheme(scheme);
+        auto& block = stream.localHeaderBlock();
         block.clear();
         HpackEncoder::encodeHeader(block, ":method", method);
         HpackEncoder::encodeHeader(block, ":scheme", scheme);
@@ -242,9 +240,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(std::stri
             HpackEncoder::encodeHeader(block, ":authority", *authority);
         }
         HpackEncoder::encodeHeader(block, ":path", path);
-        for (const auto& header : headers) {
-            HpackEncoder::encodeHeader(block, header.name(), header.value());
-        }
+        http2EncodeOutboundRequestHeaders(block, headers);
         if (expectation == HttpClientRequestExpectation::kContinue) {
             HpackEncoder::encodeHeader(block, "expect", kHttpContinueExpectationToken);
         }
@@ -255,29 +251,23 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(std::stri
         // This is the commit point for the wire representation. Every operation
         // above is retryable; appendResponseHeaderFrames pre-reserves the complete
         // frame sequence, so a throwing resource cannot strand a created stream.
-        appendResponseHeaderFrames(*stream, std::string_view(block), endStream);
-    } catch (...) {
-        rollback();
-        throw;
-    }
-    if (withoutContent) {
-        stream->beginLocalContentForbidden();
-    } else if (knownLengthContent != nullptr) {
-        stream->beginLocalContentKnownLength(knownLengthContent->length());
-    } else if (streamingContent) {
-        stream->beginLocalContentUnbounded();
-    }
-    if (http2EndsStream(endStream)) {
-        (void)stream->commitLocalHeadEndStream();
-    } else {
-        (void)stream->beginLocalRequestContent();
-        if (expectation == HttpClientRequestExpectation::kContinue) {
-            stream->awaitRequestContinue();
+        appendResponseHeaderFrames(stream, std::string_view(block), endStream);
+        if (withoutContent) {
+            stream.beginLocalContentForbidden();
+        } else if (knownLengthContent != nullptr) {
+            stream.beginLocalContentKnownLength(knownLengthContent->length());
+        } else if (streamingContent) {
+            stream.beginLocalContentUnbounded();
         }
-    }
-    activateLocalRequestStream(*stream);
-    http2ReleaseLocalHeaderBlock(*stream);
-    return Http2RequestHeadSubmitResult::makeSubmitted(streamId);
+        if (http2EndsStream(endStream)) {
+            (void)stream.commitLocalHeadEndStream();
+        } else {
+            (void)stream.beginLocalRequestContent();
+            if (expectation == HttpClientRequestExpectation::kContinue) {
+                stream.awaitRequestContinue();
+            }
+        }
+    });
 }
 
 Http2RequestHeadSubmitResult Http2Connection::submitConnectRequestHead(
@@ -297,37 +287,19 @@ Http2RequestHeadSubmitResult Http2Connection::submitConnectRequestHead(
             Http2RequestHeadSubmitError::kInvalidMessage);
     }
 
-    auto* stream = admitLocalRequestStream();
-    if (stream == nullptr) {
-        return Http2RequestHeadSubmitResult::makeFailure(
-            Http2RequestHeadSubmitError::kLocalStreamCapacityReached);
-    }
-    const auto streamId = stream->id();
-    const auto rollback = [this, streamId]() noexcept {
-        (void)streams_.remove(streamId);
-        nextLocalStreamId_ -= 2;
-    };
-    try {
-        (void)stream->beginStandardConnect();
-        stream->assignRequestMethod("CONNECT");
-        stream->beginLocalContentForbidden();
-        (void)stream->beginLocalConnectRequest();
+    return submitLocalRequestHead([&](Http2StreamState& stream) {
+        (void)stream.beginStandardConnect();
+        stream.assignRequestMethod("CONNECT");
+        stream.beginLocalContentForbidden();
+        (void)stream.beginLocalConnectRequest();
 
-        auto& block = stream->localHeaderBlock();
+        auto& block = stream.localHeaderBlock();
         block.clear();
         HpackEncoder::encodeHeader(block, ":method", "CONNECT");
         HpackEncoder::encodeHeader(block, ":authority", authority);
-        for (const auto& header : headers) {
-            HpackEncoder::encodeHeader(block, header.name(), header.value());
-        }
-        appendResponseHeaderFrames(*stream, std::string_view(block), Http2EndStream::kKeepOpen);
-    } catch (...) {
-        rollback();
-        throw;
-    }
-    activateLocalRequestStream(*stream);
-    http2ReleaseLocalHeaderBlock(*stream);
-    return Http2RequestHeadSubmitResult::makeSubmitted(streamId);
+        http2EncodeOutboundRequestHeaders(block, headers);
+        appendResponseHeaderFrames(stream, std::string_view(block), Http2EndStream::kKeepOpen);
+    });
 }
 
 Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
@@ -359,25 +331,15 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
             Http2RequestHeadSubmitError::kInvalidMessage);
     }
 
-    auto* stream = admitLocalRequestStream();
-    if (stream == nullptr) {
-        return Http2RequestHeadSubmitResult::makeFailure(
-            Http2RequestHeadSubmitError::kLocalStreamCapacityReached);
-    }
-    const auto streamId = stream->id();
-    const auto rollback = [this, streamId]() noexcept {
-        (void)streams_.remove(streamId);
-        nextLocalStreamId_ -= 2;
-    };
-    try {
-        (void)stream->beginExtendedConnect();
-        stream->assignRequestMethod("CONNECT");
-        stream->assignRequestScheme(scheme);
-        stream->setProtocol(encodedProtocol);
-        stream->beginLocalContentForbidden();
-        (void)stream->beginLocalConnectRequest();
+    return submitLocalRequestHead([&](Http2StreamState& stream) {
+        (void)stream.beginExtendedConnect();
+        stream.assignRequestMethod("CONNECT");
+        stream.assignRequestScheme(scheme);
+        stream.setProtocol(encodedProtocol);
+        stream.beginLocalContentForbidden();
+        (void)stream.beginLocalConnectRequest();
 
-        auto& block = stream->localHeaderBlock();
+        auto& block = stream.localHeaderBlock();
         block.clear();
         HpackEncoder::encodeHeader(block, ":method", "CONNECT");
         // RFC 8441 registers and requires the lowercase `websocket` value. HTTP
@@ -387,17 +349,9 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
         HpackEncoder::encodeHeader(block, ":scheme", scheme);
         HpackEncoder::encodeHeader(block, ":authority", authority);
         HpackEncoder::encodeHeader(block, ":path", path);
-        for (const auto& header : headers) {
-            HpackEncoder::encodeHeader(block, header.name(), header.value());
-        }
-        appendResponseHeaderFrames(*stream, std::string_view(block), Http2EndStream::kKeepOpen);
-    } catch (...) {
-        rollback();
-        throw;
-    }
-    activateLocalRequestStream(*stream);
-    http2ReleaseLocalHeaderBlock(*stream);
-    return Http2RequestHeadSubmitResult::makeSubmitted(streamId);
+        http2EncodeOutboundRequestHeaders(block, headers);
+        appendResponseHeaderFrames(stream, std::string_view(block), Http2EndStream::kKeepOpen);
+    });
 }
 
 }  // namespace ruvia::detail

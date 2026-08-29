@@ -85,6 +85,9 @@ public:
     friend Task<void> finishDbTransaction(
         Pool&, std::size_t, std::string_view, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
+    friend Task<DbTransaction> beginDbTransaction(
+        Pool&, std::string_view, std::pmr::memory_resource*, OperationOptions);
+    template <typename Pool>
     friend Task<DbRows> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>,
         std::pmr::memory_resource*, OperationOptions);
     template <typename Pool>
@@ -153,8 +156,9 @@ public:
     Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<void> connectUnlocked(ConnectionSlot& slot, const OperationTimeout& operationTimeout);
     Task<int> waitForMysql(ConnectionSlot& slot, int status, const OperationTimeout& deadline);
-    Task<void> runMysqlQuery(
-        ConnectionSlot& slot, std::string_view sql, const OperationTimeout& deadline);
+    Task<OperationTimeout> runMysqlStatement(ConnectionSlot& slot, std::string_view sql,
+        std::span<const DbValue> params, std::pmr::memory_resource* resource,
+        const OperationTimeout& operationTimeout);
     Task<st_mysql_res*> storeMysqlResult(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<DbRows> queryOnSlot(ConnectionSlot& slot, std::string_view sql,
         std::span<const DbValue> params, std::pmr::memory_resource* resource,
@@ -218,6 +222,9 @@ private:
     template <typename Pool>
     friend Task<void> finishDbTransaction(
         Pool&, std::size_t, std::string_view, std::pmr::memory_resource*, const OperationOptions&);
+    template <typename Pool>
+    friend Task<DbTransaction> beginDbTransaction(
+        Pool&, std::string_view, std::pmr::memory_resource*, OperationOptions);
     template <typename Pool>
     friend Task<DbRows> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>,
         std::pmr::memory_resource*, OperationOptions);

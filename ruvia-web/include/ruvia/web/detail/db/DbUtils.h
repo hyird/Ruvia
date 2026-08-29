@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ruvia/http/detail/util/HttpNumberFormat.h"
@@ -68,6 +69,45 @@ inline void appendDbNumber(std::pmr::string& output, double value) {
 // means the build has no driver for it.
 [[noreturn]] inline void throwUnavailableDbBackend() {
     throw std::logic_error("database backend is not available");
+}
+
+// DbPoolRef is a closed backend set. Keep its single checked dispatch here so
+// handle, stream, transaction, and registry operations cannot drift into
+// subtly different null or unavailable-backend behavior.
+template <typename Visitor>
+decltype(auto) visitDbPool(const DbPoolRef& pool, Visitor&& visitor) {
+#ifdef RUVIA_ENABLE_MARIADB
+    if (const auto* client = std::get_if<MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
+        return std::forward<Visitor>(visitor)(**client);
+    }
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    if (const auto* client = std::get_if<PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
+        return std::forward<Visitor>(visitor)(**client);
+    }
+#endif
+    throwUnavailableDbBackend();
+}
+
+// Destruction and immediate close paths cannot report an empty backend. They
+// deliberately ignore it while preserving the same closed-set dispatch.
+template <typename Visitor>
+void visitDbPoolIfPresent(const DbPoolRef& pool, Visitor&& visitor) noexcept {
+#ifdef RUVIA_ENABLE_MARIADB
+    if (const auto* client = std::get_if<MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
+        std::forward<Visitor>(visitor)(**client);
+        return;
+    }
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    if (const auto* client = std::get_if<PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
+        std::forward<Visitor>(visitor)(**client);
+    }
+#endif
 }
 
 }  // namespace ruvia::detail

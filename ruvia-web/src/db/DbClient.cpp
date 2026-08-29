@@ -24,11 +24,12 @@ DbClientState::DbClientState(EventLoop loop, const DbConfig& config)
       worker_(loop_.handle()),
       memory_(),
       databases_(loop_.ioContext(), worker_, memory_.resource(), config),
-      closeSignal_(worker_) {}
+      closeState_(worker_) {}
 
 DbClientState::~DbClientState() {
     const auto phase = phase_.load(std::memory_order_acquire);
-    if (phase != Phase::kClosed || !closeComplete_ || operationScope_.hasPendingOperations()) {
+    if (phase != Phase::kClosed || !closeState_.complete() ||
+        operationScope_.hasPendingOperations()) {
         std::terminate();
     }
 }
@@ -44,7 +45,7 @@ void DbClientState::bindStop() {
     } catch (...) {
         databases_.closeNow();
         phase_.store(Phase::kClosed, std::memory_order_release);
-        closeComplete_ = true;
+        closeState_.completeNow();
         throw;
     }
 }
@@ -82,15 +83,16 @@ Task<void> DbClientState::connectOnWorker() {
             throw std::runtime_error("worker stopped while database client was connecting");
         }
         connectInFlight_ = false;
-        closeSignal_.notify();
+        closeState_.notifyProgress();
     } catch (...) {
         databases_.closeNow();
         stopSource_.requestStop();
         phase_.store(Phase::kClosed, std::memory_order_release);
         connectInFlight_ = false;
-        closeSignal_.notify();
-        if (!closeTaskStarted_) {
-            closeComplete_ = true;
+        if (closeState_.taskStarted()) {
+            closeState_.notifyProgress();
+        } else {
+            closeState_.completeNow();
         }
         throw;
     }
@@ -127,7 +129,7 @@ void DbClientState::requestClose() noexcept {
             // excludes a concurrent connect() from entering the backend.
             if (phase_.compare_exchange_weak(
                     phase, Phase::kClosed, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                closeComplete_ = true;
+                closeState_.completeNow();
                 return;
             }
             continue;
@@ -165,12 +167,10 @@ Task<void> DbClientState::shutdownOwned(std::shared_ptr<DbClientState> state) {
         throw std::logic_error("database client shutdown must run on its bound event loop");
     }
     state->startCloseOnWorker();
-    while (!state->closeComplete_) {
-        co_await state->closeSignal_.wait();
+    while (!state->closeState_.complete()) {
+        co_await state->closeState_.wait();
     }
-    if (state->closeFailure_) {
-        std::rethrow_exception(state->closeFailure_);
-    }
+    state->closeState_.rethrowFailure();
 }
 
 void DbClientState::startCloseOnWorker() noexcept {
@@ -186,10 +186,9 @@ void DbClientState::startCloseOnWorker() noexcept {
     }
     stopSource_.requestStop();
     databases_.closeNow();
-    if (closeTaskStarted_ || closeComplete_) {
+    if (!closeState_.startTask()) {
         return;
     }
-    closeTaskStarted_ = true;
     try {
         auto state = shared_from_this();
         asyncStartTask(closeOnWorker(),
@@ -203,21 +202,14 @@ void DbClientState::startCloseOnWorker() noexcept {
 
 Task<void> DbClientState::closeOnWorker() {
     while (connectInFlight_) {
-        co_await closeSignal_.wait();
+        co_await closeState_.wait();
     }
     co_await operationScope_.closeAndJoin();
 }
 
 void DbClientState::finishClose(const TaskCompletionResult<void>& result) {
     phase_.store(Phase::kClosed, std::memory_order_release);
-    if (const auto* failed = result.failure()) {
-        closeFailure_ = failed->exception();
-    }
-    closeComplete_ = true;
-    closeSignal_.notify();
-    if (const auto* failed = result.failure()) {
-        std::rethrow_exception(failed->exception());
-    }
+    closeState_.finish(result);
 }
 
 }  // namespace ruvia::detail

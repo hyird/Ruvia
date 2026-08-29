@@ -108,6 +108,28 @@ private:
     std::size_t slot_;
 };
 
+template <typename Slot>
+class DbSlotActiveWaitGuard final {
+public:
+    explicit DbSlotActiveWaitGuard(Slot& slot) noexcept
+        : slot_(slot) {
+        if (slot_.waitActive) {
+            std::terminate();
+        }
+        slot_.waitActive = true;
+    }
+
+    DbSlotActiveWaitGuard(const DbSlotActiveWaitGuard&) = delete;
+    DbSlotActiveWaitGuard& operator=(const DbSlotActiveWaitGuard&) = delete;
+
+    ~DbSlotActiveWaitGuard() {
+        slot_.waitActive = false;
+    }
+
+private:
+    Slot& slot_;
+};
+
 // Taking and giving back a slot is pure lease bookkeeping: no driver is
 // involved, so both pools share these. A release that names no live lease is a
 // bug in the caller, not a runtime condition, and cannot be reported through a
@@ -225,6 +247,27 @@ Task<void> finishDbTransaction(Pool& pool, std::size_t slot, std::string_view co
     }
     cancellation.finish();
     pool.releaseSlot(slot);
+}
+
+// Starting a transaction has the same lease transfer for every driver. The
+// backend control statement owns cancellation checks and connect-on-demand;
+// duplicating those here would run the same policy twice on the call chain.
+template <typename Pool>
+Task<DbTransaction> beginDbTransaction(Pool& pool, std::string_view command,
+    std::pmr::memory_resource* resource, OperationOptions options) {
+    const OperationTimeout operationTimeout(options.timeout);
+    const auto slotIndex = co_await pool.acquireSlot(operationTimeout, options.stopToken);
+    DbSlotCancellationGuard cancellation(pool, slotIndex, options.stopToken);
+    try {
+        co_await pool.executeControl(
+            pool.slots_[slotIndex], command, resource, operationTimeout);
+        co_return DbTransaction(DbPoolRef{&pool}, slotIndex, resource, std::move(options));
+    } catch (...) {
+        pool.closeSlot(pool.slots_[slotIndex]);
+        cancellation.finish();
+        pool.releaseSlot(slotIndex);
+        throw;
+    }
 }
 
 // A statement inside an open transaction: it runs on the slot the transaction
@@ -357,21 +400,7 @@ Task<DbResolvedAddresses> resolveDbHost(
         pool.clearSlotDeadline(slot);
     }
 
-    struct ActiveResolve final {
-        explicit ActiveResolve(Slot& value) noexcept
-            : slot(value) {
-            if (slot.waitActive) {
-                std::terminate();
-            }
-            slot.waitActive = true;
-        }
-
-        ~ActiveResolve() {
-            slot.waitActive = false;
-        }
-
-        Slot& slot;
-    } activeResolve(slot);
+    DbSlotActiveWaitGuard activeResolve(slot);
 
     const auto port = formatDbPort(pool.config_.port, backend);
     try {

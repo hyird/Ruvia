@@ -82,10 +82,10 @@ bool RedisPool::clearDeadline(Connection& connection) noexcept {
     return connection.deadline.clear();
 }
 
-Task<std::error_code> RedisPool::asyncSocketWrite(
+Task<void> RedisPool::asyncSocketWrite(
     Connection& connection, const OperationTimeout& timeout) {
     if (!armDeadline(connection, timeout, Connection::DeadlineKind::kSocket)) {
-        co_return asio::error::timed_out;
+        throw RedisError(RedisError::Code::kTimeout, "redis command timed out");
     }
     const auto writeCompletion = co_await asyncAsio([&connection](auto handler) mutable {
         asio::async_write(
@@ -93,10 +93,12 @@ Task<std::error_code> RedisPool::asyncSocketWrite(
     });
     throwIfAborted(connection);
     const auto ec = writeCompletion.errorCode();
-    if (clearDeadline(connection) || timeout.expired()) {
-        co_return asio::error::timed_out;
+    if (clearDeadline(connection) || timeout.expired() || ec == asio::error::timed_out) {
+        throw RedisError(RedisError::Code::kTimeout, "redis command timed out");
     }
-    co_return ec;
+    if (ec) {
+        throw RedisError(RedisError::Code::kIoError, ec.message());
+    }
 }
 
 Task<AsioCompletion<std::size_t>> RedisPool::asyncSocketReadSome(
@@ -227,13 +229,7 @@ Task<void> RedisPool::authenticate(Connection& connection, const OperationTimeou
         connection.writeBuffer.reserve(respCommandSerializedSize(args));
         appendRespCommand(connection.writeBuffer, args);
         const auto deadline = connectTimeout.constrainedBy(commandTimeout_);
-        const auto writeEc = co_await asyncSocketWrite(connection, deadline);
-        if (writeEc) {
-            if (writeEc == asio::error::timed_out) {
-                throw RedisError(RedisError::Code::kTimeout, "redis command timed out");
-            }
-            throw RedisError(RedisError::Code::kIoError, writeEc.message());
-        }
+        co_await asyncSocketWrite(connection, deadline);
 
         co_return co_await readReply(connection, deadline, resource_);
     };

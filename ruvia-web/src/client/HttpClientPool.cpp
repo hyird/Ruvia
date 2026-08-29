@@ -594,6 +594,15 @@ void HttpClientPool::throwAbort(const Connection& connection) const {
     }
 }
 
+HttpClientError::Code HttpClientPool::transportErrorCode(
+    const std::error_code& error) const noexcept {
+    return config_.scheme == HttpScheme::kHttps &&
+                   (error.category() == asio::error::get_ssl_category() ||
+                       error == asio::ssl::error::stream_truncated)
+               ? HttpClientError::Code::kTlsFailed
+               : HttpClientError::Code::kIoError;
+}
+
 Task<void> HttpClientPool::write(
     Connection& connection, std::string_view bytes, const OperationTimeout& timeout) {
     if (bytes.empty()) {
@@ -618,13 +627,8 @@ Task<void> HttpClientPool::write(
         throw HttpClientError(HttpClientError::Code::kTimeout, "http client write timed out");
     }
     if (completion.errorCode()) {
-        const auto code =
-            config_.scheme == HttpScheme::kHttps &&
-                    (completion.errorCode().category() == asio::error::get_ssl_category() ||
-                        completion.errorCode() == asio::ssl::error::stream_truncated)
-                ? HttpClientError::Code::kTlsFailed
-                : HttpClientError::Code::kIoError;
-        throw HttpClientError(code, completion.errorCode().message());
+        throw HttpClientError(
+            transportErrorCode(completion.errorCode()), completion.errorCode().message());
     }
     bytesSent_ += completion.result();
 }
@@ -653,13 +657,8 @@ Task<std::size_t> HttpClientPool::readSome(
         if (allowEof && completion.errorCode() == asio::error::eof) {
             co_return 0;
         }
-        const auto code =
-            config_.scheme == HttpScheme::kHttps &&
-                    (completion.errorCode().category() == asio::error::get_ssl_category() ||
-                        completion.errorCode() == asio::ssl::error::stream_truncated)
-                ? HttpClientError::Code::kTlsFailed
-                : HttpClientError::Code::kIoError;
-        throw HttpClientError(code, completion.errorCode().message());
+        throw HttpClientError(
+            transportErrorCode(completion.errorCode()), completion.errorCode().message());
     }
     bytesReceived_ += completion.result();
     co_return completion.result();
