@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <exception>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -23,6 +22,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/web/WebSocketClient.h"
+#include "ruvia/web/detail/client/ClientCloseState.h"
 #include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
 
@@ -167,7 +167,7 @@ private:
     WorkerTimerRegistration heartbeatTimer_;
     WorkerTimerRegistration closeHandshakeTimer_;
     WorkerSignal writeSignal_;
-    WorkerSignal closeSignal_;
+    ClientCloseState closeState_;
     std::pmr::string input_;
     std::optional<WsConnection> protocol_;
     std::pmr::string selectedSubprotocol_;
@@ -183,9 +183,6 @@ private:
     std::int64_t lastActiveMs_{0};
     bool connectInFlight_{false};
     bool heartbeatInFlight_{false};
-    bool closeTaskStarted_{false};
-    bool closeComplete_{false};
-    std::exception_ptr closeFailure_;
     ScopedOperationScope operationScope_;
 };
 

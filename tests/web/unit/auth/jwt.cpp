@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <exception>
 #include <limits>
 #include <memory_resource>
 #include <optional>
@@ -24,6 +23,7 @@ using ruvia::JwtExpirationClaimPolicy;
 using ruvia::jwtSign;
 using ruvia::JwtSignOptions;
 using ruvia::JwtVerifyOptions;
+using ruvia::testing::throwsOn;
 
 static_assert(std::is_empty_v<ruvia::detail::JwtPayloadAccess>);
 static_assert(
@@ -193,16 +193,6 @@ std::string signedTokenWithHeaderAndPayload(
 
 std::string signedTokenWithPayload(std::string_view secret, std::string_view payloadJson) {
     return signedTokenWithHeaderAndPayload(secret, R"({"alg":"HS256","typ":"JWT"})", payloadJson);
-}
-
-template <typename Fn>
-bool throwsOn(Fn&& fn) {
-    try {
-        fn();
-        return false;
-    } catch (const std::exception&) {
-        return true;
-    }
 }
 
 }  // namespace

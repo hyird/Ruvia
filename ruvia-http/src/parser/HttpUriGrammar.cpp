@@ -67,6 +67,24 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
     return digits != 0;
 }
 
+template <typename IsAllowed>
+[[nodiscard]] bool isValidPercentEncoded(
+    std::string_view value, IsAllowed isAllowed) noexcept {
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        const auto byte = static_cast<unsigned char>(value[index]);
+        if (byte == '%') {
+            if (index + 2 >= value.size() || decodeHexNibble(value[index + 1]) < 0 ||
+                decodeHexNibble(value[index + 2]) < 0) {
+                return false;
+            }
+            index += 2;
+        } else if (!isAllowed(byte)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 [[nodiscard]] bool isUriPchar(unsigned char byte) noexcept {
@@ -91,39 +109,15 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
 
 [[nodiscard]] bool isValidUriComponent(
     std::string_view value, bool allowSlash, bool allowQuestion) noexcept {
-    for (std::size_t i = 0; i < value.size(); ++i) {
-        const auto byte = static_cast<unsigned char>(value[i]);
-        if (byte == '%') {
-            if (i + 2 >= value.size() || decodeHexNibble(value[i + 1]) < 0 ||
-                decodeHexNibble(value[i + 2]) < 0) {
-                return false;
-            }
-            i += 2;
-            continue;
-        }
-        if (!isUriPchar(byte) && !(allowSlash && byte == '/') && !(allowQuestion && byte == '?')) {
-            return false;
-        }
-    }
-    return true;
+    return isValidPercentEncoded(value, [allowSlash, allowQuestion](unsigned char byte) noexcept {
+        return isUriPchar(byte) || (allowSlash && byte == '/') || (allowQuestion && byte == '?');
+    });
 }
 
 [[nodiscard]] bool isValidUriUserinfo(std::string_view value) noexcept {
-    for (std::size_t i = 0; i < value.size(); ++i) {
-        const auto byte = static_cast<unsigned char>(value[i]);
-        if (byte == '%') {
-            if (i + 2 >= value.size() || decodeHexNibble(value[i + 1]) < 0 ||
-                decodeHexNibble(value[i + 2]) < 0) {
-                return false;
-            }
-            i += 2;
-            continue;
-        }
-        if (!isUriUnreserved(byte) && !isUriSubDelimiter(byte) && byte != ':') {
-            return false;
-        }
-    }
-    return true;
+    return isValidPercentEncoded(value, [](unsigned char byte) noexcept {
+        return isUriUnreserved(byte) || isUriSubDelimiter(byte) || byte == ':';
+    });
 }
 
 [[nodiscard]] bool isValidUriPort(std::string_view value) noexcept {
@@ -255,25 +249,10 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
 }
 
 [[nodiscard]] bool isValidRegName(std::string_view value) noexcept {
-    if (value.empty()) {
-        return false;
-    }
-
-    for (std::size_t index = 0; index < value.size(); ++index) {
-        const auto byte = static_cast<unsigned char>(value[index]);
-        if (byte == '%') {
-            if (index + 2 >= value.size() || decodeHexNibble(value[index + 1]) < 0 ||
-                decodeHexNibble(value[index + 2]) < 0) {
-                return false;
-            }
-            index += 2;
-            continue;
-        }
-        if (!kRegNameCharTable[byte]) {
-            return false;
-        }
-    }
-    return true;
+    return !value.empty() &&
+           isValidPercentEncoded(value, [](unsigned char byte) noexcept {
+               return kRegNameCharTable[byte];
+           });
 }
 
 }  // namespace ruvia::detail

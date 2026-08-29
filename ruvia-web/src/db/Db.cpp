@@ -36,19 +36,8 @@ Task<DbStreamResult> detail::MariaDbPool::stream(std::pmr::string sql,
     bool slotReleased = false;
     try {
         auto& slot = slots_[slotIndex];
-        if (!slot.connected) {
-            co_await connectUnlocked(slot, operationTimeout);
-        }
-
-        const OperationTimeout deadline = operationTimeout.constrainedBy(config_.queryTimeout);
-        std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
-        if (!params.empty()) {
-            interpolatedSql = interpolateSql(*slot.connection, std::string_view(sql),
-                std::span<const DbValue>(params), resource);
-            sql = std::move(interpolatedSql);
-        }
-
-        co_await runMysqlQuery(slot, std::string_view(sql), deadline);
+        const auto deadline = co_await runMysqlStatement(
+            slot, sql, std::span<const DbValue>(params), resource, operationTimeout);
         auto* rawResult = mysql_use_result(slot.connection);
         if (rawResult == nullptr) {
             if (mysql_field_count(slot.connection) != 0) {
@@ -179,23 +168,8 @@ Task<DbExecResult> detail::MariaDbPool::executeOnTransactionSlot(std::size_t slo
 Task<DbRows> detail::MariaDbPool::queryOnSlot(ConnectionSlot& slot, std::string_view sql,
     std::span<const DbValue> params, std::pmr::memory_resource* resource,
     const OperationTimeout& operationTimeout) {
-    if (sql.empty()) {
-        throw std::invalid_argument("SQL must not be empty");
-    }
-    throwIfCancelled(slot);
-    if (!slot.connected) {
-        co_await connectUnlocked(slot, operationTimeout);
-    }
-    const OperationTimeout deadline = operationTimeout.constrainedBy(config_.queryTimeout);
-
-    std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
-    if (!params.empty()) {
-        interpolatedSql = interpolateSql(*slot.connection, sql, params, resource);
-        sql = interpolatedSql;
-    }
-
+    const auto deadline = co_await runMysqlStatement(slot, sql, params, resource, operationTimeout);
     auto& connection = *slot.connection;
-    co_await runMysqlQuery(slot, sql, deadline);
 
     auto result = DbResultAccess::makeResult(resource);
     auto* rawResult = co_await storeMysqlResult(slot, deadline);
@@ -241,23 +215,8 @@ Task<DbRows> detail::MariaDbPool::queryOnSlot(ConnectionSlot& slot, std::string_
 Task<DbExecResult> detail::MariaDbPool::executeOnSlot(ConnectionSlot& slot, std::string_view sql,
     std::span<const DbValue> params, std::pmr::memory_resource* resource,
     const OperationTimeout& operationTimeout) {
-    if (sql.empty()) {
-        throw std::invalid_argument("SQL must not be empty");
-    }
-    throwIfCancelled(slot);
-    if (!slot.connected) {
-        co_await connectUnlocked(slot, operationTimeout);
-    }
-    const OperationTimeout deadline = operationTimeout.constrainedBy(config_.queryTimeout);
-
-    std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
-    if (!params.empty()) {
-        interpolatedSql = interpolateSql(*slot.connection, sql, params, resource);
-        sql = interpolatedSql;
-    }
-
+    const auto deadline = co_await runMysqlStatement(slot, sql, params, resource, operationTimeout);
     auto& connection = *slot.connection;
-    co_await runMysqlQuery(slot, sql, deadline);
     const auto affectedRows = static_cast<std::uint64_t>(mysql_affected_rows(&connection));
     const auto insertId = static_cast<std::uint64_t>(mysql_insert_id(&connection));
     auto* rawResult = co_await storeMysqlResult(slot, deadline);
@@ -280,22 +239,7 @@ Task<void> detail::MariaDbPool::executeControl(ConnectionSlot& slot, std::string
 
 Task<DbTransaction> detail::MariaDbPool::beginTransaction(
     std::pmr::memory_resource* resource, OperationOptions options) {
-    const OperationTimeout operationTimeout(options.timeout);
-    const auto slotIndex = co_await acquireSlot(operationTimeout, options.stopToken);
-    DbSlotCancellationGuard cancellation(*this, slotIndex, options.stopToken);
-    try {
-        auto& slot = slots_[slotIndex];
-        if (!slot.connected) {
-            co_await connectUnlocked(slot, operationTimeout);
-        }
-        co_await executeControl(slot, "START TRANSACTION", resource, operationTimeout);
-        co_return DbTransaction(DbPoolRef{this}, slotIndex, resource, std::move(options));
-    } catch (...) {
-        closeSlot(slots_[slotIndex]);
-        cancellation.finish();
-        releaseSlot(slotIndex);
-        throw;
-    }
+    return beginDbTransaction(*this, "START TRANSACTION", resource, std::move(options));
 }
 
 Task<void> detail::MariaDbPool::commitTransaction(

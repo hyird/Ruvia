@@ -5,7 +5,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <limits>
 #include <memory_resource>
 #include <optional>
@@ -28,21 +27,12 @@ namespace {
 
 using ruvia::DbValue;
 using ruvia::detail::interpolateSql;
+using ruvia::testing::throwsOn;
 
 std::string interp(st_mysql& conn, std::string_view sql, const std::vector<DbValue>& params) {
     auto out = interpolateSql(conn, sql, std::span<const DbValue>(params.data(), params.size()),
         std::pmr::get_default_resource());
     return std::string(out.data(), out.size());
-}
-
-template <typename Fn>
-bool throwsOn(Fn&& fn) {
-    try {
-        fn();
-        return false;
-    } catch (const std::exception&) {
-        return true;
-    }
 }
 
 template <typename Fn>

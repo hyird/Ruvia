@@ -65,29 +65,6 @@ PostgreSqlPool::~PostgreSqlPool() {
     closeNow();
 }
 
-Task<void> PostgreSqlPool::connect() {
-    const OperationTimeout operationTimeout(std::nullopt);
-    for (auto& slot : slots_) {
-        co_await connectUnlocked(slot, operationTimeout);
-    }
-}
-
-void PostgreSqlPool::closeNow() noexcept {
-    (void)scheduler_.close();
-    for (auto& slot : slots_) {
-        closeSlot(slot);
-    }
-}
-
-Task<std::size_t> PostgreSqlPool::acquireSlot(
-    const OperationTimeout& timeout, StopToken stopToken) {
-    return acquireDbSlot(*this, timeout, std::move(stopToken));
-}
-
-void PostgreSqlPool::releaseSlot(std::size_t slot) noexcept {
-    releaseDbSlot(*this, slot);
-}
-
 void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
     slot.closeRequested = true;
     slot.resolver.cancel();
@@ -118,24 +95,6 @@ void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
     }
     slot.connected = false;
     slot.closeRequested = false;
-}
-
-void PostgreSqlPool::cancelOperationById(std::uint64_t cancellationId) noexcept {
-    for (auto& slot : slots_) {
-        if (slot.cancellationId != cancellationId) {
-            continue;
-        }
-        slot.abortReason = DbSlotAbortReason::kCancelled;
-        closeSlot(slot);
-        return;
-    }
-}
-
-void PostgreSqlPool::throwIfCancelled(const ConnectionSlot& slot) const {
-    if (slot.abortReason == DbSlotAbortReason::kCancelled) {
-        throw DbError(
-            DbError::Code::kCancelled, DbDriver::kPostgreSql, "database operation cancelled");
-    }
 }
 
 void PostgreSqlPool::setSlotDeadline(

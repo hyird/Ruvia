@@ -16,6 +16,28 @@
 
 namespace ruvia::detail {
 
+template <Http2HeaderBlockKind Kind>
+bool Http2Connection::completeDecodedHeaderBlock(Http2StreamState& stream) {
+    static_assert(Kind == Http2HeaderBlockKind::kInitial || Kind == Http2HeaderBlockKind::kTrailers);
+    Http2StreamHeaderDecodeTransaction transaction{
+        stream, Kind == Http2HeaderBlockKind::kInitial && role_ == Http2Role::kServer};
+    auto hpackTransaction = decoder_.beginTransaction();
+    HeaderDecodeStatus status = HeaderDecodeStatus::kProtocolError;
+    if constexpr (Kind == Http2HeaderBlockKind::kInitial) {
+        status = decodeInitialHeaderBlock(stream, transaction, hpackTransaction);
+    } else {
+        status = finishTrailerBlock(stream, transaction, hpackTransaction);
+    }
+    if (status != HeaderDecodeStatus::kOk) {
+        transaction.rollback();
+        return handleHeaderDecodeFailure(stream, status, &hpackTransaction);
+    }
+    transaction.commit();
+    hpackTransaction.commit();
+    http2ResetHeaderBlock(stream);
+    return true;
+}
+
 bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string_view payload) {
     if (header.streamId == 0) {
         appendGoaway(Http2ErrorCode::kProtocolError, "HEADERS stream id must be nonzero");
@@ -183,19 +205,7 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
         const auto outputCheckpoint = output_.checkpoint();
         try {
-            Http2StreamHeaderDecodeTransaction transaction{*stream, role_ == Http2Role::kServer};
-            auto hpackTransaction = decoder_.beginTransaction();
-            const auto status = decodeInitialHeaderBlock(*stream, transaction, hpackTransaction);
-            if (status != HeaderDecodeStatus::kOk) {
-                transaction.rollback();
-                return handleHeaderDecodeFailure(*stream, status, &hpackTransaction);
-            }
-            if (http2RemoteFinalHeadDecoded(*stream)) {
-                emitRequestHeaders(*stream);  // not yet decoded = a 1xx interim head (client)
-            }
-            transaction.commit();
-            hpackTransaction.commit();
-            http2ResetHeaderBlock(*stream);
+            return completeDecodedHeaderBlock<Http2HeaderBlockKind::kInitial>(*stream);
         } catch (...) {
             output_.rollbackTo(outputCheckpoint);
             if (recordedHeadEndStream) {
@@ -238,17 +248,8 @@ bool Http2Connection::processTrailerHeaders(
 
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
         const auto outputCheckpoint = output_.checkpoint();
-        Http2StreamHeaderDecodeTransaction transaction{stream, false};
-        auto hpackTransaction = decoder_.beginTransaction();
         try {
-            const auto status = finishTrailerBlock(stream, transaction, hpackTransaction);
-            if (status != HeaderDecodeStatus::kOk) {
-                transaction.rollback();
-                return handleHeaderDecodeFailure(stream, status, &hpackTransaction);
-            }
-            transaction.commit();
-            hpackTransaction.commit();
-            http2ResetHeaderBlock(stream);
+            return completeDecodedHeaderBlock<Http2HeaderBlockKind::kTrailers>(stream);
         } catch (...) {
             output_.rollbackTo(outputCheckpoint);
             throw;
@@ -310,32 +311,9 @@ bool Http2Connection::processContinuation(
                 return finishDiscardedHeaderBlock();
             }
             if (completedKind == Http2HeaderBlockKind::kTrailers) {
-                Http2StreamHeaderDecodeTransaction transaction{*stream, false};
-                auto hpackTransaction = decoder_.beginTransaction();
-                const auto status = finishTrailerBlock(*stream, transaction, hpackTransaction);
-                if (status != HeaderDecodeStatus::kOk) {
-                    transaction.rollback();
-                    return handleHeaderDecodeFailure(*stream, status, &hpackTransaction);
-                }
-                transaction.commit();
-                hpackTransaction.commit();
-                http2ResetHeaderBlock(*stream);
+                return completeDecodedHeaderBlock<Http2HeaderBlockKind::kTrailers>(*stream);
             } else {
-                Http2StreamHeaderDecodeTransaction transaction{
-                    *stream, role_ == Http2Role::kServer};
-                auto hpackTransaction = decoder_.beginTransaction();
-                const auto status =
-                    decodeInitialHeaderBlock(*stream, transaction, hpackTransaction);
-                if (status != HeaderDecodeStatus::kOk) {
-                    transaction.rollback();
-                    return handleHeaderDecodeFailure(*stream, status, &hpackTransaction);
-                }
-                if (http2RemoteFinalHeadDecoded(*stream)) {
-                    emitRequestHeaders(*stream);
-                }
-                transaction.commit();
-                hpackTransaction.commit();
-                http2ResetHeaderBlock(*stream);
+                return completeDecodedHeaderBlock<Http2HeaderBlockKind::kInitial>(*stream);
             }
         }
     } catch (...) {

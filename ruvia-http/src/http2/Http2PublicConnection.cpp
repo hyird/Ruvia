@@ -5,7 +5,6 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
-#include <variant>
 
 #include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
@@ -275,9 +274,9 @@ namespace {
     std::terminate();
 }
 
-using RequestHeadSubmitOutcome = std::variant<std::uint32_t, Http2RequestHeadSubmitError>;
+}  // namespace
 
-[[nodiscard]] RequestHeadSubmitOutcome pinSubmittedRequest(
+Http2RequestHeadSubmitResult Http2Connection::pinSubmittedRequest(
     detail::Http2Connection& connection, const detail::Http2RequestHeadSubmitResult& result) {
     if (const auto* submitted = result.submitted()) {
         try {
@@ -293,10 +292,12 @@ using RequestHeadSubmitOutcome = std::variant<std::uint32_t, Http2RequestHeadSub
             }
             std::rethrow_exception(original);
         }
-        return submitted->streamId();
+        return Http2RequestHeadSubmitResult::makeSubmitted(submitted->streamId());
     }
-    return toPublic(result.failure()->error());
+    return Http2RequestHeadSubmitResult::makeFailure(toPublic(result.failure()->error()));
 }
+
+namespace {
 
 [[nodiscard]] HttpClientResponseHead responseHeadFromStream(
     const detail::Http2StreamState& stream, std::pmr::memory_resource* resource) {
@@ -746,24 +747,14 @@ Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(
         request.scheme.view(), authority, request.target.view(),
         static_cast<std::span<const HttpHeaderView>>(request.headers), toInternal(request.content),
         request.expectation);
-    const auto outcome = pinSubmittedRequest(impl_->connection, result);
-    if (const auto* streamId = std::get_if<std::uint32_t>(&outcome)) {
-        return Http2RequestHeadSubmitResult::makeSubmitted(*streamId);
-    }
-    return Http2RequestHeadSubmitResult::makeFailure(
-        std::get<Http2RequestHeadSubmitError>(outcome));
+    return pinSubmittedRequest(impl_->connection, result);
 }
 
 Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(
     const Http2ConnectRequestHeadView& request) {
     const auto result = impl_->connection.submitConnectRequestHead(
         request.authority.view(), static_cast<std::span<const HttpHeaderView>>(request.headers));
-    const auto outcome = pinSubmittedRequest(impl_->connection, result);
-    if (const auto* streamId = std::get_if<std::uint32_t>(&outcome)) {
-        return Http2RequestHeadSubmitResult::makeSubmitted(*streamId);
-    }
-    return Http2RequestHeadSubmitResult::makeFailure(
-        std::get<Http2RequestHeadSubmitError>(outcome));
+    return pinSubmittedRequest(impl_->connection, result);
 }
 
 Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(
@@ -771,12 +762,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(
     const auto result = impl_->connection.submitExtendedConnectRequestHead(request.protocol.view(),
         request.scheme.view(), request.authority.view(), request.target.view(),
         static_cast<std::span<const HttpHeaderView>>(request.headers));
-    const auto outcome = pinSubmittedRequest(impl_->connection, result);
-    if (const auto* streamId = std::get_if<std::uint32_t>(&outcome)) {
-        return Http2RequestHeadSubmitResult::makeSubmitted(*streamId);
-    }
-    return Http2RequestHeadSubmitResult::makeFailure(
-        std::get<Http2RequestHeadSubmitError>(outcome));
+    return pinSubmittedRequest(impl_->connection, result);
 }
 
 Http2DataSubmitStatus Http2Connection::submitData(

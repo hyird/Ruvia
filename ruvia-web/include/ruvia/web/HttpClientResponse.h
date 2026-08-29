@@ -65,6 +65,7 @@ private:
         detail::HttpClientResponseState& state, std::size_t maxBytes);
     [[nodiscard]] static Task<void> pipeToTask(
         detail::HttpClientResponseState& state, ResponseStreamWriter& output);
+    static void promotePendingData(detail::HttpClientResponseState& state);
 
     explicit HttpClientResponseBody(detail::HttpClientResponseState* state) noexcept
         : state_(state) {}

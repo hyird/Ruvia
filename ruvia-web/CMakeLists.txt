@@ -12,84 +12,9 @@ if(RUVIA_ENABLE_REDIS)
     find_package(hiredis CONFIG REQUIRED)
 endif()
 
-set(RUVIA_WEB_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/App.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppConfig.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppHttpConfig.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppIntegrationConfig.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppListenerOptions.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppRunCoordinator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Dotenv.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvParser.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvPaths.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Testing.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/WebWorker.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/CookieSignature.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/ClientTransport.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClient.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientHandle.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientHttp1.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientHttp2.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPool.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientRegistry.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/WebSocketClient.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextCookies.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextConnInfo.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextData.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextFileResponse.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextRedirect.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextRequest.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextRequestFacade.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextRequestForm.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextRequestFormParse.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextResponse.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextServices.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextSessionState.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/context/ContextStorage.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/controller/ControllerRegistry.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/controller/ControllerRouteBuilder.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Csrf.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Error.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/FileConditionalRequest.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Health.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpCors.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpRuntimeFacades.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/MultipartReader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/SecurityHeaders.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Session.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticFileTypes.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticFileVariant.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticRootConfigStorage.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticRoot.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2BufferedResponseWrite.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSession.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSessionEngine.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSendWindow.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/WorkerCapabilities.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/WorkerClientRegistryView.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ratelimit/RateLimitDecision.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/PathSegments.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/Router.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterBuild.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDispatch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDynamicIndex.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDynamicIndexBuild.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterErrorDispatch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterIndex.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterIndexBuild.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterMiddlewareDispatch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterRegistration.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterStreamDispatch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterUrl.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ruvia.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpConnectionState.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpFileWrite.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseCompression.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerListener.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/TrustedProxies.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WebWorkerRuntime.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/WebWorkerRuntimeAccept.cpp
-)
+ruvia_collect_cpp_sources(RUVIA_WEB_SOURCES src)
+list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/(db|redis)/")
+list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/auth/Jwt[^/]*\\.cpp$")
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     list(APPEND RUVIA_WEB_SOURCES
@@ -216,4 +141,3 @@ ruvia_install_public_header_closure(web include/ruvia/web
     EXCLUDE_DIRECTORIES ${_ruvia_web_excluded_header_directories})
 
 ruvia_install_export(web)
-ruvia_assert_target_file_ownership(ruvia-web)

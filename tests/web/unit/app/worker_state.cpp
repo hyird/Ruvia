@@ -1,7 +1,7 @@
 #include "test_harness.h"
+#include "memory_resource_fixture.h"
 
 #include <cstddef>
-#include <memory_resource>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -10,6 +10,8 @@
 #include "ruvia/web/detail/integration/WorkerState.h"
 
 namespace {
+
+using ruvia::test::CountingMemoryResource;
 
 struct StateInit final {
     std::vector<int>* destroyed;
@@ -31,29 +33,6 @@ struct TrackedState final {
 };
 
 struct MissingState final {};
-
-class CountingMemoryResource final : public std::pmr::memory_resource {
-public:
-    [[nodiscard]] std::size_t allocationCount() const noexcept {
-        return allocationCount_;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        ++allocationCount_;
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    std::size_t allocationCount_{0};
-};
 
 }  // namespace
 

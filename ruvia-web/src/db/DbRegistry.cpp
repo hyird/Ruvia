@@ -28,37 +28,11 @@ namespace {
 }
 
 Task<void> connectPool(detail::DbPoolRef pool) {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        co_await (*client)->connect();
-        co_return;
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        co_await (*client)->connect();
-        co_return;
-    }
-#endif
-    throw std::logic_error("database backend is not available");
+    return detail::visitDbPool(pool, [](auto& client) { return client.connect(); });
 }
 
 void closePool(detail::DbPoolRef pool) noexcept {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        (*client)->closeNow();
-        return;
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        (*client)->closeNow();
-    }
-#endif
+    detail::visitDbPoolIfPresent(pool, [](auto& client) noexcept { client.closeNow(); });
 }
 
 }  // namespace

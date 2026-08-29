@@ -4,13 +4,42 @@
 
 namespace ruvia::detail {
 
-RedisPool::ConnectionGuard::ConnectionGuard(RedisPool& pool, std::size_t index) noexcept
+RedisPool::ConnectionGuard::ConnectionGuard(
+    RedisPool& pool, std::size_t index, const StopToken& stopToken)
     : pool_(pool),
-      index_(index) {}
+      index_(index) {
+    auto& connection = pool_.connections_[index_];
+    connection.abortReason = Connection::AbortReason::kNone;
+    connection.cancellationId = 0;
+    if (!stopToken.stoppable()) {
+        return;
+    }
+    if (pool_.cancellationMailbox_ == nullptr) {
+        std::terminate();
+    }
+    cancellationId_ = pool_.cancellationMailbox_->nextOperationId();
+    connection.cancellationId = cancellationId_;
+    try {
+        stopToken.registerCallback(stopRegistration_,
+            WorkerCancellationPost<RedisOperationCancellationMailbox>(
+                pool_.cancellationMailbox_, cancellationId_));
+    } catch (...) {
+        connection.cancellationId = 0;
+        throw;
+    }
+    if (stopToken.stopRequested()) {
+        pool_.cancelOperationById(cancellationId_);
+    }
+}
 
 RedisPool::ConnectionGuard::~ConnectionGuard() {
+    stopRegistration_.reset();
+    auto& connection = pool_.connections_[index_];
+    if (connection.cancellationId == cancellationId_) {
+        connection.cancellationId = 0;
+    }
     if (discard_) {
-        pool_.close(pool_.connections_[index_]);
+        pool_.close(connection);
     }
     pool_.release(index_);
 }

@@ -14,52 +14,19 @@ namespace {
 
 Task<std::optional<DbRow>> readPoolStream(detail::DbPoolRef pool, std::size_t slot, void* result,
     std::pmr::memory_resource* resource, const OperationOptions& options) {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->readStreamRow(slot, result, resource, options);
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->readStreamRow(slot, result, resource, options);
-    }
-#endif
-    detail::throwUnavailableDbBackend();
+    return detail::visitDbPool(
+        pool, [&](auto& client) { return client.readStreamRow(slot, result, resource, options); });
 }
 
 Task<void> closePoolStream(detail::DbPoolRef pool, std::size_t slot, void* result,
     std::pmr::memory_resource* resource, const OperationOptions& options) {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->closeStream(slot, result, resource, options);
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->closeStream(slot, result, resource, options);
-    }
-#endif
-    detail::throwUnavailableDbBackend();
+    return detail::visitDbPool(
+        pool, [&](auto& client) { return client.closeStream(slot, result, resource, options); });
 }
 
 void abortPoolStream(detail::DbPoolRef pool, std::size_t slot, void* result) noexcept {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        (*client)->abortStream(slot, result);
-        return;
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        (*client)->abortStream(slot, result);
-    }
-#endif
+    detail::visitDbPoolIfPresent(
+        pool, [&](auto& client) noexcept { client.abortStream(slot, result); });
 }
 
 }  // namespace
