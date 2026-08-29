@@ -825,10 +825,10 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
 }
 
 Task<HttpClientResponse> HttpClientPool::execute(
-    HttpClientRequestStorage request, OperationOptions options, std::pmr::memory_resource*) {
-    // The public request is copied from request-local borrowed storage. Once
-    // the response head is returned, transport work may continue beyond the
-    // handler frame, so move it onto the worker-owned resource before spawning.
+    HttpClientRequestStorage request, OperationOptions options) {
+    // The public request is copied from request-local borrowed storage. Both
+    // request and response state use worker-owned storage because transport
+    // work may continue beyond the handler frame.
     std::pmr::vector<HttpHeaderView> requestHeaders(resource_);
     const auto requestView = HttpClientRequestStorageAccess::view(request, requestHeaders);
     HttpClientRequestStorage ownedRequest(

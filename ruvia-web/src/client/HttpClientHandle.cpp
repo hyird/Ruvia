@@ -350,8 +350,8 @@ ScopedOperation<HttpClientResponse> HttpClientHandle::send(
         request.setBody(bytes->value());
     }
     detail::validateOperationOptions(options_);
-    return detail::makeScopedOperation(operationScope(),
-        pool_->execute(std::move(request), options_, detail::pmrResourceOrDefault(resource_)));
+    return detail::makeScopedOperation(
+        operationScope(), pool_->execute(std::move(request), options_));
 }
 
 HttpClientStats HttpClientHandle::stats() const {

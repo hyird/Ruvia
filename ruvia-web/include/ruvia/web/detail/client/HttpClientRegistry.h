@@ -48,8 +48,8 @@ public:
     HttpClientPool(const HttpClientPool&) = delete;
     HttpClientPool& operator=(const HttpClientPool&) = delete;
 
-    [[nodiscard]] Task<HttpClientResponse> execute(HttpClientRequestStorage request,
-        OperationOptions options, std::pmr::memory_resource* responseResource);
+    [[nodiscard]] Task<HttpClientResponse> execute(
+        HttpClientRequestStorage request, OperationOptions options);
     void closeNow() noexcept;
     [[nodiscard]] Task<void> join();
     [[nodiscard]] HttpClientStats stats() const noexcept;
