@@ -83,12 +83,6 @@ constexpr std::size_t kCloseHandshakeBufferBytes = std::size_t{4} * 1024;
     return secure ? WebSocketClientError::Code::kTlsFailed : WebSocketClientError::Code::kIoError;
 }
 
-[[nodiscard]] std::int64_t steadyNowMs() noexcept {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-
 struct StopAbort final {
     std::weak_ptr<WebSocketClientState> state_;
 
@@ -419,7 +413,7 @@ Task<void> WebSocketClientState::connectOwned(std::shared_ptr<WebSocketClientSta
             throw WebSocketClientError(
                 WebSocketClientError::Code::kClosing, "WebSocket client closed while connecting");
         }
-        state->lastActiveMs_ = steadyNowMs();
+        state->lastActiveMs_ = webSocketSteadyNowMs();
         state->livenessState_ = WebSocketLivenessIdle{};
         if (state->config_.heartbeat.pingInterval.has_value()) {
             state->armHeartbeatTimer(*state->config_.heartbeat.pingInterval);
@@ -479,7 +473,7 @@ void WebSocketClientState::armHeartbeatTimer(std::chrono::milliseconds delay) {
 }
 
 void WebSocketClientState::touchActivity() noexcept {
-    lastActiveMs_ = steadyNowMs();
+    lastActiveMs_ = webSocketSteadyNowMs();
     if (phase_.load(std::memory_order_acquire) != Phase::kOpen ||
         !config_.heartbeat.pingInterval.has_value() ||
         !std::holds_alternative<WebSocketLivenessIdle>(livenessState_)) {
@@ -498,7 +492,7 @@ void WebSocketClientState::heartbeatTimerFired() noexcept {
         return;
     }
 
-    const auto now = steadyNowMs();
+    const auto now = webSocketSteadyNowMs();
     const WebSocketLifecycleOptions options{
         .heartbeat = config_.heartbeat, .closeHandshakeTimeout = config_.closeHandshakeTimeout};
     switch (webSocketLivenessDecision(options, requireProtocol().livenessMode(), livenessState_,
@@ -543,9 +537,13 @@ Task<void> WebSocketClientState::heartbeatOwned(std::shared_ptr<WebSocketClientS
             }
             co_await state->flushOutput(OperationOptions{.stopToken = state->stopSource_.token()},
                 OperationTimeout(std::nullopt));
+            // Ordinary I/O shares lastActiveMs_ and may update it while this
+            // coroutine is suspended. The Pong deadline belongs to this
+            // completed heartbeat write, so use its own timestamp.
+            const auto pingSentAtMs = webSocketSteadyNowMs();
             if (state->phase_.load(std::memory_order_acquire) == Phase::kOpen &&
                 std::holds_alternative<WebSocketSendingPing>(state->livenessState_)) {
-                state->livenessState_ = WebSocketAwaitingPong(state->lastActiveMs_);
+                state->livenessState_ = WebSocketAwaitingPong(pingSentAtMs);
                 state->armHeartbeatTimer(*state->config_.heartbeat.pongTimeout);
             }
         } catch (...) {

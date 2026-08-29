@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <variant>
 
@@ -7,6 +8,12 @@
 #include "ruvia/web/WebSocket.h"
 
 namespace ruvia::detail {
+
+[[nodiscard]] inline std::int64_t webSocketSteadyNowMs() noexcept {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 enum class WebSocketLivenessDecision : std::uint8_t {
     kIdle,
