@@ -12,26 +12,32 @@ namespace {
 class ResponseStreamOutputGuard final {
 public:
     explicit ResponseStreamOutputGuard(bool& active)
-        : active_(active) {
-        if (active_) {
+        : active_(&active) {
+        if (*active_) {
+            active_ = nullptr;
             throw std::logic_error("response stream output operation is already in progress");
         }
-        active_ = true;
-    }
-
-    ~ResponseStreamOutputGuard() {
-        active_ = false;
+        *active_ = true;
     }
 
     ResponseStreamOutputGuard(const ResponseStreamOutputGuard&) = delete;
     ResponseStreamOutputGuard& operator=(const ResponseStreamOutputGuard&) = delete;
+    ResponseStreamOutputGuard(ResponseStreamOutputGuard&& other) noexcept
+        : active_(std::exchange(other.active_, nullptr)) {}
+    ResponseStreamOutputGuard& operator=(ResponseStreamOutputGuard&&) = delete;
+
+    ~ResponseStreamOutputGuard() {
+        if (active_ != nullptr) {
+            *active_ = false;
+        }
+    }
 
 private:
-    bool& active_;
+    bool* active_;
 };
 
-ruvia::Task<void> writeTransferredChunk(void* target, ruvia::Task<void> (*write)(void*, std::string_view), std::pmr::string chunk, bool& outputActive) {
-    ResponseStreamOutputGuard guard(outputActive);
+ruvia::Task<void> writeTransferredChunk(void* target, ruvia::Task<void> (*write)(void*, std::string_view), std::pmr::string chunk, ResponseStreamOutputGuard guard) {
+    static_cast<void>(guard);
     co_await write(target, chunk);
 }
 
@@ -62,8 +68,8 @@ struct OwnedTrailers final {
     std::pmr::vector<ruvia::HttpHeaderView> views;
 };
 
-ruvia::Task<void> endOwned(void* target, ruvia::Task<void> (*end)(void*, std::span<const ruvia::HttpHeaderView>), OwnedTrailers trailers, bool& outputActive) {
-    ResponseStreamOutputGuard guard(outputActive);
+ruvia::Task<void> endOwned(void* target, ruvia::Task<void> (*end)(void*, std::span<const ruvia::HttpHeaderView>), OwnedTrailers trailers, ResponseStreamOutputGuard guard) {
+    static_cast<void>(guard);
     co_await end(target, trailers.views);
 }
 
@@ -133,24 +139,17 @@ SseWriter Context::streamSse() {
 
 namespace {
 
-Task<std::optional<std::string_view>> readBody(detail::CallableRef<std::optional<std::string_view>> read, bool& readActive) {
-    if (readActive) {
-        throw std::logic_error("request body read is already in progress");
-    }
-    readActive = true;
-    struct ReadGuard final {
-        bool& active;
-        ~ReadGuard() {
-            active = false;
-        }
-    } guard{readActive};
+Task<std::optional<std::string_view>> readBody(detail::CallableRef<std::optional<std::string_view>> read) {
     co_return co_await read();
 }
 
 }  // namespace
 
 ScopedOperation<std::optional<std::string_view>> BodyReader::read() & {
-    return detail::makeScopedOperation(operationScope_, readBody(read_, readActive_));
+    if (operationScope_.hasPendingOperations()) {
+        throw std::logic_error("request body read is already in progress");
+    }
+    return detail::makeScopedOperation(operationScope_, readBody(read_));
 }
 
 ScopedOperation<void> ResponseStreamWriter::write(std::string_view chunk) & {
@@ -161,7 +160,8 @@ ScopedOperation<void> ResponseStreamWriter::write(std::string_view chunk) & {
 
 ScopedOperation<void> ResponseStreamWriter::write(std::pmr::string&& chunk) & {
     requireActive();
-    return detail::makeScopedOperation(operationScope_, writeTransferredChunk(target_, write_, std::move(chunk), outputActive_));
+    ResponseStreamOutputGuard guard(outputActive_);
+    return detail::makeScopedOperation(operationScope_, writeTransferredChunk(target_, write_, std::move(chunk), std::move(guard)));
 }
 
 ScopedOperation<void> ResponseStreamWriter::writeln(std::string_view chunk) & {
@@ -178,7 +178,9 @@ ScopedOperation<TimerSleepResult> ResponseStreamWriter::sleep(std::chrono::milli
 
 ScopedOperation<void> ResponseStreamWriter::end(std::span<const HttpHeaderView> trailers) & {
     requireActive();
-    return detail::makeScopedOperation(operationScope_, endOwned(target_, end_, OwnedTrailers(trailers, detail::processResource()), outputActive_));
+    auto ownedTrailers = OwnedTrailers(trailers, detail::processResource());
+    ResponseStreamOutputGuard guard(outputActive_);
+    return detail::makeScopedOperation(operationScope_, endOwned(target_, end_, std::move(ownedTrailers), std::move(guard)));
 }
 
 ScopedOperation<TimerSleepResult> SseWriter::sleep(std::chrono::milliseconds duration) {

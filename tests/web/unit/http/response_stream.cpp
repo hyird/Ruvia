@@ -23,6 +23,17 @@ RUVIA_TEST(body_reader_rejects_concurrent_consumers_of_one_borrowed_buffer) {
     bool firstCompleted = false;
     bool secondRejected = false;
 
+    {
+        auto cold = binding.facade().read();
+        bool coldRejected = false;
+        try {
+            auto overlapping = binding.facade().read();
+        } catch (const std::logic_error&) {
+            coldRejected = true;
+        }
+        RUVIA_CHECK(coldRejected);
+    }
+
     auto first = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(completeBodyRead(binding.facade(), firstCompleted)), asio::use_future);
     while (!binding.reader().readSuspended) {
         RUVIA_CHECK_EQ(io.run_one(), std::size_t{1});
@@ -48,6 +59,24 @@ RUVIA_TEST(response_stream_rejects_overlapping_output_operations) {
     bool writeRejected = false;
     bool endRejected = false;
     bool failureObserved = false;
+
+    {
+        auto cold = writer.write("cold");
+        bool coldWriteRejected = false;
+        bool coldEndRejected = false;
+        try {
+            auto overlappingWrite = writer.write("overlap");
+        } catch (const std::logic_error&) {
+            coldWriteRejected = true;
+        }
+        try {
+            auto overlappingEnd = writer.end();
+        } catch (const std::logic_error&) {
+            coldEndRejected = true;
+        }
+        RUVIA_CHECK(coldWriteRejected);
+        RUVIA_CHECK(coldEndRejected);
+    }
 
     auto first = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(completeStreamWrite(writer, "first", firstCompleted)), asio::use_future);
     while (!sink.writeSuspended) {

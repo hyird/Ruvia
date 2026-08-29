@@ -167,6 +167,17 @@ RUVIA_TEST(multipart_reader_rejects_concurrent_consumers) {
     bool firstCompleted = false;
     bool secondRejected = false;
 
+    {
+        auto cold = reader.read();
+        bool coldRejected = false;
+        try {
+            auto overlapping = reader.read();
+        } catch (const std::logic_error&) {
+            coldRejected = true;
+        }
+        RUVIA_CHECK(coldRejected);
+    }
+
     auto first = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(completeMultipartRead(reader, firstCompleted)), asio::use_future);
     io.poll();
     RUVIA_CHECK(!firstCompleted);
