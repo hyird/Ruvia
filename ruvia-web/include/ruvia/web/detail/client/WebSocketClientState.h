@@ -1,11 +1,14 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <exception>
 #include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
@@ -15,10 +18,12 @@
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/StopToken.h"
+#include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/web/WebSocketClient.h"
 #include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
+#include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
 
 namespace ruvia {
 class Http1ParsedClientResponseHead;
@@ -49,6 +54,38 @@ public:
 private:
     enum class Phase : std::uint8_t { kFresh, kConnecting, kOpen, kClosing, kClosed };
     enum class AbortReason : std::uint8_t { kNone, kTimeout, kCancelled, kClosing };
+    enum class WritePhase : std::uint8_t { kIdle, kApplication, kHeartbeat };
+    enum class WriteClaim : std::uint8_t { kAcquire, kAdopt };
+
+    class WriteGuard final {
+    public:
+        WriteGuard(WebSocketClientState& state, WritePhase phase, WriteClaim claim = WriteClaim::kAcquire)
+            : state_(state),
+              phase_(phase) {
+            if (phase_ == WritePhase::kIdle) {
+                std::terminate();
+            }
+            if (claim == WriteClaim::kAcquire) {
+                if (state_.writePhase_ != WritePhase::kIdle) {
+                    throw std::logic_error("concurrent WebSocket client writes are not supported");
+                }
+                state_.writePhase_ = phase_;
+            } else if (state_.writePhase_ != phase_) {
+                std::terminate();
+            }
+        }
+
+        ~WriteGuard() {
+            state_.finishWrite(phase_);
+        }
+
+        WriteGuard(const WriteGuard&) = delete;
+        WriteGuard& operator=(const WriteGuard&) = delete;
+
+    private:
+        WebSocketClientState& state_;
+        WritePhase phase_;
+    };
 
     [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<WebSocketClientState> state);
     class ActivityLease;
@@ -65,6 +102,13 @@ private:
     [[nodiscard]] Task<void> establishTransport();
     [[nodiscard]] Task<void> performTlsHandshake();
     void validateHandshakeResponse(const Http1ParsedClientResponseHead& response, std::string_view key);
+    void finishWrite(WritePhase phase) noexcept;
+    [[nodiscard]] Task<void> waitForWriteIdle();
+    [[nodiscard]] static Task<void> heartbeatOwned(std::shared_ptr<WebSocketClientState> state);
+    void heartbeatTimerFired() noexcept;
+    void armHeartbeatTimer(std::chrono::milliseconds delay);
+    void touchActivity() noexcept;
+    [[nodiscard]] std::chrono::milliseconds heartbeatDelay(std::int64_t now) const noexcept;
     [[nodiscard]] Task<void> flushOutput(OperationOptions options);
     [[nodiscard]] Task<std::size_t> readTransport(std::span<char> output, OperationOptions options, std::optional<std::chrono::milliseconds> configuredTimeout);
     [[nodiscard]] Task<void> writeTransport(std::string_view bytes, OperationOptions options, std::optional<std::chrono::milliseconds> configuredTimeout);
@@ -85,6 +129,8 @@ private:
     asio::steady_timer connectTimer_;
     asio::steady_timer readTimer_;
     asio::steady_timer writeTimer_;
+    asio::steady_timer heartbeatTimer_;
+    WorkerSignal writeSignal_;
     std::pmr::string input_;
     std::optional<WsConnection> protocol_;
     std::pmr::string selectedSubprotocol_;
@@ -95,6 +141,9 @@ private:
     bool readActive_{false};
     bool writeActive_{false};
     bool closeActive_{false};
+    WritePhase writePhase_{WritePhase::kIdle};
+    WebSocketLivenessState livenessState_{WebSocketLivenessIdle{}};
+    std::int64_t lastActiveMs_{0};
     ScopedOperationScope operationScope_;
 };
 

@@ -20,7 +20,7 @@ namespace ruvia {
 
 struct WebSocketHeartbeatConfig final {
     // Absence disables heartbeat. When ping is present and pong is absent,
-    // pong defaults to the ping interval during route registration.
+    // pong defaults to the ping interval during configuration normalization.
     std::optional<std::chrono::milliseconds> pingInterval{};
     std::optional<std::chrono::milliseconds> pongTimeout{};
 };

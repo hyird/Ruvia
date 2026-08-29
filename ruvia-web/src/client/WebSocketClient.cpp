@@ -12,7 +12,11 @@
 #include <system_error>
 #include <utility>
 
+#include <asio/bind_allocator.hpp>
 #include <asio/connect.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/recycling_allocator.hpp>
 #include <asio/ssl/error.hpp>
 #include <asio/write.hpp>
 #include <openssl/rand.h>
@@ -78,6 +82,10 @@ constexpr std::size_t kCloseHandshakeBufferBytes = std::size_t{4} * 1024;
     return secure ? WebSocketClientError::Code::kTlsFailed : WebSocketClientError::Code::kIoError;
 }
 
+[[nodiscard]] std::int64_t steadyNowMs() noexcept {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 struct StopAbort final {
     std::weak_ptr<WebSocketClientState> state_;
 
@@ -101,6 +109,8 @@ WebSocketClientState::WebSocketClientState(EventLoop loop, const WebSocketClient
       connectTimer_(loop_.ioContext()),
       readTimer_(loop_.ioContext()),
       writeTimer_(loop_.ioContext()),
+      heartbeatTimer_(loop_.ioContext()),
+      writeSignal_(worker_),
       input_(memory_.allocator<char>()),
       selectedSubprotocol_(memory_.allocator<char>()) {
     if (config_.scheme == WebSocketScheme::kWss) {
@@ -213,6 +223,8 @@ void WebSocketClientState::closeOnWorker(AbortReason reason) noexcept {
     disarm(connectTimer_);
     disarm(readTimer_);
     disarm(writeTimer_);
+    disarm(heartbeatTimer_);
+    livenessState_ = WebSocketLivenessIdle{};
     if (protocol_) {
         (void)protocol_->abort();
     }
@@ -313,10 +325,120 @@ Task<void> WebSocketClientState::connectOwned(std::shared_ptr<WebSocketClientSta
         state->protocol_.emplace(state->input_, ProtocolByteLimit::limited(state->config_.maxMessageBytes), WebSocketCompression::kDisabled, WsConnectionRole::kClient, &WebSocketClientState::generateMask, nullptr);
         state->disarm(state->connectTimer_);
         state->phase_.store(Phase::kOpen, std::memory_order_release);
+        state->lastActiveMs_ = steadyNowMs();
+        state->livenessState_ = WebSocketLivenessIdle{};
+        if (state->config_.heartbeat.pingInterval.has_value()) {
+            state->armHeartbeatTimer(*state->config_.heartbeat.pingInterval);
+        }
     } catch (...) {
         state->disarm(state->connectTimer_);
         state->closeOnWorker(state->abortReason_ == AbortReason::kNone ? AbortReason::kClosing : state->abortReason_);
         throw;
+    }
+}
+
+void WebSocketClientState::finishWrite(WritePhase phase) noexcept {
+    if (writePhase_ != phase) {
+        std::terminate();
+    }
+    writePhase_ = WritePhase::kIdle;
+    writeSignal_.notify();
+}
+
+Task<void> WebSocketClientState::waitForWriteIdle() {
+    while (writePhase_ != WritePhase::kIdle) {
+        co_await writeSignal_.wait();
+    }
+}
+
+std::chrono::milliseconds WebSocketClientState::heartbeatDelay(std::int64_t now) const noexcept {
+    std::int64_t deadline = now + 1;
+    if (const auto* pong = std::get_if<WebSocketAwaitingPong>(&livenessState_)) {
+        deadline = pong->sentAtMs() + config_.heartbeat.pongTimeout->count();
+    } else if (std::holds_alternative<WebSocketLivenessIdle>(livenessState_)) {
+        deadline = lastActiveMs_ + config_.heartbeat.pingInterval->count();
+    }
+    return std::chrono::milliseconds(std::max<std::int64_t>(1, deadline - now));
+}
+
+void WebSocketClientState::armHeartbeatTimer(std::chrono::milliseconds delay) {
+    if (!config_.heartbeat.pingInterval.has_value()) {
+        return;
+    }
+    heartbeatTimer_.expires_after(std::max(delay, std::chrono::milliseconds{1}));
+    std::weak_ptr<WebSocketClientState> weak = shared_from_this();
+    heartbeatTimer_.async_wait([weak = std::move(weak)](const std::error_code& error) {
+        if (error) {
+            return;
+        }
+        if (const auto state = weak.lock()) {
+            state->heartbeatTimerFired();
+        }
+    });
+}
+
+void WebSocketClientState::touchActivity() noexcept {
+    lastActiveMs_ = steadyNowMs();
+    if (phase_.load(std::memory_order_acquire) != Phase::kOpen || !config_.heartbeat.pingInterval.has_value() || !std::holds_alternative<WebSocketLivenessIdle>(livenessState_)) {
+        return;
+    }
+    try {
+        armHeartbeatTimer(*config_.heartbeat.pingInterval);
+    } catch (...) {
+        closeOnWorker(AbortReason::kClosing);
+    }
+}
+
+void WebSocketClientState::heartbeatTimerFired() noexcept {
+    if (phase_.load(std::memory_order_acquire) != Phase::kOpen || !config_.heartbeat.pingInterval.has_value()) {
+        return;
+    }
+
+    const auto now = steadyNowMs();
+    const WebSocketLifecycleOptions options{.heartbeat = config_.heartbeat, .closeHandshakeTimeout = config_.closeHandshakeTimeout};
+    switch (webSocketLivenessDecision(options, requireProtocol().livenessMode(), livenessState_, writePhase_ != WritePhase::kIdle, lastActiveMs_, now)) {
+        case WebSocketLivenessDecision::kIdle:
+            try {
+                armHeartbeatTimer(heartbeatDelay(now));
+            } catch (...) {
+                closeOnWorker(AbortReason::kClosing);
+            }
+            return;
+        case WebSocketLivenessDecision::kAbortTransport:
+            closeOnWorker(AbortReason::kTimeout);
+            return;
+        case WebSocketLivenessDecision::kSendPing:
+            break;
+    }
+
+    livenessState_ = WebSocketSendingPing{};
+    writePhase_ = WritePhase::kHeartbeat;
+    try {
+        auto state = shared_from_this();
+        asio::co_spawn(loop_.executor(), taskAsAwaitable(heartbeatOwned(std::move(state))), asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
+    } catch (...) {
+        finishWrite(WritePhase::kHeartbeat);
+        closeOnWorker(AbortReason::kClosing);
+    }
+}
+
+Task<void> WebSocketClientState::heartbeatOwned(std::shared_ptr<WebSocketClientState> state) {
+    WriteGuard writeGuard(*state, WritePhase::kHeartbeat, WriteClaim::kAdopt);
+    try {
+        state->requireOpen();
+        const auto submitted = state->requireProtocol().submitFrame(WebSocketOpcode::kPing, {});
+        if (submitted != WsFrameSubmitStatus::kAccepted) {
+            throw WebSocketClientError(WebSocketClientError::Code::kProtocolError, "failed to submit WebSocket client heartbeat");
+        }
+        co_await state->flushOutput(OperationOptions{.stopToken = state->stopSource_.token()});
+        if (state->phase_.load(std::memory_order_acquire) == Phase::kOpen && std::holds_alternative<WebSocketSendingPing>(state->livenessState_)) {
+            state->livenessState_ = WebSocketAwaitingPong(state->lastActiveMs_);
+            state->armHeartbeatTimer(*state->config_.heartbeat.pongTimeout);
+        }
+    } catch (...) {
+        if (state->phase_.load(std::memory_order_acquire) != Phase::kClosed) {
+            state->closeOnWorker(AbortReason::kClosing);
+        }
     }
 }
 
@@ -453,6 +575,7 @@ Task<void> WebSocketClientState::writeTransport(std::string_view bytes, Operatio
     if (completion.errorCode()) {
         throw WebSocketClientError(transportErrorCode(config_.scheme == WebSocketScheme::kWss), completion.errorCode().message());
     }
+    touchActivity();
 }
 
 Task<std::size_t> WebSocketClientState::readTransport(std::span<char> output, OperationOptions options, std::optional<std::chrono::milliseconds> configuredTimeout) {
@@ -481,6 +604,7 @@ Task<std::size_t> WebSocketClientState::readTransport(std::span<char> output, Op
     if (completion.errorCode()) {
         throw WebSocketClientError(transportErrorCode(config_.scheme == WebSocketScheme::kWss), completion.errorCode().message());
     }
+    touchActivity();
     co_return completion.result();
 }
 
@@ -514,12 +638,19 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(std::share
     state->requireOpen();
     std::array<char, kTransportBufferBytes> bytes{};
     for (;;) {
-        auto& protocol = state->requireProtocol();
-        const auto event = protocol.poll();
+        std::optional<WsEvent> event;
+        {
+            co_await state->waitForWriteIdle();
+            WriteGuard writeGuard(*state, WritePhase::kApplication);
+            event = state->requireProtocol().poll();
+            if (event.has_value() && event->ping() != nullptr) {
+                co_await state->flushOutput(options);
+            }
+        }
         if (!event.has_value()) {
             const auto count = co_await state->readTransport(bytes, options, state->config_.readTimeout);
             if (count == 0) {
-                protocol.notifyTransportEof();
+                state->requireProtocol().notifyTransportEof();
                 state->closeOnWorker(AbortReason::kNone);
                 co_return std::nullopt;
             }
@@ -529,14 +660,17 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(std::share
         if (const auto* message = event->message()) {
             co_return WebSocketMessageAccess::make(message->opcode(), message->payload());
         }
-        if (event->ping() != nullptr) {
-            co_await state->flushOutput(options);
-            continue;
-        }
         if (event->pong() != nullptr) {
+            const bool awaitingPong = std::holds_alternative<WebSocketSendingPing>(state->livenessState_) || std::holds_alternative<WebSocketAwaitingPong>(state->livenessState_);
+            state->livenessState_ = WebSocketLivenessIdle{};
+            if (awaitingPong) {
+                state->touchActivity();
+            }
             continue;
         }
         if (event->close() != nullptr || event->protocolError() != nullptr || event->transportEnd() != nullptr) {
+            co_await state->waitForWriteIdle();
+            WriteGuard writeGuard(*state, WritePhase::kApplication);
             co_await state->flushOutput(options);
             co_return std::nullopt;
         }
@@ -553,6 +687,9 @@ ScopedOperation<void> WebSocketClientState::write(WebSocketOpcode opcode, std::s
 Task<void> WebSocketClientState::writeOwned(std::shared_ptr<WebSocketClientState> state, WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options, ActivityLease activity) {
     static_cast<void>(activity);
     state->requireOpen();
+    co_await state->waitForWriteIdle();
+    state->requireOpen();
+    WriteGuard writeGuard(*state, WritePhase::kApplication);
     const auto submitted = state->requireProtocol().submitFrame(opcode, payload);
     switch (submitted) {
         case WsFrameSubmitStatus::kAccepted:
@@ -579,31 +716,41 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
     static_cast<void>(writeActivity);
     static_cast<void>(closeActivity);
     state->requireOpen();
-    const auto submitted = state->requireProtocol().submitClose(options.code, reason);
-    if (submitted != WsCloseSubmitStatus::kAccepted) {
-        throw WebSocketClientError(WebSocketClientError::Code::kProtocolError, "invalid WebSocket client close payload");
+    {
+        co_await state->waitForWriteIdle();
+        state->requireOpen();
+        WriteGuard writeGuard(*state, WritePhase::kApplication);
+        const auto submitted = state->requireProtocol().submitClose(options.code, reason);
+        if (submitted != WsCloseSubmitStatus::kAccepted) {
+            throw WebSocketClientError(WebSocketClientError::Code::kProtocolError, "invalid WebSocket client close payload");
+        }
+        state->phase_.store(Phase::kClosing, std::memory_order_release);
+        co_await state->flushOutput(operationOptions);
     }
-    state->phase_.store(Phase::kClosing, std::memory_order_release);
-    co_await state->flushOutput(operationOptions);
     std::array<char, kCloseHandshakeBufferBytes> bytes{};
     for (;;) {
-        auto& protocol = state->requireProtocol();
-        const auto event = protocol.poll();
+        std::optional<WsEvent> event;
+        {
+            co_await state->waitForWriteIdle();
+            WriteGuard writeGuard(*state, WritePhase::kApplication);
+            event = state->requireProtocol().poll();
+            if (event.has_value() && event->ping() != nullptr) {
+                co_await state->flushOutput(operationOptions);
+            }
+        }
         if (!event.has_value()) {
             const auto count = co_await state->readTransport(bytes, operationOptions, state->config_.closeHandshakeTimeout);
             if (count == 0) {
-                protocol.notifyTransportEof();
+                state->requireProtocol().notifyTransportEof();
                 state->closeOnWorker(AbortReason::kNone);
                 co_return;
             }
             state->input_.append(bytes.data(), count);
             continue;
         }
-        if (event->ping() != nullptr) {
-            co_await state->flushOutput(operationOptions);
-            continue;
-        }
         if (event->close() != nullptr || event->protocolError() != nullptr || event->transportEnd() != nullptr) {
+            co_await state->waitForWriteIdle();
+            WriteGuard writeGuard(*state, WritePhase::kApplication);
             co_await state->flushOutput(operationOptions);
             if (state->phase_.load(std::memory_order_acquire) != Phase::kClosed) {
                 state->closeOnWorker(AbortReason::kNone);

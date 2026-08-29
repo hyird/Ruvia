@@ -238,13 +238,22 @@ RUVIA_TEST(websocket_client_config_is_validated_before_pmr_normalization) {
     config.subprotocols = {""};
     RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
     RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
+
+    config.subprotocols.clear();
+    config.heartbeat.pongTimeout = std::chrono::milliseconds{1000};
+    RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
+    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
+
+    config.heartbeat = {.pingInterval = std::chrono::milliseconds{1000}, .pongTimeout = std::chrono::milliseconds::zero()};
+    RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
+    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 }
 
 RUVIA_TEST(websocket_client_config_storage_owns_normalized_strings) {
     std::pmr::unsynchronized_pool_resource resource;
     std::optional<ruvia::detail::WebSocketClientConfigStorage> storage;
+    ruvia::WebSocketClientConfig config;
     {
-        ruvia::WebSocketClientConfig config;
         config.host = std::string(80, 'h');
         config.target = "/" + std::string(80, 't');
         config.headers.emplace_back("X-Test", std::string(80, 'v'));
@@ -272,7 +281,14 @@ RUVIA_TEST(websocket_client_config_storage_owns_normalized_strings) {
     RUVIA_CHECK(storage->offersSubprotocol("superchat"));
     RUVIA_CHECK(!storage->offersSubprotocol("Chat"));
     RUVIA_CHECK(!storage->offersSubprotocol("super"));
+    RUVIA_CHECK(!storage->heartbeat.pingInterval.has_value());
+    RUVIA_CHECK(!storage->heartbeat.pongTimeout.has_value());
     RUVIA_CHECK_EQ(std::string(storage->userAgent), std::string(80, 'u'));
+
+    config.heartbeat = {.pingInterval = std::chrono::milliseconds{1000}};
+    storage.emplace(config, &resource);
+    RUVIA_CHECK_EQ(storage->heartbeat.pingInterval->count(), std::int64_t{1000});
+    RUVIA_CHECK_EQ(storage->heartbeat.pongTimeout->count(), std::int64_t{1000});
 }
 
 #if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)

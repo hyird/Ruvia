@@ -15,6 +15,7 @@
 #include "ruvia/web/detail/util/CallableRef.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/detail/router/RouteModes.h"
+#include "ruvia/web/detail/websocket/WebSocketHeartbeatConfigValidation.h"
 // What a registered route runs, as one closed set of alternatives. Each
 // alternative carries the handler shape together with the route metadata only
 // that shape may have, so a route cannot claim a streaming or WebSocket mode
@@ -145,22 +146,7 @@ public:
         if (options.lifecycle.closeHandshakeTimeout.has_value() && options.lifecycle.closeHandshakeTimeout->count() <= 0) {
             throw std::invalid_argument("websocket close-handshake timeout must be greater than zero");
         }
-        if (!options.lifecycle.heartbeat.pingInterval.has_value()) {
-            if (options.lifecycle.heartbeat.pongTimeout.has_value()) {
-                throw std::invalid_argument("websocket pong timeout requires a ping interval");
-            }
-        } else {
-            if (options.lifecycle.heartbeat.pingInterval->count() <= 0) {
-                throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
-            }
-            auto& pongTimeout = options.lifecycle.heartbeat.pongTimeout;
-            if (!pongTimeout.has_value()) {
-                pongTimeout = options.lifecycle.heartbeat.pingInterval;
-            }
-            if (pongTimeout->count() <= 0) {
-                throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
-            }
-        }
+        options.lifecycle.heartbeat = normalizeWebSocketHeartbeatConfig(options.lifecycle.heartbeat);
         WebSocketSubprotocolSet subprotocols;
         for (const auto& subprotocol : options.subprotocols) {
             if (!subprotocols.append(subprotocol)) {

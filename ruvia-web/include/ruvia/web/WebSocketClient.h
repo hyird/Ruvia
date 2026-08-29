@@ -40,6 +40,7 @@ struct WebSocketClientConfig final {
     std::optional<std::chrono::milliseconds> readTimeout{};
     std::optional<std::chrono::milliseconds> writeTimeout{30000};
     std::optional<std::chrono::milliseconds> closeHandshakeTimeout{5000};
+    WebSocketHeartbeatConfig heartbeat{};
     TlsPeerVerificationPolicy tlsPeerVerification{TlsPeerVerificationPolicy::kVerify};
     TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
     TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kEnable};

@@ -15,6 +15,7 @@
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/websocket/handshake/WebSocketSubprotocolSet.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
+#include "ruvia/web/detail/websocket/WebSocketHeartbeatConfigValidation.h"
 
 namespace ruvia::detail {
 
@@ -54,6 +55,7 @@ inline void validateWebSocketClientConfig(const WebSocketClientConfig& config) {
             throw std::invalid_argument("WebSocket client timeout must be greater than zero");
         }
     }
+    validateWebSocketHeartbeatConfig(config.heartbeat);
     validateClientTransportConfig(clientTransportConfigView(config));
 
     for (const auto& [name, value] : config.headers) {

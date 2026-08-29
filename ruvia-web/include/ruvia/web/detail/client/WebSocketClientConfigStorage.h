@@ -47,6 +47,7 @@ struct WebSocketClientConfigStorage final {
     std::optional<std::chrono::milliseconds> readTimeout;
     std::optional<std::chrono::milliseconds> writeTimeout;
     std::optional<std::chrono::milliseconds> closeHandshakeTimeout;
+    WebSocketHeartbeatConfig heartbeat;
     ClientTransportConfigStorage transport;
     std::pmr::string userAgent;
 
@@ -81,6 +82,7 @@ private:
           readTimeout(source.readTimeout),
           writeTimeout(source.writeTimeout),
           closeHandshakeTimeout(source.closeHandshakeTimeout),
+          heartbeat(normalizeWebSocketHeartbeatConfig(source.heartbeat)),
           transport(clientTransportConfigView(source), resource),
           userAgent(source.userAgent, resource) {
         headers.reserve(source.headers.size());

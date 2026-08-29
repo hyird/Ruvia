@@ -337,6 +337,10 @@ ruvia::WebSocketClient client(loop, {
     .host = "events.example.com",
     .target = "/v1/stream",
     .subprotocols = {"events.v1", "events.v2"},
+    .heartbeat = {
+        .pingInterval = std::chrono::seconds(30),
+        .pongTimeout = std::chrono::seconds(10),
+    },
 });
 
 auto completed = loop.start(consumeEvents(client));
@@ -349,7 +353,11 @@ The driver automatically answers Ping, completes peer-initiated Close, enforces
 one concurrent read and one concurrent write, bounds complete messages, and
 closes the transport when an operation is cancelled or times out. `wss` verifies
 the peer certificate and host name by default and supports the same CA and client
-certificate fields as `HttpClientConfig`.
+certificate fields as `HttpClientConfig`. `heartbeat` is optional; it sends Ping
+after an idle interval and aborts the transport when the matching Pong is not
+observed before `pongTimeout`. Omitting `pongTimeout` uses the ping interval.
+The application must keep a `read()` operation active so inbound control frames
+and messages can be consumed.
 
 `WebSocketMessage::payload()` borrows the client read buffer and remains valid
 only until the next `read()` on that connection. Copy it first when it must live
