@@ -16,7 +16,8 @@ namespace {
 constexpr std::string_view kWebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 constexpr std::uint64_t kMaxSha1MessageBytes = (std::numeric_limits<std::uint64_t>::max)() / 8;
 
-[[nodiscard]] std::array<std::uint8_t, 20> sha1(std::string_view first, std::string_view second) noexcept {
+[[nodiscard]] std::array<std::uint8_t, 20> sha1(
+    std::string_view first, std::string_view second) noexcept {
     std::uint32_t h0 = 0x67452301U;
     std::uint32_t h1 = 0xEFCDAB89U;
     std::uint32_t h2 = 0x98BADCFEU;
@@ -27,12 +28,18 @@ constexpr std::uint64_t kMaxSha1MessageBytes = (std::numeric_limits<std::uint64_
     const std::uint64_t totalBits = static_cast<std::uint64_t>(totalSize) * 8U;
     std::size_t offset = 0;
 
-    const auto byteAt = [first, second](std::size_t index) noexcept { return index < first.size() ? static_cast<std::uint8_t>(first[index]) : static_cast<std::uint8_t>(second[index - first.size()]); };
+    const auto byteAt = [first, second](std::size_t index) noexcept {
+        return index < first.size() ? static_cast<std::uint8_t>(first[index])
+                                    : static_cast<std::uint8_t>(second[index - first.size()]);
+    };
 
     const auto process = [&](const std::array<std::uint8_t, 64>& data) noexcept {
         std::array<std::uint32_t, 80> w{};
         for (std::size_t i = 0; i < 16; ++i) {
-            w[i] = (static_cast<std::uint32_t>(data[i * 4]) << 24) | (static_cast<std::uint32_t>(data[i * 4 + 1]) << 16) | (static_cast<std::uint32_t>(data[i * 4 + 2]) << 8) | static_cast<std::uint32_t>(data[i * 4 + 3]);
+            w[i] = (static_cast<std::uint32_t>(data[i * 4]) << 24) |
+                   (static_cast<std::uint32_t>(data[i * 4 + 1]) << 16) |
+                   (static_cast<std::uint32_t>(data[i * 4 + 2]) << 8) |
+                   static_cast<std::uint32_t>(data[i * 4 + 3]);
         }
         for (std::size_t i = 16; i < 80; ++i) {
             w[i] = std::rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
@@ -112,7 +119,8 @@ void encodeWebSocketAccept(WebSocketAcceptKey& output, std::string_view key) {
     // byte, and callers of this detail helper are not otherwise required to
     // prove that a view's advertised size is backed by a full object. The
     // SHA-1 length field is measured in bits and is only 64 bits wide.
-    if (key.size() > (std::numeric_limits<std::size_t>::max)() - kWebSocketGuid.size() || key.size() > kMaxSha1MessageBytes - kWebSocketGuid.size()) {
+    if (key.size() > (std::numeric_limits<std::size_t>::max)() - kWebSocketGuid.size() ||
+        key.size() > kMaxSha1MessageBytes - kWebSocketGuid.size()) {
         throw std::length_error("WebSocket accept input is too large");
     }
     key = detail::httpTrimOws(key);

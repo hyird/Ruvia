@@ -29,7 +29,8 @@ using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::webSocketProtocolOffered;
 
 template <typename T>
-concept HasRvalueWebSocketHandshakeSubprotocol = requires(T&& handshake) { std::move(handshake).subprotocol(); };
+concept HasRvalueWebSocketHandshakeSubprotocol =
+    requires(T&& handshake) { std::move(handshake).subprotocol(); };
 
 static_assert(!HasRvalueWebSocketHandshakeSubprotocol<ruvia::WebSocketServerHandshake>);
 static_assert(!std::copy_constructible<ruvia::WebSocketServerHandshake>);
@@ -48,7 +49,9 @@ public:
 
     template <typename ConstBufferSequence, typename Handler>
     void async_write_some(const ConstBufferSequence&, Handler&& handler) {
-        asio::post(executor_, [handler = std::forward<Handler>(handler)]() mutable { std::move(handler)(std::make_error_code(std::errc::broken_pipe), std::size_t{0}); });
+        asio::post(executor_, [handler = std::forward<Handler>(handler)]() mutable {
+            std::move(handler)(std::make_error_code(std::errc::broken_pipe), std::size_t{0});
+        });
     }
 
 private:
@@ -222,8 +225,10 @@ RUVIA_TEST(ws_extension_offers_must_match_the_rfc6455_abnf) {
         return request;
     };
 
-    RUVIA_CHECK(acceptsRequest(withExtensions("Sec-WebSocket-Extensions: , x-test; flag; value=token,,\r\n")));
-    RUVIA_CHECK(acceptsRequest(withExtensions("Sec-WebSocket-Extensions: x-test; value=\"to\\ken\"\r\n")));
+    RUVIA_CHECK(acceptsRequest(
+        withExtensions("Sec-WebSocket-Extensions: , x-test; flag; value=token,,\r\n")));
+    RUVIA_CHECK(
+        acceptsRequest(withExtensions("Sec-WebSocket-Extensions: x-test; value=\"to\\ken\"\r\n")));
     RUVIA_CHECK(
         acceptsRequest(withExtensions("Sec-WebSocket-Extensions: x-test\r\n"
                                       "Sec-WebSocket-Extensions: y-test; value=token\r\n")));
@@ -235,9 +240,12 @@ RUVIA_TEST(ws_extension_offers_must_match_the_rfc6455_abnf) {
     RUVIA_CHECK(rejectsRequest(withExtensions("Sec-WebSocket-Extensions: x-test;; flag\r\n")));
     RUVIA_CHECK(rejectsRequest(withExtensions("Sec-WebSocket-Extensions: x-test; =value\r\n")));
     RUVIA_CHECK(rejectsRequest(withExtensions("Sec-WebSocket-Extensions: x-test; value=\r\n")));
-    RUVIA_CHECK(rejectsRequest(withExtensions("Sec-WebSocket-Extensions: x-test; value=\"bad value\"\r\n")));
-    RUVIA_CHECK(rejectsRequest(withExtensions("Sec-WebSocket-Extensions: x-test; value=\"unterminated\r\n")));
-    RUVIA_CHECK(rejectsRequest(withExtensions("Sec-WebSocket-Extensions: x-test; value=\"token\"junk\r\n")));
+    RUVIA_CHECK(rejectsRequest(
+        withExtensions("Sec-WebSocket-Extensions: x-test; value=\"bad value\"\r\n")));
+    RUVIA_CHECK(rejectsRequest(
+        withExtensions("Sec-WebSocket-Extensions: x-test; value=\"unterminated\r\n")));
+    RUVIA_CHECK(rejectsRequest(
+        withExtensions("Sec-WebSocket-Extensions: x-test; value=\"token\"junk\r\n")));
 }
 
 RUVIA_TEST(ws_valid_request_requires_all_conditions) {
@@ -303,7 +311,8 @@ RUVIA_TEST(ws_valid_request_requires_all_conditions) {
     if (const auto* failure = unsupportedVersion.failure()) {
         const auto error = failure->protocolError();
         RUVIA_CHECK_EQ(error.status(), ruvia::http_status::kBadRequest);
-        RUVIA_CHECK_EQ(std::string_view(error.what()), std::string_view("unsupported WebSocket version"));
+        RUVIA_CHECK_EQ(
+            std::string_view(error.what()), std::string_view("unsupported WebSocket version"));
         ruvia::HttpResponse response;
         failure->applyRequiredResponseHeaders(response);
         RUVIA_CHECK_EQ(response.header("Sec-WebSocket-Version"), std::string_view("13"));
@@ -336,7 +345,8 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
         "\r\n");
     std::string supported = "chat";
     const std::array<std::string_view, 1> supportedViews{supported};
-    const auto handshake = ruvia::makeWebSocketServerHandshake(request, {.supportedSubprotocols = supportedViews});
+    const auto handshake =
+        ruvia::makeWebSocketServerHandshake(request, {.supportedSubprotocols = supportedViews});
     supported.front() = 'X';
 
     std::string response;
@@ -350,7 +360,8 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
                                          "server_no_context_takeover; client_no_context_takeover; "
                                          "server_max_window_bits=15\r\n"
                                          "\r\n"));
-    RUVIA_CHECK(handshake.compression() == ruvia::WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits);
+    RUVIA_CHECK(handshake.compression() ==
+                ruvia::WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits);
     RUVIA_CHECK_EQ(handshake.subprotocol(), "chat");
 }
 
@@ -359,7 +370,9 @@ RUVIA_TEST(ws_handshake_writer_preserves_transport_error) {
     const auto handshake = ruvia::makeWebSocketServerHandshake(request, {});
     asio::io_context& io = ruvia::test::newTestIoContext();
     FailingHandshakeWriteStream stream(io);
-    auto result = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(ruvia::detail::writeWebSocketHandshake(stream, handshake)), asio::use_future);
+    auto result = asio::co_spawn(io,
+        ruvia::detail::taskAsAwaitable(ruvia::detail::writeWebSocketHandshake(stream, handshake)),
+        asio::use_future);
     io.run();
     RUVIA_CHECK_EQ(result.get(), std::make_error_code(std::errc::broken_pipe));
 }

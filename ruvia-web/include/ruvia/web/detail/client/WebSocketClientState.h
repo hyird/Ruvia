@@ -18,6 +18,7 @@
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/StopToken.h"
+#include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
@@ -49,8 +50,10 @@ public:
     }
 
     [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read(OperationOptions options);
-    [[nodiscard]] ScopedOperation<void> write(WebSocketOpcode opcode, std::string_view payload, OperationOptions options);
-    [[nodiscard]] ScopedOperation<void> close(WebSocketCloseOptions options, OperationOptions operationOptions);
+    [[nodiscard]] ScopedOperation<void> write(
+        WebSocketOpcode opcode, std::string_view payload, OperationOptions options);
+    [[nodiscard]] ScopedOperation<void> close(
+        WebSocketCloseOptions options, OperationOptions operationOptions);
 
 private:
     enum class Phase : std::uint8_t { kFresh, kConnecting, kOpen, kClosing, kClosed };
@@ -60,7 +63,8 @@ private:
 
     class WriteGuard final {
     public:
-        WriteGuard(WebSocketClientState& state, WritePhase phase, WriteClaim claim = WriteClaim::kAcquire)
+        WriteGuard(
+            WebSocketClientState& state, WritePhase phase, WriteClaim claim = WriteClaim::kAcquire)
             : state_(state),
               phase_(phase) {
             if (phase_ == WritePhase::kIdle) {
@@ -91,9 +95,15 @@ private:
     [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<WebSocketClientState> state);
     [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<WebSocketClientState> state);
     class ActivityLease;
-    [[nodiscard]] static Task<std::optional<WebSocketMessage>> readOwned(std::shared_ptr<WebSocketClientState> state, OperationOptions options, ActivityLease activity);
-    [[nodiscard]] static Task<void> writeOwned(std::shared_ptr<WebSocketClientState> state, WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options, ActivityLease activity);
-    [[nodiscard]] static Task<void> closeOwned(std::shared_ptr<WebSocketClientState> state, WebSocketCloseOptions options, std::pmr::string reason, OperationOptions operationOptions, ActivityLease readActivity, ActivityLease writeActivity, ActivityLease closeActivity);
+    [[nodiscard]] static Task<std::optional<WebSocketMessage>> readOwned(
+        std::shared_ptr<WebSocketClientState> state, OperationOptions options,
+        ActivityLease activity);
+    [[nodiscard]] static Task<void> writeOwned(std::shared_ptr<WebSocketClientState> state,
+        WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options,
+        ActivityLease activity);
+    [[nodiscard]] static Task<void> closeOwned(std::shared_ptr<WebSocketClientState> state,
+        WebSocketCloseOptions options, std::pmr::string reason, OperationOptions operationOptions,
+        ActivityLease readActivity, ActivityLease writeActivity, ActivityLease closeActivity);
 
     void requireCurrent() const;
     void requireOpen() const;
@@ -106,7 +116,8 @@ private:
     void requestAbort(AbortReason reason) noexcept;
     [[nodiscard]] Task<void> establishTransport();
     [[nodiscard]] Task<void> performTlsHandshake();
-    void validateHandshakeResponse(const Http1ParsedClientResponseHead& response, std::string_view key);
+    void validateHandshakeResponse(
+        const Http1ParsedClientResponseHead& response, std::string_view key);
     void finishWrite(WritePhase phase) noexcept;
     [[nodiscard]] Task<void> waitForWriteIdle();
     [[nodiscard]] static Task<void> heartbeatOwned(std::shared_ptr<WebSocketClientState> state);
@@ -115,12 +126,20 @@ private:
     void armHeartbeatTimer(std::chrono::milliseconds delay);
     void touchActivity() noexcept;
     [[nodiscard]] std::chrono::milliseconds heartbeatDelay(std::int64_t now) const noexcept;
-    [[nodiscard]] Task<void> flushOutput(OperationOptions options);
-    [[nodiscard]] Task<std::size_t> readTransport(std::span<char> output, OperationOptions options, std::optional<std::chrono::milliseconds> configuredTimeout);
-    [[nodiscard]] Task<void> writeTransport(std::string_view bytes, OperationOptions options, std::optional<std::chrono::milliseconds> configuredTimeout);
+    [[nodiscard]] Task<void> flushOutput(
+        OperationOptions options, OperationTimeout operationTimeout);
+    [[nodiscard]] Task<std::size_t> readTransport(std::span<char> output, OperationOptions options,
+        OperationTimeout operationTimeout,
+        std::optional<std::chrono::milliseconds> configuredTimeout);
+    [[nodiscard]] Task<void> writeTransport(std::string_view bytes, OperationOptions options,
+        OperationTimeout operationTimeout,
+        std::optional<std::chrono::milliseconds> configuredTimeout);
     [[nodiscard]] Task<void> performHandshake(OperationOptions options);
-    [[nodiscard]] std::optional<std::chrono::milliseconds> effectiveTimeout(const OperationOptions& options, std::optional<std::chrono::milliseconds> configured) const;
-    void arm(asio::steady_timer& timer, std::optional<std::chrono::milliseconds> timeout, AbortReason reason);
+    [[nodiscard]] std::optional<std::chrono::milliseconds> effectiveTimeout(
+        const OperationTimeout& operationTimeout,
+        std::optional<std::chrono::milliseconds> configured) const;
+    void arm(asio::steady_timer& timer, std::optional<std::chrono::milliseconds> timeout,
+        AbortReason reason);
     void disarm(asio::steady_timer& timer) noexcept;
     void throwAbort() const;
     [[nodiscard]] static bool generateMask(void*, WsMaskKey& key) noexcept;

@@ -73,7 +73,8 @@ ruvia::Task<ruvia::HttpResponse> missingStateHandler(void*, ruvia::Context& cont
     co_return context.body("unreachable");
 }
 
-[[nodiscard]] std::string readResponse(asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
+[[nodiscard]] std::string readResponse(
+    asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
     const std::size_t n = asio::read_until(socket, buffer, "\r\n\r\n", ec);
     if (ec) {
         return {};
@@ -114,7 +115,8 @@ ruvia::Task<ruvia::HttpResponse> missingStateHandler(void*, ruvia::Context& cont
             break;
         }
     }
-    std::string body(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + std::min(buffer.size(), length));
+    std::string body(asio::buffers_begin(buffer.data()),
+        asio::buffers_begin(buffer.data()) + std::min(buffer.size(), length));
     buffer.consume(std::min(buffer.size(), length));
     return head + body;
 }
@@ -135,13 +137,18 @@ int main() {
         auto& impl = ruvia::detail::RouterImpl::from(router);
         std::pmr::string countPath("/count", std::pmr::get_default_resource());
         std::pmr::string missingPath("/missing", std::pmr::get_default_resource());
-        impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::move(countPath), ruvia::detail::RouteHandler(nullptr, &countHandler), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
-        impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::move(missingPath), ruvia::detail::RouteHandler(nullptr, &missingStateHandler), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+        impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::move(countPath),
+            ruvia::detail::RouteHandler(nullptr, &countHandler),
+            ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+        impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::move(missingPath),
+            ruvia::detail::RouteHandler(nullptr, &missingStateHandler),
+            ruvia::detail::RequestBodyMode::kBuffered, {}, {});
         impl.finalize();
 
         ruvia::WorkerHandle worker;
         ruvia::detail::WorkerStateDefinition workerStates[] = {
-            ruvia::detail::WorkerStateDefinition::make<ProbeState>([&worker] { return ProbeState(worker); }),
+            ruvia::detail::WorkerStateDefinition::make<ProbeState>(
+                [&worker] { return ProbeState(worker); }),
         };
 
         const auto loopback = asio::ip::make_address("127.0.0.1");
@@ -150,7 +157,12 @@ int main() {
             {asio::ip::tcp::endpoint(loopback, 0)},
         };
         ruvia::detail::HttpServerOptions options;
-        ruvia::detail::WebWorkerRuntime server(std::span<const ruvia::detail::HttpServerListenerDefinition>(listeners), impl.routeTable(), {.workerStates = std::span<const ruvia::detail::WorkerStateDefinition>(workerStates, 1)}, options);
+        ruvia::detail::WebWorkerRuntime server(
+            std::span<const ruvia::detail::HttpServerListenerDefinition>(listeners),
+            impl.routeTable(),
+            {.workerStates =
+                    std::span<const ruvia::detail::WorkerStateDefinition>(workerStates, 1)},
+            options);
         worker = server.worker();
         server.start();
         const auto firstEndpoint = server.localEndpoint();
@@ -168,11 +180,15 @@ int main() {
             asio::ip::tcp::socket sock(ctx);
             sock.connect(firstEndpoint, ec);
             asio::streambuf buffer;
-            asio::write(sock, asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+            asio::write(sock,
+                asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")),
+                ec);
             if (readResponse(sock, buffer, ec).find("count:1") == std::string::npos) {
                 fail(1, "first request did not see a fresh worker state");
             }
-            asio::write(sock, asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+            asio::write(sock,
+                asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")),
+                ec);
             if (rc == 0 && readResponse(sock, buffer, ec).find("count:2") == std::string::npos) {
                 fail(2, "second request did not see the first request's mutation");
             }
@@ -182,17 +198,20 @@ int main() {
             asio::ip::tcp::socket sock(ctx);
             sock.connect(secondEndpoint, ec);
             asio::streambuf buffer;
-            asio::write(sock, asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+            asio::write(sock,
+                asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")),
+                ec);
             if (readResponse(sock, buffer, ec).find("count:3") == std::string::npos) {
                 fail(3, "the second listener did not share the worker-scoped state");
             }
 
             // The WebWorker dispatch path shares the same instance.
             if (rc == 0) {
-                const auto post = server.webWorker().post([](ruvia::WebWorkerContext& workerContext) -> ruvia::Task<void> {
-                    workerContext.workerState<ProbeState>().counter += 10;
-                    co_return;
-                });
+                const auto post = server.webWorker().post(
+                    [](ruvia::WebWorkerContext& workerContext) -> ruvia::Task<void> {
+                        workerContext.workerState<ProbeState>().counter += 10;
+                        co_return;
+                    });
                 if (post != ruvia::PostStatus::kAccepted) {
                     fail(4, "worker dispatch rejected the state mutation task");
                 }
@@ -202,15 +221,22 @@ int main() {
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
-                asio::write(sock, asio::buffer(std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
-                if (rc == 0 && readResponse(sock, buffer, ec).find("count:14") == std::string::npos) {
+                asio::write(sock,
+                    asio::buffer(
+                        std::string_view("GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")),
+                    ec);
+                if (rc == 0 &&
+                    readResponse(sock, buffer, ec).find("count:14") == std::string::npos) {
                     fail(5, "HTTP and dispatch paths did not share one instance");
                 }
             }
 
             // An unregistered type is a loud 500, not a silent default.
             if (rc == 0) {
-                asio::write(sock, asio::buffer(std::string_view("GET /missing HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+                asio::write(sock,
+                    asio::buffer(
+                        std::string_view("GET /missing HTTP/1.1\r\nHost: localhost\r\n\r\n")),
+                    ec);
                 const auto response = readResponse(sock, buffer, ec);
                 if (!response.starts_with("HTTP/1.1 500")) {
                     fail(6, "unregistered worker state did not fail with 500");
@@ -226,7 +252,8 @@ int main() {
     if (rc == 0 && !g_probeDestroyed) {
         fail(7, "worker state instance was not destroyed with the worker");
     }
-    if (rc == 0 && (g_probeFactoryThread == callerThread || g_probeDestroyThread != g_probeFactoryThread)) {
+    if (rc == 0 &&
+        (g_probeFactoryThread == callerThread || g_probeDestroyThread != g_probeFactoryThread)) {
         fail(8, "worker state construction/destruction was not worker-affine");
     }
     if (rc == 0 && (!g_probeFactorySawWorkerIdentity || !g_probeDestroySawWorkerIdentity)) {

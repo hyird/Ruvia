@@ -133,21 +133,27 @@ RUVIA_TEST(http_content_coding_parser_separates_capability_from_syntax) {
 
 RUVIA_TEST(http_content_coding_empty_members_follow_field_list_role) {
     for (const std::string_view value : {"", ",gzip", "gzip,", "gzip,,br", "deflate,"}) {
-        RUVIA_CHECK(ruvia::detail::isValidHttpContentEncodingFieldValue(value, ruvia::detail::HttpFieldListRole::kRecipient));
-        RUVIA_CHECK(!ruvia::detail::isValidHttpContentEncodingFieldValue(value, ruvia::detail::HttpFieldListRole::kSender));
+        RUVIA_CHECK(ruvia::detail::isValidHttpContentEncodingFieldValue(
+            value, ruvia::detail::HttpFieldListRole::kRecipient));
+        RUVIA_CHECK(!ruvia::detail::isValidHttpContentEncodingFieldValue(
+            value, ruvia::detail::HttpFieldListRole::kSender));
     }
 
-    RUVIA_CHECK(ruvia::detail::isValidHttpContentEncodingFieldValue("deflate", ruvia::detail::HttpFieldListRole::kSender));
-    RUVIA_CHECK(ruvia::detail::isValidHttpContentEncodingFieldValue("gzip, br", ruvia::detail::HttpFieldListRole::kSender));
+    RUVIA_CHECK(ruvia::detail::isValidHttpContentEncodingFieldValue(
+        "deflate", ruvia::detail::HttpFieldListRole::kSender));
+    RUVIA_CHECK(ruvia::detail::isValidHttpContentEncodingFieldValue(
+        "gzip, br", ruvia::detail::HttpFieldListRole::kSender));
 }
 
 RUVIA_TEST(http_zstd_content_rejects_window_above_rfc9659_limit) {
     const std::string plain(9 * 1024 * 1024, 'w');
     const std::string encoded = zstdCompressWithWindow(plain, 24);
     RUVIA_CHECK(!encoded.empty());
-    RUVIA_CHECK(decodeError(HttpContentCoding::kZstd, encoded, plain.size()) == HttpContentDecodeError::kInvalidContent);
+    RUVIA_CHECK(decodeError(HttpContentCoding::kZstd, encoded, plain.size()) ==
+                HttpContentDecodeError::kInvalidContent);
 
-    auto conformant = encodeHttpContent(HttpContentCoding::kZstd, plain, {.maxEncodedBytes = plain.size(), .resource = std::pmr::get_default_resource()});
+    auto conformant = encodeHttpContent(HttpContentCoding::kZstd, plain,
+        {.maxEncodedBytes = plain.size(), .resource = std::pmr::get_default_resource()});
     RUVIA_CHECK(conformant.encoded() != nullptr);
     if (const auto* content = conformant.encoded()) {
         RUVIA_CHECK_EQ(decoded(HttpContentCoding::kZstd, content->bytes(), plain.size()), plain);
@@ -156,8 +162,10 @@ RUVIA_TEST(http_zstd_content_rejects_window_above_rfc9659_limit) {
 
 RUVIA_TEST(http_content_encode_enforces_exact_cap_without_partial_output) {
     const std::string input(2048, 'e');
-    for (const auto coding : {HttpContentCoding::kGzip, HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
-        const auto full = encodeHttpContent(coding, input, {.maxEncodedBytes = input.size(), .resource = std::pmr::get_default_resource()});
+    for (const auto coding :
+        {HttpContentCoding::kGzip, HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
+        const auto full = encodeHttpContent(coding, input,
+            {.maxEncodedBytes = input.size(), .resource = std::pmr::get_default_resource()});
         RUVIA_CHECK(full.encoded() != nullptr);
         if (full.encoded() == nullptr) {
             continue;
@@ -165,13 +173,15 @@ RUVIA_TEST(http_content_encode_enforces_exact_cap_without_partial_output) {
         const auto encodedSize = full.encoded()->bytes().size();
         RUVIA_CHECK(encodedSize > 1);
 
-        const auto exact = encodeHttpContent(coding, input, {.maxEncodedBytes = encodedSize, .resource = std::pmr::get_default_resource()});
+        const auto exact = encodeHttpContent(coding, input,
+            {.maxEncodedBytes = encodedSize, .resource = std::pmr::get_default_resource()});
         RUVIA_CHECK(exact.encoded() != nullptr);
         if (const auto* encoded = exact.encoded()) {
             RUVIA_CHECK_EQ(encoded->bytes().size(), encodedSize);
         }
 
-        const auto tooSmall = encodeHttpContent(coding, input, {.maxEncodedBytes = encodedSize - 1, .resource = std::pmr::get_default_resource()});
+        const auto tooSmall = encodeHttpContent(coding, input,
+            {.maxEncodedBytes = encodedSize - 1, .resource = std::pmr::get_default_resource()});
         RUVIA_CHECK(tooSmall.encoded() == nullptr);
         RUVIA_CHECK(tooSmall.failure() != nullptr);
         if (const auto* failure = tooSmall.failure()) {
@@ -179,13 +189,15 @@ RUVIA_TEST(http_content_encode_enforces_exact_cap_without_partial_output) {
         }
     }
 
-    const auto identity = encodeHttpContent(HttpContentCoding::kIdentity, "identity", {.maxEncodedBytes = 8, .resource = std::pmr::get_default_resource()});
+    const auto identity = encodeHttpContent(HttpContentCoding::kIdentity, "identity",
+        {.maxEncodedBytes = 8, .resource = std::pmr::get_default_resource()});
     RUVIA_CHECK(identity.encoded() != nullptr);
     RUVIA_CHECK(identity.failure() == nullptr);
     if (const auto* encoded = identity.encoded()) {
         RUVIA_CHECK_EQ(encoded->bytes(), std::string_view("identity"));
     }
-    const auto identityTooLarge = encodeHttpContent(HttpContentCoding::kIdentity, "identity", {.maxEncodedBytes = 0, .resource = std::pmr::get_default_resource()});
+    const auto identityTooLarge = encodeHttpContent(HttpContentCoding::kIdentity, "identity",
+        {.maxEncodedBytes = 0, .resource = std::pmr::get_default_resource()});
     RUVIA_CHECK(identityTooLarge.encoded() == nullptr);
     RUVIA_CHECK(identityTooLarge.failure() != nullptr);
     if (const auto* failure = identityTooLarge.failure()) {
@@ -205,7 +217,8 @@ RUVIA_TEST(http_content_decoder_state_uses_the_callers_memory_resource) {
 
     for (const auto& test : cases) {
         CountingMemoryResource resource;
-        const auto result = decodeHttpContent(test.coding, test.encoded, {.maxDecodedBytes = 0, .resource = &resource});
+        const auto result = decodeHttpContent(
+            test.coding, test.encoded, {.maxDecodedBytes = 0, .resource = &resource});
         RUVIA_CHECK(result.decoded() != nullptr);
         // The decoded representation is empty and stays in the string's SSO
         // buffer. Any observed allocation therefore belongs to codec state.
@@ -219,7 +232,8 @@ RUVIA_TEST(http_content_encoder_round_trips_incremental_chunks) {
         "each encoder's pending output and finalization state. ";
     const std::string repeated = input + input + input + input + input;
 
-    for (const auto coding : {HttpContentCoding::kIdentity, HttpContentCoding::kGzip, HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
+    for (const auto coding : {HttpContentCoding::kIdentity, HttpContentCoding::kGzip,
+             HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
         std::pmr::string encoded(std::pmr::get_default_resource());
         std::pmr::string chunk(std::pmr::get_default_resource());
         HttpContentEncoder encoder(coding, std::pmr::get_default_resource());
@@ -239,7 +253,8 @@ RUVIA_TEST(http_content_encoder_round_trips_incremental_chunks) {
 }
 
 RUVIA_TEST(http_content_encoder_rejects_writes_after_finish) {
-    for (const auto coding : {HttpContentCoding::kIdentity, HttpContentCoding::kGzip, HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
+    for (const auto coding : {HttpContentCoding::kIdentity, HttpContentCoding::kGzip,
+             HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
         HttpContentEncoder encoder(coding, std::pmr::get_default_resource());
         std::pmr::string output(std::pmr::get_default_resource());
         RUVIA_CHECK(encoder.write("body", output) != HttpContentEncodeStep::kFailure);
@@ -270,14 +285,16 @@ RUVIA_TEST(http_content_encoder_failure_is_terminal) {
 RUVIA_TEST(http_content_encoder_flushes_each_incremental_chunk) {
     const std::string input(4096, 's');
 
-    for (const auto coding : {HttpContentCoding::kGzip, HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
+    for (const auto coding :
+        {HttpContentCoding::kGzip, HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
         std::pmr::string encoded(std::pmr::get_default_resource());
         std::pmr::string chunk(std::pmr::get_default_resource());
         HttpContentEncoder encoder(coding, std::pmr::get_default_resource());
         for (std::size_t offset = 0; offset < input.size();) {
             const auto size = std::min<std::size_t>(257, input.size() - offset);
             chunk.clear();
-            const auto step = encoder.write(std::string_view(input).substr(offset, size), chunk, true);
+            const auto step =
+                encoder.write(std::string_view(input).substr(offset, size), chunk, true);
             RUVIA_CHECK(step != HttpContentEncodeStep::kFailure);
             encoded.append(chunk);
             offset += size;
@@ -295,10 +312,12 @@ RUVIA_TEST(http_brotli_encode_does_not_reserve_the_output_cap) {
     bool completed = false;
     bool roundTripped = false;
     try {
-        auto result = encodeHttpContent(HttpContentCoding::kBrotli, input, {.maxEncodedBytes = input.size() - 1, .resource = &resource});
+        auto result = encodeHttpContent(HttpContentCoding::kBrotli, input,
+            {.maxEncodedBytes = input.size() - 1, .resource = &resource});
         completed = result.encoded() != nullptr;
         if (const auto* encoded = result.encoded()) {
-            roundTripped = decoded(HttpContentCoding::kBrotli, encoded->bytes(), input.size()) == input;
+            roundTripped =
+                decoded(HttpContentCoding::kBrotli, encoded->bytes(), input.size()) == input;
         }
     } catch (const std::bad_alloc&) {
     }
@@ -309,7 +328,8 @@ RUVIA_TEST(http_brotli_encode_does_not_reserve_the_output_cap) {
 RUVIA_TEST(http_identity_content_uses_the_default_resource_when_none_is_supplied) {
     const std::string input(1024, 'i');
 
-    auto decoded = decodeHttpContent(HttpContentCoding::kIdentity, input, {.maxDecodedBytes = input.size(), .resource = nullptr});
+    auto decoded = decodeHttpContent(HttpContentCoding::kIdentity, input,
+        {.maxDecodedBytes = input.size(), .resource = nullptr});
     RUVIA_CHECK(decoded.decoded() != nullptr);
     if (decoded.decoded() != nullptr) {
         auto bytes = std::move(*decoded.decoded()).takeBytes();
@@ -317,7 +337,8 @@ RUVIA_TEST(http_identity_content_uses_the_default_resource_when_none_is_supplied
         RUVIA_CHECK(bytes.get_allocator().resource() == std::pmr::get_default_resource());
     }
 
-    auto encoded = encodeHttpContent(HttpContentCoding::kIdentity, input, {.maxEncodedBytes = input.size(), .resource = nullptr});
+    auto encoded = encodeHttpContent(HttpContentCoding::kIdentity, input,
+        {.maxEncodedBytes = input.size(), .resource = nullptr});
     RUVIA_CHECK(encoded.encoded() != nullptr);
     if (encoded.encoded() != nullptr) {
         auto bytes = std::move(*encoded.encoded()).takeBytes();
@@ -329,14 +350,16 @@ RUVIA_TEST(http_identity_content_uses_the_default_resource_when_none_is_supplied
 RUVIA_TEST(http_identity_content_rejects_oversize_before_allocating) {
     const std::string input(1024, 'i');
 
-    const auto decoded = decodeHttpContent(HttpContentCoding::kIdentity, input, {.maxDecodedBytes = input.size() - 1, .resource = std::pmr::null_memory_resource()});
+    const auto decoded = decodeHttpContent(HttpContentCoding::kIdentity, input,
+        {.maxDecodedBytes = input.size() - 1, .resource = std::pmr::null_memory_resource()});
     RUVIA_CHECK(decoded.decoded() == nullptr);
     RUVIA_CHECK(decoded.failure() != nullptr);
     if (decoded.failure() != nullptr) {
         RUVIA_CHECK(decoded.failure()->error() == HttpContentDecodeError::kDecodedSizeExceeded);
     }
 
-    const auto encoded = encodeHttpContent(HttpContentCoding::kIdentity, input, {.maxEncodedBytes = input.size() - 1, .resource = std::pmr::null_memory_resource()});
+    const auto encoded = encodeHttpContent(HttpContentCoding::kIdentity, input,
+        {.maxEncodedBytes = input.size() - 1, .resource = std::pmr::null_memory_resource()});
     RUVIA_CHECK(encoded.encoded() == nullptr);
     RUVIA_CHECK(encoded.failure() != nullptr);
     if (encoded.failure() != nullptr) {
@@ -345,9 +368,12 @@ RUVIA_TEST(http_identity_content_rejects_oversize_before_allocating) {
 }
 
 RUVIA_TEST(http_content_decode_rejects_empty_encoded_input) {
-    RUVIA_CHECK(decodeError(HttpContentCoding::kGzip, {}) == HttpContentDecodeError::kInvalidContent);
-    RUVIA_CHECK(decodeError(HttpContentCoding::kBrotli, {}) == HttpContentDecodeError::kInvalidContent);
-    RUVIA_CHECK(decodeError(HttpContentCoding::kZstd, {}) == HttpContentDecodeError::kInvalidContent);
+    RUVIA_CHECK(
+        decodeError(HttpContentCoding::kGzip, {}) == HttpContentDecodeError::kInvalidContent);
+    RUVIA_CHECK(
+        decodeError(HttpContentCoding::kBrotli, {}) == HttpContentDecodeError::kInvalidContent);
+    RUVIA_CHECK(
+        decodeError(HttpContentCoding::kZstd, {}) == HttpContentDecodeError::kInvalidContent);
     RUVIA_CHECK_EQ(decoded(HttpContentCoding::kIdentity, {}, 0), std::string{});
 }
 
@@ -361,13 +387,15 @@ RUVIA_TEST(http_content_decode_zero_cap_allows_only_empty_content) {
         {HttpContentCoding::kZstd, zstdCompress({})},
     };
     for (const auto& test : emptyCases) {
-        auto result = decodeHttpContent(test.coding, test.encoded, {.maxDecodedBytes = 0, .resource = std::pmr::get_default_resource()});
+        auto result = decodeHttpContent(test.coding, test.encoded,
+            {.maxDecodedBytes = 0, .resource = std::pmr::get_default_resource()});
         RUVIA_CHECK(result.decoded() != nullptr);
         if (const auto* content = result.decoded()) {
             RUVIA_CHECK(content->bytes().empty());
         }
     }
-    RUVIA_CHECK(decodeError(HttpContentCoding::kGzip, gzipCompress("x"), 0) == HttpContentDecodeError::kDecodedSizeExceeded);
+    RUVIA_CHECK(decodeError(HttpContentCoding::kGzip, gzipCompress("x"), 0) ==
+                HttpContentDecodeError::kDecodedSizeExceeded);
 }
 
 RUVIA_TEST(zstd_decode_full_frame_succeeds) {

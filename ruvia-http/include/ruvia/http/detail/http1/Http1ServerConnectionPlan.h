@@ -18,7 +18,8 @@ public:
     // native HTTP/1.1 response version and always close. Once parsing succeeds,
     // callers must preserve the parsed plan and use requireClose().
     [[nodiscard]] static constexpr Http1ServerConnectionPlan http11Close() noexcept {
-        return Http1ServerConnectionPlan(HttpProtocolVersion::kHttp11, Http1ClosePolicy::kCloseAfterResponse);
+        return Http1ServerConnectionPlan(
+            HttpProtocolVersion::kHttp11, Http1ClosePolicy::kCloseAfterResponse);
     }
 
     [[nodiscard]] constexpr HttpProtocolVersion protocolVersion() const noexcept {
@@ -34,10 +35,13 @@ public:
     }
 
 private:
-    friend Http1ServerConnectionPlan http1PlanHttp10RequestConnection(const HttpConnectionOptions&) noexcept;
-    friend Http1ServerConnectionPlan http1PlanHttp11RequestConnection(const HttpConnectionOptions&) noexcept;
+    friend Http1ServerConnectionPlan http1PlanHttp10RequestConnection(
+        const HttpConnectionOptions&) noexcept;
+    friend Http1ServerConnectionPlan http1PlanHttp11RequestConnection(
+        const HttpConnectionOptions&) noexcept;
 
-    constexpr Http1ServerConnectionPlan(HttpProtocolVersion protocolVersion, Http1ClosePolicy disposition) noexcept
+    constexpr Http1ServerConnectionPlan(
+        HttpProtocolVersion protocolVersion, Http1ClosePolicy disposition) noexcept
         : protocolVersion_(protocolVersion),
           disposition_(disposition) {}
 
@@ -45,12 +49,17 @@ private:
     Http1ClosePolicy disposition_;
 };
 
-[[nodiscard]] inline Http1ServerConnectionPlan http1PlanHttp10RequestConnection(const HttpConnectionOptions& options) noexcept {
-    return Http1ServerConnectionPlan(HttpProtocolVersion::kHttp10, !options.close() && options.keepAlive() ? Http1ClosePolicy::kAllowReuse : Http1ClosePolicy::kCloseAfterResponse);
+[[nodiscard]] inline Http1ServerConnectionPlan http1PlanHttp10RequestConnection(
+    const HttpConnectionOptions& options) noexcept {
+    return Http1ServerConnectionPlan(HttpProtocolVersion::kHttp10,
+        !options.close() && options.keepAlive() ? Http1ClosePolicy::kAllowReuse
+                                                : Http1ClosePolicy::kCloseAfterResponse);
 }
 
-[[nodiscard]] inline Http1ServerConnectionPlan http1PlanHttp11RequestConnection(const HttpConnectionOptions& options) noexcept {
-    return Http1ServerConnectionPlan(HttpProtocolVersion::kHttp11, options.close() ? Http1ClosePolicy::kCloseAfterResponse : Http1ClosePolicy::kAllowReuse);
+[[nodiscard]] inline Http1ServerConnectionPlan http1PlanHttp11RequestConnection(
+    const HttpConnectionOptions& options) noexcept {
+    return Http1ServerConnectionPlan(HttpProtocolVersion::kHttp11,
+        options.close() ? Http1ClosePolicy::kCloseAfterResponse : Http1ClosePolicy::kAllowReuse);
 }
 
 }  // namespace ruvia::detail

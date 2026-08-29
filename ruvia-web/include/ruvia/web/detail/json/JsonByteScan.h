@@ -24,7 +24,8 @@ enum class JsonByteScanKind : std::uint8_t {
 };
 
 template <JsonByteScanKind Kind>
-[[nodiscard]] inline std::size_t findJsonSpecialByte(std::string_view input, std::size_t offset = 0) noexcept {
+[[nodiscard]] inline std::size_t findJsonSpecialByte(
+    std::string_view input, std::size_t offset = 0) noexcept {
     if (offset >= input.size()) {
         return std::string_view::npos;
     }
@@ -63,7 +64,8 @@ template <JsonByteScanKind Kind>
         if (vmaxvq_u8(special) != 0) {
             for (std::size_t index = 0; index < 16; ++index) {
                 const auto byte = static_cast<unsigned char>(input[offset + index]);
-                if (byte == '"' || byte == '\\' || byte < 0x20 || (Kind == JsonByteScanKind::kStringToken && byte >= 0x80)) {
+                if (byte == '"' || byte == '\\' || byte < 0x20 ||
+                    (Kind == JsonByteScanKind::kStringToken && byte >= 0x80)) {
                     return offset + index;
                 }
             }
@@ -74,18 +76,21 @@ template <JsonByteScanKind Kind>
 
     for (; offset < input.size(); ++offset) {
         const auto byte = static_cast<unsigned char>(input[offset]);
-        if (byte == '"' || byte == '\\' || byte < 0x20 || (Kind == JsonByteScanKind::kStringToken && byte >= 0x80)) {
+        if (byte == '"' || byte == '\\' || byte < 0x20 ||
+            (Kind == JsonByteScanKind::kStringToken && byte >= 0x80)) {
             return offset;
         }
     }
     return std::string_view::npos;
 }
 
-[[nodiscard]] inline std::size_t findJsonEscapeByte(std::string_view input, std::size_t offset = 0) noexcept {
+[[nodiscard]] inline std::size_t findJsonEscapeByte(
+    std::string_view input, std::size_t offset = 0) noexcept {
     return findJsonSpecialByte<JsonByteScanKind::kEscape>(input, offset);
 }
 
-[[nodiscard]] inline std::size_t findJsonStringTokenByte(std::string_view input, std::size_t offset = 0) noexcept {
+[[nodiscard]] inline std::size_t findJsonStringTokenByte(
+    std::string_view input, std::size_t offset = 0) noexcept {
     return findJsonSpecialByte<JsonByteScanKind::kStringToken>(input, offset);
 }
 

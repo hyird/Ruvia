@@ -43,7 +43,8 @@ struct SessionPersistencePlan final {
     std::size_t count{0};
 };
 
-[[nodiscard]] constexpr SessionPersistencePlan sessionPersistencePlan(std::string_view currentId, std::string_view oldIdToDelete) noexcept {
+[[nodiscard]] constexpr SessionPersistencePlan sessionPersistencePlan(
+    std::string_view currentId, std::string_view oldIdToDelete) noexcept {
     SessionPersistencePlan plan;
     if (!currentId.empty()) {
         plan.steps[plan.count++] = SessionPersistenceStep::kPersistCurrent;
@@ -65,7 +66,8 @@ struct SessionCommitPlan final {
     std::size_t count{0};
 };
 
-[[nodiscard]] constexpr SessionCommitPlan sessionCommitPlan(std::string_view currentId, std::string_view oldIdToDelete, bool publishCurrentCookie) noexcept {
+[[nodiscard]] constexpr SessionCommitPlan sessionCommitPlan(std::string_view currentId,
+    std::string_view oldIdToDelete, bool publishCurrentCookie) noexcept {
     SessionCommitPlan plan;
     if (!currentId.empty()) {
         plan.steps[plan.count++] = SessionCommitStep::kPersistCurrent;
@@ -92,7 +94,8 @@ struct SessionCommitPlan final {
     return true;
 }
 
-inline void appendSessionCookieHeader(HttpResponse& response, std::pmr::memory_resource* resource, std::string_view cookieName, std::string_view id, bool secure) {
+inline void appendSessionCookieHeader(HttpResponse& response, std::pmr::memory_resource* resource,
+    std::string_view cookieName, std::string_view id, bool secure) {
     const CookieOptions options{
         .sameSite = CookieSameSite::kLax,
         .httpOnly = CookieAttributePolicy::kEmit,
@@ -105,7 +108,8 @@ inline void appendSessionCookieHeader(HttpResponse& response, std::pmr::memory_r
     response.header("Set-Cookie", setCookie, {.mode = ruvia::HttpResponseHeaderMode::kAppend});
 }
 
-inline void appendExpiredSessionCookieHeader(HttpResponse& response, std::pmr::memory_resource* resource, std::string_view cookieName, bool secure) {
+inline void appendExpiredSessionCookieHeader(HttpResponse& response,
+    std::pmr::memory_resource* resource, std::string_view cookieName, bool secure) {
     const CookieOptions options{
         .sameSite = CookieSameSite::kLax,
         .maxAge = std::chrono::seconds(0),

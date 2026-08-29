@@ -24,7 +24,8 @@ public:
     using AbandonRequest = void (*)(void*, std::uint32_t) noexcept;
     using AbandonCredit = void (*)(void*, std::uint32_t, std::uint32_t) noexcept;
 
-    Http2ConnectionOwnerEndpoint(void* target, AbandonRequest abandonRequest, AbandonCredit abandonCredit) noexcept
+    Http2ConnectionOwnerEndpoint(
+        void* target, AbandonRequest abandonRequest, AbandonCredit abandonCredit) noexcept
         : target_(target),
           abandonRequest_(abandonRequest),
           abandonCredit_(abandonCredit) {}
@@ -226,7 +227,8 @@ namespace {
     std::terminate();
 }
 
-[[nodiscard]] Http2RequestContentReleaseStatus toPublic(detail::Http2RequestContentReleaseStatus status) noexcept {
+[[nodiscard]] Http2RequestContentReleaseStatus toPublic(
+    detail::Http2RequestContentReleaseStatus status) noexcept {
     switch (status) {
         case detail::Http2RequestContentReleaseStatus::kReleased:
             return Http2RequestContentReleaseStatus::kReleased;
@@ -238,7 +240,8 @@ namespace {
     std::terminate();
 }
 
-[[nodiscard]] Http2RequestHeadSubmitError toPublic(detail::Http2RequestHeadSubmitError error) noexcept {
+[[nodiscard]] Http2RequestHeadSubmitError toPublic(
+    detail::Http2RequestHeadSubmitError error) noexcept {
     switch (error) {
         case detail::Http2RequestHeadSubmitError::kInvalidState:
             return Http2RequestHeadSubmitError::kInvalidState;
@@ -260,14 +263,16 @@ namespace {
 
 using RequestHeadSubmitOutcome = std::variant<std::uint32_t, Http2RequestHeadSubmitError>;
 
-[[nodiscard]] RequestHeadSubmitOutcome pinSubmittedRequest(detail::Http2Connection& connection, const detail::Http2RequestHeadSubmitResult& result) {
+[[nodiscard]] RequestHeadSubmitOutcome pinSubmittedRequest(
+    detail::Http2Connection& connection, const detail::Http2RequestHeadSubmitResult& result) {
     if (const auto* submitted = result.submitted()) {
         try {
             connection.pinStream(submitted->streamId());
         } catch (...) {
             const auto original = std::current_exception();
             try {
-                (void)connection.submitReset(submitted->streamId(), detail::Http2ErrorCode::kCancel);
+                (void)connection.submitReset(
+                    submitted->streamId(), detail::Http2ErrorCode::kCancel);
                 // Preserve the original pinning failure; this reset is rollback only.
                 // NOLINTNEXTLINE(bugprone-empty-catch)
             } catch (...) {
@@ -279,18 +284,21 @@ using RequestHeadSubmitOutcome = std::variant<std::uint32_t, Http2RequestHeadSub
     return toPublic(result.failure()->error());
 }
 
-[[nodiscard]] HttpClientResponseHead responseHeadFromStream(const detail::Http2StreamState& stream, std::pmr::memory_resource* resource) {
+[[nodiscard]] HttpClientResponseHead responseHeadFromStream(
+    const detail::Http2StreamState& stream, std::pmr::memory_resource* resource) {
     const auto* status = stream.responseStatus();
     if (status == nullptr) {
         throw std::logic_error("HTTP/2 final response event has no status");
     }
-    auto result = detail::HttpClientResponseHeadAccess::make(*status, HttpProtocolVersion::kHttp2, resource);
+    auto result =
+        detail::HttpClientResponseHeadAccess::make(*status, HttpProtocolVersion::kHttp2, resource);
     auto& headers = detail::HttpClientResponseHeadAccess::headers(result);
     const auto count = stream.remoteInitialHeaderCount().value_or(stream.remoteHeaderCount());
     headers.reserve(count);
     for (std::size_t index = 0; index < count; ++index) {
         const auto field = stream.remoteHeaderAt(index);
-        headers.push_back(detail::HttpClientResponseHeaderAccess::make(field.name, field.value, resource));
+        headers.push_back(
+            detail::HttpClientResponseHeaderAccess::make(field.name, field.value, resource));
     }
     return result;
 }
@@ -303,7 +311,8 @@ public:
         : resource(detail::httpPmrResourceOrDefault(requested)),
           role(publicRole),
           connection(resource, toInternal(publicRole)),
-          endpoint(new detail::Http2ConnectionOwnerEndpoint(this, &Impl::abandonRequestThunk, &Impl::abandonCreditThunk)) {}
+          endpoint(new detail::Http2ConnectionOwnerEndpoint(
+              this, &Impl::abandonRequestThunk, &Impl::abandonCreditThunk)) {}
 
     ~Impl() {
         endpoint->detach();
@@ -326,7 +335,8 @@ public:
     static void abandonRequestThunk(void* target, std::uint32_t streamId) noexcept {
         static_cast<Impl*>(target)->abandonRequest(streamId);
     }
-    static void abandonCreditThunk(void* target, std::uint32_t streamId, std::uint32_t bytes) noexcept {
+    static void abandonCreditThunk(
+        void* target, std::uint32_t streamId, std::uint32_t bytes) noexcept {
         static_cast<Impl*>(target)->abandonCredit(streamId, bytes);
     }
 
@@ -493,13 +503,15 @@ public:
     Http2Role role;
     detail::Http2Connection connection;
     detail::Http2ConnectionOwnerEndpoint* endpoint;
-    std::array<DeferredRelease, detail::Http2LocalSettings::kMaxConcurrentStreams> deferredReleases{};
+    std::array<DeferredRelease, detail::Http2LocalSettings::kMaxConcurrentStreams>
+        deferredReleases{};
     std::size_t deferredReleaseCount{0};
     std::array<DeferredCredit, detail::Http2LocalSettings::kMaxConcurrentStreams> deferredCredits{};
     std::size_t deferredCreditCount{0};
 };
 
-Http2ReceivedDataCredit::Http2ReceivedDataCredit(detail::Http2ConnectionOwnerEndpoint* endpoint, std::uint32_t streamId, std::uint32_t bytes) noexcept
+Http2ReceivedDataCredit::Http2ReceivedDataCredit(detail::Http2ConnectionOwnerEndpoint* endpoint,
+    std::uint32_t streamId, std::uint32_t bytes) noexcept
     : endpoint_(endpoint),
       streamId_(streamId),
       bytes_(bytes) {
@@ -519,7 +531,9 @@ Http2ReceivedDataCredit::Http2ReceivedDataCredit(Http2ReceivedDataCredit&& other
       streamId_(std::exchange(other.streamId_, 0)),
       bytes_(std::exchange(other.bytes_, 0)) {}
 
-Http2RequestHeadEvent::Http2RequestHeadEvent(detail::Http2ConnectionOwnerEndpoint* endpoint, std::uint32_t streamId, HttpRequest request, HttpRequestExpectations expectations, HttpRequestContentIndication content) noexcept
+Http2RequestHeadEvent::Http2RequestHeadEvent(detail::Http2ConnectionOwnerEndpoint* endpoint,
+    std::uint32_t streamId, HttpRequest request, HttpRequestExpectations expectations,
+    HttpRequestContentIndication content) noexcept
     : streamId_(streamId),
       request_(request),
       expectations_(expectations),
@@ -597,14 +611,17 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
                 throw std::logic_error("HTTP/2 request event has no stream");
             }
             auto request = detail::HttpRequestAccess::make();
-            const auto build = detail::Http2RequestBuilder::build(*stream, request, impl_->resource, {});
+            const auto build =
+                detail::Http2RequestBuilder::build(*stream, request, impl_->resource, {});
             if (build.built() == nullptr) {
-                (void)impl_->connection.submitReset(value->streamId(), detail::Http2ErrorCode::kCancel);
+                (void)impl_->connection.submitReset(
+                    value->streamId(), detail::Http2ErrorCode::kCancel);
                 impl_->connection.consumeEvent();
                 throw std::logic_error("validated HTTP/2 request cannot be materialized");
             }
             impl_->connection.pinStream(value->streamId());
-            auto result = Http2Event::requestHead(impl_->endpoint, value->streamId(), request, stream->requestExpectations(), stream->requestContentIndication());
+            auto result = Http2Event::requestHead(impl_->endpoint, value->streamId(), request,
+                stream->requestExpectations(), stream->requestContentIndication());
             impl_->connection.consumeEvent();
             return std::optional<Http2Event>(std::move(result));
         }
@@ -613,12 +630,14 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
             throw std::logic_error("HTTP/2 response event has no stream");
         }
         auto head = responseHeadFromStream(*stream, impl_->resource);
-        auto result = Http2Event::responseHead(value->streamId(), std::move(head), value->requestContentSignal());
+        auto result = Http2Event::responseHead(
+            value->streamId(), std::move(head), value->requestContentSignal());
         impl_->connection.consumeEvent();
         return std::optional<Http2Event>(std::move(result));
     }
     if (const auto* value = event->messageBodyChunk()) {
-        auto result = Http2Event::messageBodyChunk(impl_->endpoint, value->streamId(), value->bytes(), value->flowControlBytes());
+        auto result = Http2Event::messageBodyChunk(
+            impl_->endpoint, value->streamId(), value->bytes(), value->flowControlBytes());
         impl_->connection.consumeEvent();
         return std::optional<Http2Event>(std::move(result));
     }
@@ -631,7 +650,8 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
         return std::optional<Http2Event>(std::move(result));
     }
     if (const auto* value = event->tunnelData()) {
-        auto result = Http2Event::tunnelData(impl_->endpoint, value->streamId(), value->bytes(), value->flowControlBytes());
+        auto result = Http2Event::tunnelData(
+            impl_->endpoint, value->streamId(), value->bytes(), value->flowControlBytes());
         impl_->connection.consumeEvent();
         return std::optional<Http2Event>(std::move(result));
     }
@@ -644,7 +664,8 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
         return std::optional<Http2Event>(std::move(result));
     }
     if (const auto* value = event->streamClosed()) {
-        auto result = Http2Event::streamClosed(value->streamId(), toPublic(value->source()), toPublic(value->error()));
+        auto result = Http2Event::streamClosed(
+            value->streamId(), toPublic(value->source()), toPublic(value->error()));
         if (impl_->role == Http2Role::kClient) {
             impl_->releaseOwnerAfterCredits(value->streamId());
         }
@@ -682,48 +703,64 @@ bool Http2Connection::wantsWrite() const noexcept {
     return impl_->connection.wantsWrite();
 }
 
-Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(const Http2RegularRequestHeadView& request) {
+Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(
+    const Http2RegularRequestHeadView& request) {
     std::optional<std::string_view> authority;
     if (request.authority) {
         authority = request.authority->view();
     }
-    const auto result = impl_->connection.submitRegularRequestHead(request.method.view(), request.scheme.view(), authority, request.target.view(), static_cast<std::span<const HttpHeaderView>>(request.headers), toInternal(request.content), request.expectation);
+    const auto result = impl_->connection.submitRegularRequestHead(request.method.view(),
+        request.scheme.view(), authority, request.target.view(),
+        static_cast<std::span<const HttpHeaderView>>(request.headers), toInternal(request.content),
+        request.expectation);
     const auto outcome = pinSubmittedRequest(impl_->connection, result);
     if (const auto* streamId = std::get_if<std::uint32_t>(&outcome)) {
         return Http2RequestHeadSubmitResult::makeSubmitted(*streamId);
     }
-    return Http2RequestHeadSubmitResult::makeFailure(std::get<Http2RequestHeadSubmitError>(outcome));
+    return Http2RequestHeadSubmitResult::makeFailure(
+        std::get<Http2RequestHeadSubmitError>(outcome));
 }
 
-Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(const Http2ConnectRequestHeadView& request) {
-    const auto result = impl_->connection.submitConnectRequestHead(request.authority.view(), static_cast<std::span<const HttpHeaderView>>(request.headers));
+Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(
+    const Http2ConnectRequestHeadView& request) {
+    const auto result = impl_->connection.submitConnectRequestHead(
+        request.authority.view(), static_cast<std::span<const HttpHeaderView>>(request.headers));
     const auto outcome = pinSubmittedRequest(impl_->connection, result);
     if (const auto* streamId = std::get_if<std::uint32_t>(&outcome)) {
         return Http2RequestHeadSubmitResult::makeSubmitted(*streamId);
     }
-    return Http2RequestHeadSubmitResult::makeFailure(std::get<Http2RequestHeadSubmitError>(outcome));
+    return Http2RequestHeadSubmitResult::makeFailure(
+        std::get<Http2RequestHeadSubmitError>(outcome));
 }
 
-Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(const Http2ExtendedConnectRequestHeadView& request) {
-    const auto result = impl_->connection.submitExtendedConnectRequestHead(request.protocol.view(), request.scheme.view(), request.authority.view(), request.target.view(), static_cast<std::span<const HttpHeaderView>>(request.headers));
+Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(
+    const Http2ExtendedConnectRequestHeadView& request) {
+    const auto result = impl_->connection.submitExtendedConnectRequestHead(request.protocol.view(),
+        request.scheme.view(), request.authority.view(), request.target.view(),
+        static_cast<std::span<const HttpHeaderView>>(request.headers));
     const auto outcome = pinSubmittedRequest(impl_->connection, result);
     if (const auto* streamId = std::get_if<std::uint32_t>(&outcome)) {
         return Http2RequestHeadSubmitResult::makeSubmitted(*streamId);
     }
-    return Http2RequestHeadSubmitResult::makeFailure(std::get<Http2RequestHeadSubmitError>(outcome));
+    return Http2RequestHeadSubmitResult::makeFailure(
+        std::get<Http2RequestHeadSubmitError>(outcome));
 }
 
-Http2DataSubmitStatus Http2Connection::submitData(std::uint32_t streamId, std::string_view bytes, Http2EndStream endStream) {
+Http2DataSubmitStatus Http2Connection::submitData(
+    std::uint32_t streamId, std::string_view bytes, Http2EndStream endStream) {
     return toPublic(impl_->connection.submitData(streamId, bytes, toInternal(endStream)));
 }
-Http2RequestContentReleaseStatus Http2Connection::releaseRequestContent(std::uint32_t streamId) noexcept {
+Http2RequestContentReleaseStatus Http2Connection::releaseRequestContent(
+    std::uint32_t streamId) noexcept {
     return toPublic(impl_->connection.releaseRequestContent(streamId));
 }
-Http2SubmitStatus Http2Connection::submitInterimResponseHead(std::uint32_t streamId, const HttpInterimResponseHead& response) {
+Http2SubmitStatus Http2Connection::submitInterimResponseHead(
+    std::uint32_t streamId, const HttpInterimResponseHead& response) {
     return toPublic(impl_->connection.submitInterimResponseHead(streamId, response));
 }
 
-Http2SubmitStatus Http2Connection::submitBufferedResponse(std::uint32_t streamId, const HttpResponse& response) {
+Http2SubmitStatus Http2Connection::submitBufferedResponse(
+    std::uint32_t streamId, const HttpResponse& response) {
     auto* stream = impl_->connection.stream(streamId);
     if (stream == nullptr) {
         return Http2SubmitStatus::kClosed;
@@ -746,8 +783,10 @@ Http2SubmitStatus Http2Connection::submitBufferedResponse(std::uint32_t streamId
         }
     }
     if (plan.sendBody()) {
-        const auto data = impl_->connection.submitData(streamId, body.bytes(), detail::Http2EndStream::kEndStream);
-        if (data != detail::Http2DataSubmitStatus::kAccepted && data != detail::Http2DataSubmitStatus::kQueued) {
+        const auto data = impl_->connection.submitData(
+            streamId, body.bytes(), detail::Http2EndStream::kEndStream);
+        if (data != detail::Http2DataSubmitStatus::kAccepted &&
+            data != detail::Http2DataSubmitStatus::kQueued) {
             return Http2SubmitStatus::kInvalidState;
         }
     }
@@ -778,7 +817,8 @@ Http2ReceivedDataAcknowledgeStatus Http2Connection::acknowledge(Http2ReceivedDat
     if (acknowledged) {
         impl_->retryDeferredRelease(streamId);
     }
-    return acknowledged ? Http2ReceivedDataAcknowledgeStatus::kAcknowledged : Http2ReceivedDataAcknowledgeStatus::kClosed;
+    return acknowledged ? Http2ReceivedDataAcknowledgeStatus::kAcknowledged
+                        : Http2ReceivedDataAcknowledgeStatus::kClosed;
 }
 bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
     return impl_->connection.hasQueuedData(streamId);
@@ -787,7 +827,8 @@ std::span<const std::uint32_t> Http2Connection::takeDrainedDataStreams() & noexc
     return impl_->connection.takeDrainedDataStreams();
 }
 Http2ServerRequestReleaseStatus Http2Connection::release(Http2RequestHeadEvent&& request) {
-    if (request.endpoint_ == nullptr || request.streamId_ == 0 || request.endpoint_ != impl_->endpoint) {
+    if (request.endpoint_ == nullptr || request.streamId_ == 0 ||
+        request.endpoint_ != impl_->endpoint) {
         return Http2ServerRequestReleaseStatus::kInvalidLease;
     }
     if (impl_->connection.stream(request.streamId_) == nullptr) {

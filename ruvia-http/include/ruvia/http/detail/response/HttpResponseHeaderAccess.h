@@ -14,7 +14,8 @@ namespace ruvia::detail {
 // truncating either field would make the response header view disagree with
 // the allocation and could turn a large application value into malformed wire
 // bytes or an out-of-bounds read during emission.
-[[nodiscard]] inline constexpr bool responseHeaderStorageSizeFits(std::size_t nameSize, std::size_t valueSize) noexcept {
+[[nodiscard]] inline constexpr bool responseHeaderStorageSizeFits(
+    std::size_t nameSize, std::size_t valueSize) noexcept {
     constexpr auto maxSize = static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)());
     return nameSize <= maxSize && valueSize <= maxSize && valueSize <= maxSize - nameSize;
 }
@@ -26,7 +27,8 @@ inline void validateResponseHeaderStorageSize(std::size_t nameSize, std::size_t 
 }
 
 struct HttpResponseHeaderAccess final {
-    [[nodiscard]] static HttpResponseHeader make(const char* bytes, std::uint32_t nameSize, std::uint32_t valueSize, std::uint32_t knownBit, bool owned) noexcept {
+    [[nodiscard]] static HttpResponseHeader make(const char* bytes, std::uint32_t nameSize,
+        std::uint32_t valueSize, std::uint32_t knownBit, bool owned) noexcept {
         HttpResponseHeader header;
         header.bytes = bytes;
         header.nameSize = nameSize;
@@ -62,7 +64,8 @@ struct HttpResponseHeaderAccess final {
     }
 };
 
-[[nodiscard]] inline HttpResponseHeader makeResponseHeader(const char* bytes, std::uint32_t nameSize, std::uint32_t valueSize, std::uint32_t knownBit, bool owned) noexcept {
+[[nodiscard]] inline HttpResponseHeader makeResponseHeader(const char* bytes,
+    std::uint32_t nameSize, std::uint32_t valueSize, std::uint32_t knownBit, bool owned) noexcept {
     return HttpResponseHeaderAccess::make(bytes, nameSize, valueSize, knownBit, owned);
 }
 
@@ -74,7 +77,8 @@ struct HttpResponseHeaderAccess final {
     return HttpResponseHeaderAccess::valueEnd(header);
 }
 
-[[nodiscard]] inline std::uint32_t responseHeaderKnownBit(const HttpResponseHeader& header) noexcept {
+[[nodiscard]] inline std::uint32_t responseHeaderKnownBit(
+    const HttpResponseHeader& header) noexcept {
     return HttpResponseHeaderAccess::knownBit(header);
 }
 

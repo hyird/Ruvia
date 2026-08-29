@@ -36,7 +36,8 @@ RUVIA_TEST(number_append_formatted_finite_rejects_non_finite) {
     // NaN and both infinities are rejected rather than emitted as the words
     // "nan"/"inf", which are not valid SQL/RESP numeric literals and would splice
     // in unquoted. Nothing is appended on rejection.
-    for (const double bad : {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}) {
+    for (const double bad : {std::numeric_limits<double>::quiet_NaN(),
+             std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}) {
         std::pmr::string sink(std::pmr::get_default_resource());
         bool threw = false;
         try {

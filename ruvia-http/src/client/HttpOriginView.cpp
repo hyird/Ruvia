@@ -34,7 +34,8 @@ HttpOriginView HttpOriginView::http(HttpOriginOptions options) {
 HttpOriginView HttpOriginView::https(HttpOriginOptions options) {
     const auto host = options.host.view();
     validateOriginHost(host);
-    return HttpOriginView(HttpScheme::kHttps, host, resolvedOriginPort(HttpScheme::kHttps, options));
+    return HttpOriginView(
+        HttpScheme::kHttps, host, resolvedOriginPort(HttpScheme::kHttps, options));
 }
 
 }  // namespace ruvia

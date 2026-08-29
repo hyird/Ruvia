@@ -25,7 +25,8 @@ ruvia::Task<void> closeAfterUpgrade(void*, ruvia::Context&) {
     co_return;
 }
 
-[[nodiscard]] std::string readHead(asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
+[[nodiscard]] std::string readHead(
+    asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
     const std::size_t n = asio::read_until(socket, buffer, "\r\n\r\n", ec);
     if (ec) {
         return {};
@@ -40,11 +41,15 @@ ruvia::Task<void> closeAfterUpgrade(void*, ruvia::Context&) {
 int main() {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    impl.registerWebSocketRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/ws", std::pmr::get_default_resource()), ruvia::detail::RouteStreamHandler(nullptr, &closeAfterUpgrade), {}, {});
+    impl.registerWebSocketRoute(ruvia::HttpKnownMethod::kGet,
+        std::pmr::string("/ws", std::pmr::get_default_resource()),
+        ruvia::detail::RouteStreamHandler(nullptr, &closeAfterUpgrade), {}, {});
     impl.finalize();
 
     ruvia::detail::HttpServerOptions options;
-    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
+    ruvia::detail::WebWorkerRuntime server(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {},
+        options);
     server.start();
 
     asio::io_context context;
@@ -59,13 +64,14 @@ int main() {
     }
 
     asio::write(socket,
-        asio::buffer(std::string_view("GET /ws HTTP/1.1\r\n"
-                                      "Host: localhost\r\n"
-                                      "Connection: Upgrade\r\n"
-                                      "Upgrade: websocket\r\n"
-                                      "Sec-WebSocket-Version: 13\r\n"
-                                      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-                                      "Accept-Encoding: identity;q=0, gzip;q=0, br;q=0, zstd;q=0\r\n\r\n")),
+        asio::buffer(
+            std::string_view("GET /ws HTTP/1.1\r\n"
+                             "Host: localhost\r\n"
+                             "Connection: Upgrade\r\n"
+                             "Upgrade: websocket\r\n"
+                             "Sec-WebSocket-Version: 13\r\n"
+                             "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                             "Accept-Encoding: identity;q=0, gzip;q=0, br;q=0, zstd;q=0\r\n\r\n")),
         ec);
     if (ec) {
         std::fputs("client failed to write websocket handshake\n", stderr);
@@ -85,7 +91,8 @@ int main() {
         std::fputs("websocket upgrade was rejected by Accept-Encoding negotiation\n", stderr);
         return 3;
     }
-    if (head.find("Content-Encoding:") != std::string::npos || head.find("content-encoding:") != std::string::npos) {
+    if (head.find("Content-Encoding:") != std::string::npos ||
+        head.find("content-encoding:") != std::string::npos) {
         std::fputs("websocket handshake carried response content coding metadata\n", stderr);
         return 4;
     }

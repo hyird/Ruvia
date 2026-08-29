@@ -41,7 +41,8 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
     std::size_t begin = 0;
     while (begin <= value.size()) {
         const auto comma = value.find(',', begin);
-        const auto token = httpTrimOws(value.substr(begin, comma == std::string_view::npos ? std::string_view::npos : comma - begin));
+        const auto token = httpTrimOws(value.substr(
+            begin, comma == std::string_view::npos ? std::string_view::npos : comma - begin));
         if (token.empty()) {
             if (role_ == HttpFieldListRole::kSender) {
                 state_.template emplace<HttpInvalidContentCodingField>();
@@ -56,7 +57,8 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
                 state_.template emplace<HttpUnsupportedContentCoding>();
             } else if (httpAsciiEqualsIgnoreCase(token, "identity")) {
                 supported->coding = HttpContentCoding::kIdentity;
-            } else if (httpAsciiEqualsIgnoreCase(token, "gzip") || httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
+            } else if (httpAsciiEqualsIgnoreCase(token, "gzip") ||
+                       httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
                 supported->coding = HttpContentCoding::kGzip;
             } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
                 supported->coding = HttpContentCoding::kBrotli;
@@ -100,7 +102,8 @@ HttpContentCodingFieldResult parseHttpContentCoding(std::string_view value) noex
     return parser.finish();
 }
 
-HttpContentDecodeResult decodeHttpContent(HttpContentCoding coding, std::string_view input, HttpContentDecodeOptions options) {
+HttpContentDecodeResult decodeHttpContent(
+    HttpContentCoding coding, std::string_view input, HttpContentDecodeOptions options) {
     detail::ContentDecodeAttempt attempt = HttpContentDecodeError::kUnsupportedCoding;
     switch (coding) {
         case HttpContentCoding::kGzip:
@@ -116,7 +119,8 @@ HttpContentDecodeResult decodeHttpContent(HttpContentCoding coding, std::string_
             if (input.size() > options.maxDecodedBytes) {
                 attempt = HttpContentDecodeError::kDecodedSizeExceeded;
             } else {
-                attempt = std::pmr::string(input, detail::httpPmrResourceOrDefault(options.resource));
+                attempt =
+                    std::pmr::string(input, detail::httpPmrResourceOrDefault(options.resource));
             }
             break;
         }
@@ -127,7 +131,8 @@ HttpContentDecodeResult decodeHttpContent(HttpContentCoding coding, std::string_
     return HttpContentDecodeResult::makeFailure(std::get<HttpContentDecodeError>(attempt));
 }
 
-HttpContentEncodeResult encodeHttpContent(HttpContentCoding coding, std::string_view input, HttpContentEncodeOptions options) {
+HttpContentEncodeResult encodeHttpContent(
+    HttpContentCoding coding, std::string_view input, HttpContentEncodeOptions options) {
     detail::ContentEncodeAttempt attempt = HttpContentEncodeError::kEncoderFailure;
     switch (coding) {
         case HttpContentCoding::kBrotli:
@@ -143,7 +148,8 @@ HttpContentEncodeResult encodeHttpContent(HttpContentCoding coding, std::string_
             if (input.size() > options.maxEncodedBytes) {
                 attempt = HttpContentEncodeError::kEncodedSizeExceeded;
             } else {
-                attempt = std::pmr::string(input, detail::httpPmrResourceOrDefault(options.resource));
+                attempt =
+                    std::pmr::string(input, detail::httpPmrResourceOrDefault(options.resource));
             }
             break;
         }

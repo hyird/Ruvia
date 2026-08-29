@@ -35,7 +35,8 @@ public:
     // requests and each carries its own deadline. This state is address-stable
     // and non-movable, which is what the timer registration and the token
     // handed to ContextServices both require.
-    void armDeadline(const WorkerHandle& worker, const StopToken& workerStop, std::chrono::milliseconds deadline) {
+    void armDeadline(const WorkerHandle& worker, const StopToken& workerStop,
+        std::chrono::milliseconds deadline) {
         deadline_.emplace(workerStop);
         deadline_->arm(worker, deadline);
     }
@@ -79,12 +80,14 @@ private:
     using DispatchState = std::variant<AwaitingDispatch, Http2SansIoStreamSignal>;
 
 public:
-    Http2SansIoSelectedRoute(Token, RouteResolution resolution, RequestBodyMode bodyMode, std::pmr::memory_resource* resource) noexcept
+    Http2SansIoSelectedRoute(Token, RouteResolution resolution, RequestBodyMode bodyMode,
+        std::pmr::memory_resource* resource) noexcept
         : resolution_(std::move(resolution)),
           body_(bodyMode, resource) {}
 
 private:
-    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(const WorkerHandle& worker, Http2SansIoTermination& termination) {
+    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
+        const WorkerHandle& worker, Http2SansIoTermination& termination) {
         if (dispatched()) {
             return nullptr;
         }
@@ -112,7 +115,8 @@ public:
         if (selectedRoute_) {
             return false;
         }
-        selectedRoute_.emplace(Http2SansIoSelectedRoute::Token{}, std::move(resolution), bodyMode, resource_);
+        selectedRoute_.emplace(
+            Http2SansIoSelectedRoute::Token{}, std::move(resolution), bodyMode, resource_);
         return true;
     }
 
@@ -144,7 +148,8 @@ public:
 private:
     friend class Http2SansIoStreamRuntimeTable;
 
-    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(const WorkerHandle& worker, Http2SansIoTermination& termination) {
+    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
+        const WorkerHandle& worker, Http2SansIoTermination& termination) {
         auto* selected = selectedRoute();
         return selected != nullptr ? selected->beginDispatch(worker, termination) : nullptr;
     }
@@ -161,7 +166,8 @@ private:
 // handler is scheduled and released only when that same runtime is removed.
 class Http2SansIoStreamRuntimeTable final {
 public:
-    explicit Http2SansIoStreamRuntimeTable(std::pmr::memory_resource* resource, Http2SansIoTermination& termination)
+    explicit Http2SansIoStreamRuntimeTable(
+        std::pmr::memory_resource* resource, Http2SansIoTermination& termination)
         : resource_(pmrResourceOrDefault(resource)),
           termination_(termination),
           overflow_(resource_) {}
@@ -224,7 +230,8 @@ public:
         return *result;
     }
 
-    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(std::uint32_t streamId, const WorkerHandle& worker) {
+    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
+        std::uint32_t streamId, const WorkerHandle& worker) {
         auto* runtime = find(streamId);
         if (runtime == nullptr) {
             return nullptr;
@@ -288,7 +295,8 @@ private:
     // typical cadence, pmr overflow for deeper multiplexing, so the table's
     // resident footprint stays small in every connection.
     static constexpr std::size_t kInlineCapacity = 2;
-    using OverflowRuntime = std::unique_ptr<Http2SansIoStreamRuntime, PmrObjectDeleter<Http2SansIoStreamRuntime>>;
+    using OverflowRuntime =
+        std::unique_ptr<Http2SansIoStreamRuntime, PmrObjectDeleter<Http2SansIoStreamRuntime>>;
 
     void accountRemoval(const Http2SansIoStreamRuntime& runtime) noexcept {
         if (runtime.dispatched()) {

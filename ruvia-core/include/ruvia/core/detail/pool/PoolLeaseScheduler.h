@@ -37,7 +37,8 @@ public:
     PoolLeaseScheduler(std::size_t poolSize, std::pmr::memory_resource* resource = nullptr)
         : freeSlots_(pmrResourceOrDefault(resource)),
           busy_(pmrResourceOrDefault(resource)),
-          waiterState_(std::allocate_shared<WaiterState>(std::pmr::polymorphic_allocator<WaiterState>(processResource()))) {
+          waiterState_(std::allocate_shared<WaiterState>(
+              std::pmr::polymorphic_allocator<WaiterState>(processResource()))) {
         freeSlots_.reserve(poolSize);
         busy_.resize(poolSize, 0);
         for (std::size_t i = 0; i < poolSize; ++i) {
@@ -62,8 +63,10 @@ public:
     // returned Task: the caller must keep the address-stable handle alive until
     // the Task completes or is cancelled and joined. A temporary handle would
     // dangle in the lazy coroutine frame, so it is rejected at compile time.
-    [[nodiscard]] Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds> timeout, StopToken stopToken, const WorkerHandle& worker);
-    Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds>, StopToken, WorkerHandle&&) = delete;
+    [[nodiscard]] Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds> timeout,
+        StopToken stopToken, const WorkerHandle& worker);
+    Task<PoolWaiterResult> acquire(
+        std::optional<std::chrono::milliseconds>, StopToken, WorkerHandle&&) = delete;
 
 private:
     struct WaiterState final : std::enable_shared_from_this<WaiterState> {
@@ -75,11 +78,15 @@ private:
                 if (!queue.commitCancellation(waiterId, continuation) || !continuation) {
                     return;
                 }
-                WorkerHandleAccess::deferOrTerminate(worker, [continuation] { continuation.resume(); });
+                WorkerHandleAccess::deferOrTerminate(
+                    worker, [continuation] { continuation.resume(); });
                 return;
             }
             auto retained = shared_from_this();
-            WorkerHandleAccess::deferOrTerminate(worker, [retained = std::move(retained), waiterId] { (void)retained->queue.cancel(waiterId); });
+            WorkerHandleAccess::deferOrTerminate(
+                worker, [retained = std::move(retained), waiterId] {
+                    (void)retained->queue.cancel(waiterId);
+                });
         }
     };
 
@@ -109,7 +116,9 @@ private:
         PoolLeaseScheduler* scheduler_;
     };
 
-    [[nodiscard]] static Task<PoolWaiterResult> acquireReserved(AcquireReservation reservation, std::optional<std::chrono::milliseconds> timeout, StopToken stopToken, const WorkerHandle* worker) {
+    [[nodiscard]] static Task<PoolWaiterResult> acquireReserved(AcquireReservation reservation,
+        std::optional<std::chrono::milliseconds> timeout, StopToken stopToken,
+        const WorkerHandle* worker) {
         auto& scheduler = reservation.scheduler();
         if (stopToken.stoppable() && (worker == nullptr || !worker->valid())) {
             throw std::logic_error("cancellable pool acquire requires a valid worker");
@@ -127,7 +136,8 @@ private:
             co_return PoolWaiterResult::makeAcquired(slot);
         }
 
-        const auto deadline = timeout.has_value() ? workerTimerDeadlineAfter(*timeout) : std::chrono::steady_clock::time_point::max();
+        const auto deadline = timeout.has_value() ? workerTimerDeadlineAfter(*timeout)
+                                                  : std::chrono::steady_clock::time_point::max();
         auto waiterId = ++scheduler.nextWaiterId_;
         if (waiterId == 0) {
             waiterId = ++scheduler.nextWaiterId_;
@@ -146,11 +156,12 @@ private:
 
         WorkerTimerRegistration deadlineTimer;
         if (timeout.has_value() && worker != nullptr) {
-            WorkerHandleAccess::scheduleTimer(*worker, deadlineTimer, deadline, [waiterState, waiterId](WorkerTimerOutcome outcome) noexcept {
-                if (outcome == WorkerTimerOutcome::kExpired) {
-                    (void)waiterState->queue.expire(waiterId);
-                }
-            });
+            WorkerHandleAccess::scheduleTimer(*worker, deadlineTimer, deadline,
+                [waiterState, waiterId](WorkerTimerOutcome outcome) noexcept {
+                    if (outcome == WorkerTimerOutcome::kExpired) {
+                        (void)waiterState->queue.expire(waiterId);
+                    }
+                });
         }
 
         auto stopRegistration = stopToken.registerCallback([worker, waiterState, waiterId] {
@@ -219,7 +230,9 @@ private:
 
 namespace ruvia::detail {
 
-inline Task<PoolWaiterResult> PoolLeaseScheduler::acquire(std::optional<std::chrono::milliseconds> timeout, StopToken stopToken, const WorkerHandle& worker) {
+inline Task<PoolWaiterResult> PoolLeaseScheduler::acquire(
+    std::optional<std::chrono::milliseconds> timeout, StopToken stopToken,
+    const WorkerHandle& worker) {
     return acquireReserved(AcquireReservation(*this), timeout, std::move(stopToken), &worker);
 }
 

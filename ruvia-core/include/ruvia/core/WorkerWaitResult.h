@@ -36,7 +36,9 @@ template <typename T>
 class WorkerWaitResult final {
 public:
     [[nodiscard]] WorkerWaitStatus status() const noexcept {
-        return std::holds_alternative<detail::WorkerWaitValue<T>>(result_) ? WorkerWaitStatus::kValue : std::get<WorkerWaitStatus>(result_);
+        return std::holds_alternative<detail::WorkerWaitValue<T>>(result_)
+                   ? WorkerWaitStatus::kValue
+                   : std::get<WorkerWaitStatus>(result_);
     }
 
     [[nodiscard]] bool hasValue() const noexcept {
@@ -74,7 +76,8 @@ private:
 
     using Result = std::variant<detail::WorkerWaitValue<T>, WorkerWaitStatus>;
 
-    explicit WorkerWaitResult(detail::WorkerWaitValue<T> value) noexcept(std::is_nothrow_move_constructible_v<T>)
+    explicit WorkerWaitResult(detail::WorkerWaitValue<T> value) noexcept(
+        std::is_nothrow_move_constructible_v<T>)
         : result_(std::move(value)) {}
 
     explicit WorkerWaitResult(WorkerWaitStatus status) noexcept
@@ -93,7 +96,8 @@ namespace ruvia::detail {
 
 struct WorkerWaitResultAccess final {
     template <typename T>
-    [[nodiscard]] static WorkerWaitResult<T> value(T value) noexcept(std::is_nothrow_move_constructible_v<T>) {
+    [[nodiscard]] static WorkerWaitResult<T> value(T value) noexcept(
+        std::is_nothrow_move_constructible_v<T>) {
         return WorkerWaitResult<T>(WorkerWaitValue<T>(std::move(value)));
     }
 

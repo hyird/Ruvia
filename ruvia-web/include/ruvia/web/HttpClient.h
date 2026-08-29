@@ -28,7 +28,8 @@ public:
     // shutdown, so only lvalue clients may create them.
     [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const&;
     HttpClientHandle withOptions(OperationOptions) const&& = delete;
-    [[nodiscard]] ScopedOperation<HttpClientResponse> send(const HttpClientRequestView& request) const&;
+    [[nodiscard]] ScopedOperation<HttpClientResponse> send(
+        const HttpClientRequestView& request) const&;
     ScopedOperation<HttpClientResponse> send(const HttpClientRequestView&) const&& = delete;
 
     // Idempotent and callable from any thread. It only requests immediate

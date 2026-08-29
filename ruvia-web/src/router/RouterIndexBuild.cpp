@@ -46,7 +46,8 @@ void detail::RouteTable::buildPerfectHash() {
 
             for (const auto routeIndex : exactRoutes) {
                 const auto& route = routes_[routeIndex];
-                const auto index = static_cast<std::size_t>(routeHash(route.method(), route.path(), seed)) & mask;
+                const auto index =
+                    static_cast<std::size_t>(routeHash(route.method(), route.path(), seed)) & mask;
                 if (candidateMarks[index] == generation) {
                     collision = true;
                     break;
@@ -58,7 +59,8 @@ void detail::RouteTable::buildPerfectHash() {
             if (!collision) {
                 plan.exactSlots_.resize(slotCount);
                 for (std::size_t i = 0; i < slotCount; ++i) {
-                    plan.exactSlots_[i].routeIndex = candidateMarks[i] == generation ? candidate[i] : kNoRouteIndex;
+                    plan.exactSlots_[i].routeIndex =
+                        candidateMarks[i] == generation ? candidate[i] : kNoRouteIndex;
                 }
                 plan.exactSeed_ = seed;
                 plan.exactMask_ = mask;

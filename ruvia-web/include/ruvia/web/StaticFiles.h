@@ -106,9 +106,12 @@ private:
     struct PreparedConstruction;
 
     explicit StaticRoot(PreparedConstruction prepared);
-    [[nodiscard]] static PreparedConstruction prepareConstruction(const std::filesystem::path& root, StaticRootOptions options);
-    [[nodiscard]] static PreparedConstruction prepareConstruction(const std::filesystem::path& root, const detail::StaticRootConfigStorage& config);
-    [[nodiscard]] static PreparedConstruction prepareConstruction(const std::filesystem::path& root, detail::StaticRootConfigStorage&& config);
+    [[nodiscard]] static PreparedConstruction prepareConstruction(
+        const std::filesystem::path& root, StaticRootOptions options);
+    [[nodiscard]] static PreparedConstruction prepareConstruction(
+        const std::filesystem::path& root, const detail::StaticRootConfigStorage& config);
+    [[nodiscard]] static PreparedConstruction prepareConstruction(
+        const std::filesystem::path& root, detail::StaticRootConfigStorage&& config);
 
     struct StateDeleter final {
         void operator()(detail::StaticRootState* state) const noexcept;

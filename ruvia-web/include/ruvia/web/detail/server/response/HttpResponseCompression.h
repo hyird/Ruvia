@@ -90,7 +90,8 @@ private:
 // decoder), but response negotiation still has to inspect a known stack: a
 // client that accepts gzip but rejects br cannot be sent `gzip, br` merely
 // because the stack is not executable by this process.
-[[nodiscard]] inline bool httpKnownResponseContentEncodingStackAccepted(const HttpResponseCodingSelection& selection, const HttpResponse& response) noexcept {
+[[nodiscard]] inline bool httpKnownResponseContentEncodingStackAccepted(
+    const HttpResponseCodingSelection& selection, const HttpResponse& response) noexcept {
     bool sawKnownCoding = false;
     bool sawUnknownCoding = false;
     bool accepted = true;
@@ -101,7 +102,8 @@ private:
         httpVisitCommaSeparatedQuotedItems(header.value(), [&](std::string_view item) noexcept {
             if (item.empty()) {
                 sawUnknownCoding = true;
-            } else if (httpAsciiEqualsIgnoreCase(item, "gzip") || httpAsciiEqualsIgnoreCase(item, "x-gzip")) {
+            } else if (httpAsciiEqualsIgnoreCase(item, "gzip") ||
+                       httpAsciiEqualsIgnoreCase(item, "x-gzip")) {
                 sawKnownCoding = true;
                 accepted = accepted && selection.accepts(HttpContentCoding::kGzip);
             } else if (httpAsciiEqualsIgnoreCase(item, "br")) {
@@ -130,7 +132,9 @@ private:
 // handler supplied a known pre-encoded representation the client excluded.
 // Bodyless statuses are representation-free and therefore never need a
 // content-coding fallback.
-[[nodiscard]] inline bool httpResponseCodingFallbackForbidden(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, const HttpResponse& response) noexcept {
+[[nodiscard]] inline bool httpResponseCodingFallbackForbidden(
+    const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod,
+    const HttpResponse& response) noexcept {
     if (!httpResponseBodyPlan(requestMethod, response.status()).statusAllowsBody()) {
         return false;
     }
@@ -156,20 +160,28 @@ private:
     return true;
 }
 
-[[nodiscard]] HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, HttpResponse& response, const CompressionConfig& options);
+[[nodiscard]] HttpResponseCompressionResult applyResponseCompression(
+    const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod,
+    HttpResponse& response, const CompressionConfig& options);
 
 // Applies the same policy as applyResponseCompression(), but offloads an
 // in-memory body above syncBytes to the bounded blocking pool. A disabled pool
 // extends synchronous compression through maxBytes; rejection by an existing
 // pool is an intentional identity fallback. Encoder/commit failures remain
 // typed failures so a client that forbids identity receives a terminal error.
-[[nodiscard]] Task<HttpResponseCompressionResult> applyResponseCompressionAsync(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, HttpResponse& response, CompressionConfig options, BlockingPool* pool, const WorkerHandle& worker);
+[[nodiscard]] Task<HttpResponseCompressionResult> applyResponseCompressionAsync(
+    const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod,
+    HttpResponse& response, CompressionConfig options, BlockingPool* pool,
+    const WorkerHandle& worker);
 
-[[nodiscard]] HttpResponseCompressionEligibility httpResponseCompressionEligibility(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, const HttpResponse& response, ResponseStreamKind kind) noexcept;
+[[nodiscard]] HttpResponseCompressionEligibility httpResponseCompressionEligibility(
+    const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod,
+    const HttpResponse& response, ResponseStreamKind kind) noexcept;
 
 // Select and annotate a streaming representation before the protocol-owned
 // stream head is committed. The returned value tells the runtime whether it
 // should own an incremental encoder for the body bytes.
-[[nodiscard]] bool prepareStreamingResponseCompression(const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod, HttpResponse& response, ResponseStreamKind kind);
+[[nodiscard]] bool prepareStreamingResponseCompression(const HttpResponseCodingSelection& selection,
+    HttpKnownMethod requestMethod, HttpResponse& response, ResponseStreamKind kind);
 
 }  // namespace ruvia::detail

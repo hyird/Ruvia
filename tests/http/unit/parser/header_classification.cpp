@@ -71,8 +71,9 @@ RUVIA_TEST(request_header_classification_unknown_is_other) {
     RUVIA_CHECK(classifyRequestHeader("Accept-Language") == RequestHeaderKind::kOther);
     RUVIA_CHECK(classifyRequestHeader("Content-Disposition") == RequestHeaderKind::kOther);
     // Same length and first byte as a known header but a different name.
-    RUVIA_CHECK(classifyRequestHeader("Hosx") == RequestHeaderKind::kOther);   // 4 bytes, not "Host"
-    RUVIA_CHECK(classifyRequestHeader("Hosts") == RequestHeaderKind::kOther);  // 5 bytes, not "Range"
+    RUVIA_CHECK(classifyRequestHeader("Hosx") == RequestHeaderKind::kOther);  // 4 bytes, not "Host"
+    RUVIA_CHECK(
+        classifyRequestHeader("Hosts") == RequestHeaderKind::kOther);  // 5 bytes, not "Range"
 }
 
 RUVIA_TEST(request_header_singleton_policy_table) {

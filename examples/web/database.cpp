@@ -24,7 +24,9 @@ void assignIfPresent(std::string& target, std::optional<std::string_view> value)
 ruvia::DbConfig dbConfigFromEnv(const ruvia::Env& env) {
 #if defined(RUVIA_ENABLE_MARIADB) && defined(RUVIA_ENABLE_POSTGRESQL)
     const auto driver = env.get("RUVIA_DB_DRIVER");
-    auto config = driver && *driver == "postgresql" ? ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql} : ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
+    auto config = driver && *driver == "postgresql"
+                      ? ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql}
+                      : ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
 #elif defined(RUVIA_ENABLE_MARIADB)
     auto config = ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb};
 #else
@@ -94,7 +96,10 @@ private:
     }
 
     static ruvia::Task<void> loadUserFound(ruvia::Context& c, bool& found) {
-        auto result = co_await c.db().query(driver_ == ruvia::DbDriver::kPostgreSql ? "SELECT id, name FROM users WHERE id = $1" : "SELECT id, name FROM users WHERE id = ?", c.req().param("id").value_or(""));
+        auto result = co_await c.db().query(driver_ == ruvia::DbDriver::kPostgreSql
+                                                ? "SELECT id, name FROM users WHERE id = $1"
+                                                : "SELECT id, name FROM users WHERE id = ?",
+            c.req().param("id").value_or(""));
         found = !result.empty();
         co_return;
     }
@@ -110,9 +115,11 @@ private:
         co_return;
     }
 
-    static ruvia::Task<void> insertUser(ruvia::Context& c, std::string_view name, std::uint64_t& id) {
+    static ruvia::Task<void> insertUser(
+        ruvia::Context& c, std::string_view name, std::uint64_t& id) {
         if (driver_ == ruvia::DbDriver::kPostgreSql) {
-            auto result = co_await c.db().query("INSERT INTO users(name) VALUES ($1) RETURNING id", name);
+            auto result =
+                co_await c.db().query("INSERT INTO users(name) VALUES ($1) RETURNING id", name);
             if (result.empty() || result.front().empty()) {
                 throw std::runtime_error("PostgreSQL INSERT did not return an id");
             }
@@ -126,8 +133,14 @@ private:
 
     static ruvia::Task<void> transferFunds(ruvia::Context& c) {
         auto tx = co_await c.db().beginTransaction();
-        (void)co_await tx.execute(driver_ == ruvia::DbDriver::kPostgreSql ? "UPDATE accounts SET balance = balance - $1 WHERE id = $2" : "UPDATE accounts SET balance = balance - ? WHERE id = ?", 100, 1);
-        (void)co_await tx.execute(driver_ == ruvia::DbDriver::kPostgreSql ? "UPDATE accounts SET balance = balance + $1 WHERE id = $2" : "UPDATE accounts SET balance = balance + ? WHERE id = ?", 100, 2);
+        (void)co_await tx.execute(driver_ == ruvia::DbDriver::kPostgreSql
+                                      ? "UPDATE accounts SET balance = balance - $1 WHERE id = $2"
+                                      : "UPDATE accounts SET balance = balance - ? WHERE id = ?",
+            100, 1);
+        (void)co_await tx.execute(driver_ == ruvia::DbDriver::kPostgreSql
+                                      ? "UPDATE accounts SET balance = balance + $1 WHERE id = $2"
+                                      : "UPDATE accounts SET balance = balance + ? WHERE id = ?",
+            100, 2);
         co_await tx.commit();
         co_return;
     }
@@ -181,5 +194,8 @@ int main() {
         app.database({.config = config});
     }
 
-    app.listen({.address = "0.0.0.0", .http = 8086}).server({.workerCount = 2, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall}).run();
+    app.listen({.address = "0.0.0.0", .http = 8086})
+        .server({.workerCount = 2,
+            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .run();
 }

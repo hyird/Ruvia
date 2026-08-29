@@ -64,7 +64,8 @@ struct SelfSignedPem {
 class ScopedTemporaryDirectory final {
 public:
     explicit ScopedTemporaryDirectory(std::string_view name)
-        : path_(std::filesystem::temp_directory_path() / (std::string(name) + "_" + std::to_string(currentProcessId()))) {
+        : path_(std::filesystem::temp_directory_path() /
+                (std::string(name) + "_" + std::to_string(currentProcessId()))) {
         std::filesystem::remove_all(path_);
         std::filesystem::create_directories(path_);
     }
@@ -125,7 +126,8 @@ private:
 };
 
 std::string gzipContent(std::string_view body) {
-    auto encoded = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, body, {.maxEncodedBytes = body.size() + 1024, .resource = std::pmr::get_default_resource()});
+    auto encoded = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, body,
+        {.maxEncodedBytes = body.size() + 1024, .resource = std::pmr::get_default_resource()});
     if (!encoded.encoded()) {
         throw std::runtime_error("failed to encode test gzip body");
     }
@@ -133,8 +135,11 @@ std::string gzipContent(std::string_view body) {
     return {bytes.data(), bytes.size()};
 }
 
-ruvia::Task<void> sendMultiplexed(const ruvia::HttpClientHandle& client, std::array<int, 16>& results, std::size_t index) {
-    auto request = ruvia::HttpClientRequestView{.method = "POST", .target = "/multiplex", .content = ruvia::HttpClientRequestContentView::bytes("multiplex")};
+ruvia::Task<void> sendMultiplexed(
+    const ruvia::HttpClientHandle& client, std::array<int, 16>& results, std::size_t index) {
+    auto request = ruvia::HttpClientRequestView{.method = "POST",
+        .target = "/multiplex",
+        .content = ruvia::HttpClientRequestContentView::bytes("multiplex")};
     auto response = co_await client.send(request);
     const auto body = co_await response.body().readAll();
     results[index] = body == "multiplex" ? 1 : -1;
@@ -149,12 +154,14 @@ ruvia::Task<void> sendSlowWithTimeout(const ruvia::HttpClientHandle& client, boo
     }
 }
 
-ruvia::Task<void> requestStopAfterDelay(const ruvia::WorkerHandle& worker, ruvia::StopSource& source) {
+ruvia::Task<void> requestStopAfterDelay(
+    const ruvia::WorkerHandle& worker, ruvia::StopSource& source) {
     (void)co_await ruvia::sleepFor(worker, 20ms);
     source.requestStop();
 }
 
-ruvia::Task<void> sendSlowWithCancellation(const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle& worker, std::pmr::memory_resource* resource, bool& cancelled) {
+ruvia::Task<void> sendSlowWithCancellation(const ruvia::HttpClientHandle& client,
+    const ruvia::WorkerHandle& worker, std::pmr::memory_resource* resource, bool& cancelled) {
     ruvia::StopSource source;
     ruvia::TaskScope cancellation(worker, {.resource = resource});
     cancellation.spawn(requestStopAfterDelay(worker, source));
@@ -172,8 +179,11 @@ ruvia::Task<void> sendSlowWithCancellation(const ruvia::HttpClientHandle& client
     co_await cancellation.join();
 }
 
-ruvia::Task<void> sendFastAlongsideCancelled(const ruvia::HttpClientHandle& client, bool& completed) {
-    auto request = ruvia::HttpClientRequestView{.method = "POST", .target = "/echo", .content = ruvia::HttpClientRequestContentView::bytes("still-open")};
+ruvia::Task<void> sendFastAlongsideCancelled(
+    const ruvia::HttpClientHandle& client, bool& completed) {
+    auto request = ruvia::HttpClientRequestView{.method = "POST",
+        .target = "/echo",
+        .content = ruvia::HttpClientRequestContentView::bytes("still-open")};
     auto response = co_await client.withOptions({.timeout = 2s}).send(request);
     completed = co_await response.body().readAll() == "still-open";
 }
@@ -186,7 +196,8 @@ SelfSignedPem makeSelfSignedPem(const char* subjectAlternativeName = "DNS:localh
     X509_gmtime_adj(X509_getm_notAfter(x509), 3600);
     X509_set_pubkey(x509, pkey);
     X509_NAME* name = X509_get_subject_name(x509);
-    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0);
+    X509_NAME_add_entry_by_txt(
+        name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0);
     X509_set_issuer_name(x509, name);
     X509V3_CTX extensionContext;
     X509V3_set_ctx_nodb(&extensionContext);
@@ -225,7 +236,8 @@ SelfSignedPem makeSelfSignedPem(const char* subjectAlternativeName = "DNS:localh
 
 class TruncatedTlsServer final {
 public:
-    TruncatedTlsServer(const std::filesystem::path& certificateChainFile, const std::filesystem::path& privateKeyFile)
+    TruncatedTlsServer(const std::filesystem::path& certificateChainFile,
+        const std::filesystem::path& privateKeyFile)
         : tlsContext_(asio::ssl::context::tls_server),
           acceptor_(io_, {asio::ip::make_address("127.0.0.1"), 0}) {
         tlsContext_.use_certificate_chain_file(certificateChainFile.string());
@@ -246,7 +258,8 @@ public:
             if (error) {
                 return;
             }
-            static constexpr std::string_view response = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\npartial";
+            static constexpr std::string_view response =
+                "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\npartial";
             asio::write(stream, asio::buffer(response), error);
             if (error) {
                 return;
@@ -278,14 +291,20 @@ private:
     std::thread thread_;
 };
 
-int selectH2Alpn(SSL*, const unsigned char** output, unsigned char* outputLength, const unsigned char* input, unsigned int inputLength, void*) noexcept {
+int selectH2Alpn(SSL*, const unsigned char** output, unsigned char* outputLength,
+    const unsigned char* input, unsigned int inputLength, void*) noexcept {
     static constexpr unsigned char protocols[] = {2, 'h', '2'};
-    return SSL_select_next_proto(const_cast<unsigned char**>(output), outputLength, protocols, static_cast<unsigned int>(sizeof(protocols)), input, inputLength) == OPENSSL_NPN_NEGOTIATED ? SSL_TLSEXT_ERR_OK : SSL_TLSEXT_ERR_NOACK;
+    return SSL_select_next_proto(const_cast<unsigned char**>(output), outputLength, protocols,
+               static_cast<unsigned int>(sizeof(protocols)), input,
+               inputLength) == OPENSSL_NPN_NEGOTIATED
+               ? SSL_TLSEXT_ERR_OK
+               : SSL_TLSEXT_ERR_NOACK;
 }
 
 class TruncatedHttp2TlsServer final {
 public:
-    TruncatedHttp2TlsServer(const std::filesystem::path& certificateChainFile, const std::filesystem::path& privateKeyFile)
+    TruncatedHttp2TlsServer(const std::filesystem::path& certificateChainFile,
+        const std::filesystem::path& privateKeyFile)
         : tlsContext_(asio::ssl::context::tls_server),
           acceptor_(io_, {asio::ip::make_address("127.0.0.1"), 0}) {
         tlsContext_.use_certificate_chain_file(certificateChainFile.string());
@@ -305,7 +324,8 @@ public:
 
             std::array<char, 24> clientPreface{};
             asio::read(stream, asio::buffer(clientPreface), error);
-            if (error || std::string_view(clientPreface.data(), clientPreface.size()) != "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n") {
+            if (error || std::string_view(clientPreface.data(), clientPreface.size()) !=
+                             "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n") {
                 return;
             }
 
@@ -355,13 +375,16 @@ private:
         std::uint32_t streamId{0};
     };
 
-    static std::optional<Frame> readFrame(asio::ssl::stream<asio::ip::tcp::socket>& stream, std::error_code& error) {
+    static std::optional<Frame> readFrame(
+        asio::ssl::stream<asio::ip::tcp::socket>& stream, std::error_code& error) {
         std::array<unsigned char, 9> header{};
         asio::read(stream, asio::buffer(header), error);
         if (error) {
             return std::nullopt;
         }
-        const auto length = (static_cast<std::size_t>(header[0]) << 16U) | (static_cast<std::size_t>(header[1]) << 8U) | static_cast<std::size_t>(header[2]);
+        const auto length = (static_cast<std::size_t>(header[0]) << 16U) |
+                            (static_cast<std::size_t>(header[1]) << 8U) |
+                            static_cast<std::size_t>(header[2]);
         std::vector<unsigned char> payload(length);
         if (!payload.empty()) {
             asio::read(stream, asio::buffer(payload), error);
@@ -369,7 +392,10 @@ private:
                 return std::nullopt;
             }
         }
-        const auto streamId = (static_cast<std::uint32_t>(header[5] & 0x7fU) << 24U) | (static_cast<std::uint32_t>(header[6]) << 16U) | (static_cast<std::uint32_t>(header[7]) << 8U) | static_cast<std::uint32_t>(header[8]);
+        const auto streamId = (static_cast<std::uint32_t>(header[5] & 0x7fU) << 24U) |
+                              (static_cast<std::uint32_t>(header[6]) << 16U) |
+                              (static_cast<std::uint32_t>(header[7]) << 8U) |
+                              static_cast<std::uint32_t>(header[8]);
         return Frame{.type = header[3], .streamId = streamId};
     }
 
@@ -379,19 +405,23 @@ private:
     std::thread thread_;
 };
 
-int runTlsTruncationCheck(const std::filesystem::path& certificateChainFile, const std::filesystem::path& privateKeyFile) {
+int runTlsTruncationCheck(const std::filesystem::path& certificateChainFile,
+    const std::filesystem::path& privateKeyFile) {
     TruncatedTlsServer server(certificateChainFile, privateKeyFile);
     asio::io_context io;
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     ruvia::WorkerMemory memory;
-    auto publicConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"};
+    auto publicConfig =
+        ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"};
     publicConfig.port = server.port();
     publicConfig.protocol = ruvia::HttpClientProtocol::kHttp1Only;
     publicConfig.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
-    ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
-    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(config)};
+    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
     auto exercise = [&]() -> ruvia::Task<int> {
         ruvia::detail::ScopedOperationScope scope;
         auto client = registry.get(memory.resource(), scope);
@@ -416,19 +446,23 @@ int runTlsTruncationCheck(const std::filesystem::path& certificateChainFile, con
     return result;
 }
 
-int runHttp2TlsTruncationCheck(const std::filesystem::path& certificateChainFile, const std::filesystem::path& privateKeyFile) {
+int runHttp2TlsTruncationCheck(const std::filesystem::path& certificateChainFile,
+    const std::filesystem::path& privateKeyFile) {
     TruncatedHttp2TlsServer server(certificateChainFile, privateKeyFile);
     asio::io_context io;
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     ruvia::WorkerMemory memory;
-    auto publicConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"};
+    auto publicConfig =
+        ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"};
     publicConfig.port = server.port();
     publicConfig.protocol = ruvia::HttpClientProtocol::kHttp2Only;
     publicConfig.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
-    ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
-    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(config)};
+    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
     auto exercise = [&]() -> ruvia::Task<int> {
         ruvia::detail::ScopedOperationScope scope;
         auto client = registry.get(memory.resource(), scope);
@@ -437,7 +471,9 @@ int runHttp2TlsTruncationCheck(const std::filesystem::path& certificateChainFile
             auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
             (void)co_await client.withOptions({.timeout = 2s}).send(request);
         } catch (const ruvia::HttpClientError& error) {
-            result = error.code() == ruvia::HttpClientError::Code::kTlsFailed ? 0 : error.code() == ruvia::HttpClientError::Code::kIoError ? 2 : 3;
+            result = error.code() == ruvia::HttpClientError::Code::kTlsFailed ? 0
+                     : error.code() == ruvia::HttpClientError::Code::kIoError ? 2
+                                                                              : 3;
         }
         scope.close();
         registry.closeNow();
@@ -452,7 +488,11 @@ int runHttp2TlsTruncationCheck(const std::filesystem::path& certificateChainFile
     return result;
 }
 
-int runVerifiedTlsClient(std::uint16_t port, std::string_view host, const std::filesystem::path& caFile, const std::filesystem::path* certificateChainFile = nullptr, const std::filesystem::path* privateKeyFile = nullptr, bool expectSuccess = true, bool allowIoFailure = false) {
+int runVerifiedTlsClient(std::uint16_t port, std::string_view host,
+    const std::filesystem::path& caFile,
+    const std::filesystem::path* certificateChainFile = nullptr,
+    const std::filesystem::path* privateKeyFile = nullptr, bool expectSuccess = true,
+    bool allowIoFailure = false) {
     asio::io_context io;
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
@@ -469,22 +509,30 @@ int runVerifiedTlsClient(std::uint16_t port, std::string_view host, const std::f
         publicConfig.privateKeyFile = privateKeyFile->string();
     }
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
-    ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
-    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(config)};
+    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
     auto exercise = [&]() -> ruvia::Task<int> {
         ruvia::detail::ScopedOperationScope scope;
         auto client = registry.get(memory.resource(), scope);
         int result = 0;
         try {
-            auto request = ruvia::HttpClientRequestView{.method = "POST", .target = "/echo", .content = ruvia::HttpClientRequestContentView::bytes("verified")};
+            auto request = ruvia::HttpClientRequestView{.method = "POST",
+                .target = "/echo",
+                .content = ruvia::HttpClientRequestContentView::bytes("verified")};
             auto response = co_await client.withOptions({.timeout = 2s}).send(request);
-            if (!expectSuccess || co_await response.body().readAll() != "verified" || response.protocolVersion() != ruvia::HttpProtocolVersion::kHttp2) {
+            if (!expectSuccess || co_await response.body().readAll() != "verified" ||
+                response.protocolVersion() != ruvia::HttpProtocolVersion::kHttp2) {
                 result = 1;
             }
         } catch (const ruvia::HttpClientError& error) {
-            const bool expectedFailure = error.code() == ruvia::HttpClientError::Code::kTlsFailed || (allowIoFailure && error.code() == ruvia::HttpClientError::Code::kIoError);
+            const bool expectedFailure =
+                error.code() == ruvia::HttpClientError::Code::kTlsFailed ||
+                (allowIoFailure && error.code() == ruvia::HttpClientError::Code::kIoError);
             if (expectSuccess || !expectedFailure) {
-                std::fprintf(stderr, "verified TLS client failed with code %u: %s\n", static_cast<unsigned int>(error.code()), error.what());
+                std::fprintf(stderr, "verified TLS client failed with code %u: %s\n",
+                    static_cast<unsigned int>(error.code()), error.what());
                 result = 2;
             }
         }
@@ -513,7 +561,10 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     ruvia::WorkerMemory memory;
-    auto publicConfig = scheme == ruvia::HttpScheme::kHttps ? ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"} : ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
+    auto publicConfig =
+        scheme == ruvia::HttpScheme::kHttps
+            ? ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"}
+            : ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
     publicConfig.port = port;
     publicConfig.protocol = protocol;
     if (scheme == ruvia::HttpScheme::kHttps) {
@@ -521,23 +572,32 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
     }
     publicConfig.connectionCount = 1;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
-    ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
-    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(config)};
+    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
     OneShotFailingResource operationResource;
     auto exercise = [&]() -> ruvia::Task<int> {
         ruvia::detail::ScopedOperationScope scope;
         auto client = registry.get(&operationResource, scope);
         auto runRequests = [&]() -> ruvia::Task<int> {
-            if (client.host() != "127.0.0.1" || client.port() != port || client.scheme() != scheme) {
+            if (client.host() != "127.0.0.1" || client.port() != port ||
+                client.scheme() != scheme) {
                 co_return 3;
             }
             int result = 0;
             reportStage(isHttp2 ? "run-client.h2.basic" : "run-client.h1.basic");
             for (int i = 0; i < 2; ++i) {
-                auto request = ruvia::HttpClientRequestView{.method = "POST", .target = "/echo", .content = ruvia::HttpClientRequestContentView::bytes("payload")};
+                auto request = ruvia::HttpClientRequestView{.method = "POST",
+                    .target = "/echo",
+                    .content = ruvia::HttpClientRequestContentView::bytes("payload")};
                 auto operation = client.send(request);
                 auto response = co_await std::move(operation);
-                if (response.status() != ruvia::http_status::kOk || co_await response.body().readAll() != "payload" || response.protocolVersion() != (protocol == ruvia::HttpClientProtocol::kHttp2Only ? ruvia::HttpProtocolVersion::kHttp2 : ruvia::HttpProtocolVersion::kHttp11)) {
+                if (response.status() != ruvia::http_status::kOk ||
+                    co_await response.body().readAll() != "payload" ||
+                    response.protocolVersion() != (protocol == ruvia::HttpClientProtocol::kHttp2Only
+                                                          ? ruvia::HttpProtocolVersion::kHttp2
+                                                          : ruvia::HttpProtocolVersion::kHttp11)) {
                     result = 1;
                     break;
                 }
@@ -549,7 +609,10 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
                     ruvia::HttpHeaderView{"X-Mixed-Case", "preserved"},
                     ruvia::HttpHeaderView{"TE", "Trailers"},
                 };
-                auto mixedCaseResponse = protocol == ruvia::HttpClientProtocol::kHttp2Only ? co_await client.send({.target = "/header", .headers = h2Headers}) : co_await client.send({.target = "/header", .headers = h1Headers});
+                auto mixedCaseResponse =
+                    protocol == ruvia::HttpClientProtocol::kHttp2Only
+                        ? co_await client.send({.target = "/header", .headers = h2Headers})
+                        : co_await client.send({.target = "/header", .headers = h1Headers});
                 if (co_await mixedCaseResponse.body().readAll() != "preserved") {
                     result = 5;
                 }
@@ -564,7 +627,8 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
                 }
                 co_await batch.join();
                 const auto elapsed = std::chrono::steady_clock::now() - started;
-                if (!std::ranges::all_of(results, [](int value) { return value == 1; }) || elapsed >= 400ms) {
+                if (!std::ranges::all_of(results, [](int value) { return value == 1; }) ||
+                    elapsed >= 400ms) {
                     result = 3;
                 }
             }
@@ -575,7 +639,8 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
                 bool fastCompleted = false;
                 ruvia::TaskScope mixed(worker, {.resource = memory.resource()});
                 mixed.spawn(sendSlowWithTimeout(client, slowTimedOut));
-                mixed.spawn(sendSlowWithCancellation(client, worker, memory.resource(), slowCancelled));
+                mixed.spawn(
+                    sendSlowWithCancellation(client, worker, memory.resource(), slowCancelled));
                 mixed.spawn(sendFastAlongsideCancelled(client, fastCompleted));
                 co_await mixed.join();
                 if (!slowTimedOut || !slowCancelled || !fastCompleted) {
@@ -586,12 +651,16 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
                 reportStage("run-client.h2.decode-error");
                 bool preservedDecoderError = false;
                 try {
-                    auto request = ruvia::HttpClientRequestView{.target = "/invalid-content-encoding"};
+                    auto request =
+                        ruvia::HttpClientRequestView{.target = "/invalid-content-encoding"};
                     (void)co_await client.send(request);
                 } catch (const ruvia::HttpClientError& error) {
-                    preservedDecoderError = error.code() == ruvia::HttpClientError::Code::kProtocolError && std::string_view(error.what()) == "invalid HTTP response Content-Encoding";
+                    preservedDecoderError =
+                        error.code() == ruvia::HttpClientError::Code::kProtocolError &&
+                        std::string_view(error.what()) == "invalid HTTP response Content-Encoding";
                     if (!preservedDecoderError) {
-                        std::fprintf(stderr, "unexpected HTTP/2 decoder error (%u): %s\n", static_cast<unsigned int>(error.code()), error.what());
+                        std::fprintf(stderr, "unexpected HTTP/2 decoder error (%u): %s\n",
+                            static_cast<unsigned int>(error.code()), error.what());
                     }
                 }
                 if (!preservedDecoderError) {
@@ -609,7 +678,8 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
                 // MSVC's Debug STL allocates small iterator proxies while constructing
                 // empty PMR containers. Fail the first real response-storage request
                 // instead, so every standard library exercises the recoverable path.
-                operationResource.failNextAllocationAtLeast(sizeof(ruvia::HttpClientResponseHeader));
+                operationResource.failNextAllocationAtLeast(
+                    sizeof(ruvia::HttpClientResponseHeader));
                 bool preservedAllocationFailure = false;
                 try {
                     (void)co_await client.send(request);
@@ -620,7 +690,10 @@ int runClient(std::uint16_t port, ruvia::HttpScheme scheme, ruvia::HttpClientPro
                     result = 7;
                 }
                 if (result == 0) {
-                    auto recoveryRequest = ruvia::HttpClientRequestView{.method = "POST", .target = "/echo", .content = ruvia::HttpClientRequestContentView::bytes("after-allocation-failure")};
+                    auto recoveryRequest = ruvia::HttpClientRequestView{.method = "POST",
+                        .target = "/echo",
+                        .content =
+                            ruvia::HttpClientRequestContentView::bytes("after-allocation-failure")};
                     auto recoveryResponse = co_await client.send(recoveryRequest);
                     if (co_await recoveryResponse.body().readAll() != "after-allocation-failure") {
                         result = 8;
@@ -696,8 +769,9 @@ int runTimeoutReconnect() {
             asio::read_until(second, request, "\r\n\r\n", ec);
             if (!ec) {
                 asio::write(second,
-                    asio::buffer(std::string_view("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: "
-                                                  "close\r\n\r\n2\r\nok\r\n0\r\n\r\n")),
+                    asio::buffer(std::string_view(
+                        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: "
+                        "close\r\n\r\n2\r\nok\r\n0\r\n\r\n")),
                     ec);
             }
         }
@@ -707,12 +781,15 @@ int runTimeoutReconnect() {
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     ruvia::WorkerMemory memory;
-    auto publicConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
+    auto publicConfig =
+        ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
     publicConfig.port = port;
     publicConfig.protocol = ruvia::HttpClientProtocol::kHttp1Only;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
-    ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
-    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(config)};
+    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
     auto exercise = [&]() -> ruvia::Task<int> {
         ruvia::detail::ScopedOperationScope scope;
         auto client = registry.get(memory.resource(), scope);
@@ -750,18 +827,22 @@ int runCookies(std::uint16_t port) {
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     ruvia::WorkerMemory memory;
-    auto publicConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
+    auto publicConfig =
+        ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
     publicConfig.port = port;
     publicConfig.protocol = ruvia::HttpClientProtocol::kHttp1Only;
     publicConfig.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
-    ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
-    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(config)};
+    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
     auto exercise = [&]() -> ruvia::Task<int> {
         ruvia::detail::ScopedOperationScope scope;
         auto client = registry.get(memory.resource(), scope);
         int result = 0;
-        if (client.host() != "127.0.0.1" || client.port() != port || client.scheme() != ruvia::HttpScheme::kHttp) {
+        if (client.host() != "127.0.0.1" || client.port() != port ||
+            client.scheme() != ruvia::HttpScheme::kHttp) {
             result = 1;
         }
 
@@ -773,15 +854,18 @@ int runCookies(std::uint16_t port) {
         }
 
         const std::array headers{ruvia::HttpHeaderView{"cookie", "manual=yes"}};
-        auto secondRequest = ruvia::HttpClientRequestView{.method = "GET", .target = "/cookie", .headers = headers};
+        auto secondRequest =
+            ruvia::HttpClientRequestView{.method = "GET", .target = "/cookie", .headers = headers};
         auto secondOperation = client.send(secondRequest);
         auto second = co_await std::move(secondOperation);
         const auto secondBody = co_await second.body().readAll();
-        if (secondBody.find("sid=abc") == std::string_view::npos || secondBody.find("manual=yes") == std::string_view::npos) {
+        if (secondBody.find("sid=abc") == std::string_view::npos ||
+            secondBody.find("manual=yes") == std::string_view::npos) {
             result = 3;
         }
         const auto stats = client.stats();
-        if (stats.bufferedRequests != 0 || stats.inFlightRequests != 0 || stats.completedRequests != 2 || stats.bytesSent == 0 || stats.bytesReceived == 0) {
+        if (stats.bufferedRequests != 0 || stats.inFlightRequests != 0 ||
+            stats.completedRequests != 2 || stats.bytesSent == 0 || stats.bytesReceived == 0) {
             result = 4;
         }
         scope.close();
@@ -811,24 +895,29 @@ int runHostPrefixedCookies(std::uint16_t port) {
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     ruvia::WorkerMemory memory;
-    auto publicConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"};
+    auto publicConfig =
+        ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1"};
     publicConfig.port = port;
     publicConfig.protocol = ruvia::HttpClientProtocol::kHttp2Only;
     publicConfig.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification;
     publicConfig.receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
-    ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
-    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(config)};
+    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
     auto exercise = [&]() -> ruvia::Task<int> {
         ruvia::detail::ScopedOperationScope scope;
         auto client = registry.get(memory.resource(), scope);
         int result = 0;
-        auto firstRequest = ruvia::HttpClientRequestView{.method = "GET", .target = "/host-prefix-cookie"};
+        auto firstRequest =
+            ruvia::HttpClientRequestView{.method = "GET", .target = "/host-prefix-cookie"};
         auto first = co_await client.withOptions({.timeout = 2s}).send(firstRequest);
         if (co_await first.body().readAll() != "new") {
             result = 1;
         } else {
-            auto secondRequest = ruvia::HttpClientRequestView{.method = "GET", .target = "/host-prefix-cookie"};
+            auto secondRequest =
+                ruvia::HttpClientRequestView{.method = "GET", .target = "/host-prefix-cookie"};
             auto second = co_await client.withOptions({.timeout = 2s}).send(secondRequest);
             const auto secondBody = co_await second.body().readAll();
             if (secondBody.find("__Host-good=good") == std::string_view::npos) {
@@ -868,7 +957,10 @@ int runBoundedBuffer() {
                 std::this_thread::sleep_for(100ms);
             }
             if (!ec) {
-                asio::write(socket, asio::buffer(std::string_view("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")), ec);
+                asio::write(socket,
+                    asio::buffer(std::string_view(
+                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")),
+                    ec);
             }
         }
     });
@@ -877,14 +969,17 @@ int runBoundedBuffer() {
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     ruvia::WorkerMemory memory;
-    auto publicConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
+    auto publicConfig =
+        ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
     publicConfig.port = port;
     publicConfig.protocol = ruvia::HttpClientProtocol::kHttp1Only;
     publicConfig.connectionCount = 1;
     publicConfig.maxBufferedRequests = 1;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
-    ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(config)};
-    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(config)};
+    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
     std::size_t remainingOperations = 3;
     auto send = [&]() -> ruvia::Task<int> {
         ruvia::detail::ScopedOperationScope scope;
@@ -998,16 +1093,23 @@ int runHttp2GoawayRetry() {
             if (stream == nullptr) {
                 return;
             }
-            const auto submitted = connection.submitStreamingResponseHead(streamId, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ruvia::detail::ResponseTrailerIntent::kPresent);
+            const auto submitted = connection.submitStreamingResponseHead(streamId,
+                std::move(response), ruvia::detail::ResponseStreamKind::kGeneric,
+                ruvia::detail::ResponseTrailerIntent::kPresent);
             if (!submitted.submitted()) {
                 return;
             }
-            if (connection.submitData(streamId, encodedBody, ruvia::detail::Http2EndStream::kKeepOpen) != ruvia::detail::Http2DataSubmitStatus::kAccepted) {
+            if (connection.submitData(
+                    streamId, encodedBody, ruvia::detail::Http2EndStream::kKeepOpen) !=
+                ruvia::detail::Http2DataSubmitStatus::kAccepted) {
                 return;
             }
-            const std::array<ruvia::HttpHeaderView, 1> trailers{ruvia::HttpHeaderView{"server-timing", "db;dur=4"}};
+            const std::array<ruvia::HttpHeaderView, 1> trailers{
+                ruvia::HttpHeaderView{"server-timing", "db;dur=4"}};
             const auto validated = ruvia::detail::httpResponseTrailerSection(trailers);
-            if (validated.section() == nullptr || connection.finishResponse(streamId, *validated.section()) != ruvia::detail::Http2FinishSubmitStatus::kAccepted) {
+            if (validated.section() == nullptr ||
+                connection.finishResponse(streamId, *validated.section()) !=
+                    ruvia::detail::Http2FinishSubmitStatus::kAccepted) {
                 return;
             }
             flush();
@@ -1022,8 +1124,10 @@ int runHttp2GoawayRetry() {
     config.port = port;
     config.protocol = ruvia::HttpClientProtocol::kHttp2Only;
     ruvia::detail::HttpClientConfigStorage storedConfig(config, memory.resource());
-    ruvia::detail::HttpClientDefinition definition{std::pmr::string("default", memory.resource()), std::move(storedConfig)};
-    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(), std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
+    ruvia::detail::HttpClientDefinition definition{
+        std::pmr::string("default", memory.resource()), std::move(storedConfig)};
+    ruvia::detail::HttpClientRegistry registry(io, worker, memory.resource(),
+        std::span<const ruvia::detail::HttpClientDefinition>(&definition, 1));
     auto exercise = [&]() -> ruvia::Task<int> {
         ruvia::detail::ScopedOperationScope scope;
         auto client = registry.get(memory.resource(), scope);
@@ -1032,7 +1136,8 @@ int runHttp2GoawayRetry() {
         int result = 0;
         if (co_await response.body().readAll() != "retried") {
             result = 1;
-        } else if (response.trailer("server-timing") != std::optional<std::string_view>("db;dur=4")) {
+        } else if (response.trailer("server-timing") !=
+                   std::optional<std::string_view>("db;dur=4")) {
             result = 2;
         }
         registry.closeNow();
@@ -1071,8 +1176,10 @@ int main() {
             co_return context.text(*value);
         }
         auto response = context.text("new");
-        response.header("Set-Cookie", "__Host-bad=bad; Secure; Path=relative", ruvia::HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
-        response.header("Set-Cookie", "__Host-good=good; Secure; Path=/", ruvia::HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
+        response.header("Set-Cookie", "__Host-bad=bad; Secure; Path=relative",
+            ruvia::HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
+        response.header("Set-Cookie", "__Host-good=good; Secure; Path=/",
+            ruvia::HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
         co_return response;
     };
     auto slow = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
@@ -1084,7 +1191,9 @@ int main() {
         (void)co_await ruvia::sleepFor(context.worker(), 50ms);
         co_return context.text(body);
     };
-    auto header = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> { co_return context.text(context.req().header("x-mixed-case").value_or("missing")); };
+    auto header = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
+        co_return context.text(context.req().header("x-mixed-case").value_or("missing"));
+    };
     auto clientState = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
         std::string body(context.req().header("user-agent").value_or("missing"));
         body.push_back('|');
@@ -1096,38 +1205,72 @@ int main() {
         response.header("Content-Encoding", "gzip");
         co_return response;
     };
-    routerImpl.registerRoute(ruvia::HttpKnownMethod::kPost, std::pmr::string("/echo", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(echo), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
-    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/cookie", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(cookie), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
-    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/host-prefix-cookie", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(hostPrefixCookie), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
-    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/slow", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(slow), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
-    routerImpl.registerRoute(ruvia::HttpKnownMethod::kPost, std::pmr::string("/multiplex", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(multiplex), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
-    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/header", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(header), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
-    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/client-state", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(clientState), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
-    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/invalid-content-encoding", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(invalidContentEncoding), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+    routerImpl.registerRoute(ruvia::HttpKnownMethod::kPost,
+        std::pmr::string("/echo", std::pmr::get_default_resource()),
+        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(echo),
+        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet,
+        std::pmr::string("/cookie", std::pmr::get_default_resource()),
+        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(cookie),
+        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet,
+        std::pmr::string("/host-prefix-cookie", std::pmr::get_default_resource()),
+        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(hostPrefixCookie),
+        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet,
+        std::pmr::string("/slow", std::pmr::get_default_resource()),
+        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(slow),
+        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+    routerImpl.registerRoute(ruvia::HttpKnownMethod::kPost,
+        std::pmr::string("/multiplex", std::pmr::get_default_resource()),
+        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(multiplex),
+        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet,
+        std::pmr::string("/header", std::pmr::get_default_resource()),
+        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(header),
+        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet,
+        std::pmr::string("/client-state", std::pmr::get_default_resource()),
+        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(clientState),
+        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+    routerImpl.registerRoute(ruvia::HttpKnownMethod::kGet,
+        std::pmr::string("/invalid-content-encoding", std::pmr::get_default_resource()),
+        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(
+            invalidContentEncoding),
+        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
     routerImpl.finalize();
 
     reportStage("main.plain-start");
-    ruvia::detail::WebWorkerRuntime plain(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable());
+    ruvia::detail::WebWorkerRuntime plain(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable());
     plain.start();
     reportStage("main.http1-client");
-    const auto httpResult = runClient(plain.localEndpoint().port(), ruvia::HttpScheme::kHttp, ruvia::HttpClientProtocol::kHttp1Only);
+    const auto httpResult = runClient(plain.localEndpoint().port(), ruvia::HttpScheme::kHttp,
+        ruvia::HttpClientProtocol::kHttp1Only);
     reportStage("main.http1-cookies");
     const auto cookieResult = runCookies(plain.localEndpoint().port());
-    auto gatewayClientConfig = ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
+    auto gatewayClientConfig =
+        ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
     gatewayClientConfig.port = plain.localEndpoint().port();
     gatewayClientConfig.protocol = ruvia::HttpClientProtocol::kHttp1Only;
     ruvia::detail::Router gatewayRouter;
     auto& gatewayRouterImpl = ruvia::detail::RouterImpl::from(gatewayRouter);
     auto gatewayHandler = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
         auto client = context.httpClient();
-        auto request = ruvia::HttpClientRequestView{.method = "POST", .target = "/echo", .content = ruvia::HttpClientRequestContentView::bytes("context-client")};
+        auto request = ruvia::HttpClientRequestView{.method = "POST",
+            .target = "/echo",
+            .content = ruvia::HttpClientRequestContentView::bytes("context-client")};
         auto operation = client.send(request);
         auto response = co_await std::move(operation);
         co_return context.text(co_await response.body().readAll());
     };
-    gatewayRouterImpl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/call", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(gatewayHandler), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+    gatewayRouterImpl.registerRoute(ruvia::HttpKnownMethod::kGet,
+        std::pmr::string("/call", std::pmr::get_default_resource()),
+        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(gatewayHandler),
+        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
     gatewayRouterImpl.finalize();
-    auto gatewayConfigStorage = ruvia::detail::HttpClientConfigStorage(gatewayClientConfig, std::pmr::get_default_resource());
+    auto gatewayConfigStorage = ruvia::detail::HttpClientConfigStorage(
+        gatewayClientConfig, std::pmr::get_default_resource());
     ruvia::detail::HttpClientDefinition gatewayDefinition{
         std::pmr::string("default", std::pmr::get_default_resource()),
         std::move(gatewayConfigStorage),
@@ -1135,7 +1278,9 @@ int main() {
     const ruvia::detail::WorkerCapabilityDefinitions gatewayCapabilities{
         .httpClients = std::span<const ruvia::detail::HttpClientDefinition>(&gatewayDefinition, 1),
     };
-    ruvia::detail::WebWorkerRuntime gateway(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), gatewayRouterImpl.routeTable(), gatewayCapabilities);
+    ruvia::detail::WebWorkerRuntime gateway(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
+        gatewayRouterImpl.routeTable(), gatewayCapabilities);
     reportStage("main.gateway-start");
     gateway.start();
     asio::io_context gatewayClientIo;
@@ -1143,7 +1288,10 @@ int main() {
     std::error_code gatewayEc;
     reportStage("main.gateway-exchange");
     gatewaySocket.connect(gateway.localEndpoint(), gatewayEc);
-    asio::write(gatewaySocket, asio::buffer(std::string_view("GET /call HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")), gatewayEc);
+    asio::write(gatewaySocket,
+        asio::buffer(
+            std::string_view("GET /call HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")),
+        gatewayEc);
     std::string gatewayResponse;
     std::array<char, 1024> gatewayBuffer{};
     while (!gatewayEc) {
@@ -1158,7 +1306,8 @@ int main() {
     plain.join();
     reportStage("main.http1-done");
     if (httpResult != 0 || cookieResult != 0 || !gatewayResponse.ends_with("context-client")) {
-        std::fprintf(stderr, "HTTP/1 client exchange failed (h1=%d, cookie=%d)\n", httpResult, cookieResult);
+        std::fprintf(
+            stderr, "HTTP/1 client exchange failed (h1=%d, cookie=%d)\n", httpResult, cookieResult);
         return 2;
     }
 
@@ -1183,58 +1332,84 @@ int main() {
     reportStage("main.tls-truncation-h2-done");
     ruvia::detail::HttpServerOptions options;
     ruvia::detail::HttpServerListenerDefinition::Tls tls;
-    tls.identity.certificateChainFile = std::pmr::string(certPath.string(), std::pmr::get_default_resource());
-    tls.identity.privateKeyFile = std::pmr::string(keyPath.string(), std::pmr::get_default_resource());
-    ruvia::detail::WebWorkerRuntime secure(ruvia::detail::HttpServerListenerDefinition(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), std::move(tls)), routerImpl.routeTable(), {}, std::move(options));
+    tls.identity.certificateChainFile =
+        std::pmr::string(certPath.string(), std::pmr::get_default_resource());
+    tls.identity.privateKeyFile =
+        std::pmr::string(keyPath.string(), std::pmr::get_default_resource());
+    ruvia::detail::WebWorkerRuntime secure(
+        ruvia::detail::HttpServerListenerDefinition(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), std::move(tls)),
+        routerImpl.routeTable(), {}, std::move(options));
     reportStage("main.secure-start");
     secure.start();
     reportStage("main.http2-client");
-    const auto h2Result = runClient(secure.localEndpoint().port(), ruvia::HttpScheme::kHttps, ruvia::HttpClientProtocol::kHttp2Only);
+    const auto h2Result = runClient(secure.localEndpoint().port(), ruvia::HttpScheme::kHttps,
+        ruvia::HttpClientProtocol::kHttp2Only);
     reportStage("main.host-cookie");
     const auto hostPrefixCookieResult = runHostPrefixedCookies(secure.localEndpoint().port());
     reportStage("main.verified-tls");
-    const auto verifiedResult = runVerifiedTlsClient(secure.localEndpoint().port(), "127.0.0.1", certPath);
+    const auto verifiedResult =
+        runVerifiedTlsClient(secure.localEndpoint().port(), "127.0.0.1", certPath);
     reportStage("main.secure-stop");
     secure.stop();
     secure.join();
     ruvia::detail::HttpServerOptions mismatchOptions;
     ruvia::detail::HttpServerListenerDefinition::Tls mismatchTls;
-    mismatchTls.identity.certificateChainFile = std::pmr::string(mismatchCertPath.string(), std::pmr::get_default_resource());
-    mismatchTls.identity.privateKeyFile = std::pmr::string(mismatchKeyPath.string(), std::pmr::get_default_resource());
-    ruvia::detail::WebWorkerRuntime mismatchSecure(ruvia::detail::HttpServerListenerDefinition(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), std::move(mismatchTls)), routerImpl.routeTable(), {}, std::move(mismatchOptions));
+    mismatchTls.identity.certificateChainFile =
+        std::pmr::string(mismatchCertPath.string(), std::pmr::get_default_resource());
+    mismatchTls.identity.privateKeyFile =
+        std::pmr::string(mismatchKeyPath.string(), std::pmr::get_default_resource());
+    ruvia::detail::WebWorkerRuntime mismatchSecure(
+        ruvia::detail::HttpServerListenerDefinition(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
+            std::move(mismatchTls)),
+        routerImpl.routeTable(), {}, std::move(mismatchOptions));
     reportStage("main.hostname-mismatch-start");
     mismatchSecure.start();
     reportStage("main.hostname-mismatch");
-    const auto hostnameFailureResult = runVerifiedTlsClient(mismatchSecure.localEndpoint().port(), "127.0.0.1", mismatchCertPath, nullptr, nullptr, false);
+    const auto hostnameFailureResult = runVerifiedTlsClient(mismatchSecure.localEndpoint().port(),
+        "127.0.0.1", mismatchCertPath, nullptr, nullptr, false);
     mismatchSecure.stop();
     mismatchSecure.join();
     reportStage("main.hostname-mismatch-done");
-    if (tlsTruncationResult != 0 || h2TlsTruncationResult != 0 || h2Result != 0 || hostPrefixCookieResult != 0 || verifiedResult != 0 || hostnameFailureResult != 0) {
+    if (tlsTruncationResult != 0 || h2TlsTruncationResult != 0 || h2Result != 0 ||
+        hostPrefixCookieResult != 0 || verifiedResult != 0 || hostnameFailureResult != 0) {
         std::fprintf(stderr,
             "HTTP/2 or verified TLS client exchange failed (h1-truncation=%d, "
             "h2-truncation=%d, h2=%d, host-cookie=%d, verified=%d, hostname=%d)\n",
-            tlsTruncationResult, h2TlsTruncationResult, h2Result, hostPrefixCookieResult, verifiedResult, hostnameFailureResult);
+            tlsTruncationResult, h2TlsTruncationResult, h2Result, hostPrefixCookieResult,
+            verifiedResult, hostnameFailureResult);
         return 3;
     }
 
     ruvia::detail::HttpServerOptions mtlsOptions;
     ruvia::detail::HttpServerListenerDefinition::Tls mtls;
-    mtls.identity.certificateChainFile = std::pmr::string(certPath.string(), std::pmr::get_default_resource());
-    mtls.identity.privateKeyFile = std::pmr::string(keyPath.string(), std::pmr::get_default_resource());
-    mtls.clientCertificates.emplace(std::pmr::get_default_resource(), ruvia::TlsClientCertificateRequirement::kRequired);
-    mtls.clientCertificates->verifyFile = std::pmr::string(certPath.string(), std::pmr::get_default_resource());
-    ruvia::detail::WebWorkerRuntime mtlsServer(ruvia::detail::HttpServerListenerDefinition(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), std::move(mtls)), routerImpl.routeTable(), {}, std::move(mtlsOptions));
+    mtls.identity.certificateChainFile =
+        std::pmr::string(certPath.string(), std::pmr::get_default_resource());
+    mtls.identity.privateKeyFile =
+        std::pmr::string(keyPath.string(), std::pmr::get_default_resource());
+    mtls.clientCertificates.emplace(
+        std::pmr::get_default_resource(), ruvia::TlsClientCertificateRequirement::kRequired);
+    mtls.clientCertificates->verifyFile =
+        std::pmr::string(certPath.string(), std::pmr::get_default_resource());
+    ruvia::detail::WebWorkerRuntime mtlsServer(
+        ruvia::detail::HttpServerListenerDefinition(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), std::move(mtls)),
+        routerImpl.routeTable(), {}, std::move(mtlsOptions));
     reportStage("main.mtls-start");
     mtlsServer.start();
     reportStage("main.mtls-missing-cert");
-    const auto missingClientCertificate = runVerifiedTlsClient(mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, nullptr, nullptr, false, true);
+    const auto missingClientCertificate = runVerifiedTlsClient(
+        mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, nullptr, nullptr, false, true);
     reportStage("main.mtls-client-cert");
-    const auto mtlsResult = runVerifiedTlsClient(mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, &certPath, &keyPath);
+    const auto mtlsResult = runVerifiedTlsClient(
+        mtlsServer.localEndpoint().port(), "127.0.0.1", certPath, &certPath, &keyPath);
     reportStage("main.mtls-stop");
     mtlsServer.stop();
     mtlsServer.join();
     if (missingClientCertificate != 0 || mtlsResult != 0) {
-        std::fprintf(stderr, "HTTP client mutual TLS exchange failed (missing=%d, mtls=%d)\n", missingClientCertificate, mtlsResult);
+        std::fprintf(stderr, "HTTP client mutual TLS exchange failed (missing=%d, mtls=%d)\n",
+            missingClientCertificate, mtlsResult);
         return 4;
     }
     reportStage("main.timeout-reconnect");

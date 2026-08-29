@@ -39,7 +39,8 @@ struct TrustedProxyBlock final {
 // fails startup instead of silently trusting nothing.
 [[nodiscard]] bool parseTrustedProxyBlock(std::string_view cidr, TrustedProxyBlock& out) noexcept;
 
-[[nodiscard]] bool trustedProxyBlockContains(const TrustedProxyBlock& block, std::string_view peerAddress) noexcept;
+[[nodiscard]] bool trustedProxyBlockContains(
+    const TrustedProxyBlock& block, std::string_view peerAddress) noexcept;
 
 // The startup-owned trusted set. Empty means "trust nothing", the default.
 class TrustedProxySet final {

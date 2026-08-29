@@ -61,16 +61,22 @@ struct H2Result final {
     std::chrono::steady_clock::duration elapsed{};
 };
 
-std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
+std::string frame(
+    std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
     std::string bytes(kHttp2FrameHeaderBytes, '\0');
-    http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()), static_cast<Http2FrameType>(type), flags, streamId);
+    http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()),
+        static_cast<Http2FrameType>(type), flags, streamId);
     bytes.append(payload);
     return bytes;
 }
 
 template <typename Handler>
-void registerBufferedRoute(ruvia::detail::RouterImpl& router, std::string_view path, Handler& handler, std::span<const ruvia::detail::ControllerMiddlewareDescriptor> middlewares) {
-    router.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string(path, std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(handler), ruvia::detail::RequestBodyMode::kBuffered, {}, middlewares);
+void registerBufferedRoute(ruvia::detail::RouterImpl& router, std::string_view path,
+    Handler& handler, std::span<const ruvia::detail::ControllerMiddlewareDescriptor> middlewares) {
+    router.registerRoute(ruvia::HttpKnownMethod::kGet,
+        std::pmr::string(path, std::pmr::get_default_resource()),
+        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(handler),
+        ruvia::detail::RequestBodyMode::kBuffered, {}, middlewares);
 }
 
 ruvia::Task<void> unusedStreamHandler(void*, ruvia::Context& context) {
@@ -80,8 +86,10 @@ ruvia::Task<void> unusedStreamHandler(void*, ruvia::Context& context) {
 }
 
 struct DeadlineAwareErrorHandler final {
-    ruvia::Task<ruvia::HttpResponse> operator()(ruvia::Context& context, ruvia::HttpErrorInfo) const {
-        const auto result = co_await ruvia::sleepFor(context.worker(), kMissedDeadlineWait, context.stopToken());
+    ruvia::Task<ruvia::HttpResponse> operator()(
+        ruvia::Context& context, ruvia::HttpErrorInfo) const {
+        const auto result =
+            co_await ruvia::sleepFor(context.worker(), kMissedDeadlineWait, context.stopToken());
         if (result == ruvia::TimerSleepResult::kStopRequested && context.deadlineExceeded()) {
             context.status(ruvia::http_status::kGatewayTimeout);
             co_return context.text("deadline");
@@ -102,7 +110,8 @@ struct DeadlineAwareErrorHandler final {
     return head.substr(0, lineEnd == std::string::npos ? head.size() : lineEnd);
 }
 
-[[nodiscard]] std::string h1Exchange(const asio::ip::tcp::endpoint& endpoint, std::string_view request, std::chrono::steady_clock::duration& elapsed) {
+[[nodiscard]] std::string h1Exchange(const asio::ip::tcp::endpoint& endpoint,
+    std::string_view request, std::chrono::steady_clock::duration& elapsed) {
     asio::io_context context;
     asio::ip::tcp::socket socket(context);
     std::error_code ec;
@@ -123,13 +132,17 @@ struct DeadlineAwareErrorHandler final {
     return status;
 }
 
-[[nodiscard]] int checkDeadlineResponse(std::string_view label, std::string_view status, std::chrono::steady_clock::duration elapsed) {
+[[nodiscard]] int checkDeadlineResponse(
+    std::string_view label, std::string_view status, std::chrono::steady_clock::duration elapsed) {
     if (status.find("504") == std::string_view::npos) {
-        std::fprintf(stderr, "%.*s error handler did not observe the request deadline: %.*s\n", static_cast<int>(label.size()), label.data(), static_cast<int>(status.size()), status.data());
+        std::fprintf(stderr, "%.*s error handler did not observe the request deadline: %.*s\n",
+            static_cast<int>(label.size()), label.data(), static_cast<int>(status.size()),
+            status.data());
         return 1;
     }
     if (elapsed > kMissedDeadlineWait / 2) {
-        std::fprintf(stderr, "%.*s error handler answered only after its full wait\n", static_cast<int>(label.size()), label.data());
+        std::fprintf(stderr, "%.*s error handler answered only after its full wait\n",
+            static_cast<int>(label.size()), label.data());
         return 2;
     }
     return 0;
@@ -139,8 +152,11 @@ struct DeadlineAwareErrorHandler final {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
 
-    auto ok = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> { co_return context.text("ok"); };
-    const auto deadline = ruvia::detail::makeMiddlewareDescriptor<ruvia::Deadline<static_cast<std::int64_t>(kDeadline.count())>>();
+    auto ok = [](ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
+        co_return context.text("ok");
+    };
+    const auto deadline = ruvia::detail::makeMiddlewareDescriptor<
+        ruvia::Deadline<static_cast<std::int64_t>(kDeadline.count())>>();
     registerBufferedRoute(impl, "/limited", ok, std::span(&deadline, std::size_t{1}));
 
     ruvia::HttpErrorHandler errorHandler(DeadlineAwareErrorHandler{});
@@ -153,7 +169,9 @@ struct DeadlineAwareErrorHandler final {
         .window = 60s,
     };
 
-    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
+    ruvia::detail::WebWorkerRuntime server(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {},
+        options);
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -165,7 +183,8 @@ struct DeadlineAwareErrorHandler final {
         rc = 10;
     }
     if (rc == 0) {
-        const auto rejected = h1Exchange(endpoint, "GET /limited HTTP/1.1\r\nHost: x\r\n\r\n", elapsed);
+        const auto rejected =
+            h1Exchange(endpoint, "GET /limited HTTP/1.1\r\nHost: x\r\n\r\n", elapsed);
         rc = checkDeadlineResponse("HTTP/1 rate-limit", rejected, elapsed);
     }
 
@@ -188,7 +207,8 @@ struct DeadlineAwareErrorHandler final {
             ruvia::test::Http2SansIoSessionFixture fixture;
             auto dispatcher = std::make_shared<WorkerDispatcher>(io, 64);
             const auto workerHandle = WorkerHandleAccess::make(dispatcher);
-            auto sessionContext = fixture.context(fixture.services(workerHandle).withPlainTransport("127.0.0.1"));
+            auto sessionContext =
+                fixture.context(fixture.services(workerHandle).withPlainTransport("127.0.0.1"));
             co_await taskAsAwaitable(runHttp2SansIoSession(sock, routes, worker, sessionContext));
         },
         asio::detached);
@@ -197,15 +217,18 @@ struct DeadlineAwareErrorHandler final {
         io,
         [&]() -> asio::awaitable<void> {
             tcp::socket sock(io);
-            co_await sock.async_connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
 
             auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_write(sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_write(sock,
+                    asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
                 (void)n;
                 co_return !ec;
             };
             auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_read(sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
                 co_return !ec && n == size;
             };
 
@@ -221,9 +244,12 @@ struct DeadlineAwareErrorHandler final {
             HpackEncoder::encodeHeader(headerBlock, ":path", "/stream");
             HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
             HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
-            HpackEncoder::encodeHeader(headerBlock, "accept-encoding", "identity;q=0, gzip;q=0, br;q=0, zstd;q=0");
+            HpackEncoder::encodeHeader(
+                headerBlock, "accept-encoding", "identity;q=0, gzip;q=0, br;q=0, zstd;q=0");
             const auto started = std::chrono::steady_clock::now();
-            if (!co_await writeAll(frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1, std::string_view(headerBlock.data(), headerBlock.size())))) {
+            if (!co_await writeAll(
+                    frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1,
+                        std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
 
@@ -233,7 +259,8 @@ struct DeadlineAwareErrorHandler final {
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                const auto header =
+                    http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
@@ -242,16 +269,18 @@ struct DeadlineAwareErrorHandler final {
                     continue;
                 }
                 if (header.type == 0x1 /*HEADERS*/) {
-                    (void)decoder.decode(std::string_view(payload.data(), payload.size()), &result, [](void* target, std::string_view name, std::string_view value) {
-                        if (name == ":status") {
-                            static_cast<H2Result*>(target)->status.assign(value);
-                        }
-                        return true;
-                    });
+                    (void)decoder.decode(std::string_view(payload.data(), payload.size()), &result,
+                        [](void* target, std::string_view name, std::string_view value) {
+                            if (name == ":status") {
+                                static_cast<H2Result*>(target)->status.assign(value);
+                            }
+                            return true;
+                        });
                 } else if (header.type == 0x0 /*DATA*/) {
                     result.body.append(payload);
                 }
-                if ((header.flags & kHttp2FlagEndStream) != 0 && (header.type == 0x0 || header.type == 0x1)) {
+                if ((header.flags & kHttp2FlagEndStream) != 0 &&
+                    (header.type == 0x0 || header.type == 0x1)) {
                     result.ended = true;
                     result.elapsed = std::chrono::steady_clock::now() - started;
                 }
@@ -268,8 +297,12 @@ struct DeadlineAwareErrorHandler final {
 [[nodiscard]] int runHttp2NegotiationErrorDeadline() {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    const auto deadline = ruvia::detail::makeMiddlewareDescriptor<ruvia::Deadline<static_cast<std::int64_t>(kDeadline.count())>>();
-    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/stream", std::pmr::get_default_resource()), ruvia::detail::RouteStreamHandler(nullptr, &unusedStreamHandler), {}, std::span(&deadline, std::size_t{1}));
+    const auto deadline = ruvia::detail::makeMiddlewareDescriptor<
+        ruvia::Deadline<static_cast<std::int64_t>(kDeadline.count())>>();
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet,
+        std::pmr::string("/stream", std::pmr::get_default_resource()),
+        ruvia::detail::RouteStreamHandler(nullptr, &unusedStreamHandler), {},
+        std::span(&deadline, std::size_t{1}));
 
     ruvia::HttpErrorHandler errorHandler(DeadlineAwareErrorHandler{});
     impl.setErrorHandler(ruvia::detail::CallbackAccess::ref(errorHandler));

@@ -37,7 +37,17 @@ private:
     Http2ErrorCode error_{Http2ErrorCode::kNoError};
 };
 
-enum class Http2EventKind : std::uint8_t { kInformationalHead, kMessageHead, kMessageBodyChunk, kMessageEnd, kTunnelData, kTunnelEnd, kStreamClosed, kRequestUnprocessed, kGoaway };
+enum class Http2EventKind : std::uint8_t {
+    kInformationalHead,
+    kMessageHead,
+    kMessageBodyChunk,
+    kMessageEnd,
+    kTunnelData,
+    kTunnelEnd,
+    kStreamClosed,
+    kRequestUnprocessed,
+    kGoaway
+};
 
 class Http2InformationalHeadEvent final {
 public:
@@ -54,13 +64,15 @@ public:
         return std::move(head_);
     }
 
-    [[nodiscard]] constexpr std::optional<HttpClientRequestContentSignal> requestContentSignal() const noexcept {
+    [[nodiscard]] constexpr std::optional<HttpClientRequestContentSignal> requestContentSignal()
+        const noexcept {
         return requestContentSignal_;
     }
 
 private:
     friend class Http2Event;
-    Http2InformationalHeadEvent(std::uint32_t streamId, HttpClientResponseHead head, std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept
+    Http2InformationalHeadEvent(std::uint32_t streamId, HttpClientResponseHead head,
+        std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept
         : streamId_(streamId),
           head_(std::move(head)),
           requestContentSignal_(requestContentSignal) {}
@@ -76,13 +88,15 @@ public:
         return streamId_;
     }
 
-    [[nodiscard]] constexpr std::optional<HttpClientRequestContentSignal> requestContentSignal() const noexcept {
+    [[nodiscard]] constexpr std::optional<HttpClientRequestContentSignal> requestContentSignal()
+        const noexcept {
         return requestContentSignal_;
     }
 
 private:
     friend class Http2Event;
-    explicit constexpr Http2MessageHeadEvent(std::uint32_t streamId, std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept
+    explicit constexpr Http2MessageHeadEvent(std::uint32_t streamId,
+        std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept
         : streamId_(streamId),
           requestContentSignal_(requestContentSignal) {}
     std::uint32_t streamId_{0};
@@ -106,7 +120,8 @@ public:
 
 private:
     friend class Http2Event;
-    constexpr Http2MessageBodyChunkEvent(std::uint32_t streamId, std::string_view bytes, std::uint32_t flowControlBytes) noexcept
+    constexpr Http2MessageBodyChunkEvent(
+        std::uint32_t streamId, std::string_view bytes, std::uint32_t flowControlBytes) noexcept
         : streamId_(streamId),
           bytes_(bytes),
           flowControlBytes_(flowControlBytes) {}
@@ -145,7 +160,8 @@ public:
 
 private:
     friend class Http2Event;
-    constexpr Http2TunnelDataEvent(std::uint32_t streamId, std::string_view bytes, std::uint32_t flowControlBytes) noexcept
+    constexpr Http2TunnelDataEvent(
+        std::uint32_t streamId, std::string_view bytes, std::uint32_t flowControlBytes) noexcept
         : streamId_(streamId),
           bytes_(bytes),
           flowControlBytes_(flowControlBytes) {}
@@ -184,7 +200,8 @@ public:
 
 private:
     friend class Http2Event;
-    constexpr Http2StreamClosedEvent(std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error) noexcept
+    constexpr Http2StreamClosedEvent(
+        std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error) noexcept
         : streamId_(streamId),
           source_(source),
           error_(error) {}
@@ -296,23 +313,32 @@ public:
 private:
     friend class Http2Connection;
 
-    using Value = std::variant<Http2InformationalHeadEvent, Http2MessageHeadEvent, Http2MessageBodyChunkEvent, Http2MessageEndEvent, Http2TunnelDataEvent, Http2TunnelEndEvent, Http2StreamClosedEvent, Http2RequestUnprocessedEvent, Http2GoawayEvent>;
+    using Value = std::variant<Http2InformationalHeadEvent, Http2MessageHeadEvent,
+        Http2MessageBodyChunkEvent, Http2MessageEndEvent, Http2TunnelDataEvent, Http2TunnelEndEvent,
+        Http2StreamClosedEvent, Http2RequestUnprocessedEvent, Http2GoawayEvent>;
 
-    static_assert(static_cast<std::size_t>(Http2EventKind::kGoaway) + 1 == std::variant_size_v<Value>);
+    static_assert(
+        static_cast<std::size_t>(Http2EventKind::kGoaway) + 1 == std::variant_size_v<Value>);
 
     template <typename Event>
     explicit Http2Event(Event event) noexcept
         : value_(std::move(event)) {}
 
-    [[nodiscard]] static Http2Event informationalHead(std::uint32_t streamId, HttpClientResponseHead head, std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept {
-        return Http2Event(Http2InformationalHeadEvent(streamId, std::move(head), requestContentSignal));
+    [[nodiscard]] static Http2Event informationalHead(std::uint32_t streamId,
+        HttpClientResponseHead head,
+        std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept {
+        return Http2Event(
+            Http2InformationalHeadEvent(streamId, std::move(head), requestContentSignal));
     }
 
-    [[nodiscard]] static Http2Event messageHead(std::uint32_t streamId, std::optional<HttpClientRequestContentSignal> requestContentSignal = std::nullopt) noexcept {
+    [[nodiscard]] static Http2Event messageHead(
+        std::uint32_t streamId, std::optional<HttpClientRequestContentSignal> requestContentSignal =
+                                    std::nullopt) noexcept {
         return Http2Event(Http2MessageHeadEvent(streamId, requestContentSignal));
     }
 
-    [[nodiscard]] static Http2Event messageBodyChunk(std::uint32_t streamId, std::string_view bytes, std::uint32_t flowControlBytes) noexcept {
+    [[nodiscard]] static Http2Event messageBodyChunk(
+        std::uint32_t streamId, std::string_view bytes, std::uint32_t flowControlBytes) noexcept {
         return Http2Event(Http2MessageBodyChunkEvent(streamId, bytes, flowControlBytes));
     }
 
@@ -320,7 +346,8 @@ private:
         return Http2Event(Http2MessageEndEvent(streamId));
     }
 
-    [[nodiscard]] static Http2Event tunnelData(std::uint32_t streamId, std::string_view bytes, std::uint32_t flowControlBytes) noexcept {
+    [[nodiscard]] static Http2Event tunnelData(
+        std::uint32_t streamId, std::string_view bytes, std::uint32_t flowControlBytes) noexcept {
         return Http2Event(Http2TunnelDataEvent(streamId, bytes, flowControlBytes));
     }
 
@@ -328,7 +355,8 @@ private:
         return Http2Event(Http2TunnelEndEvent(streamId));
     }
 
-    [[nodiscard]] static Http2Event streamClosed(std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error) noexcept {
+    [[nodiscard]] static Http2Event streamClosed(
+        std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error) noexcept {
         return Http2Event(Http2StreamClosedEvent(streamId, source, error));
     }
 

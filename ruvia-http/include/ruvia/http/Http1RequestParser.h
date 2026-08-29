@@ -77,7 +77,8 @@ private:
 
     // HttpRequest contains only borrowed views and fixed-size metadata. Copy it
     // once into the result so the ownership and lifetime contract stays explicit.
-    Http1ParsedRequest(const HttpRequest& request, Http1RequestBodyPlan bodyPlan, std::string_view wireBody, std::size_t consumedBytes) noexcept
+    Http1ParsedRequest(const HttpRequest& request, Http1RequestBodyPlan bodyPlan,
+        std::string_view wireBody, std::size_t consumedBytes) noexcept
         : request_(request),
           bodyPlan_(bodyPlan),
           wireBody_(wireBody),

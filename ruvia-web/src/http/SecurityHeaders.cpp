@@ -56,10 +56,12 @@ struct SecurityHeadersPolicy final {
     std::string_view permissionsPolicy;
 };
 
-[[nodiscard]] SecurityHeadersFlags validateSecurityHeadersConfig(const SecurityHeadersConfig& config) {
+[[nodiscard]] SecurityHeadersFlags validateSecurityHeadersConfig(
+    const SecurityHeadersConfig& config) {
     const bool emitContentTypeOptions = emitsDefaultSecurityHeader(config.contentTypeOptionsHeader);
     const bool emitFrameOptions = emitsDefaultSecurityHeader(config.frameOptionsHeader);
-    const bool emitStrictTransportSecurity = emitsDefaultSecurityHeader(config.strictTransportSecurityHeader);
+    const bool emitStrictTransportSecurity =
+        emitsDefaultSecurityHeader(config.strictTransportSecurityHeader);
     const bool replaceExisting = replacesExistingSecurityHeader(config.existingHeaders);
     bool emitDisabledXssProtection = false;
     switch (config.xssProtectionHeader) {
@@ -98,8 +100,10 @@ struct SecurityHeadersPolicy final {
 }
 
 template <typename Target, typename HeaderRange>
-void applySecurityHeadersTo(Target& target, const SecurityHeadersPolicy& policy, const HeaderRange& customHeaders, bool secureTransport) {
-    const auto setHeader = [&target, replaceExisting = policy.flags.replaceExisting](std::string_view name, std::string_view value, bool skipEmpty) {
+void applySecurityHeadersTo(Target& target, const SecurityHeadersPolicy& policy,
+    const HeaderRange& customHeaders, bool secureTransport) {
+    const auto setHeader = [&target, replaceExisting = policy.flags.replaceExisting](
+                               std::string_view name, std::string_view value, bool skipEmpty) {
         if (skipEmpty && value.empty()) {
             return;
         }
@@ -109,8 +113,10 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersPolicy& policy,
         target.header(name, value);
     };
 
-    const auto setSecureTransportHeader = [&setHeader, secureTransport](std::string_view name, std::string_view value, bool skipEmpty) {
-        if (!secureTransport && detail::httpAsciiEqualsIgnoreCase(name, "Strict-Transport-Security")) {
+    const auto setSecureTransportHeader = [&setHeader, secureTransport](std::string_view name,
+                                              std::string_view value, bool skipEmpty) {
+        if (!secureTransport &&
+            detail::httpAsciiEqualsIgnoreCase(name, "Strict-Transport-Security")) {
             return;
         }
         setHeader(name, value, skipEmpty);
@@ -142,11 +148,13 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersPolicy& policy,
 
 }  // namespace
 
-SecurityHeadersMiddleware::StoredHeader::StoredHeader(std::string_view headerName, std::string_view headerValue, std::pmr::memory_resource* resource)
+SecurityHeadersMiddleware::StoredHeader::StoredHeader(
+    std::string_view headerName, std::string_view headerValue, std::pmr::memory_resource* resource)
     : name(headerName, resource),
       value(headerValue, resource) {}
 
-SecurityHeadersMiddleware::ConfigStorage::ValidatedConfig SecurityHeadersMiddleware::ConfigStorage::validate(const SecurityHeadersConfig& source) {
+SecurityHeadersMiddleware::ConfigStorage::ValidatedConfig
+SecurityHeadersMiddleware::ConfigStorage::validate(const SecurityHeadersConfig& source) {
     const auto flags = validateSecurityHeadersConfig(source);
     return ValidatedConfig{
         .source = &source,
@@ -158,10 +166,12 @@ SecurityHeadersMiddleware::ConfigStorage::ValidatedConfig SecurityHeadersMiddlew
     };
 }
 
-SecurityHeadersMiddleware::ConfigStorage::ConfigStorage(const SecurityHeadersConfig& source, std::pmr::memory_resource* resource)
+SecurityHeadersMiddleware::ConfigStorage::ConfigStorage(
+    const SecurityHeadersConfig& source, std::pmr::memory_resource* resource)
     : ConfigStorage(validate(source), resource) {}
 
-SecurityHeadersMiddleware::ConfigStorage::ConfigStorage(ValidatedConfig validated, std::pmr::memory_resource* resource)
+SecurityHeadersMiddleware::ConfigStorage::ConfigStorage(
+    ValidatedConfig validated, std::pmr::memory_resource* resource)
     : emitContentTypeOptions(validated.emitContentTypeOptions),
       emitFrameOptions(validated.emitFrameOptions),
       emitStrictTransportSecurity(validated.emitStrictTransportSecurity),
@@ -214,7 +224,8 @@ Task<void> SecurityHeadersMiddleware::handle(Context& context, Next& next) {
     };
     applySecurityHeadersTo(context, policy, config_.customHeaders, secureTransport);
     co_await next();
-    applySecurityHeadersTo(detail::ContextAccess::responseStorage(context), policy, config_.customHeaders, secureTransport);
+    applySecurityHeadersTo(detail::ContextAccess::responseStorage(context), policy,
+        config_.customHeaders, secureTransport);
 }
 
 }  // namespace ruvia

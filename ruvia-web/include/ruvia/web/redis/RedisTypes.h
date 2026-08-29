@@ -100,7 +100,8 @@ enum class RedisXReadGroupAcknowledgementPolicy : std::uint8_t {
 struct RedisXReadGroupOptions final {
     std::optional<std::uint64_t> count{};
     std::optional<RedisBlockWait> block{};
-    RedisXReadGroupAcknowledgementPolicy acknowledgement{RedisXReadGroupAcknowledgementPolicy::kTrackPending};
+    RedisXReadGroupAcknowledgementPolicy acknowledgement{
+        RedisXReadGroupAcknowledgementPolicy::kTrackPending};
 };
 
 enum class RedisSetCondition : std::uint8_t {
@@ -212,7 +213,8 @@ public:
 private:
     friend struct detail::RedisTypesAccess;
 
-    constexpr RedisTtl(RedisTtlState state, std::optional<std::chrono::milliseconds> remaining) noexcept
+    constexpr RedisTtl(
+        RedisTtlState state, std::optional<std::chrono::milliseconds> remaining) noexcept
         : state_(state),
           remaining_(remaining) {}
 
@@ -252,9 +254,11 @@ private:
     friend struct detail::RedisTypesAccess;
 
     RedisKeyValue(std::string_view key, std::string_view value, std::pmr::memory_resource* resource)
-        : RedisKeyValue(key, value, detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+        : RedisKeyValue(key, value, detail::ResolvedPmrResourceTag{},
+              detail::pmrResourceOrDefault(resource)) {}
 
-    RedisKeyValue(std::string_view key, std::string_view value, detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+    RedisKeyValue(std::string_view key, std::string_view value, detail::ResolvedPmrResourceTag,
+        std::pmr::memory_resource* resource)
         : key_(key.data(), key.size(), resource),
           value_(value.data(), value.size(), resource) {}
 
@@ -284,9 +288,11 @@ private:
     friend struct detail::RedisTypesAccess;
 
     RedisScoredValue(std::string_view value, double score, std::pmr::memory_resource* resource)
-        : RedisScoredValue(value, score, detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+        : RedisScoredValue(value, score, detail::ResolvedPmrResourceTag{},
+              detail::pmrResourceOrDefault(resource)) {}
 
-    RedisScoredValue(std::string_view value, double score, detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+    RedisScoredValue(std::string_view value, double score, detail::ResolvedPmrResourceTag,
+        std::pmr::memory_resource* resource)
         : value_(value.data(), value.size(), resource),
           score_(score) {}
 
@@ -460,7 +466,18 @@ class RedisRegistry;
 
 class RedisError final : public std::runtime_error {
 public:
-    enum class Code : std::uint8_t { kNotConfigured, kConnectFailed, kAuthFailed, kProtocolError, kCommandError, kIoError, kTimeout, kCancelled, kClosing, kTransactionAborted };
+    enum class Code : std::uint8_t {
+        kNotConfigured,
+        kConnectFailed,
+        kAuthFailed,
+        kProtocolError,
+        kCommandError,
+        kIoError,
+        kTimeout,
+        kCancelled,
+        kClosing,
+        kTransactionAborted
+    };
 
     RedisError(Code code, std::string_view message);
 
@@ -497,10 +514,14 @@ private:
 
     explicit RedisValue(std::pmr::memory_resource* resource = nullptr);
     [[nodiscard]] static RedisValue nullValue(std::pmr::memory_resource* resource);
-    [[nodiscard]] static RedisValue stringValue(std::string_view value, std::pmr::memory_resource* resource);
-    [[nodiscard]] static RedisValue errorValue(std::string_view value, std::pmr::memory_resource* resource);
-    [[nodiscard]] static RedisValue integerValue(std::int64_t value, std::pmr::memory_resource* resource);
-    [[nodiscard]] static RedisValue arrayValue(std::pmr::vector<RedisValue> values, std::pmr::memory_resource* resource);
+    [[nodiscard]] static RedisValue stringValue(
+        std::string_view value, std::pmr::memory_resource* resource);
+    [[nodiscard]] static RedisValue errorValue(
+        std::string_view value, std::pmr::memory_resource* resource);
+    [[nodiscard]] static RedisValue integerValue(
+        std::int64_t value, std::pmr::memory_resource* resource);
+    [[nodiscard]] static RedisValue arrayValue(
+        std::pmr::vector<RedisValue> values, std::pmr::memory_resource* resource);
 
     RedisValue(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
 

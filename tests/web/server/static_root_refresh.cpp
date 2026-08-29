@@ -28,12 +28,14 @@
 
 namespace {
 
-[[nodiscard]] std::string readHead(asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
+[[nodiscard]] std::string readHead(
+    asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
     const std::size_t bytes = asio::read_until(socket, buffer, "\r\n\r\n", ec);
     if (ec) {
         return {};
     }
-    std::string head(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + bytes);
+    std::string head(
+        asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + bytes);
     buffer.consume(bytes);
     return head;
 }
@@ -46,7 +48,9 @@ namespace {
         if (line.size() > name.size()) {
             bool match = true;
             for (std::size_t i = 0; i < name.size(); ++i) {
-                const auto lower = [](char c) noexcept { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+                const auto lower = [](char c) noexcept {
+                    return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+                };
                 if (lower(line[i]) != name[i]) {
                     match = false;
                     break;
@@ -70,7 +74,8 @@ namespace {
     return std::string_view::npos;
 }
 
-[[nodiscard]] std::string readBody(asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::size_t size, std::error_code& ec) {
+[[nodiscard]] std::string readBody(
+    asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::size_t size, std::error_code& ec) {
     std::string body(size, '\0');
     std::size_t copied = std::min(buffer.size(), size);
     if (copied != 0) {
@@ -88,22 +93,27 @@ struct FetchResult final {
     std::string body;
 };
 
-[[nodiscard]] bool hasHeaderValue(std::string_view head, std::string_view name, std::string_view value) {
+[[nodiscard]] bool hasHeaderValue(
+    std::string_view head, std::string_view name, std::string_view value) {
     for (std::string_view rest = head; !rest.empty();) {
         const auto eol = rest.find("\r\n");
         const auto line = rest.substr(0, eol);
         const auto colon = line.find(':');
         if (colon != std::string_view::npos) {
-            auto lower = [](char c) noexcept { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+            auto lower = [](char c) noexcept {
+                return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+            };
             bool nameMatches = colon == name.size();
             for (std::size_t i = 0; nameMatches && i < name.size(); ++i) {
                 nameMatches = lower(line[i]) == lower(name[i]);
             }
             std::string_view headerValue = line.substr(colon + 1);
-            while (!headerValue.empty() && (headerValue.front() == ' ' || headerValue.front() == '\t')) {
+            while (!headerValue.empty() &&
+                   (headerValue.front() == ' ' || headerValue.front() == '\t')) {
                 headerValue.remove_prefix(1);
             }
-            while (!headerValue.empty() && (headerValue.back() == ' ' || headerValue.back() == '\t')) {
+            while (
+                !headerValue.empty() && (headerValue.back() == ' ' || headerValue.back() == '\t')) {
                 headerValue.remove_suffix(1);
             }
             if (nameMatches && headerValue == value) {
@@ -119,7 +129,8 @@ struct FetchResult final {
 }
 
 [[nodiscard]] std::string gzipDecode(std::string_view encoded) {
-    auto result = ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, encoded, {.maxDecodedBytes = 4096, .resource = std::pmr::get_default_resource()});
+    auto result = ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, encoded,
+        {.maxDecodedBytes = 4096, .resource = std::pmr::get_default_resource()});
     auto* decoded = result.decoded();
     return decoded == nullptr ? std::string{} : std::string(decoded->bytes());
 }
@@ -138,7 +149,8 @@ int main() {
         output << initialBody;
     }
     ruvia::StaticRootOptions rootOptions;
-    rootOptions.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
+    rootOptions.fileTypes =
+        ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     ruvia::StaticRoot root(dir, std::move(rootOptions));
 
     ruvia::DocumentRootRuntimeConfig documentRootRuntime;
@@ -148,11 +160,13 @@ int main() {
     ruvia::detail::RouteTable routes(resource);
     ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1});
     ruvia::detail::HttpServerOptions options;
-    options.documentRoot = ruvia::detail::HttpServerOptions::DocumentRoot::refreshing(root, documentRootRuntime, {.gzip = true, .minBytes = 1, .maxBytes = 4096});
+    options.documentRoot = ruvia::detail::HttpServerOptions::DocumentRoot::refreshing(
+        root, documentRootRuntime, {.gzip = true, .minBytes = 1, .maxBytes = 4096});
     options.compression.emplace();
     options.blockingPool = &pool;
 
-    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
+    ruvia::detail::WebWorkerRuntime server(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -164,7 +178,8 @@ int main() {
     };
 
     asio::io_context context;
-    const auto fetch = [&](std::string_view path, std::string_view acceptEncoding = {}) -> std::optional<FetchResult> {
+    const auto fetch = [&](std::string_view path,
+                           std::string_view acceptEncoding = {}) -> std::optional<FetchResult> {
         asio::ip::tcp::socket socket(context);
         std::error_code ec;
         socket.connect(endpoint, ec);
@@ -229,7 +244,9 @@ int main() {
     bool refreshedGzip = false;
     for (int attempt = 0; attempt != 60 && !refreshedGzip; ++attempt) {
         const auto result = fetch("/new.txt", "gzip, identity;q=0");
-        refreshedGzip = result.has_value() && hasHeaderValue(result->head, "Content-Encoding", "gzip") && gzipDecode(result->body) == refreshedBody;
+        refreshedGzip = result.has_value() &&
+                        hasHeaderValue(result->head, "Content-Encoding", "gzip") &&
+                        gzipDecode(result->body) == refreshedBody;
         if (!refreshedGzip) {
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }

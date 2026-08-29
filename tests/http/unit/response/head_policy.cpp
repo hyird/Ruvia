@@ -16,7 +16,11 @@ namespace {
 using ruvia::detail::responseWritePolicy;
 
 template <typename Policy>
-concept ExposesAnyRvalueResponseWritePolicyAlternative = requires(const Policy&& policy) { std::move(policy).normal(); } || requires(const Policy&& policy) { std::move(policy).bodyForbidden(); } || requires(const Policy&& policy) { std::move(policy).zeroLength(); } || requires(const Policy&& policy) { std::move(policy).notModified(); };
+concept ExposesAnyRvalueResponseWritePolicyAlternative =
+    requires(const Policy&& policy) { std::move(policy).normal(); } ||
+    requires(const Policy&& policy) { std::move(policy).bodyForbidden(); } ||
+    requires(const Policy&& policy) { std::move(policy).zeroLength(); } ||
+    requires(const Policy&& policy) { std::move(policy).notModified(); };
 
 static_assert(!std::default_initializable<ruvia::detail::ResponseWritePolicy>);
 static_assert(!std::default_initializable<ruvia::detail::ResponseNormalWrite>);
@@ -24,10 +28,18 @@ static_assert(!std::default_initializable<ruvia::detail::ResponseBodyForbiddenWr
 static_assert(!std::default_initializable<ruvia::detail::ResponseZeroLengthWrite>);
 static_assert(!std::default_initializable<ruvia::detail::ResponseNotModifiedWrite>);
 static_assert(!ExposesAnyRvalueResponseWritePolicyAlternative<ruvia::detail::ResponseWritePolicy>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().normal()), const ruvia::detail::ResponseNormalWrite*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().bodyForbidden()), const ruvia::detail::ResponseBodyForbiddenWrite*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().zeroLength()), const ruvia::detail::ResponseZeroLengthWrite*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().notModified()), const ruvia::detail::ResponseNotModifiedWrite*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().normal()),
+        const ruvia::detail::ResponseNormalWrite*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().bodyForbidden()),
+    const ruvia::detail::ResponseBodyForbiddenWrite*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().zeroLength()),
+        const ruvia::detail::ResponseZeroLengthWrite*>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().notModified()),
+        const ruvia::detail::ResponseNotModifiedWrite*>);
 static_assert(sizeof(ruvia::detail::ResponseWritePolicy) <= 2);
 
 template <typename T>
@@ -43,7 +55,10 @@ static_assert(!std::default_initializable<ruvia::detail::Http1ChunkedResponseStr
 static_assert(!std::default_initializable<ruvia::detail::Http1CloseDelimitedResponseStreamHead>);
 
 template <typename BodyPlan>
-concept AcceptsLooseBufferedResponseBodyPlan = requires(BodyPlan bodyPlan, const ruvia::HttpResponse& response) { ruvia::detail::httpBufferedResponseWritePlan(bodyPlan, response); };
+concept AcceptsLooseBufferedResponseBodyPlan =
+    requires(BodyPlan bodyPlan, const ruvia::HttpResponse& response) {
+        ruvia::detail::httpBufferedResponseWritePlan(bodyPlan, response);
+    };
 
 static_assert(!AcceptsLooseBufferedResponseBodyPlan<ruvia::detail::HttpResponseBodyPlan>);
 
@@ -52,7 +67,8 @@ concept HasStaleHttp1BufferedWritePlanForwarder = requires(const T& plan) { plan
 
 static_assert(!HasStaleHttp1BufferedWritePlanForwarder<ruvia::detail::Http1BufferedResponsePlan>);
 static_assert(std::is_trivially_copyable_v<ruvia::detail::Http1BufferedResponsePlan>);
-static_assert(sizeof(ruvia::detail::Http1BufferedResponsePlan) == sizeof(ruvia::detail::Http1ResponseHeadPlan));
+static_assert(sizeof(ruvia::detail::Http1BufferedResponsePlan) ==
+              sizeof(ruvia::detail::Http1ResponseHeadPlan));
 
 template <typename Plan>
 concept HasValueSemanticResponseWritePolicy = requires(const Plan& plan) {
@@ -76,47 +92,57 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     response.status(ruvia::http_status::kOk);
     response.body("hello");
 
-    const auto getPlan = ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
+    const auto getPlan =
+        ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
     RUVIA_CHECK(getPlan.requestMethod() == ruvia::HttpKnownMethod::kGet);
     RUVIA_CHECK(getPlan.bodyPlan().requestMethod() == ruvia::HttpKnownMethod::kGet);
     RUVIA_CHECK(getPlan.matchesResponse(response));
     RUVIA_CHECK_EQ(getPlan.responseStatus(), ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(getPlan.bodyPlan().responseStatus(), ruvia::http_status::kOk);
     RUVIA_CHECK(getPlan.statusAllowsBody());
-    RUVIA_CHECK(getPlan.bodyPlan().contentSemantics() == ruvia::detail::HttpResponseContentSemantics::kWithContent);
+    RUVIA_CHECK(getPlan.bodyPlan().contentSemantics() ==
+                ruvia::detail::HttpResponseContentSemantics::kWithContent);
     RUVIA_CHECK(!getPlan.bodySuppressed());
     RUVIA_CHECK(getPlan.sendBody());
     RUVIA_CHECK_EQ(getPlan.contentLength(), static_cast<std::uint64_t>(5));
 
-    const auto headPlan = ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kHead, response);
+    const auto headPlan =
+        ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kHead, response);
     RUVIA_CHECK_EQ(headPlan.responseStatus(), ruvia::http_status::kOk);
     RUVIA_CHECK(headPlan.bodyPlan().statusAllowsBody());
-    RUVIA_CHECK(headPlan.bodyPlan().contentSemantics() == ruvia::detail::HttpResponseContentSemantics::kWithoutContent);
+    RUVIA_CHECK(headPlan.bodyPlan().contentSemantics() ==
+                ruvia::detail::HttpResponseContentSemantics::kWithoutContent);
     RUVIA_CHECK(headPlan.bodySuppressed());
     RUVIA_CHECK(!headPlan.sendBody());
     RUVIA_CHECK_EQ(headPlan.contentLength(), static_cast<std::uint64_t>(5));
 
     response.status(ruvia::http_status::kNoContent);
-    const auto noContentPlan = ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
+    const auto noContentPlan =
+        ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
     RUVIA_CHECK_EQ(noContentPlan.responseStatus(), ruvia::http_status::kNoContent);
     RUVIA_CHECK(!noContentPlan.bodyPlan().statusAllowsBody());
-    RUVIA_CHECK(noContentPlan.bodyPlan().contentSemantics() == ruvia::detail::HttpResponseContentSemantics::kWithoutContent);
+    RUVIA_CHECK(noContentPlan.bodyPlan().contentSemantics() ==
+                ruvia::detail::HttpResponseContentSemantics::kWithoutContent);
     RUVIA_CHECK(noContentPlan.bodySuppressed());
     RUVIA_CHECK(!noContentPlan.sendBody());
     RUVIA_CHECK_EQ(noContentPlan.contentLength(), static_cast<std::uint64_t>(0));
 
     response.status(ruvia::http_status::kResetContent);
-    const auto resetContentPlan = ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
+    const auto resetContentPlan =
+        ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
     RUVIA_CHECK(!resetContentPlan.bodyPlan().statusAllowsBody());
-    RUVIA_CHECK(resetContentPlan.bodyPlan().contentSemantics() == ruvia::detail::HttpResponseContentSemantics::kWithContent);
+    RUVIA_CHECK(resetContentPlan.bodyPlan().contentSemantics() ==
+                ruvia::detail::HttpResponseContentSemantics::kWithContent);
     RUVIA_CHECK(resetContentPlan.bodySuppressed());
     RUVIA_CHECK(!resetContentPlan.sendBody());
     RUVIA_CHECK_EQ(resetContentPlan.contentLength(), static_cast<std::uint64_t>(0));
 
     response.status(ruvia::http_status::kOk);
-    const auto connectPlan = ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kConnect, response);
+    const auto connectPlan =
+        ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kConnect, response);
     RUVIA_CHECK(connectPlan.statusAllowsBody());
-    RUVIA_CHECK(connectPlan.bodyPlan().contentSemantics() == ruvia::detail::HttpResponseContentSemantics::kConnectTunnel);
+    RUVIA_CHECK(connectPlan.bodyPlan().contentSemantics() ==
+                ruvia::detail::HttpResponseContentSemantics::kConnectTunnel);
     RUVIA_CHECK(connectPlan.bodySuppressed());
     RUVIA_CHECK(!connectPlan.sendBody());
     RUVIA_CHECK_EQ(connectPlan.contentLength(), static_cast<std::uint64_t>(0));
@@ -127,7 +153,8 @@ RUVIA_TEST(response_write_plan_rejects_mutated_response_snapshot) {
     ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kMultiStatus);
     response.body("old");
-    const auto plan = ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
+    const auto plan =
+        ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
     RUVIA_CHECK(plan.matchesResponse(response));
 
     response.body("longer");
@@ -138,7 +165,9 @@ RUVIA_TEST(response_write_plan_rejects_mutated_response_snapshot) {
 }
 
 RUVIA_TEST(response_policy_normal_status_allows_everything) {
-    for (const ruvia::HttpStatusCode status : {ruvia::http_status::kOk, ruvia::http_status::kPartialContent, ruvia::http_status::kNotFound, ruvia::http_status::kInternalServerError}) {
+    for (const ruvia::HttpStatusCode status :
+        {ruvia::http_status::kOk, ruvia::http_status::kPartialContent,
+            ruvia::http_status::kNotFound, ruvia::http_status::kInternalServerError}) {
         const auto policy = responseWritePolicy(status);
         RUVIA_CHECK(policy.normal() != nullptr);
         RUVIA_CHECK(policy.bodyForbidden() == nullptr);
@@ -154,7 +183,9 @@ RUVIA_TEST(response_policy_normal_status_allows_everything) {
 RUVIA_TEST(response_policy_bodyless_statuses_forbid_all_framing) {
     // 1xx informational and 204 are terminated by the empty line regardless of
     // headers (RFC 9112 §6.3 rule 1), so they carry no body and no framing headers.
-    for (const ruvia::HttpStatusCode status : {ruvia::http_status::kContinue, ruvia::http_status::kSwitchingProtocols, ruvia::HttpStatusCode::fromValue(199), ruvia::http_status::kNoContent}) {
+    for (const ruvia::HttpStatusCode status :
+        {ruvia::http_status::kContinue, ruvia::http_status::kSwitchingProtocols,
+            ruvia::HttpStatusCode::fromValue(199), ruvia::http_status::kNoContent}) {
         const auto policy = responseWritePolicy(status);
         RUVIA_CHECK(policy.normal() == nullptr);
         RUVIA_CHECK(policy.bodyForbidden() != nullptr);
@@ -199,13 +230,18 @@ RUVIA_TEST(response_policy_not_modified_keeps_explicit_content_length) {
 RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
     ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.body("hello");
-    const auto bodyPlan = ruvia::detail::httpResponseBodyPlan(ruvia::HttpKnownMethod::kGet, ruvia::http_status::kOk);
-    const auto connectionPlan = ruvia::detail::http1PlanHttp11RequestConnection(ruvia::detail::HttpConnectionOptions{});
-    const auto writePlan = ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
+    const auto bodyPlan =
+        ruvia::detail::httpResponseBodyPlan(ruvia::HttpKnownMethod::kGet, ruvia::http_status::kOk);
+    const auto connectionPlan =
+        ruvia::detail::http1PlanHttp11RequestConnection(ruvia::detail::HttpConnectionOptions{});
+    const auto writePlan =
+        ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
     const auto combined = ruvia::detail::http1BufferedResponsePlan(writePlan, connectionPlan);
     const auto& buffered = combined.headPlan();
-    const auto chunked = ruvia::detail::http1ChunkedResponseStreamHeadPlan(bodyPlan, connectionPlan);
-    const auto closeDelimited = ruvia::detail::http1CloseDelimitedResponseStreamHeadPlan(bodyPlan, connectionPlan);
+    const auto chunked =
+        ruvia::detail::http1ChunkedResponseStreamHeadPlan(bodyPlan, connectionPlan);
+    const auto closeDelimited =
+        ruvia::detail::http1CloseDelimitedResponseStreamHeadPlan(bodyPlan, connectionPlan);
 
     RUVIA_CHECK(buffered.buffered() != nullptr);
     RUVIA_CHECK(buffered.chunkedStream() == nullptr);
@@ -216,7 +252,8 @@ RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
     RUVIA_CHECK(closeDelimited.buffered() == nullptr);
     RUVIA_CHECK(closeDelimited.chunkedStream() == nullptr);
     RUVIA_CHECK(closeDelimited.closeDelimitedStream() != nullptr);
-    RUVIA_CHECK(closeDelimited.bodyPlan().contentSemantics() == ruvia::detail::HttpResponseContentSemantics::kWithContent);
+    RUVIA_CHECK(closeDelimited.bodyPlan().contentSemantics() ==
+                ruvia::detail::HttpResponseContentSemantics::kWithContent);
     RUVIA_CHECK_EQ(buffered.buffered()->contentLength(), std::uint64_t{5});
     RUVIA_CHECK_EQ(combined.contentLength(), std::uint64_t{5});
     RUVIA_CHECK_EQ(combined.responseStatus(), ruvia::http_status::kOk);

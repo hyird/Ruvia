@@ -19,7 +19,8 @@ void lowercaseAscii(std::pmr::string& value) noexcept {
 
 }  // namespace
 
-StaticRootConfigStorage::StaticRootConfigStorage(const StaticRootConfigStorage& source, std::pmr::memory_resource* resource)
+StaticRootConfigStorage::StaticRootConfigStorage(
+    const StaticRootConfigStorage& source, std::pmr::memory_resource* resource)
     : StaticRootConfigStorage(resource) {
     cacheControl = source.cacheControl;
     indexFile = source.indexFile;
@@ -41,12 +42,14 @@ StaticRootConfigStorage::StaticRootConfigStorage(const StaticRootConfigStorage& 
     dotfiles = source.dotfiles;
 }
 
-StaticRootConfigStorage makeStaticRootConfigStorage(const StaticRootOptions& source, std::pmr::memory_resource* resource) {
+StaticRootConfigStorage makeStaticRootConfigStorage(
+    const StaticRootOptions& source, std::pmr::memory_resource* resource) {
     validateStaticRootOptions(source);
     return storeValidatedStaticRootConfig(source, resource);
 }
 
-StaticRootConfigStorage storeValidatedStaticRootConfig(const StaticRootOptions& source, std::pmr::memory_resource* resource) {
+StaticRootConfigStorage storeValidatedStaticRootConfig(
+    const StaticRootOptions& source, std::pmr::memory_resource* resource) {
     StaticRootConfigStorage result(resource);
     result.cacheControl = source.cacheControl;
     result.indexFile = source.indexFile;
@@ -62,7 +65,10 @@ StaticRootConfigStorage storeValidatedStaticRootConfig(const StaticRootOptions& 
         lowercaseAscii(stored.extension);
         stored.contentType = mime.contentType;
     }
-    std::ranges::sort(result.mimeTypes, [](const StaticRootMimeTypeStorage& left, const StaticRootMimeTypeStorage& right) { return left.extension < right.extension; });
+    std::ranges::sort(result.mimeTypes,
+        [](const StaticRootMimeTypeStorage& left, const StaticRootMimeTypeStorage& right) {
+            return left.extension < right.extension;
+        });
 
     result.fileTypeKind = source.fileTypes.kind;
     if (result.fileTypeKind == StaticFileTypePolicy::Kind::kOnly) {
@@ -75,7 +81,8 @@ StaticRootConfigStorage storeValidatedStaticRootConfig(const StaticRootOptions& 
             lowercaseAscii(stored);
         }
         std::ranges::sort(result.fileTypeExtensions);
-        result.fileTypeExtensions.erase(std::ranges::unique(result.fileTypeExtensions).begin(), result.fileTypeExtensions.end());
+        result.fileTypeExtensions.erase(std::ranges::unique(result.fileTypeExtensions).begin(),
+            result.fileTypeExtensions.end());
     }
     result.rangeRequests = source.rangeRequests;
     result.responseValidators = source.responseValidators;

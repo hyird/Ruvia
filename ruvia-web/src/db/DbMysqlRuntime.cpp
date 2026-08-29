@@ -13,7 +13,8 @@ class MysqlLibraryEnv final {
 public:
     MysqlLibraryEnv() {
         if (mysql_library_init(0, nullptr, nullptr) != 0) {
-            throw DbError(DbError::Code::kConnectFailed, DbDriver::kMariaDb, "failed to initialize the MariaDB client library");
+            throw DbError(DbError::Code::kConnectFailed, DbDriver::kMariaDb,
+                "failed to initialize the MariaDB client library");
         }
     }
 
@@ -26,7 +27,8 @@ class MysqlThreadEnv final {
 public:
     MysqlThreadEnv() {
         if (mysql_thread_init() != 0) {
-            throw DbError(DbError::Code::kConnectFailed, DbDriver::kMariaDb, "failed to initialize the MariaDB client thread");
+            throw DbError(DbError::Code::kConnectFailed, DbDriver::kMariaDb,
+                "failed to initialize the MariaDB client thread");
         }
     }
 
@@ -41,7 +43,8 @@ public:
     }
 
     const auto seconds = std::chrono::ceil<std::chrono::seconds>(timeout).count();
-    return std::in_range<unsigned int>(seconds) ? static_cast<unsigned int>(seconds) : std::numeric_limits<unsigned int>::max();
+    return std::in_range<unsigned int>(seconds) ? static_cast<unsigned int>(seconds)
+                                                : std::numeric_limits<unsigned int>::max();
 }
 
 }  // namespace
@@ -53,7 +56,8 @@ void ensureMysqlThreadInitialized() {
     (void)threadEnv;
 }
 
-bool setMysqlTimeout(st_mysql& connection, mysql_option option, std::optional<std::chrono::milliseconds> timeout) noexcept {
+bool setMysqlTimeout(st_mysql& connection, mysql_option option,
+    std::optional<std::chrono::milliseconds> timeout) noexcept {
     if (!timeout.has_value()) {
         return true;
     }
@@ -61,7 +65,8 @@ bool setMysqlTimeout(st_mysql& connection, mysql_option option, std::optional<st
     return mysql_optionsv(&connection, option, &seconds) == 0;
 }
 
-MysqlWaitDeadline selectMysqlWaitDeadline(std::optional<std::chrono::milliseconds> operationTimeout, std::optional<std::chrono::milliseconds> driverTimeout) noexcept {
+MysqlWaitDeadline selectMysqlWaitDeadline(std::optional<std::chrono::milliseconds> operationTimeout,
+    std::optional<std::chrono::milliseconds> driverTimeout) noexcept {
     if (operationTimeout && driverTimeout) {
         if (*operationTimeout <= *driverTimeout) {
             return {*operationTimeout, MysqlWaitDeadlineSource::kOperation};

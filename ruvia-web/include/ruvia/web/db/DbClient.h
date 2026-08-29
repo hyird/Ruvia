@@ -43,20 +43,31 @@ public:
     [[nodiscard]] DbHandle withOptions(OperationOptions options) const&;
     DbHandle withOptions(OperationOptions) const&& = delete;
 
-    [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {}) const&;
+    [[nodiscard]] ScopedOperation<DbRows> query(
+        std::string_view sql, std::span<const DbValue> params = {}) const&;
     ScopedOperation<DbRows> query(std::string_view, std::span<const DbValue> = {}) const&& = delete;
-    [[nodiscard]] ScopedOperation<DbRows> query(std::string_view, std::initializer_list<DbValue>) const& = delete;
-    ScopedOperation<DbRows> query(std::string_view, std::initializer_list<DbValue>) const&& = delete;
+    [[nodiscard]] ScopedOperation<DbRows> query(
+        std::string_view, std::initializer_list<DbValue>) const& = delete;
+    ScopedOperation<DbRows> query(
+        std::string_view, std::initializer_list<DbValue>) const&& = delete;
 
-    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, std::span<const DbValue> params = {}) const&;
-    ScopedOperation<DbExecResult> execute(std::string_view, std::span<const DbValue> = {}) const&& = delete;
-    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view, std::initializer_list<DbValue>) const& = delete;
-    ScopedOperation<DbExecResult> execute(std::string_view, std::initializer_list<DbValue>) const&& = delete;
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(
+        std::string_view sql, std::span<const DbValue> params = {}) const&;
+    ScopedOperation<DbExecResult> execute(
+        std::string_view, std::span<const DbValue> = {}) const&& = delete;
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(
+        std::string_view, std::initializer_list<DbValue>) const& = delete;
+    ScopedOperation<DbExecResult> execute(
+        std::string_view, std::initializer_list<DbValue>) const&& = delete;
 
-    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(std::string_view sql, std::span<const DbValue> params = {}) const&;
-    ScopedOperation<DbStreamResult> queryStream(std::string_view, std::span<const DbValue> = {}) const&& = delete;
-    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(std::string_view, std::initializer_list<DbValue>) const& = delete;
-    ScopedOperation<DbStreamResult> queryStream(std::string_view, std::initializer_list<DbValue>) const&& = delete;
+    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(
+        std::string_view sql, std::span<const DbValue> params = {}) const&;
+    ScopedOperation<DbStreamResult> queryStream(
+        std::string_view, std::span<const DbValue> = {}) const&& = delete;
+    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(
+        std::string_view, std::initializer_list<DbValue>) const& = delete;
+    ScopedOperation<DbStreamResult> queryStream(
+        std::string_view, std::initializer_list<DbValue>) const&& = delete;
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
@@ -69,7 +80,8 @@ public:
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbExecResult> execute(std::string_view sql, Params&&... params) const& {
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(
+        std::string_view sql, Params&&... params) const& {
         return withOptions({}).execute(sql, std::forward<Params>(params)...);
     }
     template <typename... Params>
@@ -78,7 +90,8 @@ public:
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
-    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(std::string_view sql, Params&&... params) const& {
+    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(
+        std::string_view sql, Params&&... params) const& {
         return withOptions({}).queryStream(sql, std::forward<Params>(params)...);
     }
     template <typename... Params>

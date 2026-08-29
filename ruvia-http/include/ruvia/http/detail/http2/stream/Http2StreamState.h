@@ -139,7 +139,8 @@ public:
         return remoteContent_.selectMetadataOnly();
     }
 
-    [[nodiscard]] Http2RemoteContentAccountingResult accountRemoteContent(std::size_t bytes) noexcept {
+    [[nodiscard]] Http2RemoteContentAccountingResult accountRemoteContent(
+        std::size_t bytes) noexcept {
         return remoteContent_.account(bytes);
     }
 
@@ -160,7 +161,8 @@ public:
         localContent_.beginKnownLength(length);
     }
 
-    [[nodiscard]] Http2LocalContentCheck checkLocalContentAccept(std::size_t bytes, bool terminal) const noexcept {
+    [[nodiscard]] Http2LocalContentCheck checkLocalContentAccept(
+        std::size_t bytes, bool terminal) const noexcept {
         return localContent_.checkAccept(bytes, terminal);
     }
 
@@ -355,11 +357,17 @@ public:
         const auto* knownLength = remoteContent_.allowedKnownLength();
         // An open receive half can still be metadata-only, known-empty, or
         // awaiting only an empty END_STREAM frame.
-        const bool contentCanFollow = lifecycle_.remoteReceive().contentOpen() != nullptr && (remoteContent_.allowedWithoutLength() != nullptr || (knownLength != nullptr && knownLength->receivedBytes() < knownLength->declaredLength()));
-        return contentCanFollow ? HttpRequestContentIndication::kWillFollow : HttpRequestContentIndication::kNoContent;
+        const bool contentCanFollow =
+            lifecycle_.remoteReceive().contentOpen() != nullptr &&
+            (remoteContent_.allowedWithoutLength() != nullptr ||
+                (knownLength != nullptr &&
+                    knownLength->receivedBytes() < knownLength->declaredLength()));
+        return contentCanFollow ? HttpRequestContentIndication::kWillFollow
+                                : HttpRequestContentIndication::kNoContent;
     }
 
-    [[nodiscard]] HttpServerExpectationPlan expectationPlan(HttpUnsupportedExpectationPolicy unsupportedPolicy) const noexcept {
+    [[nodiscard]] HttpServerExpectationPlan expectationPlan(
+        HttpUnsupportedExpectationPolicy unsupportedPolicy) const noexcept {
         return expectations_.serverPlan(requestContentIndication(), unsupportedPolicy);
     }
 
@@ -404,7 +412,8 @@ public:
     }
     [[nodiscard]] std::string_view requestCookie() const&& = delete;
 
-    [[nodiscard]] bool appendRequestCookieHeaderValue(std::string_view value, bool hasExistingCookie) {
+    [[nodiscard]] bool appendRequestCookieHeaderValue(
+        std::string_view value, bool hasExistingCookie) {
         return messageData_.appendCookieHeaderValue(value, hasExistingCookie);
     }
 
@@ -421,7 +430,8 @@ public:
     }
     [[nodiscard]] Http2StoredHeaderView remoteHeaderAt(std::size_t) const&& = delete;
 
-    [[nodiscard]] bool appendRemoteHeader(std::string_view name, std::string_view value, RequestHeaderKind kind) {
+    [[nodiscard]] bool appendRemoteHeader(
+        std::string_view name, std::string_view value, RequestHeaderKind kind) {
         return messageData_.appendHeader(name, value, kind);
     }
 
@@ -586,7 +596,8 @@ public:
 // destruction unless the decoder explicitly commits the block.
 class Http2StreamHeaderDecodeTransaction final {
 public:
-    explicit Http2StreamHeaderDecodeTransaction(Http2StreamState& stream, bool isolateRequestData = true) noexcept
+    explicit Http2StreamHeaderDecodeTransaction(
+        Http2StreamState& stream, bool isolateRequestData = true) noexcept
         : stream_(&stream),
           messageData_(stream.messageData_.resource()),
           remoteContent_(stream.remoteContent_),
@@ -605,7 +616,8 @@ public:
     }
 
     Http2StreamHeaderDecodeTransaction(const Http2StreamHeaderDecodeTransaction&) = delete;
-    Http2StreamHeaderDecodeTransaction& operator=(const Http2StreamHeaderDecodeTransaction&) = delete;
+    Http2StreamHeaderDecodeTransaction& operator=(
+        const Http2StreamHeaderDecodeTransaction&) = delete;
     Http2StreamHeaderDecodeTransaction(Http2StreamHeaderDecodeTransaction&&) = delete;
     Http2StreamHeaderDecodeTransaction& operator=(Http2StreamHeaderDecodeTransaction&&) = delete;
 

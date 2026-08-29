@@ -51,12 +51,19 @@ concept HasPeerSettingErrorAccessor = requires(const T& result) {
 };
 
 template <typename T>
-concept HasAnyRvaluePeerSettingAccessor = requires(T&& result) { std::move(result).applied(); } || requires(T&& result) { std::move(result).initialWindowChange(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvaluePeerSettingAccessor =
+    requires(T&& result) { std::move(result).applied(); } || requires(T&& result) {
+        std::move(result).initialWindowChange();
+    } || requires(T&& result) { std::move(result).failure(); };
 
 static_assert(!std::default_initializable<Http2PeerSettingApplyResult>);
-static_assert(std::same_as<decltype(std::declval<const Http2PeerSettingApplyResult&>().applied()), const Http2PeerSettingApplied*>);
-static_assert(std::same_as<decltype(std::declval<const Http2PeerSettingApplyResult&>().initialWindowChange()), const Http2PeerInitialWindowChange*>);
-static_assert(std::same_as<decltype(std::declval<const Http2PeerSettingApplyResult&>().failure()), const Http2PeerSettingFailure*>);
+static_assert(std::same_as<decltype(std::declval<const Http2PeerSettingApplyResult&>().applied()),
+    const Http2PeerSettingApplied*>);
+static_assert(
+    std::same_as<decltype(std::declval<const Http2PeerSettingApplyResult&>().initialWindowChange()),
+        const Http2PeerInitialWindowChange*>);
+static_assert(std::same_as<decltype(std::declval<const Http2PeerSettingApplyResult&>().failure()),
+    const Http2PeerSettingFailure*>);
 static_assert(!HasPeerSettingStatusField<Http2PeerSettingApplyResult>);
 static_assert(!HasPeerSettingChangedField<Http2PeerSettingApplyResult>);
 static_assert(!HasPeerSettingDeltaField<Http2PeerSettingApplyResult>);
@@ -73,7 +80,8 @@ static_assert(!std::default_initializable<Http2PeerSettingApplied>);
 static_assert(!std::constructible_from<Http2PeerInitialWindowChange, std::int64_t>);
 static_assert(!std::constructible_from<Http2PeerSettingFailure, Http2PeerSettingError>);
 
-constexpr std::uint32_t kInt32Max = static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)());
+constexpr std::uint32_t kInt32Max =
+    static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)());
 
 }  // namespace
 
@@ -118,7 +126,8 @@ RUVIA_TEST(peer_setting_apply_result_is_discriminated) {
     RUVIA_CHECK(applied.failure() == nullptr);
 
     // Re-advertising the same value still requires stream propagation, with delta zero.
-    const auto changed = settings.apply(Http2SettingId::kInitialWindowSize, static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize));
+    const auto changed = settings.apply(Http2SettingId::kInitialWindowSize,
+        static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize));
     RUVIA_CHECK(changed.applied() == nullptr);
     RUVIA_CHECK(changed.initialWindowChange() != nullptr);
     RUVIA_CHECK_EQ(changed.initialWindowChange()->delta(), std::int64_t{0});
@@ -153,14 +162,16 @@ RUVIA_TEST(peer_settings_initial_window_size_and_delta) {
     Http2PeerSettings settings(Http2Role::kServer);
     const auto result = settings.apply(Http2SettingId::kInitialWindowSize, 100000);
     RUVIA_CHECK(result.initialWindowChange() != nullptr);
-    RUVIA_CHECK_EQ(result.initialWindowChange()->delta(), std::int64_t{100000} - kHttp2DefaultInitialWindowSize);
+    RUVIA_CHECK_EQ(result.initialWindowChange()->delta(),
+        std::int64_t{100000} - kHttp2DefaultInitialWindowSize);
     RUVIA_CHECK_EQ(settings.initialWindowSize(), std::int32_t{100000});
 
     // Exactly 2^31-1 is allowed and reports the signed difference.
     Http2PeerSettings atMax(Http2Role::kServer);
     const auto max = atMax.apply(Http2SettingId::kInitialWindowSize, kInt32Max);
     RUVIA_CHECK(max.initialWindowChange() != nullptr);
-    RUVIA_CHECK_EQ(max.initialWindowChange()->delta(), static_cast<std::int64_t>(kInt32Max) - kHttp2DefaultInitialWindowSize);
+    RUVIA_CHECK_EQ(max.initialWindowChange()->delta(),
+        static_cast<std::int64_t>(kInt32Max) - kHttp2DefaultInitialWindowSize);
     // One above is a flow-control error (RFC 9113 Section 6.5.2).
     Http2PeerSettings tooBig(Http2Role::kServer);
     const auto invalid = tooBig.apply(Http2SettingId::kInitialWindowSize, kInt32Max + 1);
@@ -193,7 +204,8 @@ RUVIA_TEST(peer_settings_enable_connect_protocol_cannot_be_disabled) {
     // Once enabled it must never be turned off (RFC 8441).
     const auto disabled = settings.apply(Http2SettingId::kEnableConnectProtocol, 0);
     RUVIA_CHECK(disabled.failure() != nullptr);
-    RUVIA_CHECK(disabled.failure()->error() == Http2PeerSettingError::kInvalidEnableConnectProtocolTransition);
+    RUVIA_CHECK(disabled.failure()->error() ==
+                Http2PeerSettingError::kInvalidEnableConnectProtocolTransition);
     // A non-boolean value is invalid.
     const auto invalid = settings.apply(Http2SettingId::kEnableConnectProtocol, 5);
     RUVIA_CHECK(invalid.failure() != nullptr);
@@ -222,13 +234,23 @@ RUVIA_TEST(peer_settings_stored_values_and_unknown_ignored) {
 
 RUVIA_TEST(peer_settings_error_code_and_message_mapping) {
     // Only an invalid initial window is a flow-control error; the rest are protocol errors.
-    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidInitialWindow) == Http2ErrorCode::kFlowControlError);
-    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidEnablePush) == Http2ErrorCode::kProtocolError);
-    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidMaxFrameSize) == Http2ErrorCode::kProtocolError);
+    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidInitialWindow) ==
+                Http2ErrorCode::kFlowControlError);
+    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidEnablePush) ==
+                Http2ErrorCode::kProtocolError);
+    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidMaxFrameSize) ==
+                Http2ErrorCode::kProtocolError);
 
-    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidEnablePush), std::string_view("invalid ENABLE_PUSH"));
-    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidInitialWindow), std::string_view("invalid initial window"));
-    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidMaxFrameSize), std::string_view("invalid max frame size"));
-    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidEnableConnectProtocol), std::string_view("invalid ENABLE_CONNECT_PROTOCOL"));
-    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidEnableConnectProtocolTransition), std::string_view("invalid ENABLE_CONNECT_PROTOCOL transition"));
+    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidEnablePush),
+        std::string_view("invalid ENABLE_PUSH"));
+    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidInitialWindow),
+        std::string_view("invalid initial window"));
+    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidMaxFrameSize),
+        std::string_view("invalid max frame size"));
+    RUVIA_CHECK_EQ(
+        http2PeerSettingErrorMessage(Http2PeerSettingError::kInvalidEnableConnectProtocol),
+        std::string_view("invalid ENABLE_CONNECT_PROTOCOL"));
+    RUVIA_CHECK_EQ(http2PeerSettingErrorMessage(
+                       Http2PeerSettingError::kInvalidEnableConnectProtocolTransition),
+        std::string_view("invalid ENABLE_CONNECT_PROTOCOL transition"));
 }

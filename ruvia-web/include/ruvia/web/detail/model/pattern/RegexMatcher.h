@@ -39,7 +39,8 @@ template <FixedString Pattern>
     static const RegexPatternState state = [pattern] {
         RegexPatternState compiled;
         try {
-            compiled.regex.emplace(pattern.begin(), pattern.end(), std::regex_constants::ECMAScript | std::regex_constants::optimize);
+            compiled.regex.emplace(pattern.begin(), pattern.end(),
+                std::regex_constants::ECMAScript | std::regex_constants::optimize);
         } catch (const std::regex_error&) {
             compiled.regex.reset();
         }

@@ -58,7 +58,8 @@ public:
         : state_(Http2NotConnect()) {}
 
     [[nodiscard]] bool begin(Http2ConnectForm form) noexcept {
-        if ((form != Http2ConnectForm::kStandard && form != Http2ConnectForm::kExtended) || notConnect() == nullptr) {
+        if ((form != Http2ConnectForm::kStandard && form != Http2ConnectForm::kExtended) ||
+            notConnect() == nullptr) {
             return false;
         }
         state_ = State(Http2ConnectPending(form));
@@ -102,7 +103,8 @@ public:
     [[nodiscard]] constexpr const Http2ConnectRejected* rejected() const&& = delete;
 
 private:
-    using State = std::variant<Http2NotConnect, Http2ConnectPending, Http2TunnelOpen, Http2ConnectRejected>;
+    using State =
+        std::variant<Http2NotConnect, Http2ConnectPending, Http2TunnelOpen, Http2ConnectRejected>;
 
     State state_;
 };

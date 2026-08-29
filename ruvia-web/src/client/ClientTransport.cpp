@@ -22,7 +22,8 @@ namespace {
 
 constexpr std::array<unsigned char, 9> kHttp11Alpn = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
 constexpr std::array<unsigned char, 3> kHttp2Alpn = {2, 'h', '2'};
-constexpr std::array<unsigned char, 12> kNegotiatedHttpAlpn = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+constexpr std::array<unsigned char, 12> kNegotiatedHttpAlpn = {
+    2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
 
 [[nodiscard]] std::span<const unsigned char> clientAlpnBytes(ClientAlpnMode mode) noexcept {
     switch (mode) {
@@ -59,10 +60,13 @@ std::string_view selectedClientAlpn(SSL* ssl) noexcept {
     return {reinterpret_cast<const char*>(selected), size};
 }
 
-ClientTransportConfigStorage::ClientTransportConfigStorage(ClientTransportConfigView source, std::pmr::memory_resource* resource)
-    : ClientTransportConfigStorage(ResolvedPmrResourceTag{}, source, pmrResourceOrDefault(resource)) {}
+ClientTransportConfigStorage::ClientTransportConfigStorage(
+    ClientTransportConfigView source, std::pmr::memory_resource* resource)
+    : ClientTransportConfigStorage(
+          ResolvedPmrResourceTag{}, source, pmrResourceOrDefault(resource)) {}
 
-ClientTransportConfigStorage::ClientTransportConfigStorage(ResolvedPmrResourceTag, ClientTransportConfigView source, std::pmr::memory_resource* resource)
+ClientTransportConfigStorage::ClientTransportConfigStorage(
+    ResolvedPmrResourceTag, ClientTransportConfigView source, std::pmr::memory_resource* resource)
     : tlsPeerVerification_(source.tlsPeerVerification),
       tcpNoDelay_(source.tcpNoDelay),
       tcpKeepAlive_(source.tcpKeepAlive),
@@ -71,7 +75,8 @@ ClientTransportConfigStorage::ClientTransportConfigStorage(ResolvedPmrResourceTa
       privateKeyFile_(source.privateKeyFile, resource),
       privateKeyPassword_(source.privateKeyPassword, resource) {}
 
-ClientTransportConfigStorage::ClientTransportConfigStorage(const ClientTransportConfigStorage& source, std::pmr::memory_resource* resource)
+ClientTransportConfigStorage::ClientTransportConfigStorage(
+    const ClientTransportConfigStorage& source, std::pmr::memory_resource* resource)
     : ClientTransportConfigStorage(source.view(), resource) {}
 
 ClientTransportConfigView ClientTransportConfigStorage::view() const noexcept {
@@ -86,7 +91,8 @@ ClientTransportConfigView ClientTransportConfigStorage::view() const noexcept {
     };
 }
 
-void validateClientOriginHost(std::string_view host, const char* emptyMessage, const char* invalidMessage) {
+void validateClientOriginHost(
+    std::string_view host, const char* emptyMessage, const char* invalidMessage) {
     ensureConfigHost(host, emptyMessage, invalidMessage, kSeparatedPortHostRules);
     std::string wireHost;
     if (host.find(':') != std::string_view::npos) {
@@ -103,13 +109,15 @@ void validateClientOriginHost(std::string_view host, const char* emptyMessage, c
 }
 
 void validateClientTransportConfig(ClientTransportConfigView config) {
-    if (config.tlsPeerVerification != TlsPeerVerificationPolicy::kVerify && config.tlsPeerVerification != TlsPeerVerificationPolicy::kSkipVerification) {
+    if (config.tlsPeerVerification != TlsPeerVerificationPolicy::kVerify &&
+        config.tlsPeerVerification != TlsPeerVerificationPolicy::kSkipVerification) {
         throw std::invalid_argument("client TLS peer verification policy is invalid");
     }
     validateTcpNoDelayPolicy(config.tcpNoDelay);
     validateTcpKeepAlivePolicy(config.tcpKeepAlive);
     if (config.certificateChainFile.empty() != config.privateKeyFile.empty()) {
-        throw std::invalid_argument("client certificate chain and private key must be configured together");
+        throw std::invalid_argument(
+            "client certificate chain and private key must be configured together");
     }
 }
 
@@ -126,7 +134,9 @@ void configureClientTlsContext(asio::ssl::context& context, ClientTransportConfi
     }
     if (!config.privateKeyPassword.empty()) {
         auto password = std::string(config.privateKeyPassword);
-        context.set_password_callback([password = std::move(password)](std::size_t, asio::ssl::context_base::password_purpose) { return password; });
+        context.set_password_callback(
+            [password = std::move(password)](
+                std::size_t, asio::ssl::context_base::password_purpose) { return password; });
     }
     if (!config.certificateChainFile.empty()) {
         context.use_certificate_chain_file(std::string(config.certificateChainFile));
@@ -134,21 +144,24 @@ void configureClientTlsContext(asio::ssl::context& context, ClientTransportConfi
     }
 }
 
-ClientTlsSetupError prepareClientTlsStream(asio::ssl::stream<asio::ip::tcp::socket>& stream, const std::pmr::string& host, ClientTransportConfigView config, ClientAlpnMode alpnMode) {
+ClientTlsSetupError prepareClientTlsStream(asio::ssl::stream<asio::ip::tcp::socket>& stream,
+    const std::pmr::string& host, ClientTransportConfigView config, ClientAlpnMode alpnMode) {
     if (SSL_clear(stream.native_handle()) != 1) {
         return ClientTlsSetupError::kResetFailed;
     }
     // RFC 6066 HostName carries a DNS host_name, never an IPv4/IPv6 literal.
     // Host verification still receives IP literals so OpenSSL can validate IP
     // subjectAltName entries.
-    if (!isClientIpAddress(host) && SSL_set_tlsext_host_name(stream.native_handle(), host.c_str()) != 1) {
+    if (!isClientIpAddress(host) &&
+        SSL_set_tlsext_host_name(stream.native_handle(), host.c_str()) != 1) {
         return ClientTlsSetupError::kSniFailed;
     }
     if (config.tlsPeerVerification == TlsPeerVerificationPolicy::kVerify) {
         stream.set_verify_callback(asio::ssl::host_name_verification(std::string(host)));
     }
     const auto protocols = clientAlpnBytes(alpnMode);
-    if (SSL_set_alpn_protos(stream.native_handle(), protocols.data(), static_cast<unsigned int>(protocols.size())) != 0) {
+    if (SSL_set_alpn_protos(stream.native_handle(), protocols.data(),
+            static_cast<unsigned int>(protocols.size())) != 0) {
         return ClientTlsSetupError::kAlpnFailed;
     }
     return ClientTlsSetupError::kNone;

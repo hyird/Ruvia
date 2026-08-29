@@ -13,12 +13,14 @@ inline void validateWebSocketHeartbeatConfig(const WebSocketHeartbeatConfig& con
         }
         return;
     }
-    if (config.pingInterval->count() <= 0 || (config.pongTimeout.has_value() && config.pongTimeout->count() <= 0)) {
+    if (config.pingInterval->count() <= 0 ||
+        (config.pongTimeout.has_value() && config.pongTimeout->count() <= 0)) {
         throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
     }
 }
 
-[[nodiscard]] inline WebSocketHeartbeatConfig normalizeWebSocketHeartbeatConfig(WebSocketHeartbeatConfig config) {
+[[nodiscard]] inline WebSocketHeartbeatConfig normalizeWebSocketHeartbeatConfig(
+    WebSocketHeartbeatConfig config) {
     validateWebSocketHeartbeatConfig(config);
     if (config.pingInterval.has_value() && !config.pongTimeout.has_value()) {
         config.pongTimeout = config.pingInterval;

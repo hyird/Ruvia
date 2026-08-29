@@ -25,9 +25,11 @@ inline void validateOperationOptions(const OperationOptions& options) {
     }
 }
 
-[[nodiscard]] inline OperationOptions mergeOperationOptions(const OperationOptions& base, OperationOptions overrides) {
+[[nodiscard]] inline OperationOptions mergeOperationOptions(
+    const OperationOptions& base, OperationOptions overrides) {
     OperationOptions merged = base;
-    if (overrides.timeout.has_value() && (!merged.timeout.has_value() || *overrides.timeout < *merged.timeout)) {
+    if (overrides.timeout.has_value() &&
+        (!merged.timeout.has_value() || *overrides.timeout < *merged.timeout)) {
         merged.timeout = overrides.timeout;
     }
     merged.stopToken = combineStopTokens(base.stopToken, std::move(overrides.stopToken));

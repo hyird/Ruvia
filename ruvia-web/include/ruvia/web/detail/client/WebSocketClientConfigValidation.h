@@ -30,14 +30,16 @@ namespace ruvia::detail {
         "sec-websocket-extensions",
         "content-length",
     };
-    return std::ranges::any_of(reserved, [name](std::string_view candidate) { return httpAsciiEqualsIgnoreCase(name, candidate); });
+    return std::ranges::any_of(reserved,
+        [name](std::string_view candidate) { return httpAsciiEqualsIgnoreCase(name, candidate); });
 }
 
 inline void validateWebSocketClientConfig(const WebSocketClientConfig& config) {
     if (config.scheme != WebSocketScheme::kWs && config.scheme != WebSocketScheme::kWss) {
         throw std::invalid_argument("WebSocket client scheme is invalid");
     }
-    validateClientOriginHost(config.host, "WebSocket client host must not be empty", "WebSocket client host is invalid");
+    validateClientOriginHost(
+        config.host, "WebSocket client host must not be empty", "WebSocket client host is invalid");
     if (config.port.has_value() && config.port.value() == 0) {
         throw std::invalid_argument("WebSocket client port must be greater than zero");
     }
@@ -50,7 +52,8 @@ inline void validateWebSocketClientConfig(const WebSocketClientConfig& config) {
     if (config.connectTimeout.count() <= 0) {
         throw std::invalid_argument("WebSocket client connect timeout must be greater than zero");
     }
-    for (const std::optional<std::chrono::milliseconds> timeout : {config.readTimeout, config.writeTimeout, config.closeHandshakeTimeout}) {
+    for (const std::optional<std::chrono::milliseconds> timeout :
+        {config.readTimeout, config.writeTimeout, config.closeHandshakeTimeout}) {
         if (timeout.has_value() && timeout->count() <= 0) {
             throw std::invalid_argument("WebSocket client timeout must be greater than zero");
         }
@@ -59,7 +62,8 @@ inline void validateWebSocketClientConfig(const WebSocketClientConfig& config) {
     validateClientTransportConfig(clientTransportConfigView(config));
 
     for (const auto& [name, value] : config.headers) {
-        if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) || isReservedWebSocketHandshakeHeader(name)) {
+        if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) ||
+            isReservedWebSocketHandshakeHeader(name)) {
             throw std::invalid_argument("invalid or reserved WebSocket client handshake header");
         }
     }
@@ -67,7 +71,8 @@ inline void validateWebSocketClientConfig(const WebSocketClientConfig& config) {
     WebSocketSubprotocolSet subprotocols;
     for (const auto& subprotocol : config.subprotocols) {
         if (!subprotocols.append(subprotocol)) {
-            throw std::invalid_argument("WebSocket client subprotocols must contain at most 64 unique HTTP tokens");
+            throw std::invalid_argument(
+                "WebSocket client subprotocols must contain at most 64 unique HTTP tokens");
         }
     }
 }

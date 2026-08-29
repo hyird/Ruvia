@@ -24,7 +24,8 @@ private:
     int* expiredCount_;
 };
 
-ruvia::Task<void> waitForScopeRelease(ruvia::detail::WorkerSignal& signal, std::promise<void>& started) {
+ruvia::Task<void> waitForScopeRelease(
+    ruvia::detail::WorkerSignal& signal, std::promise<void>& started) {
     started.set_value();
     co_await signal.wait();
 }
@@ -46,7 +47,8 @@ RUVIA_TEST(scoped_operation_close_and_join_waits_before_expiring_capabilities) {
     static_cast<void>(capability);
     auto startedPromise = std::promise<void>();
     auto started = startedPromise.get_future();
-    auto operation = ruvia::detail::makeScopedOperation(scope, waitForScopeRelease(signal, startedPromise));
+    auto operation =
+        ruvia::detail::makeScopedOperation(scope, waitForScopeRelease(signal, startedPromise));
     auto operationRoot = loop.start(awaitScopedOperation(operation));
     loops.start();
     started.get();

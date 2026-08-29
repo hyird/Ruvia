@@ -60,14 +60,18 @@ private:
 RUVIA_TEST(worker_state_registration_accepts_one_valid_definition_per_type) {
     std::vector<int> destroyed;
     std::vector<ruvia::detail::WorkerStateDefinition> definitions;
-    ruvia::detail::appendWorkerStateDefinition(definitions, ruvia::detail::WorkerStateDefinition::make<TrackedState<1>>([&] { return StateInit{&destroyed, 1}; }));
+    ruvia::detail::appendWorkerStateDefinition(
+        definitions, ruvia::detail::WorkerStateDefinition::make<TrackedState<1>>(
+                         [&] { return StateInit{&destroyed, 1}; }));
 
-    auto duplicate = ruvia::detail::WorkerStateDefinition::make<TrackedState<1>>([&] { return StateInit{&destroyed, 2}; });
+    auto duplicate = ruvia::detail::WorkerStateDefinition::make<TrackedState<1>>(
+        [&] { return StateInit{&destroyed, 2}; });
     bool rejectedDuplicate = false;
     try {
         ruvia::detail::appendWorkerStateDefinition(definitions, std::move(duplicate));
     } catch (const std::invalid_argument& error) {
-        rejectedDuplicate = std::string_view(error.what()) == "worker state type is already registered";
+        rejectedDuplicate =
+            std::string_view(error.what()) == "worker state type is already registered";
     }
     RUVIA_CHECK(rejectedDuplicate);
     RUVIA_CHECK(duplicate.valid());
@@ -126,9 +130,12 @@ RUVIA_TEST(worker_state_registry_indexes_types_and_destroys_in_reverse_registrat
 
     registry.initialize();
     RUVIA_CHECK_EQ(factoryCalls, 3);
-    auto* first = static_cast<TrackedState<1>*>(registry.instance(ruvia::detail::workerStateTypeKey<TrackedState<1>>()));
-    auto* second = static_cast<TrackedState<2>*>(registry.instance(ruvia::detail::workerStateTypeKey<TrackedState<2>>()));
-    auto* third = static_cast<TrackedState<3>*>(registry.instance(ruvia::detail::workerStateTypeKey<TrackedState<3>>()));
+    auto* first = static_cast<TrackedState<1>*>(
+        registry.instance(ruvia::detail::workerStateTypeKey<TrackedState<1>>()));
+    auto* second = static_cast<TrackedState<2>*>(
+        registry.instance(ruvia::detail::workerStateTypeKey<TrackedState<2>>()));
+    auto* third = static_cast<TrackedState<3>*>(
+        registry.instance(ruvia::detail::workerStateTypeKey<TrackedState<3>>()));
     RUVIA_CHECK(first != nullptr);
     RUVIA_CHECK(second != nullptr);
     RUVIA_CHECK(third != nullptr);

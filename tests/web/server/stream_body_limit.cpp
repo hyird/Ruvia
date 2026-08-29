@@ -33,12 +33,14 @@ ruvia::Task<ruvia::HttpResponse> readStreamingBody(void*, ruvia::Context& contex
     co_return context.text(std::move(body));
 }
 
-[[nodiscard]] std::string readHead(asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
+[[nodiscard]] std::string readHead(
+    asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
     const auto bytes = asio::read_until(socket, buffer, "\r\n\r\n", ec);
     if (ec) {
         return {};
     }
-    std::string head(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + bytes);
+    std::string head(
+        asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + bytes);
     buffer.consume(bytes);
     return head;
 }
@@ -49,7 +51,12 @@ int main() {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     const auto bodyLimit = ruvia::detail::makeMiddlewareDescriptor<ruvia::BodyLimit<8>>();
-    impl.registerRoute(ruvia::HttpKnownMethod::kPost, std::pmr::string("/upload", std::pmr::get_default_resource()), ruvia::detail::RouteHandler(nullptr, &readStreamingBody), ruvia::detail::RequestBodyMode::kStream, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span(&bodyLimit, std::size_t{1}));
+    impl.registerRoute(ruvia::HttpKnownMethod::kPost,
+        std::pmr::string("/upload", std::pmr::get_default_resource()),
+        ruvia::detail::RouteHandler(nullptr, &readStreamingBody),
+        ruvia::detail::RequestBodyMode::kStream,
+        std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+        std::span(&bodyLimit, std::size_t{1}));
     impl.finalize();
 
     ruvia::detail::HttpServerOptions options;
@@ -57,7 +64,9 @@ int main() {
     // the route-declared limit is carried into the streaming reader.
     options.maxStreamBodyBytes.reset();
 
-    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
+    ruvia::detail::WebWorkerRuntime server(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {},
+        options);
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -93,7 +102,9 @@ int main() {
         asio::streambuf buffer;
         const auto head = readHead(socket, buffer, ec);
         if (!head.starts_with("HTTP/1.1 413")) {
-            std::fputs("chunked stream route body exceeded BodyLimit but was not rejected with 413\n", stderr);
+            std::fputs(
+                "chunked stream route body exceeded BodyLimit but was not rejected with 413\n",
+                stderr);
             rc = 3;
         }
     }

@@ -99,7 +99,8 @@ bool attachedWorker(ruvia::DbConfig config) {
     auto attachment = ruvia::attachEventLoop(io);
     const auto loop = attachment.loop();
     ruvia::DbClient client(loop, configure(std::move(config), peer.port()));
-    auto connected = asio::co_spawn(loop.executor(), ruvia::asAwaitable(client.connect()), asio::use_future);
+    auto connected =
+        asio::co_spawn(loop.executor(), ruvia::asAwaitable(client.connect()), asio::use_future);
     std::thread runner([&] { io.run(); });
 
     auto shutdownTask = loop.start(client.shutdown());
@@ -128,7 +129,8 @@ bool connectDeadlineExpires(ruvia::DbConfig config) {
     config = configure(std::move(config), peer.port());
     config.connectTimeout = 100ms;
     ruvia::DbClient client(loop, config);
-    auto connected = asio::co_spawn(loop.executor(), ruvia::asAwaitable(client.connect()), asio::use_future);
+    auto connected =
+        asio::co_spawn(loop.executor(), ruvia::asAwaitable(client.connect()), asio::use_future);
     std::thread runner([&] { io.run(); });
 
     const bool completed = connected.wait_for(3s) == std::future_status::ready;
@@ -151,7 +153,8 @@ bool connectDeadlineExpires(ruvia::DbConfig config) {
 bool closeBeforeDispatch(ruvia::DbConfig config) {
     ruvia::EventLoopPool loops({.loopCount = 1});
     ruvia::DbClient client(loops.loop(0), std::move(config));
-    auto connected = asio::co_spawn(loops.loop(0).executor(), ruvia::asAwaitable(client.connect()), asio::use_future);
+    auto connected = asio::co_spawn(
+        loops.loop(0).executor(), ruvia::asAwaitable(client.connect()), asio::use_future);
     client.close();
     loops.start();
 

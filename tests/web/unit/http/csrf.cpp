@@ -50,11 +50,14 @@ using ruvia::detail::RequestKnownHeader;
 // through the private SecureTokenReady constructor.
 #if defined(__GNUC__) && !defined(__clang__)
 template <typename Value>
-concept CanForgeSecureTokenResult = requires(Value&& value) { ruvia::detail::SecureTokenResult::makeReady(std::forward<Value>(value)); };
+concept CanForgeSecureTokenResult = requires(
+    Value&& value) { ruvia::detail::SecureTokenResult::makeReady(std::forward<Value>(value)); };
 #endif
 
 template <typename Result>
-concept ExposesRvalueSecureTokenAlternative = requires(Result&& result) { std::move(result).ready(); } || requires(Result&& result) { std::move(result).failure(); };
+concept ExposesRvalueSecureTokenAlternative = requires(Result&& result) {
+    std::move(result).ready();
+} || requires(Result&& result) { std::move(result).failure(); };
 
 static_assert(!ExposesRvalueSecureTokenAlternative<ruvia::detail::SecureTokenResult>);
 static_assert(!std::constructible_from<ruvia::detail::SecureTokenReady, std::string_view>);
@@ -85,7 +88,9 @@ struct CsrfOutcome final {
 
 // Runs CsrfProtection::handle over a synthesized request and reports whether the
 // chain continued (next called) or was short-circuited with a response.
-CsrfOutcome runCsrf(ruvia::CsrfProtection& csrf, std::string_view cookieName, std::string_view headerName, HttpKnownMethod method, bool withCookie, std::string_view cookieToken, bool withHeader, std::string_view headerToken) {
+CsrfOutcome runCsrf(ruvia::CsrfProtection& csrf, std::string_view cookieName,
+    std::string_view headerName, HttpKnownMethod method, bool withCookie,
+    std::string_view cookieToken, bool withHeader, std::string_view headerToken) {
     WorkerMemory worker;
     RequestMemory memory(worker);
     HttpRequest request = HttpRequestAccess::make();
@@ -97,7 +102,8 @@ CsrfOutcome runCsrf(ruvia::CsrfProtection& csrf, std::string_view cookieName, st
     cookie.push_back('=');
     cookie.append(cookieToken.data(), cookieToken.size());
     if (withCookie) {
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", cookie}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie));
+        HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", cookie},
+            HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie));
     }
     if (withHeader) {
         HttpRequestAccess::addHeader(request, HttpHeaderView{headerName, headerToken});
@@ -109,7 +115,8 @@ CsrfOutcome runCsrf(ruvia::CsrfProtection& csrf, std::string_view cookieName, st
     ruvia::detail::NextState state{};
     state.context = &context;
     state.control = &control;
-    Next next = NextAccess::make(state, [](ruvia::detail::NextState) -> ruvia::Task<void> { co_return; });
+    Next next =
+        NextAccess::make(state, [](ruvia::detail::NextState) -> ruvia::Task<void> { co_return; });
 
     asio::io_context& io = ruvia::test::newTestIoContext();
     asio::co_spawn(io, ruvia::detail::taskAsAwaitable(csrf.handle(context, next)), asio::detached);
@@ -127,9 +134,11 @@ CsrfOutcome runCsrf(ruvia::CsrfProtection& csrf, std::string_view cookieName, st
     return out;
 }
 
-CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view cookieToken, bool withHeader, std::string_view headerToken) {
+CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view cookieToken,
+    bool withHeader, std::string_view headerToken) {
     ruvia::CsrfProtection csrf;
-    return runCsrf(csrf, "XSRF-TOKEN", "X-XSRF-TOKEN", method, withCookie, cookieToken, withHeader, headerToken);
+    return runCsrf(csrf, "XSRF-TOKEN", "X-XSRF-TOKEN", method, withCookie, cookieToken, withHeader,
+        headerToken);
 }
 
 }  // namespace
@@ -146,10 +155,17 @@ RUVIA_TEST(csrf_token_is_48_lowercase_hex_chars) {
 }
 
 RUVIA_TEST(csrf_custom_names_validate_at_construction) {
-    RUVIA_CHECK(!throwsInvalid([] { (void)ruvia::CsrfProtection({.cookieName = "APP-XSRF", .headerName = "X-APP-XSRF"}); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::CsrfProtection({.cookieName = "", .headerName = "X-XSRF-TOKEN"}); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::CsrfProtection({.cookieName = "bad;name", .headerName = "X-XSRF-TOKEN"}); }));
-    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::CsrfProtection({.cookieName = "XSRF-TOKEN", .headerName = "Bad Header"}); }));
+    RUVIA_CHECK(!throwsInvalid([] {
+        (void)ruvia::CsrfProtection({.cookieName = "APP-XSRF", .headerName = "X-APP-XSRF"});
+    }));
+    RUVIA_CHECK(throwsInvalid(
+        [] { (void)ruvia::CsrfProtection({.cookieName = "", .headerName = "X-XSRF-TOKEN"}); }));
+    RUVIA_CHECK(throwsInvalid([] {
+        (void)ruvia::CsrfProtection({.cookieName = "bad;name", .headerName = "X-XSRF-TOKEN"});
+    }));
+    RUVIA_CHECK(throwsInvalid([] {
+        (void)ruvia::CsrfProtection({.cookieName = "XSRF-TOKEN", .headerName = "Bad Header"});
+    }));
 }
 
 RUVIA_TEST(csrf_middleware_owns_custom_names_after_source_destruction) {
@@ -164,11 +180,13 @@ RUVIA_TEST(csrf_middleware_owns_custom_names_after_source_destruction) {
         csrf = std::make_unique<ruvia::CsrfProtection>(config);
     }
 
-    const auto safe = runCsrf(*csrf, cookieName, headerName, HttpKnownMethod::kGet, false, {}, false, {});
+    const auto safe =
+        runCsrf(*csrf, cookieName, headerName, HttpKnownMethod::kGet, false, {}, false, {});
     RUVIA_CHECK(safe.nextInvoked);
     RUVIA_CHECK(safe.reseeded);
 
-    const auto unsafe = runCsrf(*csrf, cookieName, headerName, HttpKnownMethod::kPost, true, "abcdef123456", true, "abcdef123456");
+    const auto unsafe = runCsrf(*csrf, cookieName, headerName, HttpKnownMethod::kPost, true,
+        "abcdef123456", true, "abcdef123456");
     RUVIA_CHECK(unsafe.nextInvoked);
     RUVIA_CHECK(!unsafe.hasResponse);
 }
@@ -220,7 +238,8 @@ RUVIA_TEST(csrf_unsafe_method_requires_matching_double_submit) {
     RUVIA_CHECK(!ok.hasResponse);
 
     // A mismatched header is rejected with 403 and the chain is NOT continued.
-    const auto mismatch = runCsrf(HttpKnownMethod::kPost, true, "abcdef123456", true, "DIFFERENTtoken");
+    const auto mismatch =
+        runCsrf(HttpKnownMethod::kPost, true, "abcdef123456", true, "DIFFERENTtoken");
     RUVIA_CHECK(!mismatch.nextInvoked);
     RUVIA_CHECK(mismatch.hasResponse);
     RUVIA_CHECK_EQ(mismatch.status, std::uint16_t{403});

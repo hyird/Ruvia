@@ -24,7 +24,8 @@ public:
         auto status = HttpContentLengthParseStatus::kOk;
         bool sawValue = false;
         auto parsedValue = value_;
-        httpVisitCommaSeparatedQuotedItems(fieldValue, [&parsedValue, &status, &sawValue](std::string_view item) noexcept {
+        httpVisitCommaSeparatedQuotedItems(fieldValue, [&parsedValue, &status, &sawValue](
+                                                           std::string_view item) noexcept {
             if (item.empty()) {
                 status = HttpContentLengthParseStatus::kInvalid;
                 return false;

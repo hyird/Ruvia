@@ -35,12 +35,22 @@ namespace {
 
 using RedisDefinitions = std::span<const ruvia::detail::RedisDefinition>;
 
-static_assert(!std::constructible_from<ruvia::detail::RedisRegistry, asio::io_context&, std::pmr::memory_resource*, RedisDefinitions>);
-static_assert(std::constructible_from<ruvia::detail::RedisRegistry, asio::io_context&, std::pmr::memory_resource*, RedisDefinitions, ruvia::WorkerHandle>);
-static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&, ruvia::detail::RedisConfigStorage&&, std::optional<std::chrono::milliseconds>, std::size_t, const ruvia::WorkerHandle&, std::pmr::memory_resource*>);
-static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&, const ruvia::detail::RedisConfigStorage&, std::optional<std::chrono::milliseconds>, std::size_t, std::pmr::memory_resource*>);
-static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&, const ruvia::detail::RedisConfigStorage&, std::optional<std::chrono::milliseconds>, std::size_t, std::pmr::memory_resource*, const ruvia::WorkerHandle*>);
-static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&, const ruvia::detail::RedisConfigStorage&, std::optional<std::chrono::milliseconds>, std::size_t, ruvia::WorkerHandle, std::pmr::memory_resource*>);
+static_assert(!std::constructible_from<ruvia::detail::RedisRegistry, asio::io_context&,
+    std::pmr::memory_resource*, RedisDefinitions>);
+static_assert(std::constructible_from<ruvia::detail::RedisRegistry, asio::io_context&,
+    std::pmr::memory_resource*, RedisDefinitions, ruvia::WorkerHandle>);
+static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
+    ruvia::detail::RedisConfigStorage&&, std::optional<std::chrono::milliseconds>, std::size_t,
+    const ruvia::WorkerHandle&, std::pmr::memory_resource*>);
+static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
+    const ruvia::detail::RedisConfigStorage&, std::optional<std::chrono::milliseconds>, std::size_t,
+    std::pmr::memory_resource*>);
+static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
+    const ruvia::detail::RedisConfigStorage&, std::optional<std::chrono::milliseconds>, std::size_t,
+    std::pmr::memory_resource*, const ruvia::WorkerHandle*>);
+static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
+    const ruvia::detail::RedisConfigStorage&, std::optional<std::chrono::milliseconds>, std::size_t,
+    ruvia::WorkerHandle, std::pmr::memory_resource*>);
 
 class RedisTestWorker final {
 public:
@@ -64,7 +74,9 @@ private:
     ruvia::WorkerHandle handle_;
 };
 
-[[nodiscard]] ruvia::detail::RedisDefinition redisDefinition(std::string_view alias, const ruvia::RedisConfig& config = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource()) {
+[[nodiscard]] ruvia::detail::RedisDefinition redisDefinition(std::string_view alias,
+    const ruvia::RedisConfig& config = {},
+    std::pmr::memory_resource* resource = std::pmr::get_default_resource()) {
     return {
         std::pmr::string(alias, resource),
         ruvia::detail::RedisConfigStorage(config, resource),
@@ -202,7 +214,19 @@ static_assert(std::is_move_assignable_v<ruvia::RedisValue>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisValue>);
 
 template <typename T>
-concept ExposesAnyRvalueRedisOwnedView = requires(T&& value) { std::move(value).duration(); } || requires(T&& value) { std::move(value).key(); } || requires(T&& value) { std::move(value).value(); } || requires(T&& value) { std::move(value).values(); } || requires(T&& value) { std::move(value).entries(); } || requires(T&& value) { std::move(value).fields(); } || requires(T&& value) { std::move(value).streams(); } || requires(T&& value) { std::move(value).stream(); } || requires(T&& value) { std::move(value).id(); } || requires(T&& value) { std::move(value).message(); } || requires(T&& value) { std::move(value).string(); } || requires(T&& value) { std::move(value).error(); } || requires(T&& value) { std::move(value).array(); };
+concept ExposesAnyRvalueRedisOwnedView = requires(T&& value) { std::move(value).duration(); } ||
+                                         requires(T&& value) { std::move(value).key(); } ||
+                                         requires(T&& value) { std::move(value).value(); } ||
+                                         requires(T&& value) { std::move(value).values(); } ||
+                                         requires(T&& value) { std::move(value).entries(); } ||
+                                         requires(T&& value) { std::move(value).fields(); } ||
+                                         requires(T&& value) { std::move(value).streams(); } ||
+                                         requires(T&& value) { std::move(value).stream(); } ||
+                                         requires(T&& value) { std::move(value).id(); } ||
+                                         requires(T&& value) { std::move(value).message(); } ||
+                                         requires(T&& value) { std::move(value).string(); } ||
+                                         requires(T&& value) { std::move(value).error(); } ||
+                                         requires(T&& value) { std::move(value).array(); };
 
 template <typename T>
 concept HasRedisErrorMessageAlias = requires(const T& error) { error.message(); };
@@ -223,7 +247,8 @@ static_assert(std::derived_from<ruvia::RedisError, std::runtime_error>);
 static_assert(!HasRedisErrorMessageAlias<ruvia::RedisError>);
 
 template <typename T>
-concept HasRedisHandleSpanArgs = requires(const T& handle, std::span<const std::string_view> keys, std::span<const std::pair<std::string_view, std::string_view>> pairs) {
+concept HasRedisHandleSpanArgs = requires(const T& handle, std::span<const std::string_view> keys,
+    std::span<const std::pair<std::string_view, std::string_view>> pairs) {
     handle.command(keys);
     handle.mget(keys);
     handle.mset(pairs);
@@ -236,41 +261,51 @@ concept HasRedisHandleSpanArgs = requires(const T& handle, std::span<const std::
 };
 
 template <typename T>
-concept HasRedisHandleInitializerListArgs = requires(const T& handle, std::initializer_list<std::string_view> keys, std::initializer_list<std::pair<std::string_view, std::string_view>> pairs) {
-    handle.command(keys);
-    handle.mget(keys);
-    handle.mset(pairs);
-    handle.hset(std::string_view{}, pairs);
-    handle.hmget(std::string_view{}, keys);
-    handle.sinter(keys);
-    handle.sunion(keys);
-    handle.sdiff(keys);
-    handle.scriptExists(keys);
-};
+concept HasRedisHandleInitializerListArgs =
+    requires(const T& handle, std::initializer_list<std::string_view> keys,
+        std::initializer_list<std::pair<std::string_view, std::string_view>> pairs) {
+        handle.command(keys);
+        handle.mget(keys);
+        handle.mset(pairs);
+        handle.hset(std::string_view{}, pairs);
+        handle.hmget(std::string_view{}, keys);
+        handle.sinter(keys);
+        handle.sunion(keys);
+        handle.sdiff(keys);
+        handle.scriptExists(keys);
+    };
 
 template <typename T>
-concept HasRedisPerCallCommandOptions = requires(const T& handle, std::span<const std::string_view> args) { handle.command(args, ruvia::OperationOptions{}); } || requires(const T& handle) { handle.command(ruvia::OperationOptions{}, "PING"); };
+concept HasRedisPerCallCommandOptions =
+    requires(const T& handle, std::span<const std::string_view> args) {
+        handle.command(args, ruvia::OperationOptions{});
+    } || requires(const T& handle) { handle.command(ruvia::OperationOptions{}, "PING"); };
 
 template <typename T>
-concept HasRedisBlockingPerCallOptions = requires(const T& handle, std::span<const std::string_view> keys) {
-    handle.blpop(keys, ruvia::RedisBlockWait::indefinitely(), ruvia::OperationOptions{});
-    handle.brpop(keys, ruvia::RedisBlockWait::indefinitely(), ruvia::OperationOptions{});
-};
+concept HasRedisBlockingPerCallOptions =
+    requires(const T& handle, std::span<const std::string_view> keys) {
+        handle.blpop(keys, ruvia::RedisBlockWait::indefinitely(), ruvia::OperationOptions{});
+        handle.brpop(keys, ruvia::RedisBlockWait::indefinitely(), ruvia::OperationOptions{});
+    };
 
 template <typename T>
 concept HasRedisXReadGroupOperationMember = requires(T& options) { options.operation; };
 
 template <typename T>
-concept HasRedisPipelineSpanCommand = requires(T& pipeline, std::span<const std::string_view> args) { pipeline.command(args); };
+concept HasRedisPipelineSpanCommand =
+    requires(T& pipeline, std::span<const std::string_view> args) { pipeline.command(args); };
 
 template <typename T>
-concept HasRedisPipelineInitializerListCommand = requires(T& pipeline, std::initializer_list<std::string_view> args) { pipeline.command(args); };
+concept HasRedisPipelineInitializerListCommand =
+    requires(T& pipeline, std::initializer_list<std::string_view> args) { pipeline.command(args); };
 
 template <typename T>
-concept HasRedisTransactionSpanCommand = requires(T& transaction, std::span<const std::string_view> args) { transaction.command(args); };
+concept HasRedisTransactionSpanCommand =
+    requires(T& transaction, std::span<const std::string_view> args) { transaction.command(args); };
 
 template <typename T>
-concept HasRedisTransactionInitializerListCommand = requires(T& transaction, std::initializer_list<std::string_view> args) { transaction.command(args); };
+concept HasRedisTransactionInitializerListCommand = requires(
+    T& transaction, std::initializer_list<std::string_view> args) { transaction.command(args); };
 
 template <typename T>
 concept HasRedisTransactionDiscard = requires(T& transaction) { transaction.discard(); };
@@ -282,7 +317,8 @@ template <typename T>
 concept HasRvalueRedisExec = requires(T& batch) { std::move(batch).exec(); };
 
 template <typename T>
-concept HasRvalueRedisExecOptions = requires(T& batch) { std::move(batch).exec(ruvia::OperationOptions{}); };
+concept HasRvalueRedisExecOptions =
+    requires(T& batch) { std::move(batch).exec(ruvia::OperationOptions{}); };
 
 template <typename T>
 concept HasLegacyRedisSetOptionBooleans = requires(T& options) {
@@ -297,13 +333,15 @@ template <typename T>
 concept HasRedisSetReturnPreviousBoolean = requires(T& options) { options.returnPrevious = true; };
 
 template <typename T>
-concept HasRedisSetPreviousValuePolicy = requires(T& options) { options.previousValue = ruvia::RedisSetPreviousValuePolicy::kReturn; };
+concept HasRedisSetPreviousValuePolicy =
+    requires(T& options) { options.previousValue = ruvia::RedisSetPreviousValuePolicy::kReturn; };
 
 template <typename T>
 concept HasRedisXReadGroupNoAckBoolean = requires(T& options) { options.noAck = true; };
 
 template <typename T>
-concept HasRedisXReadGroupAcknowledgementPolicy = requires(T& options) { options.acknowledgement = ruvia::RedisXReadGroupAcknowledgementPolicy::kNoAck; };
+concept HasRedisXReadGroupAcknowledgementPolicy = requires(
+    T& options) { options.acknowledgement = ruvia::RedisXReadGroupAcknowledgementPolicy::kNoAck; };
 
 template <typename T>
 concept HasRedisTcpNoDelayBoolean = requires(T& config) { config.tcpNoDelay = true; };
@@ -323,13 +361,18 @@ concept HasRedisRegistrationConfig = requires(T& app, ruvia::RedisConfig config)
 };
 
 template <typename T>
-concept HasRedisRegistrationPositional = requires(T& app, ruvia::RedisConfig config) { app.redis(config); } || requires(T& app, ruvia::RedisConfig config) { app.redis(std::string_view{}, config); };
+concept HasRedisRegistrationPositional = requires(T& app, ruvia::RedisConfig config) {
+    app.redis(config);
+} || requires(T& app, ruvia::RedisConfig config) { app.redis(std::string_view{}, config); };
 
 template <typename Match>
-concept AcceptsRedisScanMatch = requires(Match&& match) { ruvia::RedisScanOptions{.match = std::forward<Match>(match)}; };
+concept AcceptsRedisScanMatch =
+    requires(Match&& match) { ruvia::RedisScanOptions{.match = std::forward<Match>(match)}; };
 
 template <typename Match>
-concept AssignsRedisScanMatch = requires(ruvia::RedisScanOptions& options, Match&& match) { options.match = std::forward<Match>(match); };
+concept AssignsRedisScanMatch = requires(ruvia::RedisScanOptions& options, Match&& match) {
+    options.match = std::forward<Match>(match);
+};
 
 // Command arguments passed as ordinary arguments rather than a prepared span.
 template <typename T>
@@ -347,32 +390,43 @@ concept HasRedisHandleVariadicArgs = requires(const T& handle, std::string_view 
 
 // Alternating name/value commands need complete pairs.
 template <typename T>
-concept HasRedisHandleOddPairArgs = requires(const T& handle, std::string_view key) { handle.mset(key, key, key); };
+concept HasRedisHandleOddPairArgs =
+    requires(const T& handle, std::string_view key) { handle.mset(key, key, key); };
 
 // Variadic commands synchronously clone owning-string temporaries.
 template <typename T>
-concept HasRedisHandleOwningTemporaryArgs = requires(const T& handle, std::string_view key) { handle.mget(key, std::string("owned")); };
+concept HasRedisHandleOwningTemporaryArgs =
+    requires(const T& handle, std::string_view key) { handle.mget(key, std::string("owned")); };
 
 template <typename T>
-concept HasRedisHandleOwningLvalueArgs = requires(const T& handle, std::string_view key, std::string owned) { handle.mget(key, owned); };
+concept HasRedisHandleOwningLvalueArgs =
+    requires(const T& handle, std::string_view key, std::string owned) { handle.mget(key, owned); };
 
 template <typename T>
-concept HasRedisPipelineVariadicCommand = requires(T& pipeline, std::string_view key) { pipeline.command("TYPE", key); };
+concept HasRedisPipelineVariadicCommand =
+    requires(T& pipeline, std::string_view key) { pipeline.command("TYPE", key); };
 
 template <typename T>
-concept HasRedisPipelineOwningTemporaryArgs = requires(T& pipeline) { pipeline.command("GET", std::string("owned")); };
+concept HasRedisPipelineOwningTemporaryArgs =
+    requires(T& pipeline) { pipeline.command("GET", std::string("owned")); };
 
 template <typename T>
-concept HasRedisTransactionVariadicCommand = requires(T& transaction, std::string_view key) { transaction.command("TYPE", key); };
+concept HasRedisTransactionVariadicCommand =
+    requires(T& transaction, std::string_view key) { transaction.command("TYPE", key); };
 
 template <typename T>
-concept HasRedisTransactionOwningTemporaryArgs = requires(T& transaction) { transaction.command("GET", std::string("owned")); };
+concept HasRedisTransactionOwningTemporaryArgs =
+    requires(T& transaction) { transaction.command("GET", std::string("owned")); };
 
 template <typename T>
-concept HasRedisTransactionVariadicWatch = requires(T& transaction, std::string_view key) { transaction.watch(key, key); };
+concept HasRedisTransactionVariadicWatch =
+    requires(T& transaction, std::string_view key) { transaction.watch(key, key); };
 
 template <typename T>
-concept HasLegacyRedisSetCommands = requires(const T& handle) { handle.setEx("key", std::chrono::seconds(1), "value"); } || requires(const T& handle) { handle.setNx("key", "value"); } || requires(const T& handle) { handle.getSet("key", "value"); };
+concept HasLegacyRedisSetCommands =
+    requires(const T& handle) { handle.setEx("key", std::chrono::seconds(1), "value"); } ||
+    requires(const T& handle) { handle.setNx("key", "value"); } ||
+    requires(const T& handle) { handle.getSet("key", "value"); };
 
 template <typename T>
 concept HasLegacyRedisBatchGetSet = requires(T& batch) { batch.getSet("key", "value"); };
@@ -409,22 +463,30 @@ static_assert(!std::assignable_from<ruvia::RedisTransaction&, ruvia::RedisTransa
 static_assert(!HasLegacyRedisSetOptionBooleans<ruvia::RedisSetOptions>);
 static_assert(!HasRedisSetReturnPreviousBoolean<ruvia::RedisSetOptions>);
 static_assert(HasRedisSetPreviousValuePolicy<ruvia::RedisSetOptions>);
-static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().condition), std::optional<ruvia::RedisSetCondition>>);
-static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().expiration), std::optional<ruvia::RedisSetExpiration>>);
-static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().previousValue), ruvia::RedisSetPreviousValuePolicy>);
+static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().condition),
+    std::optional<ruvia::RedisSetCondition>>);
+static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().expiration),
+    std::optional<ruvia::RedisSetExpiration>>);
+static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().previousValue),
+    ruvia::RedisSetPreviousValuePolicy>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::RedisSetResult&>().applied()), bool>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::RedisSetResult&>().previous()), const std::optional<std::pmr::string>&>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::RedisSetResult&>().previous()),
+    const std::optional<std::pmr::string>&>);
 static_assert(!std::default_initializable<ruvia::RedisSetExpiration>);
-static_assert(std::same_as<decltype(ruvia::RedisScanOptions{}.cursor), std::optional<ruvia::RedisScanCursor>>);
+static_assert(std::same_as<decltype(ruvia::RedisScanOptions{}.cursor),
+    std::optional<ruvia::RedisScanCursor>>);
 static_assert(!std::default_initializable<ruvia::RedisScanCursor>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::RedisTtl&>().remaining()), std::optional<std::chrono::milliseconds>>);
-static_assert(std::same_as<decltype(ruvia::RedisScanOptions{}.count), std::optional<std::uint64_t>>);
+static_assert(std::same_as<decltype(std::declval<const ruvia::RedisTtl&>().remaining()),
+    std::optional<std::chrono::milliseconds>>);
+static_assert(
+    std::same_as<decltype(ruvia::RedisScanOptions{}.count), std::optional<std::uint64_t>>);
 static_assert(std::is_aggregate_v<ruvia::RedisScanOptions>);
 static_assert(std::is_aggregate_v<ruvia::OperationOptions>);
 static_assert(std::is_aggregate_v<ruvia::RedisXReadGroupOptions>);
 static_assert(!HasRedisXReadGroupNoAckBoolean<ruvia::RedisXReadGroupOptions>);
 static_assert(HasRedisXReadGroupAcknowledgementPolicy<ruvia::RedisXReadGroupOptions>);
-static_assert(std::same_as<decltype(std::declval<ruvia::RedisXReadGroupOptions>().acknowledgement), ruvia::RedisXReadGroupAcknowledgementPolicy>);
+static_assert(std::same_as<decltype(std::declval<ruvia::RedisXReadGroupOptions>().acknowledgement),
+    ruvia::RedisXReadGroupAcknowledgementPolicy>);
 static_assert(!HasRedisXReadGroupOperationMember<ruvia::RedisXReadGroupOptions>);
 static_assert(!HasRedisPerCallCommandOptions<ruvia::RedisHandle>);
 static_assert(!HasRedisBlockingPerCallOptions<ruvia::RedisHandle>);
@@ -441,7 +503,9 @@ static_assert(ruvia::RedisConfig{}.tcpKeepAlive == ruvia::TcpKeepAlivePolicy::kS
 static_assert(!HasRedisTcpNoDelayBoolean<ruvia::RedisConfig>);
 static_assert(!HasRedisKeepAliveBoolean<ruvia::RedisConfig>);
 static_assert(std::is_aggregate_v<ruvia::RedisRegistrationConfig>);
-static_assert(std::same_as<decltype(ruvia::RedisRegistrationConfig{.config = ruvia::RedisConfig{}}.alias), std::string>);
+static_assert(
+    std::same_as<decltype(ruvia::RedisRegistrationConfig{.config = ruvia::RedisConfig{}}.alias),
+        std::string>);
 static_assert(HasRedisRegistrationConfig<ruvia::App>);
 static_assert(!HasRedisRegistrationPositional<ruvia::App>);
 constexpr ruvia::RedisScanOptions kLiteralRedisScanOptions{
@@ -467,13 +531,15 @@ RUVIA_TEST(redis_api_surface_uses_span_args_without_initializer_list_overloads) 
     RUVIA_CHECK(true);
 }
 
-RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_a_cancellation_bound) {
+RUVIA_TEST(
+    redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_a_cancellation_bound) {
     asio::io_context ioContext;
     RedisTestWorker worker(ioContext);
     ruvia::RedisConfig config;
     config.commandTimeout = std::chrono::milliseconds(1);
     const std::array definitions{redisDefinition("default", config)};
-    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
+    ruvia::detail::RedisRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope generalScope;
     auto redis = registry.get(std::pmr::get_default_resource(), generalScope);
     const std::array<std::string_view, 1> keys{"queue"};
@@ -492,12 +558,14 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_
         finitePopAccepted = false;
     }
     try {
-        (void)redis.xreadGroup("workers", "consumer", streams, {.block = ruvia::RedisBlockWait::forDuration(std::chrono::milliseconds(10))});
+        (void)redis.xreadGroup("workers", "consumer", streams,
+            {.block = ruvia::RedisBlockWait::forDuration(std::chrono::milliseconds(10))});
     } catch (...) {
         finiteStreamAccepted = false;
     }
     try {
-        (void)redis.withOptions({.timeout = std::chrono::seconds(1)}).command("BLPOP", "queue", "1");
+        (void)redis.withOptions({.timeout = std::chrono::seconds(1)})
+            .command("BLPOP", "queue", "1");
     } catch (...) {
         finiteRawAccepted = false;
     }
@@ -526,7 +594,8 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_
     bool infinitePopRejected = false;
     bool unboundedRawRejected = false;
     try {
-        (void)redis.xreadGroup("workers", "consumer", streams, {.block = ruvia::RedisBlockWait::indefinitely()});
+        (void)redis.xreadGroup(
+            "workers", "consumer", streams, {.block = ruvia::RedisBlockWait::indefinitely()});
     } catch (const std::invalid_argument&) {
         infiniteStreamRejected = true;
     }
@@ -560,7 +629,8 @@ RUVIA_TEST(redis_registry_derives_default_pool_from_owned_entry_index) {
         redisDefinition("cache"),
         redisDefinition("default"),
     }};
-    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
+    ruvia::detail::RedisRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope operationScope;
 
     bool defaultResolved = true;
@@ -584,7 +654,10 @@ RUVIA_TEST(redis_registry_rejects_an_invalid_worker) {
     const RedisDefinitions definitions;
     const ruvia::WorkerHandle worker;
 
-    RUVIA_CHECK(throwsInvalidArgument([&] { ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions, worker); }));
+    RUVIA_CHECK(throwsInvalidArgument([&] {
+        ruvia::detail::RedisRegistry registry(
+            ioContext, std::pmr::get_default_resource(), definitions, worker);
+    }));
 }
 
 RUVIA_TEST(redis_registry_owns_nested_pmr_configuration) {
@@ -604,7 +677,8 @@ RUVIA_TEST(redis_registry_owns_nested_pmr_configuration) {
     definition.emplace(redisDefinition("default", config, &sourceResource));
 
     std::optional<ruvia::detail::RedisRegistry> registry;
-    registry.emplace(ioContext, &targetResource, std::span<const ruvia::detail::RedisDefinition>(&*definition, 1), worker.handle());
+    registry.emplace(ioContext, &targetResource,
+        std::span<const ruvia::detail::RedisDefinition>(&*definition, 1), worker.handle());
     definition.reset();
     sourceResource.release();
     registry.reset();
@@ -616,7 +690,8 @@ RUVIA_TEST(redis_request_capabilities_reject_after_parent_scope_closes) {
     asio::io_context ioContext;
     RedisTestWorker worker(ioContext);
     const std::array definitions{redisDefinition("default")};
-    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
+    ruvia::detail::RedisRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope operationScope;
     auto handle = registry.get(std::pmr::get_default_resource(), operationScope);
     auto copiedHandle = handle;
@@ -689,7 +764,8 @@ RUVIA_TEST(redis_expire_rejects_non_positive_ttl_before_io) {
     asio::io_context ioContext;
     RedisTestWorker worker(ioContext);
     const std::array definitions{redisDefinition("default")};
-    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
+    ruvia::detail::RedisRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope operationScope;
     auto redis = registry.get(std::pmr::get_default_resource(), operationScope);
 
@@ -714,7 +790,8 @@ RUVIA_TEST(redis_multi_key_commands_reject_empty_key_spans_before_io) {
     asio::io_context ioContext;
     RedisTestWorker worker(ioContext);
     const std::array definitions{redisDefinition("default")};
-    ruvia::detail::RedisRegistry registry(ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
+    ruvia::detail::RedisRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope operationScope;
     auto redis = registry.get(std::pmr::get_default_resource(), operationScope);
     const std::span<const std::string_view> noKeys;
@@ -726,12 +803,16 @@ RUVIA_TEST(redis_multi_key_commands_reject_empty_key_spans_before_io) {
 }
 
 RUVIA_TEST(redis_transaction_errors_preserve_server_diagnostics) {
-    const auto reply = ruvia::detail::RedisTypesAccess::errorValue("EXECABORT Transaction discarded because of previous errors.", std::pmr::get_default_resource());
+    const auto reply = ruvia::detail::RedisTypesAccess::errorValue(
+        "EXECABORT Transaction discarded because of previous errors.",
+        std::pmr::get_default_resource());
     bool preserved = false;
     try {
         ruvia::detail::throwIfRedisTransactionReplyError(reply, 3);
     } catch (const ruvia::RedisError& error) {
-        preserved = error.code() == ruvia::RedisError::Code::kCommandError && std::string_view(error.what()).find("reply 3") != std::string_view::npos && std::string_view(error.what()).find("EXECABORT") != std::string_view::npos;
+        preserved = error.code() == ruvia::RedisError::Code::kCommandError &&
+                    std::string_view(error.what()).find("reply 3") != std::string_view::npos &&
+                    std::string_view(error.what()).find("EXECABORT") != std::string_view::npos;
     }
     RUVIA_CHECK(preserved);
 }
@@ -746,7 +827,8 @@ RUVIA_TEST(redis_active_command_reports_pool_closing_instead_of_io_error) {
     config.commandTimeout = std::nullopt;
     auto* const resource = std::pmr::get_default_resource();
     const auto storedConfig = ruvia::detail::RedisConfigStorage(config, resource);
-    ruvia::detail::RedisPool pool(ioContext, storedConfig, storedConfig.commandTimeout, 1, worker.handle(), resource);
+    ruvia::detail::RedisPool pool(
+        ioContext, storedConfig, storedConfig.commandTimeout, 1, worker.handle(), resource);
 
     auto exercise = [&]() -> ruvia::Task<ruvia::RedisError::Code> {
         std::pmr::vector<std::pmr::string> args(resource);
@@ -759,7 +841,8 @@ RUVIA_TEST(redis_active_command_reports_pool_closing_instead_of_io_error) {
         co_return ruvia::RedisError::Code::kProtocolError;
     };
 
-    auto result = asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
+    auto result =
+        asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
     std::jthread runner([&worker] { worker.run(); });
     server.waitUntilCommandRead();
     asio::post(ioContext, [&pool] { pool.closeNow(); });
@@ -770,10 +853,12 @@ RUVIA_TEST(redis_active_command_reports_pool_closing_instead_of_io_error) {
 
 RUVIA_TEST(redis_value_move_assignment_propagates_allocator_failure) {
     RejectingMemoryResource rejecting;
-    const auto longValue = std::string_view("redis value large enough to exceed any small-string buffer");
+    const auto longValue =
+        std::string_view("redis value large enough to exceed any small-string buffer");
 
     auto destination = ruvia::detail::RedisTypesAccess::keyValue({}, {}, &rejecting);
-    auto source = ruvia::detail::RedisTypesAccess::keyValue(longValue, longValue, std::pmr::get_default_resource());
+    auto source = ruvia::detail::RedisTypesAccess::keyValue(
+        longValue, longValue, std::pmr::get_default_resource());
     rejecting.rejectAllocations();
     bool allocationFailure = false;
     try {
@@ -785,7 +870,8 @@ RUVIA_TEST(redis_value_move_assignment_propagates_allocator_failure) {
 
     rejecting.rejectAllocations(false);
     auto destinationValue = ruvia::detail::RedisTypesAccess::nullValue(&rejecting);
-    auto sourceValue = ruvia::detail::RedisTypesAccess::stringValue(longValue, std::pmr::get_default_resource());
+    auto sourceValue =
+        ruvia::detail::RedisTypesAccess::stringValue(longValue, std::pmr::get_default_resource());
     rejecting.rejectAllocations();
     allocationFailure = false;
     try {

@@ -83,7 +83,8 @@ void ScopedOperationScope::resumeJoiner() noexcept {
     continuation.resume();
 }
 
-ScopedCapabilityNode::ScopedCapabilityNode(ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept
+ScopedCapabilityNode::ScopedCapabilityNode(
+    ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept
     : expire_(expire) {
     if (scope.active()) {
         link(scope);
@@ -137,7 +138,8 @@ ScopedOperationScope& ScopedCapabilityNode::operationScope() const {
     return *scope_;
 }
 
-void ScopedCapabilityNode::bind(ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept {
+void ScopedCapabilityNode::bind(
+    ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept {
     if (scope_ != nullptr || active_) {
         std::terminate();
     }

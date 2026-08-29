@@ -20,7 +20,8 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] inline bool http2IsForbiddenConnectionHeader(std::string_view name) noexcept {
-    return name == "connection" || name == "keep-alive" || name == "proxy-connection" || name == "transfer-encoding" || name == "upgrade";
+    return name == "connection" || name == "keep-alive" || name == "proxy-connection" ||
+           name == "transfer-encoding" || name == "upgrade";
 }
 
 // Application response fields are protocol-neutral and may retain their
@@ -28,19 +29,27 @@ namespace ruvia::detail {
 // complete RFC 9113 section 8.2.2 forbidden set case-insensitively. The TE
 // exception applies only to requests, so it is forbidden in responses too.
 [[nodiscard]] inline bool http2IsForbiddenResponseConnectionField(std::string_view name) noexcept {
-    return httpAsciiEqualsIgnoreCase(name, "connection") || httpAsciiEqualsIgnoreCase(name, "keep-alive") || httpAsciiEqualsIgnoreCase(name, "proxy-connection") || httpAsciiEqualsIgnoreCase(name, "te") || httpAsciiEqualsIgnoreCase(name, "transfer-encoding") || httpAsciiEqualsIgnoreCase(name, "upgrade");
+    return httpAsciiEqualsIgnoreCase(name, "connection") ||
+           httpAsciiEqualsIgnoreCase(name, "keep-alive") ||
+           httpAsciiEqualsIgnoreCase(name, "proxy-connection") ||
+           httpAsciiEqualsIgnoreCase(name, "te") ||
+           httpAsciiEqualsIgnoreCase(name, "transfer-encoding") ||
+           httpAsciiEqualsIgnoreCase(name, "upgrade");
 }
 
-[[nodiscard]] inline bool http2FieldValueHasLeadingOrTrailingWhitespace(std::string_view value) noexcept {
+[[nodiscard]] inline bool http2FieldValueHasLeadingOrTrailingWhitespace(
+    std::string_view value) noexcept {
     const auto asciiWhitespace = [](char ch) noexcept { return ch == ' ' || ch == '\t'; };
     return !value.empty() && (asciiWhitespace(value.front()) || asciiWhitespace(value.back()));
 }
 
-[[nodiscard]] inline bool http2IsValidRegularHeader(std::string_view name, std::string_view value) noexcept {
+[[nodiscard]] inline bool http2IsValidRegularHeader(
+    std::string_view name, std::string_view value) noexcept {
     if (name.empty() || name.front() == ':') {
         return false;
     }
-    if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) || http2FieldValueHasLeadingOrTrailingWhitespace(value)) {
+    if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) ||
+        http2FieldValueHasLeadingOrTrailingWhitespace(value)) {
         return false;
     }
     if (http2HeaderNameHasUppercase(name)) {
@@ -58,7 +67,8 @@ namespace ruvia::detail {
 // Decoded HTTP/2 field names are already required to be lowercase. The TE
 // exception above belongs only to requests (RFC 9113 Section 8.2.2); a response
 // carrying TE is malformed even when its value is exactly "trailers".
-[[nodiscard]] inline bool http2IsValidDecodedResponseHeader(std::string_view name, std::string_view value) noexcept {
+[[nodiscard]] inline bool http2IsValidDecodedResponseHeader(
+    std::string_view name, std::string_view value) noexcept {
     return http2IsValidRegularHeader(name, value) && !http2IsForbiddenResponseConnectionField(name);
 }
 

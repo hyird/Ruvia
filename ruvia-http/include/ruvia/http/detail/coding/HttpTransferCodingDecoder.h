@@ -94,7 +94,8 @@ public:
 private:
     friend class TransferCodingDecodeResult;
     friend class TransferCodingDecoder;
-    constexpr TransferCodingDecodeProtocolFailure(std::size_t consumedBytes, TransferCodingDecodeError error) noexcept
+    constexpr TransferCodingDecodeProtocolFailure(
+        std::size_t consumedBytes, TransferCodingDecodeError error) noexcept
         : consumedBytes_(consumedBytes),
           error_(error) {}
     std::size_t consumedBytes_;
@@ -152,7 +153,9 @@ public:
 
 private:
     friend class TransferCodingDecoder;
-    using Value = std::variant<TransferCodingDecodeNeedInput, TransferCodingDecodeOutput, TransferCodingDecodeComplete, TransferCodingDecodeProtocolFailure, TransferCodingDecoderFailure>;
+    using Value = std::variant<TransferCodingDecodeNeedInput, TransferCodingDecodeOutput,
+        TransferCodingDecodeComplete, TransferCodingDecodeProtocolFailure,
+        TransferCodingDecoderFailure>;
 
     template <typename Result>
     explicit TransferCodingDecodeResult(Result result) noexcept
@@ -163,13 +166,15 @@ private:
 
 class TransferCodingDecoder final {
 public:
-    TransferCodingDecoder(HttpTransferCoding coding, std::pmr::memory_resource* resource, ProtocolByteLimit bodyLimit);
+    TransferCodingDecoder(HttpTransferCoding coding, std::pmr::memory_resource* resource,
+        ProtocolByteLimit bodyLimit);
     ~TransferCodingDecoder();
 
     TransferCodingDecoder(const TransferCodingDecoder&) = delete;
     TransferCodingDecoder& operator=(const TransferCodingDecoder&) = delete;
 
-    [[nodiscard]] TransferCodingDecodeResult decode(std::string_view input, std::span<char> output) noexcept;
+    [[nodiscard]] TransferCodingDecodeResult decode(
+        std::string_view input, std::span<char> output) noexcept;
     // EOF is a decoder step, not a second status channel. It returns the same
     // exclusive complete/failure result as decode(), with zero consumed bytes.
     [[nodiscard]] TransferCodingDecodeResult finishInput() noexcept;
@@ -188,9 +193,11 @@ private:
 
     [[nodiscard]] InflateStep inflateStep(std::string_view input, std::span<char> output) noexcept;
     [[nodiscard]] static TransferCodingDecodeResult needInput(std::size_t consumed) noexcept;
-    [[nodiscard]] static TransferCodingDecodeResult output(std::size_t consumed, std::string_view bytes) noexcept;
+    [[nodiscard]] static TransferCodingDecodeResult output(
+        std::size_t consumed, std::string_view bytes) noexcept;
     [[nodiscard]] static TransferCodingDecodeResult complete(std::size_t consumed) noexcept;
-    [[nodiscard]] TransferCodingDecodeResult fail(std::size_t consumed, TransferCodingDecodeError error) noexcept;
+    [[nodiscard]] TransferCodingDecodeResult fail(
+        std::size_t consumed, TransferCodingDecodeError error) noexcept;
 
     static voidpf zallocThunk(voidpf opaque, uInt items, uInt size) noexcept;
     static void zfreeThunk(voidpf opaque, voidpf address) noexcept;

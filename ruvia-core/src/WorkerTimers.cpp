@@ -44,7 +44,8 @@ WorkerTimerCancellation WorkerTimerRegistration::cancellation() const& {
     return WorkerTimerCancellation(*dispatcher_, slot_, generation_);
 }
 
-void WorkerTimerRegistration::bind(WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept {
+void WorkerTimerRegistration::bind(
+    WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept {
     dispatcher_ = &dispatcher;
     slot_ = slot;
     generation_ = generation;
@@ -56,7 +57,9 @@ void WorkerTimerRegistration::release() noexcept {
     generation_ = 0;
 }
 
-void WorkerDispatcher::scheduleTimer(WorkerTimerRegistration& registration, std::chrono::steady_clock::time_point deadline, MoveOnlyFunction<void(WorkerTimerOutcome)> completion) {
+void WorkerDispatcher::scheduleTimer(WorkerTimerRegistration& registration,
+    std::chrono::steady_clock::time_point deadline,
+    MoveOnlyFunction<void(WorkerTimerOutcome)> completion) {
     if (!isCurrent()) {
         throw std::logic_error("worker timers must be scheduled on their worker");
     }
@@ -68,7 +71,8 @@ void WorkerDispatcher::scheduleTimer(WorkerTimerRegistration& registration, std:
     }
 
     if (registration.dispatcher_ != nullptr) {
-        if (registration.dispatcher_ != this || hasTimer(registration.slot_, registration.generation_)) {
+        if (registration.dispatcher_ != this ||
+            hasTimer(registration.slot_, registration.generation_)) {
             throw std::logic_error("worker timer registration is already active");
         }
         registration.release();
@@ -109,7 +113,8 @@ void WorkerDispatcher::scheduleTimer(WorkerTimerRegistration& registration, std:
     }
 }
 
-void WorkerDispatcher::requestTimerCancellation(std::size_t slot, std::uint64_t generation) noexcept {
+void WorkerDispatcher::requestTimerCancellation(
+    std::size_t slot, std::uint64_t generation) noexcept {
     if (generation == 0) {
         return;
     }
@@ -129,7 +134,9 @@ void WorkerDispatcher::requestTimerCancellation(std::size_t slot, std::uint64_t 
                 // A stopped io_context can be restarted; queue the cancellation
                 // so a destroyed registration cannot leave a live slot that
                 // expires after that restart.
-                asio::post(impl_->ioContext, [self = shared_from_this(), slot, generation] { self->cancelTimer(slot, generation); });
+                asio::post(impl_->ioContext, [self = shared_from_this(), slot, generation] {
+                    self->cancelTimer(slot, generation);
+                });
             } catch (...) {
                 std::terminate();
             }
@@ -153,7 +160,8 @@ void WorkerDispatcher::cancelTimer(std::size_t slotIndex, std::uint64_t generati
     impl_->freeTimerSlot = slotIndex;
     ++impl_->staleTimerCount;
     if (impl_->staleTimerCount >= 64 && impl_->staleTimerCount * 2 >= impl_->timers.size()) {
-        std::erase_if(impl_->timers, [this](const TimerEntry& entry) { return !hasTimer(entry.slot, entry.generation); });
+        std::erase_if(impl_->timers,
+            [this](const TimerEntry& entry) { return !hasTimer(entry.slot, entry.generation); });
         std::ranges::make_heap(impl_->timers, TimerEntryLater{});
         impl_->staleTimerCount = 0;
     }
@@ -162,7 +170,9 @@ void WorkerDispatcher::cancelTimer(std::size_t slotIndex, std::uint64_t generati
     }
     try {
         if (completion) {
-            defer([completion = std::move(completion)]() mutable { completion(WorkerTimerOutcome::kCancelled); });
+            defer([completion = std::move(completion)]() mutable {
+                completion(WorkerTimerOutcome::kCancelled);
+            });
         }
     } catch (...) {
         std::terminate();
@@ -216,7 +226,8 @@ void WorkerDispatcher::armTimer() {
     }
     impl_->timer->cancel(ignored);
     impl_->timerArmed = false;
-    while (!impl_->timers.empty() && !hasTimer(impl_->timers.front().slot, impl_->timers.front().generation)) {
+    while (!impl_->timers.empty() &&
+           !hasTimer(impl_->timers.front().slot, impl_->timers.front().generation)) {
         std::ranges::pop_heap(impl_->timers, TimerEntryLater{});
         impl_->timers.pop_back();
         if (impl_->staleTimerCount != 0) {
@@ -239,7 +250,8 @@ void WorkerDispatcher::armTimer() {
 
 void WorkerDispatcher::fireTimers() {
     impl_->dispatchingTimers = true;
-    while (!impl_->timers.empty() && impl_->timers.front().deadline <= std::chrono::steady_clock::now()) {
+    while (!impl_->timers.empty() &&
+           impl_->timers.front().deadline <= std::chrono::steady_clock::now()) {
         std::ranges::pop_heap(impl_->timers, TimerEntryLater{});
         auto entry = std::move(impl_->timers.back());
         impl_->timers.pop_back();
@@ -263,7 +275,8 @@ void WorkerDispatcher::fireTimers() {
 }
 
 bool WorkerDispatcher::hasTimer(std::size_t slot, std::uint64_t generation) const noexcept {
-    return slot < impl_->timerSlots.size() && impl_->timerSlots[slot].active && impl_->timerSlots[slot].generation == generation;
+    return slot < impl_->timerSlots.size() && impl_->timerSlots[slot].active &&
+           impl_->timerSlots[slot].generation == generation;
 }
 
 }  // namespace ruvia::detail

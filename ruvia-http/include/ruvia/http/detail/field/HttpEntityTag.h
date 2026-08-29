@@ -20,11 +20,13 @@ std::string_view httpTrimWeakEtagPrefix(Value&&) = delete;
     return value.size() >= 2 && value[0] == 'W' && value[1] == '/';
 }
 
-[[nodiscard]] inline bool httpStrongEtagEquals(std::string_view left, std::string_view right) noexcept {
+[[nodiscard]] inline bool httpStrongEtagEquals(
+    std::string_view left, std::string_view right) noexcept {
     return !httpIsWeakEtag(left) && !httpIsWeakEtag(right) && left == right;
 }
 
-[[nodiscard]] inline bool httpWeakEtagEquals(std::string_view left, std::string_view right) noexcept {
+[[nodiscard]] inline bool httpWeakEtagEquals(
+    std::string_view left, std::string_view right) noexcept {
     return httpTrimWeakEtagPrefix(left) == httpTrimWeakEtagPrefix(right);
 }
 
@@ -33,12 +35,14 @@ struct HttpEtagListMatchResult final {
     bool matched;
 };
 
-[[nodiscard]] inline HttpEtagListMatchResult httpParseEtagListMatches(std::string_view values, std::string_view expected, bool strong) noexcept {
+[[nodiscard]] inline HttpEtagListMatchResult httpParseEtagListMatches(
+    std::string_view values, std::string_view expected, bool strong) noexcept {
     bool matched = false;
     std::size_t offset = 0;
 
     while (offset < values.size()) {
-        while (offset < values.size() && (values[offset] == ' ' || values[offset] == '\t' || values[offset] == ',')) {
+        while (offset < values.size() &&
+               (values[offset] == ' ' || values[offset] == '\t' || values[offset] == ',')) {
             ++offset;
         }
         if (offset == values.size()) {
@@ -65,7 +69,8 @@ struct HttpEtagListMatchResult final {
         }
         ++offset;
         const auto entityTag = values.substr(begin, offset - begin);
-        matched = matched || (strong ? httpStrongEtagEquals(entityTag, expected) : httpWeakEtagEquals(entityTag, expected));
+        matched = matched || (strong ? httpStrongEtagEquals(entityTag, expected)
+                                     : httpWeakEtagEquals(entityTag, expected));
 
         while (offset < values.size() && (values[offset] == ' ' || values[offset] == '\t')) {
             ++offset;
@@ -77,7 +82,8 @@ struct HttpEtagListMatchResult final {
     return {true, matched};
 }
 
-[[nodiscard]] inline bool httpEtagListMatches(std::string_view values, std::string_view expected, bool strong) noexcept {
+[[nodiscard]] inline bool httpEtagListMatches(
+    std::string_view values, std::string_view expected, bool strong) noexcept {
     const auto result = httpParseEtagListMatches(values, expected, strong);
     return result.valid && result.matched;
 }

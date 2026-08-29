@@ -12,28 +12,34 @@
 namespace ruvia {
 namespace {
 
-Task<std::optional<DbRow>> readPoolStream(detail::DbPoolRef pool, std::size_t slot, void* result, std::pmr::memory_resource* resource, const OperationOptions& options) {
+Task<std::optional<DbRow>> readPoolStream(detail::DbPoolRef pool, std::size_t slot, void* result,
+    std::pmr::memory_resource* resource, const OperationOptions& options) {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         return (*client)->readStreamRow(slot, result, resource, options);
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         return (*client)->readStreamRow(slot, result, resource, options);
     }
 #endif
     detail::throwUnavailableDbBackend();
 }
 
-Task<void> closePoolStream(detail::DbPoolRef pool, std::size_t slot, void* result, std::pmr::memory_resource* resource, const OperationOptions& options) {
+Task<void> closePoolStream(detail::DbPoolRef pool, std::size_t slot, void* result,
+    std::pmr::memory_resource* resource, const OperationOptions& options) {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         return (*client)->closeStream(slot, result, resource, options);
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         return (*client)->closeStream(slot, result, resource, options);
     }
 #endif
@@ -42,13 +48,15 @@ Task<void> closePoolStream(detail::DbPoolRef pool, std::size_t slot, void* resul
 
 void abortPoolStream(detail::DbPoolRef pool, std::size_t slot, void* result) noexcept {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         (*client)->abortStream(slot, result);
         return;
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         (*client)->abortStream(slot, result);
     }
 #endif
@@ -56,7 +64,8 @@ void abortPoolStream(detail::DbPoolRef pool, std::size_t slot, void* result) noe
 
 }  // namespace
 
-DbStreamResult::Lease::Lease(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, OperationOptions options) noexcept
+DbStreamResult::Lease::Lease(detail::DbPoolRef client, std::size_t slot, void* result,
+    std::pmr::memory_resource* resource, OperationOptions options) noexcept
     : client(client),
       slot(slot),
       result(result),
@@ -65,18 +74,22 @@ DbStreamResult::Lease::Lease(detail::DbPoolRef client, std::size_t slot, void* r
 
 class DbStreamResult::State final {
 public:
-    State(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, OperationOptions options) noexcept
+    State(detail::DbPoolRef client, std::size_t slot, void* result,
+        std::pmr::memory_resource* resource, OperationOptions options) noexcept
         : operation(Lease{client, slot, result, resource, std::move(options)}) {}
 
     ~State() {
-        operation.reset([](Lease& lease) noexcept { abortPoolStream(lease.client, lease.slot, lease.result); });
+        operation.reset(
+            [](Lease& lease) noexcept { abortPoolStream(lease.client, lease.slot, lease.result); });
     }
 
     OperationState operation;
 };
 
-DbStreamResult::DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, OperationOptions options)
-    : state_(detail::makePmrObject<State>(resource, client, slot, result, resource, std::move(options))) {}
+DbStreamResult::DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result,
+    std::pmr::memory_resource* resource, OperationOptions options)
+    : state_(detail::makePmrObject<State>(
+          resource, client, slot, result, resource, std::move(options))) {}
 
 DbStreamResult::DbStreamResult(DbStreamResult&& other) noexcept
     : detail::ScopedCapabilityNode(std::move(other)),
@@ -99,13 +112,15 @@ void DbStreamResult::expireCapability(detail::ScopedCapabilityNode& capability) 
 
 ScopedOperation<std::optional<DbRow>> DbStreamResult::read() & {
     requireActive();
-    return detail::makeScopedOperation(operationScope(), readTask(OperationGuard(state_->operation)));
+    return detail::makeScopedOperation(
+        operationScope(), readTask(OperationGuard(state_->operation)));
 }
 
 Task<std::optional<DbRow>> DbStreamResult::readTask(OperationGuard operation) {
     operation.start();
     auto& lease = operation.lease();
-    auto row = co_await readPoolStream(lease.client, lease.slot, lease.result, lease.resource, lease.options);
+    auto row = co_await readPoolStream(
+        lease.client, lease.slot, lease.result, lease.resource, lease.options);
     if (row) {
         operation.finishActive();
     } else {
@@ -116,7 +131,8 @@ Task<std::optional<DbRow>> DbStreamResult::readTask(OperationGuard operation) {
 
 ScopedOperation<void> DbStreamResult::close() & {
     requireActive();
-    return detail::makeScopedOperation(operationScope(), closeTask(OperationGuard(state_->operation)));
+    return detail::makeScopedOperation(
+        operationScope(), closeTask(OperationGuard(state_->operation)));
 }
 
 Task<void> DbStreamResult::closeTask(OperationGuard operation) {
@@ -128,7 +144,8 @@ Task<void> DbStreamResult::closeTask(OperationGuard operation) {
 
 void DbStreamResult::reset() noexcept {
     if (state_ != nullptr) {
-        state_->operation.reset([](Lease& lease) noexcept { abortPoolStream(lease.client, lease.slot, lease.result); });
+        state_->operation.reset(
+            [](Lease& lease) noexcept { abortPoolStream(lease.client, lease.slot, lease.result); });
     }
 }
 

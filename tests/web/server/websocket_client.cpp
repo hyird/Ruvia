@@ -31,10 +31,12 @@ namespace {
 
 class WebSocketOrigin final {
 public:
-    explicit WebSocketOrigin(bool heartbeat = false, bool respondPong = true, bool sendPingsAfterClose = false)
+    explicit WebSocketOrigin(bool heartbeat = false, bool respondPong = true,
+        bool sendPingsAfterClose = false, bool sendPingsDuringRead = false)
         : heartbeat_(heartbeat),
           respondPong_(respondPong),
           sendPingsAfterClose_(sendPingsAfterClose),
+          sendPingsDuringRead_(sendPingsDuringRead),
           io_(),
           acceptor_(io_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
           thread_([this] { serve(); }) {}
@@ -67,7 +69,8 @@ private:
             }
             const auto line = request.substr(cursor, end - cursor);
             const auto colon = line.find(':');
-            if (colon != std::string_view::npos && ruvia::detail::httpAsciiEqualsIgnoreCase(line.substr(0, colon), name)) {
+            if (colon != std::string_view::npos &&
+                ruvia::detail::httpAsciiEqualsIgnoreCase(line.substr(0, colon), name)) {
                 return std::string(ruvia::detail::httpTrimOws(line.substr(colon + 1)));
             }
             cursor = end + 2;
@@ -78,7 +81,8 @@ private:
     static std::string readClientFrame(asio::ip::tcp::socket& socket, std::uint8_t expectedOpcode) {
         std::array<unsigned char, 2> head{};
         asio::read(socket, asio::buffer(head));
-        if ((head[0] & 0x0FU) != expectedOpcode || (head[1] & 0x80U) == 0 || (head[1] & 0x7FU) > 125) {
+        if ((head[0] & 0x0FU) != expectedOpcode || (head[1] & 0x80U) == 0 ||
+            (head[1] & 0x7FU) > 125) {
             return {};
         }
         const auto size = static_cast<std::size_t>(head[1] & 0x7FU);
@@ -89,12 +93,14 @@ private:
             asio::read(socket, asio::buffer(payload));
         }
         for (std::size_t i = 0; i < size; ++i) {
-            payload[i] = static_cast<char>(static_cast<unsigned char>(payload[i]) ^ mask[i % mask.size()]);
+            payload[i] =
+                static_cast<char>(static_cast<unsigned char>(payload[i]) ^ mask[i % mask.size()]);
         }
         return payload;
     }
 
-    static void writeServerFrame(asio::ip::tcp::socket& socket, std::uint8_t opcode, std::string_view payload) {
+    static void writeServerFrame(
+        asio::ip::tcp::socket& socket, std::uint8_t opcode, std::string_view payload) {
         std::string frame;
         frame.push_back(static_cast<char>(0x80U | opcode));
         frame.push_back(static_cast<char>(payload.size()));
@@ -105,7 +111,8 @@ private:
     static bool readClientControlFrame(asio::ip::tcp::socket& socket, std::uint8_t expectedOpcode) {
         std::array<unsigned char, 2> head{};
         asio::read(socket, asio::buffer(head));
-        if ((head[0] & 0x8FU) != (0x80U | expectedOpcode) || (head[1] & 0x80U) == 0 || (head[1] & 0x7FU) > 125) {
+        if ((head[0] & 0x8FU) != (0x80U | expectedOpcode) || (head[1] & 0x80U) == 0 ||
+            (head[1] & 0x7FU) > 125) {
             return false;
         }
         const auto size = static_cast<std::size_t>(head[1] & 0x7FU);
@@ -124,9 +131,12 @@ private:
             acceptor_.accept(socket);
             asio::streambuf buffer;
             asio::read_until(socket, buffer, "\r\n\r\n");
-            std::string request(asio::buffers_begin(buffer.data()), asio::buffers_end(buffer.data()));
+            std::string request(
+                asio::buffers_begin(buffer.data()), asio::buffers_end(buffer.data()));
             const auto key = header(request, "Sec-WebSocket-Key");
-            if (key.empty() || !ruvia::detail::httpHasToken(header(request, "Upgrade"), "websocket") || header(request, "Sec-WebSocket-Protocol") != "chat, superchat") {
+            if (key.empty() ||
+                !ruvia::detail::httpHasToken(header(request, "Upgrade"), "websocket") ||
+                header(request, "Sec-WebSocket-Protocol") != "chat, superchat") {
                 return;
             }
             ruvia::detail::WebSocketAcceptKey accept{};
@@ -168,6 +178,19 @@ private:
                 return;
             }
 
+            if (sendPingsDuringRead_) {
+                succeeded_.store(true, std::memory_order_release);
+                for (int i = 0; i < 100; ++i) {
+                    try {
+                        writeServerFrame(socket, 0x9, {});
+                    } catch (...) {
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+                }
+                return;
+            }
+
             const bool receivedText = readClientFrame(socket, 0x1) == "hello";
             writeServerFrame(socket, 0x1, "world");
             const auto close = readClientFrame(socket, 0x8);
@@ -183,6 +206,7 @@ private:
     bool heartbeat_;
     bool respondPong_;
     bool sendPingsAfterClose_;
+    bool sendPingsDuringRead_;
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     std::thread thread_;
@@ -191,7 +215,8 @@ private:
 
 ruvia::Task<int> exercise(ruvia::WebSocketClient& client, ruvia::WorkerId expectedWorker) {
     co_await client.connect();
-    if (!client.connected() || !client.worker().isCurrent() || client.worker().id() != expectedWorker || client.subprotocol() != "chat") {
+    if (!client.connected() || !client.worker().isCurrent() ||
+        client.worker().id() != expectedWorker || client.subprotocol() != "chat") {
         co_return 1;
     }
     {
@@ -214,7 +239,8 @@ ruvia::Task<int> exercise(ruvia::WebSocketClient& client, ruvia::WorkerId expect
             auto competingRead = client.read();
             static_cast<void>(competingRead);
         } catch (const ruvia::WebSocketClientError& error) {
-            competingReadRejected = error.code() == ruvia::WebSocketClientError::Code::kInvalidState;
+            competingReadRejected =
+                error.code() == ruvia::WebSocketClientError::Code::kInvalidState;
         }
         if (!competingReadRejected) {
             co_return 3;
@@ -227,7 +253,8 @@ ruvia::Task<int> exercise(ruvia::WebSocketClient& client, ruvia::WorkerId expect
             auto competingWrite = client.text("also-discarded");
             static_cast<void>(competingWrite);
         } catch (const ruvia::WebSocketClientError& error) {
-            competingWriteRejected = error.code() == ruvia::WebSocketClientError::Code::kInvalidState;
+            competingWriteRejected =
+                error.code() == ruvia::WebSocketClientError::Code::kInvalidState;
         }
         if (!competingWriteRejected) {
             co_return 4;
@@ -240,7 +267,8 @@ ruvia::Task<int> exercise(ruvia::WebSocketClient& client, ruvia::WorkerId expect
             auto competingClose = client.close({.code = 1000});
             static_cast<void>(competingClose);
         } catch (const ruvia::WebSocketClientError& error) {
-            competingCloseRejected = error.code() == ruvia::WebSocketClientError::Code::kInvalidState;
+            competingCloseRejected =
+                error.code() == ruvia::WebSocketClientError::Code::kInvalidState;
         }
         if (!competingCloseRejected) {
             co_return 5;
@@ -262,10 +290,14 @@ ruvia::Task<int> exerciseHeartbeat(ruvia::WebSocketClient& client, bool expectTi
     try {
         const auto message = co_await client.read();
         client.abort();
-        result = expectTimeout || !message.has_value() || !message->text() || message->payload() != "heartbeat" ? 1 : 0;
+        result = expectTimeout || !message.has_value() || !message->text() ||
+                         message->payload() != "heartbeat"
+                     ? 1
+                     : 0;
     } catch (const ruvia::WebSocketClientError& error) {
         client.abort();
-        result = expectTimeout && error.code() == ruvia::WebSocketClientError::Code::kTimeout ? 0 : 2;
+        result =
+            expectTimeout && error.code() == ruvia::WebSocketClientError::Code::kTimeout ? 0 : 2;
     }
     co_await client.shutdown();
     co_return result;
@@ -283,7 +315,22 @@ ruvia::Task<int> exerciseCloseTimeout(ruvia::WebSocketClient& client) {
     co_return result;
 }
 
-ruvia::Task<void> consumeUntilShutdown(ruvia::WebSocketClient& client, ruvia::detail::WorkerSignal& started) {
+ruvia::Task<int> exerciseReadTimeout(ruvia::WebSocketClient& client) {
+    co_await client.connect();
+    int result = 1;
+    try {
+        static_cast<void>(
+            co_await client.withOptions({.timeout = std::chrono::milliseconds{50}}).read());
+    } catch (const ruvia::WebSocketClientError& error) {
+        result = error.code() == ruvia::WebSocketClientError::Code::kTimeout ? 0 : 2;
+    }
+    client.abort();
+    co_await client.shutdown();
+    co_return result;
+}
+
+ruvia::Task<void> consumeUntilShutdown(
+    ruvia::WebSocketClient& client, ruvia::detail::WorkerSignal& started) {
     auto read = client.read();
     started.notify();
     try {
@@ -292,20 +339,26 @@ ruvia::Task<void> consumeUntilShutdown(ruvia::WebSocketClient& client, ruvia::de
     }
 }
 
-ruvia::Task<int> exerciseShutdownWhileReading(ruvia::EventLoop loop, ruvia::WebSocketClient& client) {
+ruvia::Task<int> exerciseShutdownWhileReading(
+    ruvia::EventLoop loop, ruvia::WebSocketClient& client) {
     co_await client.connect();
     ruvia::detail::WorkerSignal readStarted(client.worker());
-    ruvia::detail::asyncStartTask(consumeUntilShutdown(client, readStarted), asio::bind_executor(loop.executor(), [](ruvia::detail::TaskCompletionResult<void> result) {
-        if (result.failure()) {
-            std::terminate();
-        }
-    }));
+    ruvia::detail::asyncStartTask(consumeUntilShutdown(client, readStarted),
+        asio::bind_executor(loop.executor(), [](ruvia::detail::TaskCompletionResult<void> result) {
+            if (result.failure()) {
+                std::terminate();
+            }
+        }));
     co_await readStarted.wait();
     co_await client.shutdown();
     co_return client.connected() ? 1 : 0;
 }
 
-ruvia::Task<int> exerciseAll(ruvia::EventLoop loop, ruvia::WebSocketClient& client, ruvia::WebSocketClient& heartbeatClient, ruvia::WebSocketClient& timeoutClient, ruvia::WebSocketClient& shutdownClient, ruvia::WebSocketClient& closeTimeoutClient, ruvia::WebSocketClient& freshClient, ruvia::WorkerId expectedWorker) {
+ruvia::Task<int> exerciseAll(ruvia::EventLoop loop, ruvia::WebSocketClient& client,
+    ruvia::WebSocketClient& heartbeatClient, ruvia::WebSocketClient& timeoutClient,
+    ruvia::WebSocketClient& readTimeoutClient, ruvia::WebSocketClient& shutdownClient,
+    ruvia::WebSocketClient& closeTimeoutClient, ruvia::WebSocketClient& freshClient,
+    ruvia::WorkerId expectedWorker) {
     co_await freshClient.shutdown();
     const auto shutdownResult = co_await exerciseShutdownWhileReading(loop, shutdownClient);
     if (shutdownResult != 0) {
@@ -318,6 +371,10 @@ ruvia::Task<int> exerciseAll(ruvia::EventLoop loop, ruvia::WebSocketClient& clie
     const auto timeoutResult = co_await exerciseHeartbeat(timeoutClient, true);
     if (timeoutResult != 0) {
         co_return 10 + timeoutResult;
+    }
+    const auto readTimeoutResult = co_await exerciseReadTimeout(readTimeoutClient);
+    if (readTimeoutResult != 0) {
+        co_return 15 + readTimeoutResult;
     }
     const auto closeTimeoutResult = co_await exerciseCloseTimeout(closeTimeoutClient);
     if (closeTimeoutResult != 0) {
@@ -385,32 +442,45 @@ int main() {
         ruvia::WebSocketClient plainClientWithInactiveTlsConfig(loop, invalidConfig);
 
         WebSocketOrigin heartbeatOrigin(true, true);
-        ruvia::WebSocketClient heartbeatClient(loop, {
-                                                         .scheme = ruvia::WebSocketScheme::kWs,
-                                                         .host = "127.0.0.1",
-                                                         .port = heartbeatOrigin.port(),
-                                                         .target = "/events",
-                                                         .subprotocols = {"chat", "superchat"},
-                                                         .heartbeat = {.pingInterval = std::chrono::milliseconds{20}, .pongTimeout = std::chrono::milliseconds{100}},
-                                                     });
+        ruvia::WebSocketClient heartbeatClient(
+            loop, {
+                      .scheme = ruvia::WebSocketScheme::kWs,
+                      .host = "127.0.0.1",
+                      .port = heartbeatOrigin.port(),
+                      .target = "/events",
+                      .subprotocols = {"chat", "superchat"},
+                      .heartbeat = {.pingInterval = std::chrono::milliseconds{20},
+                          .pongTimeout = std::chrono::milliseconds{100}},
+                  });
         WebSocketOrigin timeoutOrigin(true, false);
-        ruvia::WebSocketClient timeoutClient(loop, {
-                                                       .scheme = ruvia::WebSocketScheme::kWs,
-                                                       .host = "127.0.0.1",
-                                                       .port = timeoutOrigin.port(),
-                                                       .target = "/events",
-                                                       .subprotocols = {"chat", "superchat"},
-                                                       .heartbeat = {.pingInterval = std::chrono::milliseconds{20}, .pongTimeout = std::chrono::milliseconds{50}},
-                                                   });
+        ruvia::WebSocketClient timeoutClient(
+            loop, {
+                      .scheme = ruvia::WebSocketScheme::kWs,
+                      .host = "127.0.0.1",
+                      .port = timeoutOrigin.port(),
+                      .target = "/events",
+                      .subprotocols = {"chat", "superchat"},
+                      .heartbeat = {.pingInterval = std::chrono::milliseconds{20},
+                          .pongTimeout = std::chrono::milliseconds{50}},
+                  });
+        WebSocketOrigin readTimeoutOrigin(false, true, false, true);
+        ruvia::WebSocketClient readTimeoutClient(loop, {
+                                                           .scheme = ruvia::WebSocketScheme::kWs,
+                                                           .host = "127.0.0.1",
+                                                           .port = readTimeoutOrigin.port(),
+                                                           .target = "/events",
+                                                           .subprotocols = {"chat", "superchat"},
+                                                       });
         WebSocketOrigin closeTimeoutOrigin(false, true, true);
-        ruvia::WebSocketClient closeTimeoutClient(loop, {
-                                                            .scheme = ruvia::WebSocketScheme::kWs,
-                                                            .host = "127.0.0.1",
-                                                            .port = closeTimeoutOrigin.port(),
-                                                            .target = "/events",
-                                                            .subprotocols = {"chat", "superchat"},
-                                                            .closeHandshakeTimeout = std::chrono::milliseconds{50},
-                                                        });
+        ruvia::WebSocketClient closeTimeoutClient(
+            loop, {
+                      .scheme = ruvia::WebSocketScheme::kWs,
+                      .host = "127.0.0.1",
+                      .port = closeTimeoutOrigin.port(),
+                      .target = "/events",
+                      .subprotocols = {"chat", "superchat"},
+                      .closeHandshakeTimeout = std::chrono::milliseconds{50},
+                  });
         WebSocketOrigin shutdownOrigin;
         ruvia::WebSocketClient shutdownClient(loop, {
                                                         .scheme = ruvia::WebSocketScheme::kWs,
@@ -431,13 +501,17 @@ int main() {
         std::promise<int> completion;
         auto future = completion.get_future();
         const auto posted = loop.post([&] {
-            ruvia::detail::asyncStartTask(exerciseAll(loop, client, heartbeatClient, timeoutClient, shutdownClient, closeTimeoutClient, plainClientWithInactiveTlsConfig, loop.id()), asio::bind_executor(loop.executor(), [&completion](ruvia::detail::TaskCompletionResult<int> result) {
-                if (auto* success = result.success()) {
-                    completion.set_value(std::move(*success).takeValue());
-                } else {
-                    completion.set_exception(result.failure()->exception());
-                }
-            }));
+            ruvia::detail::asyncStartTask(exerciseAll(loop, client, heartbeatClient, timeoutClient,
+                                              readTimeoutClient, shutdownClient, closeTimeoutClient,
+                                              plainClientWithInactiveTlsConfig, loop.id()),
+                asio::bind_executor(loop.executor(),
+                    [&completion](ruvia::detail::TaskCompletionResult<int> result) {
+                        if (auto* success = result.success()) {
+                            completion.set_value(std::move(*success).takeValue());
+                        } else {
+                            completion.set_exception(result.failure()->exception());
+                        }
+                    }));
         });
         if (!posted.accepted()) {
             return 2;
@@ -448,7 +522,9 @@ int main() {
         if (result != 0) {
             return 10 + result;
         }
-        return origin.succeeded() && closeTimeoutOrigin.succeeded() ? 0 : 20;
+        return origin.succeeded() && readTimeoutOrigin.succeeded() && closeTimeoutOrigin.succeeded()
+                   ? 0
+                   : 20;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "WebSocket client test failed: %s\n", error.what());
         return 100;
