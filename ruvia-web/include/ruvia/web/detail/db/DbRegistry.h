@@ -197,9 +197,9 @@ private:
     asio::io_context& ioContext_;
     DbConfigStorage config_;
     std::pmr::memory_resource* resource_;
+    const WorkerHandle& worker_;
     std::pmr::vector<ConnectionSlot> slots_;
     PoolLeaseScheduler scheduler_;
-    const WorkerHandle& worker_;
     std::shared_ptr<DbOperationCancellationMailbox<MariaDbPool>> cancellationMailbox_;
 };
 
@@ -331,9 +331,9 @@ private:
     asio::io_context& ioContext_;
     DbConfigStorage config_;
     std::pmr::memory_resource* resource_;
+    const WorkerHandle& worker_;
     std::pmr::vector<ConnectionSlot> slots_;
     PoolLeaseScheduler scheduler_;
-    const WorkerHandle& worker_;
     std::shared_ptr<DbOperationCancellationMailbox<PostgreSqlPool>> cancellationMailbox_;
 };
 

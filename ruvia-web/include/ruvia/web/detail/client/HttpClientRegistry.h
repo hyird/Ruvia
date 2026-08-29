@@ -96,8 +96,8 @@ private:
         Http2Runtime(const WorkerHandle& worker, std::pmr::memory_resource* resource)
             : writeSignal(worker),
               stateSignal(worker),
-              connectScheduler(1, resource),
-              http1Scheduler(1, resource),
+              connectScheduler(1, worker, resource),
+              http1Scheduler(1, worker, resource),
               pending(resource) {}
         Http2Runtime(WorkerHandle&&, std::pmr::memory_resource*) = delete;
 

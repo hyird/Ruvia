@@ -49,9 +49,9 @@ PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, const WorkerHandle& 
     : ioContext_(ioContext),
       config_(std::move(config)),
       resource_(pmrResourceOrDefault(resource)),
-      slots_(resource_),
-      scheduler_(1, resource_),
       worker_(requirePostgreSqlWorker(worker)),
+      slots_(resource_),
+      scheduler_(1, worker_, resource_),
       cancellationMailbox_(makeWorkerCancellationMailbox(*this, worker_)) {
     if (config_.driver != DbDriver::kPostgreSql) {
         throw std::invalid_argument("PostgreSQL pool requires the PostgreSQL driver");

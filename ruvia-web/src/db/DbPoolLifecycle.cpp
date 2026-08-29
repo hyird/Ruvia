@@ -51,9 +51,9 @@ detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, const WorkerHandle
     : ioContext_(ioContext),
       config_(std::move(config)),
       resource_(detail::pmrResourceOrDefault(resource)),
-      slots_(resource_),
-      scheduler_(1, resource_),
       worker_(requireMariaDbWorker(worker)),
+      slots_(resource_),
+      scheduler_(1, worker_, resource_),
       cancellationMailbox_(makeWorkerCancellationMailbox(*this, worker_)) {
     if (config_.driver != DbDriver::kMariaDb) {
         throw std::invalid_argument("MariaDB pool requires the MariaDB driver");

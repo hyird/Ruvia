@@ -143,7 +143,7 @@ HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& 
       config_(std::move(config)),
       tlsContext_(asio::ssl::context::tls_client),
       connections_(resource_),
-      scheduler_(httpClientSchedulerSlots(config_), resource_),
+      scheduler_(httpClientSchedulerSlots(config_), worker_, resource_),
       backgroundTasks_(worker_, {.resource = resource_}),
       cookies_(resource_) {
     for (const auto& [name, value] : config_.cookies) {
