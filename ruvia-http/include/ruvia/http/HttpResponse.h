@@ -45,7 +45,8 @@ public:
     }
 
     [[nodiscard]] std::string_view value() const noexcept {
-        return bytes == nullptr ? std::string_view{} : std::string_view(bytes + nameSize, valueSize);
+        return bytes == nullptr ? std::string_view{}
+                                : std::string_view(bytes + nameSize, valueSize);
     }
 
 private:
@@ -131,17 +132,27 @@ private:
     [[nodiscard]] const HttpResponseHeader* inlineData() const noexcept;
     [[nodiscard]] HttpResponseHeader* data() noexcept;
     [[nodiscard]] const HttpResponseHeader* data() const noexcept;
-    [[nodiscard]] HttpResponseHeader makeOwnedHeader(std::string_view name, std::string_view value, std::uint32_t knownBit);
-    [[nodiscard]] HttpResponseHeader makeUninitializedHeader(std::string_view name, std::size_t valueSize, std::uint32_t knownBit);
-    [[nodiscard]] static std::optional<HttpResponseHeader> makeStaticHeader(std::string_view name, std::string_view value, std::uint32_t knownBit) noexcept;
-    [[nodiscard]] bool tryAssignOwnedInPlace(HttpResponseHeader& header, std::string_view name, std::string_view value, std::uint32_t knownBit) noexcept;
+    [[nodiscard]] HttpResponseHeader makeOwnedHeader(
+        std::string_view name, std::string_view value, std::uint32_t knownBit);
+    [[nodiscard]] HttpResponseHeader makeUninitializedHeader(
+        std::string_view name, std::size_t valueSize, std::uint32_t knownBit);
+    [[nodiscard]] static std::optional<HttpResponseHeader> makeStaticHeader(
+        std::string_view name, std::string_view value, std::uint32_t knownBit) noexcept;
+    [[nodiscard]] bool tryAssignOwnedInPlace(HttpResponseHeader& header, std::string_view name,
+        std::string_view value, std::uint32_t knownBit) noexcept;
     HttpResponseHeader& appendHeader(HttpResponseHeader header);
-    HttpResponseHeader& addStableView(std::string_view name, std::string_view value, std::uint32_t knownBit = 0);
-    HttpResponseHeader& addUninitializedValue(std::string_view name, std::size_t valueSize, std::uint32_t knownBit = 0);
-    HttpResponseHeader& add(std::string_view name, std::string_view value, std::uint32_t knownBit = 0);
-    void assign(HttpResponseHeader& header, std::string_view name, std::string_view value, std::uint32_t knownBit);
-    HttpResponseHeader& assignUninitializedValue(HttpResponseHeader& header, std::string_view name, std::size_t valueSize, std::uint32_t knownBit);
-    void assignStableView(HttpResponseHeader& header, std::string_view name, std::string_view value, std::uint32_t knownBit);
+    HttpResponseHeader& addStableView(
+        std::string_view name, std::string_view value, std::uint32_t knownBit = 0);
+    HttpResponseHeader& addUninitializedValue(
+        std::string_view name, std::size_t valueSize, std::uint32_t knownBit = 0);
+    HttpResponseHeader& add(
+        std::string_view name, std::string_view value, std::uint32_t knownBit = 0);
+    void assign(HttpResponseHeader& header, std::string_view name, std::string_view value,
+        std::uint32_t knownBit);
+    HttpResponseHeader& assignUninitializedValue(HttpResponseHeader& header, std::string_view name,
+        std::size_t valueSize, std::uint32_t knownBit);
+    void assignStableView(HttpResponseHeader& header, std::string_view name, std::string_view value,
+        std::uint32_t knownBit);
     void releaseHeader(HttpResponseHeader& header) noexcept;
     void reserve(std::size_t count);
     HttpResponseHeader& appendPreparedHeader(HttpResponseHeader header) noexcept;
@@ -203,33 +214,50 @@ private:
     void materializeBody();
     void setHeaderStableView(std::string_view key, std::string_view value);
     void setHeaderUnsigned(std::string_view key, std::uint64_t value, std::uint32_t knownBit);
-    void setAllowHeader(std::uint32_t methodMask, std::span<const std::string_view> extensionMethods = {});
+    void setAllowHeader(
+        std::uint32_t methodMask, std::span<const std::string_view> extensionMethods = {});
     void setContentRange(std::uint64_t offset, std::uint64_t length, std::uint64_t size);
     void setContentRangeUnsatisfied(std::uint64_t size);
     void setHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit);
-    void appendHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit);
-    HttpResponseHeader& appendHeaderUninitializedValue(std::string_view key, std::size_t valueSize, std::uint32_t knownBit);
-    HttpResponseHeader& upsertSetCookieHeaderUninitializedValue(std::string_view wirePrefix, std::string_view cookieName, std::string_view path, std::string_view domain, std::size_t valueSize);
+    void appendHeaderValidated(
+        std::string_view key, std::string_view value, std::uint32_t knownBit);
+    HttpResponseHeader& appendHeaderUninitializedValue(
+        std::string_view key, std::size_t valueSize, std::uint32_t knownBit);
+    HttpResponseHeader& upsertSetCookieHeaderUninitializedValue(std::string_view wirePrefix,
+        std::string_view cookieName, std::string_view path, std::string_view domain,
+        std::size_t valueSize);
     void upsertSetCookieHeaderValidated(std::string_view value);
-    [[nodiscard]] HttpResponseHeader* findSetCookieHeader(std::string_view wirePrefix, std::string_view cookieName, bool hasPath, std::string_view path, std::string_view domain) noexcept;
-    void eraseLaterSetCookieHeaders(HttpResponseHeader& retained, std::string_view wirePrefix, std::string_view cookieName, bool hasPath, std::string_view path, std::string_view domain) noexcept;
-    [[nodiscard]] HttpResponseHeader& collapseResponseHeaders(HttpResponseHeader& retained, std::string_view key, std::uint32_t knownBit) noexcept;
+    [[nodiscard]] HttpResponseHeader* findSetCookieHeader(std::string_view wirePrefix,
+        std::string_view cookieName, bool hasPath, std::string_view path,
+        std::string_view domain) noexcept;
+    void eraseLaterSetCookieHeaders(HttpResponseHeader& retained, std::string_view wirePrefix,
+        std::string_view cookieName, bool hasPath, std::string_view path,
+        std::string_view domain) noexcept;
+    [[nodiscard]] HttpResponseHeader& collapseResponseHeaders(
+        HttpResponseHeader& retained, std::string_view key, std::uint32_t knownBit) noexcept;
     bool removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept;
     void rebuildKnownHeaderIndex() noexcept;
     void reserveHeaders(std::size_t count);
     HttpResponse(detail::HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource);
     void setFileBody(std::filesystem::path file, std::uint64_t size);
-    void setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
-    void setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, detail::ResponseFileIdentity identity);
+    void setFileBody(
+        std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
+    void setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset,
+        std::uint64_t length, detail::ResponseFileIdentity identity);
     void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size);
-    void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
+    void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size,
+        std::uint64_t offset, std::uint64_t length);
     void setBorrowedNativeFileBody(const detail::HttpNativePathChar* file, std::uint64_t size);
-    void setBorrowedNativeFileBody(const detail::HttpNativePathChar* file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
+    void setBorrowedNativeFileBody(const detail::HttpNativePathChar* file, std::uint64_t size,
+        std::uint64_t offset, std::uint64_t length);
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] std::string_view knownHeaderValue(std::uint32_t bit) const noexcept;
-    [[nodiscard]] HttpResponseHeader* findHeaderForUpdate(std::string_view key, std::uint32_t knownBit) noexcept;
-    [[nodiscard]] const HttpResponseHeader* findHeaderForRead(std::string_view key, std::uint32_t knownBit) const noexcept;
-    HttpResponseHeader& prepareHeaderValueStorage(std::string_view key, std::size_t valueSize, std::uint32_t knownBit);
+    [[nodiscard]] HttpResponseHeader* findHeaderForUpdate(
+        std::string_view key, std::uint32_t knownBit) noexcept;
+    [[nodiscard]] const HttpResponseHeader* findHeaderForRead(
+        std::string_view key, std::uint32_t knownBit) const noexcept;
+    HttpResponseHeader& prepareHeaderValueStorage(
+        std::string_view key, std::size_t valueSize, std::uint32_t knownBit);
     void recordKnownHeaderIndex(std::uint32_t knownBit, std::size_t index) noexcept;
     [[nodiscard]] HttpResponse cloneForTransaction() const;
 

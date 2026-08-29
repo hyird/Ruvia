@@ -48,7 +48,13 @@ private:
     std::uint64_t declaredLength_;
 };
 
-enum class Http2LocalContentCheck : std::uint8_t { kAccepted, kNotStarted, kForbidden, kLengthExceeded, kLengthIncomplete };
+enum class Http2LocalContentCheck : std::uint8_t {
+    kAccepted,
+    kNotStarted,
+    kForbidden,
+    kLengthExceeded,
+    kLengthIncomplete
+};
 
 class Http2LocalContentState final {
 public:
@@ -98,7 +104,8 @@ public:
     // Transactional preflight for one submitData input. No counters change here.
     // A terminal known-length submission must complete the declared length exactly;
     // callers can retry a rejected input with a corrected terminal flag or size.
-    [[nodiscard]] Http2LocalContentCheck checkAccept(std::size_t bytes, bool terminal) const noexcept {
+    [[nodiscard]] Http2LocalContentCheck checkAccept(
+        std::size_t bytes, bool terminal) const noexcept {
         if (unset() != nullptr) {
             return Http2LocalContentCheck::kNotStarted;
         }
@@ -140,11 +147,13 @@ public:
             return false;
         }
         const auto* knownLengthContent = knownLength();
-        return knownLengthContent == nullptr || acceptedBytes_ == knownLengthContent->declaredLength();
+        return knownLengthContent == nullptr ||
+               acceptedBytes_ == knownLengthContent->declaredLength();
     }
 
 private:
-    using Content = std::variant<Http2LocalContentUnset, Http2LocalContentForbidden, Http2LocalContentUnbounded, Http2LocalContentKnownLength>;
+    using Content = std::variant<Http2LocalContentUnset, Http2LocalContentForbidden,
+        Http2LocalContentUnbounded, Http2LocalContentKnownLength>;
 
     void reset(Content content) noexcept {
         content_ = content;

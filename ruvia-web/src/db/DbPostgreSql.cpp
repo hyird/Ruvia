@@ -12,17 +12,23 @@
 
 namespace ruvia::detail {
 
-DbError postgreSqlError(const pg_conn& connection, std::string_view operation, DbError::Code errorCode, const pg_result* result) {
+DbError postgreSqlError(const pg_conn& connection, std::string_view operation,
+    DbError::Code errorCode, const pg_result* result) {
     std::pmr::string error(operation, processResource());
     error.append(" failed");
-    const char* state = result == nullptr ? nullptr : PQresultErrorField(const_cast<PGresult*>(result), PG_DIAG_SQLSTATE);
-    const char* constraint = result == nullptr ? nullptr : PQresultErrorField(const_cast<PGresult*>(result), PG_DIAG_CONSTRAINT_NAME);
+    const char* state = result == nullptr
+                            ? nullptr
+                            : PQresultErrorField(const_cast<PGresult*>(result), PG_DIAG_SQLSTATE);
+    const char* constraint = result == nullptr ? nullptr
+                                               : PQresultErrorField(const_cast<PGresult*>(result),
+                                                     PG_DIAG_CONSTRAINT_NAME);
     if (state != nullptr && state[0] != '\0') {
         error.append(" [sqlstate=");
         error.append(state);
         error.push_back(']');
     }
-    const char* message = result == nullptr ? PQerrorMessage(const_cast<PGconn*>(&connection)) : PQresultErrorMessage(const_cast<PGresult*>(result));
+    const char* message = result == nullptr ? PQerrorMessage(const_cast<PGconn*>(&connection))
+                                            : PQresultErrorMessage(const_cast<PGresult*>(result));
     if (message != nullptr && message[0] != '\0') {
         while (*message == ' ' || *message == '\r' || *message == '\n') {
             ++message;
@@ -33,7 +39,9 @@ DbError postgreSqlError(const pg_conn& connection, std::string_view operation, D
             error.pop_back();
         }
     }
-    return DbError(errorCode, DbDriver::kPostgreSql, std::string(error), std::nullopt, state == nullptr ? std::string{} : std::string(state), constraint == nullptr ? std::string{} : std::string(constraint));
+    return DbError(errorCode, DbDriver::kPostgreSql, std::string(error), std::nullopt,
+        state == nullptr ? std::string{} : std::string(state),
+        constraint == nullptr ? std::string{} : std::string(constraint));
 }
 
 PostgreSqlParams::PostgreSqlParams(std::pmr::memory_resource* resource)
@@ -41,7 +49,8 @@ PostgreSqlParams::PostgreSqlParams(std::pmr::memory_resource* resource)
       values(pmrResourceOrDefault(resource)),
       lengths(pmrResourceOrDefault(resource)) {}
 
-PostgreSqlParams encodePostgreSqlParams(std::span<const DbValue> params, std::pmr::memory_resource* resource) {
+PostgreSqlParams encodePostgreSqlParams(
+    std::span<const DbValue> params, std::pmr::memory_resource* resource) {
     auto* resolved = pmrResourceOrDefault(resource);
     PostgreSqlParams output(resolved);
     output.encoded.reserve(params.size());
@@ -58,7 +67,8 @@ PostgreSqlParams encodePostgreSqlParams(std::span<const DbValue> params, std::pm
                 continue;
             case DbValueType::kString:
                 if (DbValueAccess::text(param).find('\0') != std::string_view::npos) {
-                    throw std::invalid_argument("PostgreSQL string parameter must not contain NUL bytes");
+                    throw std::invalid_argument(
+                        "PostgreSQL string parameter must not contain NUL bytes");
                 }
                 value.assign(DbValueAccess::text(param));
                 break;

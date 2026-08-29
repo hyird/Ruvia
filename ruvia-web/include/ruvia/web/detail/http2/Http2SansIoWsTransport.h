@@ -36,7 +36,9 @@ namespace ruvia::detail {
 template <typename Executor>
 class Http2SansIoWsTransport final {
 public:
-    Http2SansIoWsTransport(Http2Connection& connection, std::uint32_t streamId, Http2SansIoBodyQueue& bodyQueue, Http2SansIoStreamSignal& signal, WorkerSignal& writeSignal, Executor executor) noexcept
+    Http2SansIoWsTransport(Http2Connection& connection, std::uint32_t streamId,
+        Http2SansIoBodyQueue& bodyQueue, Http2SansIoStreamSignal& signal, WorkerSignal& writeSignal,
+        Executor executor) noexcept
         : connection_(connection),
           streamId_(streamId),
           bodyQueue_(bodyQueue),
@@ -55,7 +57,8 @@ public:
             }
             auto* stream = connection_.stream(streamId_);
             if (stream == nullptr || stream->isAborted()) {
-                co_return WsTransportReadResult::makeFailure(std::make_error_code(std::errc::connection_reset));
+                co_return WsTransportReadResult::makeFailure(
+                    std::make_error_code(std::errc::connection_reset));
             }
             if (const auto chunk = bodyQueue_.pop(); !chunk.empty()) {
                 releaseCreditIfDrained();
@@ -75,8 +78,11 @@ public:
         }
     }
 
-    [[nodiscard]] Task<std::error_code> writeBytes(std::string_view bytes, WsTransportDisposition disposition) {
-        const auto terminal = disposition == WsTransportDisposition::kEndTransport ? Http2EndStream::kEndStream : Http2EndStream::kKeepOpen;
+    [[nodiscard]] Task<std::error_code> writeBytes(
+        std::string_view bytes, WsTransportDisposition disposition) {
+        const auto terminal = disposition == WsTransportDisposition::kEndTransport
+                                  ? Http2EndStream::kEndStream
+                                  : Http2EndStream::kKeepOpen;
         for (;;) {
             if (signal_.terminated()) {
                 co_return signal_.terminalError();
@@ -92,7 +98,8 @@ public:
             if (result == Http2DataSubmitStatus::kInvalidState) {
                 co_return std::make_error_code(std::errc::protocol_error);
             }
-            if (result == Http2DataSubmitStatus::kContentLengthExceeded || result == Http2DataSubmitStatus::kContentLengthIncomplete) {
+            if (result == Http2DataSubmitStatus::kContentLengthExceeded ||
+                result == Http2DataSubmitStatus::kContentLengthIncomplete) {
                 // Tunnel DATA is unbounded; observing a response-length verdict here
                 // means the stream was configured with the wrong local message mode.
                 co_return std::make_error_code(std::errc::protocol_error);
@@ -103,7 +110,8 @@ public:
             // wait for the older queued input and retry this exact view.
             const auto waitResult = co_await awaitHttp2SendWindow(connection_, streamId_, &signal_);
             if (waitResult.aborted() != nullptr) {
-                co_return signal_.terminated() ? signal_.terminalError() : std::make_error_code(std::errc::connection_reset);
+                co_return signal_.terminated() ? signal_.terminalError()
+                                               : std::make_error_code(std::errc::connection_reset);
             }
             if (result == Http2DataSubmitStatus::kQueued) {
                 co_return std::error_code{};
@@ -148,7 +156,9 @@ private:
 // Admission always binds the runtime-owned signal before this facade can exist.
 class Http2SansIoRequestBodyReader final {
 public:
-    Http2SansIoRequestBodyReader(Http2Connection& connection, std::uint32_t streamId, Http2SansIoBodyQueue& bodyQueue, Http2SansIoStreamSignal& signal, WorkerSignal& writeSignal) noexcept
+    Http2SansIoRequestBodyReader(Http2Connection& connection, std::uint32_t streamId,
+        Http2SansIoBodyQueue& bodyQueue, Http2SansIoStreamSignal& signal,
+        WorkerSignal& writeSignal) noexcept
         : connection_(connection),
           streamId_(streamId),
           bodyQueue_(bodyQueue),

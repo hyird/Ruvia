@@ -43,7 +43,8 @@ private:
 template <typename T>
     requires JsonBody<T>::value
 [[nodiscard]] std::optional<T> fromJson(std::string_view body, ModelParseOptions options = {}) {
-    return detail::ModelJsonAccess::parseOwned<T>(body, detail::pmrResourceOrDefault(options.resource));
+    return detail::ModelJsonAccess::parseOwned<T>(
+        body, detail::pmrResourceOrDefault(options.resource));
 }
 
 template <typename T>

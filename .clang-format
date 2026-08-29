@@ -10,7 +10,7 @@ NamespaceIndentation: None
 IndentCaseLabels: true
 UseTab: Never
 
-ColumnLimit: 100000
+ColumnLimit: 100
 AlignAfterOpenBracket: DontAlign
 BinPackArguments: true
 BinPackParameters: true

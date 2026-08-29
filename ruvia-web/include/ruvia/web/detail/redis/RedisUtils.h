@@ -25,15 +25,18 @@ inline void appendRedisNumber(std::pmr::string& output, std::int64_t value) {
     appendHttpFormattedNumber(output, value, "failed to format redis number");
 }
 
-[[nodiscard]] inline std::pmr::string redisIntString(std::int64_t value, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::pmr::string redisIntString(
+    std::int64_t value, std::pmr::memory_resource* resource) {
     std::pmr::string output(pmrResourceOrDefault(resource));
     appendRedisNumber(output, value);
     return output;
 }
 
-[[nodiscard]] inline std::pmr::string redisScoreString(double value, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::pmr::string redisScoreString(
+    double value, std::pmr::memory_resource* resource) {
     std::pmr::string output(pmrResourceOrDefault(resource));
-    appendHttpFormattedFiniteNumber(output, value, "redis sorted set score must be finite", "redis sorted set score is invalid");
+    appendHttpFormattedFiniteNumber(output, value, "redis sorted set score must be finite",
+        "redis sorted set score is invalid");
     return output;
 }
 

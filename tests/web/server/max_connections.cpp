@@ -49,7 +49,8 @@ int main() {
     options.maxConnections = 1;
     options.requestHeaderTimeout = kHeaderTimeout;
 
-    ruvia::detail::WebWorkerRuntime server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
+    ruvia::detail::WebWorkerRuntime server(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -95,7 +96,9 @@ int main() {
             std::error_code ec;
             third.connect(endpoint, ec);
             if (!ec) {
-                asio::write(third, asio::buffer(std::string_view("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+                asio::write(third,
+                    asio::buffer(std::string_view("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")),
+                    ec);
                 asio::streambuf response;
                 if (!ec) {
                     asio::read_until(third, response, "\r\n\r\n", ec);

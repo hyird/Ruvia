@@ -14,7 +14,8 @@ inline constexpr std::size_t kCookieSignatureSize = 44;
 // Throws std::invalid_argument on an empty secret and std::length_error when
 // the secret or length-framed message cannot be represented by OpenSSL's HMAC
 // length parameters.
-void writeCookieSignature(char* output, std::string_view secret, std::string_view name, std::string_view value);
+void writeCookieSignature(
+    char* output, std::string_view secret, std::string_view name, std::string_view value);
 
 // Constant-time comparison; signature strings are attacker-controlled.
 [[nodiscard]] bool cookieSignatureEquals(std::string_view left, std::string_view right) noexcept;

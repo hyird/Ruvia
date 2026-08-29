@@ -139,7 +139,8 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
         RUVIA_CHECK(result.selected() == nullptr);
         RUVIA_CHECK(result.failure() != nullptr);
         if (const auto* failure = result.failure()) {
-            RUVIA_CHECK(failure->error() == ruvia::detail::HttpResponseCodingSelectionError::kNoAcceptableCoding);
+            RUVIA_CHECK(failure->error() ==
+                        ruvia::detail::HttpResponseCodingSelectionError::kNoAcceptableCoding);
         }
     }
     HttpResponseCodingQualities explicitEmpty;

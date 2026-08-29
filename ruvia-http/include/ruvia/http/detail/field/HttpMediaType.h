@@ -27,7 +27,8 @@ std::string_view httpMediaTypeOnly(Value&&) = delete;
     if (token.empty()) {
         return false;
     }
-    return std::ranges::all_of(token, [](char ch) noexcept { return isHttpTokenChar(static_cast<unsigned char>(ch)); });
+    return std::ranges::all_of(
+        token, [](char ch) noexcept { return isHttpTokenChar(static_cast<unsigned char>(ch)); });
 }
 
 struct HttpMediaTypeParts final {
@@ -40,7 +41,8 @@ struct HttpMediaTypeParts final {
 // equal (for example, utf-8 and "utf-8") without allocating temporary strings.
 // Parameter values are otherwise case-sensitive; individual media-type
 // registrations define any value-specific case folding.
-[[nodiscard]] inline bool httpMediaParameterValueEquals(std::string_view left, std::string_view right, bool asciiCaseInsensitive = false) noexcept {
+[[nodiscard]] inline bool httpMediaParameterValueEquals(
+    std::string_view left, std::string_view right, bool asciiCaseInsensitive = false) noexcept {
     struct Cursor final {
         std::string_view value;
         std::size_t position{0};
@@ -129,7 +131,8 @@ struct HttpMediaTypeParts final {
 }
 
 template <typename Visitor>
-[[nodiscard]] inline bool httpVisitMediaTypeParameters(std::string_view value, bool skipQualityParameter, Visitor&& visitor) noexcept {
+[[nodiscard]] inline bool httpVisitMediaTypeParameters(
+    std::string_view value, bool skipQualityParameter, Visitor&& visitor) noexcept {
     if (!httpAcceptParametersHaveStrictEquals(value)) {
         return false;
     }
@@ -164,22 +167,29 @@ template <typename Visitor>
             return true;
         }
         // Comparing a value with itself performs syntax validation as well.
-        return httpMediaParameterValueEquals(parameterValue, parameterValue) && visitor(name, parameterValue);
+        return httpMediaParameterValueEquals(parameterValue, parameterValue) &&
+               visitor(name, parameterValue);
     });
 }
 
-[[nodiscard]] inline bool httpOfferedMediaTypeHasParameter(std::string_view offered, std::string_view expectedName, std::string_view expectedValue) noexcept {
+[[nodiscard]] inline bool httpOfferedMediaTypeHasParameter(std::string_view offered,
+    std::string_view expectedName, std::string_view expectedValue) noexcept {
     bool found = false;
-    const bool valid = httpVisitMediaTypeParameters(offered, false, [expectedName, expectedValue, &found](std::string_view name, std::string_view value) noexcept {
-        if (httpAsciiEqualsIgnoreCase(name, expectedName) && httpMediaParameterValueEquals(value, expectedValue, httpAsciiEqualsIgnoreCase(name, "charset"))) {
-            found = true;
-        }
-        return true;
-    });
+    const bool valid = httpVisitMediaTypeParameters(offered, false,
+        [expectedName, expectedValue, &found](
+            std::string_view name, std::string_view value) noexcept {
+            if (httpAsciiEqualsIgnoreCase(name, expectedName) &&
+                httpMediaParameterValueEquals(
+                    value, expectedValue, httpAsciiEqualsIgnoreCase(name, "charset"))) {
+                found = true;
+            }
+            return true;
+        });
     return valid && found;
 }
 
-[[nodiscard]] inline bool httpParseMediaTypeParts(std::string_view value, bool allowWildcard, HttpMediaTypeParts& parts) noexcept {
+[[nodiscard]] inline bool httpParseMediaTypeParts(
+    std::string_view value, bool allowWildcard, HttpMediaTypeParts& parts) noexcept {
     value = httpMediaTypeOnly(value);
     const auto slash = value.find('/');
     if (slash == std::string_view::npos) {
@@ -196,14 +206,18 @@ template <typename Visitor>
     if (typeWildcard && !subtypeWildcard) {
         return false;
     }
-    return (typeWildcard || httpMediaToken(parts.type)) && (subtypeWildcard || httpMediaToken(parts.subtype));
+    return (typeWildcard || httpMediaToken(parts.type)) &&
+           (subtypeWildcard || httpMediaToken(parts.subtype));
 }
 
 template <HttpTemporaryOwningCharString Value>
 bool httpParseMediaTypeParts(Value&&, bool, HttpMediaTypeParts&) = delete;
 
-[[nodiscard]] inline bool httpParseMediaType(std::string_view value, bool allowWildcard, HttpMediaTypeParts& parts) noexcept {
-    return httpParseMediaTypeParts(value, allowWildcard, parts) && httpVisitMediaTypeParameters(value, false, [](std::string_view, std::string_view) noexcept { return true; });
+[[nodiscard]] inline bool httpParseMediaType(
+    std::string_view value, bool allowWildcard, HttpMediaTypeParts& parts) noexcept {
+    return httpParseMediaTypeParts(value, allowWildcard, parts) &&
+           httpVisitMediaTypeParameters(
+               value, false, [](std::string_view, std::string_view) noexcept { return true; });
 }
 
 template <HttpTemporaryOwningCharString Value>

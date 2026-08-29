@@ -49,11 +49,13 @@ class RouteRateLimitResult;
 }  // namespace ruvia::detail
 
 #ifdef RUVIA_GET_DYNAMIC
-#error "RUVIA_GET_DYNAMIC must not be public; use RUVIA_GET_STREAM or RUVIA_GET_SSE for explicit response streaming"
+#error \
+    "RUVIA_GET_DYNAMIC must not be public; use RUVIA_GET_STREAM or RUVIA_GET_SSE for explicit response streaming"
 #endif
 
 #ifdef RUVIA_POST_DYNAMIC
-#error "RUVIA_POST_DYNAMIC must not be public; ordinary routes must not enter response streaming dynamically"
+#error \
+    "RUVIA_POST_DYNAMIC must not be public; ordinary routes must not enter response streaming dynamically"
 #endif
 
 namespace {
@@ -101,17 +103,22 @@ public:
         if (c.exception()) {
             const auto* downstreamResponse = c.response();
             const bool hadDownstreamErrorResponse = downstreamResponse != nullptr;
-            const bool downstreamWasInternalError = downstreamResponse != nullptr && downstreamResponse->status() == ruvia::http_status::kInternalServerError;
+            const bool downstreamWasInternalError =
+                downstreamResponse != nullptr &&
+                downstreamResponse->status() == ruvia::http_status::kInternalServerError;
             c.status(ruvia::http_status::kInternalServerError);
             auto response = c.text("caught by middleware\n");
             response.header("X-Surface-Error", "true");
-            response.header("X-Surface-Error-Response", hadDownstreamErrorResponse ? "true" : "false");
-            response.header("X-Surface-Error-Status", downstreamWasInternalError ? "internal-server-error" : "other");
+            response.header(
+                "X-Surface-Error-Response", hadDownstreamErrorResponse ? "true" : "false");
+            response.header("X-Surface-Error-Status",
+                downstreamWasInternalError ? "internal-server-error" : "other");
             c.respond(std::move(response));
             co_return;
         }
         c.header("X-Surface-Finalized", c.response() != nullptr ? "true" : "false");
-        c.header("X-Surface-Middleware", "after-next", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+        c.header(
+            "X-Surface-Middleware", "after-next", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
     }
 };
 
@@ -123,7 +130,8 @@ public:
     }
 };
 
-class SurfacePreDirectResponseMiddleware final : public ruvia::Middleware<SurfacePreDirectResponseMiddleware> {
+class SurfacePreDirectResponseMiddleware final
+    : public ruvia::Middleware<SurfacePreDirectResponseMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         c.header("X-Surface-Pre-Direct", "true");
@@ -179,7 +187,8 @@ public:
     RUVIA_GET("/cookies", cookies);
     RUVIA_GET("/signed-cookies", signedCookies);
     RUVIA_ALL("/any", anyMethod);
-    RUVIA_ON((::ruvia::HttpKnownMethod::kPut, ::ruvia::HttpKnownMethod::kDelete), ("/on-item/:id", "/on-legacy/:id"), onItem);
+    RUVIA_ON((::ruvia::HttpKnownMethod::kPut, ::ruvia::HttpKnownMethod::kDelete),
+        ("/on-item/:id", "/on-legacy/:id"), onItem);
     RUVIA_GET("/manual/body", manualBody);
     RUVIA_PUT_STREAM("/upload/:id", streamPut);
     RUVIA_PATCH_STREAM("/upload/:id", streamPatch);
@@ -251,7 +260,8 @@ private:
         response.status(ruvia::http_status::kNonAuthoritativeInformation);
         response.header("X-Response-Remove", "drop");
         response.body("response slot\n");
-        response.header("X-Response-Slot", "true", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+        response.header(
+            "X-Response-Slot", "true", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
         response.removeHeader("X-Response-Remove");
         co_return response;
     }
@@ -278,7 +288,8 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> binaryBody(ruvia::Context& c) {
-        static constexpr std::array<std::byte, 3> bytes{std::byte{0x00}, std::byte{0x41}, std::byte{0xff}};
+        static constexpr std::array<std::byte, 3> bytes{
+            std::byte{0x00}, std::byte{0x41}, std::byte{0xff}};
         c.status(ruvia::http_status::kPartialContent);
         c.header("X-Binary-Body", "true");
         co_return c.body(std::span<const std::byte>(bytes));
@@ -304,7 +315,9 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {
         c.header("X-Error-Prepared", "true");
-        co_return c.error({.status = ruvia::http_status::kBadRequest, .code = "example_error", .message = "the example request was rejected"});
+        co_return c.error({.status = ruvia::http_status::kBadRequest,
+            .code = "example_error",
+            .message = "the example request was rejected"});
     }
 
     ruvia::Task<ruvia::HttpResponse> throwError(ruvia::Context&) {
@@ -648,7 +661,8 @@ private:
         co_return co_await countStreamingBody(c, "patch");
     }
 
-    static ruvia::Task<ruvia::HttpResponse> countStreamingBody(ruvia::Context& c, std::string_view verb) {
+    static ruvia::Task<ruvia::HttpResponse> countStreamingBody(
+        ruvia::Context& c, std::string_view verb) {
         std::uint64_t bytes = 0;
         auto& reader = c.req().bodyReader();
         while (auto chunk = co_await reader.read()) {
@@ -667,5 +681,10 @@ private:
 };
 
 int main() {
-    ruvia::app().listen({.address = "0.0.0.0", .http = 8088}).server({.workerCount = 2, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall}).onNotFound(&surfaceNotFound).run();
+    ruvia::app()
+        .listen({.address = "0.0.0.0", .http = 8088})
+        .server({.workerCount = 2,
+            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .onNotFound(&surfaceNotFound)
+        .run();
 }

@@ -36,14 +36,18 @@ void webSocketAbortThunk(void* target) noexcept {
 
 template <typename Connection>
 [[nodiscard]] WebSocket makeWebSocketFacade(Connection& connection) noexcept {
-    return WebSocketAccess::make(&connection, &webSocketReadThunk<Connection>, &webSocketWriteThunk<Connection>, &webSocketCloseThunk<Connection>, &webSocketAbortThunk<Connection>);
+    return WebSocketAccess::make(&connection, &webSocketReadThunk<Connection>,
+        &webSocketWriteThunk<Connection>, &webSocketCloseThunk<Connection>,
+        &webSocketAbortThunk<Connection>);
 }
 
 // The terminal handler borrows an established connection, but does not close it:
 // onion middleware post-processing still belongs to the same WebSocket request
 // and must be able to turn its own failure into the session's 1011 outcome.
 template <typename Transport>
-Task<void> invokeWebSocketHandler(WebSocketConnection<Transport>& connection, ConnectionScanner::Entry& scannerEntry, const CallableRef<void, Context&>& handler, Context& context) {
+Task<void> invokeWebSocketHandler(WebSocketConnection<Transport>& connection,
+    ConnectionScanner::Entry& scannerEntry, const CallableRef<void, Context&>& handler,
+    Context& context) {
     auto webSocket = makeWebSocketFacade(connection);
     ContextWebSocketBinding webSocketBinding(context, webSocket);
 
@@ -63,7 +67,9 @@ Task<void> invokeWebSocketHandler(WebSocketConnection<Transport>& connection, Co
 // it throws is a real fault (an invalid code, or exhaustion), not a routine
 // disconnect.
 template <typename Transport>
-Task<void> finishWebSocketSession(WebSocketConnection<Transport>& connection, std::exception_ptr exception, const ConnectionFailureSink& connectionFailure, std::string_view remoteAddress) {
+Task<void> finishWebSocketSession(WebSocketConnection<Transport>& connection,
+    std::exception_ptr exception, const ConnectionFailureSink& connectionFailure,
+    std::string_view remoteAddress) {
     connectionFailure.invoke(remoteAddress, exception);
     try {
         if (exception != nullptr) {

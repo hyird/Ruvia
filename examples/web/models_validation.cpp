@@ -9,25 +9,39 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
-RUVIA_REQUEST_MODEL(ProfileRequest, RUVIA_OPTIONAL_FIELD(displayName, ruvia::String), RUVIA_OPTIONAL_FIELD(email, ruvia::String), RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32));
+RUVIA_REQUEST_MODEL(ProfileRequest, RUVIA_OPTIONAL_FIELD(displayName, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(email, ruvia::String), RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32));
 
-RUVIA_REQUEST_MODEL(RoleRequest, RUVIA_OPTIONAL_FIELD(name, ruvia::String), RUVIA_OPTIONAL_FIELD(level, ruvia::UInt32));
+RUVIA_REQUEST_MODEL(RoleRequest, RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(level, ruvia::UInt32));
 
-RUVIA_REQUEST_MODEL(RegisterRequest, RUVIA_OPTIONAL_FIELD_NAME("user_name", username, ruvia::String, RUVIA_DEFAULT("guest")), RUVIA_OPTIONAL_FIELD(password, ruvia::String), RUVIA_OPTIONAL_FIELD(code, ruvia::String), RUVIA_OPTIONAL_FIELD(profile, ProfileRequest), RUVIA_OPTIONAL_FIELD(roles, ruvia::Array<RoleRequest>), RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>), RUVIA_OPTIONAL_FIELD(newsletter, ruvia::Bool));
+RUVIA_REQUEST_MODEL(RegisterRequest,
+    RUVIA_OPTIONAL_FIELD_NAME("user_name", username, ruvia::String, RUVIA_DEFAULT("guest")),
+    RUVIA_OPTIONAL_FIELD(password, ruvia::String), RUVIA_OPTIONAL_FIELD(code, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(profile, ProfileRequest),
+    RUVIA_OPTIONAL_FIELD(roles, ruvia::Array<RoleRequest>),
+    RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>),
+    RUVIA_OPTIONAL_FIELD(newsletter, ruvia::Bool));
 
-RUVIA_RESPONSE_MODEL(RegisterResponse, RUVIA_OPTIONAL_FIELD(username, ruvia::String), RUVIA_OPTIONAL_FIELD(roleCount, ruvia::UInt32), RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
+RUVIA_RESPONSE_MODEL(RegisterResponse, RUVIA_OPTIONAL_FIELD(username, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(roleCount, ruvia::UInt32),
+    RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
 
-RUVIA_REQUEST_MODEL(ContactForm, RUVIA_OPTIONAL_FIELD(name, ruvia::String), RUVIA_OPTIONAL_FIELD(email, ruvia::String), RUVIA_OPTIONAL_FIELD(message, ruvia::String));
+RUVIA_REQUEST_MODEL(ContactForm, RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(email, ruvia::String), RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
-RUVIA_REQUEST_MODEL(SearchQuery, RUVIA_OPTIONAL_FIELD(q, ruvia::String), RUVIA_OPTIONAL_FIELD(page, ruvia::UInt32));
+RUVIA_REQUEST_MODEL(
+    SearchQuery, RUVIA_OPTIONAL_FIELD(q, ruvia::String), RUVIA_OPTIONAL_FIELD(page, ruvia::UInt32));
 
 RUVIA_REQUEST_MODEL(CategoryParams, RUVIA_OPTIONAL_FIELD(id, ruvia::String));
 
-RUVIA_REQUEST_MODEL(RequestHeaders, RUVIA_OPTIONAL_FIELD_NAME("x-request-id", requestId, ruvia::String));
+RUVIA_REQUEST_MODEL(
+    RequestHeaders, RUVIA_OPTIONAL_FIELD_NAME("x-request-id", requestId, ruvia::String));
 
 RUVIA_REQUEST_MODEL(PreferencesCookie, RUVIA_OPTIONAL_FIELD(theme, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(Category, RUVIA_OPTIONAL_FIELD(name, ruvia::String), RUVIA_OPTIONAL_FIELD(children, ruvia::BoxedArray<Category>));
+RUVIA_RESPONSE_MODEL(Category, RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(children, ruvia::BoxedArray<Category>));
 
 static bool hasRuviaCodePrefix(const ruvia::String& code) {
     return code.view().starts_with("CY-");
@@ -35,42 +49,71 @@ static bool hasRuviaCodePrefix(const ruvia::String& code) {
 
 class ProfileValidator final : public ruvia::Middleware<ProfileValidator> {
 public:
-    RUVIA_VALIDATE_JSON(ProfileRequest, RUVIA_RULE(displayName, RUVIA_REQUIRED("display name is required"), RUVIA_MIN(2, "display name is too short"), RUVIA_MAX(64, "display name is too long")), RUVIA_RULE(email, RUVIA_REQUIRED("email is required"), RUVIA_EMAIL("email format is invalid")), RUVIA_RULE(age, RUVIA_MIN(0, "age is too small"), RUVIA_MAX(130, "age is too large")))
+    RUVIA_VALIDATE_JSON(ProfileRequest,
+        RUVIA_RULE(displayName, RUVIA_REQUIRED("display name is required"),
+            RUVIA_MIN(2, "display name is too short"), RUVIA_MAX(64, "display name is too long")),
+        RUVIA_RULE(
+            email, RUVIA_REQUIRED("email is required"), RUVIA_EMAIL("email format is invalid")),
+        RUVIA_RULE(age, RUVIA_MIN(0, "age is too small"), RUVIA_MAX(130, "age is too large")))
 };
 
 class RoleValidator final : public ruvia::Middleware<RoleValidator> {
 public:
-    RUVIA_VALIDATE_JSON(RoleRequest, RUVIA_RULE(name, RUVIA_REQUIRED("role is required"), RUVIA_ONE_OF("role is not allowed", "admin", "user", "editor")), RUVIA_RULE(level, RUVIA_MIN(1, "level is too small"), RUVIA_MAX(10, "level is too large")))
+    RUVIA_VALIDATE_JSON(RoleRequest,
+        RUVIA_RULE(name, RUVIA_REQUIRED("role is required"),
+            RUVIA_ONE_OF("role is not allowed", "admin", "user", "editor")),
+        RUVIA_RULE(level, RUVIA_MIN(1, "level is too small"), RUVIA_MAX(10, "level is too large")))
 };
 
 class RegisterValidator final : public ruvia::Middleware<RegisterValidator> {
 public:
-    RUVIA_VALIDATE_JSON(RegisterRequest, RUVIA_RULE_NAME("user_name", username, RUVIA_REQUIRED("username is required"), RUVIA_PATTERN("username format is invalid", "^[a-z][a-z0-9_]*$")), RUVIA_RULE(password, RUVIA_REQUIRED("password is required"), RUVIA_MIN(8, "password is too short")), RUVIA_RULE(code, RUVIA_CUSTOM("code must use CY- prefix", hasRuviaCodePrefix)), RUVIA_RULE(profile, RUVIA_REQUIRED("profile is required"), RUVIA_NESTED(ProfileValidator)), RUVIA_RULE(roles, RUVIA_REQUIRED("at least one role is required"), RUVIA_MIN(1, "too few roles"), RUVIA_MAX(5, "too many roles"), RUVIA_EACH(RoleValidator)))
+    RUVIA_VALIDATE_JSON(RegisterRequest,
+        RUVIA_RULE_NAME("user_name", username, RUVIA_REQUIRED("username is required"),
+            RUVIA_PATTERN("username format is invalid", "^[a-z][a-z0-9_]*$")),
+        RUVIA_RULE(password, RUVIA_REQUIRED("password is required"),
+            RUVIA_MIN(8, "password is too short")),
+        RUVIA_RULE(code, RUVIA_CUSTOM("code must use CY- prefix", hasRuviaCodePrefix)),
+        RUVIA_RULE(profile, RUVIA_REQUIRED("profile is required"), RUVIA_NESTED(ProfileValidator)),
+        RUVIA_RULE(roles, RUVIA_REQUIRED("at least one role is required"),
+            RUVIA_MIN(1, "too few roles"), RUVIA_MAX(5, "too many roles"),
+            RUVIA_EACH(RoleValidator)))
 };
 
 class ContactFormValidator final : public ruvia::Middleware<ContactFormValidator> {
 public:
-    RUVIA_VALIDATE_FORM(ContactForm, RUVIA_RULE(name, RUVIA_REQUIRED("name is required"), RUVIA_MIN(2, "name is too short")), RUVIA_RULE(email, RUVIA_REQUIRED("email is required"), RUVIA_EMAIL("email format is invalid")), RUVIA_RULE(message, RUVIA_REQUIRED("message is required"), RUVIA_MIN(10, "message is too short")))
+    RUVIA_VALIDATE_FORM(ContactForm,
+        RUVIA_RULE(name, RUVIA_REQUIRED("name is required"), RUVIA_MIN(2, "name is too short")),
+        RUVIA_RULE(
+            email, RUVIA_REQUIRED("email is required"), RUVIA_EMAIL("email format is invalid")),
+        RUVIA_RULE(
+            message, RUVIA_REQUIRED("message is required"), RUVIA_MIN(10, "message is too short")))
 };
 
 class SearchQueryValidator final : public ruvia::Middleware<SearchQueryValidator> {
 public:
-    RUVIA_VALIDATE_QUERY(SearchQuery, RUVIA_RULE(q, RUVIA_REQUIRED("query is required"), RUVIA_MIN(2, "query is too short")), RUVIA_RULE(page, RUVIA_MIN(1, "page is too small")))
+    RUVIA_VALIDATE_QUERY(SearchQuery,
+        RUVIA_RULE(q, RUVIA_REQUIRED("query is required"), RUVIA_MIN(2, "query is too short")),
+        RUVIA_RULE(page, RUVIA_MIN(1, "page is too small")))
 };
 
 class CategoryParamValidator final : public ruvia::Middleware<CategoryParamValidator> {
 public:
-    RUVIA_VALIDATE_PARAM(CategoryParams, RUVIA_RULE(id, RUVIA_REQUIRED("category id is required"), RUVIA_MIN(2, "category id is too short")))
+    RUVIA_VALIDATE_PARAM(CategoryParams, RUVIA_RULE(id, RUVIA_REQUIRED("category id is required"),
+                                             RUVIA_MIN(2, "category id is too short")))
 };
 
 class RequestHeaderValidator final : public ruvia::Middleware<RequestHeaderValidator> {
 public:
-    RUVIA_VALIDATE_HEADER(RequestHeaders, RUVIA_RULE_NAME("x-request-id", requestId, RUVIA_REQUIRED("request id is required"), RUVIA_MIN(8, "request id is too short")))
+    RUVIA_VALIDATE_HEADER(RequestHeaders,
+        RUVIA_RULE_NAME("x-request-id", requestId, RUVIA_REQUIRED("request id is required"),
+            RUVIA_MIN(8, "request id is too short")))
 };
 
 class PreferencesCookieValidator final : public ruvia::Middleware<PreferencesCookieValidator> {
 public:
-    RUVIA_VALIDATE_COOKIE(PreferencesCookie, RUVIA_RULE(theme, RUVIA_REQUIRED("theme cookie is required"), RUVIA_ONE_OF("theme is not allowed", "light", "dark")))
+    RUVIA_VALIDATE_COOKIE(
+        PreferencesCookie, RUVIA_RULE(theme, RUVIA_REQUIRED("theme cookie is required"),
+                               RUVIA_ONE_OF("theme is not allowed", "light", "dark")))
 };
 
 class ModelController final : public ruvia::Controller<ModelController> {
@@ -99,8 +142,10 @@ private:
         if (roles) {
             response.set<"roleCount">(ruvia::UInt32{static_cast<std::uint32_t>(roles->size())});
         }
-        response.ensure<"tags">().emplace_back(ruvia::String("created", {.resource = c.resource()}));
-        response.ensure<"tags">().emplace_back(ruvia::String("validated", {.resource = c.resource()}));
+        response.ensure<"tags">().emplace_back(
+            ruvia::String("created", {.resource = c.resource()}));
+        response.ensure<"tags">().emplace_back(
+            ruvia::String("validated", {.resource = c.resource()}));
         c.status(ruvia::http_status::kCreated);
         co_return c.json(response);
     }
@@ -113,14 +158,16 @@ private:
         if (const auto json = co_await c.req().jsonIf<ContactForm>()) {
             std::pmr::string body(c.allocator<char>());
             body.append("json feedback from ");
-            body.append(json->get<"name">().has_value() ? json->get<"name">()->view() : "anonymous");
+            body.append(
+                json->get<"name">().has_value() ? json->get<"name">()->view() : "anonymous");
             body.push_back('\n');
             co_return c.text(std::move(body));
         }
         if (const auto form = co_await c.req().formIf<ContactForm>()) {
             std::pmr::string body(c.allocator<char>());
             body.append("form feedback from ");
-            body.append(form->get<"name">().has_value() ? form->get<"name">()->view() : "anonymous");
+            body.append(
+                form->get<"name">().has_value() ? form->get<"name">()->view() : "anonymous");
             body.push_back('\n');
             co_return c.text(std::move(body));
         }
@@ -146,7 +193,10 @@ private:
         body.append(q->view());
         body.append("\nquery-shared=");
         const auto queryValue = q->view();
-        body.append(requestQuery.has_value() && requestQuery->data() == queryValue.data() && requestQuery->size() == queryValue.size() ? "true" : "false");
+        body.append(requestQuery.has_value() && requestQuery->data() == queryValue.data() &&
+                            requestQuery->size() == queryValue.size()
+                        ? "true"
+                        : "false");
         if (const auto page = query.get<"page">()) {
             body.append("\npage=");
             char buffer[16]{};
@@ -198,5 +248,9 @@ private:
 };
 
 int main() {
-    ruvia::app().listen({.address = "0.0.0.0", .http = 8081}).server({.workerCount = 2, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall}).run();
+    ruvia::app()
+        .listen({.address = "0.0.0.0", .http = 8081})
+        .server({.workerCount = 2,
+            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .run();
 }

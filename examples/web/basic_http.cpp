@@ -27,17 +27,24 @@ class AdminAuthMiddleware final : public ruvia::Middleware<AdminAuthMiddleware> 
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         if (c.req().header("X-Admin-Token").value_or("") != "secret") {
-            c.respond(c.error({.status = ruvia::http_status::kUnauthorized, .code = "unauthorized", .message = "missing admin token"}));
+            c.respond(c.error({.status = ruvia::http_status::kUnauthorized,
+                .code = "unauthorized",
+                .message = "missing admin token"}));
             co_return;
         }
         co_await next();
     }
 };
 
-RUVIA_RESPONSE_MODEL(UserResponse, RUVIA_OPTIONAL_FIELD(id, ruvia::String), RUVIA_OPTIONAL_FIELD(name, ruvia::String), RUVIA_OPTIONAL_FIELD(active, ruvia::Bool));
+RUVIA_RESPONSE_MODEL(UserResponse, RUVIA_OPTIONAL_FIELD(id, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(name, ruvia::String), RUVIA_OPTIONAL_FIELD(active, ruvia::Bool));
 
-ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(ruvia::Context& c, ruvia::HttpErrorInfo error) {
-    co_return c.error({.status = error.status(), .code = error.code(), .message = error.message(), .statusText = error.statusText()});
+ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(
+    ruvia::Context& c, ruvia::HttpErrorInfo error) {
+    co_return c.error({.status = error.status(),
+        .code = error.code(),
+        .message = error.message(),
+        .statusText = error.statusText()});
 }
 
 // Prefix-scoped fallbacks: the longest matching registered prefix wins, on
@@ -45,12 +52,17 @@ ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(ruvia::Context& c, ruvia::H
 // outside every prefix keep using the app-wide handlers above.
 ruvia::Task<ruvia::HttpResponse> apiNotFound(ruvia::Context& c) {
     c.status(ruvia::http_status::kNotFound);
-    co_return c.error({.status = ruvia::http_status::kNotFound, .code = "api_not_found", .message = "no such API endpoint"});
+    co_return c.error({.status = ruvia::http_status::kNotFound,
+        .code = "api_not_found",
+        .message = "no such API endpoint"});
 }
 
 ruvia::Task<ruvia::HttpResponse> apiError(ruvia::Context& c, ruvia::HttpErrorInfo error) {
     c.header("X-Api-Error", "true");
-    co_return c.error({.status = error.status(), .code = error.code(), .message = error.message(), .statusText = error.statusText()});
+    co_return c.error({.status = error.status(),
+        .code = error.code(),
+        .message = error.message(),
+        .statusText = error.statusText()});
 }
 
 std::optional<std::uint32_t> parseUInt32(std::optional<std::string_view> input) noexcept {
@@ -95,7 +107,9 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> user(ruvia::Context& c) {
         UserResponse response(c);
-        response.set<"id">(c.req().param("id").value_or("unknown")).set<"name">("example-user").set<"active">(ruvia::Bool{true});
+        response.set<"id">(c.req().param("id").value_or("unknown"))
+            .set<"name">("example-user")
+            .set<"active">(ruvia::Bool{true});
         co_return c.json(response);
     }
 
@@ -155,7 +169,9 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> fail(ruvia::Context&) {
-        throw ruvia::HttpError({.status = ruvia::http_status::kBadRequest, .code = "example_error", .message = "the example handler threw an HttpError"});
+        throw ruvia::HttpError({.status = ruvia::http_status::kBadRequest,
+            .code = "example_error",
+            .message = "the example handler threw an HttpError"});
     }
 
     ruvia::Task<ruvia::HttpResponse> health(ruvia::Context& c) {

@@ -34,14 +34,18 @@ RUVIA_TEST(body_reader_rejects_concurrent_consumers_of_one_borrowed_buffer) {
         RUVIA_CHECK(coldRejected);
     }
 
-    auto first = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(completeBodyRead(binding.facade(), firstCompleted)), asio::use_future);
+    auto first = asio::co_spawn(io,
+        ruvia::detail::taskAsAwaitable(completeBodyRead(binding.facade(), firstCompleted)),
+        asio::use_future);
     while (!binding.reader().readSuspended) {
         RUVIA_CHECK_EQ(io.run_one(), std::size_t{1});
     }
     RUVIA_CHECK(!firstCompleted);
 
     io.restart();
-    auto second = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(rejectConcurrentBodyRead(binding.facade(), secondRejected)), asio::use_future);
+    auto second = asio::co_spawn(io,
+        ruvia::detail::taskAsAwaitable(rejectConcurrentBodyRead(binding.facade(), secondRejected)),
+        asio::use_future);
     asio::post(io, [&binding] { binding.reader().resume(); });
     io.run();
     first.get();
@@ -53,7 +57,8 @@ RUVIA_TEST(body_reader_rejects_concurrent_consumers_of_one_borrowed_buffer) {
 
 RUVIA_TEST(websocket_rejects_overlapping_cold_operations) {
     CaptureWebSocket capture;
-    auto socket = ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
+    auto socket =
+        ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
 
     {
         auto cold = socket.read();
@@ -124,7 +129,9 @@ RUVIA_TEST(websocket_rejects_overlapping_cold_operations) {
     }
 
     asio::io_context io(1);
-    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(writeStoredTemporaryWebSocketPayload(socket)), asio::use_future);
+    auto future = asio::co_spawn(io,
+        ruvia::detail::taskAsAwaitable(writeStoredTemporaryWebSocketPayload(socket)),
+        asio::use_future);
     io.run();
     future.get();
     RUVIA_CHECK_EQ(capture.writes.size(), std::size_t{1});
@@ -157,7 +164,9 @@ RUVIA_TEST(response_stream_rejects_overlapping_output_operations) {
         RUVIA_CHECK(coldEndRejected);
     }
 
-    auto first = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(completeStreamWrite(writer, "first", firstCompleted)), asio::use_future);
+    auto first = asio::co_spawn(io,
+        ruvia::detail::taskAsAwaitable(completeStreamWrite(writer, "first", firstCompleted)),
+        asio::use_future);
     while (!sink.writeSuspended) {
         RUVIA_CHECK_EQ(io.run_one(), std::size_t{1});
     }
@@ -165,8 +174,12 @@ RUVIA_TEST(response_stream_rejects_overlapping_output_operations) {
     RUVIA_CHECK(!firstCompleted);
 
     io.restart();
-    auto overlappingWrite = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(rejectConcurrentStreamWrite(writer, writeRejected)), asio::use_future);
-    auto overlappingEnd = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(rejectConcurrentStreamEnd(writer, endRejected)), asio::use_future);
+    auto overlappingWrite = asio::co_spawn(io,
+        ruvia::detail::taskAsAwaitable(rejectConcurrentStreamWrite(writer, writeRejected)),
+        asio::use_future);
+    auto overlappingEnd = asio::co_spawn(io,
+        ruvia::detail::taskAsAwaitable(rejectConcurrentStreamEnd(writer, endRejected)),
+        asio::use_future);
     io.poll();
     overlappingWrite.get();
     overlappingEnd.get();
@@ -184,13 +197,17 @@ RUVIA_TEST(response_stream_rejects_overlapping_output_operations) {
 
     sink.failNextWrite = true;
     io.restart();
-    auto failing = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(observeStreamWriteFailure(writer, failureObserved)), asio::use_future);
+    auto failing = asio::co_spawn(io,
+        ruvia::detail::taskAsAwaitable(observeStreamWriteFailure(writer, failureObserved)),
+        asio::use_future);
     io.run();
     failing.get();
     RUVIA_CHECK(failureObserved);
 
     io.restart();
-    auto following = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(completeStreamWrite(writer, "following", firstCompleted)), asio::use_future);
+    auto following = asio::co_spawn(io,
+        ruvia::detail::taskAsAwaitable(completeStreamWrite(writer, "following", firstCompleted)),
+        asio::use_future);
     io.run();
     following.get();
     RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{3});
@@ -204,7 +221,8 @@ RUVIA_TEST(response_stream_writeln_emits_independent_lines) {
     auto writer = makeWriter(sink);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writeLines(writer)), asio::use_future);
+    auto future =
+        asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writeLines(writer)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -218,7 +236,8 @@ RUVIA_TEST(response_stream_stored_writeln_operations_own_independent_payloads) {
     auto writer = makeWriter(sink);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writeStoredLines(writer)), asio::use_future);
+    auto future = asio::co_spawn(
+        ctx, ruvia::detail::taskAsAwaitable(writeStoredLines(writer)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -229,9 +248,12 @@ RUVIA_TEST(response_stream_stored_writeln_operations_own_independent_payloads) {
 
 RUVIA_TEST(websocket_stored_operation_owns_temporary_payload) {
     CaptureWebSocket capture;
-    auto socket = ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
+    auto socket =
+        ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writeStoredTemporaryWebSocketPayload(socket)), asio::use_future);
+    auto future = asio::co_spawn(ctx,
+        ruvia::detail::taskAsAwaitable(writeStoredTemporaryWebSocketPayload(socket)),
+        asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK_EQ(capture.writes.size(), std::size_t{1});
@@ -243,7 +265,8 @@ RUVIA_TEST(response_stream_pmr_overload_transfers_prebuilt_chunk) {
     auto writer = makeWriter(sink);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writePrebuiltChunk(writer)), asio::use_future);
+    auto future = asio::co_spawn(
+        ctx, ruvia::detail::taskAsAwaitable(writePrebuiltChunk(writer)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -253,10 +276,12 @@ RUVIA_TEST(response_stream_pmr_overload_transfers_prebuilt_chunk) {
 
 RUVIA_TEST(websocket_text_pmr_overload_transfers_prebuilt_payload) {
     CaptureWebSocket capture;
-    auto socket = ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
+    auto socket =
+        ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writePrebuiltTextFrame(socket)), asio::use_future);
+    auto future = asio::co_spawn(
+        ctx, ruvia::detail::taskAsAwaitable(writePrebuiltTextFrame(socket)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -269,7 +294,8 @@ RUVIA_TEST(response_stream_end_submits_one_terminal_trailer_section) {
     auto writer = makeWriter(sink);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(endWithTrailers(writer)), asio::use_future);
+    auto future = asio::co_spawn(
+        ctx, ruvia::detail::taskAsAwaitable(endWithTrailers(writer)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -282,7 +308,8 @@ RUVIA_TEST(response_stream_stored_end_owns_trailer_names_and_values) {
     CaptureStreamSink sink;
     auto writer = makeWriter(sink);
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(endWithExpiredTrailerSources(writer)), asio::use_future);
+    auto future = asio::co_spawn(ctx,
+        ruvia::detail::taskAsAwaitable(endWithExpiredTrailerSources(writer)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK_EQ(sink.trailers.size(), std::size_t{1});
@@ -312,24 +339,32 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
         detachedContextRejected = true;
     }
     RUVIA_CHECK(detachedContextRejected);
-    bound.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet, ruvia::http_status::kOk, ruvia::detail::ResponseTrailerIntent::kNone));
+    bound.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet,
+        ruvia::http_status::kOk, ruvia::detail::ResponseTrailerIntent::kNone));
     bool committedContextReleased = false;
     try {
         (void)bound.streamingHead();
     } catch (const std::logic_error& error) {
-        committedContextReleased = std::string_view(error.what()) == "response stream is already committed";
+        committedContextReleased =
+            std::string_view(error.what()) == "response stream is already committed";
     }
     RUVIA_CHECK(committedContextReleased);
 
     // A committed stream that allows a body accepts a chunk before end()...
     ResponseStreamState open;
-    open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet, ruvia::http_status::kMultiStatus, ruvia::detail::ResponseTrailerIntent::kNone));
+    open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet,
+        ruvia::http_status::kMultiStatus, ruvia::detail::ResponseTrailerIntent::kNone));
     RUVIA_CHECK(open.commitPlan() != nullptr);
     RUVIA_CHECK_EQ(open.commitPlan()->responseStatus(), ruvia::http_status::kMultiStatus);
-    RUVIA_CHECK(open.commitPlan()->framing() == ruvia::detail::ResponseStreamFraming::kHttp1Chunked);
+    RUVIA_CHECK(
+        open.commitPlan()->framing() == ruvia::detail::ResponseStreamFraming::kHttp1Chunked);
     bool recommitRejected = false;
     try {
-        open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(ruvia::detail::ResponseStreamFraming::kHttp2Frames, ruvia::HttpKnownMethod::kGet, ruvia::HttpStatusCode::fromValue(418), ruvia::detail::ResponseTrailerIntent::kNone));
+        open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+            ruvia::detail::ResponseStreamFraming::kHttp2Frames, ruvia::HttpKnownMethod::kGet,
+            ruvia::HttpStatusCode::fromValue(418), ruvia::detail::ResponseTrailerIntent::kNone));
     } catch (const std::logic_error&) {
         recommitRejected = true;
     }
@@ -362,7 +397,9 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     // coexist with Ended. A post-commit abort retains the exact wire plan for
     // dispatch accounting, while an uncommitted abort cannot manufacture one.
     ResponseStreamState abortedOpen;
-    abortedOpen.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet, ruvia::http_status::kPartialContent, ruvia::detail::ResponseTrailerIntent::kNone));
+    abortedOpen.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet,
+        ruvia::http_status::kPartialContent, ruvia::detail::ResponseTrailerIntent::kNone));
     abortedOpen.markAborted();
     abortedOpen.markAborted();
     RUVIA_CHECK(abortedOpen.aborted());
@@ -389,7 +426,9 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     // would have produced is correct handler behavior there, so dispatch must
     // be able to tell it apart from a post-end() sequencing bug.
     ResponseStreamState suppressed;
-    suppressed.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kHead, ruvia::http_status::kOk, ruvia::detail::ResponseTrailerIntent::kNone));
+    suppressed.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kHead,
+        ruvia::http_status::kOk, ruvia::detail::ResponseTrailerIntent::kNone));
     bool bodyRejected = false;
     try {
         suppressed.ensureBodyAllowed();
@@ -401,7 +440,9 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     // HTTP/2 can keep the same content-forbidden response open solely for a
     // terminal trailing-HEADERS block, without accidentally enabling DATA.
     ResponseStreamState trailersOnly;
-    trailersOnly.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(ruvia::detail::ResponseStreamFraming::kHttp2Frames, ruvia::HttpKnownMethod::kHead, ruvia::http_status::kOk, ruvia::detail::ResponseTrailerIntent::kPresent));
+    trailersOnly.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp2Frames, ruvia::HttpKnownMethod::kHead,
+        ruvia::http_status::kOk, ruvia::detail::ResponseTrailerIntent::kPresent));
     RUVIA_CHECK(trailersOnly.committed());
     RUVIA_CHECK(!trailersOnly.ended());
     bool trailersOnlyBodyRejected = false;
@@ -411,16 +452,20 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
         trailersOnlyBodyRejected = true;
     }
     RUVIA_CHECK(trailersOnlyBodyRejected);
-    trailersOnly.ensureTrailersAllowed(ruvia::detail::ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+    trailersOnly.ensureTrailersAllowed(
+        ruvia::detail::ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
 }
 
 RUVIA_TEST(response_stream_head_rejects_a_mismatched_status_plan) {
     ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kCreated);
-    auto plan = ruvia::detail::httpResponseStreamCommitPlan(ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet, ruvia::http_status::kAccepted, ruvia::detail::ResponseTrailerIntent::kNone);
+    auto plan = ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet,
+        ruvia::http_status::kAccepted, ruvia::detail::ResponseTrailerIntent::kNone);
     bool rejected = false;
     try {
-        (void)ruvia::detail::prepareResponseStreamHead(std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, std::move(plan));
+        (void)ruvia::detail::prepareResponseStreamHead(
+            std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, std::move(plan));
     } catch (const std::invalid_argument&) {
         rejected = true;
     }

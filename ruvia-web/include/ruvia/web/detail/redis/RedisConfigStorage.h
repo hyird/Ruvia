@@ -16,7 +16,8 @@ namespace ruvia::detail {
 // PMR-owned runtime form of the ordinary public RedisConfig value.
 struct RedisConfigStorage final {
     RedisConfigStorage(const RedisConfig& source, std::pmr::memory_resource* resource)
-        : RedisConfigStorage(ValidatedConfigTag{}, validate(source), pmrResourceOrDefault(resource)) {}
+        : RedisConfigStorage(
+              ValidatedConfigTag{}, validate(source), pmrResourceOrDefault(resource)) {}
 
     RedisConfigStorage(const RedisConfigStorage& source, std::pmr::memory_resource* resource)
         : RedisConfigStorage(ValidatedConfigTag{}, source, pmrResourceOrDefault(resource)) {}
@@ -44,7 +45,8 @@ private:
         return source;
     }
 
-    RedisConfigStorage(ValidatedConfigTag, const RedisConfig& source, std::pmr::memory_resource* resource)
+    RedisConfigStorage(
+        ValidatedConfigTag, const RedisConfig& source, std::pmr::memory_resource* resource)
         : host(source.host, resource),
           port(source.port),
           username(source.username, resource),
@@ -60,7 +62,8 @@ private:
           tcpNoDelay(source.tcpNoDelay),
           tcpKeepAlive(source.tcpKeepAlive) {}
 
-    RedisConfigStorage(ValidatedConfigTag, const RedisConfigStorage& source, std::pmr::memory_resource* resource)
+    RedisConfigStorage(
+        ValidatedConfigTag, const RedisConfigStorage& source, std::pmr::memory_resource* resource)
         : host(source.host, resource),
           port(source.port),
           username(source.username, resource),

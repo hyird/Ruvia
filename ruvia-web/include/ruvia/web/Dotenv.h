@@ -93,7 +93,8 @@ public:
     // are indistinguishable here by design; use get<T>() when the difference
     // matters, which is the common case for deployment settings.
     template <typename T>
-    [[nodiscard]] std::optional<std::remove_cvref_t<T>> tryGet(std::string_view name) const& noexcept {
+    [[nodiscard]] std::optional<std::remove_cvref_t<T>> tryGet(
+        std::string_view name) const& noexcept {
         const auto value = get(name);
         if (!value.has_value()) {
             return std::nullopt;
@@ -117,7 +118,8 @@ private:
     [[nodiscard]] static std::optional<bool> parseBoolValue(std::string_view value) noexcept;
 
     template <typename T>
-    [[nodiscard]] static std::optional<std::remove_cvref_t<T>> parseTypedValue(std::string_view value) noexcept;
+    [[nodiscard]] static std::optional<std::remove_cvref_t<T>> parseTypedValue(
+        std::string_view value) noexcept;
 
     template <typename T>
     [[nodiscard]] static std::optional<T> parseArithmeticValue(std::string_view value) noexcept;
@@ -136,7 +138,8 @@ std::optional<std::remove_cvref_t<T>> Env::get(std::string_view name) const& {
     }
     auto parsed = parseTypedValue<T>(*value);
     if (!parsed.has_value()) {
-        throw std::invalid_argument("invalid value for environment variable '" + std::string(name) + "'");
+        throw std::invalid_argument(
+            "invalid value for environment variable '" + std::string(name) + "'");
     }
     return parsed;
 }
@@ -152,7 +155,8 @@ std::optional<std::remove_cvref_t<T>> Env::parseTypedValue(std::string_view valu
     } else if constexpr (std::is_integral_v<Value> || std::is_floating_point_v<Value>) {
         return parseArithmeticValue<Value>(value);
     } else {
-        static_assert(kUnsupportedTypedEnvValue<Value>, "Env::get<T>() supports string_view, bool, integral, and floating-point values");
+        static_assert(kUnsupportedTypedEnvValue<Value>,
+            "Env::get<T>() supports string_view, bool, integral, and floating-point values");
     }
 }
 

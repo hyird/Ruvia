@@ -21,9 +21,11 @@ inline constexpr int kHttpZstdWindowLogMax = 23;  // RFC 9659: 8 MiB
 
 }  // namespace
 
-ContentDecodeAttempt decodeZstdContent(std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
+ContentDecodeAttempt decodeZstdContent(
+    std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    auto* stream = ZSTD_createDStream_advanced(ZSTD_customMem{&pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource()});
+    auto* stream = ZSTD_createDStream_advanced(
+        ZSTD_customMem{&pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource()});
     if (stream == nullptr) {
         return HttpContentDecodeError::kDecoderFailure;
     }
@@ -37,7 +39,8 @@ ContentDecodeAttempt decodeZstdContent(std::string_view input, std::size_t maxDe
     if (ZSTD_isError(initialized) != 0) {
         return HttpContentDecodeError::kDecoderFailure;
     }
-    const auto windowLimit = ZSTD_DCtx_setParameter(stream, ZSTD_d_windowLogMax, kHttpZstdWindowLogMax);
+    const auto windowLimit =
+        ZSTD_DCtx_setParameter(stream, ZSTD_d_windowLogMax, kHttpZstdWindowLogMax);
     if (ZSTD_isError(windowLimit) != 0) {
         return HttpContentDecodeError::kDecoderFailure;
     }
@@ -49,7 +52,9 @@ ContentDecodeAttempt decodeZstdContent(std::string_view input, std::size_t maxDe
         ZSTD_outBuffer out{buffer, sizeof(buffer), 0};
         const auto result = ZSTD_decompressStream(stream, &out, &in);
         if (ZSTD_isError(result) != 0) {
-            return ZSTD_getErrorCode(result) == ZSTD_error_memory_allocation ? HttpContentDecodeError::kDecoderFailure : HttpContentDecodeError::kInvalidContent;
+            return ZSTD_getErrorCode(result) == ZSTD_error_memory_allocation
+                       ? HttpContentDecodeError::kDecoderFailure
+                       : HttpContentDecodeError::kInvalidContent;
         }
         if (!appendDecodedBytes(output, buffer, out.pos, maxDecodedBytes)) {
             return HttpContentDecodeError::kDecodedSizeExceeded;
@@ -65,9 +70,11 @@ ContentDecodeAttempt decodeZstdContent(std::string_view input, std::size_t maxDe
     }
 }
 
-ContentEncodeAttempt encodeZstdContent(std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
+ContentEncodeAttempt encodeZstdContent(
+    std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    auto* context = ZSTD_createCCtx_advanced(ZSTD_customMem{&pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource()});
+    auto* context = ZSTD_createCCtx_advanced(
+        ZSTD_customMem{&pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource()});
     if (context == nullptr) {
         return HttpContentEncodeError::kEncoderFailure;
     }
@@ -77,7 +84,10 @@ ContentEncodeAttempt encodeZstdContent(std::string_view input, std::size_t maxEn
             ZSTD_freeCCtx(context);
         }
     } guard{context};
-    if (ZSTD_isError(ZSTD_CCtx_setParameter(context, ZSTD_c_compressionLevel, ZSTD_CLEVEL_DEFAULT)) != 0 || ZSTD_isError(ZSTD_CCtx_setParameter(context, ZSTD_c_windowLog, kHttpZstdWindowLogMax)) != 0) {
+    if (ZSTD_isError(
+            ZSTD_CCtx_setParameter(context, ZSTD_c_compressionLevel, ZSTD_CLEVEL_DEFAULT)) != 0 ||
+        ZSTD_isError(ZSTD_CCtx_setParameter(context, ZSTD_c_windowLog, kHttpZstdWindowLogMax)) !=
+            0) {
         return HttpContentEncodeError::kEncoderFailure;
     }
     ZSTD_inBuffer in{input.data(), input.size(), 0};

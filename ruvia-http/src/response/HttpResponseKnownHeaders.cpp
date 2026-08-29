@@ -140,7 +140,8 @@ std::uint32_t classifyResponseHeaderName(std::string_view name) noexcept {
             }
             return 0;
         case 32:
-            if (first == 'a' && httpAsciiEqualsIgnoreCase(name, "Access-Control-Allow-Credentials")) {
+            if (first == 'a' &&
+                httpAsciiEqualsIgnoreCase(name, "Access-Control-Allow-Credentials")) {
                 return kResponseHeaderAccessControlAllowCredentials;
             }
             return 0;

@@ -103,7 +103,11 @@ private:
 
 class WsConnection final {
 public:
-    explicit WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(), WebSocketCompression compression = WebSocketCompression::kDisabled, WsConnectionRole role = WsConnectionRole::kServer, WsMaskKeyGenerator maskKeyGenerator = nullptr, void* maskKeyContext = nullptr);
+    explicit WsConnection(std::pmr::string& input,
+        ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(),
+        WebSocketCompression compression = WebSocketCompression::kDisabled,
+        WsConnectionRole role = WsConnectionRole::kServer,
+        WsMaskKeyGenerator maskKeyGenerator = nullptr, void* maskKeyContext = nullptr);
 
     // Parse buffered transport bytes until one protocol event is available or
     // more input is required (nullopt). Every materialized event contains one

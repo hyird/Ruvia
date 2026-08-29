@@ -52,8 +52,11 @@ public:
 
     // Two registrations of the same middleware type differ when they carry
     // different arguments, so identity spans the argument pointer as well.
-    [[nodiscard]] friend bool operator==(const ControllerMiddlewareDescriptor& left, const ControllerMiddlewareDescriptor& right) noexcept {
-        return left.invoke_ == right.invoke_ && left.create_ == right.create_ && left.destroy_ == right.destroy_ && left.args_ == right.args_ && left.prefix_ == right.prefix_;
+    [[nodiscard]] friend bool operator==(const ControllerMiddlewareDescriptor& left,
+        const ControllerMiddlewareDescriptor& right) noexcept {
+        return left.invoke_ == right.invoke_ && left.create_ == right.create_ &&
+               left.destroy_ == right.destroy_ && left.args_ == right.args_ &&
+               left.prefix_ == right.prefix_;
     }
 
     [[nodiscard]] const void* validatedModelTypeKey() const noexcept {
@@ -99,7 +102,10 @@ private:
     friend ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args);
 
     constexpr ControllerMiddlewareDescriptor() noexcept = default;
-    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy, const void* args, const void* validatedModelTypeKey, bool usesRouteRateLimit, bool runsOnUnmatchedRequests = false, std::size_t requestBodyLimit = 0, std::int64_t deadlineMs = 0) noexcept
+    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy,
+        const void* args, const void* validatedModelTypeKey, bool usesRouteRateLimit,
+        bool runsOnUnmatchedRequests = false, std::size_t requestBodyLimit = 0,
+        std::int64_t deadlineMs = 0) noexcept
         : invoke_(invoke),
           create_(create),
           destroy_(destroy),

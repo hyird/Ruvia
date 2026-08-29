@@ -17,12 +17,14 @@
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] std::size_t http2DataFrameEncodedBytes(std::size_t dataBytes, std::size_t maxFrameSize) {
+[[nodiscard]] std::size_t http2DataFrameEncodedBytes(
+    std::size_t dataBytes, std::size_t maxFrameSize) {
     if (dataBytes == 0) {
         return 0;
     }
     const auto frameCount = dataBytes / maxFrameSize + (dataBytes % maxFrameSize == 0 ? 0 : 1);
-    if (frameCount > (std::numeric_limits<std::size_t>::max() - dataBytes) / kHttp2FrameHeaderBytes) {
+    if (frameCount >
+        (std::numeric_limits<std::size_t>::max() - dataBytes) / kHttp2FrameHeaderBytes) {
         throw std::length_error("HTTP/2 DATA output size overflow");
     }
     return dataBytes + frameCount * kHttp2FrameHeaderBytes;
@@ -31,7 +33,8 @@ namespace {
 // The largest HPACK integer encoding for a dynamic-table update is six bytes
 // (the value is a uint32 with a five-bit prefix). The drain preflight uses this
 // upper bound; appendResponseHeaderFrames computes the exact prefix afterwards.
-[[nodiscard]] std::size_t http2HeaderFrameEncodedBytes(std::size_t headerBytes, std::size_t maxFrameSize, std::size_t firstPrefixBytes) {
+[[nodiscard]] std::size_t http2HeaderFrameEncodedBytes(
+    std::size_t headerBytes, std::size_t maxFrameSize, std::size_t firstPrefixBytes) {
     if (firstPrefixBytes > maxFrameSize) {
         throw std::length_error("HTTP/2 header prefix exceeds frame size");
     }
@@ -61,17 +64,21 @@ namespace {
 
 }  // namespace
 
-std::size_t Http2Connection::sendDataUpToWindow(Http2StreamState& stream, std::string_view data, std::size_t offset, Http2EndStream endStream) {
+std::size_t Http2Connection::sendDataUpToWindow(
+    Http2StreamState& stream, std::string_view data, std::size_t offset, Http2EndStream endStream) {
     const auto total = data.size();
     while (offset < total) {
         const auto available = http2AvailableSendWindow(connectionSendWindow_, stream);
         if (available == 0) {
             break;  // window exhausted; caller buffers the remainder
         }
-        const auto chunk = std::min<std::size_t>({total - offset, available, peerSettings_.maxFrameSize()});
+        const auto chunk =
+            std::min<std::size_t>({total - offset, available, peerSettings_.maxFrameSize()});
         const bool last = offset + chunk == total;
         http2ConsumeSendWindow(connectionSendWindow_, stream, chunk);
-        output_.appendFrame(Http2FrameType::kData, static_cast<std::uint8_t>(http2EndsStream(endStream) && last ? kHttp2FlagEndStream : 0), stream.id(), data.substr(offset, chunk));
+        output_.appendFrame(Http2FrameType::kData,
+            static_cast<std::uint8_t>(http2EndsStream(endStream) && last ? kHttp2FlagEndStream : 0),
+            stream.id(), data.substr(offset, chunk));
         stream.commitLocalContent(chunk);
         offset += chunk;
     }
@@ -100,7 +107,8 @@ void Http2Connection::markSendWindowOpened() {
         const auto remaining = pending.bytes.size() - pending.offset;
         const auto available = http2AvailableSendWindow(simulatedConnectionWindow, *stream);
         const auto immediate = std::min(remaining, available);
-        requiredOutputBytes = checkedOutputBytesAdd(requiredOutputBytes, http2DataFrameEncodedBytes(immediate, maxFrame));
+        requiredOutputBytes = checkedOutputBytesAdd(
+            requiredOutputBytes, http2DataFrameEncodedBytes(immediate, maxFrame));
         simulatedConnectionWindow -= static_cast<std::int32_t>(immediate);
         if (immediate != remaining) {
             continue;
@@ -108,7 +116,9 @@ void Http2Connection::markSendWindowOpened() {
 
         ++drainedCount;
         if (!pending.trailerBlock.empty()) {
-            requiredOutputBytes = checkedOutputBytesAdd(requiredOutputBytes, http2HeaderFrameEncodedBytes(pending.trailerBlock.size(), maxFrame, simulatedTableUpdatePending ? kMaxDynamicTableUpdateBytes : 0));
+            requiredOutputBytes = checkedOutputBytesAdd(requiredOutputBytes,
+                http2HeaderFrameEncodedBytes(pending.trailerBlock.size(), maxFrame,
+                    simulatedTableUpdatePending ? kMaxDynamicTableUpdateBytes : 0));
             simulatedTableUpdatePending = false;
         }
     }
@@ -127,12 +137,14 @@ void Http2Connection::markSendWindowOpened() {
             pendingSends_.erase(pendingSends_.begin() + static_cast<std::ptrdiff_t>(i));
             continue;
         }
-        pending.offset = sendDataUpToWindow(*stream, std::string_view(pending.bytes), pending.offset, pending.endStream);
+        pending.offset = sendDataUpToWindow(
+            *stream, std::string_view(pending.bytes), pending.offset, pending.endStream);
         if (pending.offset >= pending.bytes.size()) {
             // The body fully drained. If a trailer block was queued behind it, emit it
             // now as the terminal HEADERS(END_STREAM) -- strictly AFTER all the DATA.
             if (!pending.trailerBlock.empty() && !stream->isAborted()) {
-                appendResponseHeaderFrames(*stream, std::string_view(pending.trailerBlock), Http2EndStream::kEndStream);
+                appendResponseHeaderFrames(
+                    *stream, std::string_view(pending.trailerBlock), Http2EndStream::kEndStream);
             }
             if (http2EndsStream(pending.endStream) || !pending.trailerBlock.empty()) {
                 (void)stream->commitLocalEndStream();
@@ -146,7 +158,8 @@ void Http2Connection::markSendWindowOpened() {
     }
 }
 
-bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::string_view payload) {
+bool Http2Connection::processWindowUpdate(
+    const Http2FrameHeader& header, std::string_view payload) {
     if (payload.size() != 4) {
         appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid WINDOW_UPDATE");
         return false;
@@ -190,7 +203,8 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
         if (increment == 0) {
             // A skipped/released identifier is closed, not idle. Promote the
             // mandatory stream error because RST_STREAM is forbidden there.
-            appendGoaway(Http2ErrorCode::kProtocolError, "zero WINDOW_UPDATE on released closed stream");
+            appendGoaway(
+                Http2ErrorCode::kProtocolError, "zero WINDOW_UPDATE on released closed stream");
             return false;
         }
         return true;
@@ -281,7 +295,8 @@ void Http2Connection::releaseAllReceivedData(std::uint32_t streamId) {
 }
 
 bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
-    return std::ranges::find(pendingSends_, streamId, &Http2PendingSend::streamId) != pendingSends_.end();
+    return std::ranges::find(pendingSends_, streamId, &Http2PendingSend::streamId) !=
+           pendingSends_.end();
 }
 
 void Http2Connection::queueConsumedDataCredit(Http2StreamState* stream, std::uint32_t bytes) {
@@ -289,10 +304,12 @@ void Http2Connection::queueConsumedDataCredit(Http2StreamState* stream, std::uin
         return;
     }
 
-    const bool streamCanReceive = stream != nullptr && !http2RemotePeerHalfClosed(*stream) && !stream->isAborted();
+    const bool streamCanReceive =
+        stream != nullptr && !http2RemotePeerHalfClosed(*stream) && !stream->isAborted();
     const auto connectionReady = connectionReceiveCredit_.readyAfter(bytes);
     const auto streamReady = streamCanReceive && stream->receiveWindowCredit().readyAfter(bytes);
-    const auto frameCount = static_cast<std::size_t>(connectionReady) + static_cast<std::size_t>(streamReady);
+    const auto frameCount =
+        static_cast<std::size_t>(connectionReady) + static_cast<std::size_t>(streamReady);
     if (frameCount != 0) {
         output_.reserveAdditional(frameCount * kHttp2WindowUpdateFrameBytes);
     }
@@ -306,7 +323,8 @@ void Http2Connection::queueConsumedDataCredit(Http2StreamState* stream, std::uin
     auto* out = buffer;
     if (connectionReceiveCredit_.ready()) {
         const auto increment = connectionReceiveCredit_.take();
-        http2CreditConnectionReceiveWindow(connectionReceiveWindow_, static_cast<std::int32_t>(increment));
+        http2CreditConnectionReceiveWindow(
+            connectionReceiveWindow_, static_cast<std::int32_t>(increment));
         out = http2WriteWindowUpdate(out, 0, increment);
     }
     if (streamCanReceive && stream->receiveWindowCredit().ready()) {

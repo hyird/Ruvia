@@ -84,13 +84,16 @@ public:
         bytes_.reserve(bytes_.size() + additional);
     }
 
-    void appendFrame(Http2FrameType type, std::uint8_t flags, std::uint32_t streamId, std::string_view first, std::string_view second = {}) {
-        if (first.size() > kHttp2MaxFrameSizeLimit || second.size() > kHttp2MaxFrameSizeLimit - first.size()) {
+    void appendFrame(Http2FrameType type, std::uint8_t flags, std::uint32_t streamId,
+        std::string_view first, std::string_view second = {}) {
+        if (first.size() > kHttp2MaxFrameSizeLimit ||
+            second.size() > kHttp2MaxFrameSizeLimit - first.size()) {
             std::terminate();
         }
 
         std::array<char, kHttp2FrameHeaderBytes> header;
-        http2EncodeFrameHeader(header.data(), static_cast<std::uint32_t>(first.size() + second.size()), type, flags, streamId);
+        http2EncodeFrameHeader(header.data(),
+            static_cast<std::uint32_t>(first.size() + second.size()), type, flags, streamId);
         // A frame is the smallest wire-level transaction. Reserve the complete
         // frame before appending any part so a throwing PMR resource cannot leave
         // a header or prefix without its payload in pendingOutput().
@@ -99,7 +102,8 @@ public:
         appendBytes(first);
         appendBytes(second);
     }
-    void appendGoawayFrame(std::uint32_t lastStreamId, Http2ErrorCode error, std::string_view debug = {});
+    void appendGoawayFrame(
+        std::uint32_t lastStreamId, Http2ErrorCode error, std::string_view debug = {});
     void appendRstStream(std::uint32_t streamId, Http2ErrorCode error);
 
 private:

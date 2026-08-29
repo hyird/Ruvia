@@ -37,7 +37,8 @@ public:
         return semantics_;
     }
 
-    [[nodiscard]] std::uint64_t bufferedRepresentationLength(const HttpResponse& response) const noexcept {
+    [[nodiscard]] std::uint64_t bufferedRepresentationLength(
+        const HttpResponse& response) const noexcept {
         if (!statusAllowsBody() || semantics_ == HttpResponseContentSemantics::kConnectTunnel) {
             return 0;
         }
@@ -48,7 +49,8 @@ private:
     friend HttpResponseBodyPlan httpResponseBodyPlan(HttpKnownMethod, HttpStatusCode) noexcept;
     friend class HttpBufferedResponseWritePlan;
 
-    constexpr HttpResponseBodyPlan(HttpKnownMethod requestMethod, HttpStatusCode responseStatus, ResponseWritePolicy policy, HttpResponseContentSemantics semantics) noexcept
+    constexpr HttpResponseBodyPlan(HttpKnownMethod requestMethod, HttpStatusCode responseStatus,
+        ResponseWritePolicy policy, HttpResponseContentSemantics semantics) noexcept
         : requestMethod_(requestMethod),
           responseStatus_(responseStatus),
           policy_(policy),
@@ -63,9 +65,11 @@ private:
 static_assert(std::is_trivially_copyable_v<HttpResponseBodyPlan>);
 static_assert(sizeof(HttpResponseBodyPlan) <= 12);
 
-[[nodiscard]] inline HttpResponseBodyPlan httpResponseBodyPlan(HttpKnownMethod requestMethod, HttpStatusCode statusCode) noexcept {
+[[nodiscard]] inline HttpResponseBodyPlan httpResponseBodyPlan(
+    HttpKnownMethod requestMethod, HttpStatusCode statusCode) noexcept {
     const auto policy = responseWritePolicy(statusCode);
-    return HttpResponseBodyPlan(requestMethod, statusCode, policy, httpResponseContentSemantics(requestMethod, statusCode));
+    return HttpResponseBodyPlan(
+        requestMethod, statusCode, policy, httpResponseContentSemantics(requestMethod, statusCode));
 }
 
 class HttpBufferedResponseWritePlan final {
@@ -106,13 +110,16 @@ public:
     // snapshot before wire mutation so a changed status/body cannot silently
     // reuse stale representation metadata.
     [[nodiscard]] bool matchesResponse(const HttpResponse& response) const noexcept {
-        return responseStatus() == response.status() && contentLength_ == bodyPlan_.bufferedRepresentationLength(response);
+        return responseStatus() == response.status() &&
+               contentLength_ == bodyPlan_.bufferedRepresentationLength(response);
     }
 
 private:
-    friend HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(HttpKnownMethod, const HttpResponse&) noexcept;
+    friend HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(
+        HttpKnownMethod, const HttpResponse&) noexcept;
 
-    HttpBufferedResponseWritePlan(HttpResponseBodyPlan bodyPlan, std::uint64_t contentLength) noexcept
+    HttpBufferedResponseWritePlan(
+        HttpResponseBodyPlan bodyPlan, std::uint64_t contentLength) noexcept
         : bodyPlan_(bodyPlan),
           contentLength_(contentLength) {}
 
@@ -120,7 +127,8 @@ private:
     std::uint64_t contentLength_{0};
 };
 
-[[nodiscard]] inline HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(HttpKnownMethod requestMethod, const HttpResponse& response) noexcept {
+[[nodiscard]] inline HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(
+    HttpKnownMethod requestMethod, const HttpResponse& response) noexcept {
     const auto bodyPlan = httpResponseBodyPlan(requestMethod, response.status());
     return HttpBufferedResponseWritePlan(bodyPlan, bodyPlan.bufferedRepresentationLength(response));
 }

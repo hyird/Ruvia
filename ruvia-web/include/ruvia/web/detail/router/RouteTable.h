@@ -47,7 +47,8 @@ struct NextAccess final {
         return Next(state, invoke);
     }
 
-    [[nodiscard]] static Next& makeIn(std::pmr::memory_resource* resource, NextState state, NextInvoke invoke) {
+    [[nodiscard]] static Next& makeIn(
+        std::pmr::memory_resource* resource, NextState state, NextInvoke invoke) {
         auto* resolved = pmrResourceOrDefault(resource);
         auto* storage = resolved->allocate(sizeof(Next), alignof(Next));
         return *new (storage) Next(state, invoke);
@@ -90,19 +91,23 @@ public:
     // the final value (slashes preserved, may be empty). The pattern is the
     // route's identity -- an unregistered pattern or a value-count mismatch is
     // a programming error and throws std::invalid_argument.
-    [[nodiscard]] std::pmr::string urlFor(std::string_view pattern, std::span<const std::string_view> values, std::pmr::memory_resource* resource) const;
+    [[nodiscard]] std::pmr::string urlFor(std::string_view pattern,
+        std::span<const std::string_view> values, std::pmr::memory_resource* resource) const;
     [[nodiscard]] RouteResolution resolve(const HttpRequest& request) const noexcept;
-    [[nodiscard]] RouteResolution resolve(HttpKnownMethod method, std::string_view path) const noexcept;
+    [[nodiscard]] RouteResolution resolve(
+        HttpKnownMethod method, std::string_view path) const noexcept;
 
     // Extension-method routing, kept off every enum-indexed structure. The
     // request's exact token is compared against a small cold list, which costs
     // a known-method request nothing: both protocol drivers only reach it when
     // classifyHttpMethod() returned kUnknown.
-    [[nodiscard]] RouteResolution resolveExtensionMethod(std::string_view methodToken, std::string_view path) const noexcept;
+    [[nodiscard]] RouteResolution resolveExtensionMethod(
+        std::string_view methodToken, std::string_view path) const noexcept;
 
     // Tokens of the extension routes registered on `path`, for the Allow header
     // of a 405. Written into caller storage so no allocation outlives the call.
-    [[nodiscard]] std::span<const std::string_view> extensionMethodsFor(std::string_view path, std::span<std::string_view> buffer) const noexcept;
+    [[nodiscard]] std::span<const std::string_view> extensionMethodsFor(
+        std::string_view path, std::span<std::string_view> buffer) const noexcept;
     // Unique extension method tokens registered anywhere on the server, for the
     // server-wide Allow header of OPTIONS *.
     [[nodiscard]] std::span<const std::string_view> extensionMethodsForServer() const noexcept;
@@ -112,8 +117,10 @@ public:
     // makes 405 conditional on the method being "known by the origin server",
     // so a token nobody registered is 501 no matter what the target path holds.
     [[nodiscard]] bool recognizesMethodToken(std::string_view methodToken) const noexcept;
-    Task<HttpResponse> dispatch(const HttpRequest& request, RequestMemory& memory, ContextServices services) const;
-    Task<HttpResponse> dispatch(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services) const;
+    Task<HttpResponse> dispatch(
+        const HttpRequest& request, RequestMemory& memory, ContextServices services) const;
+    Task<HttpResponse> dispatch(const HttpRequest& request, const RouteResolution& resolution,
+        RequestMemory& memory, ContextServices services) const;
     // Canonical buffered-response application dispatch for every server
     // protocol. An unresolved route first consults the configured document
     // root, then falls through to 404/405/OPTIONS handling. Any failure escaping
@@ -122,13 +129,22 @@ public:
     // DocumentRootBinding::none() when no root is configured,
     // DocumentRootBinding::standalone(root) for an immutable root, or
     // DocumentRootBinding::configured(root) for a server-owned refreshing root.
-    Task<HttpResponse> dispatchBufferedResponse(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, DocumentRootBinding documentRoot, ContextServices services, StaticFileSelectionMode staticFileMode = StaticFileSelectionMode::kIdentityOnly) const;
-    Task<HttpResponse> handleError(const HttpRequest& request, RequestMemory& memory, HttpErrorInfo error, ContextServices services) const;
-    Task<HttpResponse> handleException(const HttpRequest& request, RequestMemory& memory, std::exception_ptr exception, ContextServices services) const;
+    Task<HttpResponse> dispatchBufferedResponse(const HttpRequest& request,
+        const RouteResolution& resolution, RequestMemory& memory, DocumentRootBinding documentRoot,
+        ContextServices services,
+        StaticFileSelectionMode staticFileMode = StaticFileSelectionMode::kIdentityOnly) const;
+    Task<HttpResponse> handleError(const HttpRequest& request, RequestMemory& memory,
+        HttpErrorInfo error, ContextServices services) const;
+    Task<HttpResponse> handleException(const HttpRequest& request, RequestMemory& memory,
+        std::exception_ptr exception, ContextServices services) const;
     // Absence means the bound output handled the request; a value is the one
     // buffered response produced before a response-stream commit.
-    Task<std::optional<HttpResponse>> dispatchResponseStream(const HttpRequest& request, const ResolvedRoute& route, RequestMemory& memory, ResponseStreamWriter& responseStream, ContextServices services) const;
-    Task<std::optional<HttpResponse>> dispatchWebSocket(const HttpRequest& request, const ResolvedRoute& route, RequestMemory& memory, const RouteStreamHandler& handler, ContextServices services) const;
+    Task<std::optional<HttpResponse>> dispatchResponseStream(const HttpRequest& request,
+        const ResolvedRoute& route, RequestMemory& memory, ResponseStreamWriter& responseStream,
+        ContextServices services) const;
+    Task<std::optional<HttpResponse>> dispatchWebSocket(const HttpRequest& request,
+        const ResolvedRoute& route, RequestMemory& memory, const RouteStreamHandler& handler,
+        ContextServices services) const;
 
     // App moves the first worker's compiled plan to process ownership, then
     // binds every later worker table to that same immutable lookup structure.
@@ -161,49 +177,74 @@ private:
     [[nodiscard]] static std::size_t methodIndex(HttpKnownMethod method) noexcept;
     [[nodiscard]] static bool isRoutableMethod(HttpKnownMethod method) noexcept;
     [[nodiscard]] static bool isDynamicPath(std::string_view path) noexcept;
-    [[nodiscard]] static std::uint64_t routeHash(HttpKnownMethod method, std::string_view path, std::uint64_t seed) noexcept;
+    [[nodiscard]] static std::uint64_t routeHash(
+        HttpKnownMethod method, std::string_view path, std::uint64_t seed) noexcept;
     [[nodiscard]] static std::size_t nextPowerOfTwo(std::size_t value) noexcept;
     [[nodiscard]] static std::size_t dynamicNodeUpperBound(std::string_view path) noexcept;
     [[nodiscard]] static std::size_t dynamicParamNameUpperBound(std::string_view path) noexcept;
     void insertDynamic(DynamicNode& root, RouteEntry& route, std::size_t routeIndex);
     void appendDynamicParamName(RouteEntry& route, std::string_view name);
     static void sortDynamicNode(DynamicNode& node);
-    [[nodiscard]] static std::size_t findDynamicNode(const DynamicNode& node, std::string_view path, RouteMatch& match) noexcept;
-    [[nodiscard]] static std::size_t findDynamicNodeNoParams(const DynamicNode& node, std::string_view path) noexcept;
-    [[nodiscard]] static const DynamicStaticChild* findDynamicStaticChild(const DynamicNode& node, std::string_view segment) noexcept;
+    [[nodiscard]] static std::size_t findDynamicNode(
+        const DynamicNode& node, std::string_view path, RouteMatch& match) noexcept;
+    [[nodiscard]] static std::size_t findDynamicNodeNoParams(
+        const DynamicNode& node, std::string_view path) noexcept;
+    [[nodiscard]] static const DynamicStaticChild* findDynamicStaticChild(
+        const DynamicNode& node, std::string_view segment) noexcept;
     [[nodiscard]] static bool addParam(RouteMatch& match, std::string_view value) noexcept;
-    [[nodiscard]] static bool sameDynamicShape(std::string_view left, std::string_view right) noexcept;
+    [[nodiscard]] static bool sameDynamicShape(
+        std::string_view left, std::string_view right) noexcept;
 
-    [[nodiscard]] const RouteEntry* findStaticRoute(HttpKnownMethod method, std::string_view path) const noexcept;
-    [[nodiscard]] const RouteEntry* findDynamicRoute(HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept;
-    [[nodiscard]] const RouteEntry* findPerfect(HttpKnownMethod method, std::string_view path) const noexcept;
-    [[nodiscard]] const RouteEntry* findDynamic(HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept;
-    [[nodiscard]] std::uint32_t allowedMethods(std::string_view path, HttpKnownMethod requestedMethod) const noexcept;
+    [[nodiscard]] const RouteEntry* findStaticRoute(
+        HttpKnownMethod method, std::string_view path) const noexcept;
+    [[nodiscard]] const RouteEntry* findDynamicRoute(
+        HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept;
+    [[nodiscard]] const RouteEntry* findPerfect(
+        HttpKnownMethod method, std::string_view path) const noexcept;
+    [[nodiscard]] const RouteEntry* findDynamic(
+        HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept;
+    [[nodiscard]] std::uint32_t allowedMethods(
+        std::string_view path, HttpKnownMethod requestedMethod) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethodsForServer() const noexcept;
-    [[nodiscard]] Task<HttpResponse> dispatchRequest(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services, DocumentRootBinding documentRoot, DispatchFailure failure, StaticFileSelectionMode staticFileMode) const;
+    [[nodiscard]] Task<HttpResponse> dispatchRequest(const HttpRequest& request,
+        const RouteResolution& resolution, RequestMemory& memory, ContextServices services,
+        DocumentRootBinding documentRoot, DispatchFailure failure,
+        StaticFileSelectionMode staticFileMode) const;
     [[nodiscard]] Task<HttpResponse> invokeRoute(const RouteEntry& route, Context& context) const;
-    [[nodiscard]] Task<HttpResponse> invokeRouteWithMiddleware(const RouteEntry& route, Context& context) const;
-    [[nodiscard]] Task<void> invokeMiddlewareAt(const RouteEntry& route, std::size_t index, Context& context) const;
+    [[nodiscard]] Task<HttpResponse> invokeRouteWithMiddleware(
+        const RouteEntry& route, Context& context) const;
+    [[nodiscard]] Task<void> invokeMiddlewareAt(
+        const RouteEntry& route, std::size_t index, Context& context) const;
     [[nodiscard]] static Task<void> invokeMiddlewareContinuation(NextState state);
-    [[nodiscard]] Task<std::optional<HttpResponse>> dispatchStreamRoute(const HttpRequest& request, const ResolvedRoute& route, RequestMemory& memory, const RouteStreamHandler& handler, ContextServices services) const;
-    [[nodiscard]] Task<void> invokeStreamMiddlewareAt(const RouteEntry& route, std::size_t index, Context& context, StreamMiddlewareChainState& chain, const RouteStreamHandler& handler) const;
+    [[nodiscard]] Task<std::optional<HttpResponse>> dispatchStreamRoute(const HttpRequest& request,
+        const ResolvedRoute& route, RequestMemory& memory, const RouteStreamHandler& handler,
+        ContextServices services) const;
+    [[nodiscard]] Task<void> invokeStreamMiddlewareAt(const RouteEntry& route, std::size_t index,
+        Context& context, StreamMiddlewareChainState& chain,
+        const RouteStreamHandler& handler) const;
     [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(NextState state);
-    [[nodiscard]] Task<void> storeMiddlewareExceptionResponse(Context& context, std::exception_ptr exception) const;
+    [[nodiscard]] Task<void> storeMiddlewareExceptionResponse(
+        Context& context, std::exception_ptr exception) const;
     [[nodiscard]] Task<HttpResponse> handleError(Context& context, HttpErrorInfo error) const;
-    [[nodiscard]] Task<HttpResponse> handleNotFound(const HttpRequest& request, RequestMemory& memory, ContextServices services) const;
+    [[nodiscard]] Task<HttpResponse> handleNotFound(
+        const HttpRequest& request, RequestMemory& memory, ContextServices services) const;
 
     // Runs the unmatched-request middleware chain around `terminal`, which
     // produces the 404/405/501 response. Falls straight through to the terminal
     // when nothing declared itself for unmatched requests.
     using UnmatchedTerminal = CallableRef<HttpResponse, Context&>;
-    [[nodiscard]] Task<HttpResponse> runUnmatchedChain(Context& context, const UnmatchedTerminal& terminal) const;
-    [[nodiscard]] Task<void> invokeUnmatchedMiddlewareAt(std::size_t index, Context& context, const UnmatchedTerminal& terminal) const;
+    [[nodiscard]] Task<HttpResponse> runUnmatchedChain(
+        Context& context, const UnmatchedTerminal& terminal) const;
+    [[nodiscard]] Task<void> invokeUnmatchedMiddlewareAt(
+        std::size_t index, Context& context, const UnmatchedTerminal& terminal) const;
     [[nodiscard]] static Task<void> invokeUnmatchedMiddlewareContinuation(NextState state);
-    [[nodiscard]] Task<HttpResponse> handleException(Context& context, std::exception_ptr exception) const;
+    [[nodiscard]] Task<HttpResponse> handleException(
+        Context& context, std::exception_ptr exception) const;
 
     template <typename Handler>
     struct StoredPrefixHandler final {
-        StoredPrefixHandler(std::pmr::memory_resource* resource, std::string_view prefixValue, Handler handlerValue)
+        StoredPrefixHandler(
+            std::pmr::memory_resource* resource, std::string_view prefixValue, Handler handlerValue)
             : prefix(prefixValue, resource),
               handler(handlerValue) {}
 
@@ -232,7 +273,8 @@ private:
     HttpErrorHandlerRef errorHandler_{nullptr};
     HttpNotFoundHandlerRef notFoundHandler_{nullptr};
     std::pmr::vector<StoredPrefixHandler<HttpErrorHandlerRef>> prefixErrorHandlers_{resource_};
-    std::pmr::vector<StoredPrefixHandler<HttpNotFoundHandlerRef>> prefixNotFoundHandlers_{resource_};
+    std::pmr::vector<StoredPrefixHandler<HttpNotFoundHandlerRef>> prefixNotFoundHandlers_{
+        resource_};
     bool hasRouteRateLimit_{false};
 };
 

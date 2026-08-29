@@ -57,7 +57,8 @@ public:
         if (auto* suspended = std::get_if<SuspendRaceSuspended>(&state_)) {
             const auto continuation = suspended->continuation();
             try {
-                state_.template emplace<SuspendRaceReadyAfterSuspend>(std::move(value), continuation);
+                state_.template emplace<SuspendRaceReadyAfterSuspend>(
+                    std::move(value), continuation);
             } catch (...) {
                 state_.template emplace<SuspendRaceSuspended>(continuation);
                 throw;
@@ -101,7 +102,8 @@ private:
 
     class SuspendRaceReadyBeforeSuspend final {
     public:
-        explicit SuspendRaceReadyBeforeSuspend(T&& value) noexcept(std::is_nothrow_move_constructible_v<T>)
+        explicit SuspendRaceReadyBeforeSuspend(T&& value) noexcept(
+            std::is_nothrow_move_constructible_v<T>)
             : value_(std::move(value)) {}
 
         [[nodiscard]] T takeValue() && noexcept(std::is_nothrow_move_constructible_v<T>) {
@@ -114,7 +116,8 @@ private:
 
     class SuspendRaceReadyAfterSuspend final {
     public:
-        SuspendRaceReadyAfterSuspend(T&& value, std::coroutine_handle<> continuation) noexcept(std::is_nothrow_move_constructible_v<T>)
+        SuspendRaceReadyAfterSuspend(T&& value, std::coroutine_handle<> continuation) noexcept(
+            std::is_nothrow_move_constructible_v<T>)
             : value_(std::move(value)),
               continuation_(continuation) {}
 
@@ -131,7 +134,8 @@ private:
         std::coroutine_handle<> continuation_;
     };
 
-    using State = std::variant<SuspendRacePending, SuspendRaceSuspended, SuspendRaceReadyBeforeSuspend, SuspendRaceReadyAfterSuspend>;
+    using State = std::variant<SuspendRacePending, SuspendRaceSuspended,
+        SuspendRaceReadyBeforeSuspend, SuspendRaceReadyAfterSuspend>;
 
     State state_;
 };

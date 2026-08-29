@@ -20,7 +20,8 @@ struct alignas(std::max_align_t) ZlibAllocationHeader final {
 // Allocate `items * size` bytes from `resource`, stamped with the header the
 // matching free needs. Returns nullptr on any overflow or allocation failure,
 // which is how zlib expects an allocator to refuse.
-[[nodiscard]] voidpf zlibPmrAllocate(std::pmr::memory_resource* resource, uInt items, uInt size) noexcept;
+[[nodiscard]] voidpf zlibPmrAllocate(
+    std::pmr::memory_resource* resource, uInt items, uInt size) noexcept;
 
 // Return a block obtained from zlibPmrAllocate to the resource it came from.
 void zlibPmrFree(voidpf address) noexcept;

@@ -27,8 +27,10 @@ bool throwsOn(Fn&& fn) {
     }
 }
 
-HttpOriginView originFor(std::string_view host, std::uint16_t port, HttpScheme scheme = HttpScheme::kHttp) {
-    return scheme == HttpScheme::kHttps ? HttpOriginView::https({.host = host, .port = port}) : HttpOriginView::http({.host = host, .port = port});
+HttpOriginView originFor(
+    std::string_view host, std::uint16_t port, HttpScheme scheme = HttpScheme::kHttp) {
+    return scheme == HttpScheme::kHttps ? HttpOriginView::https({.host = host, .port = port})
+                                        : HttpOriginView::http({.host = host, .port = port});
 }
 
 std::string authorityFor(const HttpOriginView& origin) {
@@ -107,22 +109,26 @@ RUVIA_TEST(http_serialized_origin_matches_fetch_wire_grammar) {
 
 RUVIA_TEST(http_origin_authority_brackets_ipv6_and_omits_default_port) {
     // The default port for the scheme is omitted: 80 for http, 443 for https.
-    RUVIA_CHECK_EQ(authorityFor(HttpOriginView::http({.host = "example.com"})), std::string("example.com"));
-    RUVIA_CHECK_EQ(authorityFor(HttpOriginView::https({.host = "example.com"})), std::string("example.com"));
+    RUVIA_CHECK_EQ(
+        authorityFor(HttpOriginView::http({.host = "example.com"})), std::string("example.com"));
+    RUVIA_CHECK_EQ(
+        authorityFor(HttpOriginView::https({.host = "example.com"})), std::string("example.com"));
 
     // A non-default port is appended.
     RUVIA_CHECK_EQ(authorityFor(originFor("example.com", 8080)), std::string("example.com:8080"));
 
     // The default depends on the typed scheme: 80 is not default for https, and
     // 443 is not default for http, so each is included.
-    RUVIA_CHECK_EQ(authorityFor(originFor("example.com", 80, HttpScheme::kHttps)), std::string("example.com:80"));
+    RUVIA_CHECK_EQ(authorityFor(originFor("example.com", 80, HttpScheme::kHttps)),
+        std::string("example.com:80"));
     RUVIA_CHECK_EQ(authorityFor(originFor("example.com", 443)), std::string("example.com:443"));
 
     // uri-host already carries the brackets required for an IP-literal; the
     // serializer no longer guesses host kind by searching for a colon.
     RUVIA_CHECK_EQ(authorityFor(originFor("[::1]", 80)), std::string("[::1]"));
     RUVIA_CHECK_EQ(authorityFor(originFor("[::1]", 8080)), std::string("[::1]:8080"));
-    RUVIA_CHECK_EQ(authorityFor(originFor("[2001:db8::1]", 443, HttpScheme::kHttps)), std::string("[2001:db8::1]"));
+    RUVIA_CHECK_EQ(authorityFor(originFor("[2001:db8::1]", 443, HttpScheme::kHttps)),
+        std::string("[2001:db8::1]"));
     RUVIA_CHECK_EQ(authorityFor(originFor("[v1.future]", 8080)), std::string("[v1.future]:8080"));
     RUVIA_CHECK_EQ(authorityFor(originFor("example.com", 0)), std::string("example.com:0"));
 }

@@ -25,18 +25,27 @@ concept HasPublicHttp1RequestBodyPlanFactories = requires {
 };
 
 template <typename String>
-concept AcceptsTemporaryHttpOriginHost = requires(String&& value) { ruvia::HttpOriginView::http({.host = std::forward<String>(value)}); };
+concept AcceptsTemporaryHttpOriginHost = requires(
+    String&& value) { ruvia::HttpOriginView::http({.host = std::forward<String>(value)}); };
 
 template <typename String>
-concept AcceptsLvalueHttpOriginHost = requires(String& value) { ruvia::HttpOriginView::http({.host = value}); };
+concept AcceptsLvalueHttpOriginHost =
+    requires(String& value) { ruvia::HttpOriginView::http({.host = value}); };
 
 template <typename String>
-concept AcceptsHttpOriginPositionalFactories = requires(String value) { ruvia::HttpOriginView::http(value); } || requires(String value) { ruvia::HttpOriginView::http(value, std::uint16_t{80}); } || requires(String value) { ruvia::HttpOriginView::https(value); } || requires(String value) { ruvia::HttpOriginView::https(value, std::uint16_t{443}); };
+concept AcceptsHttpOriginPositionalFactories =
+    requires(String value) { ruvia::HttpOriginView::http(value); } ||
+    requires(String value) { ruvia::HttpOriginView::http(value, std::uint16_t{80}); } ||
+    requires(String value) { ruvia::HttpOriginView::https(value); } ||
+    requires(String value) { ruvia::HttpOriginView::https(value, std::uint16_t{443}); };
 
 static_assert(!HasPublicHttp1RequestBodyPlanFactories<ruvia::Http1RequestBodyPlan>);
 static_assert(std::is_aggregate_v<ruvia::HttpOriginOptions>);
-static_assert(std::same_as<decltype(ruvia::HttpOriginView::http({.host = "example.test"})), ruvia::HttpOriginView>);
-static_assert(std::same_as<decltype(ruvia::HttpOriginView::https({.host = "example.test", .port = std::uint16_t{8443}})), ruvia::HttpOriginView>);
+static_assert(std::same_as<decltype(ruvia::HttpOriginView::http({.host = "example.test"})),
+    ruvia::HttpOriginView>);
+static_assert(std::same_as<decltype(ruvia::HttpOriginView::https(
+                               {.host = "example.test", .port = std::uint16_t{8443}})),
+    ruvia::HttpOriginView>);
 static_assert(!AcceptsHttpOriginPositionalFactories<std::string_view>);
 static_assert(AcceptsLvalueHttpOriginHost<std::string>);
 static_assert(!AcceptsTemporaryHttpOriginHost<std::string>);
@@ -48,7 +57,8 @@ static_assert(!std::default_initializable<ruvia::detail::WebSocketServerNegotiat
 static_assert(!std::copy_constructible<ruvia::detail::WebSocketServerNegotiation>);
 static_assert(std::move_constructible<ruvia::detail::WebSocketServerNegotiation>);
 static_assert(!std::constructible_from<ruvia::WebSocketCompression, bool>);
-static_assert(!std::constructible_from<ruvia::detail::WsConnection, std::pmr::string&, std::size_t, bool>);
+static_assert(
+    !std::constructible_from<ruvia::detail::WsConnection, std::pmr::string&, std::size_t, bool>);
 static_assert(!std::copy_constructible<ruvia::Http2Connection>);
 static_assert(!std::copy_constructible<ruvia::HpackDecoder>);
 static_assert(!std::copy_constructible<ruvia::WebSocketServerConnection>);

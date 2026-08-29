@@ -1,16 +1,20 @@
 #include "ruvia/web/Testing.h"
 
+#include <asio/io_context.hpp>
+
 #include <chrono>
+#include <deque>
 #include <exception>
 #include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpLimits.h"
@@ -50,7 +54,18 @@ void appendSyntheticHeaderLine(std::string& head, std::string_view name, std::st
     head.append("\r\n");
 }
 
-Task<void> startTestWorker(detail::ConnectionScanner& scanner, detail::WorkerCapabilities& capabilities) {
+// Asio's Windows IOCP backend creates a timer thread for a context that owns a
+// steady_timer. Repeatedly destroying those contexts is not safe on all
+// supported Windows runners, so the in-memory facade keeps one fresh context
+// per TestApp until process exit. The workers and their Ruvia state remain
+// fully isolated; only the inert Asio context storage is retained.
+asio::io_context& testEventLoopContext() {
+    static std::deque<asio::io_context>& contexts = *new std::deque<asio::io_context>();
+    return contexts.emplace_back();
+}
+
+Task<void> startTestWorker(
+    detail::ConnectionScanner& scanner, detail::WorkerCapabilities& capabilities) {
     capabilities.initializeWorkerState();
     scanner.start();
     try {
@@ -62,7 +77,8 @@ Task<void> startTestWorker(detail::ConnectionScanner& scanner, detail::WorkerCap
     }
 }
 
-Task<void> stopTestWorker(detail::ConnectionScanner& scanner, detail::WorkerCapabilities& capabilities) {
+Task<void> stopTestWorker(
+    detail::ConnectionScanner& scanner, detail::WorkerCapabilities& capabilities) {
     scanner.stop();
     scanner.closeAll();
     capabilities.closeNow();
@@ -82,15 +98,19 @@ struct TestApp::Impl final {
     detail::ControllerStore controllers;
     WorkerMemory memory;
     Env env;
-    std::pmr::vector<detail::ControllerMiddlewareDescriptor> globalMiddlewares{detail::registrationResource()};
-    std::pmr::vector<detail::WorkerStateDefinition> workerStateDefinitions{detail::registrationResource()};
+    std::pmr::vector<detail::ControllerMiddlewareDescriptor> globalMiddlewares{
+        detail::registrationResource()};
+    std::pmr::vector<detail::WorkerStateDefinition> workerStateDefinitions{
+        detail::registrationResource()};
     std::vector<std::pair<std::string, HttpErrorHandler>> prefixErrorHandlers;
     std::vector<std::pair<std::string, HttpNotFoundHandler>> prefixNotFoundHandlers;
     HttpErrorHandler errorHandler{nullptr};
     HttpNotFoundHandler notFoundHandler{nullptr};
-    EventLoopPool eventLoops{{.loopCount = 1}};
-    EventLoop eventLoop{eventLoops.loop(0)};
+    asio::io_context& eventLoopContext{testEventLoopContext()};
+    EventLoopAttachment eventLoopAttachment{attachEventLoop(eventLoopContext)};
+    EventLoop eventLoop{eventLoopAttachment.loop()};
     WorkerHandle worker{eventLoop.handle()};
+    std::thread eventLoopThread;
     StopSource stopSource;
     StopToken stopToken{stopSource.token()};
     std::optional<detail::ConnectionScanner> connectionScanner;
@@ -109,11 +129,9 @@ struct TestApp::Impl final {
             }
         }
         if (eventLoopStarted) {
-            eventLoops.stop();
-            try {
-                eventLoops.join();
-            } catch (...) {
-                std::terminate();
+            eventLoopAttachment.stop();
+            if (eventLoopThread.joinable()) {
+                eventLoopThread.join();
             }
         }
     }
@@ -144,7 +162,8 @@ struct TestApp::Impl final {
             routes.setPrefixErrorHandlers(views);
         }
         if (!prefixNotFoundHandlers.empty()) {
-            std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(detail::registrationResource());
+            std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(
+                detail::registrationResource());
             views.reserve(prefixNotFoundHandlers.size());
             for (const auto& [prefix, handler] : prefixNotFoundHandlers) {
                 views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
@@ -157,14 +176,23 @@ struct TestApp::Impl final {
         routes.finalize();
 
         connectionScanner.emplace(worker, detail::ConnectionScannerOptions{});
-        capabilities.emplace(eventLoop.ioContext(), worker, memory.resource(), detail::WorkerCapabilityDefinitions{.workerStates = workerStateDefinitions},
+        capabilities.emplace(eventLoop.ioContext(), worker, memory.resource(),
+            detail::WorkerCapabilityDefinitions{.workerStates = workerStateDefinitions},
             detail::WorkerCapabilityOptions{
-                .routeRateLimits = routes.routeTable().hasRouteRateLimit() ? detail::RouteRateLimitPresence::kPresent : detail::RouteRateLimitPresence::kAbsent,
+                .routeRateLimits = routes.routeTable().hasRouteRateLimit()
+                                       ? detail::RouteRateLimitPresence::kPresent
+                                       : detail::RouteRateLimitPresence::kAbsent,
                 .rateLimitCapacity = 1024,
                 .env = &env,
             },
             *connectionScanner);
-        eventLoops.start();
+        eventLoopThread = std::thread([this] {
+            try {
+                eventLoopContext.run();
+            } catch (...) {
+                std::terminate();
+            }
+        });
         eventLoopStarted = true;
         eventLoop.start(startTestWorker(*connectionScanner, *capabilities)).get();
         workerReady = true;
@@ -241,12 +269,14 @@ TestResponse TestApp::request(const TestRequest& request) {
                 break;
             }
         }
-        if (!parseError.has_value() && !request.cookies_.empty() && !detail::isValidHttpHeaderValue(request.cookies_)) {
+        if (!parseError.has_value() && !request.cookies_.empty() &&
+            !detail::isValidHttpHeaderValue(request.cookies_)) {
             parseError = HttpParseError::kInvalidHeader;
         }
     }
     if (!parseError.has_value()) {
-        requestHead.reserve(request.method_.size() + request.target_.size() + request.cookies_.size() + 16);
+        requestHead.reserve(
+            request.method_.size() + request.target_.size() + request.cookies_.size() + 16);
         requestHead.append(request.method_);
         requestHead.push_back(' ');
         requestHead.append(request.target_);
@@ -262,7 +292,8 @@ TestResponse TestApp::request(const TestRequest& request) {
         detail::ParsedRequestHeaderBlock block;
         if (requestHead.size() > kMaxHttpHeaderBytes) {
             parseError = HttpParseError::kHeaderTooLarge;
-        } else if (const auto error = detail::parseHttpHeaderBlock(requestHead, requestHead.size(), block)) {
+        } else if (const auto error =
+                       detail::parseHttpHeaderBlock(requestHead, requestHead.size(), block)) {
             parseError = *error;
         } else {
             const auto contentLength = block.contentLength.value();
@@ -270,27 +301,40 @@ TestResponse TestApp::request(const TestRequest& request) {
             const auto contentSemantics = detail::httpRequestContentSemantics(request.method_);
             if (transferEncoding.has_value() && contentLength.has_value()) {
                 parseError = HttpParseError::kInvalidTransferEncoding;
-            } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden && transferEncoding.has_value()) {
+            } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden &&
+                       transferEncoding.has_value()) {
                 parseError = HttpParseError::kInvalidTransferEncoding;
-            } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden && contentLength.has_value()) {
+            } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden &&
+                       contentLength.has_value()) {
                 parseError = HttpParseError::kInvalidContentLength;
-            } else if (transferEncoding.has_value() && transferEncoding->finalChunked() == nullptr) {
+            } else if (transferEncoding.has_value() &&
+                       transferEncoding->finalChunked() == nullptr) {
                 parseError = HttpParseError::kInvalidTransferEncoding;
-            } else if (contentSemantics == detail::HttpRequestContentSemantics::kContentTypeRequired && (contentLength.has_value() || transferEncoding.has_value()) && (block.seenHeaderBits & detail::singletonRequestHeaderBit(detail::RequestHeaderKind::kContentType)) == 0) {
+            } else if (contentSemantics ==
+                           detail::HttpRequestContentSemantics::kContentTypeRequired &&
+                       (contentLength.has_value() || transferEncoding.has_value()) &&
+                       (block.seenHeaderBits & detail::singletonRequestHeaderBit(
+                                                   detail::RequestHeaderKind::kContentType)) == 0) {
                 parseError = HttpParseError::kInvalidHeader;
             }
 
             if (!parseError.has_value()) {
-                const auto targetRebindsHost = targetView.form == detail::HttpRequestTargetForm::kAbsolute || targetView.form == detail::HttpRequestTargetForm::kAuthority;
+                const auto targetRebindsHost =
+                    targetView.form == detail::HttpRequestTargetForm::kAbsolute ||
+                    targetView.form == detail::HttpRequestTargetForm::kAuthority;
                 for (std::size_t i = 0; i < block.headerCount; ++i) {
                     const auto& header = block.headers[i];
                     auto value = header.value.bind(requestHead);
-                    if (targetRebindsHost && block.hostHeaderIndex >= 0 && i == static_cast<std::size_t>(block.hostHeaderIndex)) {
+                    if (targetRebindsHost && block.hostHeaderIndex >= 0 &&
+                        i == static_cast<std::size_t>(block.hostHeaderIndex)) {
                         value = targetView.authority;
                     }
                     const HttpHeaderView view{header.name.bind(requestHead), value};
                     const auto slot = detail::requestHeaderKindKnownSlot(header.kind);
-                    const bool added = slot < detail::kRequestHeaderKindCount ? detail::HttpRequestAccess::addHeader(parsed, view, slot) : detail::HttpRequestAccess::addHeader(parsed, view);
+                    const bool added =
+                        slot < detail::kRequestHeaderKindCount
+                            ? detail::HttpRequestAccess::addHeader(parsed, view, slot)
+                            : detail::HttpRequestAccess::addHeader(parsed, view);
                     if (!added) {
                         parseError = HttpParseError::kTooManyHeaders;
                         break;
@@ -318,19 +362,27 @@ TestResponse TestApp::request(const TestRequest& request) {
     auto dispatch = [&]() -> Task<HttpResponse> {
         auto requestServices = services;
         std::optional<detail::RequestDeadline> requestDeadline;
-        if (!parseError.has_value() && !bodyLimitError.has_value() && resolved != nullptr && resolved->route().deadlineMs() != 0) {
+        if (!parseError.has_value() && !bodyLimitError.has_value() && resolved != nullptr &&
+            resolved->route().deadlineMs() != 0) {
             requestDeadline.emplace(requestServices.stopToken());
-            requestDeadline->arm(requestServices.worker(), std::chrono::milliseconds(resolved->route().deadlineMs()));
+            requestDeadline->arm(requestServices.worker(),
+                std::chrono::milliseconds(resolved->route().deadlineMs()));
             requestServices = requestServices.withRequestDeadline(*requestDeadline);
         }
         if (parseError.has_value()) {
             const auto error = httpParseProtocolError(*parseError);
-            co_return co_await routes.handleError(parsed, requestMemory, HttpErrorInfo({.status = error.status(), .message = error.what()}), requestServices);
+            co_return co_await routes.handleError(parsed, requestMemory,
+                HttpErrorInfo({.status = error.status(), .message = error.what()}),
+                requestServices);
         }
         if (bodyLimitError.has_value()) {
-            co_return co_await routes.handleError(parsed, requestMemory, HttpErrorInfo({.status = bodyLimitError->status(), .message = bodyLimitError->what()}), requestServices);
+            co_return co_await routes.handleError(parsed, requestMemory,
+                HttpErrorInfo(
+                    {.status = bodyLimitError->status(), .message = bodyLimitError->what()}),
+                requestServices);
         }
-        co_return co_await routes.dispatchBufferedResponse(parsed, resolution, requestMemory, detail::DocumentRootBinding::none(), requestServices);
+        co_return co_await routes.dispatchBufferedResponse(parsed, resolution, requestMemory,
+            detail::DocumentRootBinding::none(), requestServices);
     };
     auto response = impl_->eventLoop.start(dispatch()).get();
 

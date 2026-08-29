@@ -40,8 +40,10 @@ public:
 
     // Collects the unread remainder of this same stream. maxBytes is a caller
     // bound in addition to the origin's transport bound.
-    [[nodiscard]] ScopedOperation<std::pmr::string> readAll(std::size_t maxBytes = kDefaultMaxBufferedBodyBytes) &;
-    ScopedOperation<std::pmr::string> readAll(std::size_t = kDefaultMaxBufferedBodyBytes) && = delete;
+    [[nodiscard]] ScopedOperation<std::pmr::string> readAll(
+        std::size_t maxBytes = kDefaultMaxBufferedBodyBytes) &;
+    ScopedOperation<std::pmr::string> readAll(
+        std::size_t = kDefaultMaxBufferedBodyBytes) && = delete;
 
     // Copies this same stream into a controller response stream with natural
     // backpressure. This is the common forwarding path for both small and
@@ -57,9 +59,12 @@ private:
 
     ~HttpClientResponseBody() = default;
 
-    [[nodiscard]] static Task<std::optional<std::string_view>> readTask(detail::HttpClientResponseState& state);
-    [[nodiscard]] static Task<std::pmr::string> readAllTask(detail::HttpClientResponseState& state, std::size_t maxBytes);
-    [[nodiscard]] static Task<void> pipeToTask(detail::HttpClientResponseState& state, ResponseStreamWriter& output);
+    [[nodiscard]] static Task<std::optional<std::string_view>> readTask(
+        detail::HttpClientResponseState& state);
+    [[nodiscard]] static Task<std::pmr::string> readAllTask(
+        detail::HttpClientResponseState& state, std::size_t maxBytes);
+    [[nodiscard]] static Task<void> pipeToTask(
+        detail::HttpClientResponseState& state, ResponseStreamWriter& output);
 
     explicit HttpClientResponseBody(detail::HttpClientResponseState* state) noexcept
         : state_(state) {}
@@ -96,8 +101,10 @@ public:
 private:
     friend class detail::HttpClientPool;
 
-    HttpClientResponse(std::pmr::memory_resource* resource, const WorkerHandle& worker, detail::HttpClientPool& pool);
-    HttpClientResponse(std::pmr::memory_resource*, WorkerHandle&&, detail::HttpClientPool&) = delete;
+    HttpClientResponse(std::pmr::memory_resource* resource, const WorkerHandle& worker,
+        detail::HttpClientPool& pool);
+    HttpClientResponse(
+        std::pmr::memory_resource*, WorkerHandle&&, detail::HttpClientPool&) = delete;
     HttpClientResponse(detail::HttpClientResponseState* state, bool retain) noexcept;
     void release() noexcept;
 

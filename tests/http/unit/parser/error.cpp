@@ -58,11 +58,16 @@ RUVIA_TEST(http_status_code_wire_token_is_derived_from_the_strong_type) {
 RUVIA_TEST(http_reason_phrase_is_conventional_http1_presentation) {
     RUVIA_CHECK_EQ(httpReasonPhrase(ruvia::http_status::kOk), std::string_view("OK"));
     RUVIA_CHECK_EQ(httpReasonPhrase(ruvia::http_status::kNotFound), std::string_view("Not Found"));
-    RUVIA_CHECK_EQ(httpReasonPhrase(ruvia::http_status::kContentTooLarge), std::string_view("Content Too Large"));
-    RUVIA_CHECK_EQ(httpReasonPhrase(ruvia::http_status::kInternalServerError), std::string_view("Internal Server Error"));
-    RUVIA_CHECK_EQ(httpReasonPhrase(ruvia::http_status::kResetContent), std::string_view("Reset Content"));
-    RUVIA_CHECK_EQ(httpReasonPhrase(ruvia::http_status::kBadGateway), std::string_view("Bad Gateway"));
-    RUVIA_CHECK_EQ(httpReasonPhrase(ruvia::http_status::kGatewayTimeout), std::string_view("Gateway Timeout"));
+    RUVIA_CHECK_EQ(httpReasonPhrase(ruvia::http_status::kContentTooLarge),
+        std::string_view("Content Too Large"));
+    RUVIA_CHECK_EQ(httpReasonPhrase(ruvia::http_status::kInternalServerError),
+        std::string_view("Internal Server Error"));
+    RUVIA_CHECK_EQ(
+        httpReasonPhrase(ruvia::http_status::kResetContent), std::string_view("Reset Content"));
+    RUVIA_CHECK_EQ(
+        httpReasonPhrase(ruvia::http_status::kBadGateway), std::string_view("Bad Gateway"));
+    RUVIA_CHECK_EQ(
+        httpReasonPhrase(ruvia::http_status::kGatewayTimeout), std::string_view("Gateway Timeout"));
 }
 
 RUVIA_TEST(http_reason_phrase_does_not_mislabel_extension_statuses) {
@@ -87,15 +92,25 @@ RUVIA_TEST(http_protocol_error_owns_bounded_diagnostic_without_allocation) {
 
 RUVIA_TEST(parse_error_status_mapping) {
     // Size limits map to their specific statuses.
-    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kHeaderTooLarge).status(), ruvia::http_status::kRequestHeaderFieldsTooLarge);
-    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kTooManyHeaders).status(), ruvia::http_status::kRequestHeaderFieldsTooLarge);
-    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kBodyTooLarge).status(), ruvia::http_status::kContentTooLarge);
-    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kUnsupportedTransferEncoding).status(), ruvia::http_status::kNotImplemented);
-    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kUnsupportedHttpVersion).status(), ruvia::http_status::kHttpVersionNotSupported);
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kHeaderTooLarge).status(),
+        ruvia::http_status::kRequestHeaderFieldsTooLarge);
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kTooManyHeaders).status(),
+        ruvia::http_status::kRequestHeaderFieldsTooLarge);
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kBodyTooLarge).status(),
+        ruvia::http_status::kContentTooLarge);
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kUnsupportedTransferEncoding).status(),
+        ruvia::http_status::kNotImplemented);
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kUnsupportedHttpVersion).status(),
+        ruvia::http_status::kHttpVersionNotSupported);
     // Everything else is a 400 Bad Request.
-    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kMissingHost).status(), ruvia::http_status::kBadRequest);
-    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kInvalidConnection).status(), ruvia::http_status::kBadRequest);
-    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kInvalidUpgrade).status(), ruvia::http_status::kBadRequest);
-    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kInvalidChunkSize).status(), ruvia::http_status::kBadRequest);
-    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kConflictingContentLength).status(), ruvia::http_status::kBadRequest);
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kMissingHost).status(),
+        ruvia::http_status::kBadRequest);
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kInvalidConnection).status(),
+        ruvia::http_status::kBadRequest);
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kInvalidUpgrade).status(),
+        ruvia::http_status::kBadRequest);
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kInvalidChunkSize).status(),
+        ruvia::http_status::kBadRequest);
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kConflictingContentLength).status(),
+        ruvia::http_status::kBadRequest);
 }

@@ -42,10 +42,15 @@ RedisTransaction& RedisTransaction::unwatch() {
     return *this;
 }
 
-Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(detail::RedisPool& pool, OperationOptions options, std::pmr::memory_resource* resource, std::pmr::vector<RedisPipeline::Command> watches, std::pmr::vector<RedisPipeline::Command> commands) {
+Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(detail::RedisPool& pool,
+    OperationOptions options, std::pmr::memory_resource* resource,
+    std::pmr::vector<RedisPipeline::Command> watches,
+    std::pmr::vector<RedisPipeline::Command> commands) {
     std::pmr::vector<detail::RedisCommandArgsView> framed(resource);
     framed.reserve(watches.size() + commands.size() + 2);
-    auto appendCommandView = [&framed](const RedisPipeline::Command& command) { framed.emplace_back(command.args); };
+    auto appendCommandView = [&framed](const RedisPipeline::Command& command) {
+        framed.emplace_back(command.args);
+    };
     auto multi = RedisPipeline::makeCommand(resource, "MULTI");
     auto exec = RedisPipeline::makeCommand(resource, "EXEC");
     for (const auto& command : watches) {
@@ -57,7 +62,8 @@ Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(detail::RedisP
     }
     appendCommandView(exec);
 
-    auto replies = co_await pool.executePipeline(std::span<const detail::RedisCommandArgsView>(framed), std::move(options), resource);
+    auto replies = co_await pool.executePipeline(
+        std::span<const detail::RedisCommandArgsView>(framed), std::move(options), resource);
     if (replies.empty()) {
         throw RedisError(RedisError::Code::kProtocolError, "redis transaction returned no replies");
     }
@@ -83,7 +89,9 @@ Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(detail::RedisP
 ScopedOperation<std::pmr::vector<RedisValue>> RedisTransaction::exec() && {
     auto* commandResource = pipeline_.resource();
     auto& pool = pipeline_.consumePool();
-    return detail::makeScopedOperation(pipeline_.operationScope(), executeOwned(pool, pipeline_.operationOptions_, commandResource, std::move(watches_), std::move(pipeline_.commands_)));
+    return detail::makeScopedOperation(
+        pipeline_.operationScope(), executeOwned(pool, pipeline_.operationOptions_, commandResource,
+                                        std::move(watches_), std::move(pipeline_.commands_)));
 }
 
 }  // namespace ruvia

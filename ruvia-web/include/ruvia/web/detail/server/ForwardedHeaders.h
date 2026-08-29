@@ -87,7 +87,8 @@ inline void parseForwardedElement(std::string_view element, ForwardedClient& out
         if (httpAsciiEqualsIgnoreCase(header.name(), "Forwarded")) {
             const auto value = header.value();
             const auto comma = value.find(',');
-            parseForwardedElement(comma == std::string_view::npos ? value : value.substr(0, comma), result);
+            parseForwardedElement(
+                comma == std::string_view::npos ? value : value.substr(0, comma), result);
             if (!result.address.empty() || !result.scheme.empty()) {
                 return result;
             }
@@ -97,7 +98,8 @@ inline void parseForwardedElement(std::string_view element, ForwardedClient& out
     for (const auto& header : request.headers()) {
         if (result.address.empty() && httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-For")) {
             result.address = forwardedForLeftmost(header.value());
-        } else if (result.scheme.empty() && httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-Proto")) {
+        } else if (result.scheme.empty() &&
+                   httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-Proto")) {
             result.scheme = httpTrimOws(header.value());
         }
     }

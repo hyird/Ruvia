@@ -11,7 +11,8 @@ struct HttpConditionalMethodPlan final {
     bool evaluatesRange;
 };
 
-[[nodiscard]] inline constexpr HttpConditionalMethodPlan httpConditionalMethodPlan(HttpKnownMethod method) noexcept {
+[[nodiscard]] inline constexpr HttpConditionalMethodPlan httpConditionalMethodPlan(
+    HttpKnownMethod method) noexcept {
     switch (method) {
         case HttpKnownMethod::kGet:
             return {true, true, true, true};

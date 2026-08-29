@@ -11,7 +11,14 @@
 
 namespace ruvia::detail {
 
-enum class HttpChunkScanError : std::uint8_t { kInvalidSize, kSizeOverflow, kInvalidExtension, kInvalidCrlf, kInvalidTrailer, kTooLarge };
+enum class HttpChunkScanError : std::uint8_t {
+    kInvalidSize,
+    kSizeOverflow,
+    kInvalidExtension,
+    kInvalidCrlf,
+    kInvalidTrailer,
+    kTooLarge
+};
 
 class HttpChunkTrailerField final {
 public:
@@ -188,7 +195,8 @@ private:
 };
 
 [[nodiscard]] bool parseHttpChunkSize(std::string_view value, std::size_t& size) noexcept;
-[[nodiscard]] std::optional<HttpChunkScanError> validateHttpChunkTrailers(std::string_view trailers) noexcept;
+[[nodiscard]] std::optional<HttpChunkScanError> validateHttpChunkTrailers(
+    std::string_view trailers) noexcept;
 [[nodiscard]] HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept;
 
 }  // namespace ruvia::detail

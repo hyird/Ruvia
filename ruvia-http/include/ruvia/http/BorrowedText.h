@@ -45,7 +45,8 @@ public:
     }
 
     template <typename Traits, typename Allocator>
-    constexpr BorrowedText& operator=(const std::basic_string<char, Traits, Allocator>& value) noexcept {
+    constexpr BorrowedText& operator=(
+        const std::basic_string<char, Traits, Allocator>& value) noexcept {
         value_ = std::string_view(value);
         return *this;
     }
@@ -86,7 +87,8 @@ public:
     }
 
     template <typename Traits, typename Allocator>
-    friend constexpr bool operator==(BorrowedText left, const std::basic_string<char, Traits, Allocator>& right) noexcept {
+    friend constexpr bool operator==(
+        BorrowedText left, const std::basic_string<char, Traits, Allocator>& right) noexcept {
         return left.value_ == std::string_view(right);
     }
 

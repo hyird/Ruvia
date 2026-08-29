@@ -27,7 +27,8 @@ struct StaticRootConfigStorage final {
           mimeTypes(pmrResourceOrDefault(resource)),
           fileTypeExtensions(pmrResourceOrDefault(resource)) {}
 
-    StaticRootConfigStorage(const StaticRootConfigStorage& source, std::pmr::memory_resource* resource);
+    StaticRootConfigStorage(
+        const StaticRootConfigStorage& source, std::pmr::memory_resource* resource);
     StaticRootConfigStorage(StaticRootConfigStorage&&) noexcept = default;
     StaticRootConfigStorage& operator=(const StaticRootConfigStorage&) = delete;
     StaticRootConfigStorage& operator=(StaticRootConfigStorage&&) noexcept = default;
@@ -43,11 +44,13 @@ struct StaticRootConfigStorage final {
     StaticDotfilePolicy dotfiles{StaticDotfilePolicy::kDeny};
 };
 
-[[nodiscard]] StaticRootConfigStorage makeStaticRootConfigStorage(const StaticRootOptions& source, std::pmr::memory_resource* resource);
+[[nodiscard]] StaticRootConfigStorage makeStaticRootConfigStorage(
+    const StaticRootOptions& source, std::pmr::memory_resource* resource);
 
 // The caller owns whole-config validation and invokes this only after every
 // related policy has passed. This split lets App validate DocumentRootConfig
 // atomically before the first owner-PMR allocation.
-[[nodiscard]] StaticRootConfigStorage storeValidatedStaticRootConfig(const StaticRootOptions& source, std::pmr::memory_resource* resource);
+[[nodiscard]] StaticRootConfigStorage storeValidatedStaticRootConfig(
+    const StaticRootOptions& source, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

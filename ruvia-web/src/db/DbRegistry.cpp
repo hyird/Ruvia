@@ -29,13 +29,15 @@ namespace {
 
 Task<void> connectPool(detail::DbPoolRef pool) {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         co_await (*client)->connect();
         co_return;
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         co_await (*client)->connect();
         co_return;
     }
@@ -45,13 +47,15 @@ Task<void> connectPool(detail::DbPoolRef pool) {
 
 void closePool(detail::DbPoolRef pool) noexcept {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         (*client)->closeNow();
         return;
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         (*client)->closeNow();
     }
 #endif
@@ -59,13 +63,15 @@ void closePool(detail::DbPoolRef pool) noexcept {
 
 void scanPool(detail::DbPoolRef pool, std::chrono::steady_clock::time_point now) noexcept {
 #ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         (*client)->scanDeadlines(now);
         return;
     }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
         (*client)->scanDeadlines(now);
     }
 #endif
@@ -73,7 +79,8 @@ void scanPool(detail::DbPoolRef pool, std::chrono::steady_clock::time_point now)
 
 }  // namespace
 
-detail::DbRegistry::DbRegistry(asio::io_context& ioContext, ConnectionScanner& scanner, std::pmr::memory_resource* resource, const DbConfig& defaultConfig)
+detail::DbRegistry::DbRegistry(asio::io_context& ioContext, ConnectionScanner& scanner,
+    std::pmr::memory_resource* resource, const DbConfig& defaultConfig)
     : resource_(detail::pmrResourceOrDefault(resource)),
       pools_(resource_),
       aliasIndex_(resource_) {
@@ -83,11 +90,13 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, ConnectionScanner& s
     registerDeadlineScanner(scanner);
 }
 
-detail::DbRegistry::DbRegistry(asio::io_context& ioContext, ConnectionScanner& scanner, std::pmr::memory_resource* resource, std::span<const detail::DbDefinition> databases)
+detail::DbRegistry::DbRegistry(asio::io_context& ioContext, ConnectionScanner& scanner,
+    std::pmr::memory_resource* resource, std::span<const detail::DbDefinition> databases)
     : resource_(detail::pmrResourceOrDefault(resource)),
       pools_(resource_),
       aliasIndex_(resource_) {
-    validateCapabilityAliases(databases, "database alias must not be empty", "duplicate database alias");
+    validateCapabilityAliases(
+        databases, "database alias must not be empty", "duplicate database alias");
     aliasIndex_.build(databases);
     pools_.reserve(databases.size());
     for (const auto& definition : databases) {
@@ -98,21 +107,24 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, ConnectionScanner& s
 
 detail::DbRegistry::~DbRegistry() = default;
 
-void detail::DbRegistry::add(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config) {
+void detail::DbRegistry::add(
+    asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config) {
     PoolOwner owner;
     switch (config.driver) {
         case DbDriver::kUnspecified:
             std::terminate();
         case DbDriver::kMariaDb:
 #ifdef RUVIA_ENABLE_MARIADB
-            owner = detail::makePmrObject<MariaDbPool>(resource_, ioContext, worker, std::move(config), resource_);
+            owner = detail::makePmrObject<MariaDbPool>(
+                resource_, ioContext, worker, std::move(config), resource_);
             break;
 #else
             std::terminate();
 #endif
         case DbDriver::kPostgreSql:
 #ifdef RUVIA_ENABLE_POSTGRESQL
-            owner = detail::makePmrObject<PostgreSqlPool>(resource_, ioContext, worker, std::move(config), resource_);
+            owner = detail::makePmrObject<PostgreSqlPool>(
+                resource_, ioContext, worker, std::move(config), resource_);
             break;
 #else
             std::terminate();
@@ -128,7 +140,8 @@ void detail::DbRegistry::registerDeadlineScanner(ConnectionScanner& scanner) noe
     }
     // Per-operation options can add a timeout after startup, so every database
     // pool participates even when its registration config has no default.
-    scanner.registerWorkerMaintenance(deadlineMaintenance_, this, [](void* target) noexcept { static_cast<DbRegistry*>(target)->scanDeadlines(); });
+    scanner.registerWorkerMaintenance(deadlineMaintenance_, this,
+        [](void* target) noexcept { static_cast<DbRegistry*>(target)->scanDeadlines(); });
 }
 
 Task<void> detail::DbRegistry::connect() {
@@ -155,15 +168,18 @@ void detail::DbRegistry::scanDeadlines() noexcept {
     }
 }
 
-DbHandle detail::DbRegistry::get(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
+DbHandle detail::DbRegistry::get(
+    std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
     const auto defaultPoolIndex = aliasIndex_.defaultIndex();
     if (!defaultPoolIndex.has_value()) {
-        throw DbError(DbError::Code::kNotConfigured, std::nullopt, "default database is not configured");
+        throw DbError(
+            DbError::Code::kNotConfigured, std::nullopt, "default database is not configured");
     }
     return DbHandle(poolRef(pools_[*defaultPoolIndex]), resource, operationScope);
 }
 
-DbHandle detail::DbRegistry::get(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
+DbHandle detail::DbRegistry::get(std::string_view alias, std::pmr::memory_resource* resource,
+    ScopedOperationScope& operationScope) const {
     const auto match = aliasIndex_.find(alias);
     if (match.has_value()) {
         return DbHandle(poolRef(pools_[*match]), resource, operationScope);

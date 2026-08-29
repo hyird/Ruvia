@@ -16,7 +16,8 @@ namespace ruvia::detail {
 
 class ControllerRouteBuilder::Impl final {
 public:
-    Impl(Router& routerValue, std::pmr::string prefixValue, std::pmr::vector<ControllerMiddlewareDescriptor> middlewareValues)
+    Impl(Router& routerValue, std::pmr::string prefixValue,
+        std::pmr::vector<ControllerMiddlewareDescriptor> middlewareValues)
         : router_(routerValue),
           prefix_(std::move(prefixValue)),
           middlewares_(std::move(middlewareValues)) {}
@@ -29,7 +30,8 @@ public:
         return prefix_;
     }
 
-    [[nodiscard]] const std::pmr::vector<ControllerMiddlewareDescriptor>& middlewares() const noexcept {
+    [[nodiscard]] const std::pmr::vector<ControllerMiddlewareDescriptor>& middlewares()
+        const noexcept {
         return middlewares_;
     }
 
@@ -71,19 +73,39 @@ public:
     [[nodiscard]] const RouteTable& routeTable() const;
     [[nodiscard]] CompiledRoutePlanPtr releaseCompiledPlan();
 
-    void registerRoute(HttpKnownMethod method, std::pmr::string path, RouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
-    void registerResponseStreamRoute(HttpKnownMethod method, std::pmr::string path, RouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
-    void registerSseRoute(HttpKnownMethod method, std::pmr::string path, RouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
-    void registerWebSocketRoute(HttpKnownMethod method, std::pmr::string path, RouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares, WebSocketRouteConfig webSocketConfig = {});
+    void registerRoute(HttpKnownMethod method, std::pmr::string path, RouteHandler handler,
+        RequestBodyMode bodyMode,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
+    void registerResponseStreamRoute(HttpKnownMethod method, std::pmr::string path,
+        RouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
+    void registerSseRoute(HttpKnownMethod method, std::pmr::string path, RouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
+    void registerWebSocketRoute(HttpKnownMethod method, std::pmr::string path,
+        RouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares,
+        WebSocketRouteConfig webSocketConfig = {});
 
     // An extension method is routed by its exact wire token. Kept off the
     // enum-indexed structures entirely: extension routes are rare, so they get
     // a separate cold list rather than widening every dense per-method array.
-    void registerExtensionMethodRoute(std::string_view methodToken, std::pmr::string path, RouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
+    void registerExtensionMethodRoute(std::string_view methodToken, std::pmr::string path,
+        RouteHandler handler, RequestBodyMode bodyMode,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
 
 private:
-    void registerEndpoint(HttpKnownMethod method, std::pmr::string path, RouteEndpoint endpoint, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
-    void registerEndpointWithToken(HttpKnownMethod method, std::string_view methodToken, std::pmr::string path, RouteEndpoint endpoint, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
+    void registerEndpoint(HttpKnownMethod method, std::pmr::string path, RouteEndpoint endpoint,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
+    void registerEndpointWithToken(HttpKnownMethod method, std::string_view methodToken,
+        std::pmr::string path, RouteEndpoint endpoint,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
 
     class PendingRoute final {
     public:
@@ -171,10 +193,14 @@ private:
     };
 
     static void validateNoDynamicRouteConflict(std::span<const PendingRoute> routes);
-    void validateRouteTarget(HttpKnownMethod method, std::string_view methodToken, std::string_view path) const;
+    void validateRouteTarget(
+        HttpKnownMethod method, std::string_view methodToken, std::string_view path) const;
     [[nodiscard]] RouteMiddleware materializeMiddleware(ControllerMiddlewareDescriptor middleware);
-    void appendMaterializedMiddlewares(std::pmr::vector<RouteMiddleware>& frames, std::span<const ControllerMiddlewareDescriptor> descriptors);
-    [[nodiscard]] std::pmr::vector<RouteMiddleware> materializeMiddlewares(std::span<const ControllerMiddlewareDescriptor> first, std::span<const ControllerMiddlewareDescriptor> second = {});
+    void appendMaterializedMiddlewares(std::pmr::vector<RouteMiddleware>& frames,
+        std::span<const ControllerMiddlewareDescriptor> descriptors);
+    [[nodiscard]] std::pmr::vector<RouteMiddleware> materializeMiddlewares(
+        std::span<const ControllerMiddlewareDescriptor> first,
+        std::span<const ControllerMiddlewareDescriptor> second = {});
     void buildRouteTable(RouteTable& table, const CompiledRoutePlan* compiledPlan) const;
 
     struct RouteTableDeleter final {
@@ -190,8 +216,10 @@ private:
     std::unique_ptr<RouteTable, RouteTableDeleter> routeTable_;
     HttpErrorHandlerRef errorHandler_{nullptr};
     HttpNotFoundHandlerRef notFoundHandler_{nullptr};
-    std::pmr::vector<std::pair<std::pmr::string, HttpErrorHandlerRef>> prefixErrorHandlers_{registrationResource()};
-    std::pmr::vector<std::pair<std::pmr::string, HttpNotFoundHandlerRef>> prefixNotFoundHandlers_{registrationResource()};
+    std::pmr::vector<std::pair<std::pmr::string, HttpErrorHandlerRef>> prefixErrorHandlers_{
+        registrationResource()};
+    std::pmr::vector<std::pair<std::pmr::string, HttpNotFoundHandlerRef>> prefixNotFoundHandlers_{
+        registrationResource()};
     bool hasRouteRateLimit_{false};
 };
 

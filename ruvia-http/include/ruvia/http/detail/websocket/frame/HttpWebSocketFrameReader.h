@@ -18,7 +18,8 @@ namespace ruvia::detail {
 
 // Drop the bytes a completed frame consumed, compacting the buffer only once the
 // dead prefix is worth the move.
-inline void compactWebSocketReadBuffer(std::pmr::string& buffer, std::size_t& offset, std::size_t& pendingCompactUntil) noexcept {
+inline void compactWebSocketReadBuffer(
+    std::pmr::string& buffer, std::size_t& offset, std::size_t& pendingCompactUntil) noexcept {
     if (pendingCompactUntil == 0) {
         return;
     }
@@ -86,9 +87,11 @@ public:
     [[nodiscard]] constexpr const WebSocketFrameReadFailure* failure() const&& = delete;
 
 private:
-    friend WebSocketFrameReadResult webSocketTryReadFrame(std::pmr::string&, std::size_t&, std::size_t&, ProtocolByteLimit, bool, bool);
+    friend WebSocketFrameReadResult webSocketTryReadFrame(
+        std::pmr::string&, std::size_t&, std::size_t&, ProtocolByteLimit, bool, bool);
 
-    using Value = std::variant<WebSocketFrameNeedInput, WebSocketFrameView, WebSocketFrameReadFailure>;
+    using Value =
+        std::variant<WebSocketFrameNeedInput, WebSocketFrameView, WebSocketFrameReadFailure>;
 
     template <typename Alternative>
     explicit constexpr WebSocketFrameReadResult(Alternative alternative) noexcept
@@ -98,11 +101,13 @@ private:
         return WebSocketFrameReadResult(WebSocketFrameNeedInput());
     }
 
-    [[nodiscard]] static constexpr WebSocketFrameReadResult makeFrame(const WebSocketFrameStart& start, std::string_view payload) noexcept {
+    [[nodiscard]] static constexpr WebSocketFrameReadResult makeFrame(
+        const WebSocketFrameStart& start, std::string_view payload) noexcept {
         return WebSocketFrameReadResult(WebSocketFrameView(start, payload));
     }
 
-    [[nodiscard]] static constexpr WebSocketFrameReadResult makeFailure(WebSocketProtocolFailure error) noexcept {
+    [[nodiscard]] static constexpr WebSocketFrameReadResult makeFailure(
+        WebSocketProtocolFailure error) noexcept {
         return WebSocketFrameReadResult(WebSocketFrameReadFailure(error));
     }
 
@@ -114,7 +119,9 @@ private:
 // validation, and in-place unmasking when the peer is a client.
 // It never performs I/O and never throws for peer bytes; callers append transport
 // input after needInput(), while failure() carries the Close reason.
-[[nodiscard]] inline WebSocketFrameReadResult webSocketTryReadFrame(std::pmr::string& buffer, std::size_t& offset, std::size_t& pendingCompactUntil, ProtocolByteLimit messageLimit, bool permessageDeflate, bool expectMasked) {
+[[nodiscard]] inline WebSocketFrameReadResult webSocketTryReadFrame(std::pmr::string& buffer,
+    std::size_t& offset, std::size_t& pendingCompactUntil, ProtocolByteLimit messageLimit,
+    bool permessageDeflate, bool expectMasked) {
     compactWebSocketReadBuffer(buffer, offset, pendingCompactUntil);
     const auto available = buffer.size() - offset;
     if (available < 2) {
@@ -125,7 +132,8 @@ private:
     std::uint64_t length = second & 0x7FU;
     std::size_t headerSize = 2;
 
-    const auto frameStart = decodeWebSocketFrameStart(first, second, permessageDeflate, expectMasked);
+    const auto frameStart =
+        decodeWebSocketFrameStart(first, second, permessageDeflate, expectMasked);
     if (!frameStart.has_value()) {
         return WebSocketFrameReadResult::makeFailure(WebSocketProtocolFailure::kProtocolError);
     }
@@ -163,7 +171,9 @@ private:
         return WebSocketFrameReadResult::makeFailure(WebSocketProtocolFailure::kMessageTooLarge);
     }
     const auto maskBytes = expectMasked ? std::size_t{4} : std::size_t{0};
-    if (headerSize > (std::numeric_limits<std::size_t>::max)() - maskBytes || length > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)() - headerSize - maskBytes)) {
+    if (headerSize > (std::numeric_limits<std::size_t>::max)() - maskBytes ||
+        length > static_cast<std::uint64_t>(
+                     (std::numeric_limits<std::size_t>::max)() - headerSize - maskBytes)) {
         return WebSocketFrameReadResult::makeFailure(WebSocketProtocolFailure::kProtocolError);
     }
     const auto totalFrameBytes = headerSize + maskBytes + static_cast<std::size_t>(length);
@@ -189,7 +199,10 @@ private:
     return WebSocketFrameReadResult::makeFrame(*frameStart, payloadView);
 }
 
-[[nodiscard]] inline WebSocketFrameReadResult webSocketTryReadFrame(std::pmr::string& buffer, std::size_t& offset, std::size_t& pendingCompactUntil, ProtocolByteLimit messageLimit, bool permessageDeflate) {
-    return webSocketTryReadFrame(buffer, offset, pendingCompactUntil, messageLimit, permessageDeflate, true);
+[[nodiscard]] inline WebSocketFrameReadResult webSocketTryReadFrame(std::pmr::string& buffer,
+    std::size_t& offset, std::size_t& pendingCompactUntil, ProtocolByteLimit messageLimit,
+    bool permessageDeflate) {
+    return webSocketTryReadFrame(
+        buffer, offset, pendingCompactUntil, messageLimit, permessageDeflate, true);
 }
 }  // namespace ruvia::detail

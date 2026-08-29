@@ -12,7 +12,8 @@ namespace {
 
 std::string b64(std::string_view in) {
     std::string out(ruvia::detail::base64EncodedSize(in.size()), '\0');
-    ruvia::detail::encodeBase64(out.data(), std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(in.data()), in.size()));
+    ruvia::detail::encodeBase64(out.data(),
+        std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(in.data()), in.size()));
     return out;
 }
 

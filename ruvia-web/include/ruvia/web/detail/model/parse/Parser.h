@@ -13,12 +13,14 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline bool contentTypeMatches(std::string_view contentType, std::string_view expected) noexcept {
+[[nodiscard]] inline bool contentTypeMatches(
+    std::string_view contentType, std::string_view expected) noexcept {
     if (contentType.empty()) {
         return false;
     }
     const auto semicolon = contentType.find(';');
-    const auto mediaType = httpTrimOws(semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
+    const auto mediaType = httpTrimOws(
+        semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
     return httpAsciiEqualsIgnoreCase(mediaType, expected);
 }
 

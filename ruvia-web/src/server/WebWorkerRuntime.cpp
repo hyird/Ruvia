@@ -45,17 +45,21 @@ using TcpEndpoint = asio::ip::tcp::endpoint;
 
 namespace {
 
-int selectAlpnProtocol(SSL*, const unsigned char** out, unsigned char* outLength, const unsigned char* in, unsigned int inLength, void*) noexcept {
+int selectAlpnProtocol(SSL*, const unsigned char** out, unsigned char* outLength,
+    const unsigned char* in, unsigned int inLength, void*) noexcept {
     // Only h2 and http/1.1 are offered. HTTP/3 / QUIC is explicitly not supported (no "h3"
     // token, no UDP/QUIC listener); a peer offering only h3 falls back to http/1.1 or fails ALPN.
-    static constexpr unsigned char protocols[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
-    if (SSL_select_next_proto(const_cast<unsigned char**>(out), outLength, protocols, static_cast<unsigned int>(sizeof(protocols)), in, inLength) == OPENSSL_NPN_NEGOTIATED) {
+    static constexpr unsigned char protocols[] = {
+        2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+    if (SSL_select_next_proto(const_cast<unsigned char**>(out), outLength, protocols,
+            static_cast<unsigned int>(sizeof(protocols)), in, inLength) == OPENSSL_NPN_NEGOTIATED) {
         return SSL_TLSEXT_ERR_OK;
     }
     return SSL_TLSEXT_ERR_NOACK;
 }
 
-[[nodiscard]] StaticRootPrecompressionOptions documentRootPrecompressionOptions(const HttpServerOptions& options) noexcept {
+[[nodiscard]] StaticRootPrecompressionOptions documentRootPrecompressionOptions(
+    const HttpServerOptions& options) noexcept {
     const auto* configured = options.documentRoot.precompressionOptions();
     if (configured == nullptr || !options.compression.has_value()) {
         return {};
@@ -121,7 +125,8 @@ void useCertificateChainFile(asio::ssl::context& context, const std::pmr::string
 
 void usePrivateKeyFile(asio::ssl::context& context, const std::pmr::string& filename) {
     ::ERR_clear_error();
-    if (::SSL_CTX_use_PrivateKey_file(context.native_handle(), filename.c_str(), SSL_FILETYPE_PEM) != 1) {
+    if (::SSL_CTX_use_PrivateKey_file(
+            context.native_handle(), filename.c_str(), SSL_FILETYPE_PEM) != 1) {
         throwTlsContextFileError("use_private_key_file");
     }
 }
@@ -133,25 +138,40 @@ void loadVerifyFile(asio::ssl::context& context, const std::pmr::string& filenam
     }
 }
 
-[[nodiscard]] ConnectionScannerOptions makeConnectionScannerOptions(const HttpServerOptions& options) noexcept {
-    return ConnectionScannerOptions{.scanInterval = options.scanInterval, .idleTimeout = options.idleTimeout, .initialReadTimeout = options.requestHeaderTimeout, .payloadReadTimeout = options.requestBodyTimeout, .writeTimeout = options.writeTimeout};
+[[nodiscard]] ConnectionScannerOptions makeConnectionScannerOptions(
+    const HttpServerOptions& options) noexcept {
+    return ConnectionScannerOptions{.scanInterval = options.scanInterval,
+        .idleTimeout = options.idleTimeout,
+        .initialReadTimeout = options.requestHeaderTimeout,
+        .payloadReadTimeout = options.requestBodyTimeout,
+        .writeTimeout = options.writeTimeout};
 }
 
 }  // namespace
 
-WebWorkerRuntime::WebWorkerRuntime(TcpEndpoint endpoint, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
-    : WebWorkerRuntime(HttpServerListenerDefinition(std::move(endpoint)), routes, capabilities, std::move(options)) {}
+WebWorkerRuntime::WebWorkerRuntime(TcpEndpoint endpoint, const RouteTable& routes,
+    WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
+    : WebWorkerRuntime(HttpServerListenerDefinition(std::move(endpoint)), routes, capabilities,
+          std::move(options)) {}
 
-WebWorkerRuntime::WebWorkerRuntime(HttpServerListenerDefinition listener, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
-    : WebWorkerRuntime(std::span<const HttpServerListenerDefinition>(&listener, 1), routes, capabilities, std::move(options)) {}
+WebWorkerRuntime::WebWorkerRuntime(HttpServerListenerDefinition listener, const RouteTable& routes,
+    WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
+    : WebWorkerRuntime(std::span<const HttpServerListenerDefinition>(&listener, 1), routes,
+          capabilities, std::move(options)) {}
 
-WebWorkerRuntime::WebWorkerRuntime(std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
-    : WebWorkerRuntime(validateHttpServerConfiguration(listeners, std::move(options)), routes, capabilities) {}
+WebWorkerRuntime::WebWorkerRuntime(std::span<const HttpServerListenerDefinition> listeners,
+    const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
+    : WebWorkerRuntime(
+          validateHttpServerConfiguration(listeners, std::move(options)), routes, capabilities) {}
 
-WebWorkerRuntime::WebWorkerRuntime(const ValidatedHttpServerConfiguration& configuration, const RouteTable& routes, WorkerCapabilityDefinitions capabilities)
-    : WebWorkerRuntime(ValidatedConfigurationTag{}, configuration.listeners(), routes, capabilities, configuration.options()) {}
+WebWorkerRuntime::WebWorkerRuntime(const ValidatedHttpServerConfiguration& configuration,
+    const RouteTable& routes, WorkerCapabilityDefinitions capabilities)
+    : WebWorkerRuntime(ValidatedConfigurationTag{}, configuration.listeners(), routes, capabilities,
+          configuration.options()) {}
 
-WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag, std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions)
+WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
+    std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes,
+    WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions)
     // One worker thread runs all I/O on this context; cross-thread access is
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
@@ -169,20 +189,25 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag, std::span<const Ht
       capabilities_(ioContext_, workerRuntime_.handle(), memory_.resource(), capabilities,
           WorkerCapabilityOptions{
               .defaultRateLimit = options_.defaultRateLimitPerWorker,
-              .routeRateLimits = routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent : RouteRateLimitPresence::kAbsent,
+              .routeRateLimits = routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent
+                                                             : RouteRateLimitPresence::kAbsent,
               .rateLimitCapacity = options_.rateLimitCapacityPerWorker,
               .maxDecodedBodyBytes = options_.maxBufferedBodyBytes,
               .blockingPool = options_.blockingPool,
               .env = options_.env,
-              .trustedProxies = options_.trustedProxies.empty() ? nullptr : &options_.trustedProxies,
+              .trustedProxies =
+                  options_.trustedProxies.empty() ? nullptr : &options_.trustedProxies,
               .precompressedStaticFiles = options_.compression.has_value(),
           },
           connectionScanner_),
-      webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(), workerRuntime_.handle(), memory_.resource(), capabilities_, [this](const std::exception_ptr& failure) { failWorker(failure); })),
+      webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(),
+          workerRuntime_.handle(), memory_.resource(), capabilities_,
+          [this](const std::exception_ptr& failure) { failWorker(failure); })),
       workSetPool_(memory_) {
     listeners_.reserve(listeners.size());
     for (const auto& listener : listeners) {
-        listeners_.push_back(makePmrObject<HttpServerListener>(memory_.resource(), ioContext_, listener, memory_.resource()));
+        listeners_.push_back(makePmrObject<HttpServerListener>(
+            memory_.resource(), ioContext_, listener, memory_.resource()));
     }
     if (options_.documentRoot.refreshOptions() != nullptr) {
         const auto* configuredRoot = options_.documentRoot.root();
@@ -192,7 +217,8 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag, std::span<const Ht
         ownedDocumentRoot_ = StaticRootAccess::clone(processResource(), *configuredRoot);
         const auto precompression = documentRootPrecompressionOptions(options_);
         if (precompression.enabled()) {
-            StaticRootAccess::installPrecompressedVariants(*ownedDocumentRoot_, configuredRoot, precompression);
+            StaticRootAccess::installPrecompressedVariants(
+                *ownedDocumentRoot_, configuredRoot, precompression);
         }
         options_.documentRoot.publish(*ownedDocumentRoot_);
     }
@@ -329,7 +355,8 @@ HttpServerStats WebWorkerRuntime::stats() const noexcept {
     stats.connectionFailures = connectionFailures_.load(std::memory_order_relaxed);
     stats.acceptFailures = acceptFailures_.load(std::memory_order_relaxed);
     stats.workerFailures = workerFailures_.load(std::memory_order_relaxed);
-    stats.documentRootRefreshFailures = documentRootRefreshFailures_.load(std::memory_order_relaxed);
+    stats.documentRootRefreshFailures =
+        documentRootRefreshFailures_.load(std::memory_order_relaxed);
     return stats;
 }
 
@@ -351,11 +378,13 @@ void WebWorkerRuntime::configureAcceptor(HttpServerListener& listener) {
 
 #if defined(SO_REUSEPORT) && !defined(_WIN32)
     int enabled = 1;
-    if (::setsockopt(listener.acceptor.native_handle(), SOL_SOCKET, SO_REUSEPORT, &enabled, sizeof(enabled)) != 0) {
+    if (::setsockopt(listener.acceptor.native_handle(), SOL_SOCKET, SO_REUSEPORT, &enabled,
+            sizeof(enabled)) != 0) {
         throw std::system_error(errno, std::generic_category(), "failed to enable SO_REUSEPORT");
     }
 #elif !defined(_WIN32)
-    throw std::runtime_error("SO_REUSEPORT is required but not available on this platform/toolchain");
+    throw std::runtime_error(
+        "SO_REUSEPORT is required but not available on this platform/toolchain");
 #endif
 
     (void)listener.acceptor.bind(listener.endpoint, ec);
@@ -386,13 +415,19 @@ void WebWorkerRuntime::configureTlsContext(HttpServerListener& listener) {
         throw std::invalid_argument("TLS requires certificate chain and private key files");
     }
 
-    const auto configure = [tls](asio::ssl::context& context, const std::pmr::string& certificateChainFile, const std::pmr::string& privateKeyFile, const std::pmr::string& privateKeyPassword) {
-        context.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 | asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
+    const auto configure = [tls](asio::ssl::context& context,
+                               const std::pmr::string& certificateChainFile,
+                               const std::pmr::string& privateKeyFile,
+                               const std::pmr::string& privateKeyPassword) {
+        context.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
+                            asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 |
+                            asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
         SSL_CTX_set_options(context.native_handle(), SSL_OP_NO_COMPRESSION);
         SSL_CTX_set_alpn_select_cb(context.native_handle(), selectAlpnProtocol, nullptr);
         if (!privateKeyPassword.empty()) {
             SSL_CTX_set_default_passwd_cb(context.native_handle(), copyPrivateKeyPassword);
-            SSL_CTX_set_default_passwd_cb_userdata(context.native_handle(), const_cast<std::pmr::string*>(&privateKeyPassword));
+            SSL_CTX_set_default_passwd_cb_userdata(
+                context.native_handle(), const_cast<std::pmr::string*>(&privateKeyPassword));
         }
         useCertificateChainFile(context, certificateChainFile);
         usePrivateKeyFile(context, privateKeyFile);
@@ -406,7 +441,8 @@ void WebWorkerRuntime::configureTlsContext(HttpServerListener& listener) {
     listener.sniContexts.reserve(tls->sniIdentities.size());
     for (const auto& sni : tls->sniIdentities) {
         auto& context = listener.sniContexts.emplace_back(asio::ssl::context::tls_server);
-        configure(context, sni.identity.certificateChainFile, sni.identity.privateKeyFile, sni.identity.privateKeyPassword);
+        configure(context, sni.identity.certificateChainFile, sni.identity.privateKeyFile,
+            sni.identity.privateKeyPassword);
     }
     listener.sniLookup.reserve(tls->sniIdentities.size());
     for (std::size_t i = 0; i < tls->sniIdentities.size(); ++i) {
@@ -415,7 +451,8 @@ void WebWorkerRuntime::configureTlsContext(HttpServerListener& listener) {
 
     listener.tlsContext.emplace(asio::ssl::context::tls_server);
     auto& context = *listener.tlsContext;
-    configure(context, tls->identity.certificateChainFile, tls->identity.privateKeyFile, tls->identity.privateKeyPassword);
+    configure(context, tls->identity.certificateChainFile, tls->identity.privateKeyFile,
+        tls->identity.privateKeyPassword);
     if (!listener.sniLookup.empty()) {
         SSL_CTX_set_tlsext_servername_callback(context.native_handle(), &selectSniContext);
         SSL_CTX_set_tlsext_servername_arg(context.native_handle(), &listener.sniLookup);
@@ -463,7 +500,8 @@ void WebWorkerRuntime::runIoContext() noexcept {
         workerRuntime_.run(
             [this] {
                 capabilities_.initializeWorkerState();
-                asio::co_spawn(ioContext_, taskAsAwaitable(runWorker()), asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
+                asio::co_spawn(ioContext_, taskAsAwaitable(runWorker()),
+                    asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
             },
             [this, &workerFailed](const std::exception_ptr& failure) noexcept {
                 workerFailed = true;
@@ -487,7 +525,8 @@ void WebWorkerRuntime::runIoContext() noexcept {
 
     lifecycle_.completeStop();
     workerState_ = HttpServerWorkerState::kStopped;
-    (void)workerCompletion_.markStartupFailed(std::make_exception_ptr(std::runtime_error("http server worker stopped before startup completed")));
+    (void)workerCompletion_.markStartupFailed(std::make_exception_ptr(
+        std::runtime_error("http server worker stopped before startup completed")));
 }
 
 Task<void> WebWorkerRuntime::runWorker() {
@@ -500,7 +539,8 @@ Task<void> WebWorkerRuntime::runWorker() {
         co_await capabilities_.connect();
         (void)workerCompletion_.markStartupReady();
 
-        const auto serveCompletion = co_await asyncAsio([this](auto handler) mutable { serveGate_.async_wait(std::move(handler)); });
+        const auto serveCompletion = co_await asyncAsio(
+            [this](auto handler) mutable { serveGate_.async_wait(std::move(handler)); });
         const auto serveError = serveCompletion.errorCode();
         if (serveError && serveError != asio::error::operation_aborted) {
             throw std::system_error(serveError, "web worker serve gate failed");
@@ -549,12 +589,17 @@ Task<void> WebWorkerRuntime::staticRootRefreshLoop() {
         std::terminate();
     }
     const auto interval = refreshOptions->refreshInterval;
-    const auto reclaimRetiredRoots = [this]() noexcept { std::erase_if(retiredDocumentRoots_, [](const DocumentRootPtr& root) { return root == nullptr || !StaticRootAccess::hasActiveBindings(*root); }); };
+    const auto reclaimRetiredRoots = [this]() noexcept {
+        std::erase_if(retiredDocumentRoots_, [](const DocumentRootPtr& root) {
+            return root == nullptr || !StaticRootAccess::hasActiveBindings(*root);
+        });
+    };
     for (;;) {
         if (!httpServerWorkerRunning(workerState_)) {
             co_return;
         }
-        if (co_await sleepFor(workerRuntime_.handle(), interval) == TimerSleepResult::kStopRequested) {
+        if (co_await sleepFor(workerRuntime_.handle(), interval) ==
+            TimerSleepResult::kStopRequested) {
             co_return;
         }
         if (!httpServerWorkerRunning(workerState_)) {
@@ -591,7 +636,12 @@ Task<void> WebWorkerRuntime::staticRootRefreshLoop() {
         }
         DocumentRootPtr candidate(nullptr, PmrObjectDeleter<StaticRoot>{processResource()});
         try {
-            auto rebuilt = co_await ruvia::tryRunBlocking(*options_.blockingPool, workerRuntime_.handle(), [rootPath = std::move(rootPath), rootConfig = std::move(*rootConfig)]() mutable { return StaticRootAccess::make(processResource(), rootPath, std::move(rootConfig)); });
+            auto rebuilt = co_await ruvia::tryRunBlocking(*options_.blockingPool,
+                workerRuntime_.handle(),
+                [rootPath = std::move(rootPath), rootConfig = std::move(*rootConfig)]() mutable {
+                    return StaticRootAccess::make(
+                        processResource(), rootPath, std::move(rootConfig));
+                });
             if (!rebuilt.completed()) {
                 if (rebuilt.failed()) {
                     // A refresh is transactional: keep serving the last complete
@@ -621,17 +671,22 @@ Task<void> WebWorkerRuntime::staticRootRefreshLoop() {
         if (!httpServerWorkerRunning(workerState_)) {
             co_return;
         }
-        if (StaticRootAccess::fingerprint(*candidate) == StaticRootAccess::fingerprint(*currentRoot) && StaticRootAccess::sameSnapshot(*candidate, *currentRoot)) {
+        if (StaticRootAccess::fingerprint(*candidate) ==
+                StaticRootAccess::fingerprint(*currentRoot) &&
+            StaticRootAccess::sameSnapshot(*candidate, *currentRoot)) {
             continue;
         }
 
         const auto precompression = documentRootPrecompressionOptions(options_);
         if (precompression.enabled()) {
             try {
-                auto prepared = co_await ruvia::tryRunBlocking(*options_.blockingPool, workerRuntime_.handle(), [candidate = std::move(candidate), precompression]() mutable {
-                    StaticRootAccess::installPrecompressedVariants(*candidate, nullptr, precompression);
-                    return std::move(candidate);
-                });
+                auto prepared =
+                    co_await ruvia::tryRunBlocking(*options_.blockingPool, workerRuntime_.handle(),
+                        [candidate = std::move(candidate), precompression]() mutable {
+                            StaticRootAccess::installPrecompressedVariants(
+                                *candidate, nullptr, precompression);
+                            return std::move(candidate);
+                        });
                 if (!prepared.completed()) {
                     if (prepared.failed()) {
                         documentRootRefreshFailures_.fetch_add(1, std::memory_order_relaxed);
@@ -661,7 +716,8 @@ Task<void> WebWorkerRuntime::staticRootRefreshLoop() {
         // without this retirement step leaves a suspended coroutine with a
         // dangling StaticRoot after the next poll.
         try {
-            if (ownedDocumentRoot_ != nullptr && StaticRootAccess::hasActiveBindings(*ownedDocumentRoot_)) {
+            if (ownedDocumentRoot_ != nullptr &&
+                StaticRootAccess::hasActiveBindings(*ownedDocumentRoot_)) {
                 // A vector growth is the only fallible part of publication.
                 // The old pointer remains owned by this server if growth is
                 // rejected, so the candidate can be discarded and the next

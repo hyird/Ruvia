@@ -137,7 +137,8 @@ public:
         self().requireActive();
         auto startValue = redisIntString(start, self().resource());
         auto stopValue = redisIntString(stop, self().resource());
-        return self().command("LRANGE", key, std::string_view(startValue), std::string_view(stopValue));
+        return self().command(
+            "LRANGE", key, std::string_view(startValue), std::string_view(stopValue));
     }
 
     Derived& sadd(std::string_view key, std::string_view member) {
@@ -170,7 +171,8 @@ public:
         self().requireActive();
         auto startValue = redisIntString(start, self().resource());
         auto stopValue = redisIntString(stop, self().resource());
-        return self().command("ZRANGE", key, std::string_view(startValue), std::string_view(stopValue));
+        return self().command(
+            "ZRANGE", key, std::string_view(startValue), std::string_view(stopValue));
     }
 
     Derived& zscore(std::string_view key, std::string_view member) {

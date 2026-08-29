@@ -38,10 +38,12 @@ template <HttpTemporaryOwningCharString Value>
 std::string_view httpTrimQuotes(Value&&) = delete;
 
 template <typename Predicate>
-[[nodiscard]] inline std::string_view httpFindHeaderToken(std::string_view value, Predicate&& predicate) noexcept {
+[[nodiscard]] inline std::string_view httpFindHeaderToken(
+    std::string_view value, Predicate&& predicate) noexcept {
     while (!value.empty()) {
         const auto comma = value.find(',');
-        const auto token = httpTrimOws(comma == std::string_view::npos ? value : value.substr(0, comma));
+        const auto token =
+            httpTrimOws(comma == std::string_view::npos ? value : value.substr(0, comma));
         if (!token.empty() && predicate(token)) {
             return token;
         }
@@ -60,7 +62,8 @@ std::string_view httpFindHeaderToken(Value&&, Predicate&&) = delete;
 // RFC quoted-string (honoring quoted-pairs, so a `\"` does not end the string), or
 // value.size() if there is none. Sole owner of the quote-aware delimiter scan
 // shared by the comma-list and semicolon-parameter quoted visitors below.
-[[nodiscard]] inline std::size_t httpFindUnquotedDelimiter(std::string_view value, std::size_t start, char delimiter) noexcept {
+[[nodiscard]] inline std::size_t httpFindUnquotedDelimiter(
+    std::string_view value, std::size_t start, char delimiter) noexcept {
     bool inQuotes = false;
     for (std::size_t i = start; i < value.size(); ++i) {
         const char c = value[i];
@@ -102,7 +105,8 @@ inline void httpVisitCommaSeparatedQuotedItems(std::string_view value, Visitor&&
 // should use httpVisitCommaSeparatedQuotedItems directly.
 template <typename Visitor>
 inline void httpVisitCommaSeparatedQuoted(std::string_view value, Visitor&& visitor) {
-    httpVisitCommaSeparatedQuotedItems(value, [&visitor](std::string_view item) { return item.empty() || visitor(item); });
+    httpVisitCommaSeparatedQuotedItems(
+        value, [&visitor](std::string_view item) { return item.empty() || visitor(item); });
 }
 
 // Iterate the `key=value` parameters of a `;`-delimited list (cookie pairs,
@@ -128,7 +132,8 @@ template <typename Visitor>
 inline void httpVisitSemicolonParameters(std::string_view value, Visitor&& visitor) {
     while (!value.empty()) {
         const auto semicolon = value.find(';');
-        const auto part = httpTrimOws(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
+        const auto part =
+            httpTrimOws(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
         if (!httpEmitSemicolonParameter(part, visitor)) {
             return;
         }
@@ -190,75 +195,93 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     }
 }
 
-[[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameter(std::string_view value, std::string_view name) {
+[[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameter(
+    std::string_view value, std::string_view name) {
     std::optional<std::string_view> result;
-    httpVisitSemicolonParameters(value, [name, &result](std::string_view key, std::string_view parameterValue) {
-        if (key == name) {
-            result = parameterValue;
-        }
-        return true;
-    });
+    httpVisitSemicolonParameters(
+        value, [name, &result](std::string_view key, std::string_view parameterValue) {
+            if (key == name) {
+                result = parameterValue;
+            }
+            return true;
+        });
     return result;
 }
 
 template <HttpTemporaryOwningCharString Value>
 std::optional<std::string_view> httpFindSemicolonParameter(Value&&, std::string_view) = delete;
 
-[[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterQuoted(std::string_view value, std::string_view name) {
+[[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterQuoted(
+    std::string_view value, std::string_view name) {
     std::optional<std::string_view> result;
-    httpVisitSemicolonParametersQuoted(value, [name, &result](std::string_view key, std::string_view parameterValue) {
-        if (key == name) {
-            result = parameterValue;
-        }
-        return true;
-    });
+    httpVisitSemicolonParametersQuoted(
+        value, [name, &result](std::string_view key, std::string_view parameterValue) {
+            if (key == name) {
+                result = parameterValue;
+            }
+            return true;
+        });
     return result;
 }
 
 template <HttpTemporaryOwningCharString Value>
-std::optional<std::string_view> httpFindSemicolonParameterQuoted(Value&&, std::string_view) = delete;
+std::optional<std::string_view> httpFindSemicolonParameterQuoted(
+    Value&&, std::string_view) = delete;
 
-[[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterQuotedIgnoreCase(std::string_view value, std::string_view name) {
+[[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterQuotedIgnoreCase(
+    std::string_view value, std::string_view name) {
     std::optional<std::string_view> result;
-    httpVisitSemicolonParametersQuoted(value, [name, &result](std::string_view key, std::string_view parameterValue) {
-        if (httpAsciiEqualsIgnoreCase(key, name)) {
-            result = parameterValue;
-        }
-        return true;
-    });
+    httpVisitSemicolonParametersQuoted(
+        value, [name, &result](std::string_view key, std::string_view parameterValue) {
+            if (httpAsciiEqualsIgnoreCase(key, name)) {
+                result = parameterValue;
+            }
+            return true;
+        });
     return result;
 }
 
 template <HttpTemporaryOwningCharString Value>
-std::optional<std::string_view> httpFindSemicolonParameterQuotedIgnoreCase(Value&&, std::string_view) = delete;
+std::optional<std::string_view> httpFindSemicolonParameterQuotedIgnoreCase(
+    Value&&, std::string_view) = delete;
 
-[[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterIgnoreCase(std::string_view value, std::string_view name) {
+[[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterIgnoreCase(
+    std::string_view value, std::string_view name) {
     std::optional<std::string_view> result;
-    httpVisitSemicolonParameters(value, [name, &result](std::string_view key, std::string_view parameterValue) {
-        if (httpAsciiEqualsIgnoreCase(key, name)) {
-            result = parameterValue;
-        }
-        return true;
-    });
+    httpVisitSemicolonParameters(
+        value, [name, &result](std::string_view key, std::string_view parameterValue) {
+            if (httpAsciiEqualsIgnoreCase(key, name)) {
+                result = parameterValue;
+            }
+            return true;
+        });
     return result;
 }
 
 template <HttpTemporaryOwningCharString Value>
-std::optional<std::string_view> httpFindSemicolonParameterIgnoreCase(Value&&, std::string_view) = delete;
+std::optional<std::string_view> httpFindSemicolonParameterIgnoreCase(
+    Value&&, std::string_view) = delete;
 
 [[nodiscard]] inline bool httpHasToken(std::string_view value, std::string_view expected) noexcept {
     if (expected.empty()) {
         return false;
     }
     const auto expectedFirst = httpAsciiToLower(static_cast<unsigned char>(expected.front()));
-    return !httpFindHeaderToken(value, [expected, expectedFirst](std::string_view token) noexcept { return token.size() == expected.size() && httpAsciiToLower(static_cast<unsigned char>(token.front())) == expectedFirst && httpAsciiEqualsIgnoreCase(token, expected); }).empty();
+    return !httpFindHeaderToken(value, [expected, expectedFirst](std::string_view token) noexcept {
+        return token.size() == expected.size() &&
+               httpAsciiToLower(static_cast<unsigned char>(token.front())) == expectedFirst &&
+               httpAsciiEqualsIgnoreCase(token, expected);
+    }).empty();
 }
 
-[[nodiscard]] inline bool httpHasExactToken(std::string_view value, std::string_view expected) noexcept {
+[[nodiscard]] inline bool httpHasExactToken(
+    std::string_view value, std::string_view expected) noexcept {
     if (expected.empty()) {
         return false;
     }
-    return !httpFindHeaderToken(value, [expected](std::string_view token) noexcept { return token == expected; }).empty();
+    return !httpFindHeaderToken(value, [expected](std::string_view token) noexcept {
+        return token == expected;
+    }).empty();
 }
 
 }  // namespace ruvia::detail

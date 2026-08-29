@@ -133,7 +133,8 @@ public:
     void reset(Release&& release) noexcept {
         if (auto* active = std::get_if<Active>(&state_); active != nullptr) {
             release(active->payload);
-        } else if (std::holds_alternative<Reserved>(state_) || std::holds_alternative<Operating>(state_)) {
+        } else if (std::holds_alternative<Reserved>(state_) ||
+                   std::holds_alternative<Operating>(state_)) {
             // Destroying the database owner while its structured operation is
             // pending or running would leave that coroutine borrowing a dead object.
             std::terminate();

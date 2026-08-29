@@ -22,10 +22,12 @@ using ruvia::detail::WebSocketProtocolFailure;
 using ruvia::detail::webSocketProtocolFailureCloseCode;
 
 template <typename T>
-concept HasAnyRvalueClosePayloadAccessor = requires(T&& result) { std::move(result).encoded(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueClosePayloadAccessor = requires(T&& result) { std::move(result).encoded(); } ||
+                                           requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
-concept ExposesRvalueEncodedClosePayloadBytes = requires(T&& payload) { std::move(payload).bytes(); };
+concept ExposesRvalueEncodedClosePayloadBytes =
+    requires(T&& payload) { std::move(payload).bytes(); };
 
 static_assert(!HasAnyRvalueClosePayloadAccessor<WebSocketClosePayloadEncodeResult>);
 static_assert(!ExposesRvalueEncodedClosePayloadBytes<WebSocketEncodedClosePayload>);
@@ -38,7 +40,8 @@ std::string closeBody(std::uint16_t code, std::string_view reason) {
     return body;
 }
 
-std::optional<WebSocketClosePayloadEncodeError> encodeError(std::uint16_t code, std::string_view reason) {
+std::optional<WebSocketClosePayloadEncodeError> encodeError(
+    std::uint16_t code, std::string_view reason) {
     const auto result = encodeWebSocketClosePayload(code, reason);
     const auto* failure = result.failure();
     return failure == nullptr ? std::nullopt : std::optional(failure->error());
@@ -77,29 +80,37 @@ RUVIA_TEST(ws_close_encode_valid) {
 
 RUVIA_TEST(ws_close_encode_rejects_invalid) {
     RUVIA_CHECK(encodeError(1005, "x") == WebSocketClosePayloadEncodeError::kInvalidCode);
-    RUVIA_CHECK(encodeError(1000, std::string("\xc0\x80", 2)) == WebSocketClosePayloadEncodeError::kInvalidReason);
-    RUVIA_CHECK(encodeError(1000, std::string(124, 'x')) == WebSocketClosePayloadEncodeError::kReasonTooLarge);
+    RUVIA_CHECK(encodeError(1000, std::string("\xc0\x80", 2)) ==
+                WebSocketClosePayloadEncodeError::kInvalidReason);
+    RUVIA_CHECK(encodeError(1000, std::string(124, 'x')) ==
+                WebSocketClosePayloadEncodeError::kReasonTooLarge);
     RUVIA_CHECK(!encodeError(1000, std::string(123, 'x')).has_value());
 }
 
 RUVIA_TEST(ws_close_validate_incoming) {
     // An empty close body is valid; a 1-byte body (a partial code) is not.
     RUVIA_CHECK(!webSocketClosePayloadFailure(std::string_view()).has_value());
-    RUVIA_CHECK(webSocketClosePayloadFailure(std::string(1, 'x')) == WebSocketProtocolFailure::kProtocolError);
+    RUVIA_CHECK(webSocketClosePayloadFailure(std::string(1, 'x')) ==
+                WebSocketProtocolFailure::kProtocolError);
     // A valid code with a valid UTF-8 reason passes.
     RUVIA_CHECK(!webSocketClosePayloadFailure(closeBody(1000, "ok")).has_value());
     // A reserved code or an invalid-UTF-8 reason is rejected.
-    RUVIA_CHECK(webSocketClosePayloadFailure(closeBody(1005, "")) == WebSocketProtocolFailure::kProtocolError);
-    RUVIA_CHECK(webSocketClosePayloadFailure(closeBody(1000, std::string("\xc0\x80", 2))) == WebSocketProtocolFailure::kInvalidPayloadData);
+    RUVIA_CHECK(webSocketClosePayloadFailure(closeBody(1005, "")) ==
+                WebSocketProtocolFailure::kProtocolError);
+    RUVIA_CHECK(webSocketClosePayloadFailure(closeBody(1000, std::string("\xc0\x80", 2))) ==
+                WebSocketProtocolFailure::kInvalidPayloadData);
 }
 
 RUVIA_TEST(ws_close_incoming_violation_carries_rfc_close_code) {
     // RFC 6455 §7.4.1: a malformed incoming Close is a protocol error (1002); a
     // Close whose 2-byte code is valid but whose reason is not UTF-8 is invalid
     // payload data (1007). The read loop echoes this code instead of a generic 1011.
-    RUVIA_CHECK_EQ(failureCloseCode(std::string(1, 'x')), std::uint16_t{1002});                          // 1-byte partial code
-    RUVIA_CHECK_EQ(failureCloseCode(closeBody(1005, "")), std::uint16_t{1002});                          // reserved code
-    RUVIA_CHECK_EQ(failureCloseCode(closeBody(1006, "")), std::uint16_t{1002});                          // never-on-wire code
-    RUVIA_CHECK_EQ(failureCloseCode(closeBody(1000, std::string("\xc0\x80", 2))), std::uint16_t{1007});  // bad UTF-8 reason
-    RUVIA_CHECK_EQ(failureCloseCode(closeBody(1000, "ok")), std::uint16_t{0});                           // valid: accepted
+    RUVIA_CHECK_EQ(
+        failureCloseCode(std::string(1, 'x')), std::uint16_t{1002});  // 1-byte partial code
+    RUVIA_CHECK_EQ(failureCloseCode(closeBody(1005, "")), std::uint16_t{1002});  // reserved code
+    RUVIA_CHECK_EQ(
+        failureCloseCode(closeBody(1006, "")), std::uint16_t{1002});  // never-on-wire code
+    RUVIA_CHECK_EQ(failureCloseCode(closeBody(1000, std::string("\xc0\x80", 2))),
+        std::uint16_t{1007});                                                   // bad UTF-8 reason
+    RUVIA_CHECK_EQ(failureCloseCode(closeBody(1000, "ok")), std::uint16_t{0});  // valid: accepted
 }

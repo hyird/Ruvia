@@ -14,7 +14,8 @@ namespace {
     return httpAsciiEqualsIgnoreCase(value, token);
 }
 
-[[nodiscard]] bool xreadOptionsContainBlocking(std::span<const std::string_view> args, std::size_t firstOption, bool allowNoAck) {
+[[nodiscard]] bool xreadOptionsContainBlocking(
+    std::span<const std::string_view> args, std::size_t firstOption, bool allowNoAck) {
     for (std::size_t i = firstOption; i < args.size();) {
         const auto token = args[i];
         if (isRedisToken(token, "STREAMS")) {
@@ -158,12 +159,14 @@ bool validateRedisPooledCommand(std::span<const std::string_view> args, bool all
     };
     for (const auto name : stateful) {
         if (httpAsciiEqualsIgnoreCase(command, name)) {
-            throw std::invalid_argument("stateful redis commands are not allowed through pooled command()");
+            throw std::invalid_argument(
+                "stateful redis commands are not allowed through pooled command()");
         }
     }
 
     bool blocking = false;
-    constexpr std::string_view alwaysBlocking[]{"BLPOP", "BRPOP", "BRPOPLPUSH", "BLMOVE", "BLMPOP", "BZPOPMIN", "BZPOPMAX", "BZMPOP", "WAIT", "WAITAOF"};
+    constexpr std::string_view alwaysBlocking[]{"BLPOP", "BRPOP", "BRPOPLPUSH", "BLMOVE", "BLMPOP",
+        "BZPOPMIN", "BZPOPMAX", "BZMPOP", "WAIT", "WAITAOF"};
     for (const auto name : alwaysBlocking) {
         blocking = blocking || httpAsciiEqualsIgnoreCase(command, name);
     }
@@ -174,20 +177,24 @@ bool validateRedisPooledCommand(std::span<const std::string_view> args, bool all
         blocking = blocking || xreadGroupCommandIsBlocking(args);
     }
     if (blocking && !allowBlocking) {
-        throw std::invalid_argument("blocking redis command is not allowed in a pipeline or transaction");
+        throw std::invalid_argument(
+            "blocking redis command is not allowed in a pipeline or transaction");
     }
     return blocking;
 }
 
-Task<RedisValue> executeOwnedRedisCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
+Task<RedisValue> executeOwnedRedisCommand(RedisCommandExecutor executor,
+    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     return executor.pool->executeOwned(std::move(args), resource, std::move(executor.options));
 }
 
-Task<RedisValue> executeOwnedRedisCommand(RedisPool& pool, std::pmr::vector<std::pmr::string> args, OperationOptions options, std::pmr::memory_resource* resource) {
+Task<RedisValue> executeOwnedRedisCommand(RedisPool& pool, std::pmr::vector<std::pmr::string> args,
+    OperationOptions options, std::pmr::memory_resource* resource) {
     return pool.executeOwned(std::move(args), resource, std::move(options));
 }
 
-Task<std::optional<std::pmr::string>> redisStringCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
+Task<std::optional<std::pmr::string>> redisStringCommand(RedisCommandExecutor executor,
+    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(std::move(executor), std::move(args), resource);
     throwIfRedisError(value);
     if (value.null()) {
@@ -197,13 +204,15 @@ Task<std::optional<std::pmr::string>> redisStringCommand(RedisCommandExecutor ex
     co_return std::pmr::string(text.data(), text.size(), resource);
 }
 
-Task<std::int64_t> redisIntegerCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
+Task<std::int64_t> redisIntegerCommand(RedisCommandExecutor executor,
+    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(std::move(executor), std::move(args), resource);
     throwIfRedisError(value);
     co_return redisValueInteger(value);
 }
 
-Task<std::pmr::vector<std::pmr::string>> redisStringArrayCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
+Task<std::pmr::vector<std::pmr::string>> redisStringArrayCommand(RedisCommandExecutor executor,
+    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(std::move(executor), std::move(args), resource);
     throwIfRedisError(value);
     const auto items = redisValueArray(value);
@@ -219,7 +228,8 @@ Task<std::pmr::vector<std::pmr::string>> redisStringArrayCommand(RedisCommandExe
     co_return output;
 }
 
-Task<std::pmr::vector<bool>> redisBoolArrayCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
+Task<std::pmr::vector<bool>> redisBoolArrayCommand(RedisCommandExecutor executor,
+    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(std::move(executor), std::move(args), resource);
     throwIfRedisError(value);
     const auto items = redisValueArray(value);
@@ -232,7 +242,9 @@ Task<std::pmr::vector<bool>> redisBoolArrayCommand(RedisCommandExecutor executor
     co_return output;
 }
 
-Task<std::pmr::vector<std::optional<std::pmr::string>>> redisOptionalStringArrayCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
+Task<std::pmr::vector<std::optional<std::pmr::string>>> redisOptionalStringArrayCommand(
+    RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args,
+    std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(std::move(executor), std::move(args), resource);
     throwIfRedisError(value);
     const auto items = redisValueArray(value);
@@ -251,7 +263,8 @@ Task<std::pmr::vector<std::optional<std::pmr::string>>> redisOptionalStringArray
     co_return output;
 }
 
-Task<void> redisOkCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
+Task<void> redisOkCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args,
+    std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(std::move(executor), std::move(args), resource);
     throwIfRedisError(value);
     if (!httpAsciiEqualsIgnoreCase(redisValueString(value), "OK")) {
@@ -260,7 +273,8 @@ Task<void> redisOkCommand(RedisCommandExecutor executor, std::pmr::vector<std::p
     co_return;
 }
 
-Task<std::pmr::string> redisStatusCommand(RedisCommandExecutor executor, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
+Task<std::pmr::string> redisStatusCommand(RedisCommandExecutor executor,
+    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(std::move(executor), std::move(args), resource);
     throwIfRedisError(value);
     const auto text = redisValueString(value);

@@ -27,7 +27,8 @@ using ruvia::detail::Http2StreamHeaderDecodeTransaction;
 using ruvia::detail::Http2StreamState;
 
 template <typename T>
-concept HasAnyRvalueHpackDecodeAccessor = requires(T&& result) { std::move(result).decoded(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueHpackDecodeAccessor = requires(T&& result) { std::move(result).decoded(); } ||
+                                          requires(T&& result) { std::move(result).failure(); };
 
 static_assert(!HasAnyRvalueHpackDecodeAccessor<HpackDecodeResult>);
 
@@ -122,21 +123,27 @@ RUVIA_TEST(hpack_indexed_static_header) {
 RUVIA_TEST(hpack_request_literal_no_huffman) {
     // RFC 7541 C.3.1: indexed :method/:scheme/:path plus a literal :authority.
     Collector out;
-    RUVIA_CHECK(decodeBlock(bytes({0x82, 0x86, 0x84, 0x41, 0x0f, 0x77, 0x77, 0x77, 0x2e, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d}), out));
+    RUVIA_CHECK(decodeBlock(bytes({0x82, 0x86, 0x84, 0x41, 0x0f, 0x77, 0x77, 0x77, 0x2e, 0x65, 0x78,
+                                0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d}),
+        out));
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{4});
     RUVIA_CHECK_EQ(out.headers[0], std::make_pair(std::string(":method"), std::string("GET")));
     RUVIA_CHECK_EQ(out.headers[1], std::make_pair(std::string(":scheme"), std::string("http")));
     RUVIA_CHECK_EQ(out.headers[2], std::make_pair(std::string(":path"), std::string("/")));
-    RUVIA_CHECK_EQ(out.headers[3], std::make_pair(std::string(":authority"), std::string("www.example.com")));
+    RUVIA_CHECK_EQ(
+        out.headers[3], std::make_pair(std::string(":authority"), std::string("www.example.com")));
 }
 
 RUVIA_TEST(hpack_request_literal_huffman) {
     // RFC 7541 C.4.1: same request but :authority is Huffman-encoded. This
     // exercises the Huffman decoder against a known-answer vector.
     Collector out;
-    RUVIA_CHECK(decodeBlock(bytes({0x82, 0x86, 0x84, 0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff}), out));
+    RUVIA_CHECK(decodeBlock(bytes({0x82, 0x86, 0x84, 0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a,
+                                0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff}),
+        out));
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{4});
-    RUVIA_CHECK_EQ(out.headers[3], std::make_pair(std::string(":authority"), std::string("www.example.com")));
+    RUVIA_CHECK_EQ(
+        out.headers[3], std::make_pair(std::string(":authority"), std::string("www.example.com")));
 }
 
 RUVIA_TEST(hpack_encode_decode_round_trip) {
@@ -145,20 +152,23 @@ RUVIA_TEST(hpack_encode_decode_round_trip) {
     Collector out;
     RUVIA_CHECK(decodeBlock(std::string_view(encoded.data(), encoded.size()), out));
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{1});
-    RUVIA_CHECK_EQ(out.headers[0], std::make_pair(std::string("x-custom-header"), std::string("custom value")));
+    RUVIA_CHECK_EQ(out.headers[0],
+        std::make_pair(std::string("x-custom-header"), std::string("custom value")));
 }
 
 RUVIA_TEST(hpack_encoder_rejects_unrepresentable_string_length_without_partial_output) {
     // The view only carries metadata; the encoder must reject it before it ever
     // reads the pointed-to bytes, so this does not allocate or dereference 4 GiB.
     if constexpr (sizeof(std::size_t) > sizeof(std::uint32_t)) {
-        const auto oversizedLength = static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) + 1U;
+        const auto oversizedLength =
+            static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) + 1U;
         const std::string_view oversized("x", oversizedLength);
 
         std::pmr::string indexedNameOutput(std::pmr::get_default_resource());
         bool rejectedValue = false;
         try {
-            HpackEncoder::encodeHeaderWithNameIndex(indexedNameOutput, ruvia::detail::HpackStaticIndex::kContentType, oversized);
+            HpackEncoder::encodeHeaderWithNameIndex(
+                indexedNameOutput, ruvia::detail::HpackStaticIndex::kContentType, oversized);
         } catch (const std::length_error&) {
             rejectedValue = true;
         }
@@ -382,7 +392,8 @@ RUVIA_TEST(hpack_dynamic_insert_allocation_failure_preserves_table) {
 
     resource.rejectAllocations(false);
     Collector retained;
-    const auto retainedResult = decoder.decode(bytes({0xbe}), &retained, &collect);  // indexed dynamic entry 62
+    const auto retainedResult =
+        decoder.decode(bytes({0xbe}), &retained, &collect);  // indexed dynamic entry 62
     RUVIA_CHECK(retainedResult.decoded() != nullptr);
     RUVIA_CHECK_EQ(retained.headers.size(), std::size_t{1});
     if (!retained.headers.empty()) {
@@ -401,7 +412,10 @@ RUVIA_TEST(hpack_header_callback_allocation_failure_rolls_back_stream_state) {
     HpackEncoder::encodeHeader(block, ":method", "GET");
     HpackEncoder::encodeHeader(block, ":path", largePath);
 
-    const auto decode = [](void* target, std::string_view name, std::string_view value) { return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value); };
+    const auto decode = [](void* target, std::string_view name, std::string_view value) {
+        return http2OnDecodedInitialHeader(
+            *static_cast<Http2HeaderDecodeContext*>(target), name, value);
+    };
 
     bool allocationFailed = false;
     {
@@ -468,7 +482,8 @@ RUVIA_TEST(hpack_field_block_allocation_failure_rolls_back_prior_dynamic_inserts
     // Index 62 is the first dynamic entry. It must not be visible after a
     // failed field block, even though the first callback/insertion completed.
     Collector beforeRetry;
-    const auto beforeRetryResult = decoder.decode(std::string_view("\xbe", 1), &beforeRetry, &collect);
+    const auto beforeRetryResult =
+        decoder.decode(std::string_view("\xbe", 1), &beforeRetry, &collect);
     RUVIA_CHECK(beforeRetryResult.failure() != nullptr);
     if (const auto* failure = beforeRetryResult.failure()) {
         RUVIA_CHECK(failure->error() == HpackDecodeError::kInvalidIndex);
@@ -483,7 +498,8 @@ RUVIA_TEST(hpack_field_block_allocation_failure_rolls_back_prior_dynamic_inserts
     // (dynamic index 3) must remain invalid rather than exposing a duplicated
     // copy of the first field.
     Collector afterRetry;
-    const auto afterRetryResult = decoder.decode(std::string_view("\xc0", 1), &afterRetry, &collect);
+    const auto afterRetryResult =
+        decoder.decode(std::string_view("\xc0", 1), &afterRetry, &collect);
     RUVIA_CHECK(afterRetryResult.failure() != nullptr);
     if (const auto* failure = afterRetryResult.failure()) {
         RUVIA_CHECK(failure->error() == HpackDecodeError::kInvalidIndex);
@@ -640,7 +656,8 @@ RUVIA_TEST(hpack_callback_rejection_keeps_dynamic_table_consistent) {
         out.append(value);
         return out;
     };
-    const std::string blockA = litIncremental("a-one", "1") + litIncremental("b-two", "2") + litIncremental("c-three", "3");
+    const std::string blockA = litIncremental("a-one", "1") + litIncremental("b-two", "2") +
+                               litIncremental("c-three", "3");
 
     RejectAt rejectAt{.rejectIndex = 1};
     const auto resultA = decoder.decode(blockA, &rejectAt, &rejectAtCallback);

@@ -36,7 +36,8 @@
 namespace ruvia::detail {
 
 template <typename Stream>
-Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, Stream& stream, TcpSocket& socket, ContextServices baseRouteServices) {
+Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, Stream& stream,
+    TcpSocket& socket, ContextServices baseRouteServices) {
     // Resident connection identity (held for the whole connection): the scanner
     // entry, the keep-alive request sequence, the remote address, and the count
     // of buffered bytes. The heavy per-request working set (read buffer, request arena,
@@ -88,8 +89,15 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                 releaseIdleWorkSet(workSetPool_, workSet);
                 // Idle wait for the next keep-alive request uses idleTimeout;
                 // the connection's first request uses requestHeaderTimeout.
-                scannerEntry.setPhase(servedKeepaliveRequest ? ConnectionScanner::Phase::kIdle : ConnectionScanner::Phase::kReadingInitial);
-                auto idleCompletion = co_await asyncAsio<std::size_t>([&socket, &idleReadBuffer](auto handler) mutable { socket.async_read_some(asio::buffer(idleReadBuffer.data(), idleReadBuffer.size()), std::move(handler)); });
+                scannerEntry.setPhase(servedKeepaliveRequest
+                                          ? ConnectionScanner::Phase::kIdle
+                                          : ConnectionScanner::Phase::kReadingInitial);
+                auto idleCompletion = co_await asyncAsio<std::size_t>(
+                    [&socket, &idleReadBuffer](auto handler) mutable {
+                        socket.async_read_some(
+                            asio::buffer(idleReadBuffer.data(), idleReadBuffer.size()),
+                            std::move(handler));
+                    });
                 const auto idleEc = idleCompletion.errorCode();
                 const auto idleBytes = idleCompletion.result();
                 if (idleEc || !httpServerWorkerRunning(workerState_)) {
@@ -119,7 +127,8 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
         }
 
         std::optional<RequestMemory> requestMemoryStorage;
-        auto& requestMemory = emplaceRequestMemory(requestMemoryStorage, memory_, std::span<std::byte>(workSet->arenaBlock, sizeof(workSet->arenaBlock)));
+        auto& requestMemory = emplaceRequestMemory(requestMemoryStorage, memory_,
+            std::span<std::byte>(workSet->arenaBlock, sizeof(workSet->arenaBlock)));
         HttpResponse response({.resource = requestMemory.resource()});
         HttpResponseCodingPolicy responseCodingPolicy = HttpResponseCodingPolicy::disabled();
         // Holds the next pipelined request from the moment a body route hands it
@@ -200,31 +209,40 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                 routeResolution = routes.resolve(parsed.request);
                 // Keyed on the client, not the hop: behind a trusted proxy every
                 // request would otherwise share the proxy's single key.
-                clientAddress = baseRouteServices.resolveConnInfo(parsed.request).client().address();
+                clientAddress =
+                    baseRouteServices.resolveConnInfo(parsed.request).client().address();
                 const auto* resolved = routeResolution.resolved();
-                const auto handlerDeadline = effectiveHandlerDeadline(options_.deadline ? std::optional{options_.deadline->handler} : std::nullopt, resolved != nullptr ? resolved->route().deadlineMs() : 0);
+                const auto handlerDeadline = effectiveHandlerDeadline(
+                    options_.deadline ? std::optional{options_.deadline->handler} : std::nullopt,
+                    resolved != nullptr ? resolved->route().deadlineMs() : 0);
                 if (handlerDeadline > std::chrono::milliseconds::zero()) {
                     requestDeadline.emplace(stopToken_);
                     requestDeadline->arm(workerRuntime_.handle(), handlerDeadline);
                     requestServices = baseRouteServices.withRequestDeadline(*requestDeadline);
                 }
 
-                const auto expectationPlan = parsed.bodyPlan.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
+                const auto expectationPlan =
+                    parsed.bodyPlan.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
                 if (const auto* rejection = expectationPlan.rejection()) {
                     // Expect extensions are valid HTTP syntax. The protocol parser
                     // reports the semantic fact; this Web product deliberately does
                     // not implement extensions beyond 100-continue and chooses the
                     // RFC 9110-permitted 417 response before reading request content.
-                    closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(requestMemory.resource(), rejection->protocolError()));
+                    closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(
+                        requestMemory.resource(), rejection->protocolError()));
                     break;
                 }
                 if (const auto* redirect = listener.redirect()) {
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
-                        closingRejection = Http1ClosingRejection::error(HttpErrorInfo({.status = ruvia::http_status::kBadRequest, .message = "missing Host header"}));
+                        closingRejection = Http1ClosingRejection::error(
+                            HttpErrorInfo({.status = ruvia::http_status::kBadRequest,
+                                .message = "missing Host header"}));
                         break;
                     }
-                    response = makeAutoHttpsRedirectResponse(parsed.request, requestMemory, redirect->httpsPort);
-                    if (httpResponseNeedsNotAcceptable(responseCodingPolicy, parsed.request, response)) {
+                    response = makeAutoHttpsRedirectResponse(
+                        parsed.request, requestMemory, redirect->httpsPort);
+                    if (httpResponseNeedsNotAcceptable(
+                            responseCodingPolicy, parsed.request, response)) {
                         response = co_await routes.handleError(parsed.request, requestMemory,
                             HttpErrorInfo({
                                 .status = ruvia::http_status::kNotAcceptable,
@@ -238,30 +256,46 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                         // it inherit the original negotiated coding promise.
                         responseCodingPolicy = HttpResponseCodingPolicy::disabled();
                     }
-                    const auto connectionPlan = requireHttp1FinalResponseCommit(response, parsed.connectionPlan.requireClose());
-                    requestCompletion.emplace(Http1SessionRequestCompletion::makeBufferedClosing(connectionPlan));
+                    const auto connectionPlan = requireHttp1FinalResponseCommit(
+                        response, parsed.connectionPlan.requireClose());
+                    requestCompletion.emplace(
+                        Http1SessionRequestCompletion::makeBufferedClosing(connectionPlan));
                     scannerEntry.touch();
                     break;
                 }
 
-                const auto appRateLimit = decideRequestRateLimit(&capabilities_.rateLimiter(), clientAddress);
+                const auto appRateLimit =
+                    decideRequestRateLimit(&capabilities_.rateLimiter(), clientAddress);
                 if (const auto* rejection = appRateLimit.rejection()) {
-                    closingRejection = Http1ClosingRejection::rateLimit(rateLimitRejectionError(), *rejection);
+                    closingRejection =
+                        Http1ClosingRejection::rateLimit(rateLimitRejectionError(), *rejection);
                     break;
                 }
 
                 if (resolved == nullptr) {
-                    if (const auto bodyFailure = contentLengthLimitFailure(parsed.bodyPlan, ProtocolByteLimit::limited(options_.maxBufferedBodyBytes))) {
-                        closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(requestMemory.resource(), bodyFailure->protocolError()));
+                    if (const auto bodyFailure = contentLengthLimitFailure(parsed.bodyPlan,
+                            ProtocolByteLimit::limited(options_.maxBufferedBodyBytes))) {
+                        closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(
+                            requestMemory.resource(), bodyFailure->protocolError()));
                         break;
                     }
-                    response = co_await routes.dispatchBufferedResponse(parsed.request, routeResolution, requestMemory, options_.documentRoot.binding(), requestServices, requestServices.precompressedStaticFiles() ? StaticFileSelectionMode::kPrecompressed : StaticFileSelectionMode::kIdentityOnly);
+                    response =
+                        co_await routes.dispatchBufferedResponse(parsed.request, routeResolution,
+                            requestMemory, options_.documentRoot.binding(), requestServices,
+                            requestServices.precompressedStaticFiles()
+                                ? StaticFileSelectionMode::kPrecompressed
+                                : StaticFileSelectionMode::kIdentityOnly);
                     // An unresolved request never consumes its body, regardless
                     // of whether the shared Web dispatch selected a document-root
                     // file, 404, 405, or OPTIONS response.
-                    auto connectionPlan = http1ApplyRequestBodyConsumption(parsed.connectionPlan, parsed.bodyPlan.requiresConsumption() ? Http1RequestBodyConsumption::kIncomplete : Http1RequestBodyConsumption::kComplete);
-                    connectionPlan = finalizeBufferedRouteResponse(response, connectionPlan, requestSequence);
-                    requestCompletion.emplace(Http1SessionRequestCompletion::makeBufferedUnrestored(connectionPlan, requestHead->headerBytes()));
+                    auto connectionPlan = http1ApplyRequestBodyConsumption(
+                        parsed.connectionPlan, parsed.bodyPlan.requiresConsumption()
+                                                   ? Http1RequestBodyConsumption::kIncomplete
+                                                   : Http1RequestBodyConsumption::kComplete);
+                    connectionPlan =
+                        finalizeBufferedRouteResponse(response, connectionPlan, requestSequence);
+                    requestCompletion.emplace(Http1SessionRequestCompletion::makeBufferedUnrestored(
+                        connectionPlan, requestHead->headerBytes()));
                     scannerEntry.touch();
                     break;
                 }
@@ -275,7 +309,10 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                         .scannerEntry = scannerEntry,
                         .parsed = parsed,
                         .responseCoding = *responseCodingPolicy.selection(),
-                        .responseCodingAvailability = options_.compression.has_value() ? HttpResponseCodingAvailability::kIdentityAndCompression : HttpResponseCodingAvailability::kIdentityOnly,
+                        .responseCodingAvailability =
+                            options_.compression.has_value()
+                                ? HttpResponseCodingAvailability::kIdentityAndCompression
+                                : HttpResponseCodingAvailability::kIdentityOnly,
                         .routes = routes,
                         .requestMemory = requestMemory,
                         .baseRouteServices = requestServices,
@@ -287,22 +324,33 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
 
                 const auto& route = resolved->route();
                 const auto& endpoint = route.endpoint();
-                if (responseCodingPolicy.negotiationFailed() && endpoint.responseStream() != nullptr) {
+                if (responseCodingPolicy.negotiationFailed() &&
+                    endpoint.responseStream() != nullptr) {
                     // A response stream commits its representation before a
                     // buffered status can be inspected. WebSocket upgrades do
                     // not select an HTTP response representation.
-                    closingRejection = Http1ClosingRejection::error(HttpErrorInfo({.status = ruvia::http_status::kNotAcceptable, .code = "not_acceptable", .message = "no acceptable response content coding"}));
+                    closingRejection = Http1ClosingRejection::error(
+                        HttpErrorInfo({.status = ruvia::http_status::kNotAcceptable,
+                            .code = "not_acceptable",
+                            .message = "no acceptable response content coding"}));
                     break;
                 }
-                const auto maxRequestBodyBytes = requestBodyByteLimit(endpoint.requestBodyMode(), options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes, resolved->route().maxRequestBodyBytes());
-                if (const auto bodyFailure = contentLengthLimitFailure(parsed.bodyPlan, maxRequestBodyBytes)) {
-                    closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(requestMemory.resource(), bodyFailure->protocolError()));
+                const auto maxRequestBodyBytes =
+                    requestBodyByteLimit(endpoint.requestBodyMode(), options_.maxStreamBodyBytes,
+                        options_.maxBufferedBodyBytes, resolved->route().maxRequestBodyBytes());
+                if (const auto bodyFailure =
+                        contentLengthLimitFailure(parsed.bodyPlan, maxRequestBodyBytes)) {
+                    closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(
+                        requestMemory.resource(), bodyFailure->protocolError()));
                     break;
                 }
 
                 if (endpoint.webSocket() != nullptr) {
-                    const auto pendingFrames = std::string_view(readBuffer.data() + requestHead->headerBytes(), usedBytes - requestHead->headerBytes());
-                    auto webSocketCompletion = co_await dispatchHttpWebSocketRoute(routeDispatch(), *resolved, pendingFrames);
+                    const auto pendingFrames =
+                        std::string_view(readBuffer.data() + requestHead->headerBytes(),
+                            usedBytes - requestHead->headerBytes());
+                    auto webSocketCompletion = co_await dispatchHttpWebSocketRoute(
+                        routeDispatch(), *resolved, pendingFrames);
                     if (!webSocketCompletion.has_value()) {
                         co_return;
                     }
@@ -311,12 +359,15 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                 }
 
                 if (endpoint.responseStream() != nullptr) {
-                    requestCompletion.emplace(co_await dispatchHttpResponseStreamRoute(routeDispatch(), responseHead, *requestHead, *resolved));
+                    requestCompletion.emplace(co_await dispatchHttpResponseStreamRoute(
+                        routeDispatch(), responseHead, *requestHead, *resolved));
                     break;
                 }
                 const auto* bufferedEndpoint = endpoint.buffered();
-                if (bufferedEndpoint != nullptr && bufferedEndpoint->requestBodyMode() == RequestBodyMode::kStream) {
-                    requestCompletion.emplace(co_await dispatchHttpStreamBodyRoute(routeDispatch(), *requestHead, routeResolution, readBuffer, usedBytes, pipelineStash));
+                if (bufferedEndpoint != nullptr &&
+                    bufferedEndpoint->requestBodyMode() == RequestBodyMode::kStream) {
+                    requestCompletion.emplace(co_await dispatchHttpStreamBodyRoute(routeDispatch(),
+                        *requestHead, routeResolution, readBuffer, usedBytes, pipelineStash));
                     break;
                 }
 
@@ -325,7 +376,8 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                 // dedicated coroutine here would cost one frame allocation
                 // per request.
                 {
-                    const auto bodyAndPipeline = httpBodyAndPipeline(*requestHead, readBuffer, usedBytes);
+                    const auto bodyAndPipeline =
+                        httpBodyAndPipeline(*requestHead, readBuffer, usedBytes);
 
                     // The body reader/loader setup can throw (e.g. constructing a
                     // transfer-coding decoder for a bad Transfer-Encoding), so it
@@ -335,31 +387,41 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                     std::exception_ptr bodySetupException;
                     HttpLazyBufferedBodyRouteState<Stream> bodyState;
                     try {
-                        prepareHttpLazyBufferedBodyRoute(bodyState, routeDispatch(), maxRequestBodyBytes, bodyAndPipeline);
+                        prepareHttpLazyBufferedBodyRoute(
+                            bodyState, routeDispatch(), maxRequestBodyBytes, bodyAndPipeline);
                     } catch (...) {
                         bodySetupException = std::current_exception();
                     }
 
                     if (bodySetupException != nullptr) {
-                        requestCompletion.emplace(co_await completeFailedHttpBodyRoute(scannerEntry, bodySetupException, parsed, routes, requestMemory, requestServices, response));
+                        requestCompletion.emplace(
+                            co_await completeFailedHttpBodyRoute(scannerEntry, bodySetupException,
+                                parsed, routes, requestMemory, requestServices, response));
                         break;
                     }
 
-                    response = co_await routes.dispatchBufferedResponse(parsed.request, routeResolution, requestMemory, options_.documentRoot.binding(), bodyState.withLoader(requestServices));
+                    response = co_await routes.dispatchBufferedResponse(parsed.request,
+                        routeResolution, requestMemory, options_.documentRoot.binding(),
+                        bodyState.withLoader(requestServices));
 
-                    requestCompletion.emplace(completeSuccessfulHttpBodyRoute(scannerEntry, response, parsed.connectionPlan, requestSequence, bodyState.consumption(), pipelineStash, [&bodyState](std::pmr::string& stash) { bodyState.takePipeline(stash); }));
+                    requestCompletion.emplace(completeSuccessfulHttpBodyRoute(scannerEntry,
+                        response, parsed.connectionPlan, requestSequence, bodyState.consumption(),
+                        pipelineStash,
+                        [&bodyState](std::pmr::string& stash) { bodyState.takePipeline(stash); }));
                     break;
                 }
             }
 
             if (const auto* failure = parsed.failure()) {
                 if constexpr (kPlainTcp) {
-                    if (listener.redirect() == nullptr && shouldDropInvalidCleartextHttp1Input(bufferView, failure->source())) {
+                    if (listener.redirect() == nullptr &&
+                        shouldDropInvalidCleartextHttp1Input(bufferView, failure->source())) {
                         co_return;
                     }
                 }
                 const auto error = failure->protocolError();
-                closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(requestMemory.resource(), error));
+                closingRejection = Http1ClosingRejection::error(
+                    copyHttpProtocolErrorInfo(requestMemory.resource(), error));
                 break;
             }
 
@@ -368,15 +430,23 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
             // With no request bytes yet on a reused connection this read is the
             // keepalive idle wait (idleTimeout); once any header bytes are
             // buffered, or on the first request, requestHeaderTimeout governs.
-            scannerEntry.setPhase((usedBytes == 0 && servedKeepaliveRequest) ? ConnectionScanner::Phase::kIdle : ConnectionScanner::Phase::kReadingInitial);
+            scannerEntry.setPhase((usedBytes == 0 && servedKeepaliveRequest)
+                                      ? ConnectionScanner::Phase::kIdle
+                                      : ConnectionScanner::Phase::kReadingInitial);
             growReadBuffer(readBuffer, usedBytes);
             if (usedBytes == readBuffer.size()) {
                 const auto error = httpParseProtocolError(HttpParseError::kHeaderTooLarge);
-                closingRejection = Http1ClosingRejection::error(copyHttpProtocolErrorInfo(requestMemory.resource(), error));
+                closingRejection = Http1ClosingRejection::error(
+                    copyHttpProtocolErrorInfo(requestMemory.resource(), error));
                 break;
             }
 
-            auto readCompletion = co_await asyncAsio<std::size_t>([&stream, &readBuffer, usedBytes](auto handler) mutable { stream.async_read_some(asio::buffer(readBuffer.data() + usedBytes, readBuffer.size() - usedBytes), std::move(handler)); });
+            auto readCompletion = co_await asyncAsio<std::size_t>(
+                [&stream, &readBuffer, usedBytes](auto handler) mutable {
+                    stream.async_read_some(
+                        asio::buffer(readBuffer.data() + usedBytes, readBuffer.size() - usedBytes),
+                        std::move(handler));
+                });
             const auto ec = readCompletion.errorCode();
             const auto bytesRead = readCompletion.result();
             if (ec) {
@@ -391,11 +461,13 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
         // keeps one set of call temporaries in the frame instead of one per
         // rejection branch.
         if (const auto* closingError = closingRejection.error()) {
-            response = co_await routes.handleError(parsed.request, requestMemory, *closingError, requestServices);
+            response = co_await routes.handleError(
+                parsed.request, requestMemory, *closingError, requestServices);
             if (const auto* rateLimit = closingRejection.rateLimit()) {
                 applyRateLimitRejectionHeaders(response, *rateLimit);
             }
-            requestCompletion.emplace(Http1SessionRequestCompletion::makeBufferedClosing(requireHttp1FinalResponseCommit(response, parsed.connectionPlan.requireClose())));
+            requestCompletion.emplace(Http1SessionRequestCompletion::makeBufferedClosing(
+                requireHttp1FinalResponseCommit(response, parsed.connectionPlan.requireClose())));
         }
 
         if (!requestCompletion) {
@@ -404,16 +476,23 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
         auto connectionPlan = requestCompletion->connectionPlan();
         if (requestCompletion->bufferedResponse() != nullptr) {
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
-            auto preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerRuntime_.handle());
-            if (const auto error = httpBufferedResponsePreparationError(responseCodingPolicy, parsed.request, response, preparation.compressionResult())) {
-                response = co_await routes.handleError(parsed.request, requestMemory, *error, requestServices);
-                preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerRuntime_.handle());
-                if (httpBufferedResponsePreparationError(responseCodingPolicy, parsed.request, response, preparation.compressionResult()).has_value()) {
+            auto preparation = co_await prepareBufferedHttpResponseAsync(
+                parsed.request, responseCodingPolicy, response, options_, workerRuntime_.handle());
+            if (const auto error = httpBufferedResponsePreparationError(responseCodingPolicy,
+                    parsed.request, response, preparation.compressionResult())) {
+                response = co_await routes.handleError(
+                    parsed.request, requestMemory, *error, requestServices);
+                preparation = co_await prepareBufferedHttpResponseAsync(parsed.request,
+                    responseCodingPolicy, response, options_, workerRuntime_.handle());
+                if (httpBufferedResponsePreparationError(responseCodingPolicy, parsed.request,
+                        response, preparation.compressionResult())
+                        .has_value()) {
                     // The negotiated coding could not be installed even on
                     // the generated terminal error. Make the terminal error
                     // state explicit before allowing identity bytes.
                     responseCodingPolicy = HttpResponseCodingPolicy::disabled();
-                    preparation = co_await prepareBufferedHttpResponseAsync(parsed.request, responseCodingPolicy, response, options_, workerRuntime_.handle());
+                    preparation = co_await prepareBufferedHttpResponseAsync(parsed.request,
+                        responseCodingPolicy, response, options_, workerRuntime_.handle());
                 }
                 connectionPlan = requireHttp1FinalResponseCommit(response, connectionPlan);
                 requestCompletion = requestCompletion->withBufferedConnectionPlan(connectionPlan);
@@ -421,25 +500,30 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
             }
             const auto writePlan = preparation.writePlan();
             const auto responsePlan = http1BufferedResponsePlan(writePlan, connectionPlan);
-            const auto writeResult = co_await writeResponse(stream, memory_, &responseHead, &fileChunk, response, responsePlan);
+            const auto writeResult = co_await writeResponse(
+                stream, memory_, &responseHead, &fileChunk, response, responsePlan);
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
             if (const auto committedStatus = writeResult.committedStatus()) {
-                recordHttpAccess(options_.accessLog, parsed.request, clientAddress, *committedStatus, requestStart);
+                recordHttpAccess(options_.accessLog, parsed.request, clientAddress,
+                    *committedStatus, requestStart);
             }
             if (writeResult.completed() == nullptr) {
                 co_return;
             }
         } else if (const auto* committed = requestCompletion->committedStream()) {
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
-            recordHttpAccess(options_.accessLog, parsed.request, clientAddress, committed->status(), requestStart);
+            recordHttpAccess(options_.accessLog, parsed.request, clientAddress, committed->status(),
+                requestStart);
         } else {
             throw std::logic_error("HTTP/1 request completion has no wire alternative");
         }
 
-        if (connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse || !httpServerWorkerRunning(workerState_)) {
+        if (connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse ||
+            !httpServerWorkerRunning(workerState_)) {
             co_return;
         }
-        applyReusableHttp1RequestBufferCompletion(requestCompletion->bufferCompletion(), readBuffer, usedBytes);
+        applyReusableHttp1RequestBufferCompletion(
+            requestCompletion->bufferCompletion(), readBuffer, usedBytes);
         trimReadBufferStorage(readBuffer, usedBytes);
         // A request completed and the connection is being reused: the next
         // wait with no buffered bytes is a keepalive idle wait.

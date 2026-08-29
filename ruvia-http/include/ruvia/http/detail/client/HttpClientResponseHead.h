@@ -43,14 +43,20 @@ struct Http1ClientParsedResponseHead final {
     HttpTransferEncodingState transferEncoding;
 };
 
-using Http1ClientStatusLineParseResult = std::variant<Http1ClientParsedStatusLine, Http1ClientResponseParseError>;
-using Http1ClientResponseHeadParseResult = std::variant<Http1ClientParsedResponseHead, Http1ClientResponseParseError>;
-using Http1ClientResponsePlanningResult = std::variant<Http1ClientResponsePlan, Http1ClientResponseParseError>;
+using Http1ClientStatusLineParseResult =
+    std::variant<Http1ClientParsedStatusLine, Http1ClientResponseParseError>;
+using Http1ClientResponseHeadParseResult =
+    std::variant<Http1ClientParsedResponseHead, Http1ClientResponseParseError>;
+using Http1ClientResponsePlanningResult =
+    std::variant<Http1ClientResponsePlan, Http1ClientResponseParseError>;
 
 // Parse the status line and header fields of one complete head section.
-[[nodiscard]] Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(std::string_view headSection, const Http1ClientExchangeState& exchangeState) noexcept;
+[[nodiscard]] Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
+    std::string_view headSection, const Http1ClientExchangeState& exchangeState) noexcept;
 
 // Decide the response plan a parsed head implies for this request.
-[[nodiscard]] Http1ClientResponsePlanningResult planHttp1ClientResponse(const Http1ClientExchangeState& exchangeState, const Http1ClientParsedResponseHead& response, Http1ClientRequestContentPhase requestContentPhase) noexcept;
+[[nodiscard]] Http1ClientResponsePlanningResult planHttp1ClientResponse(
+    const Http1ClientExchangeState& exchangeState, const Http1ClientParsedResponseHead& response,
+    Http1ClientRequestContentPhase requestContentPhase) noexcept;
 
 }  // namespace ruvia::detail

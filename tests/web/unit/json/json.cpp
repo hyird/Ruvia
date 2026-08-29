@@ -16,7 +16,8 @@
 namespace {
 
 template <typename Input>
-concept ConstructsJsonScanner = requires(Input&& input) { ruvia::detail::JsonScanner(std::forward<Input>(input)); };
+concept ConstructsJsonScanner =
+    requires(Input&& input) { ruvia::detail::JsonScanner(std::forward<Input>(input)); };
 
 static_assert(!ConstructsJsonScanner<std::string>);
 static_assert(!ConstructsJsonScanner<const std::string>);
@@ -24,7 +25,8 @@ static_assert(!ConstructsJsonScanner<std::pmr::string>);
 static_assert(ConstructsJsonScanner<std::string&>);
 static_assert(ConstructsJsonScanner<std::pmr::string&>);
 static_assert(ConstructsJsonScanner<std::string_view>);
-static_assert(!std::constructible_from<ruvia::detail::JsonStringToken, std::string_view, ruvia::detail::JsonStringEncoding>);
+static_assert(!std::constructible_from<ruvia::detail::JsonStringToken, std::string_view,
+    ruvia::detail::JsonStringEncoding>);
 
 std::optional<std::pmr::string> decodeJson(std::string_view raw) {
     return ruvia::detail::decodeJsonString(raw, std::pmr::get_default_resource());
@@ -207,7 +209,8 @@ RUVIA_TEST(json_string_validates_utf8_content) {
     RUVIA_CHECK_EQ(std::string_view(*smile), std::string_view("\xF0\x9F\x98\x80", 4));  // U+1F600
     const auto unicodeMax = decodeJson(std::string_view("\xF4\x8F\xBF\xBF", 4));
     RUVIA_CHECK(unicodeMax.has_value());
-    RUVIA_CHECK_EQ(std::string_view(*unicodeMax), std::string_view("\xF4\x8F\xBF\xBF", 4));  // U+10FFFF
+    RUVIA_CHECK_EQ(
+        std::string_view(*unicodeMax), std::string_view("\xF4\x8F\xBF\xBF", 4));  // U+10FFFF
 
     // Ill-formed UTF-8 is rejected (RFC 8259 §8.1 / Unicode Table 3-7).
     const std::string_view bad[] = {

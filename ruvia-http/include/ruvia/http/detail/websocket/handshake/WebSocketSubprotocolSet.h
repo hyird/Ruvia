@@ -33,7 +33,8 @@ public:
     [[nodiscard]] bool appendList(std::string_view value) noexcept {
         while (true) {
             const auto comma = value.find(',');
-            const auto protocol = httpTrimOws(comma == std::string_view::npos ? value : value.substr(0, comma));
+            const auto protocol =
+                httpTrimOws(comma == std::string_view::npos ? value : value.substr(0, comma));
             if (!protocol.empty() && !append(protocol)) {
                 return false;
             }

@@ -127,13 +127,20 @@ private:
 namespace detail {
 
 struct WorkerHandleAccess {
-    [[nodiscard]] static WorkerHandle make(const std::shared_ptr<WorkerDispatcher>& dispatcher) noexcept;
+    [[nodiscard]] static WorkerHandle make(
+        const std::shared_ptr<WorkerDispatcher>& dispatcher) noexcept;
     static void defer(const WorkerHandle& worker, MoveOnlyFunction<void()> task);
-    [[nodiscard]] static bool deferIfAttached(const WorkerHandle& worker, MoveOnlyFunction<void()> task);
-    static void deferOrTerminate(const WorkerHandle& worker, MoveOnlyFunction<void()> task) noexcept;
-    static void registerShutdownListener(const WorkerHandle& worker, const std::shared_ptr<WorkerShutdownListener>& listener);
-    static void scheduleTimer(const WorkerHandle& worker, WorkerTimerRegistration& registration, std::chrono::steady_clock::time_point deadline, MoveOnlyFunction<void(WorkerTimerOutcome)> completion);
-    [[nodiscard]] static PostStatus postFactory(const WorkerHandle& worker, MoveOnlyFunction<MoveOnlyFunction<void()>()> factory);
+    [[nodiscard]] static bool deferIfAttached(
+        const WorkerHandle& worker, MoveOnlyFunction<void()> task);
+    static void deferOrTerminate(
+        const WorkerHandle& worker, MoveOnlyFunction<void()> task) noexcept;
+    static void registerShutdownListener(
+        const WorkerHandle& worker, const std::shared_ptr<WorkerShutdownListener>& listener);
+    static void scheduleTimer(const WorkerHandle& worker, WorkerTimerRegistration& registration,
+        std::chrono::steady_clock::time_point deadline,
+        MoveOnlyFunction<void(WorkerTimerOutcome)> completion);
+    [[nodiscard]] static PostStatus postFactory(
+        const WorkerHandle& worker, MoveOnlyFunction<MoveOnlyFunction<void()>()> factory);
 };
 
 }  // namespace detail

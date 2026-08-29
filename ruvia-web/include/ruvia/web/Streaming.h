@@ -35,7 +35,8 @@ private:
     struct Token final {};
 
 public:
-    BodyReader(Token, void* target, detail::CallableRef<std::optional<std::string_view>>::Invoke read) noexcept
+    BodyReader(Token, void* target,
+        detail::CallableRef<std::optional<std::string_view>>::Invoke read) noexcept
         : read_(target, read) {}
 
     BodyReader(const BodyReader&) = delete;
@@ -71,12 +72,14 @@ public:
     ScopedOperation<void> write(std::string_view) && = delete;
 
     template <typename Text>
-        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
+                 std::constructible_from<std::string_view, Text &&>)
     ScopedOperation<void> write(Text&& chunk) & {
         return write(std::string_view(std::forward<Text>(chunk)));
     }
     template <typename Text>
-        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> && std::constructible_from<std::string_view, Text &&>)
+        requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
+                    std::constructible_from<std::string_view, Text &&>)
     ScopedOperation<void> write(Text&&) && = delete;
 
     /// Zero-copy write: takes ownership of an already-allocated chunk and
@@ -126,7 +129,8 @@ private:
     using Committed = bool (*)(void*) noexcept;
     using Aborted = bool (*)(void*) noexcept;
 
-    ResponseStreamWriter(void* target, Write write, End end, Sleep sleep, BindContext bindContext, ReleaseContext releaseContext, Committed committed, Aborted aborted) noexcept
+    ResponseStreamWriter(void* target, Write write, End end, Sleep sleep, BindContext bindContext,
+        ReleaseContext releaseContext, Committed committed, Aborted aborted) noexcept
         : target_(target),
           write_(write),
           end_(end),

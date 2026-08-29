@@ -10,7 +10,8 @@ namespace ruvia::detail {
 class Http2StreamHeaderBlocks final {
 public:
     explicit Http2StreamHeaderBlocks(std::pmr::memory_resource* resource = nullptr)
-        : Http2StreamHeaderBlocks(HttpResolvedPmrResourceTag{}, httpPmrResourceOrDefault(resource)) {}
+        : Http2StreamHeaderBlocks(
+              HttpResolvedPmrResourceTag{}, httpPmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] std::pmr::string& remote() & noexcept {
         return remote_;

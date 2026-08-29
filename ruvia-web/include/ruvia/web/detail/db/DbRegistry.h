@@ -18,7 +18,8 @@ namespace ruvia::detail {
 
 class DbRegistry final {
 public:
-    DbRegistry(asio::io_context&, ConnectionScanner&, std::pmr::memory_resource*, std::span<const DbDefinition>) {}
+    DbRegistry(asio::io_context&, ConnectionScanner&, std::pmr::memory_resource*,
+        std::span<const DbDefinition>) {}
 
     DbRegistry(const DbRegistry&) = delete;
     DbRegistry& operator=(const DbRegistry&) = delete;
@@ -70,8 +71,10 @@ struct DbSlotSocketQuarantine;
 
 class MariaDbPool final {
 public:
-    MariaDbPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config, std::pmr::memory_resource* resource = nullptr);
-    MariaDbPool(asio::io_context&, WorkerHandle&&, DbConfigStorage, std::pmr::memory_resource* = nullptr) = delete;
+    MariaDbPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config,
+        std::pmr::memory_resource* resource = nullptr);
+    MariaDbPool(asio::io_context&, WorkerHandle&&, DbConfigStorage,
+        std::pmr::memory_resource* = nullptr) = delete;
     ~MariaDbPool();
 
     MariaDbPool(const MariaDbPool&) = delete;
@@ -82,17 +85,23 @@ public:
     void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept;
 
     template <typename Pool>
-    friend Task<void> finishDbTransaction(Pool&, std::size_t, std::string_view, std::pmr::memory_resource*, const OperationOptions&);
+    friend Task<void> finishDbTransaction(
+        Pool&, std::size_t, std::string_view, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
-    friend Task<DbRows> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*, OperationOptions);
+    friend Task<DbRows> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>,
+        std::pmr::memory_resource*, OperationOptions);
     template <typename Pool>
-    friend Task<DbExecResult> executeDbCommand(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*, OperationOptions);
+    friend Task<DbExecResult> executeDbCommand(Pool&, std::pmr::string, std::pmr::vector<DbValue>,
+        std::pmr::memory_resource*, OperationOptions);
     template <typename Pool, typename Slot>
-    friend Task<DbResolvedAddresses> resolveDbHost(Pool&, Slot&, const OperationTimeout&, std::string_view);
+    friend Task<DbResolvedAddresses> resolveDbHost(
+        Pool&, Slot&, const OperationTimeout&, std::string_view);
     template <typename Pool>
-    friend Task<DbRows> queryOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
+    friend Task<DbRows> queryOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
+        std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
-    friend Task<DbExecResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
+    friend Task<DbExecResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
+        std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
     friend Task<std::size_t> acquireDbSlot(Pool&, const OperationTimeout&, StopToken);
     template <typename Pool>
@@ -138,27 +147,46 @@ public:
     Task<std::size_t> acquireSlot(const OperationTimeout& timeout, StopToken stopToken);
     void releaseSlot(std::size_t slot) noexcept;
     void closeSlot(ConnectionSlot& slot) noexcept;
-    void setSlotDeadline(ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind) noexcept;
+    void setSlotDeadline(ConnectionSlot& slot, std::chrono::milliseconds timeout,
+        ConnectionSlot::DeadlineKind kind) noexcept;
     void clearSlotDeadline(ConnectionSlot& slot) noexcept;
     Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<void> connectUnlocked(ConnectionSlot& slot, const OperationTimeout& operationTimeout);
     Task<int> waitForMysql(ConnectionSlot& slot, int status, const OperationTimeout& deadline);
-    Task<void> runMysqlQuery(ConnectionSlot& slot, std::string_view sql, const OperationTimeout& deadline);
+    Task<void> runMysqlQuery(
+        ConnectionSlot& slot, std::string_view sql, const OperationTimeout& deadline);
     Task<st_mysql_res*> storeMysqlResult(ConnectionSlot& slot, const OperationTimeout& deadline);
-    Task<DbRows> queryOnSlot(ConnectionSlot& slot, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout);
-    Task<DbExecResult> executeOnSlot(ConnectionSlot& slot, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout);
-    Task<void> executeControl(ConnectionSlot& slot, std::string_view sql, std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout);
-    Task<DbRows> query(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, OperationOptions options);
-    Task<DbExecResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, OperationOptions options);
-    Task<DbStreamResult> stream(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, OperationOptions options);
-    Task<std::optional<DbRow>> readStreamRow(std::size_t slot, void* result, std::pmr::memory_resource* resource, const OperationOptions& options);
-    Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource, const OperationOptions& options);
+    Task<DbRows> queryOnSlot(ConnectionSlot& slot, std::string_view sql,
+        std::span<const DbValue> params, std::pmr::memory_resource* resource,
+        const OperationTimeout& operationTimeout);
+    Task<DbExecResult> executeOnSlot(ConnectionSlot& slot, std::string_view sql,
+        std::span<const DbValue> params, std::pmr::memory_resource* resource,
+        const OperationTimeout& operationTimeout);
+    Task<void> executeControl(ConnectionSlot& slot, std::string_view sql,
+        std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout);
+    Task<DbRows> query(std::pmr::string sql, std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<DbExecResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<DbStreamResult> stream(std::pmr::string sql, std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<std::optional<DbRow>> readStreamRow(std::size_t slot, void* result,
+        std::pmr::memory_resource* resource, const OperationOptions& options);
+    Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource,
+        const OperationOptions& options);
     void abortStream(std::size_t slot, void* result) noexcept;
-    Task<DbRows> queryOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const OperationOptions& options);
-    Task<DbExecResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const OperationOptions& options);
-    Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource, OperationOptions options);
-    Task<void> commitTransaction(std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
-    Task<void> rollbackTransaction(std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
+    Task<DbRows> queryOnTransactionSlot(std::size_t slot, std::pmr::string sql,
+        std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
+        const OperationOptions& options);
+    Task<DbExecResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql,
+        std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
+        const OperationOptions& options);
+    Task<DbTransaction> beginTransaction(
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<void> commitTransaction(
+        std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
+    Task<void> rollbackTransaction(
+        std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
     void abortTransaction(std::size_t slot) noexcept;
     void cancelOperationById(std::uint64_t cancellationId) noexcept;
     void throwIfCancelled(const ConnectionSlot& slot) const;
@@ -179,8 +207,10 @@ private:
 
 class PostgreSqlPool final {
 public:
-    PostgreSqlPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config, std::pmr::memory_resource* resource = nullptr);
-    PostgreSqlPool(asio::io_context&, WorkerHandle&&, DbConfigStorage, std::pmr::memory_resource* = nullptr) = delete;
+    PostgreSqlPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config,
+        std::pmr::memory_resource* resource = nullptr);
+    PostgreSqlPool(asio::io_context&, WorkerHandle&&, DbConfigStorage,
+        std::pmr::memory_resource* = nullptr) = delete;
     ~PostgreSqlPool();
 
     PostgreSqlPool(const PostgreSqlPool&) = delete;
@@ -192,17 +222,23 @@ public:
 
 private:
     template <typename Pool>
-    friend Task<void> finishDbTransaction(Pool&, std::size_t, std::string_view, std::pmr::memory_resource*, const OperationOptions&);
+    friend Task<void> finishDbTransaction(
+        Pool&, std::size_t, std::string_view, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
-    friend Task<DbRows> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*, OperationOptions);
+    friend Task<DbRows> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>,
+        std::pmr::memory_resource*, OperationOptions);
     template <typename Pool>
-    friend Task<DbExecResult> executeDbCommand(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*, OperationOptions);
+    friend Task<DbExecResult> executeDbCommand(Pool&, std::pmr::string, std::pmr::vector<DbValue>,
+        std::pmr::memory_resource*, OperationOptions);
     template <typename Pool, typename Slot>
-    friend Task<DbResolvedAddresses> resolveDbHost(Pool&, Slot&, const OperationTimeout&, std::string_view);
+    friend Task<DbResolvedAddresses> resolveDbHost(
+        Pool&, Slot&, const OperationTimeout&, std::string_view);
     template <typename Pool>
-    friend Task<DbRows> queryOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
+    friend Task<DbRows> queryOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
+        std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
-    friend Task<DbExecResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
+    friend Task<DbExecResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
+        std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
     friend Task<std::size_t> acquireDbSlot(Pool&, const OperationTimeout&, StopToken);
     template <typename Pool>
@@ -243,28 +279,47 @@ public:
     Task<std::size_t> acquireSlot(const OperationTimeout& timeout, StopToken stopToken);
     void releaseSlot(std::size_t slot) noexcept;
     void closeSlot(ConnectionSlot& slot) noexcept;
-    void setSlotDeadline(ConnectionSlot& slot, std::optional<std::chrono::milliseconds> timeout) noexcept;
+    void setSlotDeadline(
+        ConnectionSlot& slot, std::optional<std::chrono::milliseconds> timeout) noexcept;
     void clearSlotDeadline(ConnectionSlot& slot) noexcept;
     Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<void> connectUnlocked(ConnectionSlot& slot, const OperationTimeout& operationTimeout);
     Task<void> waitForPostgreSql(ConnectionSlot& slot, bool read, const OperationTimeout& deadline);
     Task<void> flushOutput(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<void> waitUntilResultReady(ConnectionSlot& slot, const OperationTimeout& deadline);
-    Task<void> sendQuery(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, const OperationTimeout& deadline, bool singleRow);
-    Task<DbRows> queryOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout);
-    Task<DbExecResult> executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout);
-    Task<void> executeControl(ConnectionSlot& slot, std::string_view sql, std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout);
-    Task<DbRows> query(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, OperationOptions options);
-    Task<DbExecResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, OperationOptions options);
-    Task<DbStreamResult> stream(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, OperationOptions options);
-    Task<std::optional<DbRow>> readStreamRow(std::size_t slot, void* result, std::pmr::memory_resource* resource, const OperationOptions& options);
-    Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource, const OperationOptions& options);
+    Task<void> sendQuery(ConnectionSlot& slot, const std::pmr::string& sql,
+        std::span<const DbValue> params, const OperationTimeout& deadline, bool singleRow);
+    Task<DbRows> queryOnSlot(ConnectionSlot& slot, const std::pmr::string& sql,
+        std::span<const DbValue> params, std::pmr::memory_resource* resource,
+        const OperationTimeout& operationTimeout);
+    Task<DbExecResult> executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql,
+        std::span<const DbValue> params, std::pmr::memory_resource* resource,
+        const OperationTimeout& operationTimeout);
+    Task<void> executeControl(ConnectionSlot& slot, std::string_view sql,
+        std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout);
+    Task<DbRows> query(std::pmr::string sql, std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<DbExecResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<DbStreamResult> stream(std::pmr::string sql, std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<std::optional<DbRow>> readStreamRow(std::size_t slot, void* result,
+        std::pmr::memory_resource* resource, const OperationOptions& options);
+    Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource,
+        const OperationOptions& options);
     void abortStream(std::size_t slot, void* result) noexcept;
-    Task<DbRows> queryOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const OperationOptions& options);
-    Task<DbExecResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, const OperationOptions& options);
-    Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource, OperationOptions options);
-    Task<void> commitTransaction(std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
-    Task<void> rollbackTransaction(std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
+    Task<DbRows> queryOnTransactionSlot(std::size_t slot, std::pmr::string sql,
+        std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
+        const OperationOptions& options);
+    Task<DbExecResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql,
+        std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
+        const OperationOptions& options);
+    Task<DbTransaction> beginTransaction(
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<void> commitTransaction(
+        std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
+    Task<void> rollbackTransaction(
+        std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
     void abortTransaction(std::size_t slot) noexcept;
     void cancelOperationById(std::uint64_t cancellationId) noexcept;
     void throwIfCancelled(const ConnectionSlot& slot) const;
@@ -285,8 +340,10 @@ class DbRegistry final {
 public:
     // One scanner is the authority for both the worker binding and deadline
     // maintenance. It outlives this registry and every pool the registry owns.
-    DbRegistry(asio::io_context& ioContext, ConnectionScanner& scanner, std::pmr::memory_resource* resource, const DbConfig& defaultConfig);
-    DbRegistry(asio::io_context& ioContext, ConnectionScanner& scanner, std::pmr::memory_resource* resource, std::span<const DbDefinition> databases);
+    DbRegistry(asio::io_context& ioContext, ConnectionScanner& scanner,
+        std::pmr::memory_resource* resource, const DbConfig& defaultConfig);
+    DbRegistry(asio::io_context& ioContext, ConnectionScanner& scanner,
+        std::pmr::memory_resource* resource, std::span<const DbDefinition> databases);
     ~DbRegistry();
 
     DbRegistry(const DbRegistry&) = delete;
@@ -295,8 +352,10 @@ public:
     Task<void> connect();
     void closeNow() noexcept;
     [[nodiscard]] bool empty() const noexcept;
-    [[nodiscard]] DbHandle get(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const;
-    [[nodiscard]] DbHandle get(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const;
+    [[nodiscard]] DbHandle get(
+        std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const;
+    [[nodiscard]] DbHandle get(std::string_view alias, std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope) const;
 
 #ifdef RUVIA_ENABLE_MARIADB
     using MariaDbPoolOwner = std::unique_ptr<MariaDbPool, PmrObjectDeleter<MariaDbPool>>;

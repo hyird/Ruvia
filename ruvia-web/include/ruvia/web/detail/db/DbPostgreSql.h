@@ -14,7 +14,8 @@ struct pg_result;
 
 namespace ruvia::detail {
 
-[[nodiscard]] DbError postgreSqlError(const pg_conn& connection, std::string_view operation, DbError::Code code, const pg_result* result = nullptr);
+[[nodiscard]] DbError postgreSqlError(const pg_conn& connection, std::string_view operation,
+    DbError::Code code, const pg_result* result = nullptr);
 
 struct PostgreSqlParams final {
     explicit PostgreSqlParams(std::pmr::memory_resource* resource);
@@ -24,7 +25,8 @@ struct PostgreSqlParams final {
     std::pmr::vector<int> lengths;
 };
 
-[[nodiscard]] PostgreSqlParams encodePostgreSqlParams(std::span<const DbValue> params, std::pmr::memory_resource* resource);
+[[nodiscard]] PostgreSqlParams encodePostgreSqlParams(
+    std::span<const DbValue> params, std::pmr::memory_resource* resource);
 
 [[nodiscard]] std::uint64_t postgreSqlAffectedRows(const pg_result& result) noexcept;
 

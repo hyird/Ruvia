@@ -29,9 +29,11 @@ RUVIA_TEST(no_encoding_means_decode_is_identity) {
     // The decode-skip fast path relies on: if hasUrlEncoding is false, decoding
     // reproduces the input verbatim.
     auto* const resource = std::pmr::get_default_resource();
-    for (const std::string_view value : {std::string_view(""), std::string_view("plain"), std::string_view("a/b?c=d"), std::string_view("no-plus")}) {
+    for (const std::string_view value : {std::string_view(""), std::string_view("plain"),
+             std::string_view("a/b?c=d"), std::string_view("no-plus")}) {
         RUVIA_CHECK(!hasUrlEncoding(value, Mode::kPercent));
-        const auto decoded = decodeUrlComponent(value, {.mode = Mode::kPercent, .resource = resource});
+        const auto decoded =
+            decodeUrlComponent(value, {.mode = Mode::kPercent, .resource = resource});
         RUVIA_CHECK(decoded.has_value());
         RUVIA_CHECK_EQ(std::string_view(*decoded), value);
     }

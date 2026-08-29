@@ -54,7 +54,8 @@ private:
           queryTimeout(source.queryTimeout),
           acquireTimeout(source.acquireTimeout) {}
 
-    DbConfigStorage(ValidatedConfigTag, const DbConfigStorage& source, std::pmr::memory_resource* resource)
+    DbConfigStorage(
+        ValidatedConfigTag, const DbConfigStorage& source, std::pmr::memory_resource* resource)
         : driver(source.driver),
           host(source.host, resource),
           port(source.port),

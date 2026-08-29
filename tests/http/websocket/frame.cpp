@@ -52,32 +52,43 @@ concept HasFrameReadError = requires(const T& result) {
 };
 
 template <typename T>
-concept HasAnyRvalueFrameReadAccessor = requires(T&& result) { std::move(result).needInput(); } || requires(T&& result) { std::move(result).frame(); } || requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueFrameReadAccessor = requires(T&& result) { std::move(result).needInput(); } ||
+                                        requires(T&& result) { std::move(result).frame(); } ||
+                                        requires(T&& result) { std::move(result).failure(); };
 
 template <typename String>
-concept AcceptsTemporaryTextFramePayload = requires(String&& payload) { WebSocketFrameView::text(std::move(payload), true); };
+concept AcceptsTemporaryTextFramePayload =
+    requires(String&& payload) { WebSocketFrameView::text(std::move(payload), true); };
 
 template <typename String>
-concept AcceptsTemporaryBinaryFramePayload = requires(String&& payload) { WebSocketFrameView::binary(std::move(payload), true); };
+concept AcceptsTemporaryBinaryFramePayload =
+    requires(String&& payload) { WebSocketFrameView::binary(std::move(payload), true); };
 
 template <typename String>
-concept AcceptsTemporaryContinuationFramePayload = requires(String&& payload) { WebSocketFrameView::continuation(std::move(payload), true); };
+concept AcceptsTemporaryContinuationFramePayload =
+    requires(String&& payload) { WebSocketFrameView::continuation(std::move(payload), true); };
 
 template <typename String>
-concept AcceptsTemporaryCloseFramePayload = requires(String&& payload) { WebSocketFrameView::close(std::move(payload)); };
+concept AcceptsTemporaryCloseFramePayload =
+    requires(String&& payload) { WebSocketFrameView::close(std::move(payload)); };
 
 template <typename String>
-concept AcceptsTemporaryPingFramePayload = requires(String&& payload) { WebSocketFrameView::ping(std::move(payload)); };
+concept AcceptsTemporaryPingFramePayload =
+    requires(String&& payload) { WebSocketFrameView::ping(std::move(payload)); };
 
 template <typename String>
-concept AcceptsTemporaryPongFramePayload = requires(String&& payload) { WebSocketFrameView::pong(std::move(payload)); };
+concept AcceptsTemporaryPongFramePayload =
+    requires(String&& payload) { WebSocketFrameView::pong(std::move(payload)); };
 
 static_assert(!std::default_initializable<WebSocketFrameReadResult>);
 static_assert(!std::default_initializable<WebSocketFrameStart>);
 static_assert(!std::default_initializable<WebSocketFrameView>);
-static_assert(std::same_as<decltype(std::declval<const WebSocketFrameReadResult&>().needInput()), const ruvia::detail::WebSocketFrameNeedInput*>);
-static_assert(std::same_as<decltype(std::declval<const WebSocketFrameReadResult&>().frame()), const ruvia::detail::WebSocketFrameView*>);
-static_assert(std::same_as<decltype(std::declval<const WebSocketFrameReadResult&>().failure()), const ruvia::detail::WebSocketFrameReadFailure*>);
+static_assert(std::same_as<decltype(std::declval<const WebSocketFrameReadResult&>().needInput()),
+    const ruvia::detail::WebSocketFrameNeedInput*>);
+static_assert(std::same_as<decltype(std::declval<const WebSocketFrameReadResult&>().frame()),
+    const ruvia::detail::WebSocketFrameView*>);
+static_assert(std::same_as<decltype(std::declval<const WebSocketFrameReadResult&>().failure()),
+    const ruvia::detail::WebSocketFrameReadFailure*>);
 static_assert(!HasFrameReadStatusField<WebSocketFrameReadResult>);
 static_assert(!HasFrameReadStatusAccessor<WebSocketFrameReadResult>);
 static_assert(!HasRequiredBytesField<WebSocketFrameReadResult>);
@@ -180,20 +191,24 @@ RUVIA_TEST(ws_frame_view_factories_exclude_invalid_metadata_combinations) {
 
 RUVIA_TEST(ws_encode_frame_header_length_boundaries) {
     WebSocketFrameHeader header{};
-    const auto u8 = [&header](std::size_t index) { return static_cast<unsigned char>(header[index]); };
+    const auto u8 = [&header](
+                        std::size_t index) { return static_cast<unsigned char>(header[index]); };
     // <=125: 1-byte length, no mask bit (server frames are unmasked).
     RUVIA_CHECK_EQ(encodeWebSocketFrameHeader(header, WebSocketOpcode::kText, 125), std::size_t{2});
     RUVIA_CHECK_EQ(u8(0), 0x81U);
     RUVIA_CHECK_EQ(u8(1), 125U);
     // 126..0xFFFF: 126 marker + 16-bit length.
-    RUVIA_CHECK_EQ(encodeWebSocketFrameHeader(header, WebSocketOpcode::kBinary, 126), std::size_t{4});
+    RUVIA_CHECK_EQ(
+        encodeWebSocketFrameHeader(header, WebSocketOpcode::kBinary, 126), std::size_t{4});
     RUVIA_CHECK_EQ(u8(0), 0x82U);
     RUVIA_CHECK_EQ(u8(1), 126U);
     RUVIA_CHECK_EQ(u8(2), 0U);
     RUVIA_CHECK_EQ(u8(3), 126U);
-    RUVIA_CHECK_EQ(encodeWebSocketFrameHeader(header, WebSocketOpcode::kText, 65535), std::size_t{4});
+    RUVIA_CHECK_EQ(
+        encodeWebSocketFrameHeader(header, WebSocketOpcode::kText, 65535), std::size_t{4});
     // >0xFFFF: 127 marker + 64-bit length. 65536 = 0x0000000000010000.
-    RUVIA_CHECK_EQ(encodeWebSocketFrameHeader(header, WebSocketOpcode::kText, 65536), std::size_t{10});
+    RUVIA_CHECK_EQ(
+        encodeWebSocketFrameHeader(header, WebSocketOpcode::kText, 65536), std::size_t{10});
     RUVIA_CHECK_EQ(u8(1), 127U);
     RUVIA_CHECK_EQ(u8(2), 0U);
     RUVIA_CHECK_EQ(u8(7), 1U);  // the 0x10000 bit
@@ -237,13 +252,15 @@ RUVIA_TEST(ws_frame_reader_needs_input_without_sentinel_metadata) {
     std::size_t offset = 0;
     std::size_t pendingCompactUntil = 0;
 
-    const auto empty = webSocketTryReadFrame(input, offset, pendingCompactUntil, ProtocolByteLimit::limited(1024), false);
+    const auto empty = webSocketTryReadFrame(
+        input, offset, pendingCompactUntil, ProtocolByteLimit::limited(1024), false);
     RUVIA_CHECK(empty.needInput() != nullptr);
     RUVIA_CHECK(empty.frame() == nullptr);
     RUVIA_CHECK(empty.failure() == nullptr);
 
     input.push_back(static_cast<char>(0x81));
-    const auto partial = webSocketTryReadFrame(input, offset, pendingCompactUntil, ProtocolByteLimit::limited(1024), false);
+    const auto partial = webSocketTryReadFrame(
+        input, offset, pendingCompactUntil, ProtocolByteLimit::limited(1024), false);
     RUVIA_CHECK(partial.needInput() != nullptr);
     RUVIA_CHECK(partial.frame() == nullptr);
     RUVIA_CHECK(partial.failure() == nullptr);
@@ -256,7 +273,8 @@ RUVIA_TEST(ws_frame_reader_returns_one_unmasked_borrowed_frame) {
     std::size_t offset = 0;
     std::size_t pendingCompactUntil = 0;
 
-    const auto result = webSocketTryReadFrame(input, offset, pendingCompactUntil, ProtocolByteLimit::limited(1024), false);
+    const auto result = webSocketTryReadFrame(
+        input, offset, pendingCompactUntil, ProtocolByteLimit::limited(1024), false);
     RUVIA_CHECK(result.needInput() == nullptr);
     RUVIA_CHECK(result.failure() == nullptr);
     RUVIA_CHECK(result.frame() != nullptr);
@@ -272,7 +290,8 @@ RUVIA_TEST(ws_frame_reader_reports_typed_wire_failures) {
     std::size_t offset = 0;
     std::size_t pendingCompactUntil = 0;
     std::pmr::string unmasked(std::string_view("\x81\x02hi", 4), std::pmr::get_default_resource());
-    const auto maskFailure = webSocketTryReadFrame(unmasked, offset, pendingCompactUntil, ProtocolByteLimit::limited(1024), false);
+    const auto maskFailure = webSocketTryReadFrame(
+        unmasked, offset, pendingCompactUntil, ProtocolByteLimit::limited(1024), false);
     RUVIA_CHECK(maskFailure.failure() != nullptr);
     RUVIA_CHECK(maskFailure.failure()->error() == WebSocketProtocolFailure::kProtocolError);
     RUVIA_CHECK(maskFailure.frame() == nullptr);
@@ -280,7 +299,8 @@ RUVIA_TEST(ws_frame_reader_reports_typed_wire_failures) {
     auto tooLarge = maskedFrame(0x82, "123456");
     offset = 0;
     pendingCompactUntil = 0;
-    const auto sizeFailure = webSocketTryReadFrame(tooLarge, offset, pendingCompactUntil, ProtocolByteLimit::limited(5), false);
+    const auto sizeFailure = webSocketTryReadFrame(
+        tooLarge, offset, pendingCompactUntil, ProtocolByteLimit::limited(5), false);
     RUVIA_CHECK(sizeFailure.failure() != nullptr);
     RUVIA_CHECK(sizeFailure.failure()->error() == WebSocketProtocolFailure::kMessageTooLarge);
 
@@ -288,7 +308,8 @@ RUVIA_TEST(ws_frame_reader_reports_typed_wire_failures) {
     auto close = maskedFrame(0x88, invalidClose);
     offset = 0;
     pendingCompactUntil = 0;
-    const auto closeFailure = webSocketTryReadFrame(close, offset, pendingCompactUntil, ProtocolByteLimit::limited(1024), false);
+    const auto closeFailure = webSocketTryReadFrame(
+        close, offset, pendingCompactUntil, ProtocolByteLimit::limited(1024), false);
     RUVIA_CHECK(closeFailure.failure() != nullptr);
     RUVIA_CHECK(closeFailure.failure()->error() == WebSocketProtocolFailure::kInvalidPayloadData);
 }
@@ -309,8 +330,10 @@ RUVIA_TEST(ws_frame_reader_rejects_non_minimal_length_encoding) {
     const auto readsAsProtocolError = [](std::pmr::string& frame) {
         std::size_t offset = 0;
         std::size_t pendingCompactUntil = 0;
-        const auto result = webSocketTryReadFrame(frame, offset, pendingCompactUntil, ProtocolByteLimit::limited(1U << 20), false);
-        return result.failure() != nullptr && result.failure()->error() == WebSocketProtocolFailure::kProtocolError;
+        const auto result = webSocketTryReadFrame(
+            frame, offset, pendingCompactUntil, ProtocolByteLimit::limited(1U << 20), false);
+        return result.failure() != nullptr &&
+               result.failure()->error() == WebSocketProtocolFailure::kProtocolError;
     };
 
     // 16-bit form (126) carrying a 2-byte payload -- should have used the 7-bit form.
@@ -342,7 +365,8 @@ RUVIA_TEST(ws_frame_reader_rejects_non_minimal_length_encoding) {
     maskedBody(minimal16, std::string(126, 'x'));
     std::size_t offset = 0;
     std::size_t pendingCompactUntil = 0;
-    const auto ok = webSocketTryReadFrame(minimal16, offset, pendingCompactUntil, ProtocolByteLimit::limited(1U << 20), false);
+    const auto ok = webSocketTryReadFrame(
+        minimal16, offset, pendingCompactUntil, ProtocolByteLimit::limited(1U << 20), false);
     RUVIA_CHECK(ok.frame() != nullptr);
     RUVIA_CHECK_EQ(ok.frame()->payload().size(), std::size_t{126});
 }
