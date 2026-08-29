@@ -1,16 +1,20 @@
 #include "ruvia/web/Testing.h"
 
+#include <asio/io_context.hpp>
+
 #include <chrono>
+#include <deque>
 #include <exception>
 #include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpLimits.h"
@@ -48,6 +52,16 @@ void appendSyntheticHeaderLine(std::string& head, std::string_view name, std::st
     head.append(": ");
     head.append(value);
     head.append("\r\n");
+}
+
+// Asio's Windows IOCP backend creates a timer thread for a context that owns a
+// steady_timer. Repeatedly destroying those contexts is not safe on all
+// supported Windows runners, so the in-memory facade keeps one fresh context
+// per TestApp until process exit. The workers and their Ruvia state remain
+// fully isolated; only the inert Asio context storage is retained.
+asio::io_context& testEventLoopContext() {
+    static std::deque<asio::io_context>& contexts = *new std::deque<asio::io_context>();
+    return contexts.emplace_back();
 }
 
 Task<void> startTestWorker(detail::ConnectionScanner& scanner, detail::WorkerCapabilities& capabilities) {
@@ -88,9 +102,11 @@ struct TestApp::Impl final {
     std::vector<std::pair<std::string, HttpNotFoundHandler>> prefixNotFoundHandlers;
     HttpErrorHandler errorHandler{nullptr};
     HttpNotFoundHandler notFoundHandler{nullptr};
-    EventLoopPool eventLoops{{.loopCount = 1}};
-    EventLoop eventLoop{eventLoops.loop(0)};
+    asio::io_context& eventLoopContext{testEventLoopContext()};
+    EventLoopAttachment eventLoopAttachment{attachEventLoop(eventLoopContext)};
+    EventLoop eventLoop{eventLoopAttachment.loop()};
     WorkerHandle worker{eventLoop.handle()};
+    std::thread eventLoopThread;
     StopSource stopSource;
     StopToken stopToken{stopSource.token()};
     std::optional<detail::ConnectionScanner> connectionScanner;
@@ -109,11 +125,9 @@ struct TestApp::Impl final {
             }
         }
         if (eventLoopStarted) {
-            eventLoops.stop();
-            try {
-                eventLoops.join();
-            } catch (...) {
-                std::terminate();
+            eventLoopAttachment.stop();
+            if (eventLoopThread.joinable()) {
+                eventLoopThread.join();
             }
         }
     }
@@ -164,7 +178,13 @@ struct TestApp::Impl final {
                 .env = &env,
             },
             *connectionScanner);
-        eventLoops.start();
+        eventLoopThread = std::thread([this] {
+            try {
+                eventLoopContext.run();
+            } catch (...) {
+                std::terminate();
+            }
+        });
         eventLoopStarted = true;
         eventLoop.start(startTestWorker(*connectionScanner, *capabilities)).get();
         workerReady = true;
