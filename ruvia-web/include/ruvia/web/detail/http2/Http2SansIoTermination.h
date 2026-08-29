@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <coroutine>
-#include <memory>
 #include <system_error>
 #include <utility>
 
@@ -115,10 +114,6 @@ private:
     Http2SansIoTerminationObserver* head_{nullptr};
 };
 
-struct Http2SansIoSleepCancellation final {
-    WorkerTimerRegistration* timer{nullptr};
-};
-
 // A response-stream sleep races its worker timer against connection termination.
 // Cancelling the timer is the wakeup path, so the timer callback remains the sole
 // continuation owner and a terminal event cannot double-resume the coroutine.
@@ -139,15 +134,6 @@ public:
           termination_(termination),
           duration_(duration),
           stopToken_(std::move(stopToken)),
-          cancellation_(std::make_shared<Http2SansIoSleepCancellation>()),
-          stopRegistration_(stopToken_.registerCallback(
-              [worker = &worker, cancellation = cancellation_]() noexcept {
-                  WorkerHandleAccess::deferOrTerminate(*worker, [cancellation] {
-                      if (cancellation->timer != nullptr) {
-                          cancellation->timer->cancel();
-                      }
-                  });
-              })),
           observer_(this, &Http2SansIoSleepAwaiter::notifyTermination) {}
     Http2SansIoSleepAwaiter(WorkerHandle&&, Http2SansIoTermination&,
         std::chrono::steady_clock::duration, StopToken) = delete;
@@ -162,23 +148,21 @@ public:
         if (!termination_.attach(observer_)) {
             return false;
         }
-        if (cancellation_ != nullptr) {
-            cancellation_->timer = &timer_;
-        }
         try {
             WorkerHandleAccess::scheduleTimer(worker_, timer_, workerTimerDeadlineAfter(duration_),
                 [this](WorkerTimerOutcome outcome) noexcept {
                     timerOutcome_ = outcome;
-                    if (cancellation_ != nullptr) {
-                        cancellation_->timer = nullptr;
-                    }
                     termination_.detach(observer_);
                     continuation_.resume();
                 });
-        } catch (...) {
-            if (cancellation_ != nullptr) {
-                cancellation_->timer = nullptr;
+            if (stopToken_.stoppable()) {
+                const auto cancellation = timer_.cancellation();
+                stopToken_.registerCallback(
+                    stopRegistration_, [cancellation] { cancellation.cancel(); });
             }
+        } catch (...) {
+            stopRegistration_.reset();
+            timer_.cancelQuietly();
             termination_.detach(observer_);
             throw;
         }
@@ -211,7 +195,6 @@ private:
     std::coroutine_handle<> continuation_{};
     WorkerTimerRegistration timer_;
     WorkerTimerOutcome timerOutcome_{WorkerTimerOutcome::kExpired};
-    std::shared_ptr<Http2SansIoSleepCancellation> cancellation_;
     StopRegistration stopRegistration_;
     Http2SansIoTerminationObserver observer_;
 };

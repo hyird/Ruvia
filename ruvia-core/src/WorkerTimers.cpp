@@ -27,6 +27,10 @@ void WorkerTimerRegistration::cancel() noexcept {
     cancel(true);
 }
 
+void WorkerTimerRegistration::cancelQuietly() noexcept {
+    cancel(false);
+}
+
 void WorkerTimerRegistration::cancel(bool notify) noexcept {
     auto* dispatcher = std::exchange(dispatcher_, nullptr);
     const auto slot = std::exchange(slot_, 0);

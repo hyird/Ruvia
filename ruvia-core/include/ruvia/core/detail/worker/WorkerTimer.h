@@ -96,6 +96,9 @@ public:
     WorkerTimerRegistration& operator=(WorkerTimerRegistration&&) = delete;
 
     void cancel() noexcept;
+    // Removes the registration without delivering a completion. This is only
+    // for rolling back setup before the awaiter has published a continuation.
+    void cancelQuietly() noexcept;
     [[nodiscard]] WorkerTimerCancellation cancellation() const&;
     WorkerTimerCancellation cancellation() const&& = delete;
     // Whether this registration still owns a cancellation token. Expiry consumes
