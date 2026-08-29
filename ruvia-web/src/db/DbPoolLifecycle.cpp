@@ -67,29 +67,6 @@ detail::MariaDbPool::~MariaDbPool() {
     closeNow();
 }
 
-Task<void> detail::MariaDbPool::connect() {
-    const OperationTimeout operationTimeout(std::nullopt);
-    for (auto& slot : slots_) {
-        co_await connectUnlocked(slot, operationTimeout);
-    }
-}
-
-void detail::MariaDbPool::closeNow() noexcept {
-    (void)scheduler_.close();
-    for (auto& slot : slots_) {
-        closeSlot(slot);
-    }
-}
-
-Task<std::size_t> detail::MariaDbPool::acquireSlot(
-    const OperationTimeout& timeout, StopToken stopToken) {
-    return detail::acquireDbSlot(*this, timeout, std::move(stopToken));
-}
-
-void detail::MariaDbPool::releaseSlot(std::size_t slot) noexcept {
-    detail::releaseDbSlot(*this, slot);
-}
-
 void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
     slot.closeRequested = true;
     slot.resolver.cancel();
@@ -136,24 +113,6 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
     }
     slot.connected = false;
     slot.closeRequested = false;
-}
-
-void detail::MariaDbPool::cancelOperationById(std::uint64_t cancellationId) noexcept {
-    for (auto& slot : slots_) {
-        if (slot.cancellationId != cancellationId) {
-            continue;
-        }
-        slot.abortReason = DbSlotAbortReason::kCancelled;
-        closeSlot(slot);
-        return;
-    }
-}
-
-void detail::MariaDbPool::throwIfCancelled(const ConnectionSlot& slot) const {
-    if (slot.abortReason == DbSlotAbortReason::kCancelled) {
-        throw DbError(
-            DbError::Code::kCancelled, DbDriver::kMariaDb, "database operation cancelled");
-    }
 }
 
 void detail::MariaDbPool::setSlotDeadline(

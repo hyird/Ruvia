@@ -5,6 +5,7 @@
 #include <exception>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -138,6 +139,66 @@ void releaseDbSlot(Pool& pool, std::size_t slot) noexcept {
         std::terminate();
     }
 }
+
+// Driver pools share their worker-affine lifecycle. The driver-specific slot
+// close and connect operations remain on the pool so this base only owns the
+// scheduling and cancellation rules.
+template <typename Pool>
+class DbPoolLifecycleBase {
+public:
+    [[nodiscard]] Task<void> connect() {
+        auto& pool = derived();
+        const OperationTimeout operationTimeout(std::nullopt);
+        for (auto& slot : pool.slots_) {
+            co_await pool.connectUnlocked(slot, operationTimeout);
+        }
+    }
+
+    void closeNow() noexcept {
+        auto& pool = derived();
+        (void)pool.scheduler_.close();
+        for (auto& slot : pool.slots_) {
+            pool.closeSlot(slot);
+        }
+    }
+
+    [[nodiscard]] Task<std::size_t> acquireSlot(
+        const OperationTimeout& timeout, StopToken stopToken) {
+        return acquireDbSlot(derived(), timeout, std::move(stopToken));
+    }
+
+    void releaseSlot(std::size_t slot) noexcept {
+        releaseDbSlot(derived(), slot);
+    }
+
+    void cancelOperationById(std::uint64_t cancellationId) noexcept {
+        auto& pool = derived();
+        for (auto& slot : pool.slots_) {
+            if (slot.cancellationId != cancellationId) {
+                continue;
+            }
+            slot.abortReason = DbSlotAbortReason::kCancelled;
+            pool.closeSlot(slot);
+            return;
+        }
+    }
+
+    template <typename Slot>
+    void throwIfCancelled(const Slot& slot) const {
+        if (slot.abortReason == DbSlotAbortReason::kCancelled) {
+            throw DbError(
+                DbError::Code::kCancelled, derived().config_.driver, "database operation cancelled");
+        }
+    }
+
+private:
+    [[nodiscard]] Pool& derived() noexcept {
+        return static_cast<Pool&>(*this);
+    }
+    [[nodiscard]] const Pool& derived() const noexcept {
+        return static_cast<const Pool&>(*this);
+    }
+};
 
 // Ending a transaction is the same for every driver: run the control statement
 // on the slot the transaction holds, and release that slot exactly once. A

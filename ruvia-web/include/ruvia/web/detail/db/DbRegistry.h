@@ -70,7 +70,7 @@ struct DbSlotSocketQuarantine;
 
 #ifdef RUVIA_ENABLE_MARIADB
 
-class MariaDbPool final {
+class MariaDbPool final : public DbPoolLifecycleBase<MariaDbPool> {
 public:
     MariaDbPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config,
         std::pmr::memory_resource* resource = nullptr);
@@ -80,9 +80,6 @@ public:
 
     MariaDbPool(const MariaDbPool&) = delete;
     MariaDbPool& operator=(const MariaDbPool&) = delete;
-
-    Task<void> connect();
-    void closeNow() noexcept;
 
     template <typename Pool>
     friend Task<void> finishDbTransaction(
@@ -108,6 +105,7 @@ public:
     friend void releaseDbSlot(Pool&, std::size_t) noexcept;
     template <typename Pool>
     friend class DbSlotCancellationGuard;
+    friend class DbPoolLifecycleBase<MariaDbPool>;
     friend class WorkerCancellationMailbox<MariaDbPool>;
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
@@ -148,8 +146,6 @@ public:
     };
 
     // Backend dispatch entry points. The class itself remains detail-only.
-    Task<std::size_t> acquireSlot(const OperationTimeout& timeout, StopToken stopToken);
-    void releaseSlot(std::size_t slot) noexcept;
     void closeSlot(ConnectionSlot& slot) noexcept;
     void setSlotDeadline(
         ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind);
@@ -192,8 +188,6 @@ public:
     Task<void> rollbackTransaction(
         std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
     void abortTransaction(std::size_t slot) noexcept;
-    void cancelOperationById(std::uint64_t cancellationId) noexcept;
-    void throwIfCancelled(const ConnectionSlot& slot) const;
 
 private:
     asio::io_context& ioContext_;
@@ -209,7 +203,7 @@ private:
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
 
-class PostgreSqlPool final {
+class PostgreSqlPool final : public DbPoolLifecycleBase<PostgreSqlPool> {
 public:
     PostgreSqlPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config,
         std::pmr::memory_resource* resource = nullptr);
@@ -219,9 +213,6 @@ public:
 
     PostgreSqlPool(const PostgreSqlPool&) = delete;
     PostgreSqlPool& operator=(const PostgreSqlPool&) = delete;
-
-    Task<void> connect();
-    void closeNow() noexcept;
 
 private:
     template <typename Pool>
@@ -248,6 +239,7 @@ private:
     friend void releaseDbSlot(Pool&, std::size_t) noexcept;
     template <typename Pool>
     friend class DbSlotCancellationGuard;
+    friend class DbPoolLifecycleBase<PostgreSqlPool>;
     friend class WorkerCancellationMailbox<PostgreSqlPool>;
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
@@ -282,8 +274,6 @@ private:
 
 public:
     // Backend dispatch entry points. The class itself remains detail-only.
-    Task<std::size_t> acquireSlot(const OperationTimeout& timeout, StopToken stopToken);
-    void releaseSlot(std::size_t slot) noexcept;
     void closeSlot(ConnectionSlot& slot) noexcept;
     void setSlotDeadline(
         ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind);
@@ -327,8 +317,6 @@ public:
     Task<void> rollbackTransaction(
         std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
     void abortTransaction(std::size_t slot) noexcept;
-    void cancelOperationById(std::uint64_t cancellationId) noexcept;
-    void throwIfCancelled(const ConnectionSlot& slot) const;
 
 private:
     asio::io_context& ioContext_;
