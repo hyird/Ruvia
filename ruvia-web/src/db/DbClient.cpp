@@ -1,6 +1,5 @@
 #include "ruvia/web/db/DbClient.h"
 
-#include <chrono>
 #include <exception>
 #include <optional>
 #include <stdexcept>
@@ -20,22 +19,11 @@ EventLoop DbClientState::requireLoop(EventLoop loop) {
     return loop;
 }
 
-ConnectionScannerOptions DbClientState::scannerOptions() {
-    return ConnectionScannerOptions{
-        .scanInterval = std::chrono::seconds(1),
-        .idleTimeout = std::nullopt,
-        .initialReadTimeout = std::nullopt,
-        .payloadReadTimeout = std::nullopt,
-        .writeTimeout = std::nullopt,
-    };
-}
-
 DbClientState::DbClientState(EventLoop loop, const DbConfig& config)
     : loop_(requireLoop(std::move(loop))),
       worker_(loop_.handle()),
       memory_(),
-      scanner_(worker_, scannerOptions()),
-      databases_(loop_.ioContext(), scanner_, memory_.resource(), config),
+      databases_(loop_.ioContext(), worker_, memory_.resource(), config),
       closeSignal_(worker_) {}
 
 DbClientState::~DbClientState() {
@@ -87,7 +75,6 @@ Task<void> DbClientState::connectOnWorker() {
         if (stopSource_.stopRequested() || !worker_.accepting()) {
             throw std::runtime_error("database client closed before connecting");
         }
-        scanner_.start();
         co_await databases_.connect();
         expected = Phase::kConnecting;
         if (!phase_.compare_exchange_strong(expected, Phase::kConnected, std::memory_order_acq_rel,
@@ -97,7 +84,6 @@ Task<void> DbClientState::connectOnWorker() {
         connectInFlight_ = false;
         closeSignal_.notify();
     } catch (...) {
-        scanner_.stop();
         databases_.closeNow();
         stopSource_.requestStop();
         phase_.store(Phase::kClosed, std::memory_order_release);
@@ -199,7 +185,6 @@ void DbClientState::startCloseOnWorker() noexcept {
         }
     }
     stopSource_.requestStop();
-    scanner_.stop();
     databases_.closeNow();
     if (closeTaskStarted_ || closeComplete_) {
         return;

@@ -96,6 +96,9 @@ public:
     WorkerTimerRegistration& operator=(WorkerTimerRegistration&&) = delete;
 
     void cancel() noexcept;
+    // Removes the registration without delivering a completion. This is only
+    // for rolling back setup before the awaiter has published a continuation.
+    void cancelQuietly() noexcept;
     [[nodiscard]] WorkerTimerCancellation cancellation() const&;
     WorkerTimerCancellation cancellation() const&& = delete;
     // Whether this registration still owns a cancellation token. Expiry consumes
@@ -104,11 +107,14 @@ public:
     [[nodiscard]] bool registered() const noexcept;
 
 private:
+    void cancel(bool notify) noexcept;
     void bind(WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept;
     void release() noexcept;
 
     // The handle supplied to scheduleTimer() must outlive this registration.
-    // Internal users enforce that structurally through member declaration order.
+    // Explicit cancel() delivers kCancelled to the completion. Destruction only
+    // removes the registration: a callback that refers to the destroyed owner
+    // must never be queued merely because its RAII token went out of scope.
     WorkerDispatcher* dispatcher_{nullptr};
     std::size_t slot_{0};
     std::uint64_t generation_{0};

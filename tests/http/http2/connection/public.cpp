@@ -409,6 +409,50 @@ RUVIA_TEST(http2_public_data_credit_endpoint_survives_connection_destruction_wit
     RUVIA_CHECK(escapedCredit.valid());
 }
 
+RUVIA_TEST(http2_public_request_views_survive_connection_move_assignment) {
+    auto* resource = std::pmr::new_delete_resource();
+    // Keep caller-owned input alive so this test isolates the connection's decoded storage.
+    const auto wire = serverRequestWire(resource, "x");
+    std::optional<ruvia::Http2Event> escapedRequest;
+    std::optional<ruvia::Http2Event> escapedChunk;
+
+    auto server = ruvia::Http2Connection::server({.resource = resource});
+    (void)server.consumeOutput(server.pendingOutput().size());
+    RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);
+
+    auto request = server.nextEvent();
+    RUVIA_CHECK(request && request->requestHead() != nullptr);
+    if (request) {
+        escapedRequest.emplace(std::move(*request));
+    }
+    auto chunk = server.nextEvent();
+    RUVIA_CHECK(chunk && chunk->messageBodyChunk() != nullptr);
+    if (chunk) {
+        escapedChunk.emplace(std::move(*chunk));
+    }
+
+    // Move assignment destroys the old implementation while the public events still hold leases.
+    auto replacement = ruvia::Http2Connection::server({.resource = resource});
+    server = std::move(replacement);
+
+    const auto* requestHead = escapedRequest ? escapedRequest->requestHead() : nullptr;
+    RUVIA_CHECK(requestHead != nullptr);
+    if (requestHead != nullptr) {
+        const auto& materialized = requestHead->request();
+        RUVIA_CHECK(materialized.method() == "POST");
+        RUVIA_CHECK(materialized.target() == "/upload");
+        RUVIA_CHECK(materialized.authority() == "example.test");
+        const auto contentLength = materialized.header("content-length");
+        RUVIA_CHECK(contentLength && *contentLength == "1");
+    }
+
+    const auto* body = escapedChunk ? escapedChunk->messageBodyChunk() : nullptr;
+    RUVIA_CHECK(body != nullptr);
+    if (body != nullptr) {
+        RUVIA_CHECK(body->bytes() == "x");
+    }
+}
+
 #if !defined(_MSC_VER)
 RUVIA_TEST(http2_public_response_materialization_failure_keeps_event_retryable) {
     ToggleAllocationResource resource;

@@ -192,7 +192,7 @@ RUVIA_TEST(cookie_path_octets_follow_set_cookie_grammar) {
     RUVIA_CHECK(isValidCookieAttribute("/path/to"));
     RUVIA_CHECK(isValidCookieAttribute("example.com"));
     RUVIA_CHECK(isValidCookieAttribute(""));
-    RUVIA_CHECK(!isValidCookieAttribute("a;b"));  // ';' would inject another attribute
+    RUVIA_CHECK(!isValidCookieAttribute("a;b"));                        // ';' would inject another attribute
     RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\rb", 3)));  // CR (header injection)
     RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\nb", 3)));  // LF
     RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\0b", 3)));  // NUL

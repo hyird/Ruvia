@@ -43,7 +43,8 @@ public:
     const Http2SendWindowAborted* aborted() const&& = delete;
 
 private:
-    enum class State : std::uint8_t { kReady, kAborted };
+    enum class State : std::uint8_t { kReady,
+        kAborted };
 
     explicit constexpr Http2SendWindowWaitResult(State state) noexcept
         : state_(state) {}

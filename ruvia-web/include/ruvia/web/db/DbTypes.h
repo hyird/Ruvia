@@ -118,7 +118,12 @@ class DbMigrationRunner;
 struct DbValueAccess;
 struct DbResultAccess;
 
-enum class DbValueType : std::uint8_t { kNull, kString, kSigned, kUnsigned, kDouble, kBool };
+enum class DbValueType : std::uint8_t { kNull,
+    kString,
+    kSigned,
+    kUnsigned,
+    kDouble,
+    kBool };
 
 }  // namespace detail
 

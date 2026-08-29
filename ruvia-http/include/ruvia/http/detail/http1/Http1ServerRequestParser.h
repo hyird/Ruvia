@@ -18,7 +18,8 @@ namespace ruvia::detail {
 
 class Http1ServerRequestParseFailure;
 
-enum class Http1ServerRequestParseFailureSource : std::uint8_t { kRequestLine, kMessage };
+enum class Http1ServerRequestParseFailureSource : std::uint8_t { kRequestLine,
+    kMessage };
 
 struct Http1RequestParseResultAccess final {
     [[nodiscard]] static Http1RequestParseResult needMore() noexcept {

@@ -345,10 +345,10 @@ RUVIA_TEST(response_head_emits_well_formed_normal) {
 
     RUVIA_CHECK(head.starts_with("HTTP/1.1 200 OK\r\n"));
     RUVIA_CHECK(head.find("X-Foo: bar\r\n") != std::string_view::npos);
-    RUVIA_CHECK(head.find("Server:") == std::string_view::npos);  // product policy is explicit
-    RUVIA_CHECK(head.find("Date: ") != std::string_view::npos);   // auto-injected
+    RUVIA_CHECK(head.find("Server:") == std::string_view::npos);                // product policy is explicit
+    RUVIA_CHECK(head.find("Date: ") != std::string_view::npos);                 // auto-injected
     RUVIA_CHECK(head.find("Content-Length: 5\r\n") != std::string_view::npos);  // auto, body size
-    RUVIA_CHECK(head.ends_with("\r\n\r\n"));  // blank-line terminator
+    RUVIA_CHECK(head.ends_with("\r\n\r\n"));                                    // blank-line terminator
 }
 
 RUVIA_TEST(response_head_extension_status_uses_an_empty_reason_phrase) {

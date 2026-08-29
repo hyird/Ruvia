@@ -16,7 +16,8 @@ namespace detail {
 struct HttpContentDecodeResultAccess;
 }  // namespace detail
 
-enum class HttpContentEncodeError : std::uint8_t { kEncodedSizeExceeded, kEncoderFailure };
+enum class HttpContentEncodeError : std::uint8_t { kEncodedSizeExceeded,
+    kEncoderFailure };
 
 struct HttpContentEncodeOptions final {
     std::size_t maxEncodedBytes{};

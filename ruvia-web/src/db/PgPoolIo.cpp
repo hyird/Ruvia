@@ -103,7 +103,11 @@ Task<void> PostgreSqlPool::waitForPostgreSql(
             "binding PostgreSQL connection socket: " + error.message(), error.value());
     }
 
-    setSlotDeadline(slot, remaining);
+    if (remaining.has_value()) {
+        setSlotDeadline(slot, *remaining, ConnectionSlot::DeadlineKind::kSocket);
+    } else {
+        clearSlotDeadline(slot);
+    }
     struct SocketWaitAwaiter final {
         ConnectionSlot& slot;
         DbSlotSocket& socket;

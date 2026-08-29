@@ -1,10 +1,14 @@
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 #include <asio/io_context.hpp>
@@ -50,6 +54,21 @@ struct WorkerMaintenanceResetProbe final {
         auto& probe = *static_cast<WorkerMaintenanceResetProbe*>(target);
         ++probe.ticks;
         probe.registration->reset();
+    }
+};
+
+struct BlockingMaintenanceProbe final {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered{false};
+    bool release{false};
+
+    static void check(void* target) noexcept {
+        auto& probe = *static_cast<BlockingMaintenanceProbe*>(target);
+        std::unique_lock lock(probe.mutex);
+        probe.entered = true;
+        probe.condition.notify_one();
+        probe.condition.wait(lock, [&probe] { return probe.release; });
     }
 };
 
@@ -242,6 +261,62 @@ int main() {
         entry.registerPeriodicCheck(registration, &probe, &PeriodicProbe::tick);
     }
     registration.reset();
+
+    // An expiry callback may already be scanning while another thread destroys
+    // the scanner. Destruction must wait for that callback instead of letting
+    // its recursive re-arm call observe a freed scanner.
+    bool scannerLifetimeSafe = true;
+    {
+        asio::io_context scannerIo;
+        auto scannerDispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(scannerIo, 16);
+        auto scannerWorker = ruvia::detail::WorkerHandleAccess::make(scannerDispatcher);
+        auto scanner = std::make_unique<ruvia::detail::ConnectionScanner>(scannerWorker,
+            ruvia::detail::ConnectionScannerOptions{.scanInterval = std::chrono::milliseconds(1)});
+        BlockingMaintenanceProbe blockingProbe;
+        ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration maintenance;
+        scanner->registerWorkerMaintenance(
+            maintenance, &blockingProbe, &BlockingMaintenanceProbe::check);
+        if (scannerDispatcher->post([&scanner] { scanner->start(); }) !=
+            ruvia::PostStatus::kAccepted) {
+            scannerLifetimeSafe = false;
+        }
+        std::thread scannerThread([&] { scannerIo.run(); });
+        {
+            std::unique_lock lock(blockingProbe.mutex);
+            if (!blockingProbe.condition.wait_for(lock, std::chrono::milliseconds(100),
+                    [&blockingProbe] { return blockingProbe.entered; })) {
+                scannerLifetimeSafe = false;
+            }
+        }
+        std::atomic_bool destroyed{false};
+        std::thread destroyer([scanner = std::move(scanner), &destroyed]() mutable {
+            scanner.reset();
+            destroyed.store(true, std::memory_order_release);
+        });
+        if (blockingProbe.entered) {
+            const auto waitUntil =
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+            while (!destroyed.load(std::memory_order_acquire) &&
+                   std::chrono::steady_clock::now() < waitUntil) {
+                std::this_thread::yield();
+            }
+            if (destroyed.load(std::memory_order_acquire)) {
+                scannerLifetimeSafe = false;
+            }
+        }
+        {
+            std::lock_guard lock(blockingProbe.mutex);
+            blockingProbe.release = true;
+        }
+        blockingProbe.condition.notify_one();
+        destroyer.join();
+        scannerIo.stop();
+        scannerThread.join();
+        scannerDispatcher->detachContext();
+    }
+    if (!scannerLifetimeSafe) {
+        return 12;
+    }
 
     // Scanner teardown likewise invalidates startup-owned maintenance nodes.
     ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration maintenanceRegistration;

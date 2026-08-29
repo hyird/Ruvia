@@ -27,7 +27,8 @@
 
 namespace ruvia::detail {
 
-enum class Http2InterimResponseHeaderEncodeStatus : std::uint8_t { kOk, kInvalidHeader };
+enum class Http2InterimResponseHeaderEncodeStatus : std::uint8_t { kOk,
+    kInvalidHeader };
 
 struct Http2KnownHeaderEncoding final {
     std::string_view name;

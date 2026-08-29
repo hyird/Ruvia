@@ -48,8 +48,8 @@ public:
     HttpClientPool(const HttpClientPool&) = delete;
     HttpClientPool& operator=(const HttpClientPool&) = delete;
 
-    [[nodiscard]] Task<HttpClientResponse> execute(HttpClientRequestStorage request,
-        OperationOptions options, std::pmr::memory_resource* responseResource);
+    [[nodiscard]] Task<HttpClientResponse> execute(
+        HttpClientRequestStorage request, OperationOptions options);
     void closeNow() noexcept;
     [[nodiscard]] Task<void> join();
     [[nodiscard]] HttpClientStats stats() const noexcept;
@@ -66,9 +66,15 @@ private:
     friend class ::ruvia::HttpClientResponse;
     friend class ::ruvia::HttpClientResponseBody;
 
-    enum class WireProtocol : std::uint8_t { kUnknown, kHttp1, kHttp2 };
-    enum class AbortReason : std::uint8_t { kNone, kTimeout, kCancelled, kClosing };
-    enum class DeadlineKind : std::uint8_t { kResolve, kSocket };
+    enum class WireProtocol : std::uint8_t { kUnknown,
+        kHttp1,
+        kHttp2 };
+    enum class AbortReason : std::uint8_t { kNone,
+        kTimeout,
+        kCancelled,
+        kClosing };
+    enum class DeadlineKind : std::uint8_t { kResolve,
+        kSocket };
 
     struct Http2PendingStream final {
         Http2PendingStream(const WorkerHandle& worker, HttpClientResponse& value)
@@ -96,8 +102,8 @@ private:
         Http2Runtime(const WorkerHandle& worker, std::pmr::memory_resource* resource)
             : writeSignal(worker),
               stateSignal(worker),
-              connectScheduler(1, resource),
-              http1Scheduler(1, resource),
+              connectScheduler(1, worker, resource),
+              http1Scheduler(1, worker, resource),
               pending(resource) {}
         Http2Runtime(WorkerHandle&&, std::pmr::memory_resource*) = delete;
 

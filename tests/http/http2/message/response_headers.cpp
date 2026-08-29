@@ -38,7 +38,8 @@ static_assert(requires(const Http2ResponseHeadPlan& plan, const Http2ResponseHea
     { temporary.bodyPlan() } -> std::same_as<ruvia::detail::HttpResponseBodyPlan>;
 });
 
-enum class ResponseHeadMode : std::uint8_t { kBuffered, kStreaming };
+enum class ResponseHeadMode : std::uint8_t { kBuffered,
+    kStreaming };
 
 struct Collector final {
     std::vector<std::pair<std::string, std::string>> headers;

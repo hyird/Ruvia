@@ -119,7 +119,10 @@ protected:
 
 private:
     friend class ScopedOperationScope;
-    enum class Phase : std::uint8_t { kCold, kRunning, kComplete, kExpired };
+    enum class Phase : std::uint8_t { kCold,
+        kRunning,
+        kComplete,
+        kExpired };
     void expire() noexcept;
 
     ScopedOperationScope* scope_{nullptr};

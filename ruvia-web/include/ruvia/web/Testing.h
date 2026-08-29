@@ -8,15 +8,14 @@
 // middleware, validators, prefix and app-wide notFound/onError fallbacks,
 // urlFor, route body limits, route rate limits, and worker state all behave as
 // they do in a running server.
-// No socket is opened and no worker thread is started; request() runs the
-// handler coroutine to completion synchronously and copies the response out.
+// No socket is opened; request() drives a private worker to completion
+// synchronously and copies the response out.
 //
 // Scope: buffered-response routes (including 404/405/501/OPTIONS fallbacks).
 // Streaming/SSE/WebSocket routes and handlers that await worker-bound
-// services (timers, db(), redis(), runBlocking()) need a running server; drive
-// those through a real loopback server instead. A route Deadline is rejected
-// with std::logic_error before dispatch because this facade has no worker timer
-// and must not silently turn a bounded production route into an unbounded test.
+// services (db(), redis(), runBlocking()) need a running server; drive those
+// through a real loopback server instead. Route deadlines are enforced by the
+// private worker's timer.
 
 #include <cstddef>
 #include <memory>

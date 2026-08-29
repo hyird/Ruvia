@@ -7,7 +7,6 @@
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/db/DbClient.h"
@@ -43,7 +42,6 @@ private:
     };
 
     [[nodiscard]] static EventLoop requireLoop(EventLoop loop);
-    [[nodiscard]] static ConnectionScannerOptions scannerOptions();
 
     [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<DbClientState> state);
     [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<DbClientState> state);
@@ -56,7 +54,6 @@ private:
     EventLoop loop_;
     WorkerHandle worker_;
     WorkerMemory memory_;
-    ConnectionScanner scanner_;
     DbRegistry databases_;
     StopSource stopSource_;
     EventLoopStopRegistration stopRegistration_;

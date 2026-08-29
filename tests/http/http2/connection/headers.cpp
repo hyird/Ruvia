@@ -956,7 +956,7 @@ RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
     out = out.substr(9 + d2.length);
     const auto th = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
     RUVIA_CHECK_EQ(th.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));  // trailer
-    RUVIA_CHECK((th.flags & ruvia::detail::kHttp2FlagEndStream) != 0);  // END_STREAM here
+    RUVIA_CHECK((th.flags & ruvia::detail::kHttp2FlagEndStream) != 0);             // END_STREAM here
     RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{8});
     const auto trailerPayload = out.substr(9, th.length);
     RUVIA_CHECK(trailerPayload.find("x-checksum") != std::string_view::npos);

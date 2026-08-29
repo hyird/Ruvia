@@ -19,9 +19,12 @@ namespace ruvia::detail {
 // list obligations: senders cannot generate empty members, while recipients
 // must ignore a reasonable number of them. The HTTP/1 head-size limit bounds
 // recipient work, so the tolerant path remains allocation-free and O(head).
-enum class HttpFieldListRole : std::uint8_t { kRecipient, kSender };
+enum class HttpFieldListRole : std::uint8_t { kRecipient,
+    kSender };
 
-enum class HttpFieldListParseStatus : std::uint8_t { kOk, kMalformed, kRejected };
+enum class HttpFieldListParseStatus : std::uint8_t { kOk,
+    kMalformed,
+    kRejected };
 
 enum class HttpConnectionOption : std::uint8_t {
     kClose = 1U << 0,

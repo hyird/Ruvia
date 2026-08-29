@@ -21,7 +21,12 @@ namespace ruvia {
 // basic_string rvalues are rejected before a dangling view can be created.
 class JsonValue final {
 public:
-    enum class Kind : unsigned char { kObject, kArray, kString, kNumber, kBoolean, kNull };
+    enum class Kind : unsigned char { kObject,
+        kArray,
+        kString,
+        kNumber,
+        kBoolean,
+        kNull };
 
     [[nodiscard]] static std::optional<JsonValue> parse(
         std::string_view body, ModelParseOptions options = {}) noexcept {
@@ -257,7 +262,9 @@ private:
 
 namespace detail {
 
-enum class ModelInputKind : std::uint8_t { kJson, kForm, kFormFields };
+enum class ModelInputKind : std::uint8_t { kJson,
+    kForm,
+    kFormFields };
 
 class ModelInput final {
 public:

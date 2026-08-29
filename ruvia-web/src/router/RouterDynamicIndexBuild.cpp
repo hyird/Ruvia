@@ -223,7 +223,9 @@ void detail::RouteTable::sortDynamicNode(DynamicNode& node) {
 }
 
 bool detail::RouteTable::sameDynamicShape(std::string_view left, std::string_view right) noexcept {
-    enum class ForkPriority : std::uint8_t { kShared, kLeftStatic, kRightStatic };
+    enum class ForkPriority : std::uint8_t { kShared,
+        kLeftStatic,
+        kRightStatic };
 
     // Tracks the first static-vs-param fork. After that fork, the static side has runtime priority
     // for overlapping paths because findDynamicNode tries static children before param children.

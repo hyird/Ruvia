@@ -7,7 +7,6 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpLimits.h"
@@ -26,16 +25,14 @@ static_assert(ruvia::detail::WorkerCapabilityOptions{}.rateLimitCapacity ==
               ruvia::kDefaultRateLimitCapacityPerWorker);
 static_assert(!std::constructible_from<ruvia::detail::WorkerCapabilities, asio::io_context&,
     ruvia::WorkerHandle&&, std::pmr::memory_resource*, ruvia::detail::WorkerCapabilityDefinitions,
-    ruvia::detail::WorkerCapabilityOptions, ruvia::detail::ConnectionScanner&>);
+    ruvia::detail::WorkerCapabilityOptions>);
 
 RUVIA_TEST(worker_capabilities_exposes_one_address_stable_capability_graph) {
     asio::io_context ioContext;
     const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 64);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     ruvia::WorkerMemory memory;
-    ruvia::detail::ConnectionScanner scanner(worker, {});
-    ruvia::detail::WorkerCapabilities capabilities(
-        ioContext, worker, memory.resource(), {}, {}, scanner);
+    ruvia::detail::WorkerCapabilities capabilities(ioContext, worker, memory.resource(), {}, {});
     const ruvia::StopToken stopToken;
 
     capabilities.initializeWorkerState();

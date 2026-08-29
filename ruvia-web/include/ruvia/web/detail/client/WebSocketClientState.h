@@ -56,10 +56,20 @@ public:
         WebSocketCloseOptions options, OperationOptions operationOptions);
 
 private:
-    enum class Phase : std::uint8_t { kFresh, kConnecting, kOpen, kClosing, kClosed };
-    enum class AbortReason : std::uint8_t { kNone, kTimeout, kCancelled, kClosing };
-    enum class WritePhase : std::uint8_t { kIdle, kApplication, kHeartbeat };
-    enum class WriteClaim : std::uint8_t { kAcquire, kAdopt };
+    enum class Phase : std::uint8_t { kFresh,
+        kConnecting,
+        kOpen,
+        kClosing,
+        kClosed };
+    enum class AbortReason : std::uint8_t { kNone,
+        kTimeout,
+        kCancelled,
+        kClosing };
+    enum class WritePhase : std::uint8_t { kIdle,
+        kApplication,
+        kHeartbeat };
+    enum class WriteClaim : std::uint8_t { kAcquire,
+        kAdopt };
 
     class WriteGuard final {
     public:

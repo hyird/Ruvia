@@ -44,7 +44,7 @@ RedisPool::RedisPool(asio::io_context& ioContext, const RedisConfigStorage& conf
       commandTimeout_(commandTimeout),
       resource_(detail::pmrResourceOrDefault(resource)),
       connections_(resource_),
-      scheduler_(poolSize, resource_),
+      scheduler_(poolSize, worker_, resource_),
       cancellationMailbox_(makeWorkerCancellationMailbox(*this, worker_)) {
     connections_.reserve(poolSize);
     for (std::size_t i = 0; i < poolSize; ++i) {

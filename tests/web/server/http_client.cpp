@@ -5,6 +5,7 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cstdio>
 #include <filesystem>
@@ -753,18 +754,31 @@ int runTimeoutReconnect() {
     asio::io_context serverIo;
     asio::ip::tcp::acceptor acceptor(serverIo, {asio::ip::make_address("127.0.0.1"), 0});
     const auto port = acceptor.local_endpoint().port();
+    std::atomic_bool firstRequestSeen = false;
     std::thread upstream([&] {
         std::error_code ec;
         auto first = acceptor.accept(ec);
         if (!ec) {
             asio::streambuf request;
             asio::read_until(first, request, "\r\n\r\n", ec);
+            firstRequestSeen.store(!ec, std::memory_order_release);
             std::this_thread::sleep_for(150ms);
             first.close(ec);
         }
         ec.clear();
-        auto second = acceptor.accept(ec);
-        if (!ec) {
+        acceptor.non_blocking(true, ec);
+        if (ec) {
+            return;
+        }
+        for (;;) {
+            auto second = acceptor.accept(ec);
+            if (ec == asio::error::would_block || ec == asio::error::try_again) {
+                std::this_thread::sleep_for(1ms);
+                continue;
+            }
+            if (ec) {
+                return;
+            }
             asio::streambuf request;
             asio::read_until(second, request, "\r\n\r\n", ec);
             if (!ec) {
@@ -774,6 +788,7 @@ int runTimeoutReconnect() {
                         "close\r\n\r\n2\r\nok\r\n0\r\n\r\n")),
                     ec);
             }
+            break;
         }
     });
 
@@ -784,7 +799,8 @@ int runTimeoutReconnect() {
     auto publicConfig =
         ruvia::HttpClientConfig{.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1"};
     publicConfig.port = port;
-    publicConfig.protocol = ruvia::HttpClientProtocol::kHttp1Only;
+    publicConfig.protocol = ruvia::HttpClientProtocol::kNegotiate;
+    publicConfig.maxConcurrentHttp2StreamsPerConnection = 2;
     ruvia::detail::HttpClientConfigStorage config(publicConfig, memory.resource());
     ruvia::detail::HttpClientDefinition definition{
         std::pmr::string("default", memory.resource()), std::move(config)};
@@ -793,31 +809,46 @@ int runTimeoutReconnect() {
     auto exercise = [&]() -> ruvia::Task<int> {
         ruvia::detail::ScopedOperationScope scope;
         auto client = registry.get(memory.resource(), scope);
+        ruvia::TaskScope requests(worker, {.resource = memory.resource()});
         bool timedOut = false;
-        try {
-            auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-            auto first = client.withOptions({.timeout = 50ms}).send(request);
-            (void)co_await std::move(first);
-        } catch (const ruvia::HttpClientError& error) {
-            timedOut = error.code() == ruvia::HttpClientError::Code::kTimeout;
+        std::string secondBody;
+        auto firstRequest = [&]() -> ruvia::Task<void> {
+            try {
+                auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
+                auto first = client.withOptions({.timeout = 50ms}).send(request);
+                (void)co_await std::move(first);
+            } catch (const ruvia::HttpClientError& error) {
+                timedOut = error.code() == ruvia::HttpClientError::Code::kTimeout;
+            }
+        };
+        auto secondRequest = [&]() -> ruvia::Task<void> {
+            try {
+                auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
+                auto second = client.withOptions({.timeout = 2s}).send(request);
+                auto response = co_await std::move(second);
+                const auto body = co_await response.body().readAll();
+                secondBody.assign(body.data(), body.size());
+            } catch (...) {
+            }
+        };
+        requests.spawn(firstRequest());
+        while (!firstRequestSeen.load(std::memory_order_acquire)) {
+            (void)co_await ruvia::sleepFor(worker, 1ms);
         }
-        if (!timedOut) {
-            co_return 1;
-        }
-        auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
-        auto second = client.withOptions({.timeout = 2s}).send(request);
-        auto response = co_await std::move(second);
-        const auto body = co_await response.body().readAll();
+        requests.spawn(secondRequest());
+        co_await requests.join();
         scope.close();
         registry.closeNow();
         co_await registry.join();
-        co_return body == "ok" ? 0 : 2;
+        co_return (timedOut && secondBody == "ok") ? 0 : 2;
     };
     auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
     io.run();
     const auto result = future.get();
     registry.closeNow();
     dispatcher->detachContext();
+    std::error_code ignored;
+    acceptor.close(ignored);
     upstream.join();
     return result;
 }

@@ -16,8 +16,11 @@
 
 namespace ruvia {
 
-enum class WebSocketTransportDisposition : std::uint8_t { kKeepOpen, kEndTransport };
-enum class WebSocketLivenessMode : std::uint8_t { kOpen, kAwaitingPeerClose, kInactive };
+enum class WebSocketTransportDisposition : std::uint8_t { kKeepOpen,
+    kEndTransport };
+enum class WebSocketLivenessMode : std::uint8_t { kOpen,
+    kAwaitingPeerClose,
+    kInactive };
 enum class WebSocketFrameSubmitStatus : std::uint8_t {
     kAccepted,
     kNotOpen,
@@ -34,9 +37,13 @@ enum class WebSocketCloseSubmitStatus : std::uint8_t {
     kInvalidReason,
     kReasonTooLarge
 };
-enum class WebSocketAbortDisposition : std::uint8_t { kAbortTransport, kNoTransportAction };
-enum class WebSocketOutputConsumeStatus : std::uint8_t { kPending, kDrained, kOutOfRange };
-enum class WebSocketFeedStatus : std::uint8_t { kAccepted, kInactive };
+enum class WebSocketAbortDisposition : std::uint8_t { kAbortTransport,
+    kNoTransportAction };
+enum class WebSocketOutputConsumeStatus : std::uint8_t { kPending,
+    kDrained,
+    kOutOfRange };
+enum class WebSocketFeedStatus : std::uint8_t { kAccepted,
+    kInactive };
 
 struct WebSocketServerConnectionOptions final {
     std::pmr::memory_resource* resource{nullptr};

@@ -74,10 +74,10 @@ RUVIA_TEST(http_parse_imf_fixdate) {
     RUVIA_CHECK(
         !httpParseImfFixdate("sun, 06 Nov 1994 08:49:37 GMT").has_value());  // case-sensitive
     RUVIA_CHECK(
-        !httpParseImfFixdate("Sun  06 Nov 1994 08:49:37 GMT").has_value());  // bad separators
+        !httpParseImfFixdate("Sun  06 Nov 1994 08:49:37 GMT").has_value());          // bad separators
     RUVIA_CHECK(!httpParseImfFixdate("Sun, 06 Xxx 1994 08:49:37 GMT").has_value());  // bad month
     RUVIA_CHECK(
-        !httpParseImfFixdate("Sun, 32 Nov 1994 08:49:37 GMT").has_value());  // day out of range
+        !httpParseImfFixdate("Sun, 32 Nov 1994 08:49:37 GMT").has_value());          // day out of range
     RUVIA_CHECK(!httpParseImfFixdate("Sun, 06 Nov 1994 08:49:37 UTC").has_value());  // not GMT
 }
 
@@ -145,7 +145,7 @@ RUVIA_TEST(imf_fixdate_rejects_malformed) {
     RUVIA_CHECK(
         !httpParseImfFixdate("Thu, 01 Jan 1970 00:00:00").has_value());  // wrong length / no GMT
     RUVIA_CHECK(
-        !httpParseImfFixdate("Thu, 01 Jan 1970 00:00:00 UTC").has_value());  // zone must be GMT
+        !httpParseImfFixdate("Thu, 01 Jan 1970 00:00:00 UTC").has_value());          // zone must be GMT
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jon 1970 00:00:00 GMT").has_value());  // bad month
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jan 1970 25:00:00 GMT").has_value());  // hour > 23
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 00 Jan 1970 00:00:00 GMT").has_value());  // day < 1
@@ -167,7 +167,7 @@ RUVIA_TEST(imf_fixdate_rejects_malformed) {
 RUVIA_TEST(imf_fixdate_leap_second_boundary) {
     using ruvia::detail::httpParseImfFixdate;
     RUVIA_CHECK(
-        httpParseImfFixdate("Thu, 01 Jan 1970 23:59:60 GMT").has_value());  // leap second allowed
+        httpParseImfFixdate("Thu, 01 Jan 1970 23:59:60 GMT").has_value());           // leap second allowed
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jan 1970 23:59:61 GMT").has_value());  // 61 rejected
 }
 

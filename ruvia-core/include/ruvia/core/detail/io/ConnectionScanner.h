@@ -3,6 +3,9 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <asio/ip/tcp.hpp>
 
@@ -162,6 +165,14 @@ public:
     void closeAll() noexcept;
 
 private:
+    struct TimerState final {
+        explicit TimerState(ConnectionScanner* owner) noexcept
+            : owner(owner) {}
+
+        std::mutex mutex;
+        ConnectionScanner* owner;
+    };
+
     static void detachEntry(Entry& entry) noexcept;
     void detachAllEntries() noexcept;
     void periodicCheckAdded() noexcept;
@@ -175,13 +186,14 @@ private:
 
     WorkerHandle worker_;
     WorkerTimerRegistration timer_;
+    std::shared_ptr<TimerState> timerState_;
     ConnectionScannerOptions options_;
     std::int64_t cachedNowMs_{0};
     Entry sentinel_{};
     WorkerMaintenanceRegistration* workerMaintenance_{nullptr};
     WorkerMaintenanceRegistration* workerMaintenanceScanNext_{nullptr};
     std::size_t periodicCheckCount_{0};
-    bool running_{false};
+    std::atomic_bool running_{false};
 };
 
 }  // namespace ruvia::detail

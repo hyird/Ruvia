@@ -46,6 +46,21 @@ public:
         }
     }
 
+    // A worker-bound scheduler arms an exact timer for every queued acquire.
+    // The unbound form is retained for callers that drive deadlines explicitly
+    // through scanDeadlines().
+    PoolLeaseScheduler(std::size_t poolSize, const WorkerHandle& worker,
+        std::pmr::memory_resource* resource = nullptr)
+        : PoolLeaseScheduler(poolSize, resource) {
+        if (!worker.valid()) {
+            throw std::invalid_argument("pool lease scheduler requires a valid worker");
+        }
+        worker_ = &worker;
+    }
+    PoolLeaseScheduler(std::size_t, WorkerHandle&&, std::pmr::memory_resource* = nullptr) = delete;
+    PoolLeaseScheduler(
+        std::size_t, const WorkerHandle&&, std::pmr::memory_resource* = nullptr) = delete;
+
     PoolLeaseScheduler(const PoolLeaseScheduler&) = delete;
     PoolLeaseScheduler& operator=(const PoolLeaseScheduler&) = delete;
 
@@ -56,7 +71,7 @@ public:
     }
 
     [[nodiscard]] Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds> timeout) {
-        return acquireReserved(AcquireReservation(*this), timeout, {}, nullptr);
+        return acquireReserved(AcquireReservation(*this), timeout, {}, worker_);
     }
 
     // Cancellable acquire borrows the caller's worker for the lifetime of the
@@ -216,6 +231,9 @@ public:
     }
 
 private:
+    // Borrows the address-stable worker that owns this scheduler. It is null
+    // only for the explicit scanDeadlines() maintenance form above.
+    const WorkerHandle* worker_{nullptr};
     std::pmr::vector<std::size_t> freeSlots_;
     std::pmr::vector<std::uint8_t> busy_;
     // Allocated once with the process PMR pool. Contended acquires borrow it;

@@ -53,7 +53,7 @@ RUVIA_TEST(utf8_rejects_invalid_sequences) {
     RUVIA_CHECK(!isValidUtf8(bytes({0xF5, 0x80, 0x80, 0x80})));  // F5 lead, out of range
     RUVIA_CHECK(!isValidUtf8(bytes({0xC2})));                    // truncated 2-byte
     RUVIA_CHECK(!isValidUtf8(bytes({0xE2, 0x82})));              // truncated 3-byte
-    RUVIA_CHECK(!isValidUtf8(bytes({0xC2, 0xC2})));  // lead byte where a continuation was due
+    RUVIA_CHECK(!isValidUtf8(bytes({0xC2, 0xC2})));              // lead byte where a continuation was due
 }
 
 RUVIA_TEST(websocket_close_code_validity) {

@@ -14,7 +14,10 @@ namespace ruvia::detail {
 
 // Shared model traits used by parser, validation rules, and generated macros.
 
-enum class ModelFieldState : std::uint8_t { kMissing, kParsed, kInvalidType, kDuplicate };
+enum class ModelFieldState : std::uint8_t { kMissing,
+    kParsed,
+    kInvalidType,
+    kDuplicate };
 
 template <typename>
 inline constexpr bool alwaysFalse = false;

@@ -287,8 +287,9 @@ RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
     // No Pong arrived and its deadline elapsed. The callback can only abort its
     // own transport; it cannot ask Core to close the scanner's owning socket.
     io.restart();
-    asio::post(io, [&connection] {
-        WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 12);
+    const auto timeoutNow = ruvia::detail::webSocketSteadyNowMs() + 1;
+    asio::post(io, [&connection, timeoutNow] {
+        WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, timeoutNow);
     });
     io.run();
     RUVIA_CHECK(state.aborted);

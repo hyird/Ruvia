@@ -29,7 +29,8 @@ namespace ruvia::detail {
     return validateUrlEncoding(body);
 }
 
-enum class FormValueEncoding : std::uint8_t { kUrlEncoded, kDecoded };
+enum class FormValueEncoding : std::uint8_t { kUrlEncoded,
+    kDecoded };
 
 [[nodiscard]] inline std::optional<bool> parseFormBool(std::string_view decoded) noexcept {
     if (decoded == "true" || decoded == "1") {

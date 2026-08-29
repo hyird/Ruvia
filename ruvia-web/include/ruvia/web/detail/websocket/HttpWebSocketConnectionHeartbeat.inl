@@ -43,9 +43,13 @@ Task<void> WebSocketConnection<Transport>::writeHeartbeatPing() {
     WriteGuard writeGuard(*this, WritePhase::kHeartbeat, WriteClaim::kAdopt);
     try {
         co_await writeFrameNow(WebSocketOpcode::kPing, {});
+        // Ordinary I/O shares the scanner activity timestamp and may update it
+        // while this coroutine is suspended. The Pong deadline belongs to this
+        // completed heartbeat write, so use its own timestamp.
+        const auto pingSentAtMs = webSocketSteadyNowMs();
         if (protocol_.livenessMode() == WsLivenessMode::kOpen &&
             std::holds_alternative<WebSocketSendingPing>(livenessState_)) {
-            livenessState_ = WebSocketAwaitingPong(scannerEntry_.lastActiveMs());
+            livenessState_ = WebSocketAwaitingPong(pingSentAtMs);
         }
     } catch (...) {
         abortTransport();

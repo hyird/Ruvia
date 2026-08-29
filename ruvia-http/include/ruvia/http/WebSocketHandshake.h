@@ -47,7 +47,8 @@ public:
 private:
     friend class WebSocketHandshakeValidationResult;
 
-    enum class Kind : std::uint8_t { kInvalidRequest, kUnsupportedVersion };
+    enum class Kind : std::uint8_t { kInvalidRequest,
+        kUnsupportedVersion };
 
     explicit constexpr WebSocketHandshakeFailure(Kind kind) noexcept
         : kind_(kind) {}

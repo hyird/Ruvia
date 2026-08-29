@@ -152,7 +152,9 @@ private:
     friend class Http2BufferedRequestBody;
     friend class Http2StreamingRequestBody;
 
-    enum class State : std::uint8_t { kStored, kProtocolFailure, kBacklogOverflow };
+    enum class State : std::uint8_t { kStored,
+        kProtocolFailure,
+        kBacklogOverflow };
 
     union Value {
         constexpr explicit Value(Http2RequestBodyStored value) noexcept

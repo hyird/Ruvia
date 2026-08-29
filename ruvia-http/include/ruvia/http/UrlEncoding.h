@@ -16,7 +16,8 @@
 
 namespace ruvia::detail {
 
-enum class UrlDecodeMode : std::uint8_t { kPercent, kForm };
+enum class UrlDecodeMode : std::uint8_t { kPercent,
+    kForm };
 
 struct UrlDecodeOptions final {
     UrlDecodeMode mode{UrlDecodeMode::kPercent};
