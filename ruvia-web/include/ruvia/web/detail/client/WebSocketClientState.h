@@ -51,9 +51,10 @@ private:
     enum class AbortReason : std::uint8_t { kNone, kTimeout, kCancelled, kClosing };
 
     [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<WebSocketClientState> state);
-    [[nodiscard]] static Task<std::optional<WebSocketMessage>> readOwned(std::shared_ptr<WebSocketClientState> state, OperationOptions options);
-    [[nodiscard]] static Task<void> writeOwned(std::shared_ptr<WebSocketClientState> state, WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options);
-    [[nodiscard]] static Task<void> closeOwned(std::shared_ptr<WebSocketClientState> state, WebSocketCloseOptions options, std::pmr::string reason, OperationOptions operationOptions);
+    class ActivityLease;
+    [[nodiscard]] static Task<std::optional<WebSocketMessage>> readOwned(std::shared_ptr<WebSocketClientState> state, OperationOptions options, ActivityLease activity);
+    [[nodiscard]] static Task<void> writeOwned(std::shared_ptr<WebSocketClientState> state, WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options, ActivityLease activity);
+    [[nodiscard]] static Task<void> closeOwned(std::shared_ptr<WebSocketClientState> state, WebSocketCloseOptions options, std::pmr::string reason, OperationOptions operationOptions, ActivityLease readActivity, ActivityLease writeActivity, ActivityLease closeActivity);
 
     void requireCurrent() const;
     void requireOpen() const;
@@ -87,13 +88,14 @@ private:
     std::pmr::string input_;
     std::optional<WsConnection> protocol_;
     std::pmr::string selectedSubprotocol_;
-    ScopedOperationScope operationScope_;
     StopSource stopSource_;
     EventLoopStopRegistration stopRegistration_;
     std::atomic<Phase> phase_{Phase::kFresh};
     AbortReason abortReason_{AbortReason::kNone};
     bool readActive_{false};
     bool writeActive_{false};
+    bool closeActive_{false};
+    ScopedOperationScope operationScope_;
 };
 
 }  // namespace ruvia::detail

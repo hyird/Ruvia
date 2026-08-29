@@ -31,6 +31,34 @@
 #include "ruvia/web/detail/client/WebSocketClientState.h"
 
 namespace ruvia::detail {
+
+class WebSocketClientState::ActivityLease final {
+public:
+    explicit ActivityLease(bool& active, const char* message)
+        : active_(&active) {
+        if (*active_) {
+            active_ = nullptr;
+            throw WebSocketClientError(WebSocketClientError::Code::kInvalidState, message);
+        }
+        *active_ = true;
+    }
+
+    ActivityLease(const ActivityLease&) = delete;
+    ActivityLease& operator=(const ActivityLease&) = delete;
+    ActivityLease(ActivityLease&& other) noexcept
+        : active_(std::exchange(other.active_, nullptr)) {}
+    ActivityLease& operator=(ActivityLease&&) = delete;
+
+    ~ActivityLease() {
+        if (active_ != nullptr) {
+            *active_ = false;
+        }
+    }
+
+private:
+    bool* active_;
+};
+
 namespace {
 
 constexpr std::size_t kHandshakeNonceBytes = 16;
@@ -49,24 +77,6 @@ constexpr std::size_t kCloseHandshakeBufferBytes = std::size_t{4} * 1024;
 [[nodiscard]] WebSocketClientError::Code transportErrorCode(bool secure) noexcept {
     return secure ? WebSocketClientError::Code::kTlsFailed : WebSocketClientError::Code::kIoError;
 }
-
-class ActivityGuard final {
-public:
-    explicit ActivityGuard(bool& active, const char* message)
-        : active_(active) {
-        if (active_) {
-            throw WebSocketClientError(WebSocketClientError::Code::kInvalidState, message);
-        }
-        active_ = true;
-    }
-
-    ~ActivityGuard() {
-        active_ = false;
-    }
-
-private:
-    bool& active_;
-};
 
 struct StopAbort final {
     std::weak_ptr<WebSocketClientState> state_;
@@ -495,12 +505,13 @@ Task<void> WebSocketClientState::flushOutput(OperationOptions options) {
 
 ScopedOperation<std::optional<WebSocketMessage>> WebSocketClientState::read(OperationOptions options) {
     validateOperationOptions(options);
-    return makeScopedOperation(operationScope_, readOwned(shared_from_this(), std::move(options)));
+    requireCurrent();
+    return makeScopedOperation(operationScope_, readOwned(shared_from_this(), std::move(options), ActivityLease(readActive_, "concurrent WebSocket client reads are not supported")));
 }
 
-Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(std::shared_ptr<WebSocketClientState> state, OperationOptions options) {
+Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(std::shared_ptr<WebSocketClientState> state, OperationOptions options, ActivityLease activity) {
+    static_cast<void>(activity);
     state->requireOpen();
-    ActivityGuard guard(state->readActive_, "concurrent WebSocket client reads are not supported");
     std::array<char, kTransportBufferBytes> bytes{};
     for (;;) {
         auto& protocol = state->requireProtocol();
@@ -534,13 +545,14 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(std::share
 
 ScopedOperation<void> WebSocketClientState::write(WebSocketOpcode opcode, std::string_view payload, OperationOptions options) {
     validateOperationOptions(options);
+    requireCurrent();
     std::pmr::string owned(payload, memory_.resource());
-    return makeScopedOperation(operationScope_, writeOwned(shared_from_this(), opcode, std::move(owned), std::move(options)));
+    return makeScopedOperation(operationScope_, writeOwned(shared_from_this(), opcode, std::move(owned), std::move(options), ActivityLease(writeActive_, "concurrent WebSocket client writes are not supported")));
 }
 
-Task<void> WebSocketClientState::writeOwned(std::shared_ptr<WebSocketClientState> state, WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options) {
+Task<void> WebSocketClientState::writeOwned(std::shared_ptr<WebSocketClientState> state, WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options, ActivityLease activity) {
+    static_cast<void>(activity);
     state->requireOpen();
-    ActivityGuard guard(state->writeActive_, "concurrent WebSocket client writes are not supported");
     const auto submitted = state->requireProtocol().submitFrame(opcode, payload);
     switch (submitted) {
         case WsFrameSubmitStatus::kAccepted:
@@ -557,14 +569,16 @@ Task<void> WebSocketClientState::writeOwned(std::shared_ptr<WebSocketClientState
 
 ScopedOperation<void> WebSocketClientState::close(WebSocketCloseOptions options, OperationOptions operationOptions) {
     validateOperationOptions(operationOptions);
+    requireCurrent();
     std::pmr::string reason(options.reason.view(), memory_.resource());
-    return makeScopedOperation(operationScope_, closeOwned(shared_from_this(), options, std::move(reason), std::move(operationOptions)));
+    return makeScopedOperation(operationScope_, closeOwned(shared_from_this(), options, std::move(reason), std::move(operationOptions), ActivityLease(readActive_, "WebSocket client close cannot overlap read"), ActivityLease(writeActive_, "WebSocket client close cannot overlap write"), ActivityLease(closeActive_, "WebSocket client close is already in progress")));
 }
 
-Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState> state, WebSocketCloseOptions options, std::pmr::string reason, OperationOptions operationOptions) {
+Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState> state, WebSocketCloseOptions options, std::pmr::string reason, OperationOptions operationOptions, ActivityLease readActivity, ActivityLease writeActivity, ActivityLease closeActivity) {
+    static_cast<void>(readActivity);
+    static_cast<void>(writeActivity);
+    static_cast<void>(closeActivity);
     state->requireOpen();
-    ActivityGuard readGuard(state->readActive_, "WebSocket client close cannot overlap read");
-    ActivityGuard writeGuard(state->writeActive_, "WebSocket client close cannot overlap write");
     const auto submitted = state->requireProtocol().submitClose(options.code, reason);
     if (submitted != WsCloseSubmitStatus::kAccepted) {
         throw WebSocketClientError(WebSocketClientError::Code::kProtocolError, "invalid WebSocket client close payload");
