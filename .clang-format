@@ -10,7 +10,9 @@ NamespaceIndentation: None
 IndentCaseLabels: true
 UseTab: Never
 
-ColumnLimit: 100
+# Keep line length unrestricted; wrapping is driven only by syntax and the
+# remaining clang-format rules.
+ColumnLimit: 0
 AlignAfterOpenBracket: DontAlign
 BinPackArguments: true
 BinPackParameters: true
