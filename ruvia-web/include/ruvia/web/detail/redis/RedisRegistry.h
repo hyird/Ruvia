@@ -135,10 +135,13 @@ private:
         std::unique_ptr<redisReader, RedisReaderDeleter> reader;
         std::size_t replyBytes{0};
         bool connected{false};
-        enum class AbortReason : std::uint8_t { kNone, kCancelled, kClosing };
+        enum class AbortReason : std::uint8_t { kNone,
+            kCancelled,
+            kClosing };
         AbortReason abortReason{AbortReason::kNone};
         std::uint64_t cancellationId{0};
-        enum class DeadlineKind : std::uint8_t { kResolve, kSocket };
+        enum class DeadlineKind : std::uint8_t { kResolve,
+            kSocket };
         OperationDeadline<DeadlineKind> deadline;
         std::unique_ptr<WorkerTimerRegistration, PmrObjectDeleter<WorkerTimerRegistration>>
             deadlineTimer;

@@ -265,7 +265,7 @@ RUVIA_TEST(routing_deep_wildcard_with_static_prefix_allowed) {
 
     // Guards the fix must NOT regress (these genuinely shadow -> still conflicts):
     RUVIA_CHECK(
-        finalizeConflicts({"/a/*", "/a/:x"}));  // wildcard vs param sibling at a shared node
+        finalizeConflicts({"/a/*", "/a/:x"}));          // wildcard vs param sibling at a shared node
     RUVIA_CHECK(finalizeConflicts({"/a/*", "/:x/b"}));  // after a static/param fork, the wildcard
         // steals the other route's direct-match path
     RUVIA_CHECK(finalizeConflicts({"/*", "/:x"}));                   // root wildcard vs param
@@ -345,7 +345,7 @@ RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
     RUVIA_CHECK((mask & bit(HttpKnownMethod::kGet)) != 0);
     RUVIA_CHECK((mask & bit(HttpKnownMethod::kPost)) != 0);
     RUVIA_CHECK(
-        (mask & bit(HttpKnownMethod::kHead)) != 0);  // auto-registered alongside the GET route
+        (mask & bit(HttpKnownMethod::kHead)) != 0);         // auto-registered alongside the GET route
     RUVIA_CHECK((mask & bit(HttpKnownMethod::kPut)) == 0);  // belongs to /b, not /a
     RUVIA_CHECK(
         (mask & bit(HttpKnownMethod::kDelete)) == 0);  // the requested method is not echoed back

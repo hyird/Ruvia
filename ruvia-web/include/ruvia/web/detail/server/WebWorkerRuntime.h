@@ -2,7 +2,6 @@
 
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
-#include <asio/steady_timer.hpp>
 #include <exception>
 #include <memory>
 #include <memory_resource>
@@ -17,6 +16,7 @@
 #include "ruvia/core/detail/RuntimeLifecycle.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/detail/worker/WorkerRuntimeContext.h"
+#include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/WebWorker.h"
@@ -100,8 +100,8 @@ private:
     Task<void> handleHttp2Session(Stream& stream, asio::ip::tcp::socket& socket,
         ContextServices services, std::string_view initialBytes = {});
     asio::io_context ioContext_;
-    asio::steady_timer serveGate_;
     WorkerRuntimeContext workerRuntime_;
+    WorkerSignal serveSignal_;
     StopSource stopSource_;
     StopToken stopToken_{stopSource_.token()};
     const RouteTable& routes_;

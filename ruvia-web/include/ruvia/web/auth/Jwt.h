@@ -22,7 +22,9 @@ namespace detail {
 struct JwtPayloadAccess;
 }  // namespace detail
 
-enum class JwtAlgorithm : std::uint8_t { kHs256, kHs384, kHs512 };
+enum class JwtAlgorithm : std::uint8_t { kHs256,
+    kHs384,
+    kHs512 };
 
 enum class JwtExpirationClaimPolicy : std::uint8_t {
     kRequire,

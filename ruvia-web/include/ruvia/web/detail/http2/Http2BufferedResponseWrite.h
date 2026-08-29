@@ -231,7 +231,9 @@ public:
         const HttpResponse& response, HttpBufferedResponseWritePlan writePlan);
 
 private:
-    enum class DataWriteResult : std::uint8_t { kCompleted, kPeerAborted, kFailed };
+    enum class DataWriteResult : std::uint8_t { kCompleted,
+        kPeerAborted,
+        kFailed };
 
     [[nodiscard]] Task<DataWriteResult> writeData(
         std::uint32_t streamId, std::string_view chunk, Http2EndStream endStream);

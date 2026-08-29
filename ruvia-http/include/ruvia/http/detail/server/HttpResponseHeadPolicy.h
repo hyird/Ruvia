@@ -78,7 +78,10 @@ public:
 private:
     friend ResponseWritePolicy responseWritePolicy(HttpStatusCode) noexcept;
 
-    enum class State : std::uint8_t { kNormal, kBodyForbidden, kZeroLength, kNotModified };
+    enum class State : std::uint8_t { kNormal,
+        kBodyForbidden,
+        kZeroLength,
+        kNotModified };
 
     explicit constexpr ResponseWritePolicy(State state) noexcept
         : state_(state) {}

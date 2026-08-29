@@ -16,7 +16,9 @@ namespace ruvia::detail {
 // Output acknowledgement is transactional. A transport can distinguish a valid
 // partial write from a complete drain, while an impossible over-consumption leaves
 // both the pending view and its cursor unchanged.
-enum class Http2OutputConsumeStatus : std::uint8_t { kPending, kDrained, kOutOfRange };
+enum class Http2OutputConsumeStatus : std::uint8_t { kPending,
+    kDrained,
+    kOutOfRange };
 
 // Sole owner of HTTP/2 outbound bytes and their consumed prefix. Connection logic
 // selects protocol actions; this component owns contiguous frame serialization and

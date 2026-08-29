@@ -318,10 +318,10 @@ RUVIA_TEST(session_id_validation_accepts_only_lowercase_hex) {
 
     RUVIA_CHECK(!isValidSessionId(""));  // empty
     RUVIA_CHECK(
-        !isValidSessionId(std::string_view(std::string(129, 'a'))));  // one past the max length
-    RUVIA_CHECK(!isValidSessionId("DEADBEEF"));                       // uppercase hex is rejected
-    RUVIA_CHECK(!isValidSessionId("deadbeeg"));                       // 'g' is not a hex digit
-    RUVIA_CHECK(!isValidSessionId("dead beef"));                      // space
-    RUVIA_CHECK(!isValidSessionId("../../etc"));  // path-traversal shape can never validate
+        !isValidSessionId(std::string_view(std::string(129, 'a'))));    // one past the max length
+    RUVIA_CHECK(!isValidSessionId("DEADBEEF"));                         // uppercase hex is rejected
+    RUVIA_CHECK(!isValidSessionId("deadbeeg"));                         // 'g' is not a hex digit
+    RUVIA_CHECK(!isValidSessionId("dead beef"));                        // space
+    RUVIA_CHECK(!isValidSessionId("../../etc"));                        // path-traversal shape can never validate
     RUVIA_CHECK(!isValidSessionId(std::string_view("dead\0beef", 9)));  // embedded NUL
 }

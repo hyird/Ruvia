@@ -36,8 +36,8 @@ public:
     void scheduleTimer(WorkerTimerRegistration& registration,
         std::chrono::steady_clock::time_point deadline,
         MoveOnlyFunction<void(WorkerTimerOutcome)> completion);
-    void requestTimerCancellation(std::size_t slot, std::uint64_t generation) noexcept;
-    void cancelTimer(std::size_t slot, std::uint64_t generation) noexcept;
+    void requestTimerCancellation(std::size_t slot, std::uint64_t generation, bool notify) noexcept;
+    void cancelTimer(std::size_t slot, std::uint64_t generation, bool notify) noexcept;
     void stopTimers() noexcept;
     // Runs the owned/attached io_context with a thread-local worker identity so
     // worker-affine hot paths do not lock merely to prove their current worker.

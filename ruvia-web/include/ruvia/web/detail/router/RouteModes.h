@@ -4,6 +4,7 @@
 
 namespace ruvia::detail {
 
-enum class RequestBodyMode : std::uint8_t { kBuffered, kStream };
+enum class RequestBodyMode : std::uint8_t { kBuffered,
+    kStream };
 
 }  // namespace ruvia::detail

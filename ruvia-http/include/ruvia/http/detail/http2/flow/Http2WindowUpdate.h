@@ -11,7 +11,9 @@ namespace ruvia::detail {
 
 inline constexpr std::size_t kHttp2WindowUpdateFrameBytes = kHttp2FrameHeaderBytes + 4;
 
-enum class Http2WindowUpdateResult : std::uint8_t { kOk, kZeroIncrement, kOverflow };
+enum class Http2WindowUpdateResult : std::uint8_t { kOk,
+    kZeroIncrement,
+    kOverflow };
 
 [[nodiscard]] inline std::uint32_t http2WindowUpdateIncrement(std::string_view payload) noexcept {
     return http2Read31(reinterpret_cast<const unsigned char*>(payload.data()));

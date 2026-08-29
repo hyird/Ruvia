@@ -61,36 +61,19 @@ void closePool(detail::DbPoolRef pool) noexcept {
 #endif
 }
 
-void scanPool(detail::DbPoolRef pool, std::chrono::steady_clock::time_point now) noexcept {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        (*client)->scanDeadlines(now);
-        return;
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        (*client)->scanDeadlines(now);
-    }
-#endif
-}
-
 }  // namespace
 
-detail::DbRegistry::DbRegistry(asio::io_context& ioContext, ConnectionScanner& scanner,
+detail::DbRegistry::DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
     std::pmr::memory_resource* resource, const DbConfig& defaultConfig)
     : resource_(detail::pmrResourceOrDefault(resource)),
       pools_(resource_),
       aliasIndex_(resource_) {
     aliasIndex_.build({kDefaultCapabilityAlias});
     pools_.reserve(1);
-    add(ioContext, scanner.worker(), DbConfigStorage(defaultConfig, resource_));
-    registerDeadlineScanner(scanner);
+    add(ioContext, worker, DbConfigStorage(defaultConfig, resource_));
 }
 
-detail::DbRegistry::DbRegistry(asio::io_context& ioContext, ConnectionScanner& scanner,
+detail::DbRegistry::DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
     std::pmr::memory_resource* resource, std::span<const detail::DbDefinition> databases)
     : resource_(detail::pmrResourceOrDefault(resource)),
       pools_(resource_),
@@ -100,9 +83,8 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, ConnectionScanner& s
     aliasIndex_.build(databases);
     pools_.reserve(databases.size());
     for (const auto& definition : databases) {
-        add(ioContext, scanner.worker(), DbConfigStorage(definition.config, resource_));
+        add(ioContext, worker, DbConfigStorage(definition.config, resource_));
     }
-    registerDeadlineScanner(scanner);
 }
 
 detail::DbRegistry::~DbRegistry() = default;
@@ -134,16 +116,6 @@ void detail::DbRegistry::add(
     pools_.push_back(std::move(owner));
 }
 
-void detail::DbRegistry::registerDeadlineScanner(ConnectionScanner& scanner) noexcept {
-    if (pools_.empty()) {
-        return;
-    }
-    // Per-operation options can add a timeout after startup, so every database
-    // pool participates even when its registration config has no default.
-    scanner.registerWorkerMaintenance(deadlineMaintenance_, this,
-        [](void* target) noexcept { static_cast<DbRegistry*>(target)->scanDeadlines(); });
-}
-
 Task<void> detail::DbRegistry::connect() {
     for (auto& pool : pools_) {
         co_await connectPool(poolRef(pool));
@@ -159,13 +131,6 @@ void detail::DbRegistry::closeNow() noexcept {
 
 bool detail::DbRegistry::empty() const noexcept {
     return pools_.empty();
-}
-
-void detail::DbRegistry::scanDeadlines() noexcept {
-    const auto now = std::chrono::steady_clock::now();
-    for (auto& pool : pools_) {
-        scanPool(poolRef(pool), now);
-    }
 }
 
 DbHandle detail::DbRegistry::get(

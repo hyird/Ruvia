@@ -6,7 +6,9 @@
 
 namespace ruvia::detail {
 
-enum class HeaderDecodeStatus : std::uint8_t { kOk, kProtocolError, kCompressionError };
+enum class HeaderDecodeStatus : std::uint8_t { kOk,
+    kProtocolError,
+    kCompressionError };
 
 [[nodiscard]] inline HeaderDecodeStatus http2ClassifyHeaderDecodeResult(
     const HpackDecodeResult& result) noexcept {

@@ -5,9 +5,17 @@
 
 namespace ruvia::detail::model {
 
-enum class PatternAtomKind : unsigned char { kLiteral, kAny, kDigit, kWord, kSpace, kClass };
+enum class PatternAtomKind : unsigned char { kLiteral,
+    kAny,
+    kDigit,
+    kWord,
+    kSpace,
+    kClass };
 
-enum class PatternQuantifier : unsigned char { kOne, kZeroOrOne, kZeroOrMore, kOneOrMore };
+enum class PatternQuantifier : unsigned char { kOne,
+    kZeroOrOne,
+    kZeroOrMore,
+    kOneOrMore };
 
 struct PatternAtom final {
     PatternAtomKind kind{PatternAtomKind::kLiteral};

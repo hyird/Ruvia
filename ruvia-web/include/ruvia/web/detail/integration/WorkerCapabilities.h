@@ -8,7 +8,6 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
@@ -56,9 +55,9 @@ class WorkerCapabilities final {
 public:
     WorkerCapabilities(asio::io_context& ioContext, const WorkerHandle& worker,
         std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions,
-        WorkerCapabilityOptions options, ConnectionScanner& scanner);
+        WorkerCapabilityOptions options);
     WorkerCapabilities(asio::io_context&, WorkerHandle&&, std::pmr::memory_resource*,
-        WorkerCapabilityDefinitions, WorkerCapabilityOptions, ConnectionScanner&) = delete;
+        WorkerCapabilityDefinitions, WorkerCapabilityOptions) = delete;
 
     WorkerCapabilities(const WorkerCapabilities&) = delete;
     WorkerCapabilities& operator=(const WorkerCapabilities&) = delete;

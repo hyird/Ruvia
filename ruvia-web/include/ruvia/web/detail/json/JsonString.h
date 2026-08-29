@@ -89,7 +89,8 @@ namespace ruvia::detail {
     return 0;  // 0x80-0xC1 (bare continuation / overlong lead) or 0xF5-0xFF
 }
 
-enum class JsonStringEncoding : std::uint8_t { kLiteral, kEscaped };
+enum class JsonStringEncoding : std::uint8_t { kLiteral,
+    kEscaped };
 
 class JsonStringToken final {
 public:

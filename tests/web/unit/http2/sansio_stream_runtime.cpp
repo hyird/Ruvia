@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 #include <asio/awaitable.hpp>
@@ -245,6 +246,34 @@ RUVIA_TEST(http2_stream_sleep_observes_request_stop_token) {
         },
         asio::detached);
     asio::post(io, [&source] { source.requestStop(); });
+    io.run();
+
+    RUVIA_CHECK(observed.has_value());
+    RUVIA_CHECK_EQ(*observed, ruvia::TimerSleepResult::kStopRequested);
+}
+
+RUVIA_TEST(http2_stream_sleep_transfers_off_worker_stop_to_timer) {
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    Http2SansIoTermination termination;
+    ruvia::StopSource source;
+    std::optional<ruvia::TimerSleepResult> observed;
+    const auto waitForStop = [&]() -> ruvia::Task<ruvia::TimerSleepResult> {
+        co_return co_await ruvia::detail::Http2SansIoSleepAwaiter(
+            worker, termination, std::chrono::hours(1), source.token());
+    };
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            observed = co_await ruvia::detail::taskAsAwaitable(waitForStop());
+        },
+        asio::detached);
+    (void)io.poll();
+    std::thread requester([&source] { source.requestStop(); });
+    requester.join();
+    io.restart();
     io.run();
 
     RUVIA_CHECK(observed.has_value());

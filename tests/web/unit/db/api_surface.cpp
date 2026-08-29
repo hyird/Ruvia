@@ -25,7 +25,6 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/db/DbClient.h"
 #include "ruvia/web/db/Db.h"
@@ -105,6 +104,11 @@ struct ClosingResolvePool final {
 
     void throwIfCancelled(const ClosingResolveSlot&) const {}
 
+    void setSlotDeadline(ClosingResolveSlot& slot, std::chrono::milliseconds timeout,
+        ClosingResolveSlot::DeadlineKind kind) {
+        slot.deadline.arm(ruvia::detail::workerTimerDeadlineAfter(timeout), kind);
+    }
+
     void clearSlotDeadline(ClosingResolveSlot& slot) noexcept {
         slot.deadline.reset();
     }
@@ -124,13 +128,11 @@ class DbRegistryTestRuntime final {
 public:
     DbRegistryTestRuntime()
         : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8)),
-          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
-          scanner(worker, {}) {}
+          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)) {}
 
     asio::io_context ioContext;
     std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
     ruvia::WorkerHandle worker;
-    ruvia::detail::ConnectionScanner scanner;
 };
 
 class RejectingMemoryResource final : public std::pmr::memory_resource {
@@ -413,12 +415,14 @@ concept HasVariadicOwningLvalueParams =
 
 static_assert(HasVariadicOwningLvalueParams<ruvia::DbHandle>);
 static_assert(HasVariadicOwningLvalueParams<ruvia::DbTransaction>);
+static_assert(std::default_initializable<ruvia::DbConfig>);
+static_assert(std::is_aggregate_v<ruvia::DbConfig>);
+static_assert(
+    std::same_as<decltype(std::declval<const ruvia::DbConfig&>().driver), ruvia::DbDriver>);
+static_assert(!HasMariaDbFactory<ruvia::DbConfig>);
+static_assert(!HasPostgreSqlFactory<ruvia::DbConfig>);
 
 }  // namespace
-
-RUVIA_TEST(db_api_surface_uses_span_params_without_initializer_list_overloads) {
-    RUVIA_CHECK(true);
-}
 
 RUVIA_TEST(db_operation_options_validate_and_compose_restrictions) {
     RUVIA_CHECK(throwsOn([] {
@@ -617,10 +621,6 @@ RUVIA_TEST(db_slot_socket_releases_before_driver_socket_closes) {
     std::error_code readError;
     (void)peerSocket.read_some(asio::buffer(byte), readError);
     RUVIA_CHECK(readError == asio::error::eof || readError == asio::error::connection_reset);
-}
-
-RUVIA_TEST(db_api_surface_accepts_variadic_params_without_absorbing_sequences) {
-    RUVIA_CHECK(true);
 }
 
 RUVIA_TEST(db_prepared_statement_rejects_blank_sql_before_io) {
@@ -897,7 +897,7 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
         dbDefinition("default", config),
     }};
     ruvia::detail::DbRegistry registry(
-        runtime.ioContext, runtime.scanner, std::pmr::get_default_resource(), definitions);
+        runtime.ioContext, runtime.worker, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
 
     bool defaultResolved = true;
@@ -918,7 +918,7 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
 
 RUVIA_TEST(db_registry_reports_typed_not_configured_error) {
     DbRegistryTestRuntime runtime;
-    ruvia::detail::DbRegistry registry(runtime.ioContext, runtime.scanner,
+    ruvia::detail::DbRegistry registry(runtime.ioContext, runtime.worker,
         std::pmr::get_default_resource(), std::span<const ruvia::detail::DbDefinition>());
     ruvia::detail::ScopedOperationScope operationScope;
 
@@ -940,16 +940,6 @@ RUVIA_TEST(db_registry_reports_typed_not_configured_error) {
     RUVIA_CHECK(aliasTyped);
 }
 
-RUVIA_TEST(db_config_is_direct_aggregate_without_factories) {
-    static_assert(std::default_initializable<ruvia::DbConfig>);
-    static_assert(std::is_aggregate_v<ruvia::DbConfig>);
-    static_assert(
-        std::same_as<decltype(std::declval<const ruvia::DbConfig&>().driver), ruvia::DbDriver>);
-    static_assert(!HasMariaDbFactory<ruvia::DbConfig>);
-    static_assert(!HasPostgreSqlFactory<ruvia::DbConfig>);
-    RUVIA_CHECK(true);
-}
-
 RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
     TrackingResource sourceResource;
     std::pmr::unsynchronized_pool_resource targetResource;
@@ -963,7 +953,7 @@ RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
     definition.emplace(dbDefinition("default", config, &sourceResource));
 
     std::optional<ruvia::detail::DbRegistry> registry;
-    registry.emplace(runtime.ioContext, runtime.scanner, &targetResource,
+    registry.emplace(runtime.ioContext, runtime.worker, &targetResource,
         std::span<const ruvia::detail::DbDefinition>(&*definition, 1));
     definition.reset();
     sourceResource.release();
@@ -981,7 +971,7 @@ RUVIA_TEST(db_handle_copy_rejects_after_parent_scope_closes) {
 #endif
     const std::array definitions{dbDefinition("default", config)};
     ruvia::detail::DbRegistry registry(
-        runtime.ioContext, runtime.scanner, std::pmr::get_default_resource(), definitions);
+        runtime.ioContext, runtime.worker, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
     auto handle = registry.get(std::pmr::get_default_resource(), operationScope);
     auto copiedHandle = handle;
@@ -1057,7 +1047,6 @@ RUVIA_TEST(db_migrator_copies_public_configuration) {
     // the caller's resource rather than their public std::string allocators.
     RUVIA_CHECK(targetResource.allocationCount() >= 6);
     migrator.reset();
-    RUVIA_CHECK(true);
 }
 
 RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {

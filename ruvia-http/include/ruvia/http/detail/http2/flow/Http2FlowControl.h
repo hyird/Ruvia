@@ -10,7 +10,8 @@
 
 namespace ruvia::detail {
 
-enum class Http2ReceiveWindowDebitStatus : std::uint8_t { kAccepted, kExceeded };
+enum class Http2ReceiveWindowDebitStatus : std::uint8_t { kAccepted,
+    kExceeded };
 
 [[nodiscard]] inline Http2WindowUpdateResult http2ApplyStreamWindowUpdate(
     Http2StreamState& stream, std::uint32_t increment) noexcept {

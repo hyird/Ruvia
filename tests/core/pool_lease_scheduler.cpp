@@ -111,6 +111,12 @@ ruvia::Task<void> exerciseAcquireTimeout(
     success = result.timedOut() != nullptr;
 }
 
+ruvia::Task<void> exerciseWorkerBoundAcquireTimeout(
+    ruvia::detail::PoolLeaseScheduler& scheduler, bool& success) {
+    const auto result = co_await scheduler.acquire(std::chrono::milliseconds(1));
+    success = result.timedOut() != nullptr;
+}
+
 ruvia::Task<void> exerciseSaturatedAcquireTimeout(
     ruvia::detail::PoolLeaseScheduler& scheduler, asio::io_context& ioContext, bool& success) {
     asio::post(ioContext, [&scheduler] {
@@ -187,8 +193,10 @@ int main() {
     ruvia::detail::PoolLeaseScheduler cancellationScheduler(0);
     const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 4);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    ruvia::detail::PoolLeaseScheduler workerTimeoutScheduler(0, worker);
     bool leaseSuccess = false;
     bool timeoutSuccess = false;
+    bool workerTimeoutSuccess = false;
     bool saturatedTimeoutSuccess = false;
     bool cancellationSuccess = false;
     asio::co_spawn(ioContext,
@@ -198,6 +206,10 @@ int main() {
     asio::co_spawn(ioContext,
         ruvia::detail::taskAsAwaitable(
             exerciseAcquireTimeout(timeoutScheduler, ioContext, timeoutSuccess)),
+        asio::detached);
+    asio::co_spawn(ioContext,
+        ruvia::detail::taskAsAwaitable(
+            exerciseWorkerBoundAcquireTimeout(workerTimeoutScheduler, workerTimeoutSuccess)),
         asio::detached);
     asio::co_spawn(ioContext,
         ruvia::detail::taskAsAwaitable(exerciseSaturatedAcquireTimeout(
@@ -211,8 +223,8 @@ int main() {
     const bool staleCancellationSuccess =
         exerciseCompletedAcquireIgnoresStalePostedCancellation(ioContext, worker);
     dispatcher->close();
-    return leaseSuccess && timeoutSuccess && saturatedTimeoutSuccess && cancellationSuccess &&
-                   staleCancellationSuccess
+    return leaseSuccess && timeoutSuccess && workerTimeoutSuccess && saturatedTimeoutSuccess &&
+                   cancellationSuccess && staleCancellationSuccess
                ? 0
                : 1;
 }

@@ -272,11 +272,11 @@ Task<DbExecResult> executeDbCommand(Pool& pool, std::pmr::string sql,
 // under the operation deadline, with the slot's resolve deadline armed around
 // it so a stalled resolve is torn down with everything else on that slot. The
 // deadline is checked once before arming and once after resuming, because the
-// scanner may have fired while this coroutine was suspended.
+// timer may have fired while this coroutine was suspended.
 //
 // Only the backend's name in the diagnostics differs, so it is the argument.
-// `Pool` supplies config_, resource_ and clearSlotDeadline(); it declares this
-// a friend so the shared rule stays out of the drivers.
+// `Pool` supplies config_, resource_, setSlotDeadline() and clearSlotDeadline();
+// it declares this a friend so the shared rule stays out of the drivers.
 template <typename Pool, typename Slot>
 Task<DbResolvedAddresses> resolveDbHost(
     Pool& pool, Slot& slot, const OperationTimeout& deadline, std::string_view backend) {
@@ -291,9 +291,9 @@ Task<DbResolvedAddresses> resolveDbHost(
         throw timedOut();
     }
     if (remaining.has_value()) {
-        slot.deadline.arm(workerTimerDeadlineAfter(*remaining), Slot::DeadlineKind::kResolve);
+        pool.setSlotDeadline(slot, *remaining, Slot::DeadlineKind::kResolve);
     } else {
-        slot.deadline.reset();
+        pool.clearSlotDeadline(slot);
     }
 
     struct ActiveResolve final {
@@ -322,8 +322,10 @@ Task<DbResolvedAddresses> resolveDbHost(
         const auto resolveError = completion.errorCode();
         auto results = std::move(completion).takeResult();
         const auto afterResolve = deadline.remaining();
+        const bool slotDeadlineExpired = slot.deadline.expired();
+        pool.clearSlotDeadline(slot);
         const bool deadlineExpired =
-            slot.deadline.clear() || (afterResolve.has_value() && afterResolve->count() <= 0);
+            slotDeadlineExpired || (afterResolve.has_value() && afterResolve->count() <= 0);
         pool.throwIfCancelled(slot);
         if (slot.closeRequested) {
             throw DbError(

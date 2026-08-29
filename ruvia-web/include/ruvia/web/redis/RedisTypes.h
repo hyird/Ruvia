@@ -489,7 +489,11 @@ private:
 
 class RedisValue final {
 public:
-    enum class Kind : std::uint8_t { kNull, kString, kInteger, kArray, kError };
+    enum class Kind : std::uint8_t { kNull,
+        kString,
+        kInteger,
+        kArray,
+        kError };
 
     RedisValue(const RedisValue&) = default;
     RedisValue& operator=(const RedisValue&) = default;

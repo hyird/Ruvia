@@ -184,8 +184,7 @@ struct TestApp::Impl final {
                                        : detail::RouteRateLimitPresence::kAbsent,
                 .rateLimitCapacity = 1024,
                 .env = &env,
-            },
-            *connectionScanner);
+            });
         eventLoopThread = std::thread([this] {
             try {
                 eventLoopContext.run();

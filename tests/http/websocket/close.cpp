@@ -106,7 +106,7 @@ RUVIA_TEST(ws_close_incoming_violation_carries_rfc_close_code) {
     // Close whose 2-byte code is valid but whose reason is not UTF-8 is invalid
     // payload data (1007). The read loop echoes this code instead of a generic 1011.
     RUVIA_CHECK_EQ(
-        failureCloseCode(std::string(1, 'x')), std::uint16_t{1002});  // 1-byte partial code
+        failureCloseCode(std::string(1, 'x')), std::uint16_t{1002});             // 1-byte partial code
     RUVIA_CHECK_EQ(failureCloseCode(closeBody(1005, "")), std::uint16_t{1002});  // reserved code
     RUVIA_CHECK_EQ(
         failureCloseCode(closeBody(1006, "")), std::uint16_t{1002});  // never-on-wire code

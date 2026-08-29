@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cmath>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -9,6 +10,30 @@
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 
 namespace ruvia::detail {
+
+// A positive remainder must never become zero merely because the caller's
+// cancellation primitive has millisecond resolution. Rounding up may wake a
+// waiter a fraction late, while rounding down turns a still-live deadline into
+// an immediate timeout.
+[[nodiscard]] inline std::chrono::milliseconds workerTimerCeilMilliseconds(
+    std::chrono::steady_clock::duration value) noexcept {
+    using Milliseconds = std::chrono::milliseconds;
+    if (value <= std::chrono::steady_clock::duration::zero()) {
+        return Milliseconds::zero();
+    }
+
+    using MillisecondFloat = std::chrono::duration<long double, Milliseconds::period>;
+    const auto count = std::chrono::duration_cast<MillisecondFloat>(value).count();
+    if (std::isnan(count)) {
+        return Milliseconds::zero();
+    }
+    const auto maximum = static_cast<long double>(Milliseconds::max().count());
+    const auto rounded = std::ceil(count);
+    if (rounded >= maximum) {
+        return Milliseconds::max();
+    }
+    return Milliseconds(static_cast<Milliseconds::rep>(rounded));
+}
 
 // One allocation-free deadline lifecycle. A deadline is either absent, armed
 // with its cancellation kind and exact time point, or expired with that same
@@ -103,7 +128,7 @@ public:
         if (now >= *deadline_) {
             return std::chrono::milliseconds(0);
         }
-        return std::chrono::duration_cast<std::chrono::milliseconds>(*deadline_ - now);
+        return workerTimerCeilMilliseconds(*deadline_ - now);
     }
 
     [[nodiscard]] bool expired() const noexcept {

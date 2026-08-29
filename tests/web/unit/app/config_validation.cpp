@@ -103,7 +103,7 @@ RUVIA_TEST(config_host_validation_separated_port_rules) {
     RUVIA_CHECK(!isValidConfigHost("[::1]", kSeparatedPortHostRules));    // brackets rejected
     RUVIA_CHECK(!isValidConfigHost("host:80", kSeparatedPortHostRules));  // single colon rejected
     RUVIA_CHECK(isValidConfigHost("host", kSeparatedPortHostRules));      // bare host is fine
-    RUVIA_CHECK(isValidConfigHost("::1", kSeparatedPortHostRules));  // two colons is not "single"
+    RUVIA_CHECK(isValidConfigHost("::1", kSeparatedPortHostRules));       // two colons is not "single"
 }
 
 RUVIA_TEST(sni_host_validation_accepts_dns_name_only) {
