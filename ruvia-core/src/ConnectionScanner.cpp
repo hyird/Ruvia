@@ -163,6 +163,7 @@ ConnectionScanner::Guard::~Guard() {
 
 ConnectionScanner::ConnectionScanner(WorkerHandle worker, ConnectionScannerOptions options)
     : worker_(requireScannerWorker(std::move(worker))),
+      timerState_(std::make_shared<TimerState>(this)),
       options_(options),
       cachedNowMs_(steadyNowMs()) {
     if (options_.scanInterval.count() <= 0) {
@@ -178,6 +179,13 @@ ConnectionScanner::ConnectionScanner(WorkerHandle worker, ConnectionScannerOptio
 
 ConnectionScanner::~ConnectionScanner() noexcept {
     stop();
+    // Timer cancellation completes asynchronously. Keep the callback's shared
+    // state alive and make it wait for any expiry callback already scanning
+    // before allowing that callback to observe this object as gone.
+    {
+        std::lock_guard lock(timerState_->mutex);
+        timerState_->owner = nullptr;
+    }
     // Entries and their guards may be owned by longer-lived connection objects.
     // Remove every scanner-owned pointer before the sentinel and timestamp die.
     detachAllEntries();
@@ -333,16 +341,22 @@ void ConnectionScanner::schedule() {
         return;
     }
 
+    const auto timerState = timerState_;
     WorkerHandleAccess::scheduleTimer(worker_, timer_,
-        workerTimerDeadlineAfter(options_.scanInterval), [this](WorkerTimerOutcome outcome) {
-            if (outcome == WorkerTimerOutcome::kCancelled || !running_) {
+        workerTimerDeadlineAfter(options_.scanInterval), [timerState](WorkerTimerOutcome outcome) {
+            if (outcome == WorkerTimerOutcome::kCancelled) {
                 return;
             }
 
-            if (hasScanningWork()) {
-                scan();
+            std::lock_guard lock(timerState->mutex);
+            auto* scanner = timerState->owner;
+            if (scanner == nullptr || !scanner->running_) {
+                return;
             }
-            schedule();
+            if (scanner->hasScanningWork()) {
+                scanner->scan();
+            }
+            scanner->schedule();
         });
 }
 
