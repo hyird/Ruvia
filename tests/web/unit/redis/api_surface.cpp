@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "memory_resource_fixture.h"
 
 #include <array>
 #include <chrono>
@@ -7,7 +8,6 @@
 #include <initializer_list>
 #include <memory>
 #include <memory_resource>
-#include <new>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -32,6 +32,9 @@
 #include "ruvia/web/detail/redis/RedisTypesAccess.h"
 
 namespace {
+
+using ruvia::test::RejectingMemoryResource;
+using ruvia::test::TrackingResource;
 
 using RedisDefinitions = std::span<const ruvia::detail::RedisDefinition>;
 
@@ -82,59 +85,6 @@ private:
         ruvia::detail::RedisConfigStorage(config, resource),
     };
 }
-
-class RejectingMemoryResource final : public std::pmr::memory_resource {
-public:
-    void rejectAllocations(bool value = true) noexcept {
-        rejecting_ = value;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (rejecting_) {
-            throw std::bad_alloc();
-        }
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
-    }
-
-    void do_deallocate(void* value, std::size_t bytes, std::size_t alignment) override {
-        std::pmr::new_delete_resource()->deallocate(value, bytes, alignment);
-    }
-
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    bool rejecting_{false};
-};
-
-class TrackingResource final : public std::pmr::memory_resource {
-public:
-    void release() noexcept {
-        released_ = true;
-    }
-
-    [[nodiscard]] bool deallocatedAfterRelease() const noexcept {
-        return deallocatedAfterRelease_;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        deallocatedAfterRelease_ = deallocatedAfterRelease_ || released_;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
-    }
-
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    bool released_{false};
-    bool deallocatedAfterRelease_{false};
-};
 
 class StalledRedisCommandServer final {
 public:
@@ -526,10 +476,6 @@ static_assert(AssignsRedisScanMatch<std::pmr::string&>);
 static_assert(AssignsRedisScanMatch<std::string_view>);
 
 }  // namespace
-
-RUVIA_TEST(redis_api_surface_uses_span_args_without_initializer_list_overloads) {
-    RUVIA_CHECK(true);
-}
 
 RUVIA_TEST(
     redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_require_a_cancellation_bound) {
