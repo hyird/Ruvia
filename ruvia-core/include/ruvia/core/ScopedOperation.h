@@ -38,9 +38,9 @@ public:
     }
 
     // A cold operation still owns a coroutine frame that may borrow its
-    // capability owner.  Owner move constructors use this to reject moving
-    // that owner before the frame has either started and completed or been
-    // explicitly discarded by closing the scope.
+    // capability owner. Owners can use this to inspect whether teardown must
+    // first discard cold frames; a running frame remains a fatal lifetime
+    // violation when the scope closes.
     [[nodiscard]] bool hasPendingOperations() const noexcept {
         return head_ != nullptr;
     }

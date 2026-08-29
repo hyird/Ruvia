@@ -2,10 +2,12 @@
 
 #include "ruvia/web/db/DbRows.h"
 #include "ruvia/core/ScopedOperation.h"
+#include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/detail/db/DbParameterPack.h"
 
 #include <cstddef>
 #include <initializer_list>
+#include <memory>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -20,9 +22,8 @@ class DbTransaction final : private detail::ScopedCapabilityNode {
 public:
     DbTransaction(const DbTransaction&) = delete;
     DbTransaction& operator=(const DbTransaction&) = delete;
-    // A pending query/commit/rollback task captures this object. Moving it
-    // while that task is cold would leave the frame pointing at the
-    // moved-from object.
+    // Operations borrow the address-stable state owned by this object, so a
+    // move transfers the state without invalidating a cold or running frame.
     DbTransaction(DbTransaction&& other) noexcept;
     DbTransaction& operator=(DbTransaction&&) = delete;
     ~DbTransaction();
@@ -69,10 +70,6 @@ private:
     friend class detail::MariaDbPool;
     friend class detail::PostgreSqlPool;
 
-    template <typename Owner>
-    friend class detail::DbOperationGuard;
-    using OperationGuard = detail::DbOperationGuard<DbTransaction>;
-
     struct Lease final {
         Lease(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
 
@@ -82,17 +79,22 @@ private:
         OperationOptions options;
     };
 
-    DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
-    Task<DbRows> queryPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params, OperationGuard operation);
-    Task<DbExecResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params, OperationGuard operation);
-    Task<void> commitTask(OperationGuard operation);
-    Task<void> rollbackTask(OperationGuard operation);
+    using OperationState = detail::DbOperationState<Lease>;
+    using OperationGuard = detail::DbOperationGuard<Lease>;
+
+    class State;
+    using StateOwner = std::unique_ptr<State, detail::PmrObjectDeleter<State>>;
+
+    DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, OperationOptions options);
+    static Task<DbRows> queryPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params, OperationGuard operation);
+    static Task<DbExecResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params, OperationGuard operation);
+    static Task<void> commitTask(OperationGuard operation);
+    static Task<void> rollbackTask(OperationGuard operation);
     void reset() noexcept;
     void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
-    detail::DbOperationState<Lease> state_{};
-    detail::ScopedOperationScope operationScope_;
+    StateOwner state_;
 };
 
 }  // namespace ruvia

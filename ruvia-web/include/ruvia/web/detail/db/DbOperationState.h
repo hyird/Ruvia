@@ -47,20 +47,7 @@ public:
         }
     }
 
-    DbOperationState(DbOperationState&& other) noexcept {
-        if (std::holds_alternative<Reserved>(other.state_) || std::holds_alternative<Operating>(other.state_)) {
-            // A pending or operating coroutine borrows both this state and its
-            // payload. Moving its owner would invalidate that structured lifetime.
-            std::terminate();
-        }
-        if (auto* active = std::get_if<Active>(&other.state_); active != nullptr) {
-            Payload payload(std::move(active->payload));
-            state_.template emplace<Active>(std::move(payload));
-        } else if (std::holds_alternative<Failed>(other.state_)) {
-            state_.template emplace<Failed>();
-        }
-        other.state_.template emplace<Closed>();
-    }
+    DbOperationState(DbOperationState&&) = delete;
     DbOperationState& operator=(DbOperationState&&) = delete;
 
     [[nodiscard]] bool active() const noexcept {
@@ -158,63 +145,63 @@ private:
     std::variant<Closed, Active, Reserved, Operating, Failed> state_{};
 };
 
-// One operation on an owner's DbOperationState. Construction reserves the
-// lease immediately; start() marks the point at which the coroutine begins to
-// drive it. Destroying a cold guard releases the reservation, while destroying
-// a started guard fails the operation unless it named its own ending. Whoever
-// owns the state supplies `state_` and a `Lease` payload type, and declares
-// this a friend -- a stream and a transaction guard theirs identically.
-template <typename Owner>
+// One operation on a DbOperationState. Construction reserves the lease
+// immediately; start() marks the point at which the coroutine begins to drive
+// it. Destroying a cold guard releases the reservation, while destroying a
+// started guard fails the operation unless it named its own ending.
+template <typename Payload>
 class DbOperationGuard final {
 public:
-    explicit DbOperationGuard(Owner& owner)
-        : owner_(&owner) {
-        owner_->state_.reserve();
+    using State = DbOperationState<Payload>;
+
+    explicit DbOperationGuard(State& state)
+        : state_(&state) {
+        state_->reserve();
     }
 
     DbOperationGuard(const DbOperationGuard&) = delete;
     DbOperationGuard& operator=(const DbOperationGuard&) = delete;
     DbOperationGuard(DbOperationGuard&& other) noexcept
-        : owner_(std::exchange(other.owner_, nullptr)),
+        : state_(std::exchange(other.state_, nullptr)),
           started_(std::exchange(other.started_, false)) {}
     DbOperationGuard& operator=(DbOperationGuard&&) = delete;
 
     ~DbOperationGuard() {
-        if (owner_ != nullptr) {
+        if (state_ != nullptr) {
             if (started_) {
-                owner_->state_.finishFailed();
+                state_->finishFailed();
             } else {
-                owner_->state_.cancelReservation();
+                state_->cancelReservation();
             }
         }
     }
 
     void start() noexcept {
-        owner_->state_.start();
+        state_->start();
         started_ = true;
     }
 
-    [[nodiscard]] typename Owner::Lease& lease() noexcept {
-        return owner_->state_.operationPayload();
+    [[nodiscard]] Payload& lease() noexcept {
+        return state_->operationPayload();
     }
 
     void finishActive() noexcept {
-        owner_->state_.finishActive();
-        owner_ = nullptr;
+        state_->finishActive();
+        state_ = nullptr;
     }
 
     void finishClosed() noexcept {
-        owner_->state_.finishClosed();
-        owner_ = nullptr;
+        state_->finishClosed();
+        state_ = nullptr;
     }
 
     void finishFailed() noexcept {
-        owner_->state_.finishFailed();
-        owner_ = nullptr;
+        state_->finishFailed();
+        state_ = nullptr;
     }
 
 private:
-    Owner* owner_;
+    State* state_;
     bool started_{false};
 };
 

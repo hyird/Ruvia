@@ -34,6 +34,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -197,6 +198,15 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, const ruvia::WorkerHandl
     dbRequire(variadicUpdate.affectedRows() == 1, "variadic update affected-row count is incorrect");
     (void)co_await db.execute("UPDATE ruvia_mariadb_integration_items SET n = ? WHERE name = ?", std::int64_t{-42}, std::string_view("a'b?c"));
 
+    {
+        auto transaction = co_await db.beginTransaction();
+        auto pending = transaction.query("SELECT 1");
+        auto moved = std::move(transaction);
+        auto rows = co_await std::move(pending);
+        dbRequire(rows[0][0].as<std::int64_t>() == 1, "transaction operation did not survive its owner move");
+        co_await moved.rollback();
+    }
+
     bool rejectedCommandStream = false;
     try {
         (void)co_await db.queryStream("UPDATE ruvia_mariadb_integration_items SET n = n WHERE name = 'missing'");
@@ -240,6 +250,15 @@ ruvia::Task<void> exercise(asio::io_context& ioContext, const ruvia::WorkerHandl
         ++streamed;
     }
     dbRequire(streamed == 2002, "the stream did not deliver every row");
+
+    {
+        auto source = co_await db.queryStream("SELECT 1");
+        auto pending = source.read();
+        auto moved = std::move(source);
+        auto row = co_await std::move(pending);
+        dbRequire(row.has_value() && (*row)[0].as<std::int64_t>() == 1, "stream operation did not survive its owner move");
+        co_await moved.close();
+    }
 
     (void)co_await db.execute("DROP TABLE ruvia_mariadb_integration_items");
     (void)co_await db.execute("DROP TABLE IF EXISTS ruvia_mariadb_integration_migrated");

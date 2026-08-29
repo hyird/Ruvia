@@ -1,6 +1,5 @@
 #include "ruvia/web/db/Db.h"
 
-#include <exception>
 #include <utility>
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbUtils.h"
@@ -64,28 +63,31 @@ DbStreamResult::Lease::Lease(detail::DbPoolRef client, std::size_t slot, void* r
       resource(detail::pmrResourceOrDefault(resource)),
       options(std::move(options)) {}
 
-DbStreamResult::DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, OperationOptions options) noexcept
-    : state_(Lease{client, slot, result, resource, std::move(options)}) {}
+class DbStreamResult::State final {
+public:
+    State(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, OperationOptions options) noexcept
+        : operation(Lease{client, slot, result, resource, std::move(options)}) {}
+
+    ~State() {
+        operationScope.close();
+        operation.reset([](Lease& lease) noexcept { abortPoolStream(lease.client, lease.slot, lease.result); });
+    }
+
+    OperationState operation;
+    detail::ScopedOperationScope operationScope;
+};
+
+DbStreamResult::DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, OperationOptions options)
+    : state_(detail::makePmrObject<State>(resource, client, slot, result, resource, std::move(options))) {}
 
 DbStreamResult::DbStreamResult(DbStreamResult&& other) noexcept
     : detail::ScopedCapabilityNode(std::move(other)),
-      state_(std::move(other.state_)) {
-    if (other.operationScope_.hasPendingOperations()) {
-        // readTask/closeTask are member coroutines. Their cold frames still
-        // contain `this`, so moving the owner would make a later await use the
-        // moved-from state. Keep the structured lifetime explicit and fail at
-        // the invalid move instead of allowing a delayed lease error.
-        std::terminate();
-    }
-}
+      state_(std::move(other.state_)) {}
 
-DbStreamResult::~DbStreamResult() {
-    operationScope_.close();
-    reset();
-}
+DbStreamResult::~DbStreamResult() = default;
 
 bool DbStreamResult::active() const noexcept {
-    return state_.active();
+    return state_ != nullptr && state_->operation.active();
 }
 
 void DbStreamResult::bindOperationScope(detail::ScopedOperationScope& scope) noexcept {
@@ -94,13 +96,15 @@ void DbStreamResult::bindOperationScope(detail::ScopedOperationScope& scope) noe
 
 void DbStreamResult::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
     auto& result = static_cast<DbStreamResult&>(capability);
-    result.operationScope_.close();
-    result.reset();
+    if (result.state_ != nullptr) {
+        result.state_->operationScope.close();
+        result.reset();
+    }
 }
 
 ScopedOperation<std::optional<DbRow>> DbStreamResult::read() & {
     requireActive();
-    return detail::makeScopedOperation(operationScope_, readTask(OperationGuard(*this)));
+    return detail::makeScopedOperation(state_->operationScope, readTask(OperationGuard(state_->operation)));
 }
 
 Task<std::optional<DbRow>> DbStreamResult::readTask(OperationGuard operation) {
@@ -117,7 +121,7 @@ Task<std::optional<DbRow>> DbStreamResult::readTask(OperationGuard operation) {
 
 ScopedOperation<void> DbStreamResult::close() & {
     requireActive();
-    return detail::makeScopedOperation(operationScope_, closeTask(OperationGuard(*this)));
+    return detail::makeScopedOperation(state_->operationScope, closeTask(OperationGuard(state_->operation)));
 }
 
 Task<void> DbStreamResult::closeTask(OperationGuard operation) {
@@ -128,7 +132,9 @@ Task<void> DbStreamResult::closeTask(OperationGuard operation) {
 }
 
 void DbStreamResult::reset() noexcept {
-    state_.reset([](Lease& lease) noexcept { abortPoolStream(lease.client, lease.slot, lease.result); });
+    if (state_ != nullptr) {
+        state_->operation.reset([](Lease& lease) noexcept { abortPoolStream(lease.client, lease.slot, lease.result); });
+    }
 }
 
 }  // namespace ruvia
