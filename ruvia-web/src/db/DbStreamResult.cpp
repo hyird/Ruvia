@@ -80,6 +80,7 @@ DbStreamResult::DbStreamResult(DbStreamResult&& other) noexcept
 }
 
 DbStreamResult::~DbStreamResult() {
+    operationScope_.close();
     reset();
 }
 
@@ -99,11 +100,11 @@ void DbStreamResult::expireCapability(detail::ScopedCapabilityNode& capability) 
 
 ScopedOperation<std::optional<DbRow>> DbStreamResult::read() & {
     requireActive();
-    return detail::makeScopedOperation(operationScope_, readTask());
+    return detail::makeScopedOperation(operationScope_, readTask(OperationGuard(*this)));
 }
 
-Task<std::optional<DbRow>> DbStreamResult::readTask() {
-    OperationGuard operation(*this);
+Task<std::optional<DbRow>> DbStreamResult::readTask(OperationGuard operation) {
+    operation.start();
     auto& lease = operation.lease();
     auto row = co_await readPoolStream(lease.client, lease.slot, lease.result, lease.resource, lease.options);
     if (row) {
@@ -116,11 +117,11 @@ Task<std::optional<DbRow>> DbStreamResult::readTask() {
 
 ScopedOperation<void> DbStreamResult::close() & {
     requireActive();
-    return detail::makeScopedOperation(operationScope_, closeTask());
+    return detail::makeScopedOperation(operationScope_, closeTask(OperationGuard(*this)));
 }
 
-Task<void> DbStreamResult::closeTask() {
-    OperationGuard operation(*this);
+Task<void> DbStreamResult::closeTask(OperationGuard operation) {
+    operation.start();
     auto& lease = operation.lease();
     co_await closePoolStream(lease.client, lease.slot, lease.result, lease.resource, lease.options);
     operation.finishClosed();

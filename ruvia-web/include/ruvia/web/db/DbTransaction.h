@@ -69,6 +69,10 @@ private:
     friend class detail::MariaDbPool;
     friend class detail::PostgreSqlPool;
 
+    template <typename Owner>
+    friend class detail::DbOperationGuard;
+    using OperationGuard = detail::DbOperationGuard<DbTransaction>;
+
     struct Lease final {
         Lease(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
 
@@ -79,17 +83,13 @@ private:
     };
 
     DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
-    Task<DbRows> queryPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
-    Task<DbExecResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
-    Task<void> commitTask();
-    Task<void> rollbackTask();
+    Task<DbRows> queryPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params, OperationGuard operation);
+    Task<DbExecResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params, OperationGuard operation);
+    Task<void> commitTask(OperationGuard operation);
+    Task<void> rollbackTask(OperationGuard operation);
     void reset() noexcept;
     void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
-
-    template <typename Owner>
-    friend class detail::DbOperationGuard;
-    using OperationGuard = detail::DbOperationGuard<DbTransaction>;
 
     detail::DbOperationState<Lease> state_{};
     detail::ScopedOperationScope operationScope_;

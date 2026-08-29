@@ -106,6 +106,10 @@ private:
     friend class detail::MariaDbPool;
     friend class detail::PostgreSqlPool;
 
+    template <typename Owner>
+    friend class detail::DbOperationGuard;
+    using OperationGuard = detail::DbOperationGuard<DbStreamResult>;
+
     struct Lease final {
         Lease(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, OperationOptions options) noexcept;
 
@@ -121,12 +125,8 @@ private:
     void reset() noexcept;
     void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
-    Task<std::optional<DbRow>> readTask();
-    Task<void> closeTask();
-
-    template <typename Owner>
-    friend class detail::DbOperationGuard;
-    using OperationGuard = detail::DbOperationGuard<DbStreamResult>;
+    Task<std::optional<DbRow>> readTask(OperationGuard operation);
+    Task<void> closeTask(OperationGuard operation);
 
     detail::DbOperationState<Lease> state_{};
     detail::ScopedOperationScope operationScope_;
