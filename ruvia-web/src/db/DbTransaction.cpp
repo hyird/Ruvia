@@ -97,12 +97,10 @@ public:
         : operation(Lease{client, slot, resource, std::move(options)}) {}
 
     ~State() {
-        operationScope.close();
         operation.reset([](Lease& lease) noexcept { abortPoolTransaction(lease.client, lease.slot); });
     }
 
     OperationState operation;
-    detail::ScopedOperationScope operationScope;
 };
 
 DbTransaction::DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource, OperationOptions options)
@@ -124,24 +122,21 @@ void DbTransaction::bindOperationScope(detail::ScopedOperationScope& scope) noex
 
 void DbTransaction::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
     auto& transaction = static_cast<DbTransaction&>(capability);
-    if (transaction.state_ != nullptr) {
-        transaction.state_->operationScope.close();
-        transaction.reset();
-    }
+    transaction.reset();
 }
 
 ScopedOperation<DbRows> DbTransaction::query(std::string_view sql, std::span<const DbValue> params) & {
     requireActive();
     OperationGuard operation(state_->operation);
     auto statement = prepareDbStatement(sql, params, operation.lease().resource);
-    return detail::makeScopedOperation(state_->operationScope, queryPrepared(std::move(statement.sql), std::move(statement.params), std::move(operation)));
+    return detail::makeScopedOperation(operationScope(), queryPrepared(std::move(statement.sql), std::move(statement.params), std::move(operation)));
 }
 
 ScopedOperation<DbExecResult> DbTransaction::execute(std::string_view sql, std::span<const DbValue> params) & {
     requireActive();
     OperationGuard operation(state_->operation);
     auto statement = prepareDbStatement(sql, params, operation.lease().resource);
-    return detail::makeScopedOperation(state_->operationScope, executePrepared(std::move(statement.sql), std::move(statement.params), std::move(operation)));
+    return detail::makeScopedOperation(operationScope(), executePrepared(std::move(statement.sql), std::move(statement.params), std::move(operation)));
 }
 
 Task<DbRows> DbTransaction::queryPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params, OperationGuard operation) {
@@ -162,7 +157,7 @@ Task<DbExecResult> DbTransaction::executePrepared(std::pmr::string sql, std::pmr
 
 ScopedOperation<void> DbTransaction::commit() & {
     requireActive();
-    return detail::makeScopedOperation(state_->operationScope, commitTask(OperationGuard(state_->operation)));
+    return detail::makeScopedOperation(operationScope(), commitTask(OperationGuard(state_->operation)));
 }
 
 Task<void> DbTransaction::commitTask(OperationGuard operation) {
@@ -174,7 +169,7 @@ Task<void> DbTransaction::commitTask(OperationGuard operation) {
 
 ScopedOperation<void> DbTransaction::rollback() & {
     requireActive();
-    return detail::makeScopedOperation(state_->operationScope, rollbackTask(OperationGuard(state_->operation)));
+    return detail::makeScopedOperation(operationScope(), rollbackTask(OperationGuard(state_->operation)));
 }
 
 Task<void> DbTransaction::rollbackTask(OperationGuard operation) {

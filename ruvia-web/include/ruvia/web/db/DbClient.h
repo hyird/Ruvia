@@ -89,8 +89,12 @@ public:
     ScopedOperation<DbTransaction> beginTransaction() const&& = delete;
 
     // Idempotent and callable from any thread. Pool teardown runs on the bound
-    // event loop; finish all operations before destroying the client.
+    // event loop; use shutdown() when its completion must be awaited.
     void close() noexcept;
+    // Requests cancellation, joins worker-owned operations, and completes on
+    // the bound event loop after the client teardown is finished.
+    [[nodiscard]] Task<void> shutdown() &;
+    Task<void> shutdown() && = delete;
 
     [[nodiscard]] const WorkerHandle& worker() const& noexcept;
     const WorkerHandle& worker() const&& = delete;

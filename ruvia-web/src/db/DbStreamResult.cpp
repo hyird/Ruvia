@@ -69,12 +69,10 @@ public:
         : operation(Lease{client, slot, result, resource, std::move(options)}) {}
 
     ~State() {
-        operationScope.close();
         operation.reset([](Lease& lease) noexcept { abortPoolStream(lease.client, lease.slot, lease.result); });
     }
 
     OperationState operation;
-    detail::ScopedOperationScope operationScope;
 };
 
 DbStreamResult::DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource, OperationOptions options)
@@ -96,15 +94,12 @@ void DbStreamResult::bindOperationScope(detail::ScopedOperationScope& scope) noe
 
 void DbStreamResult::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
     auto& result = static_cast<DbStreamResult&>(capability);
-    if (result.state_ != nullptr) {
-        result.state_->operationScope.close();
-        result.reset();
-    }
+    result.reset();
 }
 
 ScopedOperation<std::optional<DbRow>> DbStreamResult::read() & {
     requireActive();
-    return detail::makeScopedOperation(state_->operationScope, readTask(OperationGuard(state_->operation)));
+    return detail::makeScopedOperation(operationScope(), readTask(OperationGuard(state_->operation)));
 }
 
 Task<std::optional<DbRow>> DbStreamResult::readTask(OperationGuard operation) {
@@ -121,7 +116,7 @@ Task<std::optional<DbRow>> DbStreamResult::readTask(OperationGuard operation) {
 
 ScopedOperation<void> DbStreamResult::close() & {
     requireActive();
-    return detail::makeScopedOperation(state_->operationScope, closeTask(OperationGuard(state_->operation)));
+    return detail::makeScopedOperation(operationScope(), closeTask(OperationGuard(state_->operation)));
 }
 
 Task<void> DbStreamResult::closeTask(OperationGuard operation) {

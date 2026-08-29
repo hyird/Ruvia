@@ -22,10 +22,11 @@ HttpClientState::HttpClientState(EventLoop loop, const HttpClientConfig& config)
     : loop_(requireLoop(std::move(loop))),
       worker_(loop_.handle()),
       memory_(),
-      clients_(loop_.ioContext(), worker_, memory_.resource(), config) {}
+      clients_(loop_.ioContext(), worker_, memory_.resource(), config),
+      closeSignal_(worker_) {}
 
 HttpClientState::~HttpClientState() {
-    if (phase_.load(std::memory_order_acquire) != Phase::kClosed || operationScope_.hasPendingOperations()) {
+    if (phase_.load(std::memory_order_acquire) != Phase::kClosed || !closeComplete_ || operationScope_.hasPendingOperations()) {
         std::terminate();
     }
 }
@@ -41,6 +42,7 @@ void HttpClientState::bindStop() {
     } catch (...) {
         clients_.closeNow();
         phase_.store(Phase::kClosed, std::memory_order_release);
+        closeComplete_ = true;
         throw;
     }
 }
@@ -104,6 +106,23 @@ void HttpClientState::requestClose() noexcept {
     }
 }
 
+Task<void> HttpClientState::shutdown() {
+    return shutdownOwned(shared_from_this());
+}
+
+Task<void> HttpClientState::shutdownOwned(std::shared_ptr<HttpClientState> state) {
+    if (!state->worker_.isCurrent()) {
+        throw std::logic_error("HTTP client shutdown must run on its bound event loop");
+    }
+    state->startCloseOnWorker();
+    while (!state->closeComplete_) {
+        co_await state->closeSignal_.wait();
+    }
+    if (state->closeFailure_) {
+        std::rethrow_exception(state->closeFailure_);
+    }
+}
+
 void HttpClientState::startCloseOnWorker() noexcept {
     if (!worker_.isCurrent()) {
         std::terminate();
@@ -127,10 +146,16 @@ void HttpClientState::startCloseOnWorker() noexcept {
 
 Task<void> HttpClientState::closeOnWorker() {
     co_await clients_.join();
+    co_await operationScope_.closeAndJoin();
 }
 
 void HttpClientState::finishClose(const TaskCompletionResult<void>& result) {
     phase_.store(Phase::kClosed, std::memory_order_release);
+    if (const auto* failed = result.failure()) {
+        closeFailure_ = failed->exception();
+    }
+    closeComplete_ = true;
+    closeSignal_.notify();
     if (const auto* failed = result.failure()) {
         std::rethrow_exception(failed->exception());
     }
@@ -159,6 +184,10 @@ ScopedOperation<HttpClientResponse> HttpClient::send(const HttpClientRequestView
 
 void HttpClient::close() noexcept {
     state_->requestClose();
+}
+
+Task<void> HttpClient::shutdown() & {
+    return state_->shutdown();
 }
 
 HttpClientStats HttpClient::stats() const {

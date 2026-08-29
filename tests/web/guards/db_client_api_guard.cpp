@@ -42,7 +42,7 @@ concept HasVariadicOperations = requires(const T& client) {
 };
 
 template <typename Client>
-concept HasRvalueDbClientOperation = requires(Client&& client) { std::move(client).connect(); } || requires(Client&& client) { std::move(client).withOptions({}); } || requires(Client&& client) { std::move(client).query(std::string_view{}); } || requires(Client&& client, std::span<const ruvia::DbValue> params) { std::move(client).query(std::string_view{}, params); } || requires(Client&& client) { std::move(client).query(std::string_view{}, 1); } || requires(Client&& client) { std::move(client).execute(std::string_view{}); } || requires(Client&& client, std::span<const ruvia::DbValue> params) { std::move(client).execute(std::string_view{}, params); } || requires(Client&& client) { std::move(client).execute(std::string_view{}, 1); } || requires(Client&& client) { std::move(client).queryStream(std::string_view{}); } || requires(Client&& client, std::span<const ruvia::DbValue> params) { std::move(client).queryStream(std::string_view{}, params); } || requires(Client&& client) { std::move(client).queryStream(std::string_view{}, 1); } || requires(Client&& client) { std::move(client).beginTransaction(); };
+concept HasRvalueDbClientOperation = requires(Client&& client) { std::move(client).connect(); } || requires(Client&& client) { std::move(client).shutdown(); } || requires(Client&& client) { std::move(client).withOptions({}); } || requires(Client&& client) { std::move(client).query(std::string_view{}); } || requires(Client&& client, std::span<const ruvia::DbValue> params) { std::move(client).query(std::string_view{}, params); } || requires(Client&& client) { std::move(client).query(std::string_view{}, 1); } || requires(Client&& client) { std::move(client).execute(std::string_view{}); } || requires(Client&& client, std::span<const ruvia::DbValue> params) { std::move(client).execute(std::string_view{}, params); } || requires(Client&& client) { std::move(client).execute(std::string_view{}, 1); } || requires(Client&& client) { std::move(client).queryStream(std::string_view{}); } || requires(Client&& client, std::span<const ruvia::DbValue> params) { std::move(client).queryStream(std::string_view{}, params); } || requires(Client&& client) { std::move(client).queryStream(std::string_view{}, 1); } || requires(Client&& client) { std::move(client).beginTransaction(); };
 
 template <typename Stream>
 concept HasRvalueDbStreamOperation = requires(Stream&& stream) { std::move(stream).read(); } || requires(Stream&& stream) { std::move(stream).close(); };
@@ -68,6 +68,7 @@ static_assert(!std::default_initializable<ruvia::DbClient>);
 static_assert(!std::copy_constructible<ruvia::DbClient>);
 static_assert(!std::move_constructible<ruvia::DbClient>);
 static_assert(std::same_as<decltype(std::declval<ruvia::DbClient&>().connect()), ruvia::Task<void>>);
+static_assert(std::same_as<decltype(std::declval<ruvia::DbClient&>().shutdown()), ruvia::Task<void>>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().withOptions(ruvia::OperationOptions{})), ruvia::DbHandle>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().worker()), const ruvia::WorkerHandle&>);
 static_assert(HasDefaultOperations<ruvia::DbClient>);

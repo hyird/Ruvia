@@ -23,11 +23,24 @@ class ClosingPeer final {
 public:
     ClosingPeer()
         : acceptor_(io_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
-          thread_([this] { acceptAndClose(); }) {}
+          socket_(io_) {
+        acceptor_.async_accept(socket_, [this](std::error_code error) {
+            if (error) {
+                return;
+            }
+            std::error_code ignored;
+            socket_.shutdown(asio::ip::tcp::socket::shutdown_both, ignored);
+            socket_.close(ignored);
+        });
+        thread_ = std::thread([this] { io_.run(); });
+    }
 
     ~ClosingPeer() {
-        std::error_code ignored;
-        acceptor_.close(ignored);
+        asio::post(io_, [this] {
+            std::error_code ignored;
+            acceptor_.close(ignored);
+            socket_.close(ignored);
+        });
         if (thread_.joinable()) {
             thread_.join();
         }
@@ -38,19 +51,9 @@ public:
     }
 
 private:
-    void acceptAndClose() noexcept {
-        try {
-            asio::ip::tcp::socket socket(io_);
-            acceptor_.accept(socket);
-            std::error_code ignored;
-            socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignored);
-            socket.close(ignored);
-        } catch (...) {
-        }
-    }
-
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
+    asio::ip::tcp::socket socket_;
     std::thread thread_;
 };
 
@@ -99,6 +102,9 @@ bool attachedWorker(ruvia::DbConfig config) {
     auto connected = asio::co_spawn(loop.executor(), ruvia::asAwaitable(client.connect()), asio::use_future);
     std::thread runner([&] { io.run(); });
 
+    auto shutdownTask = loop.start(client.shutdown());
+    shutdownTask.get();
+
     bool connectFailed = false;
     try {
         connected.get();
@@ -107,7 +113,6 @@ bool attachedWorker(ruvia::DbConfig config) {
     }
 
     const auto correctWorker = client.worker().id() == loop.id();
-    client.close();
     attachment.stop();
     runner.join();
     return connectFailed && correctWorker;
@@ -162,6 +167,18 @@ bool closeBeforeDispatch(ruvia::DbConfig config) {
     return connectCancelled;
 }
 
+bool shutdownBeforeConnect(ruvia::DbConfig config) {
+    ruvia::EventLoopPool loops({.loopCount = 1});
+    auto loop = loops.loop(0);
+    ruvia::DbClient client(loop, config);
+    loops.start();
+    auto shutdownTask = loop.start(client.shutdown());
+    shutdownTask.get();
+    loops.stop();
+    loops.join();
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -188,6 +205,13 @@ int main() {
         if (!closeBeforeDispatch(ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql})) {
 #endif
             return 5;
+        }
+#ifdef RUVIA_ENABLE_MARIADB
+        if (!shutdownBeforeConnect(ruvia::DbConfig{.driver = ruvia::DbDriver::kMariaDb})) {
+#else
+        if (!shutdownBeforeConnect(ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql})) {
+#endif
+            return 6;
         }
         return 0;
     } catch (const std::exception& error) {

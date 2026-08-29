@@ -1,10 +1,12 @@
 #pragma once
 
 #include <atomic>
+#include <exception>
 #include <memory>
 
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/StopToken.h"
+#include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/HttpClient.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
@@ -21,6 +23,7 @@ public:
 
     void bindStop();
     void requestClose() noexcept;
+    [[nodiscard]] Task<void> shutdown();
 
     [[nodiscard]] HttpClientHandle handle(OperationOptions options);
     [[nodiscard]] HttpClientStats stats();
@@ -40,6 +43,7 @@ private:
     };
 
     [[nodiscard]] static EventLoop requireLoop(EventLoop loop);
+    [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<HttpClientState> state);
     void requireOpenOnWorker() const;
     void startCloseOnWorker() noexcept;
     [[nodiscard]] Task<void> closeOnWorker();
@@ -51,8 +55,11 @@ private:
     HttpClientRegistry clients_;
     StopSource stopSource_;
     EventLoopStopRegistration stopRegistration_;
+    WorkerSignal closeSignal_;
     std::atomic<Phase> phase_{Phase::kOpen};
     bool closeTaskStarted_{false};
+    bool closeComplete_{false};
+    std::exception_ptr closeFailure_;
     // Declared last so operations expire before their pools and worker memory.
     ScopedOperationScope operationScope_;
 };

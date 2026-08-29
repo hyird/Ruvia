@@ -31,9 +31,13 @@ public:
     [[nodiscard]] ScopedOperation<HttpClientResponse> send(const HttpClientRequestView& request) const&;
     ScopedOperation<HttpClientResponse> send(const HttpClientRequestView&) const&& = delete;
 
-    // Idempotent and callable from any thread. Shutdown runs on the bound loop;
-    // draining that loop is the lifecycle barrier.
+    // Idempotent and callable from any thread. It only requests immediate
+    // shutdown; use shutdown() when the worker teardown must be awaited.
     void close() noexcept;
+    // Requests cancellation, joins worker-owned operations, and completes on
+    // the bound event loop after the client teardown is finished.
+    [[nodiscard]] Task<void> shutdown() &;
+    Task<void> shutdown() && = delete;
 
     [[nodiscard]] HttpClientStats stats() const;
     [[nodiscard]] std::string_view host() const&;

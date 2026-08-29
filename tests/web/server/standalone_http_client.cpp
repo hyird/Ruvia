@@ -98,6 +98,12 @@ ruvia::Task<int> send(ruvia::HttpClient& client, ruvia::WorkerId worker, std::st
     co_return valid ? 0 : 1;
 }
 
+ruvia::Task<void> shutdownClient(ruvia::HttpClient& client) {
+    auto cold = client.send({.target = "/never"});
+    static_cast<void>(cold);
+    co_await client.shutdown();
+}
+
 void start(const ruvia::EventLoop& loop, ruvia::HttpClient& client, std::string_view expected, std::promise<int>& completion) {
     try {
         ruvia::detail::asyncStartTask(send(client, loop.id(), expected), asio::bind_executor(loop.executor(), [&completion](ruvia::detail::TaskCompletionResult<int> result) {
@@ -128,10 +134,11 @@ int pooledWorker() {
         return 2;
     }
     const auto result = future.get();
-    const auto closing = loop.post([&] { client.close(); });
+    auto shutdownTask = loop.start(shutdownClient(client));
+    shutdownTask.get();
     loops.stop();
     loops.join();
-    return closing == ruvia::PostStatus::kAccepted ? result : 3;
+    return result;
 }
 
 int attachedWorker() {
@@ -151,10 +158,11 @@ int attachedWorker() {
         return 2;
     }
     const auto result = future.get();
-    const auto closing = loop.post([&] { client.close(); });
+    auto shutdownTask = loop.start(shutdownClient(client));
+    shutdownTask.get();
     attachment.stop();
     thread.join();
-    return closing == ruvia::PostStatus::kAccepted ? result : 3;
+    return result;
 }
 
 }  // namespace

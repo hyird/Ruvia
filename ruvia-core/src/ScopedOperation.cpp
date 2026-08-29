@@ -4,6 +4,27 @@
 
 namespace ruvia::detail {
 
+struct ScopedOperationScope::JoinAwaiter final {
+    explicit JoinAwaiter(ScopedOperationScope& owner) noexcept
+        : owner(owner) {}
+
+    [[nodiscard]] bool await_ready() const noexcept {
+        return owner.head_ == nullptr;
+    }
+
+    bool await_suspend(std::coroutine_handle<> continuation) noexcept {
+        if (owner.head_ == nullptr || owner.joinContinuation_ != nullptr) {
+            std::terminate();
+        }
+        owner.joinContinuation_ = continuation;
+        return true;
+    }
+
+    void await_resume() const noexcept {}
+
+    ScopedOperationScope& owner;
+};
+
 void ScopedOperationScope::close() noexcept {
     active_ = false;
     while (head_ != nullptr) {
@@ -16,6 +37,50 @@ void ScopedOperationScope::close() noexcept {
     while (capabilityHead_ != nullptr) {
         capabilityHead_->expire();
     }
+}
+
+Task<void> ScopedOperationScope::closeAndJoin() & {
+    if (joinStarted_) {
+        if (!joinComplete_) {
+            throw std::logic_error("scoped operation scope can only be joined once");
+        }
+        co_return;
+    }
+    joinStarted_ = true;
+    expireForJoin();
+    if (head_ == nullptr) {
+        expireCapabilities();
+        joinComplete_ = true;
+        co_return;
+    }
+    co_await JoinAwaiter(*this);
+}
+
+void ScopedOperationScope::expireForJoin() noexcept {
+    active_ = false;
+    for (auto* operation = head_; operation != nullptr;) {
+        auto* next = operation->next_;
+        if (operation->phase_ != ScopedOperationNode::Phase::kRunning) {
+            operation->expire();
+        }
+        operation = next;
+    }
+}
+
+void ScopedOperationScope::expireCapabilities() noexcept {
+    while (capabilityHead_ != nullptr) {
+        capabilityHead_->expire();
+    }
+}
+
+void ScopedOperationScope::resumeJoiner() noexcept {
+    if (head_ != nullptr || joinContinuation_ == nullptr) {
+        return;
+    }
+    expireCapabilities();
+    auto continuation = std::exchange(joinContinuation_, {});
+    joinComplete_ = true;
+    continuation.resume();
 }
 
 ScopedCapabilityNode::ScopedCapabilityNode(ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept
@@ -173,7 +238,9 @@ void ScopedOperationNode::complete() noexcept {
     }
     phase_ = Phase::kComplete;
     if (scope_ != nullptr) {
-        scope_->unlink(*this);
+        auto* scope = scope_;
+        scope->unlink(*this);
+        scope->resumeJoiner();
     }
 }
 
