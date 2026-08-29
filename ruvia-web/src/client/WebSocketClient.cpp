@@ -109,11 +109,6 @@ WebSocketClientState::WebSocketClientState(EventLoop loop, const WebSocketClient
       tlsContext_(asio::ssl::context::tls_client),
       resolver_(loop_.ioContext()),
       stream_(loop_.ioContext(), tlsContext_),
-      connectTimer_(loop_.ioContext()),
-      readTimer_(loop_.ioContext()),
-      writeTimer_(loop_.ioContext()),
-      heartbeatTimer_(loop_.ioContext()),
-      closeHandshakeTimer_(loop_.ioContext()),
       writeSignal_(worker_),
       closeSignal_(worker_),
       input_(memory_.allocator<char>()),
@@ -171,26 +166,26 @@ bool WebSocketClientState::generateMask(void*, WsMaskKey& key) noexcept {
            1;
 }
 
-void WebSocketClientState::arm(asio::steady_timer& timer,
+void WebSocketClientState::arm(WorkerTimerRegistration& timer,
     std::optional<std::chrono::milliseconds> timeout, AbortReason reason) {
+    timer.cancel();
     if (!timeout.has_value()) {
         return;
     }
-    timer.expires_after(*timeout);
     std::weak_ptr<WebSocketClientState> weak = shared_from_this();
-    timer.async_wait([weak = std::move(weak), reason](const std::error_code& error) {
-        if (error) {
-            return;
-        }
-        if (const auto state = weak.lock()) {
-            state->closeOnWorker(reason);
-        }
-    });
+    WorkerHandleAccess::scheduleTimer(worker_, timer, workerTimerDeadlineAfter(*timeout),
+        [weak = std::move(weak), reason](WorkerTimerOutcome outcome) noexcept {
+            if (outcome != WorkerTimerOutcome::kExpired) {
+                return;
+            }
+            if (const auto state = weak.lock()) {
+                state->closeOnWorker(reason);
+            }
+        });
 }
 
-void WebSocketClientState::disarm(asio::steady_timer& timer) noexcept {
-    std::error_code ignored;
-    timer.cancel(ignored);
+void WebSocketClientState::disarm(WorkerTimerRegistration& timer) noexcept {
+    timer.cancel();
 }
 
 std::optional<std::chrono::milliseconds> WebSocketClientState::effectiveTimeout(
@@ -469,16 +464,18 @@ void WebSocketClientState::armHeartbeatTimer(std::chrono::milliseconds delay) {
     if (!config_.heartbeat.pingInterval.has_value()) {
         return;
     }
-    heartbeatTimer_.expires_after(std::max(delay, std::chrono::milliseconds{1}));
+    heartbeatTimer_.cancel();
     std::weak_ptr<WebSocketClientState> weak = shared_from_this();
-    heartbeatTimer_.async_wait([weak = std::move(weak)](const std::error_code& error) {
-        if (error) {
-            return;
-        }
-        if (const auto state = weak.lock()) {
-            state->heartbeatTimerFired();
-        }
-    });
+    WorkerHandleAccess::scheduleTimer(worker_, heartbeatTimer_,
+        workerTimerDeadlineAfter(std::max(delay, std::chrono::milliseconds{1})),
+        [weak = std::move(weak)](WorkerTimerOutcome outcome) noexcept {
+            if (outcome != WorkerTimerOutcome::kExpired) {
+                return;
+            }
+            if (const auto state = weak.lock()) {
+                state->heartbeatTimerFired();
+            }
+        });
 }
 
 void WebSocketClientState::touchActivity() noexcept {

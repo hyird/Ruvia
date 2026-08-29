@@ -13,13 +13,13 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/stream.hpp>
-#include <asio/steady_timer.hpp>
 
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
+#include "ruvia/core/detail/worker/WorkerTimer.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/web/WebSocketClient.h"
@@ -138,9 +138,9 @@ private:
     [[nodiscard]] std::optional<std::chrono::milliseconds> effectiveTimeout(
         const OperationTimeout& operationTimeout,
         std::optional<std::chrono::milliseconds> configured) const;
-    void arm(asio::steady_timer& timer, std::optional<std::chrono::milliseconds> timeout,
+    void arm(WorkerTimerRegistration& timer, std::optional<std::chrono::milliseconds> timeout,
         AbortReason reason);
-    void disarm(asio::steady_timer& timer) noexcept;
+    void disarm(WorkerTimerRegistration& timer) noexcept;
     void throwAbort() const;
     [[nodiscard]] static bool generateMask(void*, WsMaskKey& key) noexcept;
 
@@ -151,11 +151,11 @@ private:
     asio::ssl::context tlsContext_;
     asio::ip::tcp::resolver resolver_;
     asio::ssl::stream<asio::ip::tcp::socket> stream_;
-    asio::steady_timer connectTimer_;
-    asio::steady_timer readTimer_;
-    asio::steady_timer writeTimer_;
-    asio::steady_timer heartbeatTimer_;
-    asio::steady_timer closeHandshakeTimer_;
+    WorkerTimerRegistration connectTimer_;
+    WorkerTimerRegistration readTimer_;
+    WorkerTimerRegistration writeTimer_;
+    WorkerTimerRegistration heartbeatTimer_;
+    WorkerTimerRegistration closeHandshakeTimer_;
     WorkerSignal writeSignal_;
     WorkerSignal closeSignal_;
     std::pmr::string input_;
