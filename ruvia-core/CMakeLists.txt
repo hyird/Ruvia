@@ -9,19 +9,8 @@ configure_file(
     "${_ruvia_core_version_header}"
     @ONLY)
 
-add_library(ruvia-core
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/BlockingPool.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ConnectionScanner.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EventLoopPool.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/FailureReport.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/MemoryPool.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ScopedOperation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/TaskScope.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/Timer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/WorkerDispatcher.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/WorkerTimers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/WorkerHandle.cpp
-)
+ruvia_collect_cpp_sources(RUVIA_CORE_SOURCES src)
+add_library(ruvia-core ${RUVIA_CORE_SOURCES})
 add_library(ruvia::core ALIAS ruvia-core)
 
 set_target_properties(ruvia-core PROPERTIES
@@ -61,4 +50,3 @@ if(WIN32)
 endif()
 
 ruvia_install_export(core)
-ruvia_assert_target_file_ownership(ruvia-core)

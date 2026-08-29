@@ -10,6 +10,49 @@
 
 namespace ruvia {
 
+template <typename EntryName>
+void ContextRequest::RequestFormData::buildGroups(const std::pmr::vector<RequestFormField>& fields,
+    std::pmr::vector<std::size_t> order, std::pmr::vector<Group>& groups, EntryName entryName) {
+    if (order.empty()) {
+        return;
+    }
+    std::ranges::stable_sort(order, [&](std::size_t left, std::size_t right) noexcept {
+        const auto leftName = entryName(fields[left]);
+        const auto rightName = entryName(fields[right]);
+        return leftName == rightName ? left < right : leftName < rightName;
+    });
+
+    struct GroupRange final {
+        std::size_t firstIndex;
+        std::size_t begin;
+        std::size_t end;
+    };
+    std::pmr::vector<GroupRange> ranges(order.get_allocator().resource());
+    ranges.reserve(order.size());
+    for (std::size_t offset = 0; offset < order.size();) {
+        const auto begin = offset;
+        const auto firstIndex = order[offset];
+        const auto name = entryName(fields[firstIndex]);
+        do {
+            ++offset;
+        } while (offset < order.size() && entryName(fields[order[offset]]) == name);
+        ranges.push_back(GroupRange{.firstIndex = firstIndex, .begin = begin, .end = offset});
+    }
+    std::ranges::stable_sort(ranges, [](const GroupRange& left, const GroupRange& right) noexcept {
+        return left.firstIndex < right.firstIndex;
+    });
+
+    groups.reserve(ranges.size());
+    for (const auto& range : ranges) {
+        groups.push_back(Group::make(
+            groups.get_allocator().resource(), entryName(fields[range.firstIndex]), false));
+        auto& group = groups.back();
+        for (std::size_t index = range.begin; index < range.end; ++index) {
+            group.add(fields[order[index]]);
+        }
+    }
+}
+
 ContextRequest::RequestFormData::Object::Object(
     const RequestFormData& form, std::string_view dotPath)
     : form_(&form),
@@ -60,49 +103,8 @@ void ContextRequest::RequestFormData::Object::rebuildEntries() {
             order.push_back(i);
         }
     }
-    if (order.empty()) {
-        return;
-    }
-
-    std::ranges::stable_sort(order, [this](std::size_t left, std::size_t right) noexcept {
-        const auto leftName = directChildName(form_->fields_[left], path());
-        const auto rightName = directChildName(form_->fields_[right], path());
-        if (leftName == rightName) {
-            return left < right;
-        }
-        return leftName < rightName;
-    });
-
-    struct EntryBuild final {
-        std::size_t firstIndex;
-        std::size_t begin;
-        std::size_t end;
-    };
-    std::pmr::vector<EntryBuild> builds(currentResource);
-    builds.reserve(order.size());
-    for (std::size_t offset = 0; offset < order.size();) {
-        const auto begin = offset;
-        const auto firstIndex = order[offset];
-        const auto name = directChildName(form_->fields_[firstIndex], path());
-        do {
-            ++offset;
-        } while (offset < order.size() &&
-                 directChildName(form_->fields_[order[offset]], path()) == name);
-        builds.push_back(EntryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
-    }
-    std::ranges::stable_sort(builds, [](const EntryBuild& left, const EntryBuild& right) noexcept {
-        return left.firstIndex < right.firstIndex;
-    });
-
-    entries_.reserve(builds.size());
-    for (const auto& build : builds) {
-        entries_.push_back(Group::make(
-            currentResource, directChildName(form_->fields_[build.firstIndex], path()), false));
-        auto& formEntry = entries_.back();
-        for (std::size_t i = build.begin; i < build.end; ++i) {
-            formEntry.add(form_->fields_[order[i]]);
-        }
-    }
+    RequestFormData::buildGroups(form_->fields_, std::move(order), entries_,
+        [this](const RequestFormField& field) noexcept { return directChildName(field, path()); });
 }
 
 ContextRequest::RequestFormData::RequestFormData(std::pmr::vector<RequestFormField>&& fields)
@@ -152,43 +154,8 @@ void ContextRequest::RequestFormData::rebuildEntries() {
     for (std::size_t i = 0; i < fields_.size(); ++i) {
         order.push_back(i);
     }
-    std::ranges::stable_sort(order, [this](std::size_t left, std::size_t right) noexcept {
-        const auto leftName = entryName(fields_[left]);
-        const auto rightName = entryName(fields_[right]);
-        if (leftName == rightName) {
-            return left < right;
-        }
-        return leftName < rightName;
-    });
-
-    struct EntryBuild final {
-        std::size_t firstIndex;
-        std::size_t begin;
-        std::size_t end;
-    };
-    std::pmr::vector<EntryBuild> builds(resource);
-    builds.reserve(order.size());
-    for (std::size_t offset = 0; offset < order.size();) {
-        const auto begin = offset;
-        const auto firstIndex = order[offset];
-        const auto name = entryName(fields_[firstIndex]);
-        do {
-            ++offset;
-        } while (offset < order.size() && entryName(fields_[order[offset]]) == name);
-        builds.push_back(EntryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
-    }
-    std::ranges::stable_sort(builds, [](const EntryBuild& left, const EntryBuild& right) noexcept {
-        return left.firstIndex < right.firstIndex;
-    });
-
-    entries_.reserve(builds.size());
-    for (const auto& build : builds) {
-        entries_.push_back(Group::make(resource, entryName(fields_[build.firstIndex]), false));
-        auto& entry = entries_.back();
-        for (std::size_t i = build.begin; i < build.end; ++i) {
-            entry.add(fields_[order[i]]);
-        }
-    }
+    buildGroups(fields_, std::move(order), entries_,
+        [](const RequestFormField& field) noexcept { return entryName(field); });
 
     rebuildPathEntries(resource);
 }
@@ -201,48 +168,8 @@ void ContextRequest::RequestFormData::rebuildPathEntries(std::pmr::memory_resour
             order.push_back(i);
         }
     }
-    if (order.empty()) {
-        return;
-    }
-
-    std::ranges::stable_sort(order, [this](std::size_t left, std::size_t right) noexcept {
-        const auto leftName = pathEntryName(fields_[left]);
-        const auto rightName = pathEntryName(fields_[right]);
-        if (leftName == rightName) {
-            return left < right;
-        }
-        return leftName < rightName;
-    });
-
-    struct EntryBuild final {
-        std::size_t firstIndex;
-        std::size_t begin;
-        std::size_t end;
-    };
-    std::pmr::vector<EntryBuild> builds(resource);
-    builds.reserve(order.size());
-    for (std::size_t offset = 0; offset < order.size();) {
-        const auto begin = offset;
-        const auto firstIndex = order[offset];
-        const auto name = pathEntryName(fields_[firstIndex]);
-        do {
-            ++offset;
-        } while (offset < order.size() && pathEntryName(fields_[order[offset]]) == name);
-        builds.push_back(EntryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
-    }
-    std::ranges::stable_sort(builds, [](const EntryBuild& left, const EntryBuild& right) noexcept {
-        return left.firstIndex < right.firstIndex;
-    });
-
-    pathEntries_.reserve(builds.size());
-    for (const auto& build : builds) {
-        pathEntries_.push_back(
-            Group::make(resource, pathEntryName(fields_[build.firstIndex]), false));
-        auto& entry = pathEntries_.back();
-        for (std::size_t i = build.begin; i < build.end; ++i) {
-            entry.add(fields_[order[i]]);
-        }
-    }
+    buildGroups(fields_, std::move(order), pathEntries_,
+        [](const RequestFormField& field) noexcept { return pathEntryName(field); });
 }
 
 }  // namespace ruvia

@@ -88,34 +88,27 @@ void ContextSessionState::clear() {
 }
 
 void ContextSessionState::regenerate() {
-    if (auto* loadedState = std::get_if<SessionLoaded>(&value_)) {
-        auto oldId = std::move(loadedState->id);
-        auto data = std::move(loadedState->data);
+    const auto regenerateExisting = [this](auto& state) {
+        auto oldId = std::move(state.id);
+        auto data = std::move(state.data);
         if (data.empty()) {
             value_.template emplace<SessionClear>(
                 std::optional<std::pmr::string>(std::move(oldId)));
-            return;
+        } else {
+            value_.template emplace<SessionRotate>(std::move(oldId), std::move(data));
         }
-        value_.template emplace<SessionRotate>(std::move(oldId), std::move(data));
+    };
+    if (auto* loadedState = std::get_if<SessionLoaded>(&value_)) {
+        regenerateExisting(*loadedState);
         return;
     }
     if (auto* existing = std::get_if<SessionPersistExisting>(&value_)) {
-        auto oldId = std::move(existing->id);
-        auto data = std::move(existing->data);
-        if (data.empty()) {
-            value_.template emplace<SessionClear>(
-                std::optional<std::pmr::string>(std::move(oldId)));
-            return;
-        }
-        value_.template emplace<SessionRotate>(std::move(oldId), std::move(data));
+        regenerateExisting(*existing);
         return;
     }
-    if (std::get_if<SessionClear>(&value_) != nullptr ||
-        std::get_if<SessionRotate>(&value_) != nullptr) {
-        return;
-    }
-    if (auto* fresh = std::get_if<SessionPersistNew>(&value_)) {
-        (void)fresh;
+    if (std::holds_alternative<SessionClear>(value_) ||
+        std::holds_alternative<SessionRotate>(value_) ||
+        std::holds_alternative<SessionPersistNew>(value_)) {
         return;
     }
     const auto currentData = data();

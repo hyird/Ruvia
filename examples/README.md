@@ -1,6 +1,6 @@
 # Ruvia Examples
 
-These examples are built when `RUVIA_BUILD_EXAMPLES` is enabled and double as compile-time coverage for Ruvia's public API. Unit, boundary, and regression-guard coverage lives separately under `tests/` and is registered with CTest when `RUVIA_BUILD_TESTS` is enabled.
+These examples are built when `RUVIA_BUILD_EXAMPLES` is enabled and double as compile-time coverage for Ruvia's public API. Functional unit tests live separately under `tests/` and are registered with CTest when `RUVIA_BUILD_TESTS` is enabled.
 
 | Target | Source | Covers |
 | --- | --- | --- |

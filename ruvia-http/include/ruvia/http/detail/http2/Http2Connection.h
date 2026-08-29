@@ -683,6 +683,7 @@ private:
     // RFC 9113 §6.10) into the outbound buffer, ending the stream when endStream is set.
     void appendResponseHeaderFrames(
         Http2StreamState& stream, std::string_view headerBlock, Http2EndStream endStream);
+    void commitConnectResponseHead(Http2StreamState& stream, bool terminalRemoteHalf);
     // Emit DATA frames for data.substr(offset) while the send window allows, returning
     // the new offset (== data.size() when fully sent). Consumes send-window credit.
     [[nodiscard]] std::size_t sendDataUpToWindow(Http2StreamState& stream, std::string_view data,
@@ -743,6 +744,8 @@ private:
     [[nodiscard]] HeaderDecodeStatus finishTrailerBlock(Http2StreamState& stream,
         Http2StreamHeaderDecodeTransaction& streamTransaction,
         HpackDecoder::DecodeTransaction& hpackTransaction);
+    template <Http2HeaderBlockKind Kind>
+    [[nodiscard]] bool completeDecodedHeaderBlock(Http2StreamState& stream);
     // On a decode failure: compression error is fatal (GOAWAY, returns false); anything
     // else RST_STREAMs the stream and survives (returns true).
     [[nodiscard]] bool handleHeaderDecodeFailure(Http2StreamState& stream,
@@ -771,7 +774,25 @@ private:
     [[nodiscard]] std::optional<Http2RequestHeadSubmitError> localRequestAdmissionError()
         const noexcept;
     [[nodiscard]] Http2StreamState* admitLocalRequestStream();
-    void activateLocalRequestStream(Http2StreamState& stream) noexcept;
+    [[nodiscard]] Http2RequestHeadSubmitResult publishLocalRequestHead(
+        Http2StreamState& stream) noexcept;
+    template <typename Prepare>
+    [[nodiscard]] Http2RequestHeadSubmitResult submitLocalRequestHead(Prepare&& prepare) {
+        auto* stream = admitLocalRequestStream();
+        if (stream == nullptr) {
+            return Http2RequestHeadSubmitResult::makeFailure(
+                Http2RequestHeadSubmitError::kLocalStreamCapacityReached);
+        }
+        const auto streamId = stream->id();
+        try {
+            std::forward<Prepare>(prepare)(*stream);
+        } catch (...) {
+            (void)streams_.remove(streamId);
+            nextLocalStreamId_ -= 2;
+            throw;
+        }
+        return publishLocalRequestHead(*stream);
+    }
     void releaseLocalRequestStreamIfClosed(Http2StreamState& stream) noexcept;
     void releaseLocalRequestStream(Http2StreamState& stream) noexcept;
     [[nodiscard]] bool isPinned(std::uint32_t streamId) const noexcept;

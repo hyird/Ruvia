@@ -1,15 +1,13 @@
 #pragma once
 
 #include <atomic>
-#include <exception>
 #include <memory>
 
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/StopToken.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/db/DbClient.h"
+#include "ruvia/web/detail/client/ClientCloseState.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 
 namespace ruvia::detail {
@@ -57,12 +55,9 @@ private:
     DbRegistry databases_;
     StopSource stopSource_;
     EventLoopStopRegistration stopRegistration_;
-    WorkerSignal closeSignal_;
+    ClientCloseState closeState_;
     std::atomic<Phase> phase_{Phase::kFresh};
     bool connectInFlight_{false};
-    bool closeTaskStarted_{false};
-    bool closeComplete_{false};
-    std::exception_ptr closeFailure_;
     // Declared last so handles and cold operations expire before the pool and
     // its unsynchronized worker memory are destroyed.
     ScopedOperationScope operationScope_;

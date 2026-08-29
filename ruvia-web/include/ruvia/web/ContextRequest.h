@@ -519,6 +519,11 @@ public:
             return formEntry == nullptr ? 0 : formEntry->size();
         }
 
+        template <typename EntryName>
+        static void buildGroups(const std::pmr::vector<RequestFormField>& fields,
+            std::pmr::vector<std::size_t> order, std::pmr::vector<Group>& groups,
+            EntryName entryName);
+
         void rebuildEntries();
 
         [[nodiscard]] static std::string_view entryName(const RequestFormField& field) noexcept {

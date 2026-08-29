@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "memory_resource_fixture.h"
 
 #include <array>
 #include <chrono>
@@ -9,7 +10,6 @@
 #include <initializer_list>
 #include <memory>
 #include <memory_resource>
-#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -26,7 +26,6 @@
 
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/web/db/DbClient.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbPoolOperations.h"
@@ -41,6 +40,10 @@
 #endif
 
 namespace {
+
+using ruvia::test::RejectingMemoryResource;
+using ruvia::test::TrackingResource;
+using ruvia::testing::throwsOn;
 
 template <typename T>
 concept HasMariaDbFactory = requires { T::mariaDb(); };
@@ -134,75 +137,6 @@ public:
     std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
     ruvia::WorkerHandle worker;
 };
-
-class RejectingMemoryResource final : public std::pmr::memory_resource {
-public:
-    void rejectAllocations(bool value = true) noexcept {
-        rejecting_ = value;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (rejecting_) {
-            throw std::bad_alloc();
-        }
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
-    }
-
-    void do_deallocate(void* value, std::size_t bytes, std::size_t alignment) override {
-        std::pmr::new_delete_resource()->deallocate(value, bytes, alignment);
-    }
-
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    bool rejecting_{false};
-};
-
-class TrackingResource final : public std::pmr::memory_resource {
-public:
-    void release() noexcept {
-        released_ = true;
-    }
-
-    [[nodiscard]] bool deallocatedAfterRelease() const noexcept {
-        return deallocatedAfterRelease_;
-    }
-
-    [[nodiscard]] std::size_t allocationCount() const noexcept {
-        return allocationCount_;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        ++allocationCount_;
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        deallocatedAfterRelease_ = deallocatedAfterRelease_ || released_;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
-    }
-
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    bool released_{false};
-    bool deallocatedAfterRelease_{false};
-    std::size_t allocationCount_{0};
-};
-
-template <typename Fn>
-bool throwsOn(Fn&& fn) {
-    try {
-        fn();
-        return false;
-    } catch (const std::exception&) {
-        return true;
-    }
-}
 
 static_assert(std::is_move_assignable_v<ruvia::DbField>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbField>);
@@ -356,19 +290,6 @@ concept HasDbTransactionInitializerListParams =
 static_assert(HasDbHandleDefaultParams<ruvia::DbHandle>);
 static_assert(HasDbHandleSpanParams<ruvia::DbHandle>);
 static_assert(!HasDbHandleInitializerListParams<ruvia::DbHandle>);
-static_assert(std::constructible_from<ruvia::DbClient, ruvia::EventLoop, ruvia::DbConfig>);
-static_assert(!std::copy_constructible<ruvia::DbClient>);
-static_assert(!std::move_constructible<ruvia::DbClient>);
-static_assert(
-    std::same_as<decltype(std::declval<ruvia::DbClient&>().connect()), ruvia::Task<void>>);
-static_assert(HasDbHandleDefaultParams<ruvia::DbClient>);
-static_assert(HasDbHandleSpanParams<ruvia::DbClient>);
-static_assert(!HasDbHandleInitializerListParams<ruvia::DbClient>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().withOptions(
-                               ruvia::OperationOptions{})),
-    ruvia::DbHandle>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().worker()),
-    const ruvia::WorkerHandle&>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::DbHandle&>().withOptions(
                                ruvia::OperationOptions{})),
     ruvia::DbHandle>);

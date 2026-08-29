@@ -218,6 +218,8 @@ private:
         Connection& connection, const OperationTimeout& timeout, DeadlineKind kind);
     [[nodiscard]] bool clearDeadline(Connection& connection) noexcept;
     void throwAbort(const Connection& connection) const;
+    [[nodiscard]] HttpClientError::Code transportErrorCode(
+        const std::error_code& error) const noexcept;
     [[nodiscard]] Task<void> ensureConnected(Connection& connection,
         const OperationTimeout& timeout, const OperationTimeout& acquireTimeout,
         StopToken stopToken);

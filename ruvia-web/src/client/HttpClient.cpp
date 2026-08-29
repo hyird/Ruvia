@@ -23,10 +23,10 @@ HttpClientState::HttpClientState(EventLoop loop, const HttpClientConfig& config)
       worker_(loop_.handle()),
       memory_(),
       clients_(loop_.ioContext(), worker_, memory_.resource(), config),
-      closeSignal_(worker_) {}
+      closeState_(worker_) {}
 
 HttpClientState::~HttpClientState() {
-    if (phase_.load(std::memory_order_acquire) != Phase::kClosed || !closeComplete_ ||
+    if (phase_.load(std::memory_order_acquire) != Phase::kClosed || !closeState_.complete() ||
         operationScope_.hasPendingOperations()) {
         std::terminate();
     }
@@ -43,7 +43,7 @@ void HttpClientState::bindStop() {
     } catch (...) {
         clients_.closeNow();
         phase_.store(Phase::kClosed, std::memory_order_release);
-        closeComplete_ = true;
+        closeState_.completeNow();
         throw;
     }
 }
@@ -120,12 +120,10 @@ Task<void> HttpClientState::shutdownOwned(std::shared_ptr<HttpClientState> state
         throw std::logic_error("HTTP client shutdown must run on its bound event loop");
     }
     state->startCloseOnWorker();
-    while (!state->closeComplete_) {
-        co_await state->closeSignal_.wait();
+    while (!state->closeState_.complete()) {
+        co_await state->closeState_.wait();
     }
-    if (state->closeFailure_) {
-        std::rethrow_exception(state->closeFailure_);
-    }
+    state->closeState_.rethrowFailure();
 }
 
 void HttpClientState::startCloseOnWorker() noexcept {
@@ -137,10 +135,9 @@ void HttpClientState::startCloseOnWorker() noexcept {
         expected, Phase::kClosing, std::memory_order_acq_rel, std::memory_order_acquire);
     stopSource_.requestStop();
     clients_.closeNow();
-    if (closeTaskStarted_ || phase_.load(std::memory_order_acquire) == Phase::kClosed) {
+    if (phase_.load(std::memory_order_acquire) == Phase::kClosed || !closeState_.startTask()) {
         return;
     }
-    closeTaskStarted_ = true;
     try {
         auto state = shared_from_this();
         asyncStartTask(closeOnWorker(),
@@ -159,14 +156,7 @@ Task<void> HttpClientState::closeOnWorker() {
 
 void HttpClientState::finishClose(const TaskCompletionResult<void>& result) {
     phase_.store(Phase::kClosed, std::memory_order_release);
-    if (const auto* failed = result.failure()) {
-        closeFailure_ = failed->exception();
-    }
-    closeComplete_ = true;
-    closeSignal_.notify();
-    if (const auto* failed = result.failure()) {
-        std::rethrow_exception(failed->exception());
-    }
+    closeState_.finish(result);
 }
 
 }  // namespace ruvia::detail

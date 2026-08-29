@@ -35,6 +35,7 @@ using ruvia::detail::ContextAccess;
 using ruvia::detail::ContextServices;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::responseBody;
+using ruvia::testing::throwsOn;
 
 // The Context holds the request by reference, so keep it in the test's scope
 // (this macro-free setup avoids a returning helper that would dangle).
@@ -45,16 +46,6 @@ using ruvia::detail::responseBody;
     HttpRequestAccess::reset(request);                          \
     HttpRequestAccess::setResource(request, memory.resource()); \
     auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices())
-
-template <typename Fn>
-bool throwsOn(Fn&& fn) {
-    try {
-        fn();
-        return false;
-    } catch (const std::exception&) {
-        return true;
-    }
-}
 
 }  // namespace
 

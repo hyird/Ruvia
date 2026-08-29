@@ -13,17 +13,22 @@
 
 namespace ruvia::detail {
 
+namespace {
+
+[[nodiscard]] bool decodeInitialHeaderField(
+    void* target, std::string_view name, std::string_view value) {
+    return http2OnDecodedInitialHeader(
+        *static_cast<Http2HeaderDecodeContext*>(target), name, value);
+}
+
+}  // namespace
+
 HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream,
     Http2StreamHeaderDecodeTransaction& streamTransaction,
     HpackDecoder::DecodeTransaction& hpackTransaction) {
     Http2HeaderDecodeContext context{stream, &streamTransaction};
     const auto result = decoder_.decode(
-        stream.remoteHeaderBlock(), &context,
-        [](void* target, std::string_view name, std::string_view value) {
-            return http2OnDecodedInitialHeader(
-                *static_cast<Http2HeaderDecodeContext*>(target), name, value);
-        },
-        hpackTransaction);
+        stream.remoteHeaderBlock(), &context, decodeInitialHeaderField, hpackTransaction);
     if (const auto status = http2ClassifyHeaderDecodeResult(result);
         status != HeaderDecodeStatus::kOk) {
         return status;
@@ -110,9 +115,13 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream,
 HeaderDecodeStatus Http2Connection::decodeInitialHeaderBlock(Http2StreamState& stream,
     Http2StreamHeaderDecodeTransaction& streamTransaction,
     HpackDecoder::DecodeTransaction& hpackTransaction) {
-    return role_ == Http2Role::kClient
-               ? decodeResponseHeaderBlock(stream, streamTransaction, hpackTransaction)
-               : decodeHeaderBlock(stream, streamTransaction, hpackTransaction);
+    const auto status = role_ == Http2Role::kClient
+                            ? decodeResponseHeaderBlock(stream, streamTransaction, hpackTransaction)
+                            : decodeHeaderBlock(stream, streamTransaction, hpackTransaction);
+    if (status == HeaderDecodeStatus::kOk && http2RemoteFinalHeadDecoded(stream)) {
+        emitRequestHeaders(stream);  // An interim client response does not publish a message head.
+    }
+    return status;
 }
 
 HeaderDecodeStatus Http2Connection::decodeRefusedHeaderBlock(
@@ -120,12 +129,7 @@ HeaderDecodeStatus Http2Connection::decodeRefusedHeaderBlock(
     Http2StreamHeaderDecodeTransaction transaction{stream, true};
     Http2HeaderDecodeContext context{stream, &transaction};
     const auto result = decoder_.decode(
-        stream.remoteHeaderBlock(), &context,
-        [](void* target, std::string_view name, std::string_view value) {
-            return http2OnDecodedInitialHeader(
-                *static_cast<Http2HeaderDecodeContext*>(target), name, value);
-        },
-        hpackTransaction);
+        stream.remoteHeaderBlock(), &context, decodeInitialHeaderField, hpackTransaction);
     return http2ClassifyHeaderDecodeResult(result);
 }
 

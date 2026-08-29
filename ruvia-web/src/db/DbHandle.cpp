@@ -17,72 +17,31 @@ namespace {
 Task<DbRows> queryPool(detail::DbPoolRef pool, std::pmr::string sql,
     std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
     OperationOptions options) {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->query(std::move(sql), std::move(params), resource, std::move(options));
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->query(std::move(sql), std::move(params), resource, std::move(options));
-    }
-#endif
-    detail::throwUnavailableDbBackend();
+    return detail::visitDbPool(pool, [&](auto& client) {
+        return client.query(std::move(sql), std::move(params), resource, std::move(options));
+    });
 }
 
 Task<DbExecResult> executePool(detail::DbPoolRef pool, std::pmr::string sql,
     std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
     OperationOptions options) {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->execute(std::move(sql), std::move(params), resource, std::move(options));
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->execute(std::move(sql), std::move(params), resource, std::move(options));
-    }
-#endif
-    detail::throwUnavailableDbBackend();
+    return detail::visitDbPool(pool, [&](auto& client) {
+        return client.execute(std::move(sql), std::move(params), resource, std::move(options));
+    });
 }
 
 Task<DbStreamResult> streamPool(detail::DbPoolRef pool, std::pmr::string sql,
     std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
     OperationOptions options) {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->stream(std::move(sql), std::move(params), resource, std::move(options));
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->stream(std::move(sql), std::move(params), resource, std::move(options));
-    }
-#endif
-    detail::throwUnavailableDbBackend();
+    return detail::visitDbPool(pool, [&](auto& client) {
+        return client.stream(std::move(sql), std::move(params), resource, std::move(options));
+    });
 }
 
 Task<DbTransaction> beginPoolTransaction(
     detail::DbPoolRef pool, std::pmr::memory_resource* resource, OperationOptions options) {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->beginTransaction(resource, std::move(options));
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->beginTransaction(resource, std::move(options));
-    }
-#endif
-    detail::throwUnavailableDbBackend();
+    return detail::visitDbPool(pool,
+        [&](auto& client) { return client.beginTransaction(resource, std::move(options)); });
 }
 
 }  // namespace

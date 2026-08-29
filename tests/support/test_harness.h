@@ -5,6 +5,7 @@
 // and reports pass/fail counts, returning non-zero if anything failed.
 
 #include <cstdio>
+#include <exception>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,6 +32,16 @@ struct Registrar {
         registry().push_back(TestCase{name, fn});
     }
 };
+
+template <typename Fn>
+[[nodiscard]] bool throwsOn(Fn&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::exception&) {
+        return true;
+    }
+}
 
 inline void reportFailure(TestContext& ctx, const char* file, int line, std::string_view expr) {
     ++ctx.failures;

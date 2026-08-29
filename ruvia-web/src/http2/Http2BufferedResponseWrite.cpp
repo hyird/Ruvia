@@ -109,6 +109,11 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
 
     wakeWriter();
     const auto committedStatus = submittedHead->responseStatus();
+    const auto failAfterCommit = [this, streamId, committedStatus]() noexcept {
+        submitResetNoThrow(connection_, streamId, Http2ErrorCode::kInternalError);
+        wakeWriter();
+        return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
+    };
     if (!submittedHead->sendBody()) {
         co_return Http2BufferedResponseWriteResult::makeCompleted(committedStatus);
     }
@@ -123,9 +128,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
         }
         if (!ready) {
             // The committed Content-Length can no longer be honoured.
-            submitResetNoThrow(connection_, streamId, Http2ErrorCode::kInternalError);
-            wakeWriter();
-            co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
+            co_return failAfterCommit();
         }
 
         std::pmr::string fileChunk(worker_.allocator<char>());
@@ -142,9 +145,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
             input.read(fileChunk.data(), static_cast<std::streamsize>(next));
             const auto readBytes = input.gcount();
             if (readBytes <= 0) {
-                submitResetNoThrow(connection_, streamId, Http2ErrorCode::kInternalError);
-                wakeWriter();
-                co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
+                co_return failAfterCommit();
             }
             remaining -= static_cast<std::uint64_t>(readBytes);
             const auto result = co_await writeData(streamId,
@@ -155,9 +156,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
                     committedStatus);
             }
             if (result == DataWriteResult::kFailed) {
-                submitResetNoThrow(connection_, streamId, Http2ErrorCode::kInternalError);
-                wakeWriter();
-                co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
+                co_return failAfterCommit();
             }
         }
         co_return Http2BufferedResponseWriteResult::makeCompleted(committedStatus);
@@ -175,9 +174,7 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
             co_return Http2BufferedResponseWriteResult::makePeerAbortedAfterCommit(committedStatus);
         }
         if (result == DataWriteResult::kFailed) {
-            submitResetNoThrow(connection_, streamId, Http2ErrorCode::kInternalError);
-            wakeWriter();
-            co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(committedStatus);
+            co_return failAfterCommit();
         }
         offset += size;
     }

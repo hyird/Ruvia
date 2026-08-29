@@ -1,9 +1,9 @@
 #include "test_harness.h"
+#include "memory_resource_fixture.h"
 
 #include <concepts>
 #include <cstddef>
 #include <memory_resource>
-#include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -15,6 +15,9 @@
 #include "ruvia/web/detail/integration/NamedCapability.h"
 
 namespace {
+
+using ruvia::test::CountingMemoryResource;
+using ruvia::test::RejectingMemoryResource;
 
 struct Entry final {
     std::string alias;
@@ -46,50 +49,6 @@ static_assert(!std::constructible_from<ruvia::detail::HttpClientRegistry, asio::
     ruvia::WorkerHandle&&, std::pmr::memory_resource*,
     std::span<const ruvia::detail::HttpClientDefinition>>);
 
-class RejectingMemoryResource final : public std::pmr::memory_resource {
-public:
-    [[nodiscard]] std::size_t allocationCount() const noexcept {
-        return allocationCount_;
-    }
-
-private:
-    void* do_allocate(std::size_t, std::size_t) override {
-        ++allocationCount_;
-        throw std::bad_alloc();
-    }
-
-    void do_deallocate(void*, std::size_t, std::size_t) override {}
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    std::size_t allocationCount_{0};
-};
-
-class CountingMemoryResource final : public std::pmr::memory_resource {
-public:
-    [[nodiscard]] std::size_t allocationCount() const noexcept {
-        return allocationCount_;
-    }
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        ++allocationCount_;
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    std::size_t allocationCount_{0};
-};
-
 [[nodiscard]] std::string validationFailure(const std::vector<Entry>& entries) {
     try {
         ruvia::detail::validateCapabilityAliases(entries, "alias is empty", "alias is duplicated");
@@ -119,6 +78,7 @@ RUVIA_TEST(named_capability_alias_validation_checks_the_complete_set_without_own
 
 RUVIA_TEST(named_capability_upsert_validates_normalizes_and_preserves_alias_order) {
     RejectingMemoryResource rejectingResource;
+    rejectingResource.rejectAllocations();
     std::pmr::vector<Definition> invalidDefinitions(std::pmr::new_delete_resource());
     bool rejectedBeforeNormalization = false;
     try {

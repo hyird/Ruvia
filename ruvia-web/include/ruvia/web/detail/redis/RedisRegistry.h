@@ -149,7 +149,7 @@ private:
 
     class ConnectionGuard final {
     public:
-        ConnectionGuard(RedisPool& pool, std::size_t index) noexcept;
+        ConnectionGuard(RedisPool& pool, std::size_t index, const StopToken& stopToken);
         ConnectionGuard(const ConnectionGuard&) = delete;
         ConnectionGuard& operator=(const ConnectionGuard&) = delete;
         ~ConnectionGuard();
@@ -160,6 +160,8 @@ private:
     private:
         RedisPool& pool_;
         std::size_t index_{0};
+        std::uint64_t cancellationId_{0};
+        StopRegistration stopRegistration_;
         bool discard_{false};
     };
 
@@ -181,7 +183,7 @@ private:
     template <typename CommandSource>
     Task<std::pmr::vector<RedisValue>> executePipelineImpl(
         CommandSource commands, OperationOptions options, std::pmr::memory_resource* resource);
-    Task<std::error_code> asyncSocketWrite(Connection& connection, const OperationTimeout& timeout);
+    Task<void> asyncSocketWrite(Connection& connection, const OperationTimeout& timeout);
     Task<AsioCompletion<std::size_t>> asyncSocketReadSome(
         Connection& connection, std::span<char> buffer, const OperationTimeout& timeout);
     void cancelOperationById(std::uint64_t cancellationId) noexcept;

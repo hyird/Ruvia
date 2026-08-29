@@ -4,8 +4,6 @@
 #include <algorithm>
 
 #include <asio/write.hpp>
-#include <asio/ssl/error.hpp>
-
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
@@ -261,10 +259,8 @@ void HttpClientPool::failHttp2Session(Connection& connection, std::uint64_t gene
                 pendingError = HttpClientError::Code::kTimeout;
             } else if (transportError == std::errc::protocol_error) {
                 pendingError = HttpClientError::Code::kProtocolError;
-            } else if (config_.scheme == HttpScheme::kHttps &&
-                       (transportError.category() == asio::error::get_ssl_category() ||
-                           transportError == asio::ssl::error::stream_truncated)) {
-                pendingError = HttpClientError::Code::kTlsFailed;
+            } else {
+                pendingError = transportErrorCode(transportError);
             }
             break;
     }

@@ -18,6 +18,14 @@
 
 namespace ruvia {
 
+class DbTransaction;
+
+namespace detail {
+template <typename Pool>
+Task<DbTransaction> beginDbTransaction(Pool&, std::string_view, std::pmr::memory_resource*,
+    OperationOptions);
+}
+
 class DbTransaction final : private detail::ScopedCapabilityNode {
 public:
     DbTransaction(const DbTransaction&) = delete;
@@ -74,6 +82,9 @@ private:
     friend class DbHandle;
     friend class detail::MariaDbPool;
     friend class detail::PostgreSqlPool;
+    template <typename Pool>
+    friend Task<DbTransaction> detail::beginDbTransaction(
+        Pool&, std::string_view, std::pmr::memory_resource*, OperationOptions);
 
     struct Lease final {
         Lease(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource,

@@ -57,6 +57,13 @@ void clearRemainingPostgreSqlResults(PGconn* connection) noexcept {
     }
 }
 
+[[noreturn]] void throwPostgreSqlStatementError(PGconn& connection, std::string_view operation, PostgreSqlResultOwner& result) {
+    auto error = postgreSqlError(connection, operation, DbError::Code::kStatementFailed, result.get());
+    result.reset();
+    clearRemainingPostgreSqlResults(&connection);
+    throw error;
+}
+
 [[nodiscard]] bool successfulResultStatus(ExecStatusType status) noexcept {
     return status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK || status == PGRES_EMPTY_QUERY;
 }
@@ -148,11 +155,7 @@ Task<DbRows> PostgreSqlPool::queryOnSlot(ConnectionSlot& slot, const std::pmr::s
         }
         const auto status = PQresultStatus(result.get());
         if (!successfulResultStatus(status)) {
-            auto error = postgreSqlError(*slot.connection, "PostgreSQL query",
-                DbError::Code::kStatementFailed, result.get());
-            result.reset();
-            clearRemainingPostgreSqlResults(slot.connection);
-            throw error;
+            throwPostgreSqlStatementError(*slot.connection, "PostgreSQL query", result);
         }
 
         if (status == PGRES_TUPLES_OK) {
@@ -191,11 +194,7 @@ Task<DbExecResult> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std
         }
         const auto status = PQresultStatus(result.get());
         if (!successfulResultStatus(status)) {
-            auto error = postgreSqlError(*slot.connection, "PostgreSQL execute",
-                DbError::Code::kStatementFailed, result.get());
-            result.reset();
-            clearRemainingPostgreSqlResults(slot.connection);
-            throw error;
+            throwPostgreSqlStatementError(*slot.connection, "PostgreSQL execute", result);
         }
         if (status == PGRES_TUPLES_OK) {
             result.reset();
@@ -340,23 +339,7 @@ Task<DbExecResult> PostgreSqlPool::executeOnTransactionSlot(std::size_t slot, st
 
 Task<DbTransaction> PostgreSqlPool::beginTransaction(
     std::pmr::memory_resource* resource, OperationOptions options) {
-    const OperationTimeout operationTimeout(options.timeout);
-    const auto slotIndex = co_await acquireSlot(operationTimeout, options.stopToken);
-    DbSlotCancellationGuard cancellation(*this, slotIndex, options.stopToken);
-    try {
-        auto& slot = slots_[slotIndex];
-        throwIfCancelled(slot);
-        if (!slot.connected) {
-            co_await connectUnlocked(slot, operationTimeout);
-        }
-        co_await executeControl(slot, "BEGIN", resource, operationTimeout);
-        co_return DbTransaction(DbPoolRef{this}, slotIndex, resource, std::move(options));
-    } catch (...) {
-        closeSlot(slots_[slotIndex]);
-        cancellation.finish();
-        releaseSlot(slotIndex);
-        throw;
-    }
+    return beginDbTransaction(*this, "BEGIN", resource, std::move(options));
 }
 
 Task<void> PostgreSqlPool::commitTransaction(

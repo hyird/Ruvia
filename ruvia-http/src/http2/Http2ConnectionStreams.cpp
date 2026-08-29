@@ -288,10 +288,13 @@ Http2StreamState* Http2Connection::admitLocalRequestStream() {
     return stream;
 }
 
-void Http2Connection::activateLocalRequestStream(Http2StreamState& stream) noexcept {
+Http2RequestHeadSubmitResult Http2Connection::publishLocalRequestHead(
+    Http2StreamState& stream) noexcept {
     if (stream.holdPeerConcurrencySlot()) {
         ++activeLocalRequestStreams_;
     }
+    http2ReleaseLocalHeaderBlock(stream);
+    return Http2RequestHeadSubmitResult::makeSubmitted(stream.id());
 }
 
 void Http2Connection::releaseLocalRequestStream(Http2StreamState& stream) noexcept {

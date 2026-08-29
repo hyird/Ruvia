@@ -40,6 +40,7 @@ using ruvia::detail::redisValueIntegerBool;
 using ruvia::detail::redisValueString;
 using ruvia::detail::respCommandSerializedSize;
 using ruvia::detail::validateRedisPooledCommand;
+using ruvia::testing::throwsOn;
 
 RedisValue toNilValue() {
     return RedisTypesAccess::nullValue(std::pmr::get_default_resource());
@@ -67,16 +68,6 @@ redisReply arrayReply(redisReply** elements, std::size_t count) {
 RedisValue toValue(redisReply** elements, std::size_t count) {
     const auto reply = arrayReply(elements, count);
     return hiredisReplyToValue(reply, 0, 32, std::pmr::get_default_resource());
-}
-
-template <typename Fn>
-bool throwsOn(Fn&& fn) {
-    try {
-        fn();
-        return false;
-    } catch (const std::exception&) {
-        return true;
-    }
 }
 
 // True only if fn throws ruvia::RedisError specifically. A std::logic_error (the

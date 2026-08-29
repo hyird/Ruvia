@@ -8,7 +8,6 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
-#include <exception>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -20,19 +19,7 @@
 #include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbSqlScan.h"
 
-namespace {
-
-template <typename Fn>
-bool throwsOn(Fn&& fn) {
-    try {
-        fn();
-        return false;
-    } catch (const std::exception&) {
-        return true;
-    }
-}
-
-}  // namespace
+using ruvia::testing::throwsOn;
 
 RUVIA_TEST(db_migrator_options_default_table_uses_ruvia_name) {
     const ruvia::DbMigratorOptions options;

@@ -104,6 +104,19 @@ std::span<const HttpClientResponseHeader> HttpClientResponse::trailers() const& 
     return state_->trailers;
 }
 
+void HttpClientResponseBody::promotePendingData(detail::HttpClientResponseState& state) {
+    if (state.offset != state.buffered.size() || state.pending.empty()) {
+        return;
+    }
+    if (state.http2DataPending && state.pool != nullptr) {
+        state.pool->releaseResponseData(state);
+    }
+    state.buffered.clear();
+    state.offset = 0;
+    state.buffered.swap(state.pending);
+    state.spaceSignal.notify();
+}
+
 bool HttpClientResponseBody::complete() const noexcept {
     return state_ == nullptr || (state_->complete && state_->offset == state_->buffered.size() &&
                                     state_->pending.empty());
@@ -124,15 +137,7 @@ Task<std::optional<std::string_view>> HttpClientResponseBody::readTask(
         state.offset = 0;
         co_await state.dataSignal.wait();
     }
-    if (state.offset == state.buffered.size() && !state.pending.empty()) {
-        if (state.http2DataPending && state.pool != nullptr) {
-            state.pool->releaseResponseData(state);
-        }
-        state.buffered.clear();
-        state.offset = 0;
-        state.buffered.swap(state.pending);
-        state.spaceSignal.notify();
-    }
+    promotePendingData(state);
     if (state.offset == state.buffered.size()) {
         if (state.failure) {
             std::rethrow_exception(state.failure);
@@ -204,15 +209,7 @@ Task<void> HttpClientResponseBody::pipeToTask(
             state.offset = 0;
             co_await state.dataSignal.wait();
         }
-        if (state.offset == state.buffered.size() && !state.pending.empty()) {
-            if (state.http2DataPending && state.pool != nullptr) {
-                state.pool->releaseResponseData(state);
-            }
-            state.buffered.clear();
-            state.offset = 0;
-            state.buffered.swap(state.pending);
-            state.spaceSignal.notify();
-        }
+        promotePendingData(state);
         if (state.offset == state.buffered.size()) {
             if (state.failure) {
                 std::rethrow_exception(state.failure);

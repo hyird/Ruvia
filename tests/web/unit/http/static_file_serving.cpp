@@ -181,7 +181,7 @@ RUVIA_TEST(static_root_copies_public_mime_configuration_into_owned_storage) {
 RUVIA_TEST(static_root_rejects_permission_errors_in_index) {
 #if defined(_WIN32)
     // Windows ACLs are not expressible through std::filesystem::perms in a
-    // portable way; the runtime integration guard covers refresh failures.
+    // portable way, so this permission-specific case cannot run here.
     return;
 #else
     namespace fs = std::filesystem;

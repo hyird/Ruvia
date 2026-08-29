@@ -162,25 +162,9 @@ Task<void> PostgreSqlPool::waitForPostgreSql(
         }
     };
 
-    struct ActiveWait final {
-        explicit ActiveWait(ConnectionSlot& value) noexcept
-            : slot(value) {
-            if (slot.waitActive) {
-                std::terminate();
-            }
-            slot.waitActive = true;
-        }
-
-        ~ActiveWait() {
-            slot.waitActive = false;
-        }
-
-        ConnectionSlot& slot;
-    };
-
     std::exception_ptr waitFailure;
     {
-        ActiveWait activeWait(slot);
+        DbSlotActiveWaitGuard activeWait(slot);
         try {
             co_await SocketWaitAwaiter{slot, *slot.waitSocket, read, {}, {}, {}};
         } catch (...) {

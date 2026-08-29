@@ -28,8 +28,6 @@ protocol library do not require the full Web framework.
   SNI, ALPN, HTTP/1.1, and HTTP/2.
 - **Optional integrations** — MariaDB, PostgreSQL, Redis, and JWT behind vcpkg
   features; both database drivers share one `DbHandle` API surface.
-- **Verified** — RFC 9113 wire conformance suite against a real h2c server and
-  guard tests that pin the public API contracts.
 
 ## Contents
 
@@ -43,8 +41,6 @@ protocol library do not require the full Web framework.
 - [Requirements](#requirements)
 - [Build](#build)
 - [Database Drivers](#database-drivers)
-- [Conformance](#conformance)
-- [Performance Baseline](#performance-baseline)
 - [Install and Consume](#install-and-consume)
 - [Web API Shape](#web-api-shape)
 - [HTTP Protocol Library](#http-protocol-library)
@@ -788,8 +784,7 @@ then run `ctest --test-dir build -C Release --output-on-failure`.
 | `RUVIA_BUILD_CORE` | `ON` | Build `ruvia::core`. |
 | `RUVIA_BUILD_HTTP` | `ON` | Build standalone `ruvia::http`. |
 | `RUVIA_BUILD_WEB` | `ON` | Build `ruvia::web`; requires core and HTTP. |
-| `RUVIA_BUILD_TESTS` | `OFF` | Build tests for every selected target and enabled feature. |
-| `RUVIA_BUILD_BENCHMARKS` | `OFF` | Build Release-oriented HTTP hot-path benchmarks; requires HTTP. |
+| `RUVIA_BUILD_TESTS` | `OFF` | Build unit tests for every selected target and enabled feature. |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | Build examples for every enabled Web feature; requires Web. |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | Enable MariaDB integration in Web. |
 | `RUVIA_ENABLE_POSTGRESQL` | `OFF` | Enable PostgreSQL integration in Web. |
@@ -888,34 +883,6 @@ ruvia::DbMigration{{.id = "002_index",
 MariaDB commits DDL implicitly, so there the two statements are always separate
 and an interruption between them re-runs the migration on the next start: write
 MariaDB migrations to be re-applicable.
-
-With tests and a driver enabled, that driver's live test is compiled
-automatically. Set `RUVIA_RUN_POSTGRESQL_INTEGRATION=1` or
-`RUVIA_RUN_MARIADB_INTEGRATION=1` when running CTest to execute it; without the
-environment variable CTest reports it as skipped. Linux CI starts isolated
-PostgreSQL and MariaDB services and sets both variables, so driver integration
-is a required gate there rather than a skipped test.
-
-## Conformance
-
-The regular Linux CI runs a repository-owned wire-level suite against Ruvia's
-actual cleartext HTTP/2 server. Its connection-per-case, handcrafted-frame, and
-wire-error assertion model follows the proven h2spec approach, but every
-expectation is maintained directly against RFC 9113 instead of filtering
-RFC 7540 results. To reproduce it locally, install Python 3 and configure:
-
-```bash
-cmake -S . -B build-conformance -G Ninja \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DRUVIA_BUILD_TESTS=ON
-cmake --build build-conformance --target ruvia_http2_conformance_server
-ctest --test-dir build-conformance -R ruvia_http2_conformance --output-on-failure
-```
-
-## Performance Baseline
-
-Release benchmark scope, commands, and comparison rules live with the benchmark
-sources in [tests/http/benchmarks/README.md](tests/http/benchmarks/README.md).
 
 ## Install and Consume
 
@@ -1081,8 +1048,7 @@ used in JSON and validation paths.
 Model field descriptors are passed directly to a C++ variadic template. Model
 registration does not use a preprocessor argument counter or `FOR_EACH`, so
 Ruvia defines no fixed field-count limit; only the compiler's normal template
-resource limits apply. The compiled model guard declares more than 64 fields to
-protect this contract. Route middleware keeps the typed
+resource limits apply. Route middleware keeps the typed
 `c.req().validated<T>()` API, while `c.req().validatedJson<T>()` also exposes the
 validated original bytes through `raw()` for JSONB passthrough. See the compiled
 [`models_validation.cpp`](examples/web/models_validation.cpp) example for a
