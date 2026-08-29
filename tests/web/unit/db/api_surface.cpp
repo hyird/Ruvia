@@ -43,6 +43,7 @@ namespace {
 
 using ruvia::test::RejectingMemoryResource;
 using ruvia::test::TrackingResource;
+using ruvia::testing::throwsOn;
 
 template <typename T>
 concept HasMariaDbFactory = requires { T::mariaDb(); };
@@ -136,16 +137,6 @@ public:
     std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
     ruvia::WorkerHandle worker;
 };
-
-template <typename Fn>
-bool throwsOn(Fn&& fn) {
-    try {
-        fn();
-        return false;
-    } catch (const std::exception&) {
-        return true;
-    }
-}
 
 static_assert(std::is_move_assignable_v<ruvia::DbField>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbField>);

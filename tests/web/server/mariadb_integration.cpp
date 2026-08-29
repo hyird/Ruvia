@@ -51,7 +51,7 @@ namespace {
 }
 
 using ruvia::testing::dbRequire;
-using ruvia::testing::dbThrowsOn;
+using ruvia::testing::throwsOn;
 
 void exerciseMigrations(const ruvia::DbConfig& config) {
     ruvia::DbMigratorOptions options;
@@ -74,7 +74,7 @@ void exerciseMigrations(const ruvia::DbConfig& config) {
         .sql = "CREATE TABLE IF NOT EXISTS ruvia_mariadb_integration_migrated ("
                "id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, value VARCHAR(128) NOT "
                "NULL)"}}};
-    dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }),
+    dbRequire(throwsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }),
         "an edited migration body was accepted");
 }
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "test_harness.h"
+
 // Shared by the two live-driver tests. Both are skipped unless their
 // RUVIA_RUN_*_INTEGRATION variable says otherwise, both read connection details
 // from the environment, and both assert with the same two helpers -- keeping one
@@ -8,7 +10,6 @@
 
 #include <cstdint>
 #include <cstdlib>
-#include <exception>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -47,16 +48,6 @@ namespace ruvia::testing {
 inline void dbRequire(bool condition, std::string_view message) {
     if (!condition) {
         throw std::runtime_error(std::string(message));
-    }
-}
-
-template <typename Fn>
-[[nodiscard]] bool dbThrowsOn(Fn&& fn) {
-    try {
-        fn();
-        return false;
-    } catch (const std::exception&) {
-        return true;
     }
 }
 

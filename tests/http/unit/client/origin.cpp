@@ -1,7 +1,6 @@
 #include "test_harness.h"
 
 #include <cstdint>
-#include <exception>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -16,16 +15,7 @@ namespace {
 using ruvia::HttpOriginView;
 using ruvia::HttpScheme;
 using ruvia::detail::makeHttpOriginAuthority;
-
-template <typename Fn>
-bool throwsOn(Fn&& fn) {
-    try {
-        fn();
-        return false;
-    } catch (const std::exception&) {
-        return true;
-    }
-}
+using ruvia::testing::throwsOn;
 
 HttpOriginView originFor(
     std::string_view host, std::uint16_t port, HttpScheme scheme = HttpScheme::kHttp) {

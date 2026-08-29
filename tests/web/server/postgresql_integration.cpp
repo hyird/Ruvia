@@ -41,7 +41,7 @@ constexpr std::string_view kMigrationsTable = "ruvia_pg_integration_migrations";
 }
 
 using ruvia::testing::dbRequire;
-using ruvia::testing::dbThrowsOn;
+using ruvia::testing::throwsOn;
 
 template <typename Factory>
 void runTask(Factory&& factory) {
@@ -297,7 +297,7 @@ int main() {
                    "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
                    "value TEXT NOT NULL, note TEXT, "
                    "CONSTRAINT uq_ruvia_pg_integration_items_value UNIQUE (value))"}}};
-        dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }),
+        dbRequire(throwsOn([&] { (void)ruvia::DbMigrator::migrate(config, edited, options); }),
             "an edited migration body was accepted");
 
         // CREATE INDEX CONCURRENTLY is refused inside a transaction block, so
@@ -306,7 +306,7 @@ int main() {
         const std::array wrapped{ruvia::DbMigration{{.id = "002_concurrent_index",
             .sql = "CREATE INDEX CONCURRENTLY ruvia_pg_integration_items_value_idx "
                    "ON ruvia_pg_integration_items (value)"}}};
-        dbRequire(dbThrowsOn([&] { (void)ruvia::DbMigrator::migrate(config, wrapped, options); }),
+        dbRequire(throwsOn([&] { (void)ruvia::DbMigrator::migrate(config, wrapped, options); }),
             "a transactional migration did not run inside a transaction block");
 
         const std::array unwrapped{ruvia::DbMigration{{.id = "002_concurrent_index",
