@@ -22,6 +22,7 @@
 #include <openssl/rand.h>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/io/TcpSocketOptions.h"
 #include "ruvia/core/detail/util/Base64.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
@@ -110,6 +111,7 @@ WebSocketClientState::WebSocketClientState(EventLoop loop, const WebSocketClient
       readTimer_(loop_.ioContext()),
       writeTimer_(loop_.ioContext()),
       heartbeatTimer_(loop_.ioContext()),
+      closeHandshakeTimer_(loop_.ioContext()),
       writeSignal_(worker_),
       closeSignal_(worker_),
       input_(memory_.allocator<char>()),
@@ -225,6 +227,7 @@ void WebSocketClientState::closeOnWorker(AbortReason reason) noexcept {
     disarm(readTimer_);
     disarm(writeTimer_);
     disarm(heartbeatTimer_);
+    disarm(closeHandshakeTimer_);
     livenessState_ = WebSocketLivenessIdle{};
     if (protocol_) {
         (void)protocol_->abort();
@@ -793,6 +796,7 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
     static_cast<void>(writeActivity);
     static_cast<void>(closeActivity);
     state->requireOpen();
+    const OperationTimeout operationTimeout(operationOptions.timeout);
     {
         co_await state->waitForWriteIdle();
         state->requireOpen();
@@ -804,6 +808,16 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
         state->phase_.store(Phase::kClosing, std::memory_order_release);
         co_await state->flushOutput(operationOptions);
     }
+    // The close-handshake limit starts after the local Close frame is committed.
+    // Keep it on its own timer so peer traffic and control-frame responses cannot
+    // restart the deadline for the next transport read.
+    const auto handshakeTimeout = state->effectiveTimeout(OperationOptions{.timeout = operationTimeout.remaining()}, state->config_.closeHandshakeTimeout);
+    if (handshakeTimeout.has_value() && handshakeTimeout->count() == 0) {
+        state->closeOnWorker(AbortReason::kTimeout);
+        state->throwAbort();
+    }
+    state->arm(state->closeHandshakeTimer_, handshakeTimeout, AbortReason::kTimeout);
+    operationOptions.timeout.reset();
     std::array<char, kCloseHandshakeBufferBytes> bytes{};
     for (;;) {
         std::optional<WsEvent> event;
@@ -816,7 +830,7 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
             }
         }
         if (!event.has_value()) {
-            const auto count = co_await state->readTransport(bytes, operationOptions, state->config_.closeHandshakeTimeout);
+            const auto count = co_await state->readTransport(bytes, operationOptions, std::nullopt);
             if (count == 0) {
                 state->requireProtocol().notifyTransportEof();
                 state->closeOnWorker(AbortReason::kNone);

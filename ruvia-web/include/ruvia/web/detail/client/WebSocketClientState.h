@@ -136,6 +136,7 @@ private:
     asio::steady_timer readTimer_;
     asio::steady_timer writeTimer_;
     asio::steady_timer heartbeatTimer_;
+    asio::steady_timer closeHandshakeTimer_;
     WorkerSignal writeSignal_;
     WorkerSignal closeSignal_;
     std::pmr::string input_;

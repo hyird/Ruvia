@@ -31,9 +31,10 @@ namespace {
 
 class WebSocketOrigin final {
 public:
-    explicit WebSocketOrigin(bool heartbeat = false, bool respondPong = true)
+    explicit WebSocketOrigin(bool heartbeat = false, bool respondPong = true, bool sendPingsAfterClose = false)
         : heartbeat_(heartbeat),
           respondPong_(respondPong),
+          sendPingsAfterClose_(sendPingsAfterClose),
           io_(),
           acceptor_(io_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
           thread_([this] { serve(); }) {}
@@ -150,6 +151,23 @@ private:
                 return;
             }
 
+            if (sendPingsAfterClose_) {
+                const auto close = readClientFrame(socket, 0x8);
+                if (close.size() < 2) {
+                    return;
+                }
+                succeeded_.store(true, std::memory_order_release);
+                for (int i = 0; i < 100; ++i) {
+                    try {
+                        writeServerFrame(socket, 0x9, {});
+                    } catch (...) {
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+                }
+                return;
+            }
+
             const bool receivedText = readClientFrame(socket, 0x1) == "hello";
             writeServerFrame(socket, 0x1, "world");
             const auto close = readClientFrame(socket, 0x8);
@@ -164,6 +182,7 @@ private:
 
     bool heartbeat_;
     bool respondPong_;
+    bool sendPingsAfterClose_;
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     std::thread thread_;
@@ -233,7 +252,19 @@ ruvia::Task<int> exerciseHeartbeat(ruvia::WebSocketClient& client, bool expectTi
         result = expectTimeout || !message.has_value() || !message->text() || message->payload() != "heartbeat" ? 1 : 0;
     } catch (const ruvia::WebSocketClientError& error) {
         client.abort();
-        result = expectTimeout&& error.code() == ruvia::WebSocketClientError::Code::kTimeout ? 0 : 2;
+        result = expectTimeout && error.code() == ruvia::WebSocketClientError::Code::kTimeout ? 0 : 2;
+    }
+    co_await client.shutdown();
+    co_return result;
+}
+
+ruvia::Task<int> exerciseCloseTimeout(ruvia::WebSocketClient& client) {
+    co_await client.connect();
+    int result = 1;
+    try {
+        co_await client.close({.code = 1000});
+    } catch (const ruvia::WebSocketClientError& error) {
+        result = error.code() == ruvia::WebSocketClientError::Code::kTimeout ? 0 : 2;
     }
     co_await client.shutdown();
     co_return result;
@@ -261,7 +292,7 @@ ruvia::Task<int> exerciseShutdownWhileReading(ruvia::EventLoop loop, ruvia::WebS
     co_return client.connected() ? 1 : 0;
 }
 
-ruvia::Task<int> exerciseAll(ruvia::EventLoop loop, ruvia::WebSocketClient& client, ruvia::WebSocketClient& heartbeatClient, ruvia::WebSocketClient& timeoutClient, ruvia::WebSocketClient& shutdownClient, ruvia::WebSocketClient& freshClient, ruvia::WorkerId expectedWorker) {
+ruvia::Task<int> exerciseAll(ruvia::EventLoop loop, ruvia::WebSocketClient& client, ruvia::WebSocketClient& heartbeatClient, ruvia::WebSocketClient& timeoutClient, ruvia::WebSocketClient& shutdownClient, ruvia::WebSocketClient& closeTimeoutClient, ruvia::WebSocketClient& freshClient, ruvia::WorkerId expectedWorker) {
     co_await freshClient.shutdown();
     const auto shutdownResult = co_await exerciseShutdownWhileReading(loop, shutdownClient);
     if (shutdownResult != 0) {
@@ -274,6 +305,10 @@ ruvia::Task<int> exerciseAll(ruvia::EventLoop loop, ruvia::WebSocketClient& clie
     const auto timeoutResult = co_await exerciseHeartbeat(timeoutClient, true);
     if (timeoutResult != 0) {
         co_return 10 + timeoutResult;
+    }
+    const auto closeTimeoutResult = co_await exerciseCloseTimeout(closeTimeoutClient);
+    if (closeTimeoutResult != 0) {
+        co_return 20 + closeTimeoutResult;
     }
     co_return co_await exercise(client, expectedWorker);
 }
@@ -354,6 +389,15 @@ int main() {
                                                        .subprotocols = {"chat", "superchat"},
                                                        .heartbeat = {.pingInterval = std::chrono::milliseconds{20}, .pongTimeout = std::chrono::milliseconds{50}},
                                                    });
+        WebSocketOrigin closeTimeoutOrigin(false, true, true);
+        ruvia::WebSocketClient closeTimeoutClient(loop, {
+                                                            .scheme = ruvia::WebSocketScheme::kWs,
+                                                            .host = "127.0.0.1",
+                                                            .port = closeTimeoutOrigin.port(),
+                                                            .target = "/events",
+                                                            .subprotocols = {"chat", "superchat"},
+                                                            .closeHandshakeTimeout = std::chrono::milliseconds{50},
+                                                        });
         WebSocketOrigin shutdownOrigin;
         ruvia::WebSocketClient shutdownClient(loop, {
                                                         .scheme = ruvia::WebSocketScheme::kWs,
@@ -374,7 +418,7 @@ int main() {
         std::promise<int> completion;
         auto future = completion.get_future();
         const auto posted = loop.post([&] {
-            ruvia::detail::asyncStartTask(exerciseAll(loop, client, heartbeatClient, timeoutClient, shutdownClient, plainClientWithInactiveTlsConfig, loop.id()), asio::bind_executor(loop.executor(), [&completion](ruvia::detail::TaskCompletionResult<int> result) {
+            ruvia::detail::asyncStartTask(exerciseAll(loop, client, heartbeatClient, timeoutClient, shutdownClient, closeTimeoutClient, plainClientWithInactiveTlsConfig, loop.id()), asio::bind_executor(loop.executor(), [&completion](ruvia::detail::TaskCompletionResult<int> result) {
                 if (auto* success = result.success()) {
                     completion.set_value(std::move(*success).takeValue());
                 } else {
@@ -391,7 +435,7 @@ int main() {
         if (result != 0) {
             return 10 + result;
         }
-        return origin.succeeded() ? 0 : 20;
+        return origin.succeeded() && closeTimeoutOrigin.succeeded() ? 0 : 20;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "WebSocket client test failed: %s\n", error.what());
         return 100;
