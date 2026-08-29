@@ -43,7 +43,7 @@ RUVIA_TEST(content_type_matches_ignoring_parameters) {
 
 RUVIA_TEST(content_type_matches_rejects_mismatches) {
     RUVIA_CHECK(!contentTypeMatches("text/html", "application/json"));
-    RUVIA_CHECK(!contentTypeMatches("", "application/json"));  // empty content type
+    RUVIA_CHECK(!contentTypeMatches("", "application/json"));                   // empty content type
     RUVIA_CHECK(!contentTypeMatches("application/jsonx", "application/json"));  // exact, not prefix
     RUVIA_CHECK(!contentTypeMatches("application/json", "application/jsonx"));
 }

@@ -60,7 +60,7 @@ RUVIA_TEST(closed_streams_eviction_survives_ring_buffer_wraparound) {
     RUVIA_CHECK(!history.source(1).has_value());      // long evicted
     RUVIA_CHECK(!history.source(limit).has_value());  // evicted at the wrap
     RUVIA_CHECK(
-        history.source(limit + 1) == Http2StreamCloseSource::kLocal);  // oldest still-tracked
+        history.source(limit + 1) == Http2StreamCloseSource::kLocal);          // oldest still-tracked
     RUVIA_CHECK(history.source(2 * limit) == Http2StreamCloseSource::kLocal);  // newest
 
     // One further insert evicts exactly the current oldest (limit+1), proving the

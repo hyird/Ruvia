@@ -84,7 +84,9 @@ private:
     friend Http1BufferedResponseWriteResult classifyHttp1BufferedResponseWrite(
         const Http1BufferedResponsePlan&, std::size_t, std::error_code, std::size_t) noexcept;
 
-    enum class State : std::uint8_t { kCompleted, kFailedBeforeCommit, kFailedAfterCommit };
+    enum class State : std::uint8_t { kCompleted,
+        kFailedBeforeCommit,
+        kFailedAfterCommit };
 
     union Value {
         constexpr explicit Value(Http1BufferedResponseWriteCompleted value) noexcept

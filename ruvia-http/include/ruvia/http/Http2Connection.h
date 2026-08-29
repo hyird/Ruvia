@@ -26,15 +26,19 @@ namespace detail {
 class Http2ConnectionOwnerEndpoint;
 }
 
-enum class Http2Role : std::uint8_t { kServer, kClient };
+enum class Http2Role : std::uint8_t { kServer,
+    kClient };
 enum class Http2FeedResult : std::uint8_t {
     kEventsPending,
     kAccepted,
     kNeedInput,
     kProtocolFailure
 };
-enum class Http2EndStream : std::uint8_t { kKeepOpen, kEndStream };
-enum class Http2OutputConsumeStatus : std::uint8_t { kPending, kDrained, kOutOfRange };
+enum class Http2EndStream : std::uint8_t { kKeepOpen,
+    kEndStream };
+enum class Http2OutputConsumeStatus : std::uint8_t { kPending,
+    kDrained,
+    kOutOfRange };
 enum class Http2SubmitStatus : std::uint8_t {
     kAccepted,
     kClosed,
@@ -52,9 +56,15 @@ enum class Http2DataSubmitStatus : std::uint8_t {
     kContentLengthExceeded,
     kContentLengthIncomplete
 };
-enum class Http2RequestContentReleaseStatus : std::uint8_t { kReleased, kNotPending, kClosed };
-enum class Http2ServerRequestReleaseStatus : std::uint8_t { kReleased, kClosed, kInvalidLease };
-enum class Http2StreamCloseSource : std::uint8_t { kLocal, kPeer, kPeerGoaway };
+enum class Http2RequestContentReleaseStatus : std::uint8_t { kReleased,
+    kNotPending,
+    kClosed };
+enum class Http2ServerRequestReleaseStatus : std::uint8_t { kReleased,
+    kClosed,
+    kInvalidLease };
+enum class Http2StreamCloseSource : std::uint8_t { kLocal,
+    kPeer,
+    kPeerGoaway };
 
 struct Http2ConnectionOptions final {
     std::pmr::memory_resource* resource{nullptr};

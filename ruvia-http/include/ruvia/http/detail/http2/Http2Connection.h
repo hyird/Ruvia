@@ -81,7 +81,8 @@ enum class Http2FeedResult : std::uint8_t {
     kProtocolFailure,
 };
 
-enum class Http2EndStream : std::uint8_t { kKeepOpen, kEndStream };
+enum class Http2EndStream : std::uint8_t { kKeepOpen,
+    kEndStream };
 
 [[nodiscard]] constexpr bool http2EndsStream(Http2EndStream value) noexcept {
     return value == Http2EndStream::kEndStream;
@@ -779,7 +780,8 @@ private:
 
     // Close a stream: drop it from the ready queue, mark closed, emit kStreamClosed
     // (so the owner cancels any handler), remove it, and remember it as closed.
-    enum class CloseNotification : std::uint8_t { kEmitEvent, kOwnerAlreadyKnows };
+    enum class CloseNotification : std::uint8_t { kEmitEvent,
+        kOwnerAlreadyKnows };
     bool closeStreamImpl(std::uint32_t streamId, Http2StreamCloseSource source,
         Http2ErrorCode error, CloseNotification notification);
     bool closeStream(std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error);

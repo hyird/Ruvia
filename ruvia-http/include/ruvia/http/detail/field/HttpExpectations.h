@@ -136,7 +136,8 @@ namespace ruvia {
 // follow the initial head. Keep this typed: HTTP/1 derives it from its body plan,
 // while HTTP/2 combines its receive-half and remaining-content states so an open
 // metadata-only or known-empty stream cannot masquerade as pending content.
-enum class HttpRequestContentIndication : std::uint8_t { kNoContent, kWillFollow };
+enum class HttpRequestContentIndication : std::uint8_t { kNoContent,
+    kWillFollow };
 
 // RFC 9110 Section 10.1.1 forbids a client from generating 100-continue when
 // the request has no content. Keep this sender check next to the recipient-side
@@ -149,7 +150,8 @@ enum class HttpRequestContentIndication : std::uint8_t { kNoContent, kWillFollow
 // Whether the product accepts unknown expectation extensions. Expect remains
 // valid syntax either way; the HTTP contract owns the protocol response chosen
 // by the explicit rejection policy.
-enum class HttpUnsupportedExpectationPolicy : std::uint8_t { kIgnore, kReject };
+enum class HttpUnsupportedExpectationPolicy : std::uint8_t { kIgnore,
+    kReject };
 
 class HttpServerExpectationPlan;
 
@@ -199,7 +201,9 @@ public:
 private:
     friend class HttpRequestExpectations;
 
-    enum class State : std::uint8_t { kNoAction, kSendContinue, kRejection };
+    enum class State : std::uint8_t { kNoAction,
+        kSendContinue,
+        kRejection };
 
     explicit constexpr HttpServerExpectationPlan(State state) noexcept
         : state_(state) {}

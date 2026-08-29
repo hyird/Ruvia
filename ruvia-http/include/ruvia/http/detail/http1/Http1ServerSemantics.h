@@ -93,7 +93,8 @@ private:
         framing, parsed.connectionPlan, closePolicy, parsed.request.knownMethod());
 }
 
-enum class Http1ConnectionCloseFieldPolicy : std::uint8_t { kCloseOnly, kPreserveUpgrade };
+enum class Http1ConnectionCloseFieldPolicy : std::uint8_t { kCloseOnly,
+    kPreserveUpgrade };
 
 inline void http1MarkConnectionClose(HttpResponse& response,
     Http1ConnectionCloseFieldPolicy fieldPolicy = Http1ConnectionCloseFieldPolicy::kCloseOnly) {

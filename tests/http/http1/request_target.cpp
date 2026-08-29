@@ -365,11 +365,11 @@ RUVIA_TEST(request_target_bytes_reject_smuggling_and_control_chars) {
     RUVIA_CHECK(isValidRequestTargetBytes("/a/b/c"));
     RUVIA_CHECK(isValidRequestTargetBytes("http://[::1]/x?y=1"));
 
-    RUVIA_CHECK(!isValidRequestTargetBytes(""));       // empty is never a valid target
-    RUVIA_CHECK(!isValidRequestTargetBytes("/a b"));   // raw space (0x20) splits the request line
-    RUVIA_CHECK(!isValidRequestTargetBytes("/a\tb"));  // HTAB is a control char
-    RUVIA_CHECK(!isValidRequestTargetBytes("/a\rb"));  // CR -- header/line injection
-    RUVIA_CHECK(!isValidRequestTargetBytes("/a\nb"));  // LF -- request smuggling
+    RUVIA_CHECK(!isValidRequestTargetBytes(""));                            // empty is never a valid target
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a b"));                        // raw space (0x20) splits the request line
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a\tb"));                       // HTAB is a control char
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a\rb"));                       // CR -- header/line injection
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a\nb"));                       // LF -- request smuggling
     RUVIA_CHECK(!isValidRequestTargetBytes(std::string_view("/a\0b", 4)));  // NUL
     RUVIA_CHECK(!isValidRequestTargetBytes(
         "/a\x7f"
@@ -414,7 +414,7 @@ RUVIA_TEST(origin_form_target_shape) {
     RUVIA_CHECK(!isValidOriginFormTarget("/bad path"));   // inherits byte validation (raw space)
     RUVIA_CHECK(!isValidOriginFormTarget("/x#y"));        // inherits fragment rejection
     RUVIA_CHECK(
-        !isValidOriginFormTarget("/[x]"));  // brackets belong only to an IP-literal authority
+        !isValidOriginFormTarget("/[x]"));             // brackets belong only to an IP-literal authority
     RUVIA_CHECK(!isValidOriginFormTarget("/?q={x}"));  // braces must be percent-encoded
     RUVIA_CHECK(isValidOriginFormTarget("/!$&'()*+,-._~:@/x?y=/?:@"));
 }

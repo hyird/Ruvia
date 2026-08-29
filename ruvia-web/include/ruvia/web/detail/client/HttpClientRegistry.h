@@ -66,9 +66,15 @@ private:
     friend class ::ruvia::HttpClientResponse;
     friend class ::ruvia::HttpClientResponseBody;
 
-    enum class WireProtocol : std::uint8_t { kUnknown, kHttp1, kHttp2 };
-    enum class AbortReason : std::uint8_t { kNone, kTimeout, kCancelled, kClosing };
-    enum class DeadlineKind : std::uint8_t { kResolve, kSocket };
+    enum class WireProtocol : std::uint8_t { kUnknown,
+        kHttp1,
+        kHttp2 };
+    enum class AbortReason : std::uint8_t { kNone,
+        kTimeout,
+        kCancelled,
+        kClosing };
+    enum class DeadlineKind : std::uint8_t { kResolve,
+        kSocket };
 
     struct Http2PendingStream final {
         Http2PendingStream(const WorkerHandle& worker, HttpClientResponse& value)

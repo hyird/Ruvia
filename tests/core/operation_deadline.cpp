@@ -5,7 +5,8 @@
 
 namespace {
 
-enum class DeadlineKind : std::uint8_t { kRead, kWrite };
+enum class DeadlineKind : std::uint8_t { kRead,
+    kWrite };
 
 bool operationDeadlineTransitionsAreExclusive() {
     using Deadline = ruvia::detail::OperationDeadline<DeadlineKind>;

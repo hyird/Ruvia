@@ -515,7 +515,10 @@ private:
 
     MultipartParser(std::string_view completeBody, MultipartParseOptions options, CompleteInputTag);
 
-    enum class ProgressState : std::uint8_t { kBoundary, kHeaders, kBody, kDone };
+    enum class ProgressState : std::uint8_t { kBoundary,
+        kHeaders,
+        kBody,
+        kDone };
 
     using State = std::variant<ProgressState, MultipartParseError>;
 

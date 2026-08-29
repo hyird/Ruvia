@@ -28,14 +28,16 @@ enum class ResponseStreamFraming : std::uint8_t {
     kHttp2Frames
 };
 
-enum class ResponseStreamKind : std::uint8_t { kGeneric, kSse };
+enum class ResponseStreamKind : std::uint8_t { kGeneric,
+    kSse };
 
 // A trailer section is terminal message metadata, not an independently queued
 // side channel. The caller declares whether this head commit is reserving a
 // terminal trailer section so HTTP/2 can keep a content-forbidden response open
 // for trailing HEADERS while HTTP/1 rejects an unavailable representation before
 // emitting the response head.
-enum class ResponseTrailerIntent : std::uint8_t { kNone, kPresent };
+enum class ResponseTrailerIntent : std::uint8_t { kNone,
+    kPresent };
 
 // Whether a validated trailer section commits the response to sending trailers.
 // An empty section is not "no decision": it is the decision to send none, which
@@ -54,7 +56,9 @@ enum class ResponseStreamTrailerFraming : std::uint8_t {
 // Authoritative phase immediately after the initial response head is submitted.
 // kTrailersOnly is intentionally distinct from kBodyOpen: HTTP/2 may carry a
 // trailer section after a HEAD/204-style response without allowing any DATA.
-enum class ResponseStreamHeadDisposition : std::uint8_t { kBodyOpen, kTrailersOnly, kMessageEnded };
+enum class ResponseStreamHeadDisposition : std::uint8_t { kBodyOpen,
+    kTrailersOnly,
+    kMessageEnded };
 
 class ResponseStreamCommitPlan final {
 public:

@@ -18,7 +18,8 @@ class Http1ServerRequestParser;
 // Whether the runtime consumed the complete request message before attempting
 // to reuse its transport. This is a protocol lifecycle fact, not a product
 // policy bool: RFC 9112 section 9.3 forbids reuse with unread request content.
-enum class Http1RequestBodyConsumption : std::uint8_t { kComplete, kIncomplete };
+enum class Http1RequestBodyConsumption : std::uint8_t { kComplete,
+    kIncomplete };
 
 class Http1RequestWithoutBody final {
 private:

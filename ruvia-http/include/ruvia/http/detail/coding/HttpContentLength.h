@@ -11,7 +11,9 @@
 
 namespace ruvia::detail {
 
-enum class HttpContentLengthParseStatus : std::uint8_t { kOk, kInvalid, kConflicting };
+enum class HttpContentLengthParseStatus : std::uint8_t { kOk,
+    kInvalid,
+    kConflicting };
 
 // Incremental field-line parser shared by HTTP/1 request and response heads.
 // RFC 9112 section 6.3 permits a comma-combined Content-Length only when every

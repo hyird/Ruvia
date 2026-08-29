@@ -10,7 +10,8 @@
 
 namespace ruvia::detail {
 
-enum class HttpTeFieldValidationMode : std::uint8_t { kRecipient, kClientCapability };
+enum class HttpTeFieldValidationMode : std::uint8_t { kRecipient,
+    kClientCapability };
 
 [[nodiscard]] inline bool httpIsClientSupportedTeTransferCoding(std::string_view coding) noexcept {
     return httpAsciiEqualsIgnoreCase(coding, "gzip") ||

@@ -5,7 +5,8 @@
 
 namespace ruvia::detail {
 
-enum class Http2ConnectForm : std::uint8_t { kStandard, kExtended };
+enum class Http2ConnectForm : std::uint8_t { kStandard,
+    kExtended };
 
 class Http2TunnelState;
 

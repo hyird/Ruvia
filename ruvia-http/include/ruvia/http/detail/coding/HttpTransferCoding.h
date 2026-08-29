@@ -7,7 +7,8 @@
 
 namespace ruvia {
 
-enum class HttpTransferCoding : std::uint8_t { kGzip, kDeflate };
+enum class HttpTransferCoding : std::uint8_t { kGzip,
+    kDeflate };
 
 // One supported compression transfer-coding can be represented before final
 // "chunked" framing, or as the sole coding of a close-delimited response. More

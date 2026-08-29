@@ -141,7 +141,9 @@ public:
         bool closeRequested{false};
         DbSlotAbortReason abortReason{DbSlotAbortReason::kNone};
         std::uint64_t cancellationId{0};
-        enum class DeadlineKind : std::uint8_t { kResolve, kSocket, kSleep };
+        enum class DeadlineKind : std::uint8_t { kResolve,
+            kSocket,
+            kSleep };
         OperationDeadline<DeadlineKind> deadline;
     };
 
@@ -273,7 +275,8 @@ private:
         bool closeRequested{false};
         DbSlotAbortReason abortReason{DbSlotAbortReason::kNone};
         std::uint64_t cancellationId{0};
-        enum class DeadlineKind : std::uint8_t { kResolve, kSocket };
+        enum class DeadlineKind : std::uint8_t { kResolve,
+            kSocket };
         OperationDeadline<DeadlineKind> deadline;
     };
 

@@ -353,7 +353,8 @@ public:
         delete static_cast<Storage*>(raw);
     }
 
-    enum class DeferredReleaseKind : std::uint8_t { kAfterCredits, kAbandon };
+    enum class DeferredReleaseKind : std::uint8_t { kAfterCredits,
+        kAbandon };
     struct DeferredRelease final {
         std::uint32_t streamId{0};
         DeferredReleaseKind kind{DeferredReleaseKind::kAfterCredits};

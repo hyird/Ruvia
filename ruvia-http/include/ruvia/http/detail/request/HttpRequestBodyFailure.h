@@ -35,7 +35,8 @@ public:
     }
 
 private:
-    enum class Kind : std::uint8_t { kTooLarge, kIncomplete };
+    enum class Kind : std::uint8_t { kTooLarge,
+        kIncomplete };
 
     explicit constexpr HttpRequestBodyFailure(Kind kind) noexcept
         : kind_(kind) {}
