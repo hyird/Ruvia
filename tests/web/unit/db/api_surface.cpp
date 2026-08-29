@@ -3,6 +3,7 @@
 #include <array>
 #include <chrono>
 #include <concepts>
+#include <coroutine>
 #include <cstdint>
 #include <future>
 #include <initializer_list>
@@ -578,13 +579,15 @@ RUVIA_TEST(database_operation_state_rejects_overlap_and_failed_reuse) {
 
     ruvia::detail::DbOperationState<Lease> state(Lease{7});
     RUVIA_CHECK(state.active());
-    auto& lease = state.begin();
-    RUVIA_CHECK_EQ(lease.value, 7);
+    state.reserve();
+    RUVIA_CHECK_EQ(state.operationPayload().value, 7);
     RUVIA_CHECK(!state.active());
+    state.start();
+    RUVIA_CHECK_EQ(state.operationPayload().value, 7);
 
     bool overlapRejected = false;
     try {
-        (void)state.begin();
+        (void)state.reserve();
     } catch (const std::logic_error& error) {
         overlapRejected = std::string_view(error.what()) == "database operation is already in progress";
     }
@@ -593,30 +596,123 @@ RUVIA_TEST(database_operation_state_rejects_overlap_and_failed_reuse) {
     state.finishFailed();
     bool failedReuseRejected = false;
     try {
-        (void)state.begin();
+        (void)state.reserve();
     } catch (const std::logic_error& error) {
         failedReuseRejected = std::string_view(error.what()) == "database resource is not active";
     }
     RUVIA_CHECK(failedReuseRejected);
 }
 
-RUVIA_TEST(database_cold_operations_do_not_consume_pool_lease) {
-    struct Lease final {
+RUVIA_TEST(database_operation_guard_releases_cold_reservation) {
+    struct Payload final {
         int value;
     };
-    auto operate = [](ruvia::detail::DbOperationState<Lease>& state) -> ruvia::Task<void> {
-        (void)state.begin();
-        state.finishActive();
+    struct Owner final {
+        using Lease = Payload;
+
+        ruvia::detail::DbOperationState<Lease> state_{Lease{7}};
+    };
+    using Guard = ruvia::detail::DbOperationGuard<Payload>;
+    auto operate = [](Guard operation, int& observedValue) -> ruvia::Task<void> {
+        operation.start();
+        observedValue = operation.lease().value;
+        operation.finishActive();
         co_return;
     };
 
-    ruvia::detail::DbOperationState<Lease> state(Lease{7});
+    Owner owner;
+    int observedValue = 0;
     {
-        auto cold = operate(state);
-        (void)cold;
+        Guard reservation(owner.state_);
+        auto cold = operate(std::move(reservation), observedValue);
+        RUVIA_CHECK(!owner.state_.active());
+
+        bool overlapRejected = false;
+        try {
+            Guard overlap(owner.state_);
+        } catch (const std::logic_error&) {
+            overlapRejected = true;
+        }
+        RUVIA_CHECK(overlapRejected);
     }
-    RUVIA_CHECK(state.active());
-    RUVIA_CHECK_EQ(state.activePayload().value, 7);
+    RUVIA_CHECK(owner.state_.active());
+
+    asio::io_context io(1);
+    {
+        Guard reservation(owner.state_);
+        auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(operate(std::move(reservation), observedValue)), asio::use_future);
+        io.run();
+        future.get();
+    }
+    RUVIA_CHECK(owner.state_.active());
+    RUVIA_CHECK_EQ(observedValue, 7);
+}
+
+RUVIA_TEST(database_operation_guard_survives_moving_stable_owner_while_running) {
+    struct Payload final {
+        int value;
+    };
+    using State = ruvia::detail::DbOperationState<Payload>;
+    using Guard = ruvia::detail::DbOperationGuard<Payload>;
+    static_assert(!std::is_move_constructible_v<State>);
+
+    struct ResumeGate final {
+        [[nodiscard]] bool await_ready() const noexcept {
+            return false;
+        }
+
+        void await_suspend(std::coroutine_handle<> continuation) noexcept {
+            continuation_ = continuation;
+        }
+
+        void await_resume() const noexcept {}
+
+        void resume() noexcept {
+            auto continuation = std::exchange(continuation_, {});
+            continuation.resume();
+        }
+
+        std::coroutine_handle<> continuation_{};
+    };
+
+    struct Owner final {
+        Owner()
+            : state(std::make_unique<State>(Payload{7})) {}
+
+        Owner(const Owner&) = delete;
+        Owner& operator=(const Owner&) = delete;
+        Owner(Owner&&) noexcept = default;
+
+        std::unique_ptr<State> state;
+    };
+
+    auto operate = [](Guard operation, ResumeGate& gate, int& observedValue) -> ruvia::Task<void> {
+        operation.start();
+        co_await gate;
+        observedValue = operation.lease().value;
+        operation.finishActive();
+    };
+
+    Owner source;
+    ResumeGate gate;
+    int observedValue = 0;
+    Guard reservation(*source.state);
+    auto task = operate(std::move(reservation), gate, observedValue);
+
+    asio::io_context io(1);
+    auto future = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(std::move(task)), asio::use_future);
+    io.poll();
+    RUVIA_CHECK(gate.continuation_ != nullptr);
+
+    Owner moved(std::move(source));
+    RUVIA_CHECK(source.state == nullptr);
+    io.restart();
+    gate.resume();
+    io.run();
+    future.get();
+
+    RUVIA_CHECK_EQ(observedValue, 7);
+    RUVIA_CHECK(moved.state->active());
 }
 
 RUVIA_TEST(scoped_operation_scope_tracks_cold_owner_operations) {

@@ -8,6 +8,9 @@ namespace ruvia {
 
 ScopedOperation<std::optional<MultipartStreamPart>> MultipartReader::read() & {
     requireActive();
+    if (operationScope_.hasPendingOperations()) {
+        throw std::logic_error("multipart body read is already in progress");
+    }
     return detail::makeScopedOperation(operationScope_, readTask());
 }
 

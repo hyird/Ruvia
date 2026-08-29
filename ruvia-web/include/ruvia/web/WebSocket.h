@@ -54,6 +54,8 @@ public:
     WebSocket(const WebSocket&) = delete;
     WebSocket& operator=(const WebSocket&) = delete;
 
+    /// Only one read operation may be outstanding. Creating another before
+    /// the current operation completes or is discarded throws std::logic_error.
     [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read() &;
     ScopedOperation<std::optional<WebSocketMessage>> read() && = delete;
 
@@ -125,6 +127,7 @@ public:
     ScopedOperation<void> ping(std::pmr::string&& payload) &;
     ScopedOperation<void> ping(std::pmr::string&&) && = delete;
 
+    /// Close cannot overlap a read, another close, or an output operation.
     ScopedOperation<void> close(WebSocketCloseOptions options = {}) &;
     ScopedOperation<void> close(WebSocketCloseOptions = {}) && = delete;
     void abort() noexcept;
@@ -158,6 +161,9 @@ private:
     Write write_;
     Close close_;
     Abort abort_;
+    bool readActive_{false};
+    bool writeActive_{false};
+    bool closeActive_{false};
     detail::ScopedOperationScope operationScope_;
 };
 

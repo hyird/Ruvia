@@ -94,7 +94,7 @@ public:
     [[nodiscard]] ScopedOperation<void> binary(std::string_view payload) const;
     [[nodiscard]] ScopedOperation<void> ping(std::string_view payload = {}) const;
     [[nodiscard]] ScopedOperation<void> pong(std::string_view payload) const;
-    [[nodiscard]] ScopedOperation<void> close(WebSocketCloseOptions options = {}) const;
+    [[nodiscard]] ScopedOperation<void> close(WebSocketCloseOptions options) const;
     void abort() noexcept;
 
 private:
@@ -139,12 +139,9 @@ public:
     [[nodiscard]] ScopedOperation<void> close(WebSocketCloseOptions options) const&;
     ScopedOperation<void> close(WebSocketCloseOptions) const&& = delete;
 
-    // Immediate lifecycle shutdown, matching HttpClient::close(). Graceful RFC
-    // 6455 close uses the typed overload above: co_await client.close({...}).
-    void close() noexcept;
-    void abort() noexcept {
-        close();
-    }
+    // Immediate lifecycle shutdown. Graceful RFC 6455 close uses the typed
+    // overload above: co_await client.close({...}).
+    void abort() noexcept;
 
     [[nodiscard]] bool connected() const;
     [[nodiscard]] std::string_view subprotocol() const&;

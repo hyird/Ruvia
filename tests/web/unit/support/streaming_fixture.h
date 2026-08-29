@@ -178,8 +178,9 @@ inline ruvia::Task<void> writeLines(ruvia::ResponseStreamWriter& writer) {
 
 inline ruvia::Task<void> writeStoredLines(ruvia::ResponseStreamWriter& writer) {
     auto first = writer.writeln(std::string("stored-first"));
-    auto second = writer.writeln(std::string("stored-second"));
     co_await std::move(first);
+
+    auto second = writer.writeln(std::string("stored-second"));
     co_await std::move(second);
 }
 

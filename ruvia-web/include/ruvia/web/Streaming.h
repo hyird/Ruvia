@@ -44,14 +44,14 @@ public:
     /// Reads the next chunk of the streamed request body.
     /// @warning The returned view borrows the connection read buffer and is only valid
     /// until the NEXT read() call; copy it out if you need to retain it past then. An
-    /// empty optional signals end-of-body. Only one read may be in flight; concurrent
-    /// consumers are rejected because they cannot safely share the borrowed buffer.
+    /// empty optional signals end-of-body. Only one read operation may be outstanding;
+    /// creating another before it completes or is discarded throws because concurrent
+    /// consumers cannot safely share the borrowed buffer.
     [[nodiscard]] ScopedOperation<std::optional<std::string_view>> read() &;
     ScopedOperation<std::optional<std::string_view>> read() && = delete;
 
 private:
     detail::CallableRef<std::optional<std::string_view>> read_;
-    bool readActive_{false};
     detail::ScopedOperationScope operationScope_;
 };
 
@@ -60,11 +60,10 @@ public:
     ResponseStreamWriter(const ResponseStreamWriter&) = delete;
     ResponseStreamWriter& operator=(const ResponseStreamWriter&) = delete;
 
-    /// Writes one body chunk. write(), writeln(), and end() share one linear
-    /// output lane; starting another output operation before the current one
-    /// completes throws std::logic_error.
-    ///
-    /// The string_view overload copies the chunk into process-owned PMR storage
+    /// Writes one body chunk. write(), writeln(), and end() share one linear output lane.
+    /// Each returned output operation reserves the lane immediately; creating another
+    /// before it completes or is discarded throws std::logic_error. The string_view overload
+    /// copies the chunk into process-owned PMR storage before returning.
     /// before returning. Hot-path producers that already hold a buffer in
     /// request-owned storage can move it into the PMR-string overload to skip
     /// that copy.
