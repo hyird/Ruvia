@@ -26,7 +26,6 @@
 
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/web/db/DbClient.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbPoolOperations.h"
@@ -356,19 +355,6 @@ concept HasDbTransactionInitializerListParams =
 static_assert(HasDbHandleDefaultParams<ruvia::DbHandle>);
 static_assert(HasDbHandleSpanParams<ruvia::DbHandle>);
 static_assert(!HasDbHandleInitializerListParams<ruvia::DbHandle>);
-static_assert(std::constructible_from<ruvia::DbClient, ruvia::EventLoop, ruvia::DbConfig>);
-static_assert(!std::copy_constructible<ruvia::DbClient>);
-static_assert(!std::move_constructible<ruvia::DbClient>);
-static_assert(
-    std::same_as<decltype(std::declval<ruvia::DbClient&>().connect()), ruvia::Task<void>>);
-static_assert(HasDbHandleDefaultParams<ruvia::DbClient>);
-static_assert(HasDbHandleSpanParams<ruvia::DbClient>);
-static_assert(!HasDbHandleInitializerListParams<ruvia::DbClient>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().withOptions(
-                               ruvia::OperationOptions{})),
-    ruvia::DbHandle>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::DbClient&>().worker()),
-    const ruvia::WorkerHandle&>);
 static_assert(std::same_as<decltype(std::declval<const ruvia::DbHandle&>().withOptions(
                                ruvia::OperationOptions{})),
     ruvia::DbHandle>);
