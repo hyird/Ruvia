@@ -15,22 +15,26 @@ namespace ruvia::detail {
 
 void WorkerTimerCancellation::cancel() const noexcept {
     if (dispatcher_ != nullptr && generation_ != 0) {
-        dispatcher_->requestTimerCancellation(slot_, generation_);
+        dispatcher_->requestTimerCancellation(slot_, generation_, true);
     }
 }
 
 WorkerTimerRegistration::~WorkerTimerRegistration() {
-    cancel();
+    cancel(false);
 }
 
 void WorkerTimerRegistration::cancel() noexcept {
+    cancel(true);
+}
+
+void WorkerTimerRegistration::cancel(bool notify) noexcept {
     auto* dispatcher = std::exchange(dispatcher_, nullptr);
     const auto slot = std::exchange(slot_, 0);
     const auto generation = std::exchange(generation_, 0);
     if (dispatcher == nullptr || generation == 0) {
         return;
     }
-    dispatcher->requestTimerCancellation(slot, generation);
+    dispatcher->requestTimerCancellation(slot, generation, notify);
 }
 
 bool WorkerTimerRegistration::registered() const noexcept {
@@ -114,12 +118,12 @@ void WorkerDispatcher::scheduleTimer(WorkerTimerRegistration& registration,
 }
 
 void WorkerDispatcher::requestTimerCancellation(
-    std::size_t slot, std::uint64_t generation) noexcept {
+    std::size_t slot, std::uint64_t generation, bool notify) noexcept {
     if (generation == 0) {
         return;
     }
     if (currentWorkerDispatcher() == this) {
-        cancelTimer(slot, generation);
+        cancelTimer(slot, generation, notify);
         return;
     }
     bool current = false;
@@ -134,8 +138,8 @@ void WorkerDispatcher::requestTimerCancellation(
                 // A stopped io_context can be restarted; queue the cancellation
                 // so a destroyed registration cannot leave a live slot that
                 // expires after that restart.
-                asio::post(impl_->ioContext, [self = shared_from_this(), slot, generation] {
-                    self->cancelTimer(slot, generation);
+                asio::post(impl_->ioContext, [self = shared_from_this(), slot, generation, notify] {
+                    self->cancelTimer(slot, generation, notify);
                 });
             } catch (...) {
                 std::terminate();
@@ -143,10 +147,11 @@ void WorkerDispatcher::requestTimerCancellation(
             return;
         }
     }
-    cancelTimer(slot, generation);
+    cancelTimer(slot, generation, notify);
 }
 
-void WorkerDispatcher::cancelTimer(std::size_t slotIndex, std::uint64_t generation) noexcept {
+void WorkerDispatcher::cancelTimer(
+    std::size_t slotIndex, std::uint64_t generation, bool notify) noexcept {
     if (slotIndex >= impl_->timerSlots.size()) {
         return;
     }
@@ -168,14 +173,16 @@ void WorkerDispatcher::cancelTimer(std::size_t slotIndex, std::uint64_t generati
     if (!impl_->dispatchingTimers) {
         armTimer();
     }
-    try {
-        if (completion) {
-            defer([completion = std::move(completion)]() mutable {
-                completion(WorkerTimerOutcome::kCancelled);
-            });
+    if (notify) {
+        try {
+            if (completion) {
+                defer([completion = std::move(completion)]() mutable {
+                    completion(WorkerTimerOutcome::kCancelled);
+                });
+            }
+        } catch (...) {
+            std::terminate();
         }
-    } catch (...) {
-        std::terminate();
     }
 }
 

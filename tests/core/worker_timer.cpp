@@ -304,15 +304,42 @@ bool offWorkerCancellationAfterContextStopDoesNotExpireLater() {
     });
     ioContext.run();
 
-    // The cancellation request is issued outside the worker while the context is
-    // stopped. It still has to remove the active timer slot; otherwise a later
-    // restart can fire a callback owned by an already-destroyed registration.
+    // Destruction is a quiet cancellation issued outside the worker while the
+    // context is stopped. It still has to remove the active timer slot;
+    // otherwise a later restart can fire a callback owned by an already-destroyed
+    // registration.
     registration.reset();
 
     ioContext.restart();
     ioContext.run_for(std::chrono::milliseconds(20));
     dispatcher->detachContext();
-    return !expired && cancelled;
+    return !expired && !cancelled;
+}
+
+bool explicitTimerCancellationNotifiesAfterQuietDestruction() {
+    asio::io_context ioContext;
+    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    auto registration = std::make_unique<ruvia::detail::WorkerTimerRegistration>();
+    bool cancelled = false;
+
+    asio::post(ioContext, [&] {
+        ruvia::detail::WorkerHandleAccess::scheduleTimer(worker, *registration,
+            std::chrono::steady_clock::now() + std::chrono::hours(1),
+            [&cancelled](ruvia::detail::WorkerTimerOutcome outcome) {
+                cancelled = outcome == ruvia::detail::WorkerTimerOutcome::kCancelled;
+            });
+        registration->cancel();
+        registration.reset();
+        ioContext.stop();
+    });
+    ioContext.run();
+
+    ioContext.restart();
+    while (ioContext.poll() != 0) {
+    }
+    dispatcher->detachContext();
+    return cancelled;
 }
 
 ruvia::Task<void> markAfterSleep(
@@ -493,7 +520,8 @@ int main() {
         !stoppedDispatcherCanOutliveContext() ||
         !timerRegistrationResetAfterStopDoesNotQueueCancellation() ||
         !offWorkerCancellationCanRaceWithTimerShutdown() ||
-        !offWorkerCancellationAfterContextStopDoesNotExpireLater() || !stoppableSleepWorks()) {
+        !offWorkerCancellationAfterContextStopDoesNotExpireLater() ||
+        !explicitTimerCancellationNotifiesAfterQuietDestruction() || !stoppableSleepWorks()) {
         return 1;
     }
     asio::io_context ioContext;

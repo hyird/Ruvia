@@ -104,11 +104,14 @@ public:
     [[nodiscard]] bool registered() const noexcept;
 
 private:
+    void cancel(bool notify) noexcept;
     void bind(WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept;
     void release() noexcept;
 
     // The handle supplied to scheduleTimer() must outlive this registration.
-    // Internal users enforce that structurally through member declaration order.
+    // Explicit cancel() delivers kCancelled to the completion. Destruction only
+    // removes the registration: a callback that refers to the destroyed owner
+    // must never be queued merely because its RAII token went out of scope.
     WorkerDispatcher* dispatcher_{nullptr};
     std::size_t slot_{0};
     std::uint64_t generation_{0};
