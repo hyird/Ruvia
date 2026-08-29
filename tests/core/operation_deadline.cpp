@@ -50,10 +50,23 @@ bool operationTimeoutUsesOneAbsoluteDeadline() {
     return remaining.has_value() && remaining->count() > 0 && *remaining <= std::chrono::seconds(1);
 }
 
+bool positiveTimeoutRemainderDoesNotBecomeImmediate() {
+    using Clock = ruvia::detail::OperationTimeout::Clock;
+    const auto exact = std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(3));
+    const auto fractional = exact +
+                            std::chrono::duration_cast<Clock::duration>(std::chrono::microseconds(1));
+    return ruvia::detail::workerTimerCeilMilliseconds(exact) == std::chrono::milliseconds(3) &&
+           ruvia::detail::workerTimerCeilMilliseconds(fractional) ==
+               std::chrono::milliseconds(4) &&
+           ruvia::detail::workerTimerCeilMilliseconds(Clock::duration::zero()) ==
+               std::chrono::milliseconds(0);
+}
+
 }  // namespace
 
 int main() {
-    return operationDeadlineTransitionsAreExclusive() && operationTimeoutUsesOneAbsoluteDeadline()
+    return operationDeadlineTransitionsAreExclusive() && operationTimeoutUsesOneAbsoluteDeadline() &&
+                   positiveTimeoutRemainderDoesNotBecomeImmediate()
                ? 0
                : 1;
 }
