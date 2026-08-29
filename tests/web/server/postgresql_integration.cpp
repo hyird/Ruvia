@@ -176,6 +176,15 @@ ruvia::Task<void> withDatabase(asio::io_context& ioContext, const ruvia::WorkerH
 
     {
         auto transaction = co_await db.beginTransaction();
+        auto pending = transaction.query("SELECT 1");
+        auto moved = std::move(transaction);
+        auto rows = co_await std::move(pending);
+        dbRequire(rows[0][0].as<std::int64_t>() == 1, "transaction operation did not survive its owner move");
+        co_await moved.rollback();
+    }
+
+    {
+        auto transaction = co_await db.beginTransaction();
         (void)co_await transaction.execute("INSERT INTO ruvia_pg_integration_items(value) VALUES ($1)", std::span<const ruvia::DbValue>(params.data(), 1));
         co_await transaction.rollback();
     }
@@ -218,6 +227,15 @@ ruvia::Task<void> withDatabase(asio::io_context& ioContext, const ruvia::WorkerH
         ++streamed;
     }
     dbRequire(streamed == 128, "single-row mode did not stream every row");
+
+    {
+        auto source = co_await db.queryStream("SELECT generate_series(1, 2) AS sequence_value");
+        auto pending = source.read();
+        auto moved = std::move(source);
+        auto row = co_await std::move(pending);
+        dbRequire(row.has_value() && (*row)[0].as<std::int64_t>() == 1, "stream operation did not survive its owner move");
+        co_await moved.close();
+    }
 
     auto abandoned = co_await db.queryStream("SELECT generate_series(1, 128)");
     dbRequire((co_await abandoned.read()).has_value(), "stream produced no first row");

@@ -136,10 +136,49 @@ ruvia::Task<int> exercise(ruvia::WebSocketClient& client, ruvia::WorkerId expect
     if (!client.connected() || !client.worker().isCurrent() || client.worker().id() != expectedWorker || client.subprotocol() != "chat") {
         co_return 1;
     }
+    {
+        auto discardedRead = client.read();
+        bool competingReadRejected = false;
+        try {
+            auto competingRead = client.read();
+            static_cast<void>(competingRead);
+        } catch (const ruvia::WebSocketClientError& error) {
+            competingReadRejected = error.code() == ruvia::WebSocketClientError::Code::kInvalidState;
+        }
+        if (!competingReadRejected) {
+            co_return 2;
+        }
+    }
+    {
+        auto discardedWrite = client.text("discarded");
+        bool competingWriteRejected = false;
+        try {
+            auto competingWrite = client.text("also-discarded");
+            static_cast<void>(competingWrite);
+        } catch (const ruvia::WebSocketClientError& error) {
+            competingWriteRejected = error.code() == ruvia::WebSocketClientError::Code::kInvalidState;
+        }
+        if (!competingWriteRejected) {
+            co_return 3;
+        }
+    }
+    {
+        auto discardedClose = client.close({.code = 1000});
+        bool competingCloseRejected = false;
+        try {
+            auto competingClose = client.close({.code = 1000});
+            static_cast<void>(competingClose);
+        } catch (const ruvia::WebSocketClientError& error) {
+            competingCloseRejected = error.code() == ruvia::WebSocketClientError::Code::kInvalidState;
+        }
+        if (!competingCloseRejected) {
+            co_return 4;
+        }
+    }
     co_await client.text("hello");
     const auto message = co_await client.read();
     if (!message.has_value() || !message->text() || message->payload() != "world") {
-        co_return 2;
+        co_return 5;
     }
     co_await client.close({.code = 1000});
     co_return 0;

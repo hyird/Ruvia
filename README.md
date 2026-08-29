@@ -312,7 +312,7 @@ configuration, before any worker starts.
 `EventLoop`. Its API follows the standalone `HttpClient` shape: configuration is
 a designated-initializable aggregate, construction performs no I/O, `connect()`
 is lazy and worker-affine, `withOptions(OperationOptions)` derives operation
-policy, and `close()` is an idempotent immediate shutdown callable from any
+policy, and `abort()` is an idempotent immediate shutdown callable from any
 thread. Use the typed `close(WebSocketCloseOptions)` overload for an awaited RFC
 6455 close handshake.
 

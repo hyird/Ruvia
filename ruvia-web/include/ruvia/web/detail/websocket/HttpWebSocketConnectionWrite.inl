@@ -4,57 +4,78 @@ namespace ruvia::detail {
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::write(WebSocketOpcode opcode, std::string_view payload) {
-    co_await writeExclusive(opcode, payload);
+    return writeOwned(opcode, payload, WriteOperationLease(writeActive_));
+}
+
+template <typename Transport>
+Task<void> WebSocketConnection<Transport>::writeOwned(WebSocketOpcode opcode, std::string_view payload, WriteOperationLease writeLease) {
+    {
+        WriteOperationLease activeWrite(std::move(writeLease));
+        static_cast<void>(activeWrite);
+        co_await writeExclusive(opcode, payload);
+    }
 }
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::close(::ruvia::WebSocketCloseOptions options) {
-    co_await waitForHeartbeatWrite();
-    const auto reason = options.reason.view();
-    bool flushOutput = false;
-    bool awaitPeerClose = false;
-    {
-        WriteGuard writeGuard(*this, WritePhase::kApplication);
-        switch (protocol_.submitClose(options.code, reason)) {
-            case WsCloseSubmitStatus::kAccepted:
-                flushOutput = true;
-                awaitPeerClose = true;
-                break;
-            case WsCloseSubmitStatus::kAlreadyClosing:
-                flushOutput = true;
-                break;
-            case WsCloseSubmitStatus::kClosed:
-                break;
-            case WsCloseSubmitStatus::kInvalidCode:
-                throw std::invalid_argument("invalid websocket close code");
-            case WsCloseSubmitStatus::kInvalidReason:
-                throw std::invalid_argument("invalid websocket close reason");
-            case WsCloseSubmitStatus::kReasonTooLarge:
-                throw std::invalid_argument("websocket close reason is too large");
-        }
-        if (flushOutput) {
-            co_await flushProtocolOutputNow();
-        }
-        if (awaitPeerClose && protocol_.livenessMode() == WsLivenessMode::kAwaitingPeerClose) {
-            // The timeout bounds the peer's response window, so commit it only
-            // after the local Close bytes have reached the transport. The
-            // successful flush touched the scanner with the current coarse
-            // worker timestamp.
-            livenessState_ = WebSocketAwaitingPeerClose(scannerEntry_.lastActiveMs());
-        }
+    if (readPhase_ == ReadPhase::kReserved) {
+        throw std::logic_error("websocket close cannot overlap a pending read");
     }
+    return closeOwned(options, WriteOperationLease(writeActive_));
+}
 
-    // RFC 6455: sending Close starts, but does not complete, the handshake.
-    // Keep parsing transport input until the peer Close arrives (or EOF/timeout
-    // aborts this transport). The core suppresses application messages in this
-    // phase while still validating frames and handling control traffic.
-    if (awaitPeerClose) {
-        if (readActive_) {
-            while (readActive_) {
-                co_await readerDoneSignal_.wait();
+template <typename Transport>
+Task<void> WebSocketConnection<Transport>::closeOwned(::ruvia::WebSocketCloseOptions options, WriteOperationLease writeLease) {
+    {
+        WriteOperationLease activeWrite(std::move(writeLease));
+        static_cast<void>(activeWrite);
+        co_await waitForHeartbeatWrite();
+        const auto reason = options.reason.view();
+        bool flushOutput = false;
+        bool awaitPeerClose = false;
+        {
+            WriteGuard writeGuard(*this, WritePhase::kApplication);
+            switch (protocol_.submitClose(options.code, reason)) {
+                case WsCloseSubmitStatus::kAccepted:
+                    flushOutput = true;
+                    awaitPeerClose = true;
+                    break;
+                case WsCloseSubmitStatus::kAlreadyClosing:
+                    flushOutput = true;
+                    break;
+                case WsCloseSubmitStatus::kClosed:
+                    break;
+                case WsCloseSubmitStatus::kInvalidCode:
+                    throw std::invalid_argument("invalid websocket close code");
+                case WsCloseSubmitStatus::kInvalidReason:
+                    throw std::invalid_argument("invalid websocket close reason");
+                case WsCloseSubmitStatus::kReasonTooLarge:
+                    throw std::invalid_argument("websocket close reason is too large");
             }
-        } else {
-            (void)co_await read();
+            if (flushOutput) {
+                co_await flushProtocolOutputNow();
+            }
+            if (awaitPeerClose && protocol_.livenessMode() == WsLivenessMode::kAwaitingPeerClose) {
+                // The timeout bounds the peer's response window, so commit it only
+                // after the local Close bytes have reached the transport. The
+                // successful flush touched the scanner with the current coarse
+                // worker timestamp.
+                livenessState_ = WebSocketAwaitingPeerClose(scannerEntry_.lastActiveMs());
+            }
+        }
+
+        // RFC 6455: sending Close starts, but does not complete, the handshake.
+        // Keep parsing transport input until the peer Close arrives (or EOF/timeout
+        // aborts this transport). The core suppresses application messages in this
+        // phase while still validating frames and handling control traffic.
+        if (awaitPeerClose) {
+            if (readPhase_ == ReadPhase::kActive) {
+                while (readPhase_ == ReadPhase::kActive) {
+                    co_await readerDoneSignal_.wait();
+                }
+            } else {
+                (void)co_await read();
+            }
         }
     }
 }
@@ -93,16 +114,14 @@ void WebSocketConnection<Transport>::notifyWriteIdle() noexcept {
 }
 
 template <typename Transport>
-Task<void> WebSocketConnection<Transport>::writeExclusive(
-    WebSocketOpcode opcode, std::string_view payload) {
+Task<void> WebSocketConnection<Transport>::writeExclusive(WebSocketOpcode opcode, std::string_view payload) {
     co_await waitForHeartbeatWrite();
     WriteGuard writeGuard(*this, WritePhase::kApplication);
     co_await writeFrameNow(opcode, payload);
 }
 
 template <typename Transport>
-Task<void> WebSocketConnection<Transport>::writeFrameNow(
-    WebSocketOpcode opcode, std::string_view payload) {
+Task<void> WebSocketConnection<Transport>::writeFrameNow(WebSocketOpcode opcode, std::string_view payload) {
     switch (protocol_.submitFrame(opcode, payload)) {
         case WsFrameSubmitStatus::kAccepted:
             break;

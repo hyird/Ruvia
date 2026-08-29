@@ -257,14 +257,13 @@ Task<DbTransaction> detail::MariaDbPool::beginTransaction(std::pmr::memory_resou
             co_await connectUnlocked(slot, operationTimeout);
         }
         co_await executeControl(slot, "START TRANSACTION", resource, operationTimeout);
+        co_return DbTransaction(DbPoolRef{this}, slotIndex, resource, std::move(options));
     } catch (...) {
         closeSlot(slots_[slotIndex]);
         cancellation.finish();
         releaseSlot(slotIndex);
         throw;
     }
-
-    co_return DbTransaction(DbPoolRef{this}, slotIndex, resource, std::move(options));
 }
 
 Task<void> detail::MariaDbPool::commitTransaction(std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options) {
