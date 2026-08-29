@@ -195,6 +195,19 @@ ruvia::Task<int> exercise(ruvia::WebSocketClient& client, ruvia::WorkerId expect
         co_return 1;
     }
     {
+        auto handle = client.withOptions({});
+        bool invalidTimeoutRejected = false;
+        try {
+            auto invalidHandle = handle.withOptions({.timeout = std::chrono::milliseconds{0}});
+            static_cast<void>(invalidHandle);
+        } catch (const std::invalid_argument&) {
+            invalidTimeoutRejected = true;
+        }
+        if (!invalidTimeoutRejected) {
+            co_return 2;
+        }
+    }
+    {
         auto discardedRead = client.read();
         bool competingReadRejected = false;
         try {
@@ -204,7 +217,7 @@ ruvia::Task<int> exercise(ruvia::WebSocketClient& client, ruvia::WorkerId expect
             competingReadRejected = error.code() == ruvia::WebSocketClientError::Code::kInvalidState;
         }
         if (!competingReadRejected) {
-            co_return 2;
+            co_return 3;
         }
     }
     {
@@ -217,7 +230,7 @@ ruvia::Task<int> exercise(ruvia::WebSocketClient& client, ruvia::WorkerId expect
             competingWriteRejected = error.code() == ruvia::WebSocketClientError::Code::kInvalidState;
         }
         if (!competingWriteRejected) {
-            co_return 3;
+            co_return 4;
         }
     }
     {
@@ -230,13 +243,13 @@ ruvia::Task<int> exercise(ruvia::WebSocketClient& client, ruvia::WorkerId expect
             competingCloseRejected = error.code() == ruvia::WebSocketClientError::Code::kInvalidState;
         }
         if (!competingCloseRejected) {
-            co_return 4;
+            co_return 5;
         }
     }
     co_await client.text("hello");
     const auto message = co_await client.read();
     if (!message.has_value() || !message->text() || message->payload() != "world") {
-        co_return 5;
+        co_return 6;
     }
     co_await client.close({.code = 1000});
     co_await client.shutdown();

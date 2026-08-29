@@ -884,6 +884,7 @@ void WebSocketClientHandle::expireCapability(detail::ScopedCapabilityNode& capab
 }
 
 WebSocketClientHandle WebSocketClientHandle::withOptions(OperationOptions options) const {
+    detail::validateOperationOptions(options);
     requireActive();
     return WebSocketClientHandle(state_, operationScope(), detail::mergeOperationOptions(options_, std::move(options)));
 }
