@@ -1,9 +1,6 @@
 // A server exercising the HTTP context surface: route metadata and decoded
 // paths, Accept checks, buffered multipart, explicit body discard, response
 // cookies, manual HttpResponse body ownership and PUT/PATCH streaming.
-//
-// The compile-time assertions about what this surface deliberately does NOT
-// offer live in tests/web/guards/web_api_surface_guard.cpp.
 
 #include <array>
 #include <charconv>

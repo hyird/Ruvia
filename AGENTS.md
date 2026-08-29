@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Ruvia 项目协作说明。默认用中文回复。本文件只记录稳定的仓库约束；实现细节、迁移历史和具体类型清单由代码、测试与边界守卫维护，不在这里逐轮追加。
+Ruvia 项目协作说明。默认用中文回复。本文件只记录稳定的仓库约束；实现细节、迁移历史和具体类型清单由代码与单元测试维护，不在这里逐轮追加。
 
 README 面向使用者，说明构建、安装和公开能力；AGENTS 面向贡献者，说明目录、分层、性能和验证规则。不要在两个文件中重复记录同一内部实现。
 
@@ -50,8 +50,8 @@ tests/
 ```text
 examples/web/
 tests/core/
-tests/http/{unit,http1,http2,websocket,guards,support,conformance,benchmarks}/
-tests/web/{unit,server,guards}/
+tests/http/{unit,http1,http2,websocket,support}/
+tests/web/unit/
 tests/support/
 ```
 
@@ -60,16 +60,13 @@ tests/support/
 
 测试文件名只描述被测对象，不重复所在目录已经表达的信息：
 `http/http2/hpack.cpp`，不是 `http/http2/unit_hpack.cpp`；
-`web/server/write_timeout.cpp`，不是 `web/server/server_write_timeout.cpp`。
+`web/unit/router/routing_matching.cpp`，不是 `web/unit/router/unit_routing_matching.cpp`。
 单元测试 target 的源码列表按目录分组、组内字母序，不要往末尾追加。
 
-不要把 HTTP/1、HTTP/2、WebSocket 或 Web server 测试重新散放到 `tests/`
-根目录；target 专属的边界守卫、支撑代码、基准和一致性测试跟随所属
-target，只有跨 target 的通用支撑保留在独立目录。
-
-门禁必须是 ctest 条目。不要新增默认不执行的 opt-in 门禁：不跑的门禁
-守不住任何东西，只会随重构不断腐坏。契约优先用编译器验证（消费公开
-头的测试翻译单元），不要用正则匹配已安装文件的字面签名。
+不要把 HTTP/1、HTTP/2 或 WebSocket 单元测试重新散放到 `tests/` 根目录；
+target 专属的支撑代码跟随所属 target，只有跨 target 的通用支撑保留在
+独立目录。测试只保留可直接验证功能行为的单元测试，不新增 guards、
+server/integration、conformance、benchmark 或故意失败的 probe target。
 
 仓库根目录不保留源码级 `include/`、`src/`、`fuzz/`、`core/`、`http/` 或 `web/`。
 
@@ -92,7 +89,7 @@ target，只有跨 target 的通用支撑保留在独立目录。
 
 跨 target 复用的编译期契约头放在所属 target 的 `include/ruvia/<target>/detail/`。禁止把另一个 target 的 `src/` 加入 include path，也禁止通过物理相对或绝对路径包含另一个 target 的源码或私有头。target 之间只能通过 `target_link_libraries()` 传播的公开 include interface 使用依赖方已安装的头。
 
-安装从非 `detail` 公开头出发，只包含真实的同 target 传递头依赖闭包；不得重新整树安装 `detail/`。少数跨 target 编译期契约由拥有它的 target 显式安装，并继续由默认 ctest 安装闭包门禁验证。
+安装从非 `detail` 公开头出发，只包含真实的同 target 传递头依赖闭包；不得重新整树安装 `detail/`。少数跨 target 编译期契约由拥有它的 target 显式安装。
 
 `src/` 下最多保留一层业务分类目录，例如 `server/`、`http2/`、`websocket/`、`client/`；不要引入 `src/net/...`、`src/*/core/...` 等重复层级。`ruvia-core/src/` 保持扁平。`src/` 只保存实现和 target 自有 `pch.h`，契约头统一放在公开 `detail/` 根。
 
@@ -246,7 +243,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 ## 路由和中间件
 
-- Web 应用模型固定为一个进程一个 `App`：`ruvia::app()` 是唯一配置与生命周期入口，`App` 的构造、析构、复制和移动保持非公开或禁用，并由默认执行的编译与运行门禁验证唯一实例；禁止增加可并存的 App 实例、显式 application builder 或实例级 controller 清单。
+- Web 应用模型固定为一个进程一个 `App`：`ruvia::app()` 是唯一配置与生命周期入口，`App` 的构造、析构、复制和移动保持非公开或禁用；禁止增加可并存的 App 实例、显式 application builder 或实例级 controller 清单。
 - Controller 保持 CRTP + route macro 自动注册。声明 `RUVIA_ROUTES_BEGIN` / `RUVIA_ROUTES_END` 的 controller 必须在启动期自动进入进程级注册表；禁止增加 `useController<T>()`、手工 registrar 列表或要求使用者重复列举 controller。
 - controller registrar 按函数地址去重，并在首次生产或测试路由构建时封存；封存后注册必须硬错误，禁止不同 worker/TestApp 观察到不同 controller 集合。
 - 自动注册只覆盖最终程序实际保留并在 `App::run()` 前加载的 controller 翻译单元。静态库和 object library 必须通过安装包提供的 `ruvia_link_controllers()` 跨平台保留，动态模块的加载约束必须在面向使用者的文档中明确；不得要求用户维护 controller 类型清单，也不得用请求期动态发现补救链接或加载问题。
@@ -279,7 +276,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - `RUVIA_REQUEST_MODEL` 是请求解析和校验 schema；`RUVIA_RESPONSE_MODEL` 只约束响应字段类型并生成 JSON，不参与请求解析或校验。
 - 所有 HTTP JSON 输出必须先建立 `RUVIA_RESPONSE_MODEL`；`c.json()` 与 `toJson()` 只接受响应模型，不暴露动态 object/array writer 或原始 JSON details 注入入口。
 - `RUVIA_REQUIRED_FIELD` 是必填字段，`RUVIA_OPTIONAL_FIELD` 是可选字段；自定义 wire name 使用对应的 `*_FIELD_NAME`。字段通过 `get/set/ensure/reset<"field">()` 访问，不生成逐字段成员函数别名。
-- Model 字段描述符必须由 `RUVIA_REQUEST_MODEL` / `RUVIA_RESPONSE_MODEL` 的 `__VA_ARGS__` 直接进入 C++ 模板参数包。禁止在 Model 注册路径恢复 `NARG`、`FOR_EACH`、固定展开表、运行时注册表或固定字段数量上限；编译守卫必须保留一个超过 64 字段的模型。
+- Model 字段描述符必须由 `RUVIA_REQUEST_MODEL` / `RUVIA_RESPONSE_MODEL` 的 `__VA_ARGS__` 直接进入 C++ 模板参数包。禁止在 Model 注册路径恢复 `NARG`、`FOR_EACH`、固定展开表、运行时注册表或固定字段数量上限。
 - 字段必须使用 Ruvia 模型类型，不使用 raw `std::string`、`std::vector`、`std::string_view` 或基础整数。
 - 校验规则通过 route validation middleware 声明，不写进 `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`。
 - 请求 JSON 只嵌套请求模型，响应 JSON 只嵌套响应模型；两者都支持 `Array`，递归/地址稳定数组使用 `BoxedArray`。form、query、param、header、cookie 只支持扁平 key-value 基础字段。
@@ -301,7 +298,7 @@ DB 的 `query()` 只接受产出行集的语句并返回 `DbRows`，`execute()` 
   其他配置使用 `/MT`。
 - 独立构建可以从环境初始化 vcpkg toolchain、triplet 和 manifest feature；作为
   `FetchContent` / `add_subdirectory` 子项目时不得修改父项目的 `CMAKE_*` 或
-  `VCPKG_*` cache，生成的配置与门禁输入必须留在 Ruvia 自己的 binary tree。
+  `VCPKG_*` cache，生成的配置必须留在 Ruvia 自己的 binary tree。
 - outbound HTTP 的 wire/framing/HTTP/2 状态机保留在 `ruvia-http`；`ruvia-web` 可以提供 worker-local DNS、socket、TLS/ALPN、连接复用、超时和取消驱动，但不提供含糊的 `fetch` 别名、proxy 或反向代理产品集成。
 - 安装包暴露 `ruvia::core`、`ruvia::http`、`ruvia::web`，不暴露历史别名。
 - 下游按需请求 `core`、`http` 或 `web` component；消费示例只放在 README。

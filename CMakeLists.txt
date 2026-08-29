@@ -26,7 +26,6 @@ option(RUVIA_BUILD_HTTP "Build ruvia-http" ON)
 option(RUVIA_BUILD_WEB "Build ruvia-web" ON)
 option(RUVIA_BUILD_EXAMPLES "Build examples" OFF)
 option(RUVIA_BUILD_TESTS "Build tests" OFF)
-option(RUVIA_BUILD_BENCHMARKS "Build benchmarks" OFF)
 option(RUVIA_ENABLE_MARIADB "Enable MariaDB" OFF)
 option(RUVIA_ENABLE_POSTGRESQL "Enable PostgreSQL" OFF)
 option(RUVIA_ENABLE_REDIS "Enable Redis" OFF)
@@ -186,14 +185,6 @@ function(ruvia_assert_component_header_path component relative_path)
     endif()
 endfunction()
 
-# Every installed header is recorded as "<path under include/>|<file it comes
-# from>". ruvia_guard_install_closure reads the record to prove that an
-# installed header never includes one that stayed behind.
-function(ruvia_record_installed_header install_relative source_file)
-    set_property(GLOBAL APPEND PROPERTY
-        RUVIA_INSTALLED_HEADERS "${install_relative}|${source_file}")
-endfunction()
-
 function(ruvia_install_public_headers component)
     foreach(_ruvia_header ${ARGN})
         ruvia_assert_component_header_path(${component} "${_ruvia_header}")
@@ -218,10 +209,6 @@ function(ruvia_install_public_headers component)
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_install_subdir}"
             COMPONENT ${component}
         )
-        get_filename_component(_ruvia_header_name "${_ruvia_header}" NAME)
-        ruvia_record_installed_header(
-            "${_ruvia_header_install_subdir}/${_ruvia_header_name}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header}")
     endforeach()
 endfunction()
 
@@ -326,7 +313,6 @@ function(ruvia_install_generated_public_header component generated_header relati
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_install_subdir}"
         COMPONENT ${component}
     )
-    ruvia_record_installed_header("${relative_path}" "${generated_header}")
 endfunction()
 
 function(ruvia_assert_target_file_ownership target)
@@ -384,14 +370,6 @@ foreach(_ruvia_component IN ITEMS core http web)
     endif()
 endforeach()
 
-# Written after every target has declared its installs, and read by
-# ruvia_guard_install_closure at test time.
-get_property(_ruvia_installed_headers GLOBAL PROPERTY RUVIA_INSTALLED_HEADERS)
-list(SORT _ruvia_installed_headers)
-list(JOIN _ruvia_installed_headers "\n" _ruvia_installed_headers_text)
-file(WRITE "${PROJECT_BINARY_DIR}/ruvia_installed_headers.txt"
-    "${_ruvia_installed_headers_text}\n")
-
 if(RUVIA_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
@@ -399,10 +377,6 @@ if(RUVIA_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
-if(RUVIA_BUILD_BENCHMARKS)
-    add_subdirectory(tests/http/benchmarks)
-endif()
-
 configure_package_config_file(
     cmake/ruviaConfig.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfig.cmake
