@@ -1,6 +1,7 @@
 #pragma once
 
-#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/detail/worker/WorkerTimer.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbBackend.h"
 #include "ruvia/web/detail/db/DbConfigStorage.h"
@@ -18,7 +19,7 @@ namespace ruvia::detail {
 
 class DbRegistry final {
 public:
-    DbRegistry(asio::io_context&, ConnectionScanner&, std::pmr::memory_resource*,
+    DbRegistry(asio::io_context&, const WorkerHandle&, std::pmr::memory_resource*,
         std::span<const DbDefinition>) {}
 
     DbRegistry(const DbRegistry&) = delete;
@@ -82,7 +83,6 @@ public:
 
     Task<void> connect();
     void closeNow() noexcept;
-    void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept;
 
     template <typename Pool>
     friend Task<void> finishDbTransaction(
@@ -123,11 +123,13 @@ public:
 
         using SlotSocketDeleter = PmrObjectDeleter<DbSlotSocket>;
         using SlotSocketQuarantineDeleter = PmrObjectDeleter<DbSlotSocketQuarantine>;
+        using DeadlineTimerDeleter = PmrObjectDeleter<WorkerTimerRegistration>;
 
         asio::ip::tcp::resolver resolver;
         st_mysql* connection{nullptr};
         std::unique_ptr<DbSlotSocket, SlotSocketDeleter> waitSocket;
         std::unique_ptr<DbSlotSocketQuarantine, SlotSocketQuarantineDeleter> socketQuarantine;
+        std::unique_ptr<WorkerTimerRegistration, DeadlineTimerDeleter> deadlineTimer;
         std::coroutine_handle<> deadlineContinuation{};
         bool connected{false};
         // Shutdown may request closure while an async descriptor wait still
@@ -147,8 +149,8 @@ public:
     Task<std::size_t> acquireSlot(const OperationTimeout& timeout, StopToken stopToken);
     void releaseSlot(std::size_t slot) noexcept;
     void closeSlot(ConnectionSlot& slot) noexcept;
-    void setSlotDeadline(ConnectionSlot& slot, std::chrono::milliseconds timeout,
-        ConnectionSlot::DeadlineKind kind) noexcept;
+    void setSlotDeadline(
+        ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind);
     void clearSlotDeadline(ConnectionSlot& slot) noexcept;
     Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<void> connectUnlocked(ConnectionSlot& slot, const OperationTimeout& operationTimeout);
@@ -218,7 +220,6 @@ public:
 
     Task<void> connect();
     void closeNow() noexcept;
-    void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept;
 
 private:
     template <typename Pool>
@@ -260,11 +261,13 @@ private:
 
         using SlotSocketDeleter = PmrObjectDeleter<DbSlotSocket>;
         using SlotSocketQuarantineDeleter = PmrObjectDeleter<DbSlotSocketQuarantine>;
+        using DeadlineTimerDeleter = PmrObjectDeleter<WorkerTimerRegistration>;
 
         asio::ip::tcp::resolver resolver;
         pg_conn* connection{nullptr};
         std::unique_ptr<DbSlotSocket, SlotSocketDeleter> waitSocket;
         std::unique_ptr<DbSlotSocketQuarantine, SlotSocketQuarantineDeleter> socketQuarantine;
+        std::unique_ptr<WorkerTimerRegistration, DeadlineTimerDeleter> deadlineTimer;
         bool connected{false};
         bool waitActive{false};
         bool closeRequested{false};
@@ -280,7 +283,7 @@ public:
     void releaseSlot(std::size_t slot) noexcept;
     void closeSlot(ConnectionSlot& slot) noexcept;
     void setSlotDeadline(
-        ConnectionSlot& slot, std::optional<std::chrono::milliseconds> timeout) noexcept;
+        ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind);
     void clearSlotDeadline(ConnectionSlot& slot) noexcept;
     Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<void> connectUnlocked(ConnectionSlot& slot, const OperationTimeout& operationTimeout);
@@ -338,11 +341,9 @@ private:
 
 class DbRegistry final {
 public:
-    // One scanner is the authority for both the worker binding and deadline
-    // maintenance. It outlives this registry and every pool the registry owns.
-    DbRegistry(asio::io_context& ioContext, ConnectionScanner& scanner,
+    DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
         std::pmr::memory_resource* resource, const DbConfig& defaultConfig);
-    DbRegistry(asio::io_context& ioContext, ConnectionScanner& scanner,
+    DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
         std::pmr::memory_resource* resource, std::span<const DbDefinition> databases);
     ~DbRegistry();
 
@@ -374,13 +375,10 @@ public:
 
 private:
     void add(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config);
-    void registerDeadlineScanner(ConnectionScanner& scanner) noexcept;
-    void scanDeadlines() noexcept;
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<PoolOwner> pools_;
     NamedCapabilityIndex aliasIndex_;
-    ConnectionScanner::WorkerMaintenanceRegistration deadlineMaintenance_;
 };
 
 }  // namespace ruvia::detail

@@ -7,7 +7,6 @@
 #include "ruvia/web/db/Db.h"
 
 #include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/PmrObject.h"
 
 #include <asio/io_context.hpp>
@@ -24,34 +23,6 @@
 
 namespace ruvia {
 namespace {
-
-[[nodiscard]] detail::ConnectionScannerOptions dbMigrationScannerOptions() {
-    return detail::ConnectionScannerOptions{
-        .scanInterval = std::chrono::milliseconds(20),
-        .idleTimeout = std::nullopt,
-        .initialReadTimeout = std::nullopt,
-        .payloadReadTimeout = std::nullopt,
-        .writeTimeout = std::nullopt,
-    };
-}
-
-class DbMigrationScannerRun final {
-public:
-    explicit DbMigrationScannerRun(detail::ConnectionScanner& scanner)
-        : scanner_(scanner) {
-        scanner_.start();
-    }
-
-    DbMigrationScannerRun(const DbMigrationScannerRun&) = delete;
-    DbMigrationScannerRun& operator=(const DbMigrationScannerRun&) = delete;
-
-    ~DbMigrationScannerRun() {
-        scanner_.stop();
-    }
-
-private:
-    detail::ConnectionScanner& scanner_;
-};
 
 struct DbMigratorOptionsStorage final {
     DbMigratorOptionsStorage(const DbMigratorOptions& source, std::pmr::memory_resource* resource)
@@ -236,7 +207,7 @@ std::pmr::string detail::migrationChecksum(
 class detail::DbMigrationRunner final {
 public:
     [[nodiscard]] static Task<DbMigrationReport> run(asio::io_context& ioContext,
-        ConnectionScanner& scanner, DbConfigStorage config, std::span<const DbMigration> migrations,
+        const WorkerHandle& worker, DbConfigStorage config, std::span<const DbMigration> migrations,
         DbMigratorOptionsStorage options, std::pmr::memory_resource* resource) {
         auto* resolved = detail::pmrResourceOrDefault(resource);
         const auto driver = config.driver;
@@ -251,8 +222,7 @@ public:
             detail::DbDefinition{std::pmr::string(detail::kDefaultCapabilityAlias.data(),
                                      detail::kDefaultCapabilityAlias.size(), resolved),
                 std::move(config)}};
-        detail::DbRegistry registry(ioContext, scanner, resolved, databases);
-        const DbMigrationScannerRun scanning(scanner);
+        detail::DbRegistry registry(ioContext, worker, resolved, databases);
         co_await registry.connect();
         detail::ScopedOperationScope operationScope;
         auto handle = registry.get(resolved, operationScope);
@@ -427,10 +397,9 @@ Task<DbMigrationReport> stopMigrationLoopWhenDone(
     auto attachment = attachEventLoop(ioContext);
     const auto loop = attachment.loop();
     const auto worker = loop.handle();
-    detail::ConnectionScanner scanner(worker, dbMigrationScannerOptions());
     auto result = loop.start(stopMigrationLoopWhenDone(
-        attachment, detail::DbMigrationRunner::run(ioContext, scanner, std::move(config),
-                        migrations, std::move(options), resource)));
+        attachment, detail::DbMigrationRunner::run(ioContext, worker, std::move(config), migrations,
+                        std::move(options), resource)));
     ioContext.run();
     return result.get();
 }

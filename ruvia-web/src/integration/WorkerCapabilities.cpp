@@ -19,9 +19,9 @@ namespace {
 
 WorkerCapabilities::WorkerCapabilities(asio::io_context& ioContext, const WorkerHandle& worker,
     std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions,
-    WorkerCapabilityOptions options, ConnectionScanner& scanner)
+    WorkerCapabilityOptions options)
     : worker_(requireWorkerCapabilitiesWorker(worker)),
-      databases_(ioContext, scanner, resource, definitions.databases),
+      databases_(ioContext, worker_, resource, definitions.databases),
       redis_(ioContext, resource, definitions.redis, worker_),
       httpClients_(ioContext, worker_, resource, definitions.httpClients),
       workerStates_(resource, definitions.workerStates),

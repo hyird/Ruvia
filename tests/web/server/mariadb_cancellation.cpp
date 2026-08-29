@@ -6,7 +6,6 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 
 #include <asio/bind_executor.hpp>
@@ -143,23 +142,20 @@ ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry,
     auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 16});
     const auto loop = attachment.loop();
     const auto worker = loop.handle();
-    ruvia::detail::ConnectionScanner scanner(worker, {});
     auto* resource = std::pmr::get_default_resource();
     const auto config = silentPeerConfig(peer.port());
     const std::array definitions{ruvia::detail::DbDefinition{
         std::pmr::string("default", resource), ruvia::detail::DbConfigStorage(config, resource)}};
-    ruvia::detail::DbRegistry registry(ioContext, scanner, resource, definitions);
+    ruvia::detail::DbRegistry registry(ioContext, worker, resource, definitions);
     std::optional<ruvia::DbError::Code> code;
     std::string message;
     std::exception_ptr failure;
     peer.start([&stopSource] { stopSource.requestStop(); });
     asio::post(ioContext, [&] {
-        scanner.start();
         ruvia::detail::asyncStartTask(
             runCancelledQuery(registry, stopSource.token(), code, message),
             asio::bind_executor(
                 ioContext.get_executor(), [&](ruvia::detail::TaskCompletionResult<void> result) {
-                    scanner.stop();
                     if (const auto* error = result.failure()) {
                         failure = error->exception();
                     }
@@ -198,7 +194,6 @@ ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry,
     auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 16});
     const auto loop = attachment.loop();
     const auto worker = loop.handle();
-    ruvia::detail::ConnectionScanner scanner(worker, {});
     auto* resource = std::pmr::get_default_resource();
     const auto config = silentPeerConfig(peer.port());
     const std::array definitions{ruvia::detail::DbDefinition{
@@ -212,7 +207,7 @@ ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry,
     bool taskCompleted = false;
 
     {
-        ruvia::detail::DbRegistry registry(ioContext, scanner, resource, definitions);
+        ruvia::detail::DbRegistry registry(ioContext, worker, resource, definitions);
         asio::steady_timer closeTimer(ioContext);
         peer.start([&] {
             asio::post(ioContext, [&] {
@@ -228,11 +223,9 @@ ruvia::Task<void> runClosingConnect(ruvia::detail::DbRegistry& registry,
             });
         });
         asio::post(ioContext, [&] {
-            scanner.start();
             ruvia::detail::asyncStartTask(runClosingConnect(registry, code, message),
                 asio::bind_executor(ioContext.get_executor(),
                     [&](ruvia::detail::TaskCompletionResult<void> result) {
-                        scanner.stop();
                         ++completions;
                         taskCompleted = true;
                         if (const auto* error = result.failure()) {

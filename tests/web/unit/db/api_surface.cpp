@@ -25,7 +25,6 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/db/DbClient.h"
 #include "ruvia/web/db/Db.h"
@@ -105,6 +104,11 @@ struct ClosingResolvePool final {
 
     void throwIfCancelled(const ClosingResolveSlot&) const {}
 
+    void setSlotDeadline(ClosingResolveSlot& slot, std::chrono::milliseconds timeout,
+        ClosingResolveSlot::DeadlineKind kind) {
+        slot.deadline.arm(ruvia::detail::workerTimerDeadlineAfter(timeout), kind);
+    }
+
     void clearSlotDeadline(ClosingResolveSlot& slot) noexcept {
         slot.deadline.reset();
     }
@@ -124,13 +128,11 @@ class DbRegistryTestRuntime final {
 public:
     DbRegistryTestRuntime()
         : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8)),
-          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
-          scanner(worker, {}) {}
+          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)) {}
 
     asio::io_context ioContext;
     std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
     ruvia::WorkerHandle worker;
-    ruvia::detail::ConnectionScanner scanner;
 };
 
 class RejectingMemoryResource final : public std::pmr::memory_resource {
@@ -897,7 +899,7 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
         dbDefinition("default", config),
     }};
     ruvia::detail::DbRegistry registry(
-        runtime.ioContext, runtime.scanner, std::pmr::get_default_resource(), definitions);
+        runtime.ioContext, runtime.worker, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
 
     bool defaultResolved = true;
@@ -918,7 +920,7 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
 
 RUVIA_TEST(db_registry_reports_typed_not_configured_error) {
     DbRegistryTestRuntime runtime;
-    ruvia::detail::DbRegistry registry(runtime.ioContext, runtime.scanner,
+    ruvia::detail::DbRegistry registry(runtime.ioContext, runtime.worker,
         std::pmr::get_default_resource(), std::span<const ruvia::detail::DbDefinition>());
     ruvia::detail::ScopedOperationScope operationScope;
 
@@ -963,7 +965,7 @@ RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
     definition.emplace(dbDefinition("default", config, &sourceResource));
 
     std::optional<ruvia::detail::DbRegistry> registry;
-    registry.emplace(runtime.ioContext, runtime.scanner, &targetResource,
+    registry.emplace(runtime.ioContext, runtime.worker, &targetResource,
         std::span<const ruvia::detail::DbDefinition>(&*definition, 1));
     definition.reset();
     sourceResource.release();
@@ -981,7 +983,7 @@ RUVIA_TEST(db_handle_copy_rejects_after_parent_scope_closes) {
 #endif
     const std::array definitions{dbDefinition("default", config)};
     ruvia::detail::DbRegistry registry(
-        runtime.ioContext, runtime.scanner, std::pmr::get_default_resource(), definitions);
+        runtime.ioContext, runtime.worker, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
     auto handle = registry.get(std::pmr::get_default_resource(), operationScope);
     auto copiedHandle = handle;

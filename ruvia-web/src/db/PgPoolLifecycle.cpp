@@ -24,7 +24,8 @@ PostgreSqlPool::ConnectionSlot::ConnectionSlot(
     asio::io_context& ioContext, std::pmr::memory_resource* resource)
     : resolver(ioContext),
       waitSocket(nullptr, SlotSocketDeleter{pmrResourceOrDefault(resource)}),
-      socketQuarantine(makePmrObject<DbSlotSocketQuarantine>(processResource(), ioContext)) {}
+      socketQuarantine(makePmrObject<DbSlotSocketQuarantine>(processResource(), ioContext)),
+      deadlineTimer(makePmrObject<WorkerTimerRegistration>(pmrResourceOrDefault(resource))) {}
 
 PostgreSqlPool::ConnectionSlot::~ConnectionSlot() {
     if (waitActive) {
@@ -75,22 +76,6 @@ void PostgreSqlPool::closeNow() noexcept {
     (void)scheduler_.close();
     for (auto& slot : slots_) {
         closeSlot(slot);
-    }
-}
-
-void PostgreSqlPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
-    // A per-operation timeout may constrain acquire even when DbConfig does not.
-    scheduler_.scanDeadlines(now);
-    for (auto& slot : slots_) {
-        if (!slot.deadline.expire(now).has_value()) {
-            continue;
-        }
-        const auto* kind = slot.deadline.kind();
-        if (kind != nullptr && *kind == ConnectionSlot::DeadlineKind::kResolve) {
-            slot.resolver.cancel();
-        } else if (slot.waitSocket != nullptr) {
-            slot.waitSocket->cancel();
-        }
     }
 }
 
@@ -154,15 +139,37 @@ void PostgreSqlPool::throwIfCancelled(const ConnectionSlot& slot) const {
 }
 
 void PostgreSqlPool::setSlotDeadline(
-    ConnectionSlot& slot, std::optional<std::chrono::milliseconds> timeout) noexcept {
-    if (!timeout.has_value() || timeout->count() <= 0) {
-        slot.deadline.reset();
+    ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind) {
+    clearSlotDeadline(slot);
+    if (timeout.count() <= 0) {
         return;
     }
-    slot.deadline.arm(workerTimerDeadlineAfter(*timeout), ConnectionSlot::DeadlineKind::kSocket);
+    const auto deadline = workerTimerDeadlineAfter(timeout);
+    slot.deadline.arm(deadline, kind);
+    try {
+        WorkerHandleAccess::scheduleTimer(
+            worker_, *slot.deadlineTimer, deadline, [&slot](WorkerTimerOutcome outcome) noexcept {
+                if (outcome != WorkerTimerOutcome::kExpired) {
+                    return;
+                }
+                const auto expired = slot.deadline.expire(std::chrono::steady_clock::now());
+                if (!expired.has_value()) {
+                    return;
+                }
+                if (*expired == ConnectionSlot::DeadlineKind::kResolve) {
+                    slot.resolver.cancel();
+                } else if (slot.waitSocket != nullptr) {
+                    slot.waitSocket->cancel();
+                }
+            });
+    } catch (...) {
+        slot.deadline.reset();
+        throw;
+    }
 }
 
 void PostgreSqlPool::clearSlotDeadline(ConnectionSlot& slot) noexcept {
+    slot.deadlineTimer->cancel();
     (void)slot.deadline.clear();
 }
 

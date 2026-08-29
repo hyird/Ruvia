@@ -13,7 +13,6 @@
 
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/db/DbMigration.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
@@ -98,12 +97,12 @@ void exerciseRejectedCredentials(const ruvia::DbConfig& config) {
         "MariaDB credential failure omitted the driver errno");
 }
 
-ruvia::Task<void> exercise(asio::io_context& ioContext, const ruvia::WorkerHandle& worker,
-    ruvia::detail::ConnectionScanner& scanner, unsigned& ticks) {
+ruvia::Task<void> exercise(
+    asio::io_context& ioContext, const ruvia::WorkerHandle& worker, unsigned& ticks) {
     auto* resource = std::pmr::get_default_resource();
     const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default", resource),
         ruvia::detail::DbConfigStorage(testConfig(), resource)}};
-    ruvia::detail::DbRegistry registry(ioContext, scanner, resource, definitions);
+    ruvia::detail::DbRegistry registry(ioContext, worker, resource, definitions);
     co_await registry.connect();
     ruvia::detail::ScopedOperationScope operationScope;
     auto db = registry.get(resource, operationScope);
@@ -321,7 +320,6 @@ int main() {
     asio::io_context ioContext(1);
     auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 64});
     const auto worker = attachment.loop().handle();
-    ruvia::detail::ConnectionScanner scanner(worker, {});
     unsigned ticks = 0;
     asio::steady_timer heartbeat(ioContext);
     // Re-armed from its own completion, which is what makes a silent stretch
@@ -349,12 +347,10 @@ int main() {
 
     std::exception_ptr failure;
     asio::post(ioContext, [&] {
-        scanner.start();
-        ruvia::detail::asyncStartTask(exercise(ioContext, worker, scanner, ticks),
+        ruvia::detail::asyncStartTask(exercise(ioContext, worker, ticks),
             asio::bind_executor(
-                ioContext.get_executor(), [&failure, &stopped, &heartbeat, &attachment, &scanner](
+                ioContext.get_executor(), [&failure, &stopped, &heartbeat, &attachment](
                                               ruvia::detail::TaskCompletionResult<void> result) {
-                    scanner.stop();
                     if (const auto* error = result.failure()) {
                         failure = error->exception();
                     }

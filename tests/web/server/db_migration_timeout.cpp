@@ -1,9 +1,7 @@
-// A migration runs on its own event loop, away from the worker whose scanner
-// expires pool deadlines. When nothing scanned them, every DbConfig timeout was
-// armed and never fired: against a backend that completes the TCP handshake and
-// then says nothing -- a load balancer in front of a dead server, a firewall
-// swallowing the reply -- migrate() blocked its caller forever, which is
-// startup code, before anything is listening or logging.
+// A migration runs on its own event loop and must enforce its database deadline
+// there. Against a backend that completes the TCP handshake and then says
+// nothing -- a load balancer in front of a dead server, a firewall swallowing
+// the reply -- migrate() must time out instead of blocking startup forever.
 //
 // The listener here never accepts: the kernel finishes the handshake into the
 // backlog, so the client connects and then waits for a greeting that never
