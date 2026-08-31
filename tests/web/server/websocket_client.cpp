@@ -29,14 +29,19 @@
 
 namespace {
 
+enum class WebSocketOriginBehavior {
+    kEcho,
+    kHeartbeat,
+    kHeartbeatTimeout,
+    kPingsAfterClose,
+    kPingsDuringRead,
+    kMaskedServerMessage,
+};
+
 class WebSocketOrigin final {
 public:
-    explicit WebSocketOrigin(bool heartbeat = false, bool respondPong = true,
-        bool sendPingsAfterClose = false, bool sendPingsDuringRead = false)
-        : heartbeat_(heartbeat),
-          respondPong_(respondPong),
-          sendPingsAfterClose_(sendPingsAfterClose),
-          sendPingsDuringRead_(sendPingsDuringRead),
+    explicit WebSocketOrigin(WebSocketOriginBehavior behavior = WebSocketOriginBehavior::kEcho)
+        : behavior_(behavior),
           io_(),
           acceptor_(io_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
           thread_([this] { serve(); }) {}
@@ -108,6 +113,23 @@ private:
         asio::write(socket, asio::buffer(frame));
     }
 
+    static void writeMaskedServerFrame(
+        asio::ip::tcp::socket& socket, std::uint8_t opcode, std::string_view payload) {
+        constexpr std::array<unsigned char, 4> mask{0x01, 0x02, 0x03, 0x04};
+        std::string frame;
+        frame.reserve(2 + mask.size() + payload.size());
+        frame.push_back(static_cast<char>(0x80U | opcode));
+        frame.push_back(static_cast<char>(0x80U | static_cast<unsigned char>(payload.size())));
+        for (const auto byte : mask) {
+            frame.push_back(static_cast<char>(byte));
+        }
+        for (std::size_t i = 0; i < payload.size(); ++i) {
+            const auto byte = static_cast<unsigned char>(payload[i]);
+            frame.push_back(static_cast<char>(byte ^ mask[i % mask.size()]));
+        }
+        asio::write(socket, asio::buffer(frame));
+    }
+
     static bool readClientControlFrame(asio::ip::tcp::socket& socket, std::uint8_t expectedOpcode) {
         std::array<unsigned char, 2> head{};
         asio::read(socket, asio::buffer(head));
@@ -148,20 +170,21 @@ private:
             response += "\r\nSec-WebSocket-Protocol: chat\r\n\r\n";
             asio::write(socket, asio::buffer(response));
 
-            if (heartbeat_) {
+            if (behavior_ == WebSocketOriginBehavior::kHeartbeat ||
+                behavior_ == WebSocketOriginBehavior::kHeartbeatTimeout) {
                 const bool receivedPing = readClientControlFrame(socket, 0x9);
-                if (receivedPing && respondPong_) {
+                if (receivedPing && behavior_ == WebSocketOriginBehavior::kHeartbeat) {
                     writeServerFrame(socket, 0xA, {});
                     writeServerFrame(socket, 0x1, "heartbeat");
                 }
-                if (!respondPong_) {
+                if (behavior_ == WebSocketOriginBehavior::kHeartbeatTimeout) {
                     std::this_thread::sleep_for(std::chrono::milliseconds{250});
                 }
                 succeeded_.store(receivedPing, std::memory_order_release);
                 return;
             }
 
-            if (sendPingsAfterClose_) {
+            if (behavior_ == WebSocketOriginBehavior::kPingsAfterClose) {
                 const auto close = readClientFrame(socket, 0x8);
                 if (close.size() < 2) {
                     return;
@@ -178,7 +201,7 @@ private:
                 return;
             }
 
-            if (sendPingsDuringRead_) {
+            if (behavior_ == WebSocketOriginBehavior::kPingsDuringRead) {
                 succeeded_.store(true, std::memory_order_release);
                 for (int i = 0; i < 100; ++i) {
                     try {
@@ -188,6 +211,13 @@ private:
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds{10});
                 }
+                return;
+            }
+
+            if (behavior_ == WebSocketOriginBehavior::kMaskedServerMessage) {
+                writeMaskedServerFrame(socket, 0x1, "masked");
+                succeeded_.store(true, std::memory_order_release);
+                std::this_thread::sleep_for(std::chrono::milliseconds{50});
                 return;
             }
 
@@ -203,10 +233,7 @@ private:
         }
     }
 
-    bool heartbeat_;
-    bool respondPong_;
-    bool sendPingsAfterClose_;
-    bool sendPingsDuringRead_;
+    WebSocketOriginBehavior behavior_;
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     std::thread thread_;
@@ -329,6 +356,18 @@ ruvia::Task<int> exerciseReadTimeout(ruvia::WebSocketClient& client) {
     co_return result;
 }
 
+ruvia::Task<int> exerciseProtocolError(ruvia::WebSocketClient& client) {
+    co_await client.connect();
+    int result = 1;
+    try {
+        static_cast<void>(co_await client.read());
+    } catch (const ruvia::WebSocketClientError& error) {
+        result = error.code() == ruvia::WebSocketClientError::Code::kProtocolError ? 0 : 2;
+    }
+    co_await client.shutdown();
+    co_return result;
+}
+
 ruvia::Task<void> consumeUntilShutdown(
     ruvia::WebSocketClient& client, ruvia::detail::WorkerSignal& started) {
     auto read = client.read();
@@ -357,8 +396,8 @@ ruvia::Task<int> exerciseShutdownWhileReading(
 ruvia::Task<int> exerciseAll(ruvia::EventLoop loop, ruvia::WebSocketClient& client,
     ruvia::WebSocketClient& heartbeatClient, ruvia::WebSocketClient& timeoutClient,
     ruvia::WebSocketClient& readTimeoutClient, ruvia::WebSocketClient& shutdownClient,
-    ruvia::WebSocketClient& closeTimeoutClient, ruvia::WebSocketClient& freshClient,
-    ruvia::WorkerId expectedWorker) {
+    ruvia::WebSocketClient& closeTimeoutClient, ruvia::WebSocketClient& protocolErrorClient,
+    ruvia::WebSocketClient& freshClient, ruvia::WorkerId expectedWorker) {
     co_await freshClient.shutdown();
     const auto shutdownResult = co_await exerciseShutdownWhileReading(loop, shutdownClient);
     if (shutdownResult != 0) {
@@ -379,6 +418,10 @@ ruvia::Task<int> exerciseAll(ruvia::EventLoop loop, ruvia::WebSocketClient& clie
     const auto closeTimeoutResult = co_await exerciseCloseTimeout(closeTimeoutClient);
     if (closeTimeoutResult != 0) {
         co_return 20 + closeTimeoutResult;
+    }
+    const auto protocolErrorResult = co_await exerciseProtocolError(protocolErrorClient);
+    if (protocolErrorResult != 0) {
+        co_return 25 + protocolErrorResult;
     }
     co_return co_await exercise(client, expectedWorker);
 }
@@ -441,7 +484,7 @@ int main() {
         invalidConfig.subprotocols.clear();
         ruvia::WebSocketClient plainClientWithInactiveTlsConfig(loop, invalidConfig);
 
-        WebSocketOrigin heartbeatOrigin(true, true);
+        WebSocketOrigin heartbeatOrigin(WebSocketOriginBehavior::kHeartbeat);
         ruvia::WebSocketClient heartbeatClient(
             loop, {
                       .scheme = ruvia::WebSocketScheme::kWs,
@@ -452,7 +495,7 @@ int main() {
                       .heartbeat = {.pingInterval = std::chrono::milliseconds{20},
                           .pongTimeout = std::chrono::milliseconds{100}},
                   });
-        WebSocketOrigin timeoutOrigin(true, false);
+        WebSocketOrigin timeoutOrigin(WebSocketOriginBehavior::kHeartbeatTimeout);
         ruvia::WebSocketClient timeoutClient(
             loop, {
                       .scheme = ruvia::WebSocketScheme::kWs,
@@ -463,7 +506,7 @@ int main() {
                       .heartbeat = {.pingInterval = std::chrono::milliseconds{20},
                           .pongTimeout = std::chrono::milliseconds{50}},
                   });
-        WebSocketOrigin readTimeoutOrigin(false, true, false, true);
+        WebSocketOrigin readTimeoutOrigin(WebSocketOriginBehavior::kPingsDuringRead);
         ruvia::WebSocketClient readTimeoutClient(loop, {
                                                            .scheme = ruvia::WebSocketScheme::kWs,
                                                            .host = "127.0.0.1",
@@ -471,7 +514,7 @@ int main() {
                                                            .target = "/events",
                                                            .subprotocols = {"chat", "superchat"},
                                                        });
-        WebSocketOrigin closeTimeoutOrigin(false, true, true);
+        WebSocketOrigin closeTimeoutOrigin(WebSocketOriginBehavior::kPingsAfterClose);
         ruvia::WebSocketClient closeTimeoutClient(
             loop, {
                       .scheme = ruvia::WebSocketScheme::kWs,
@@ -480,6 +523,15 @@ int main() {
                       .target = "/events",
                       .subprotocols = {"chat", "superchat"},
                       .closeHandshakeTimeout = std::chrono::milliseconds{50},
+                  });
+        WebSocketOrigin protocolErrorOrigin(WebSocketOriginBehavior::kMaskedServerMessage);
+        ruvia::WebSocketClient protocolErrorClient(
+            loop, {
+                      .scheme = ruvia::WebSocketScheme::kWs,
+                      .host = "127.0.0.1",
+                      .port = protocolErrorOrigin.port(),
+                      .target = "/events",
+                      .subprotocols = {"chat", "superchat"},
                   });
         WebSocketOrigin shutdownOrigin;
         ruvia::WebSocketClient shutdownClient(loop, {
@@ -503,7 +555,8 @@ int main() {
         const auto posted = loop.post([&] {
             ruvia::detail::asyncStartTask(exerciseAll(loop, client, heartbeatClient, timeoutClient,
                                               readTimeoutClient, shutdownClient, closeTimeoutClient,
-                                              plainClientWithInactiveTlsConfig, loop.id()),
+                                              protocolErrorClient, plainClientWithInactiveTlsConfig,
+                                              loop.id()),
                 asio::bind_executor(loop.executor(),
                     [&completion](ruvia::detail::TaskCompletionResult<int> result) {
                         if (auto* success = result.success()) {
@@ -522,7 +575,8 @@ int main() {
         if (result != 0) {
             return 10 + result;
         }
-        return origin.succeeded() && readTimeoutOrigin.succeeded() && closeTimeoutOrigin.succeeded()
+        return origin.succeeded() && readTimeoutOrigin.succeeded() &&
+                       closeTimeoutOrigin.succeeded() && protocolErrorOrigin.succeeded()
                    ? 0
                    : 20;
     } catch (const std::exception& error) {
@@ -530,4 +584,3 @@ int main() {
         return 100;
     }
 }
-

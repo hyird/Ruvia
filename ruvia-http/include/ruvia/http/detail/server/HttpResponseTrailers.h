@@ -7,6 +7,7 @@
 #include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpLimits.h"
 
 #include <algorithm>
 #include <concepts>
@@ -160,6 +161,58 @@ namespace ruvia::detail {
     std::string_view name, std::string_view value) noexcept {
     return isValidResponseTrailerName(name) && !isForbiddenResponseTrailerName(name) &&
            isValidResponseTrailerValue(value);
+}
+
+// Visit a parsed HTTP/1 chunked response trailer block. The input is the bytes
+// between the terminal zero-size chunk and the empty line that ends the trailer
+// section; a final CRLF after the last field is also accepted for standalone
+// validation. Values are exposed after HTTP optional whitespace has been
+// stripped, matching the normalized public response-trailer contract.
+template <typename Visitor>
+[[nodiscard]] inline bool visitHttpResponseTrailerFields(
+    std::string_view trailers, Visitor&& visitor) {
+    if (trailers.size() > kMaxHttpHeaderBytes) {
+        return false;
+    }
+
+    std::size_t cursor = 0;
+    std::size_t fieldCount = 0;
+    while (cursor < trailers.size()) {
+        if (fieldCount == kMaxHttpHeaderFields) {
+            return false;
+        }
+        ++fieldCount;
+
+        const auto lineEnd = trailers.find("\r\n", cursor);
+        const auto line = lineEnd == std::string_view::npos
+                              ? trailers.substr(cursor)
+                              : trailers.substr(cursor, lineEnd - cursor);
+        if (line.empty() || line.front() == ' ' || line.front() == '\t') {
+            return false;
+        }
+
+        const auto colon = line.find(':');
+        if (colon == std::string_view::npos || colon == 0) {
+            return false;
+        }
+
+        const auto name = line.substr(0, colon);
+        const auto value = httpTrimOws(line.substr(colon + 1));
+        if (!responseTrailerFieldValid(name, value) || !visitor(name, value)) {
+            return false;
+        }
+
+        if (lineEnd == std::string_view::npos) {
+            return true;
+        }
+        cursor = lineEnd + 2;
+    }
+    return true;
+}
+
+[[nodiscard]] inline bool httpResponseTrailerBlockValid(std::string_view trailers) {
+    return visitHttpResponseTrailerFields(
+        trailers, [](std::string_view, std::string_view) noexcept { return true; });
 }
 
 class HttpResponseTrailerSectionResult;

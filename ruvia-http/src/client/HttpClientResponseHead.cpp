@@ -112,10 +112,13 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
                 return Http1ClientResponseParseError::kInvalidContentLength;
             }
             // RFC 9112 section 6.3 applies method/status precedence before
-            // Content-Length parsing. HEAD, non-101 informational, 304, and
-            // successful CONNECT therefore ignore this field for framing. A
-            // 101 still records its forbidden presence for handshake checks.
-            if (framingFieldsApply || resetContentRequiresEmpty) {
+            // Content-Length framing. HEAD and 304 still carry representation
+            // metadata, so their field value must parse even though it does not
+            // decide the body boundary. A 101 still records its forbidden
+            // presence for handshake checks; successful CONNECT ignores it
+            // because the stream becomes a tunnel.
+            if (framingFieldsApply || resetContentRequiresEmpty ||
+                contentSemantics == HttpResponseContentSemantics::kWithoutContent) {
                 switch (output.contentLength.parseField(value)) {
                     case HttpContentLengthParseStatus::kOk:
                         break;

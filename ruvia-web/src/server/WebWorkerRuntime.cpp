@@ -486,8 +486,12 @@ void WebWorkerRuntime::failWorker(const std::exception_ptr& failure) noexcept {
     // Counted after the dedupe above, so a worker failing once counts once.
     workerFailures_.fetch_add(1, std::memory_order_relaxed);
     (void)lifecycle_.requestStop();
-    options_.workerFailure.notify(failure);
+    // Close this worker's public dispatch endpoint before waking the App-level
+    // failure sink. Otherwise the App run thread can execute stop hooks while
+    // the failed worker still reports accepting() between requestStop() and this
+    // worker-context shutdown.
     stopOnContext();
+    options_.workerFailure.notify(failure);
 }
 
 void WebWorkerRuntime::runIoContext() noexcept {

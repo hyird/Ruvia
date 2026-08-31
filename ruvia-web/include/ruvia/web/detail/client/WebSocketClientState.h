@@ -138,6 +138,9 @@ private:
     [[nodiscard]] std::chrono::milliseconds heartbeatDelay(std::int64_t now) const noexcept;
     [[nodiscard]] Task<void> flushOutput(
         OperationOptions options, OperationTimeout operationTimeout);
+    [[nodiscard]] static Task<void> throwProtocolErrorAfterFlush(
+        std::shared_ptr<WebSocketClientState> state, OperationOptions options,
+        OperationTimeout operationTimeout, std::string_view message);
     [[nodiscard]] Task<std::size_t> readTransport(std::span<char> output, OperationOptions options,
         OperationTimeout operationTimeout,
         std::optional<std::chrono::milliseconds> configuredTimeout);

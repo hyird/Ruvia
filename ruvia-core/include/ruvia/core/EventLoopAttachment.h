@@ -13,12 +13,15 @@ struct EventLoopAttachmentOptions final {
     std::size_t mailboxCapacity{1024};
 };
 
-// Binds a worker to an io_context the caller owns and drives with run(). The
-// attachment keeps the worker's endpoint valid for as long as it is alive.
-// stop() and destruction are safe while another thread is inside run(): the
-// external context service retains the worker state until its terminal cleanup
-// handler runs, or until the context itself is destroyed. The attachment never
-// calls io_context::stop() and does not join a context it does not own.
+// Binds a worker to an io_context the caller owns. The caller may drive that
+// context directly, or call EventLoopAttachment::run() to install Ruvia's worker
+// identity while the context is running. The attachment keeps the worker's
+// endpoint valid for as long as it is alive.
+// stop() and destruction are safe while another thread is inside the external
+// io_context::run(): the external context service retains the worker state
+// until its terminal cleanup handler runs, or until the context itself is
+// destroyed. The attachment never calls io_context::stop() and does not join a
+// context it does not own.
 //
 // If the external io_context is destroyed first, attached EventLoop handles
 // become terminal; ioContext() and executor() then throw std::logic_error.
@@ -36,6 +39,9 @@ public:
 
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] EventLoop loop() const noexcept;
+    // Runs the attached context on the current thread with Ruvia's worker
+    // identity installed. The attachment object must outlive this call.
+    void run();
     void stop() noexcept;
 
 private:

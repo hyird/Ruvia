@@ -24,6 +24,7 @@ static_assert(std::same_as<decltype(std::declval<const ProtocolByteLimit&>().max
     std::optional<std::size_t>>);
 using ruvia::detail::Http1ChunkDecodeNeedMore;
 using ruvia::detail::Http1ChunkDecodeResult;
+using ruvia::detail::Http1ChunkTrailerRole;
 using ruvia::detail::Http1ChunkedBodyDecoder;
 
 template <typename T>
@@ -291,6 +292,30 @@ RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
     const auto badTrailer = trailer.decode("0\r\nContent-Length: 1\r\n\r\n");
     RUVIA_CHECK(badTrailer.failure() != nullptr);
     RUVIA_CHECK_EQ(badTrailer.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
+}
+
+RUVIA_TEST(chunked_body_decoder_validates_trailers_by_message_role) {
+    Http1ChunkedBodyDecoder response(
+        ProtocolByteLimit::limited(1024), Http1ChunkTrailerRole::kResponse);
+    const auto acceptedResponse = response.decode("0\r\nAccept-Ranges: bytes\r\n\r\n");
+    RUVIA_CHECK(acceptedResponse.complete() != nullptr);
+    if (const auto* complete = acceptedResponse.complete()) {
+        RUVIA_CHECK_EQ(complete->trailers(), std::string_view("Accept-Ranges: bytes"));
+    }
+
+    Http1ChunkedBodyDecoder request(ProtocolByteLimit::limited(1024));
+    const auto rejectedRequest = request.decode("0\r\nAccept-Ranges: bytes\r\n\r\n");
+    RUVIA_CHECK(rejectedRequest.failure() != nullptr);
+    RUVIA_CHECK_EQ(
+        rejectedRequest.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
+
+    Http1ChunkedBodyDecoder forbiddenResponse(
+        ProtocolByteLimit::limited(1024), Http1ChunkTrailerRole::kResponse);
+    const auto rejectedResponse =
+        forbiddenResponse.decode("0\r\nDate: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\n");
+    RUVIA_CHECK(rejectedResponse.failure() != nullptr);
+    RUVIA_CHECK_EQ(
+        rejectedResponse.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
 }
 
 RUVIA_TEST(chunked_body_decoder_caps_each_size_line) {

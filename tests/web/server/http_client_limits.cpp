@@ -1,4 +1,5 @@
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <chrono>
 #include <cstdio>
@@ -26,6 +27,7 @@
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpContentCodec.h"
+#include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
@@ -213,6 +215,98 @@ void writeResponse(
     asio::write(socket, asio::buffer(response), ignored);
 }
 
+class HoldingTwoShotServer final {
+public:
+    HoldingTwoShotServer()
+        : acceptor_(io_, {asio::ip::make_address("127.0.0.1"), 0}),
+          thread_([this] {
+              std::error_code error;
+              auto first = acceptor_.accept(error);
+              if (error) {
+                  return;
+              }
+              constexpr std::string_view firstHead =
+                  "HTTP/1.1 200 OK\r\n"
+                  "Content-Length: 1024\r\n"
+                  "\r\n";
+              asio::write(first, asio::buffer(firstHead), error);
+              if (error) {
+                  return;
+              }
+              const std::string firstChunk(128, 'a');
+              asio::write(first, asio::buffer(firstChunk), error);
+              if (error) {
+                  return;
+              }
+
+              auto second = acceptor_.accept(error);
+              if (error) {
+                  return;
+              }
+              (void)readHead(second, error);
+              if (!error) {
+                  writeResponse(second, "second");
+              }
+
+              while (!stop_.load(std::memory_order_acquire)) {
+                  std::this_thread::sleep_for(10ms);
+              }
+          }) {}
+
+    ~HoldingTwoShotServer() {
+        stop_.store(true, std::memory_order_release);
+        std::error_code ignored;
+        acceptor_.close(ignored);
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    HoldingTwoShotServer(const HoldingTwoShotServer&) = delete;
+    HoldingTwoShotServer& operator=(const HoldingTwoShotServer&) = delete;
+
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+
+private:
+    asio::io_context io_;
+    asio::ip::tcp::acceptor acceptor_;
+    std::atomic_bool stop_{false};
+    std::thread thread_;
+};
+
+void writeChunkedResponse(asio::ip::tcp::socket& socket, std::string_view body) {
+    std::array<char, 32> sizeBytes{};
+    const auto [sizeEnd, sizeError] =
+        std::to_chars(sizeBytes.data(), sizeBytes.data() + sizeBytes.size(), body.size(), 16);
+    if (sizeError != std::errc{}) {
+        return;
+    }
+    std::string response =
+        "HTTP/1.1 200 OK\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    response.append(sizeBytes.data(), sizeEnd);
+    response.append("\r\n");
+    response.append(body);
+    response.append("\r\n0\r\n\r\n");
+    std::error_code ignored;
+    asio::write(socket, asio::buffer(response), ignored);
+}
+
+void writeHttp2Output(ruvia::detail::Http2Connection& connection,
+    asio::ip::tcp::socket& socket, std::error_code& error) {
+    while (connection.wantsWrite() && !error) {
+        const auto output = connection.pendingOutput();
+        asio::write(socket, asio::buffer(output), error);
+        if (!error) {
+            (void)connection.consumeOutput(output.size());
+        }
+    }
+}
+
 std::string gzipContent(std::string_view body) {
     auto encoded = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, body,
         {.maxEncodedBytes = body.size() + 1024, .resource = std::pmr::get_default_resource()});
@@ -372,6 +466,45 @@ int testClosingInformationalResponse() {
         });
 }
 
+int testResetContentChunkedBodyIsRejectedBeforeStreaming() {
+    OneShotServer server([](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) {
+            return;
+        }
+        constexpr std::string_view head =
+            "HTTP/1.1 205 Reset Content\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "3\r\nbad\r\n";
+        asio::write(socket, asio::buffer(head), error);
+        if (error) {
+            return;
+        }
+        std::this_thread::sleep_for(50ms);
+        constexpr std::string_view tail = "0\r\n\r\n";
+        asio::write(socket, asio::buffer(tail), error);
+    });
+    auto config = plainConfig(server.port());
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+            CountingResource*) -> ruvia::Task<int> {
+            try {
+                auto response = co_await client.send({});
+                const auto chunk = co_await response.body().read();
+                if (chunk.has_value()) {
+                    co_return *chunk == "bad" ? 1 : 2;
+                }
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kProtocolError ? 0 : 3;
+            }
+            co_return 4;
+        });
+}
+
 int testTransferCodedResponse() {
     const auto encoded = gzipContent("decoded transfer body");
     OneShotServer server([encoded](asio::ip::tcp::socket& socket) {
@@ -408,6 +541,216 @@ int testTransferCodedResponse() {
             };
             auto response = co_await client.send({.headers = headers});
             co_return co_await response.body().readAll() == "decoded transfer body" ? 0 : 1;
+        });
+}
+
+int testChunkedIncrementalReadCanExceedBufferedLimit() {
+    const std::string decoded(256, 'c');
+    OneShotServer server([decoded](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) {
+            return;
+        }
+        writeChunkedResponse(socket, decoded);
+    });
+    auto config = plainConfig(server.port());
+    config.maxResponseBytes = 64;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [&decoded](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+            CountingResource*) -> ruvia::Task<int> {
+            try {
+                auto response = co_await client.send({});
+                std::string body;
+                while (auto chunk = co_await response.body().read()) {
+                    body.append(*chunk);
+                }
+                co_return body == decoded ? 0 : 1;
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 2 : 3;
+            }
+        });
+}
+
+int testChunkedReadAllStillEnforcesResponseLimit() {
+    const std::string decoded(256, 'r');
+    OneShotServer server([decoded](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) {
+            return;
+        }
+        writeChunkedResponse(socket, decoded);
+    });
+    auto config = plainConfig(server.port());
+    config.maxResponseBytes = 64;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+            CountingResource*) -> ruvia::Task<int> {
+            try {
+                auto response = co_await client.send({});
+                (void)co_await response.body().readAll();
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 0 : 2;
+            }
+            co_return 1;
+        });
+}
+
+int testResponseMoveAssignmentAbandonsPreviousBody() {
+    HoldingTwoShotServer server;
+    auto config = plainConfig(server.port());
+    config.connectionCount = 2;
+    config.maxResponseBytes = 16;
+    config.requestTimeout = 5s;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle& worker,
+            CountingResource*) -> ruvia::Task<int> {
+            auto first = co_await client.send({.target = "/first"});
+            auto second = co_await client.send({.target = "/second"});
+
+            first = std::move(second);
+            if (co_await first.body().readAll() != "second") {
+                co_return 1;
+            }
+
+            for (unsigned attempt = 0; attempt < 50; ++attempt) {
+                const auto stats = client.stats();
+                if (stats.inFlightRequests == 0 && stats.completedRequests == 1 &&
+                    stats.failedRequests == 1) {
+                    co_return 0;
+                }
+                co_await ruvia::sleepFor(worker, 10ms);
+            }
+
+            const auto stats = client.stats();
+            std::fprintf(stderr,
+                "move assignment stats: buffered=%zu in-flight=%zu completed=%zu failed=%zu\n",
+                stats.bufferedRequests, stats.inFlightRequests, stats.completedRequests,
+                stats.failedRequests);
+            co_return 2;
+        });
+}
+
+int testHttp2IncrementalReadCanExceedBufferedLimit() {
+    const std::string body(256, 'h');
+    OneShotServer server([body](asio::ip::tcp::socket& socket) {
+        std::pmr::monotonic_buffer_resource resource;
+        ruvia::detail::Http2Connection connection(&resource);
+        connection.beginConnection();
+        std::error_code error;
+        writeHttp2Output(connection, socket, error);
+        std::array<char, 16384> input{};
+        bool requestEnded = false;
+        std::uint32_t streamId = 0;
+        while (!error && !requestEnded) {
+            const auto bytes = socket.read_some(asio::buffer(input), error);
+            if (error) {
+                return;
+            }
+            const auto inputBytes = std::string_view(input.data(), bytes);
+            for (;;) {
+                const auto status = connection.feed(inputBytes);
+                while (auto event = connection.nextEvent()) {
+                    if (const auto* end = event->messageEnd()) {
+                        requestEnded = true;
+                        streamId = end->streamId();
+                    }
+                }
+                writeHttp2Output(connection, socket, error);
+                if (status == ruvia::detail::Http2FeedResult::kProtocolFailure || error) {
+                    return;
+                }
+                if (status != ruvia::detail::Http2FeedResult::kEventsPending) {
+                    break;
+                }
+            }
+        }
+        if (streamId == 0) {
+            return;
+        }
+        ruvia::HttpResponse response({.resource = &resource});
+        const auto submitted = connection.submitStreamingResponseHead(streamId,
+            std::move(response), ruvia::detail::ResponseStreamKind::kGeneric,
+            ruvia::detail::ResponseTrailerIntent::kNone);
+        if (!submitted.submitted()) {
+            return;
+        }
+        if (connection.submitData(streamId, body, ruvia::detail::Http2EndStream::kEndStream) !=
+            ruvia::detail::Http2DataSubmitStatus::kAccepted) {
+            return;
+        }
+        writeHttp2Output(connection, socket, error);
+    });
+    auto config = plainConfig(server.port());
+    config.protocol = ruvia::HttpClientProtocol::kHttp2Only;
+    config.maxResponseBytes = 64;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [&body](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+            CountingResource*) -> ruvia::Task<int> {
+            try {
+                auto response = co_await client.send({});
+                std::string received;
+                while (auto chunk = co_await response.body().read()) {
+                    received.append(*chunk);
+                }
+                co_return received == body ? 0 : 1;
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 2 : 3;
+            }
+        });
+}
+
+int testTransferCodedIncrementalReadCanExceedBufferedLimit() {
+    const std::string decoded(256, 't');
+    const auto encoded = gzipContent(decoded);
+    OneShotServer server([encoded](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        const auto request = readHead(socket, error);
+        if (error || request.find("te: gzip") == std::string::npos) {
+            return;
+        }
+        std::array<char, 32> sizeBytes{};
+        const auto [sizeEnd, sizeError] = std::to_chars(
+            sizeBytes.data(), sizeBytes.data() + sizeBytes.size(), encoded.size(), 16);
+        if (sizeError != std::errc{}) {
+            return;
+        }
+        std::string response =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: gzip, chunked\r\n"
+            "Connection: close\r\n"
+            "\r\n";
+        response.append(sizeBytes.data(), sizeEnd);
+        response.append("\r\n");
+        response.append(encoded);
+        response.append("\r\n0\r\n\r\n");
+        asio::write(socket, asio::buffer(response), error);
+    });
+    auto config = plainConfig(server.port());
+    config.maxResponseBytes = 64;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [&decoded](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+            CountingResource*) -> ruvia::Task<int> {
+            const std::array headers{
+                ruvia::HttpHeaderView{"Connection", "TE"},
+                ruvia::HttpHeaderView{"TE", "gzip"},
+            };
+            try {
+                auto response = co_await client.send({.headers = headers});
+                std::string body;
+                while (auto chunk = co_await response.body().read()) {
+                    body.append(*chunk);
+                }
+                co_return body == decoded ? 0 : 1;
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 2 : 3;
+            }
         });
 }
 
@@ -1126,6 +1469,80 @@ int testHttp1ResponseTrailers() {
         });
 }
 
+int testHttp1ResponseTrailerRules() {
+    {
+        OneShotServer server([](asio::ip::tcp::socket& socket) {
+            std::error_code error;
+            (void)readHead(socket, error);
+            if (error) {
+                return;
+            }
+            constexpr std::string_view response =
+                "HTTP/1.1 200 OK\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "Trailer: Accept-Ranges\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "5\r\nhello\r\n"
+                "0\r\n"
+                "Accept-Ranges: bytes\r\n"
+                "\r\n";
+            asio::write(socket, asio::buffer(response), error);
+        });
+        auto config = plainConfig(server.port());
+        CountingResource operationResource;
+        const auto accepted = runClient(config, operationResource,
+            [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+                CountingResource*) -> ruvia::Task<int> {
+                auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
+                auto response = co_await client.send(request);
+                if (co_await response.body().readAll() != "hello") {
+                    co_return 1;
+                }
+                co_return response.trailer("accept-ranges") ==
+                               std::optional<std::string_view>("bytes")
+                              ? 0
+                              : 2;
+            });
+        if (accepted != 0) {
+            return accepted;
+        }
+    }
+
+    OneShotServer server([](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) {
+            return;
+        }
+        constexpr std::string_view response =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "Trailer: Date\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "5\r\nhello\r\n"
+            "0\r\n"
+            "Date: Sun, 06 Nov 1994 08:49:37 GMT\r\n"
+            "\r\n";
+        asio::write(socket, asio::buffer(response), error);
+    });
+    auto config = plainConfig(server.port());
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+            CountingResource*) -> ruvia::Task<int> {
+            try {
+                auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
+                auto response = co_await client.send(request);
+                (void)co_await response.body().readAll();
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kProtocolError ? 0 : 3;
+            }
+            co_return 4;
+        });
+}
+
 int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
     OneShotServer server([](asio::ip::tcp::socket& socket) {
         std::error_code error;
@@ -1177,11 +1594,23 @@ int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 28> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 35> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testClosingInformationalResponse, "closing informational response"},
+            {&testResetContentChunkedBodyIsRejectedBeforeStreaming,
+                "205 chunked content streaming rejection"},
             {&testTransferCodedResponse, "transfer-coded response"},
+            {&testChunkedIncrementalReadCanExceedBufferedLimit,
+                "chunked incremental read beyond buffered limit"},
+            {&testChunkedReadAllStillEnforcesResponseLimit,
+                "chunked readAll response limit"},
+            {&testResponseMoveAssignmentAbandonsPreviousBody,
+                "response move assignment abandon"},
+            {&testHttp2IncrementalReadCanExceedBufferedLimit,
+                "HTTP/2 incremental read beyond buffered limit"},
+            {&testTransferCodedIncrementalReadCanExceedBufferedLimit,
+                "transfer-coded incremental read beyond buffered limit"},
             {&testContentEncodedResponse, "content-encoded response"},
             {&testContentEncodedResponseLimitAppliesAfterDecode,
                 "content-encoded response decoded limit"},
@@ -1209,6 +1638,7 @@ int main() {
             {&testCookieStorageSecurityConstraints, "cookie storage security constraints"},
             {&testIpCookieDomainSuffixRejection, "IP cookie domain suffix rejection"},
             {&testHttp1ResponseTrailers, "HTTP/1 response trailers"},
+            {&testHttp1ResponseTrailerRules, "HTTP/1 response trailer rules"},
             {&testHttp1ImmediateBodyUpgradeMarksRequestComplete,
                 "HTTP/1 immediate body upgrade completion"},
         }};
@@ -1225,4 +1655,3 @@ int main() {
         return 1;
     }
 }
-
