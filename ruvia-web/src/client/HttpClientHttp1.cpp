@@ -119,8 +119,11 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         std::array<char, kBodyReadChunkBytes> transferOutput{};
         const auto configureTransferDecoder = [&](HttpTransferCodings codings) {
             if (codings.count != 0) {
-                transferDecoder.emplace(codings.values[0], responseResource,
-                    ProtocolByteLimit::limited(config_.maxResponseBytes));
+                // Transfer-coding is a streaming hop-by-hop framing transform. The HTTP client
+                // response limit belongs to queued body/readAll/content-coding policy, not to the
+                // cumulative number of bytes an incremental read() or pipeTo() consumer may drain.
+                transferDecoder.emplace(
+                    codings.values[0], responseResource, ProtocolByteLimit::unlimited());
             }
         };
         const auto throwTransferFailure = [](const TransferCodingDecodeResult& result) -> void {

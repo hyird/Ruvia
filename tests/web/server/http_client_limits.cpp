@@ -411,6 +411,55 @@ int testTransferCodedResponse() {
         });
 }
 
+int testTransferCodedIncrementalReadCanExceedBufferedLimit() {
+    const std::string decoded(256, 't');
+    const auto encoded = gzipContent(decoded);
+    OneShotServer server([encoded](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        const auto request = readHead(socket, error);
+        if (error || request.find("te: gzip") == std::string::npos) {
+            return;
+        }
+        std::array<char, 32> sizeBytes{};
+        const auto [sizeEnd, sizeError] = std::to_chars(
+            sizeBytes.data(), sizeBytes.data() + sizeBytes.size(), encoded.size(), 16);
+        if (sizeError != std::errc{}) {
+            return;
+        }
+        std::string response =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: gzip, chunked\r\n"
+            "Connection: close\r\n"
+            "\r\n";
+        response.append(sizeBytes.data(), sizeEnd);
+        response.append("\r\n");
+        response.append(encoded);
+        response.append("\r\n0\r\n\r\n");
+        asio::write(socket, asio::buffer(response), error);
+    });
+    auto config = plainConfig(server.port());
+    config.maxResponseBytes = 64;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [&decoded](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+            CountingResource*) -> ruvia::Task<int> {
+            const std::array headers{
+                ruvia::HttpHeaderView{"Connection", "TE"},
+                ruvia::HttpHeaderView{"TE", "gzip"},
+            };
+            try {
+                auto response = co_await client.send({.headers = headers});
+                std::string body;
+                while (auto chunk = co_await response.body().read()) {
+                    body.append(*chunk);
+                }
+                co_return body == decoded ? 0 : 1;
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 2 : 3;
+            }
+        });
+}
+
 int testContentEncodedResponse() {
     const auto encoded = gzipContent("decoded content body");
     OneShotServer server([encoded](asio::ip::tcp::socket& socket) {
@@ -1251,11 +1300,13 @@ int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 29> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 30> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testClosingInformationalResponse, "closing informational response"},
             {&testTransferCodedResponse, "transfer-coded response"},
+            {&testTransferCodedIncrementalReadCanExceedBufferedLimit,
+                "transfer-coded incremental read beyond buffered limit"},
             {&testContentEncodedResponse, "content-encoded response"},
             {&testContentEncodedResponseLimitAppliesAfterDecode,
                 "content-encoded response decoded limit"},
