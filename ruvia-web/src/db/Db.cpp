@@ -36,7 +36,7 @@ Task<DbStreamResult> detail::MariaDbPool::stream(std::pmr::string sql,
     bool slotReleased = false;
     try {
         auto& slot = slots_[slotIndex];
-        const auto deadline = co_await runMysqlStatement(
+        co_await runMysqlStatement(
             slot, sql, std::span<const DbValue>(params), resource, operationTimeout);
         auto* rawResult = mysql_use_result(slot.connection);
         if (rawResult == nullptr) {

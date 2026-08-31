@@ -52,6 +52,54 @@ static_assert(!HasSetCookiePublicField<ruvia::HttpSetCookieView>);
 
 }  // namespace
 
+RUVIA_TEST(set_cookie_parser_handles_deterministic_arbitrary_bytes) {
+    std::uint64_t state = 0x5345'5443'4F4F'4B49ULL;
+    const auto next = [&state]() {
+        state ^= state << 7U;
+        state ^= state >> 9U;
+        return state;
+    };
+    const auto verifyBorrowedFields = [&](std::string_view input,
+                                          const ruvia::HttpSetCookieView& parsed) {
+        const auto isBorrowedInputText = [input](std::string_view value) {
+            return value.empty() || input.find(value) != std::string_view::npos;
+        };
+        RUVIA_CHECK(isBorrowedInputText(parsed.name()));
+        RUVIA_CHECK(isBorrowedInputText(parsed.value()));
+        RUVIA_CHECK(isBorrowedInputText(parsed.path()));
+        RUVIA_CHECK(isBorrowedInputText(parsed.domain()));
+        RUVIA_CHECK(!parsed.has(static_cast<ruvia::HttpSetCookieAttribute>(0)));
+        RUVIA_CHECK(!parsed.has(static_cast<ruvia::HttpSetCookieAttribute>(
+            static_cast<std::uint8_t>(ruvia::HttpSetCookieAttribute::kSecure) |
+            static_cast<std::uint8_t>(ruvia::HttpSetCookieAttribute::kPath))));
+    };
+    constexpr std::string_view cookieOctets =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+-.^_`|~";
+
+    for (std::size_t sample = 0; sample < 4096; ++sample) {
+        std::string input(static_cast<std::size_t>(next() % 1025U), '\0');
+        for (auto& byte : input) {
+            byte = static_cast<char>(next());
+        }
+
+        const auto parsed = ruvia::parseSetCookie(input);
+        if (parsed.has_value()) {
+            verifyBorrowedFields(input, *parsed);
+        }
+
+        std::string acceptedInput("sid=");
+        for (std::size_t index = 0; index < next() % 129U; ++index) {
+            acceptedInput.push_back(cookieOctets[next() % cookieOctets.size()]);
+        }
+        acceptedInput.append("; Path=/api; Domain=.example.test; Secure; SameSite=None");
+        const auto accepted = ruvia::parseSetCookie(acceptedInput);
+        RUVIA_CHECK(accepted.has_value());
+        if (accepted.has_value()) {
+            verifyBorrowedFields(acceptedInput, *accepted);
+        }
+    }
+}
+
 RUVIA_TEST(set_cookie_parser_exposes_client_storage_fields) {
     const auto parsed = ruvia::parseSetCookie(
         "sid=abc; Path=/api; Domain=.example.com; Max-Age=60; Secure; HttpOnly");

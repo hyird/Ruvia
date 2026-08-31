@@ -1,5 +1,7 @@
 #include "content_decoding_fixture.h"
 
+#include <cstdint>
+
 #include "ruvia/http/detail/coding/HttpContentEncoder.h"
 
 using ruvia::detail::HttpContentEncoder;
@@ -52,6 +54,36 @@ private:
 };
 
 }  // namespace
+
+RUVIA_TEST(http_content_decode_handles_deterministic_arbitrary_compressed_bytes) {
+    std::uint64_t state = 0xC0DE'C0DE'5EED'F00DULL;
+    const auto next = [&state]() {
+        state ^= state << 7U;
+        state ^= state >> 9U;
+        return state;
+    };
+
+    for (std::size_t sample = 0; sample < 1024; ++sample) {
+        std::string input(static_cast<std::size_t>(next() % 513U), '\0');
+        for (auto& byte : input) {
+            byte = static_cast<char>(next());
+        }
+
+        for (const auto coding :
+            {HttpContentCoding::kGzip, HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
+            const auto maxDecodedBytes = static_cast<std::size_t>(next() % 513U);
+            std::pmr::monotonic_buffer_resource resource;
+            const auto result = decodeHttpContent(
+                coding, input, {.maxDecodedBytes = maxDecodedBytes, .resource = &resource});
+            RUVIA_CHECK_EQ(static_cast<unsigned int>(result.decoded() != nullptr) +
+                               static_cast<unsigned int>(result.failure() != nullptr),
+                1U);
+            if (const auto* decoded = result.decoded()) {
+                RUVIA_CHECK(decoded->bytes().size() <= maxDecodedBytes);
+            }
+        }
+    }
+}
 
 // The Content-Encoding field and the codecs behind it, independent of any message.
 

@@ -188,6 +188,60 @@ RUVIA_TEST(http2_connection_submit_response_head_and_body) {
     RUVIA_CHECK((dd.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
 }
 
+RUVIA_TEST(http2_connection_rejects_every_data_submission_after_local_end_stream) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveGetRequest(conn, &resource);
+
+    ruvia::HttpResponse response({.resource = &resource});
+    response.status(ruvia::http_status::kOk);
+    RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response),
+        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
+    conn.consumeOutput(conn.pendingOutput().size());
+
+    std::uint64_t state = 0x4ae7'196d'25f0'83bcULL;
+    const auto next = [&state] {
+        state ^= state << 13U;
+        state ^= state >> 7U;
+        state ^= state << 17U;
+        return state;
+    };
+
+    for (std::size_t sample = 0; sample < 64; ++sample) {
+        const auto bodyBytes = static_cast<std::size_t>(next() % 9U);
+        std::string body;
+        for (std::size_t i = 0; i < bodyBytes; ++i) {
+            body.push_back(static_cast<char>('a' + (next() % 26U)));
+        }
+        const auto endStream = (next() & 1U) != 0 || sample == 63
+                                   ? Http2EndStream::kEndStream
+                                   : Http2EndStream::kKeepOpen;
+        const auto status = conn.submitData(1, body, endStream);
+        RUVIA_CHECK(status == Http2DataSubmitStatus::kAccepted);
+        if (endStream == Http2EndStream::kEndStream) {
+            break;
+        }
+        conn.consumeOutput(conn.pendingOutput().size());
+    }
+
+    const auto afterEndOutput = conn.pendingOutput();
+    auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        RUVIA_CHECK(stream->localSend().endStreamCommitted() != nullptr);
+    }
+    for (const std::string_view body : {std::string_view{}, std::string_view("x"),
+             std::string_view("second body")}) {
+        RUVIA_CHECK(conn.submitData(1, body, Http2EndStream::kKeepOpen) ==
+                    Http2DataSubmitStatus::kInvalidState);
+        RUVIA_CHECK_EQ(conn.pendingOutput(), afterEndOutput);
+        RUVIA_CHECK(conn.submitData(1, body, Http2EndStream::kEndStream) ==
+                    Http2DataSubmitStatus::kInvalidState);
+        RUVIA_CHECK_EQ(conn.pendingOutput(), afterEndOutput);
+    }
+}
+
 RUVIA_TEST(http2_connection_rejects_data_before_head_without_output) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection conn(&resource);

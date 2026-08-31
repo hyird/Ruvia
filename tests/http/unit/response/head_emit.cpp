@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <memory_resource>
 #include <stdexcept>
@@ -386,6 +387,56 @@ RUVIA_TEST(response_head_suppresses_auto_content_length) {
     RUVIA_CHECK(head.find("Transfer-Encoding: chunked\r\n") != std::string_view::npos);
     RUVIA_CHECK(head.find("gzip") == std::string_view::npos);
     RUVIA_CHECK_EQ(countOccurrences(head, "Transfer-Encoding: "), std::size_t{1});
+}
+
+RUVIA_TEST(response_head_canonicalizes_managed_framing_fields_across_case) {
+    std::uint64_t state = 0x5d28'c4f1'9e73'ab06ULL;
+    const auto next = [&state] {
+        state ^= state << 13U;
+        state ^= state >> 7U;
+        state ^= state << 17U;
+        return state;
+    };
+    const auto randomCase = [&next](std::string_view name) {
+        std::string out;
+        out.reserve(name.size());
+        for (const char c : name) {
+            if (c >= 'A' && c <= 'Z') {
+                out.push_back((next() & 1U) != 0 ? static_cast<char>(c - 'A' + 'a') : c);
+            } else if (c >= 'a' && c <= 'z') {
+                out.push_back((next() & 1U) != 0 ? static_cast<char>(c - 'a' + 'A') : c);
+            } else {
+                out.push_back(c);
+            }
+        }
+        return out;
+    };
+
+    for (std::size_t sample = 0; sample < 512; ++sample) {
+        HttpResponse buffered({.resource = std::pmr::new_delete_resource()});
+        buffered.body("payload");
+        buffered.header(randomCase("Content-Length"), "999");
+        buffered.header(randomCase("Transfer-Encoding"), "gzip, chunked");
+        buffered.header("X-Sample", std::to_string(sample));
+        const auto bufferedHead = emitBufferedHead(buffered);
+        RUVIA_CHECK_EQ(countOccurrences(bufferedHead, "Content-Length: "), std::size_t{1});
+        RUVIA_CHECK(bufferedHead.find("Content-Length: 7\r\n") != std::string_view::npos);
+        RUVIA_CHECK(bufferedHead.find("Content-Length: 999\r\n") == std::string_view::npos);
+        RUVIA_CHECK(bufferedHead.find("Transfer-Encoding:") == std::string_view::npos);
+        RUVIA_CHECK(bufferedHead.find("gzip") == std::string_view::npos);
+        RUVIA_CHECK(bufferedHead.ends_with("\r\n\r\n"));
+
+        HttpResponse chunked({.resource = std::pmr::new_delete_resource()});
+        chunked.header(randomCase("Content-Length"), "999");
+        chunked.header(randomCase("Transfer-Encoding"), "gzip, chunked");
+        chunked.header("X-Sample", std::to_string(sample));
+        const auto chunkedHead = emitChunkedStreamHead(chunked);
+        RUVIA_CHECK(chunkedHead.find("Content-Length:") == std::string_view::npos);
+        RUVIA_CHECK_EQ(countOccurrences(chunkedHead, "Transfer-Encoding: "), std::size_t{1});
+        RUVIA_CHECK(chunkedHead.find("Transfer-Encoding: chunked\r\n") != std::string_view::npos);
+        RUVIA_CHECK(chunkedHead.find("gzip") == std::string_view::npos);
+        RUVIA_CHECK(chunkedHead.ends_with("\r\n\r\n"));
+    }
 }
 
 RUVIA_TEST(http1_response_head_rejects_http10_chunked_payload_plan) {
