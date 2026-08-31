@@ -103,6 +103,12 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         // response. It describes neither HTTP content nor the following tunnel DATA.
         return true;
     }
+    if (responseKnownBit == kResponseHeaderContentLength &&
+        *context->status == http_status::kNoContent) {
+        // 204 is terminated by the header block and cannot carry Content-Length;
+        // HEAD/304 representation metadata remains handled by the metadata-only path.
+        return false;
+    }
     if (responseKnownBit == kResponseHeaderContentType) {
         if (!isValidHttpContentTypeFieldValue(value) ||
             !stream.markSingletonResponseHeader(responseKnownBit)) {
