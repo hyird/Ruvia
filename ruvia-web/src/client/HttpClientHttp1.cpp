@@ -103,7 +103,12 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         response.state_->headReady = true;
         response.state_->headSignal.notify();
 
+        bool requireEmptyContent = false;
         const auto appendChecked = [&](std::string_view bytes) {
+            if (requireEmptyContent && !bytes.empty()) {
+                throw HttpClientError(
+                    HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
+            }
             const auto retained = response.state_->buffered.size() - response.state_->offset +
                                   response.state_->pending.size();
             if (response.state_->collectAll &&
@@ -209,7 +214,6 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         auto chunkedPlan = parsed->plan().chunked();
         auto closeDelimitedPlan = parsed->plan().closeDelimited();
         bool framingHandled = false;
-        bool requireEmptyContent = false;
         if (const auto* known = parsed->plan().knownLength()) {
             contentSemanticsPresent = true;
             auto remaining = known->contentLength();

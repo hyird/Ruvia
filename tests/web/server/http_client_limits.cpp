@@ -404,6 +404,45 @@ int testClosingInformationalResponse() {
         });
 }
 
+int testResetContentChunkedBodyIsRejectedBeforeStreaming() {
+    OneShotServer server([](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) {
+            return;
+        }
+        constexpr std::string_view head =
+            "HTTP/1.1 205 Reset Content\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "3\r\nbad\r\n";
+        asio::write(socket, asio::buffer(head), error);
+        if (error) {
+            return;
+        }
+        std::this_thread::sleep_for(50ms);
+        constexpr std::string_view tail = "0\r\n\r\n";
+        asio::write(socket, asio::buffer(tail), error);
+    });
+    auto config = plainConfig(server.port());
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+            CountingResource*) -> ruvia::Task<int> {
+            try {
+                auto response = co_await client.send({});
+                const auto chunk = co_await response.body().read();
+                if (chunk.has_value()) {
+                    co_return *chunk == "bad" ? 1 : 2;
+                }
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kProtocolError ? 0 : 3;
+            }
+            co_return 4;
+        });
+}
+
 int testTransferCodedResponse() {
     const auto encoded = gzipContent("decoded transfer body");
     OneShotServer server([encoded](asio::ip::tcp::socket& socket) {
@@ -1457,10 +1496,12 @@ int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 33> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 34> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testClosingInformationalResponse, "closing informational response"},
+            {&testResetContentChunkedBodyIsRejectedBeforeStreaming,
+                "205 chunked content streaming rejection"},
             {&testTransferCodedResponse, "transfer-coded response"},
             {&testChunkedIncrementalReadCanExceedBufferedLimit,
                 "chunked incremental read beyond buffered limit"},
