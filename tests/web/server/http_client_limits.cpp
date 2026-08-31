@@ -26,6 +26,7 @@
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpContentCodec.h"
+#include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
@@ -231,6 +232,17 @@ void writeChunkedResponse(asio::ip::tcp::socket& socket, std::string_view body) 
     response.append("\r\n0\r\n\r\n");
     std::error_code ignored;
     asio::write(socket, asio::buffer(response), ignored);
+}
+
+void writeHttp2Output(ruvia::detail::Http2Connection& connection,
+    asio::ip::tcp::socket& socket, std::error_code& error) {
+    while (connection.wantsWrite() && !error) {
+        const auto output = connection.pendingOutput();
+        asio::write(socket, asio::buffer(output), error);
+        if (!error) {
+            (void)connection.consumeOutput(output.size());
+        }
+    }
 }
 
 std::string gzipContent(std::string_view body) {
@@ -483,6 +495,76 @@ int testChunkedReadAllStillEnforcesResponseLimit() {
                 co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 0 : 2;
             }
             co_return 1;
+        });
+}
+
+int testHttp2IncrementalReadCanExceedBufferedLimit() {
+    const std::string body(256, 'h');
+    OneShotServer server([body](asio::ip::tcp::socket& socket) {
+        std::pmr::monotonic_buffer_resource resource;
+        ruvia::detail::Http2Connection connection(&resource);
+        connection.beginConnection();
+        std::error_code error;
+        writeHttp2Output(connection, socket, error);
+        std::array<char, 16384> input{};
+        bool requestEnded = false;
+        std::uint32_t streamId = 0;
+        while (!error && !requestEnded) {
+            const auto bytes = socket.read_some(asio::buffer(input), error);
+            if (error) {
+                return;
+            }
+            const auto inputBytes = std::string_view(input.data(), bytes);
+            for (;;) {
+                const auto status = connection.feed(inputBytes);
+                while (auto event = connection.nextEvent()) {
+                    if (const auto* end = event->messageEnd()) {
+                        requestEnded = true;
+                        streamId = end->streamId();
+                    }
+                }
+                writeHttp2Output(connection, socket, error);
+                if (status == ruvia::detail::Http2FeedResult::kProtocolFailure || error) {
+                    return;
+                }
+                if (status != ruvia::detail::Http2FeedResult::kEventsPending) {
+                    break;
+                }
+            }
+        }
+        if (streamId == 0) {
+            return;
+        }
+        ruvia::HttpResponse response({.resource = &resource});
+        const auto submitted = connection.submitStreamingResponseHead(streamId,
+            std::move(response), ruvia::detail::ResponseStreamKind::kGeneric,
+            ruvia::detail::ResponseTrailerIntent::kNone);
+        if (!submitted.submitted()) {
+            return;
+        }
+        if (connection.submitData(streamId, body, ruvia::detail::Http2EndStream::kEndStream) !=
+            ruvia::detail::Http2DataSubmitStatus::kAccepted) {
+            return;
+        }
+        writeHttp2Output(connection, socket, error);
+    });
+    auto config = plainConfig(server.port());
+    config.protocol = ruvia::HttpClientProtocol::kHttp2Only;
+    config.maxResponseBytes = 64;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [&body](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+            CountingResource*) -> ruvia::Task<int> {
+            try {
+                auto response = co_await client.send({});
+                std::string received;
+                while (auto chunk = co_await response.body().read()) {
+                    received.append(*chunk);
+                }
+                co_return received == body ? 0 : 1;
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 2 : 3;
+            }
         });
 }
 
@@ -1375,7 +1457,7 @@ int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 32> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 33> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testClosingInformationalResponse, "closing informational response"},
@@ -1384,6 +1466,8 @@ int main() {
                 "chunked incremental read beyond buffered limit"},
             {&testChunkedReadAllStillEnforcesResponseLimit,
                 "chunked readAll response limit"},
+            {&testHttp2IncrementalReadCanExceedBufferedLimit,
+                "HTTP/2 incremental read beyond buffered limit"},
             {&testTransferCodedIncrementalReadCanExceedBufferedLimit,
                 "transfer-coded incremental read beyond buffered limit"},
             {&testContentEncodedResponse, "content-encoded response"},
