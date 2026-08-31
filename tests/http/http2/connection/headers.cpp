@@ -712,6 +712,42 @@ RUVIA_TEST(http2_connection_client_head_representation_length_survives_trailer_t
     RUVIA_CHECK(client.stream(streamId) == nullptr);
 }
 
+RUVIA_TEST(http2_connection_client_accepts_204_content_length_as_metadata) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(&resource, Http2Role::kClient);
+    handshake(client);
+
+    const auto request = client.submitRegularRequestHead(
+        "GET", "https", "example.test", "/", {}, Http2RequestContent::none());
+    RUVIA_CHECK(request.submitted() != nullptr);
+    const auto streamId = submittedRequestStreamId(request);
+    client.pinStream(streamId);
+    client.consumeOutput(client.pendingOutput().size());
+
+    std::pmr::string response(&resource);
+    HpackEncoder::encodeHeader(response, ":status", "204");
+    HpackEncoder::encodeHeader(response, "content-length", "10");
+    const auto responseHead = headersFrame(&resource, streamId,
+        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(response.data(), response.size()));
+    RUVIA_CHECK(client.feed(std::string_view(responseHead.data(), responseHead.size())) ==
+                Http2FeedResult::kAccepted);
+
+    RUVIA_CHECK(client.nextEvent().value().kind() == Http2EventKind::kMessageHead);
+    RUVIA_CHECK(client.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
+    RUVIA_CHECK(!client.nextEvent().has_value());
+    const auto* stream = client.stream(streamId);
+    RUVIA_CHECK(stream != nullptr);
+    const auto* known = stream->remoteContent().metadataOnlyKnownLength();
+    RUVIA_CHECK(known != nullptr);
+    RUVIA_CHECK_EQ(known->declaredLength(), std::size_t{10});
+    RUVIA_CHECK(!client.connectionError().has_value());
+    RUVIA_CHECK(client.pendingOutput().empty());
+
+    client.unpinStream(streamId);
+    RUVIA_CHECK(client.stream(streamId) == nullptr);
+}
+
 RUVIA_TEST(http2_connection_client_accepts_combined_equal_response_content_length) {
     {
         std::pmr::monotonic_buffer_resource resource;

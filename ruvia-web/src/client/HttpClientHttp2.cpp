@@ -145,20 +145,18 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
         } else if (const auto* chunk = event->messageBodyChunk()) {
             auto* pending = findPending(chunk->streamId());
             if (pending != nullptr && !pending->complete && !pending->failed()) {
-                const auto retained = pending->response->state_->collectAll
-                                          ? pending->response->state_->buffered.size() -
-                                                pending->response->state_->offset +
-                                                pending->response->state_->pending.size()
-                                          : pending->response->state_->pending.size();
-                if (chunk->bytes().size() >
+                auto& state = *pending->response->state_;
+                const auto retained =
+                    state.buffered.size() - state.offset + state.pending.size();
+                if (state.collectAll && chunk->bytes().size() >
                     config_.maxResponseBytes - std::min(retained, config_.maxResponseBytes)) {
                     pending->error = HttpClientError::Code::kResponseTooLarge;
                     submitHttp2Reset(connection, chunk->streamId());
                     pending->signal.notify();
                 } else {
                     try {
-                        pending->response->state_->pending.append(chunk->bytes());
-                        pending->response->state_->dataSignal.notify();
+                        state.pending.append(chunk->bytes());
+                        state.dataSignal.notify();
                     } catch (...) {
                         failPending(*pending, chunk->streamId(), std::current_exception(), true);
                     }

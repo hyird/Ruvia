@@ -517,7 +517,7 @@ RUVIA_TEST(http2_connection_rejects_half_closed_websocket_opening_handshake) {
 // RFC 9110 Section 6.4.1 defines HEAD/204/304 responses as having no message
 // content. RFC 9113 Section 8.1.1 therefore makes a non-empty DATA payload a
 // malformed response and requires PROTOCOL_ERROR on that stream. This is distinct
-// from Content-Length representation metadata, which remains legal for HEAD/304.
+// from Content-Length representation metadata, which remains legal for HEAD/204/304.
 
 RUVIA_TEST(http2_connection_client_rejects_data_for_responses_without_content) {
     struct Case final {

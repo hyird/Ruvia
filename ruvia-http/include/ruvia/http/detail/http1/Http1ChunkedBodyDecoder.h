@@ -14,6 +14,7 @@
 #include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 
 namespace ruvia::detail {
 
@@ -175,6 +176,11 @@ private:
     Value value_;
 };
 
+enum class Http1ChunkTrailerRole : std::uint8_t {
+    kRequest,
+    kResponse,
+};
+
 // Incremental sans-I/O decoder for HTTP/1 chunked content. The caller owns the
 // input buffer and removes result.consumedBytes() only after a returned body
 // view is no longer needed. Framing, trailer validation, and size accounting
@@ -183,8 +189,10 @@ private:
 // delimiters, and trailers share an independent fixed framing budget.
 class Http1ChunkedBodyDecoder final {
 public:
-    explicit Http1ChunkedBodyDecoder(ProtocolByteLimit bodyLimit) noexcept
-        : bodyLimit_(bodyLimit) {}
+    explicit Http1ChunkedBodyDecoder(ProtocolByteLimit bodyLimit,
+        Http1ChunkTrailerRole trailerRole = Http1ChunkTrailerRole::kRequest) noexcept
+        : bodyLimit_(bodyLimit),
+          trailerRole_(trailerRole) {}
 
     [[nodiscard]] Http1ChunkDecodeResult decode(std::string_view available) {
         if (const auto* failure = std::get_if<Http1ChunkDecodeError>(&state_)) {
@@ -274,7 +282,7 @@ public:
                         trailerSearchOffset_ = trailers.size() > 3 ? trailers.size() - 3 : 0;
                         return Http1ChunkDecodeResult::makeNeedMore(cursor);
                     }
-                    if (validateHttpChunkTrailers(trailers.substr(0, trailerEnd)).has_value()) {
+                    if (!trailersValid(trailers.substr(0, trailerEnd))) {
                         return fail(cursor, Http1ChunkDecodeError::kInvalidFraming);
                     }
                     const auto trailerBytes = trailerEnd + 4;
@@ -325,6 +333,16 @@ private:
         return accountFraming(2);
     }
 
+    [[nodiscard]] bool trailersValid(std::string_view trailers) const {
+        switch (trailerRole_) {
+            case Http1ChunkTrailerRole::kRequest:
+                return !validateHttpChunkTrailers(trailers).has_value();
+            case Http1ChunkTrailerRole::kResponse:
+                return httpResponseTrailerBlockValid(trailers);
+        }
+        return false;
+    }
+
     [[nodiscard]] Http1ChunkDecodeResult fail(
         std::size_t consumedBytes, Http1ChunkDecodeError error) noexcept {
         state_ = error;
@@ -332,6 +350,7 @@ private:
     }
 
     ProtocolByteLimit bodyLimit_;
+    Http1ChunkTrailerRole trailerRole_{Http1ChunkTrailerRole::kRequest};
     State state_{ProgressState::kSizeLine};
     std::size_t trailerSearchOffset_{0};
     std::size_t remaining_{0};

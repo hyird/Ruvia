@@ -552,17 +552,22 @@ RUVIA_TEST(http1_client_request_writer_enforces_expect_content_semantics) {
     }
 }
 
-RUVIA_TEST(http1_client_request_writer_rejects_invalid_close_policy) {
+RUVIA_TEST(http1_client_request_writer_rejects_invalid_wire_policy) {
     HttpClientRequestView request;
     const auto invalidWithoutExpectation =
         Http1ClientRequestWirePolicy{.closePolicy = static_cast<Http1ClosePolicy>(0xFF)};
     const auto invalidExpectContinue =
         Http1ClientRequestWirePolicy{.closePolicy = static_cast<Http1ClosePolicy>(0xFF),
             .expectation = ruvia::HttpClientRequestExpectation::kContinue};
+    const auto invalidExpectation =
+        Http1ClientRequestWirePolicy{
+            .expectation = static_cast<ruvia::HttpClientRequestExpectation>(0xFF)};
     RUVIA_CHECK(prepareError(request, invalidWithoutExpectation) ==
                 Http1ClientRequestPrepareError::kInvalidClosePolicy);
     RUVIA_CHECK(prepareError(request, invalidExpectContinue) ==
                 Http1ClientRequestPrepareError::kInvalidClosePolicy);
+    RUVIA_CHECK(prepareError(request, invalidExpectation) ==
+                Http1ClientRequestPrepareError::kInvalidExpectation);
 
     std::array<char, 512> buffer{};
     const auto connect =
@@ -572,6 +577,15 @@ RUVIA_TEST(http1_client_request_writer_rejects_invalid_close_policy) {
     if (connect.failure() != nullptr) {
         RUVIA_CHECK(
             connect.failure()->error() == Http1ClientRequestPrepareError::kInvalidClosePolicy);
+    }
+
+    const auto invalidConnectExpectation =
+        Http1ClientRequestWriter().prepareConnect(HttpOriginView::https({.host = "example.test"}),
+            std::span<const ruvia::HttpHeaderView>{}, buffer, invalidExpectation);
+    RUVIA_CHECK(invalidConnectExpectation.failure() != nullptr);
+    if (invalidConnectExpectation.failure() != nullptr) {
+        RUVIA_CHECK(invalidConnectExpectation.failure()->error() ==
+                    Http1ClientRequestPrepareError::kInvalidExpectation);
     }
 }
 

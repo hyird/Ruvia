@@ -311,7 +311,7 @@ bool testExternalEventLoopAttachment() {
             return false;
         }
 
-        std::thread externalThread([&] { ioContext.run(); });
+        std::thread externalThread([&] { attachment.run(); });
         bool dispatchedOnExternalThread = false;
         try {
             dispatchedOnExternalThread = result.get();
@@ -334,7 +334,7 @@ bool testExternalEventLoopAttachment() {
     {
         auto attachment = ruvia::attachEventLoop(ioContext);
         attachment.stop();
-        ioContext.run();
+        attachment.run();
     }
 
     ioContext.restart();
@@ -396,7 +396,7 @@ bool testExternalAttachmentRetainsStateUntilContextCleanup() {
         ioContext.restart();
         auto replacement = ruvia::attachEventLoop(ioContext);
         replacement.stop();
-        ioContext.run();
+        replacement.run();
         reattachedAfterCleanup = true;
     } catch (...) {
     }

@@ -767,6 +767,25 @@ Task<void> WebSocketClientState::flushOutput(
     }
 }
 
+Task<void> WebSocketClientState::throwProtocolErrorAfterFlush(
+    std::shared_ptr<WebSocketClientState> state, OperationOptions options,
+    OperationTimeout operationTimeout, std::string_view message) {
+    co_await state->waitForWriteIdle();
+    try {
+        WriteGuard writeGuard(*state, WritePhase::kApplication);
+        co_await state->flushOutput(std::move(options), operationTimeout);
+    } catch (const WebSocketClientError& error) {
+        if (error.code() != WebSocketClientError::Code::kIoError &&
+            error.code() != WebSocketClientError::Code::kTlsFailed) {
+            throw;
+        }
+    }
+    if (state->phase_.load(std::memory_order_acquire) != Phase::kClosed) {
+        state->closeOnWorker(AbortReason::kNone);
+    }
+    throw WebSocketClientError(WebSocketClientError::Code::kProtocolError, message);
+}
+
 ScopedOperation<std::optional<WebSocketMessage>> WebSocketClientState::read(
     OperationOptions options) {
     validateOperationOptions(options);
@@ -816,8 +835,12 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
             }
             continue;
         }
-        if (event->close() != nullptr || event->protocolError() != nullptr ||
-            event->transportEnd() != nullptr) {
+        if (event->protocolError() != nullptr) {
+            co_await WebSocketClientState::throwProtocolErrorAfterFlush(state, std::move(options),
+                operationTimeout, "WebSocket peer violated the protocol");
+            std::terminate();
+        }
+        if (event->close() != nullptr || event->transportEnd() != nullptr) {
             co_await state->waitForWriteIdle();
             WriteGuard writeGuard(*state, WritePhase::kApplication);
             co_await state->flushOutput(options, operationTimeout);
@@ -926,8 +949,13 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
             state->input_.append(bytes.data(), count);
             continue;
         }
-        if (event->close() != nullptr || event->protocolError() != nullptr ||
-            event->transportEnd() != nullptr) {
+        if (event->protocolError() != nullptr) {
+            co_await WebSocketClientState::throwProtocolErrorAfterFlush(state,
+                std::move(operationOptions), operationTimeout,
+                "WebSocket peer violated the protocol during close handshake");
+            std::terminate();
+        }
+        if (event->close() != nullptr || event->transportEnd() != nullptr) {
             co_await state->waitForWriteIdle();
             WriteGuard writeGuard(*state, WritePhase::kApplication);
             co_await state->flushOutput(operationOptions, operationTimeout);

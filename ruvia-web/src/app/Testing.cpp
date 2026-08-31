@@ -58,7 +58,9 @@ void appendSyntheticHeaderLine(std::string& head, std::string_view name, std::st
 // steady_timer. Repeatedly destroying those contexts is not safe on all
 // supported Windows runners, so the in-memory facade keeps one fresh context
 // per TestApp until process exit. The workers and their Ruvia state remain
-// fully isolated; only the inert Asio context storage is retained.
+// fully isolated; only the inert Asio context storage is retained. The context
+// still runs through EventLoopAttachment so timer cancellation and wakeups see
+// the same current-worker identity as normal workers.
 asio::io_context& testEventLoopContext() {
     static std::deque<asio::io_context>& contexts = *new std::deque<asio::io_context>();
     return contexts.emplace_back();
@@ -187,7 +189,7 @@ struct TestApp::Impl final {
             });
         eventLoopThread = std::thread([this] {
             try {
-                eventLoopContext.run();
+                eventLoopAttachment.run();
             } catch (...) {
                 std::terminate();
             }

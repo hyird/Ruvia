@@ -96,18 +96,30 @@ RUVIA_TEST(http_client_content_length_and_transfer_encoding_rejected_for_body) {
 
 RUVIA_TEST(http_client_no_body_precedence_ignores_framing_fields) {
     const auto head = parseHead("HEAD",
-        "HTTP/1.1 200 OK\r\nContent-Length: invalid\r\n"
+        "HTTP/1.1 200 OK\r\nContent-Length: 7\r\n"
         "Transfer-Encoding: custom-coding");
     const auto& withoutContent = requireWithoutContent(head.plan());
     RUVIA_CHECK(withoutContent.persistence() == Http1ClosePolicy::kAllowReuse);
 
     const auto notModified = parseHead("GET",
-        "HTTP/1.1 304 Not Modified\r\nContent-Length: invalid\r\n"
+        "HTTP/1.1 304 Not Modified\r\nContent-Length: 7\r\n"
         "Transfer-Encoding: custom-coding");
     RUVIA_CHECK(notModified.plan().withoutContent() != nullptr);
 
     const auto noContent = parseHead("GET", "HTTP/1.1 204 No Content");
     RUVIA_CHECK(noContent.plan().withoutContent() != nullptr);
+}
+
+RUVIA_TEST(http_client_no_body_content_length_metadata_must_parse) {
+    RUVIA_CHECK(parseFails("HEAD", "HTTP/1.1 200 OK\r\nContent-Length: invalid"));
+    RUVIA_CHECK(parseFails("HEAD", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6"));
+    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: invalid"));
+    RUVIA_CHECK(
+        parseFails("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: 5, 6"));
+
+    const auto repeated =
+        parseHead("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: 5\r\nContent-Length: 5");
+    RUVIA_CHECK(repeated.plan().withoutContent() != nullptr);
 }
 
 RUVIA_TEST(http_client_204_rejects_framing_fields) {

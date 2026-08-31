@@ -14,6 +14,7 @@
 namespace {
 
 using ruvia::detail::httpResponseTrailerSection;
+using ruvia::detail::httpResponseTrailerBlockValid;
 using ruvia::detail::HttpResponseTrailerSectionError;
 using ruvia::detail::HttpResponseTrailerSectionFailure;
 using ruvia::detail::HttpResponseTrailerSectionResult;
@@ -21,6 +22,7 @@ using ruvia::detail::isForbiddenResponseTrailerName;
 using ruvia::detail::isValidResponseTrailerName;
 using ruvia::detail::isValidResponseTrailerValue;
 using ruvia::detail::responseTrailerFieldValid;
+using ruvia::detail::visitHttpResponseTrailerFields;
 
 template <typename T>
 concept HasAnyRvalueTrailerSectionAccessor = requires(T&& result) {
@@ -159,6 +161,29 @@ RUVIA_TEST(response_trailer_field_combined_rule) {
     RUVIA_CHECK(!responseTrailerFieldValid("X-Trace-Id", "abc "));
     RUVIA_CHECK(!responseTrailerFieldValid("X-Trace-Id", "\tabc"));
     RUVIA_CHECK(!responseTrailerFieldValid("X-Trace-Id", "abc\t"));
+}
+
+RUVIA_TEST(response_trailer_block_parser_trims_and_uses_response_rules) {
+    std::array<ruvia::HttpHeaderView, 2> visited{};
+    std::size_t count = 0;
+    const auto ok = visitHttpResponseTrailerFields(
+        "Accept-Ranges:\tbytes  \r\nServer-Timing: db;dur=4",
+        [&](std::string_view name, std::string_view value) {
+            visited[count++] = {name, value};
+            return true;
+        });
+    RUVIA_CHECK(ok);
+    RUVIA_CHECK_EQ(count, std::size_t{2});
+    RUVIA_CHECK_EQ(visited[0].name(), std::string_view("Accept-Ranges"));
+    RUVIA_CHECK_EQ(visited[0].value(), std::string_view("bytes"));
+    RUVIA_CHECK_EQ(visited[1].name(), std::string_view("Server-Timing"));
+    RUVIA_CHECK_EQ(visited[1].value(), std::string_view("db;dur=4"));
+
+    RUVIA_CHECK(httpResponseTrailerBlockValid("ETag: \"abc\"\r\n"));
+    RUVIA_CHECK(!httpResponseTrailerBlockValid("Date: Sun, 06 Nov 1994 08:49:37 GMT"));
+    RUVIA_CHECK(!httpResponseTrailerBlockValid("Content-Length: 5"));
+    RUVIA_CHECK(!httpResponseTrailerBlockValid(" bad: fold"));
+    RUVIA_CHECK(!httpResponseTrailerBlockValid(": value"));
 }
 
 RUVIA_TEST(response_trailer_section_validation_is_all_fields_or_none) {

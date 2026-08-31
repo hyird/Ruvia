@@ -8,6 +8,7 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "client/HttpClientResponseState.h"
 
@@ -102,7 +103,12 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         response.state_->headReady = true;
         response.state_->headSignal.notify();
 
+        bool requireEmptyContent = false;
         const auto appendChecked = [&](std::string_view bytes) {
+            if (requireEmptyContent && !bytes.empty()) {
+                throw HttpClientError(
+                    HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
+            }
             const auto retained = response.state_->buffered.size() - response.state_->offset +
                                   response.state_->pending.size();
             if (response.state_->collectAll &&
@@ -118,8 +124,11 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         std::array<char, kBodyReadChunkBytes> transferOutput{};
         const auto configureTransferDecoder = [&](HttpTransferCodings codings) {
             if (codings.count != 0) {
-                transferDecoder.emplace(codings.values[0], responseResource,
-                    ProtocolByteLimit::limited(config_.maxResponseBytes));
+                // Transfer-coding is a streaming hop-by-hop framing transform. The HTTP client
+                // response limit belongs to queued body/readAll/content-coding policy, not to the
+                // cumulative number of bytes an incremental read() or pipeTo() consumer may drain.
+                transferDecoder.emplace(
+                    codings.values[0], responseResource, ProtocolByteLimit::unlimited());
             }
         };
         const auto throwTransferFailure = [](const TransferCodingDecodeResult& result) -> void {
@@ -169,17 +178,13 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
                 HttpClientError::Code::kProtocolError, "incomplete HTTP response transfer coding");
         };
         const auto retainTrailers = [&](std::string_view trailerBlock) {
-            HttpChunkTrailerParser trailerParser(trailerBlock);
-            for (;;) {
-                const auto trailer = trailerParser.next();
-                if (const auto* field = trailer.field()) {
+            const auto ok = visitHttpResponseTrailerFields(
+                trailerBlock, [&](std::string_view name, std::string_view value) {
                     response.state_->trailers.push_back(HttpClientResponseHeaderAccess::make(
-                        field->name(), field->value(), responseResource));
-                    continue;
-                }
-                if (trailer.end()) {
-                    return;
-                }
+                        name, value, responseResource));
+                    return true;
+                });
+            if (!ok) {
                 throw HttpClientError(HttpClientError::Code::kProtocolError,
                     "invalid chunked HTTP response trailers");
             }
@@ -209,7 +214,6 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         auto chunkedPlan = parsed->plan().chunked();
         auto closeDelimitedPlan = parsed->plan().closeDelimited();
         bool framingHandled = false;
-        bool requireEmptyContent = false;
         if (const auto* known = parsed->plan().knownLength()) {
             contentSemanticsPresent = true;
             auto remaining = known->contentLength();
@@ -250,9 +254,11 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         if (!framingHandled && chunkedPlan != nullptr) {
             contentSemanticsPresent = true;
             configureTransferDecoder(chunkedPlan->transferCodings());
+            // Chunked framing is a streaming delimiter. Size policy is enforced by
+            // queued-body backpressure and by readAll/content-coding collection, not by
+            // the cumulative number of bytes an incremental read() consumer drains.
             Http1ChunkedBodyDecoder decoder(
-                transferDecoder ? ProtocolByteLimit::unlimited()
-                                : ProtocolByteLimit::limited(config_.maxResponseBytes));
+                ProtocolByteLimit::unlimited(), Http1ChunkTrailerRole::kResponse);
             for (;;) {
                 auto decoded = decoder.decode(connection.readBuffer);
                 if (const auto* body = decoded.bodyChunk()) {
