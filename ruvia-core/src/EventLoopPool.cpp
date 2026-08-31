@@ -363,6 +363,17 @@ EventLoop EventLoopAttachment::loop() const noexcept {
     return EventLoop(state_);
 }
 
+void EventLoopAttachment::run() {
+    auto state = state_;
+    if (!state) {
+        throw std::logic_error("cannot run an invalid event loop attachment");
+    }
+    if (state->ioContext == nullptr) {
+        throw std::logic_error("event loop execution context is detached");
+    }
+    state->runtime.run();
+}
+
 void EventLoopAttachment::stop() noexcept {
     if (state_) {
         state_->stop(true, state_);
