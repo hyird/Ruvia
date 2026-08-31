@@ -8,6 +8,7 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "client/HttpClientResponseState.h"
 
@@ -169,17 +170,13 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
                 HttpClientError::Code::kProtocolError, "incomplete HTTP response transfer coding");
         };
         const auto retainTrailers = [&](std::string_view trailerBlock) {
-            HttpChunkTrailerParser trailerParser(trailerBlock);
-            for (;;) {
-                const auto trailer = trailerParser.next();
-                if (const auto* field = trailer.field()) {
+            const auto ok = visitHttpResponseTrailerFields(
+                trailerBlock, [&](std::string_view name, std::string_view value) {
                     response.state_->trailers.push_back(HttpClientResponseHeaderAccess::make(
-                        field->name(), field->value(), responseResource));
-                    continue;
-                }
-                if (trailer.end()) {
-                    return;
-                }
+                        name, value, responseResource));
+                    return true;
+                });
+            if (!ok) {
                 throw HttpClientError(HttpClientError::Code::kProtocolError,
                     "invalid chunked HTTP response trailers");
             }
@@ -252,7 +249,8 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
             configureTransferDecoder(chunkedPlan->transferCodings());
             Http1ChunkedBodyDecoder decoder(
                 transferDecoder ? ProtocolByteLimit::unlimited()
-                                : ProtocolByteLimit::limited(config_.maxResponseBytes));
+                                : ProtocolByteLimit::limited(config_.maxResponseBytes),
+                Http1ChunkTrailerRole::kResponse);
             for (;;) {
                 auto decoded = decoder.decode(connection.readBuffer);
                 if (const auto* body = decoded.bodyChunk()) {

@@ -1126,6 +1126,80 @@ int testHttp1ResponseTrailers() {
         });
 }
 
+int testHttp1ResponseTrailerRules() {
+    {
+        OneShotServer server([](asio::ip::tcp::socket& socket) {
+            std::error_code error;
+            (void)readHead(socket, error);
+            if (error) {
+                return;
+            }
+            constexpr std::string_view response =
+                "HTTP/1.1 200 OK\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "Trailer: Accept-Ranges\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "5\r\nhello\r\n"
+                "0\r\n"
+                "Accept-Ranges: bytes\r\n"
+                "\r\n";
+            asio::write(socket, asio::buffer(response), error);
+        });
+        auto config = plainConfig(server.port());
+        CountingResource operationResource;
+        const auto accepted = runClient(config, operationResource,
+            [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+                CountingResource*) -> ruvia::Task<int> {
+                auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
+                auto response = co_await client.send(request);
+                if (co_await response.body().readAll() != "hello") {
+                    co_return 1;
+                }
+                co_return response.trailer("accept-ranges") ==
+                               std::optional<std::string_view>("bytes")
+                              ? 0
+                              : 2;
+            });
+        if (accepted != 0) {
+            return accepted;
+        }
+    }
+
+    OneShotServer server([](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) {
+            return;
+        }
+        constexpr std::string_view response =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "Trailer: Date\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "5\r\nhello\r\n"
+            "0\r\n"
+            "Date: Sun, 06 Nov 1994 08:49:37 GMT\r\n"
+            "\r\n";
+        asio::write(socket, asio::buffer(response), error);
+    });
+    auto config = plainConfig(server.port());
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+            CountingResource*) -> ruvia::Task<int> {
+            try {
+                auto request = ruvia::HttpClientRequestView{.method = "GET", .target = "/"};
+                auto response = co_await client.send(request);
+                (void)co_await response.body().readAll();
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kProtocolError ? 0 : 3;
+            }
+            co_return 4;
+        });
+}
+
 int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
     OneShotServer server([](asio::ip::tcp::socket& socket) {
         std::error_code error;
@@ -1177,7 +1251,7 @@ int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 28> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 29> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testClosingInformationalResponse, "closing informational response"},
@@ -1209,6 +1283,7 @@ int main() {
             {&testCookieStorageSecurityConstraints, "cookie storage security constraints"},
             {&testIpCookieDomainSuffixRejection, "IP cookie domain suffix rejection"},
             {&testHttp1ResponseTrailers, "HTTP/1 response trailers"},
+            {&testHttp1ResponseTrailerRules, "HTTP/1 response trailer rules"},
             {&testHttp1ImmediateBodyUpgradeMarksRequestComplete,
                 "HTTP/1 immediate body upgrade completion"},
         }};
@@ -1225,4 +1300,3 @@ int main() {
         return 1;
     }
 }
-
