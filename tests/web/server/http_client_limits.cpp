@@ -213,6 +213,26 @@ void writeResponse(
     asio::write(socket, asio::buffer(response), ignored);
 }
 
+void writeChunkedResponse(asio::ip::tcp::socket& socket, std::string_view body) {
+    std::array<char, 32> sizeBytes{};
+    const auto [sizeEnd, sizeError] =
+        std::to_chars(sizeBytes.data(), sizeBytes.data() + sizeBytes.size(), body.size(), 16);
+    if (sizeError != std::errc{}) {
+        return;
+    }
+    std::string response =
+        "HTTP/1.1 200 OK\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    response.append(sizeBytes.data(), sizeEnd);
+    response.append("\r\n");
+    response.append(body);
+    response.append("\r\n0\r\n\r\n");
+    std::error_code ignored;
+    asio::write(socket, asio::buffer(response), ignored);
+}
+
 std::string gzipContent(std::string_view body) {
     auto encoded = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, body,
         {.maxEncodedBytes = body.size() + 1024, .resource = std::pmr::get_default_resource()});
@@ -408,6 +428,61 @@ int testTransferCodedResponse() {
             };
             auto response = co_await client.send({.headers = headers});
             co_return co_await response.body().readAll() == "decoded transfer body" ? 0 : 1;
+        });
+}
+
+int testChunkedIncrementalReadCanExceedBufferedLimit() {
+    const std::string decoded(256, 'c');
+    OneShotServer server([decoded](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) {
+            return;
+        }
+        writeChunkedResponse(socket, decoded);
+    });
+    auto config = plainConfig(server.port());
+    config.maxResponseBytes = 64;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [&decoded](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+            CountingResource*) -> ruvia::Task<int> {
+            try {
+                auto response = co_await client.send({});
+                std::string body;
+                while (auto chunk = co_await response.body().read()) {
+                    body.append(*chunk);
+                }
+                co_return body == decoded ? 0 : 1;
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 2 : 3;
+            }
+        });
+}
+
+int testChunkedReadAllStillEnforcesResponseLimit() {
+    const std::string decoded(256, 'r');
+    OneShotServer server([decoded](asio::ip::tcp::socket& socket) {
+        std::error_code error;
+        (void)readHead(socket, error);
+        if (error) {
+            return;
+        }
+        writeChunkedResponse(socket, decoded);
+    });
+    auto config = plainConfig(server.port());
+    config.maxResponseBytes = 64;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle&,
+            CountingResource*) -> ruvia::Task<int> {
+            try {
+                auto response = co_await client.send({});
+                (void)co_await response.body().readAll();
+            } catch (const ruvia::HttpClientError& error) {
+                co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 0 : 2;
+            }
+            co_return 1;
         });
 }
 
@@ -1300,11 +1375,15 @@ int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 30> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 32> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testClosingInformationalResponse, "closing informational response"},
             {&testTransferCodedResponse, "transfer-coded response"},
+            {&testChunkedIncrementalReadCanExceedBufferedLimit,
+                "chunked incremental read beyond buffered limit"},
+            {&testChunkedReadAllStillEnforcesResponseLimit,
+                "chunked readAll response limit"},
             {&testTransferCodedIncrementalReadCanExceedBufferedLimit,
                 "transfer-coded incremental read beyond buffered limit"},
             {&testContentEncodedResponse, "content-encoded response"},

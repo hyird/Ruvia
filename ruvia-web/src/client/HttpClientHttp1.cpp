@@ -250,10 +250,11 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         if (!framingHandled && chunkedPlan != nullptr) {
             contentSemanticsPresent = true;
             configureTransferDecoder(chunkedPlan->transferCodings());
+            // Chunked framing is a streaming delimiter. Size policy is enforced by
+            // queued-body backpressure and by readAll/content-coding collection, not by
+            // the cumulative number of bytes an incremental read() consumer drains.
             Http1ChunkedBodyDecoder decoder(
-                transferDecoder ? ProtocolByteLimit::unlimited()
-                                : ProtocolByteLimit::limited(config_.maxResponseBytes),
-                Http1ChunkTrailerRole::kResponse);
+                ProtocolByteLimit::unlimited(), Http1ChunkTrailerRole::kResponse);
             for (;;) {
                 auto decoded = decoder.decode(connection.readBuffer);
                 if (const auto* body = decoded.bodyChunk()) {
