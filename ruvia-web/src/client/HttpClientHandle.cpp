@@ -60,10 +60,12 @@ HttpClientResponse& HttpClientResponse::operator=(HttpClientResponse&& other) no
     if (this == &other) {
         return *this;
     }
-    std::swap(state_, other.state_);
-    std::swap(consumer_, other.consumer_);
+    release();
+    state_ = std::exchange(other.state_, nullptr);
+    consumer_ = other.consumer_;
     body_.state_ = state_;
-    other.body_.state_ = other.state_;
+    other.body_.state_ = nullptr;
+    other.consumer_ = false;
     return *this;
 }
 

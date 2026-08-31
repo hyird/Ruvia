@@ -1,4 +1,5 @@
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <chrono>
 #include <cstdio>
@@ -213,6 +214,67 @@ void writeResponse(
     std::error_code ignored;
     asio::write(socket, asio::buffer(response), ignored);
 }
+
+class HoldingTwoShotServer final {
+public:
+    HoldingTwoShotServer()
+        : acceptor_(io_, {asio::ip::make_address("127.0.0.1"), 0}),
+          thread_([this] {
+              std::error_code error;
+              auto first = acceptor_.accept(error);
+              if (error) {
+                  return;
+              }
+              constexpr std::string_view firstHead =
+                  "HTTP/1.1 200 OK\r\n"
+                  "Content-Length: 1024\r\n"
+                  "\r\n";
+              asio::write(first, asio::buffer(firstHead), error);
+              if (error) {
+                  return;
+              }
+              const std::string firstChunk(128, 'a');
+              asio::write(first, asio::buffer(firstChunk), error);
+              if (error) {
+                  return;
+              }
+
+              auto second = acceptor_.accept(error);
+              if (error) {
+                  return;
+              }
+              (void)readHead(second, error);
+              if (!error) {
+                  writeResponse(second, "second");
+              }
+
+              while (!stop_.load(std::memory_order_acquire)) {
+                  std::this_thread::sleep_for(10ms);
+              }
+          }) {}
+
+    ~HoldingTwoShotServer() {
+        stop_.store(true, std::memory_order_release);
+        std::error_code ignored;
+        acceptor_.close(ignored);
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    HoldingTwoShotServer(const HoldingTwoShotServer&) = delete;
+    HoldingTwoShotServer& operator=(const HoldingTwoShotServer&) = delete;
+
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+
+private:
+    asio::io_context io_;
+    asio::ip::tcp::acceptor acceptor_;
+    std::atomic_bool stop_{false};
+    std::thread thread_;
+};
 
 void writeChunkedResponse(asio::ip::tcp::socket& socket, std::string_view body) {
     std::array<char, 32> sizeBytes{};
@@ -534,6 +596,42 @@ int testChunkedReadAllStillEnforcesResponseLimit() {
                 co_return error.code() == ruvia::HttpClientError::Code::kResponseTooLarge ? 0 : 2;
             }
             co_return 1;
+        });
+}
+
+int testResponseMoveAssignmentAbandonsPreviousBody() {
+    HoldingTwoShotServer server;
+    auto config = plainConfig(server.port());
+    config.connectionCount = 2;
+    config.maxResponseBytes = 16;
+    config.requestTimeout = 5s;
+    CountingResource operationResource;
+    return runClient(config, operationResource,
+        [](const ruvia::HttpClientHandle& client, const ruvia::WorkerHandle& worker,
+            CountingResource*) -> ruvia::Task<int> {
+            auto first = co_await client.send({.target = "/first"});
+            auto second = co_await client.send({.target = "/second"});
+
+            first = std::move(second);
+            if (co_await first.body().readAll() != "second") {
+                co_return 1;
+            }
+
+            for (unsigned attempt = 0; attempt < 50; ++attempt) {
+                const auto stats = client.stats();
+                if (stats.inFlightRequests == 0 && stats.completedRequests == 1 &&
+                    stats.failedRequests == 1) {
+                    co_return 0;
+                }
+                co_await ruvia::sleepFor(worker, 10ms);
+            }
+
+            const auto stats = client.stats();
+            std::fprintf(stderr,
+                "move assignment stats: buffered=%zu in-flight=%zu completed=%zu failed=%zu\n",
+                stats.bufferedRequests, stats.inFlightRequests, stats.completedRequests,
+                stats.failedRequests);
+            co_return 2;
         });
 }
 
@@ -1496,7 +1594,7 @@ int testHttp1ImmediateBodyUpgradeMarksRequestComplete() {
 
 int main() {
     try {
-        const std::array<std::pair<int (*)(), std::string_view>, 34> checks{{
+        const std::array<std::pair<int (*)(), std::string_view>, 35> checks{{
             {&testOperationArena, "operation arena"},
             {&testResponseLimit, "response limit"},
             {&testClosingInformationalResponse, "closing informational response"},
@@ -1507,6 +1605,8 @@ int main() {
                 "chunked incremental read beyond buffered limit"},
             {&testChunkedReadAllStillEnforcesResponseLimit,
                 "chunked readAll response limit"},
+            {&testResponseMoveAssignmentAbandonsPreviousBody,
+                "response move assignment abandon"},
             {&testHttp2IncrementalReadCanExceedBufferedLimit,
                 "HTTP/2 incremental read beyond buffered limit"},
             {&testTransferCodedIncrementalReadCanExceedBufferedLimit,
