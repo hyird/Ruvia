@@ -7,6 +7,8 @@
 #include "ruvia/web/Health.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 
+#include <cstdint>
+#include <stdexcept>
 #include <string_view>
 
 namespace {
@@ -67,4 +69,20 @@ RUVIA_TEST(readiness_response_keeps_explicit_failure_status) {
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
     RUVIA_CHECK_EQ(ruvia::detail::responseBody(response).bytes(),
         std::string_view("{\"status\":\"not_ready\",\"reason\":\"database is unavailable\"}"));
+}
+
+RUVIA_TEST(readiness_response_rejects_invalid_state) {
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = ruvia::detail::HttpRequestAccess::make();
+    auto context = makeContext(memory, request);
+
+    bool rejected = false;
+    try {
+        (void)ruvia::makeReadinessResponse(
+            context, {.state = static_cast<ruvia::ReadinessState>(std::uint8_t{0xFF})});
+    } catch (const std::invalid_argument& error) {
+        rejected = std::string_view(error.what()) == "readiness state is invalid";
+    }
+    RUVIA_CHECK(rejected);
 }
