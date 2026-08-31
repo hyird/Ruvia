@@ -81,6 +81,10 @@ function(ruvia_verify_component_consumer name component linked_target header sou
         list(APPEND _configure_extra_args
             "-DVCPKG_HOST_TRIPLET=${_consumer_vcpkg_host_triplet}")
     endif()
+    if(DEFINED RUVIA_TEST_CONFIG AND NOT RUVIA_TEST_CONFIG STREQUAL "")
+        list(APPEND _configure_extra_args
+            "-DCMAKE_CONFIGURATION_TYPES=${RUVIA_TEST_CONFIG}")
+    endif()
 
     execute_process(
         COMMAND "@CMAKE_COMMAND@" -S "${_source_dir}" -B "${_consumer_build_dir}"
