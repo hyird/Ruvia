@@ -1,6 +1,11 @@
 set(_build_dir "@PROJECT_BINARY_DIR@")
 set(_scratch_root "@CMAKE_CURRENT_BINARY_DIR@/package_consumer")
 set(_prefix "${_scratch_root}/prefix")
+set(_consumer_generator_platform [=[@CMAKE_GENERATOR_PLATFORM@]=])
+set(_consumer_generator_toolset [=[@CMAKE_GENERATOR_TOOLSET@]=])
+set(_consumer_toolchain_file [=[@CMAKE_TOOLCHAIN_FILE@]=])
+set(_consumer_vcpkg_target_triplet [=[@VCPKG_TARGET_TRIPLET@]=])
+set(_consumer_vcpkg_host_triplet [=[@VCPKG_HOST_TRIPLET@]=])
 
 file(REMOVE_RECURSE "${_scratch_root}")
 
@@ -57,12 +62,34 @@ function(ruvia_verify_component_consumer name component linked_target header sou
         "target_link_libraries(consumer PRIVATE ${linked_target})\n")
     file(WRITE "${_source_dir}/main.cpp" "#include <${header}>\n\n${source}\n")
 
+    set(_configure_args
+        -S "${_source_dir}" -B "${_consumer_build_dir}"
+        -G "@CMAKE_GENERATOR@"
+        "-DCMAKE_PREFIX_PATH=${_prefix_path}"
+        "-DCMAKE_BUILD_TYPE=@CMAKE_BUILD_TYPE@"
+        "-DCMAKE_CXX_FLAGS=@CMAKE_CXX_FLAGS@"
+        "-DCMAKE_EXE_LINKER_FLAGS=@CMAKE_EXE_LINKER_FLAGS@")
+    if(NOT _consumer_generator_platform STREQUAL "")
+        list(APPEND _configure_args -A "${_consumer_generator_platform}")
+    endif()
+    if(NOT _consumer_generator_toolset STREQUAL "")
+        list(APPEND _configure_args -T "${_consumer_generator_toolset}")
+    endif()
+    if(NOT _consumer_toolchain_file STREQUAL "")
+        list(APPEND _configure_args
+            "-DCMAKE_TOOLCHAIN_FILE=${_consumer_toolchain_file}")
+    endif()
+    if(NOT _consumer_vcpkg_target_triplet STREQUAL "")
+        list(APPEND _configure_args
+            "-DVCPKG_TARGET_TRIPLET=${_consumer_vcpkg_target_triplet}")
+    endif()
+    if(NOT _consumer_vcpkg_host_triplet STREQUAL "")
+        list(APPEND _configure_args
+            "-DVCPKG_HOST_TRIPLET=${_consumer_vcpkg_host_triplet}")
+    endif()
+
     execute_process(
-        COMMAND "@CMAKE_COMMAND@" -S "${_source_dir}" -B "${_consumer_build_dir}"
-            -G "@CMAKE_GENERATOR@" "-DCMAKE_PREFIX_PATH=${_prefix_path}"
-            "-DCMAKE_BUILD_TYPE=@CMAKE_BUILD_TYPE@"
-            "-DCMAKE_CXX_FLAGS=@CMAKE_CXX_FLAGS@"
-            "-DCMAKE_EXE_LINKER_FLAGS=@CMAKE_EXE_LINKER_FLAGS@"
+        COMMAND "@CMAKE_COMMAND@" ${_configure_args}
         RESULT_VARIABLE _configure_result OUTPUT_VARIABLE _configure_output ERROR_VARIABLE _configure_error)
     if(NOT _configure_result EQUAL 0)
         message(FATAL_ERROR
