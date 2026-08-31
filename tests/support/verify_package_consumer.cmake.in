@@ -4,6 +4,7 @@ set(_prefix "${_scratch_root}/prefix")
 set(_consumer_generator_platform [=[@CMAKE_GENERATOR_PLATFORM@]=])
 set(_consumer_generator_toolset [=[@CMAKE_GENERATOR_TOOLSET@]=])
 set(_consumer_toolchain_file [=[@CMAKE_TOOLCHAIN_FILE@]=])
+set(_consumer_msvc_runtime_library [=[@CMAKE_MSVC_RUNTIME_LIBRARY@]=])
 set(_consumer_vcpkg_installed_dir [=[@VCPKG_INSTALLED_DIR@]=])
 set(_consumer_vcpkg_target_triplet [=[@VCPKG_TARGET_TRIPLET@]=])
 set(_consumer_vcpkg_host_triplet [=[@VCPKG_HOST_TRIPLET@]=])
@@ -73,6 +74,10 @@ function(ruvia_verify_component_consumer name component linked_target header sou
     if(NOT _consumer_toolchain_file STREQUAL "")
         list(APPEND _configure_extra_args
             "-DCMAKE_TOOLCHAIN_FILE=${_consumer_toolchain_file}")
+    endif()
+    if(NOT _consumer_msvc_runtime_library STREQUAL "")
+        list(APPEND _configure_extra_args
+            "-DCMAKE_MSVC_RUNTIME_LIBRARY=${_consumer_msvc_runtime_library}")
     endif()
     if(NOT _consumer_vcpkg_installed_dir STREQUAL "")
         list(APPEND _configure_extra_args
