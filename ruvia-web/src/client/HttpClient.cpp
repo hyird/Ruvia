@@ -43,7 +43,7 @@ void HttpClientState::bindStop() {
     } catch (...) {
         clients_.closeNow();
         phase_.store(Phase::kClosed, std::memory_order_release);
-        closeState_.completeNow();
+        closeState_.completeBeforeWorkerStart();
         throw;
     }
 }

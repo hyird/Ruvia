@@ -31,7 +31,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] auto wait() noexcept {
+    [[nodiscard]] auto wait() {
         return signal_.wait();
     }
 
@@ -42,6 +42,17 @@ public:
     void completeNow() noexcept {
         complete_ = true;
         signal_.notify();
+    }
+
+    // Before any close task can have started, no coroutine can be waiting on
+    // the worker-affine signal. This covers clients closed before their event
+    // loop is first driven, where notifying would violate WorkerSignal's
+    // affinity contract.
+    void completeBeforeWorkerStart() noexcept {
+        if (taskStarted_ || complete_) {
+            std::terminate();
+        }
+        complete_ = true;
     }
 
     void finish(const TaskCompletionResult<void>& result) {

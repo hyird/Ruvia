@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
@@ -238,6 +239,57 @@ static_assert(!HasMultipartError<ruvia::detail::HttpMultipartPartHeaderParseFail
 static_assert(HasMultipartParseError<ruvia::detail::HttpMultipartPartHeaderParseFailure>);
 
 }  // namespace
+
+RUVIA_TEST(multipart_parser_handles_deterministic_arbitrary_bytes) {
+    std::uint64_t state = 0x4D55'4C54'4950'4152ULL;
+    const auto next = [&state]() {
+        state ^= state << 7U;
+        state ^= state >> 9U;
+        return state;
+    };
+
+    for (std::size_t sample = 0; sample < 2048; ++sample) {
+        std::string input(static_cast<std::size_t>(next() % 1025U), '\0');
+        for (auto& byte : input) {
+            byte = static_cast<char>(next());
+        }
+
+        const auto boundary = ruvia::parseMultipartBoundary(input);
+        const auto boundaryAlternatives =
+            static_cast<unsigned int>(boundary.boundary() != nullptr) +
+            static_cast<unsigned int>(boundary.notApplicable() != nullptr) +
+            static_cast<unsigned int>(boundary.failure() != nullptr);
+        RUVIA_CHECK_EQ(boundaryAlternatives, 1U);
+
+        std::pmr::monotonic_buffer_resource resource;
+        const auto complete = ruvia::parseMultipartBody(input,
+            {.boundary = ruvia::MultipartBoundary("FUZZ"), .resource = &resource});
+        RUVIA_CHECK_EQ(static_cast<unsigned int>(complete.body() != nullptr) +
+                           static_cast<unsigned int>(complete.failure() != nullptr),
+            1U);
+
+        ruvia::MultipartParser parser(
+            {.boundary = ruvia::MultipartBoundary("FUZZ"), .resource = &resource});
+        parser.feed(input);
+        parser.finishInput();
+
+        bool terminal = false;
+        for (std::size_t step = 0; step <= input.size() + 1; ++step) {
+            const auto result = parser.poll();
+            const auto alternatives = static_cast<unsigned int>(result.needInput() != nullptr) +
+                                      static_cast<unsigned int>(result.part() != nullptr) +
+                                      static_cast<unsigned int>(result.done() != nullptr) +
+                                      static_cast<unsigned int>(result.failure() != nullptr);
+            RUVIA_CHECK_EQ(alternatives, 1U);
+            if (result.done() != nullptr || result.failure() != nullptr) {
+                terminal = true;
+                break;
+            }
+            RUVIA_CHECK(result.part() != nullptr);
+        }
+        RUVIA_CHECK(terminal);
+    }
+}
 
 // A lone '-' after the boundary token is not the closing "--" delimiter.
 RUVIA_TEST(multipart_boundary_lone_dash_is_not_a_delimiter) {

@@ -1,0 +1,94 @@
+set(_ruvia_source_root "@PROJECT_SOURCE_DIR@")
+
+function(_ruvia_fail _message)
+    message(FATAL_ERROR "ruvia_guard_repository_boundaries: ${_message}")
+endfunction()
+
+function(_ruvia_require _path)
+    if(NOT EXISTS "${_path}")
+        file(RELATIVE_PATH _relative "${_ruvia_source_root}" "${_path}")
+        _ruvia_fail("missing required path: ${_relative}")
+    endif()
+endfunction()
+
+function(_ruvia_forbid _path)
+    if(EXISTS "${_path}")
+        file(RELATIVE_PATH _relative "${_ruvia_source_root}" "${_path}")
+        _ruvia_fail("forbidden source-level path exists: ${_relative}")
+    endif()
+endfunction()
+
+function(_ruvia_check_target_layout _target _namespace _flat_src)
+    set(_target_root "${_ruvia_source_root}/${_target}")
+    foreach(_required IN ITEMS CMakeLists.txt include src "include/ruvia/${_namespace}")
+        _ruvia_require("${_target_root}/${_required}")
+    endforeach()
+
+    file(GLOB_RECURSE _headers LIST_DIRECTORIES FALSE "${_target_root}/include/*")
+    foreach(_header IN LISTS _headers)
+        file(RELATIVE_PATH _relative "${_target_root}" "${_header}")
+        if(NOT _relative MATCHES "^include/ruvia/${_namespace}/")
+            _ruvia_fail("${_target} owns a header outside its namespace: ${_relative}")
+        endif()
+    endforeach()
+
+    file(GLOB_RECURSE _sources LIST_DIRECTORIES FALSE "${_target_root}/src/*")
+    foreach(_source IN LISTS _sources)
+        file(RELATIVE_PATH _relative "${_target_root}/src" "${_source}")
+        if(_flat_src AND _relative MATCHES "/")
+            _ruvia_fail("${_target}/src must stay flat: ${_relative}")
+        endif()
+        if(NOT _flat_src AND NOT _relative MATCHES "^[^/]+$|^[^/]+/[^/]+$")
+            _ruvia_fail("${_target}/src exceeds one category level: ${_relative}")
+        endif()
+    endforeach()
+endfunction()
+
+function(_ruvia_check_includes _label _pattern)
+    set(_roots ${ARGN})
+    foreach(_root IN LISTS _roots)
+        file(GLOB_RECURSE _files LIST_DIRECTORIES FALSE
+            "${_root}/*.h" "${_root}/*.hpp" "${_root}/*.cpp" "${_root}/*.inl")
+        foreach(_file IN LISTS _files)
+            file(READ "${_file}" _contents)
+            string(REGEX MATCH "${_pattern}" _match "${_contents}")
+            if(_match)
+                file(RELATIVE_PATH _relative "${_ruvia_source_root}" "${_file}")
+                string(REPLACE "\n" "\\n" _match "${_match}")
+                _ruvia_fail("${_label} boundary violation in ${_relative}: ${_match}")
+            endif()
+        endforeach()
+    endforeach()
+endfunction()
+
+foreach(_forbidden IN ITEMS include src fuzz core http web)
+    _ruvia_forbid("${_ruvia_source_root}/${_forbidden}")
+endforeach()
+
+_ruvia_check_target_layout(ruvia-core core TRUE)
+_ruvia_check_target_layout(ruvia-http http FALSE)
+_ruvia_check_target_layout(ruvia-web web FALSE)
+
+set(_core_product [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(http|web)/]=])
+set(_http_product [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(core|web)/]=])
+set(_core_private [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"[^"]*(ruvia-http|ruvia-web)/]=])
+set(_http_private [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"[^"]*(ruvia-core|ruvia-web)/]=])
+set(_web_private [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"[^"]*(ruvia-core|ruvia-http)/]=])
+set(_physical_escape [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"(\.\./|[^"]*/\.\./|/)]=])
+
+_ruvia_check_includes(core-product "${_core_product}"
+    "${_ruvia_source_root}/ruvia-core/include" "${_ruvia_source_root}/ruvia-core/src")
+_ruvia_check_includes(http-product "${_http_product}"
+    "${_ruvia_source_root}/ruvia-http/include" "${_ruvia_source_root}/ruvia-http/src")
+_ruvia_check_includes(core-private "${_core_private}"
+    "${_ruvia_source_root}/ruvia-core/include" "${_ruvia_source_root}/ruvia-core/src")
+_ruvia_check_includes(http-private "${_http_private}"
+    "${_ruvia_source_root}/ruvia-http/include" "${_ruvia_source_root}/ruvia-http/src")
+_ruvia_check_includes(web-private "${_web_private}"
+    "${_ruvia_source_root}/ruvia-web/include" "${_ruvia_source_root}/ruvia-web/src")
+_ruvia_check_includes(physical-include-escape "${_physical_escape}"
+    "${_ruvia_source_root}/ruvia-core/include" "${_ruvia_source_root}/ruvia-core/src"
+    "${_ruvia_source_root}/ruvia-http/include" "${_ruvia_source_root}/ruvia-http/src"
+    "${_ruvia_source_root}/ruvia-web/include" "${_ruvia_source_root}/ruvia-web/src")
+
+message(STATUS "ruvia_guard_repository_boundaries: layout and target boundaries hold")

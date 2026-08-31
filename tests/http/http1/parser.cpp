@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include <concepts>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -91,6 +92,127 @@ RUVIA_TEST(http1_public_parse_outcome_exposes_only_its_active_alternative) {
         const auto error = failureState->protocolError();
         RUVIA_CHECK_EQ(error.status(), ruvia::http_status::kBadRequest);
         RUVIA_CHECK_EQ(std::string_view(error.what()), std::string_view("missing Host header"));
+    }
+}
+
+RUVIA_TEST(http1_parse_message_handles_deterministic_arbitrary_bytes) {
+    Http1ServerRequestParser parser;
+    std::uint64_t state = 0xD1CE'B00C'5EED'1234ULL;
+    const auto next = [&state] {
+        state ^= state << 7;
+        state ^= state >> 9;
+        return state;
+    };
+
+    for (std::size_t sample = 0; sample < 4096; ++sample) {
+        std::string input(static_cast<std::size_t>(next() % 1025), '\0');
+        for (auto& byte : input) {
+            byte = static_cast<char>(next());
+        }
+
+        const auto result = parser.parseMessage(input);
+        const auto activeAlternatives =
+            static_cast<unsigned>(result.needRequestHead() != nullptr) +
+            static_cast<unsigned>(result.needRequestBody() != nullptr) +
+            static_cast<unsigned>(result.messageReady() != nullptr) +
+            static_cast<unsigned>(result.failure() != nullptr);
+        RUVIA_CHECK_EQ(activeAlternatives, 1U);
+        RUVIA_CHECK(result.headReady() == nullptr);
+    }
+}
+
+RUVIA_TEST(http1_parse_message_maps_random_valid_heads_to_stable_request_plans) {
+    Http1ServerRequestParser parser;
+    std::uint64_t state = 0x851f'2b7c'609d'e413ULL;
+    constexpr std::string_view valueChars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    const auto next = [&state] {
+        state ^= state << 13U;
+        state ^= state >> 7U;
+        state ^= state << 17U;
+        return state;
+    };
+
+    for (std::size_t sample = 0; sample < 1024; ++sample) {
+        const bool http11 = (next() & 1U) != 0;
+        const auto connectionCase = static_cast<unsigned>(next() % 3U);
+        const auto bodyCase = static_cast<unsigned>(next() % (http11 ? 3U : 2U));
+        const auto bodySize =
+            bodyCase == 2U ? static_cast<std::size_t>((next() % 9U) + 1U)
+                           : static_cast<std::size_t>(next() % 17U);
+
+        std::string fuzzValue;
+        const auto fuzzSize = static_cast<std::size_t>(next() % 33U);
+        for (std::size_t i = 0; i < fuzzSize; ++i) {
+            fuzzValue.push_back(valueChars[static_cast<std::size_t>(next()) % valueChars.size()]);
+        }
+
+        std::string path = "/stable-" + std::to_string(sample);
+        std::string body;
+        std::string message = "POST " + path + (http11 ? " HTTP/1.1\r\n" : " HTTP/1.0\r\n");
+        message += "Host: example.test\r\n";
+        if (connectionCase == 1U) {
+            message += "Connection: close\r\n";
+        } else if (connectionCase == 2U) {
+            message += "Connection: keep-alive\r\n";
+        }
+        message += "X-Fuzz: " + fuzzValue + "\r\n";
+
+        if (bodyCase == 1U) {
+            for (std::size_t i = 0; i < bodySize; ++i) {
+                body.push_back(static_cast<char>('a' + (next() % 26U)));
+            }
+            message += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+            message += body;
+        } else if (bodyCase == 2U) {
+            for (std::size_t i = 0; i < bodySize; ++i) {
+                body.push_back(static_cast<char>('A' + (next() % 26U)));
+            }
+            message += "Transfer-Encoding: chunked\r\n\r\n";
+            message += std::to_string(body.size());
+            message += "\r\n";
+            message += body;
+            message += "\r\n0\r\n\r\n";
+        } else {
+            message += "\r\n";
+        }
+        const auto framedBytes = message.size();
+        message += "GET /next HTTP/1.1\r\nHost: example.test\r\n\r\n";
+
+        const auto result = parser.parseMessage(message);
+        RUVIA_CHECK(result.messageReady() != nullptr);
+        RUVIA_CHECK(result.failure() == nullptr);
+        if (result.messageReady() == nullptr || result.failure() != nullptr) {
+            continue;
+        }
+        RUVIA_CHECK_EQ(result.request.method(), std::string_view("POST"));
+        RUVIA_CHECK_EQ(result.request.path(), std::string_view(path));
+        RUVIA_CHECK_EQ(result.request.header("Host").value_or(std::string_view{}),
+            std::string_view("example.test"));
+        RUVIA_CHECK_EQ(result.request.header("X-Fuzz").value_or(std::string_view{}),
+            std::string_view(fuzzValue));
+        RUVIA_CHECK(result.request.protocolVersion() ==
+                    (http11 ? HttpProtocolVersion::kHttp11 : HttpProtocolVersion::kHttp10));
+
+        const auto expectedClosePolicy =
+            (!http11 && connectionCase != 2U) || connectionCase == 1U
+                ? Http1ClosePolicy::kCloseAfterResponse
+                : Http1ClosePolicy::kAllowReuse;
+        RUVIA_CHECK(result.connectionPlan.disposition() == expectedClosePolicy);
+        RUVIA_CHECK(result.connectionPlan.protocolVersion() ==
+                    (http11 ? HttpProtocolVersion::kHttp11 : HttpProtocolVersion::kHttp10));
+
+        const auto* ready = result.messageReady();
+        if (ready != nullptr) {
+            RUVIA_CHECK_EQ(ready->messageBytes(), framedBytes);
+        }
+        if (bodyCase == 1U) {
+            RUVIA_CHECK_EQ(requireKnownLength(result.bodyPlan).contentLength(), body.size());
+        } else if (bodyCase == 2U) {
+            RUVIA_CHECK(result.bodyPlan.chunked() != nullptr);
+        } else {
+            RUVIA_CHECK(result.bodyPlan.withoutBody() != nullptr);
+        }
     }
 }
 

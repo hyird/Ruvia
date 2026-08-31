@@ -45,7 +45,7 @@ void DbClientState::bindStop() {
     } catch (...) {
         databases_.closeNow();
         phase_.store(Phase::kClosed, std::memory_order_release);
-        closeState_.completeNow();
+        closeState_.completeBeforeWorkerStart();
         throw;
     }
 }
@@ -91,7 +91,7 @@ Task<void> DbClientState::connectOnWorker() {
         connectInFlight_ = false;
         if (closeState_.taskStarted()) {
             closeState_.notifyProgress();
-        } else {
+        } else if (!closeState_.complete()) {
             closeState_.completeNow();
         }
         throw;
@@ -129,7 +129,7 @@ void DbClientState::requestClose() noexcept {
             // excludes a concurrent connect() from entering the backend.
             if (phase_.compare_exchange_weak(
                     phase, Phase::kClosed, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                closeState_.completeNow();
+                closeState_.completeBeforeWorkerStart();
                 return;
             }
             continue;

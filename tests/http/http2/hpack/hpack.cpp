@@ -41,6 +41,15 @@ bool collect(void* target, std::string_view name, std::string_view value) {
     return true;
 }
 
+struct HeaderCounter final {
+    std::size_t count{0};
+};
+
+bool countHeader(void* target, std::string_view, std::string_view) {
+    ++static_cast<HeaderCounter*>(target)->count;
+    return true;
+}
+
 std::string bytes(std::initializer_list<int> values) {
     std::string out;
     out.reserve(values.size());
@@ -118,6 +127,31 @@ RUVIA_TEST(hpack_indexed_static_header) {
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{1});
     RUVIA_CHECK_EQ(out.headers[0].first, std::string(":method"));
     RUVIA_CHECK_EQ(out.headers[0].second, std::string("GET"));
+}
+
+RUVIA_TEST(hpack_decoder_handles_deterministic_arbitrary_bytes) {
+    std::uint64_t state = 0xC0DE'CAFE'1234'5678ULL;
+    const auto next = [&state]() {
+        state ^= state << 7U;
+        state ^= state >> 9U;
+        return state;
+    };
+
+    for (std::size_t sample = 0; sample < 4096; ++sample) {
+        std::string block(static_cast<std::size_t>(next() % 257U), '\0');
+        for (auto& byte : block) {
+            byte = static_cast<char>(next());
+        }
+
+        std::pmr::monotonic_buffer_resource resource;
+        HpackDecoder decoder({.resource = &resource});
+        HeaderCounter headers;
+        const auto result = decoder.decode(block, &headers, &countHeader);
+        const auto activeAlternatives = static_cast<unsigned int>(result.decoded() != nullptr) +
+                                        static_cast<unsigned int>(result.failure() != nullptr);
+        RUVIA_CHECK_EQ(activeAlternatives, 1U);
+        RUVIA_CHECK(headers.count <= block.size());
+    }
 }
 
 RUVIA_TEST(hpack_request_literal_no_huffman) {

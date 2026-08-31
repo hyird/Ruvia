@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <cstdint>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -39,6 +40,68 @@ static_assert(AcceptsTemporaryRequestTargetInput<std::pmr::string&>);
 static_assert(AcceptsTemporaryRequestTargetInput<std::string_view>);
 
 }  // namespace
+
+RUVIA_TEST(request_target_parsers_handle_deterministic_arbitrary_bytes) {
+    std::uint64_t state = 0x5441'5247'4554'4655ULL;
+    const auto next = [&state]() {
+        state ^= state << 7U;
+        state ^= state >> 9U;
+        return state;
+    };
+
+    for (std::size_t sample = 0; sample < 4096; ++sample) {
+        std::string input(static_cast<std::size_t>(next() % 513U), '\0');
+        for (auto& byte : input) {
+            byte = static_cast<char>(next());
+        }
+
+        const auto method = sample % 3 == 0 ? HttpKnownMethod::kGet
+                          : sample % 3 == 1 ? HttpKnownMethod::kOptions
+                                            : HttpKnownMethod::kConnect;
+        RequestTargetView target;
+        const auto accepted = parseRequestTarget(method, input, target);
+        const auto authority = parseHttpAuthority(input);
+        RUVIA_CHECK_EQ(isValidHostHeader(input), input.empty() || authority.has_value());
+
+        if (authority.has_value()) {
+            RUVIA_CHECK(!authority->host().empty());
+            RUVIA_CHECK(input.find(authority->host()) != std::string::npos);
+            RUVIA_CHECK_EQ(authority->port().has_value(),
+                authority->portKind() == HttpAuthorityPortKind::kValue);
+        }
+        if (!accepted) {
+            continue;
+        }
+
+        RUVIA_CHECK(target.query.empty() || input.find(target.query) != std::string::npos);
+        RUVIA_CHECK(
+            target.authority.empty() || input.find(target.authority) != std::string::npos);
+        switch (target.form) {
+            case HttpRequestTargetForm::kOrigin:
+                RUVIA_CHECK(target.scheme.empty());
+                RUVIA_CHECK(target.authority.empty());
+                RUVIA_CHECK(target.path.starts_with('/'));
+                break;
+            case HttpRequestTargetForm::kAbsolute:
+                RUVIA_CHECK(!target.scheme.empty());
+                RUVIA_CHECK(input.starts_with(target.scheme));
+                RUVIA_CHECK_EQ(target.defaultPort, httpUriSchemeDefaultPort(target.scheme));
+                RUVIA_CHECK(target.path.empty() || target.path == "/" || target.path == "*" ||
+                            input.find(target.path) != std::string::npos);
+                break;
+            case HttpRequestTargetForm::kAuthority:
+                RUVIA_CHECK(method == HttpKnownMethod::kConnect);
+                RUVIA_CHECK_EQ(target.path, std::string_view(input));
+                RUVIA_CHECK_EQ(target.authority, std::string_view(input));
+                break;
+            case HttpRequestTargetForm::kAsterisk:
+                RUVIA_CHECK(method == HttpKnownMethod::kOptions);
+                RUVIA_CHECK_EQ(input, std::string("*"));
+                RUVIA_CHECK_EQ(target.path, std::string_view("*"));
+                break;
+        }
+    }
+}
 
 RUVIA_TEST(uri_scheme_uses_complete_rfc3986_grammar) {
     RUVIA_CHECK(isValidUriScheme("http"));

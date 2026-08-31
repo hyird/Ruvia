@@ -703,6 +703,63 @@ RUVIA_TEST(http2_connection_rejects_oversized_response_heads_transactionally) {
     checkRejected(std::move(generatedOverflow));
 }
 
+RUVIA_TEST(http2_connection_rejects_response_connection_fields_transactionally) {
+    constexpr std::array forbiddenNames{std::string_view("Connection"),
+        std::string_view("Keep-Alive"), std::string_view("Proxy-Connection"),
+        std::string_view("Transfer-Encoding"), std::string_view("Upgrade")};
+    std::uint64_t state = 0x0cb3'9172'57df'a608ULL;
+    const auto next = [&state] {
+        state ^= state << 13U;
+        state ^= state >> 7U;
+        state ^= state << 17U;
+        return state;
+    };
+    const auto randomCase = [&next](std::string_view name) {
+        std::string out;
+        out.reserve(name.size());
+        for (const char c : name) {
+            if (c >= 'A' && c <= 'Z') {
+                out.push_back((next() & 1U) != 0 ? static_cast<char>(c - 'A' + 'a') : c);
+            } else if (c >= 'a' && c <= 'z') {
+                out.push_back((next() & 1U) != 0 ? static_cast<char>(c - 'a' + 'A') : c);
+            } else {
+                out.push_back(c);
+            }
+        }
+        return out;
+    };
+
+    for (std::size_t sample = 0; sample < 512; ++sample) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection connection(&resource);
+        handshake(connection);
+        driveGetRequest(connection, &resource);
+
+        ruvia::HttpResponse response({.resource = &resource});
+        response.status(ruvia::http_status::kOk);
+        const auto name = randomCase(forbiddenNames[sample % forbiddenNames.size()]);
+        ruvia::detail::setResponseHeaderStableView(response, name, "close");
+
+        const auto rejected = submitBufferedResponseHead(connection, 1, response);
+        RUVIA_CHECK(rejected.submitted() == nullptr);
+        RUVIA_CHECK(
+            responseHeadSubmitFailureMessage(rejected) == "invalid HTTP/2 response head message");
+        RUVIA_CHECK(connection.pendingOutput().empty());
+        auto* stream = connection.stream(1);
+        RUVIA_CHECK(stream != nullptr);
+        if (stream != nullptr) {
+            RUVIA_CHECK(stream->localSend().headPending() != nullptr);
+            RUVIA_CHECK(stream->localHeaderBlock().empty());
+        }
+
+        ruvia::HttpResponse retry({.resource = &resource});
+        retry.status(ruvia::http_status::kOk);
+        retry.header("X-Retry", "accepted");
+        RUVIA_CHECK(responseHeadSubmitted(submitBufferedResponseHead(connection, 1, retry)));
+        RUVIA_CHECK(!connection.pendingOutput().empty());
+    }
+}
+
 RUVIA_TEST(http2_connection_rejects_raw_request_content_length_transactionally) {
     std::pmr::monotonic_buffer_resource resource;
     const auto checkRejected = [&resource, &ruvia_ctx](
