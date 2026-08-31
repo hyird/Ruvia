@@ -120,6 +120,16 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     return false;
 }
 
+[[nodiscard]] bool isValidHttpClientRequestExpectation(
+    HttpClientRequestExpectation expectation) noexcept {
+    switch (expectation) {
+        case HttpClientRequestExpectation::kNone:
+        case HttpClientRequestExpectation::kContinue:
+            return true;
+    }
+    return false;
+}
+
 [[nodiscard]] std::pmr::string ownOfferedUpgradeProtocols(
     std::span<const HttpHeaderView> headers, std::pmr::memory_resource* resource) {
     std::pmr::string result(resource);
@@ -309,6 +319,8 @@ std::string_view http1ClientRequestPrepareErrorMessage(
             return "HTTP/1 client request header is too large";
         case Http1ClientRequestPrepareError::kInvalidClosePolicy:
             return "invalid HTTP/1 client close policy";
+        case Http1ClientRequestPrepareError::kInvalidExpectation:
+            return "invalid HTTP/1 client request expectation";
     }
     return "invalid HTTP/1 client request";
 }
@@ -325,6 +337,10 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOrig
     if (!isValidHttp1ClosePolicy(policy.closePolicy)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kInvalidClosePolicy);
+    }
+    if (!isValidHttpClientRequestExpectation(policy.expectation)) {
+        return detail::Http1ClientRequestPrepareResultAccess::failure(
+            Http1ClientRequestPrepareError::kInvalidExpectation);
     }
     if (!isValidHttpMethodToken(request.method)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(
@@ -350,6 +366,10 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(
     if (!isValidHttp1ClosePolicy(policy.closePolicy)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kInvalidClosePolicy);
+    }
+    if (!isValidHttpClientRequestExpectation(policy.expectation)) {
+        return detail::Http1ClientRequestPrepareResultAccess::failure(
+            Http1ClientRequestPrepareError::kInvalidExpectation);
     }
     if (tunnelOrigin.port() == 0) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(

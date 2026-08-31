@@ -217,6 +217,7 @@ enum class Http1ClientRequestPrepareError : std::uint8_t {
     kOptionsContentTypeRequired,
     kHeaderTooLarge,
     kInvalidClosePolicy,
+    kInvalidExpectation,
 };
 
 [[nodiscard]] std::string_view http1ClientRequestPrepareErrorMessage(
