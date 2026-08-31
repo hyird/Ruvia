@@ -135,7 +135,7 @@ private:
 // bug in the caller, not a runtime condition, and cannot be reported through a
 // noexcept path.
 template <typename Pool>
-Task<std::size_t> acquireDbSlot(Pool& pool, const OperationTimeout& timeout, StopToken stopToken) {
+Task<std::size_t> acquireDbSlot(Pool& pool, OperationTimeout timeout, StopToken stopToken) {
     const auto acquireTimeout = timeout.constrainedBy(pool.config_.acquireTimeout).remaining();
     const auto result =
         co_await pool.scheduler_.acquire(acquireTimeout, std::move(stopToken), pool.worker_);
@@ -184,8 +184,7 @@ public:
         }
     }
 
-    [[nodiscard]] Task<std::size_t> acquireSlot(
-        const OperationTimeout& timeout, StopToken stopToken) {
+    [[nodiscard]] Task<std::size_t> acquireSlot(OperationTimeout timeout, StopToken stopToken) {
         return acquireDbSlot(derived(), timeout, std::move(stopToken));
     }
 
@@ -383,7 +382,7 @@ Task<DbExecResult> executeDbCommand(Pool& pool, std::pmr::string sql,
 // it declares this a friend so the shared rule stays out of the drivers.
 template <typename Pool, typename Slot>
 Task<DbResolvedAddresses> resolveDbHost(
-    Pool& pool, Slot& slot, const OperationTimeout& deadline, std::string_view backend) {
+    Pool& pool, Slot& slot, OperationTimeout deadline, std::string_view backend) {
     const auto timedOut = [&pool, backend] {
         return DbError(DbError::Code::kTimeout, pool.config_.driver,
             std::string(backend).append(" host resolve timed out"));

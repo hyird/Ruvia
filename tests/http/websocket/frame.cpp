@@ -10,6 +10,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
@@ -264,6 +265,82 @@ RUVIA_TEST(ws_frame_reader_needs_input_without_sentinel_metadata) {
     RUVIA_CHECK(partial.needInput() != nullptr);
     RUVIA_CHECK(partial.frame() == nullptr);
     RUVIA_CHECK(partial.failure() == nullptr);
+    RUVIA_CHECK_EQ(offset, std::size_t{0});
+    RUVIA_CHECK_EQ(pendingCompactUntil, std::size_t{0});
+}
+
+RUVIA_TEST(ws_frame_reader_handles_deterministic_arbitrary_bytes) {
+    std::uint64_t state = 0x9A71'F00D'BADC'0FFEULL;
+    const auto next = [&state]() {
+        state ^= state << 7U;
+        state ^= state >> 9U;
+        return state;
+    };
+
+    for (std::size_t sample = 0; sample < 4096; ++sample) {
+        std::pmr::string input(std::pmr::get_default_resource());
+        input.resize(static_cast<std::size_t>(next() % 1025U));
+        for (auto& byte : input) {
+            byte = static_cast<char>(next());
+        }
+
+        std::size_t offset = 0;
+        std::size_t pendingCompactUntil = 0;
+        const auto result = webSocketTryReadFrame(input, offset, pendingCompactUntil,
+            ProtocolByteLimit::limited(1024), (next() & 1U) != 0, (next() & 1U) != 0);
+        const auto activeAlternatives = static_cast<unsigned int>(result.needInput() != nullptr) +
+                                        static_cast<unsigned int>(result.frame() != nullptr) +
+                                        static_cast<unsigned int>(result.failure() != nullptr);
+        RUVIA_CHECK_EQ(activeAlternatives, 1U);
+        RUVIA_CHECK(offset <= input.size());
+        RUVIA_CHECK(pendingCompactUntil <= input.size());
+
+        if (result.frame() != nullptr) {
+            RUVIA_CHECK_EQ(offset, pendingCompactUntil);
+        } else {
+            RUVIA_CHECK_EQ(offset, std::size_t{0});
+            RUVIA_CHECK_EQ(pendingCompactUntil, std::size_t{0});
+        }
+    }
+}
+
+RUVIA_TEST(ws_frame_reader_keeps_next_frame_intact_across_compaction) {
+    std::uint64_t state = 0xBA5E'F00D'1234'ABCDULL;
+    const auto next = [&state]() {
+        state ^= state << 7U;
+        state ^= state >> 9U;
+        return state;
+    };
+
+    std::pmr::string input(std::pmr::get_default_resource());
+    std::vector<std::string> payloads;
+    payloads.reserve(512);
+    for (std::size_t frameIndex = 0; frameIndex < 512; ++frameIndex) {
+        std::string payload(static_cast<std::size_t>(next() % 126U), '\0');
+        for (auto& byte : payload) {
+            byte = static_cast<char>(next());
+        }
+        input.append(maskedFrame((next() & 1U) != 0 ? 0x81U : 0x82U, payload));
+        payloads.push_back(std::move(payload));
+    }
+
+    std::size_t offset = 0;
+    std::size_t pendingCompactUntil = 0;
+    for (const auto& expected : payloads) {
+        const auto result = webSocketTryReadFrame(
+            input, offset, pendingCompactUntil, ProtocolByteLimit::limited(125), false);
+        RUVIA_CHECK(result.needInput() == nullptr);
+        RUVIA_CHECK(result.failure() == nullptr);
+        RUVIA_CHECK(result.frame() != nullptr);
+        RUVIA_CHECK_EQ(result.frame()->payload(), std::string_view(expected));
+        RUVIA_CHECK(offset <= input.size());
+        RUVIA_CHECK(pendingCompactUntil <= input.size());
+    }
+
+    const auto drained = webSocketTryReadFrame(
+        input, offset, pendingCompactUntil, ProtocolByteLimit::limited(125), false);
+    RUVIA_CHECK(drained.needInput() != nullptr);
+    RUVIA_CHECK(input.empty());
     RUVIA_CHECK_EQ(offset, std::size_t{0});
     RUVIA_CHECK_EQ(pendingCompactUntil, std::size_t{0});
 }

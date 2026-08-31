@@ -1,0 +1,96 @@
+set(_build_dir "@PROJECT_BINARY_DIR@")
+set(_scratch_root "@CMAKE_CURRENT_BINARY_DIR@/package_consumer")
+set(_prefix "${_scratch_root}/prefix")
+
+file(REMOVE_RECURSE "${_scratch_root}")
+
+set(_install_args --install "${_build_dir}" --prefix "${_prefix}")
+if(DEFINED RUVIA_TEST_CONFIG AND NOT RUVIA_TEST_CONFIG STREQUAL "")
+    list(APPEND _install_args --config "${RUVIA_TEST_CONFIG}")
+endif()
+execute_process(
+    COMMAND "@CMAKE_COMMAND@" ${_install_args}
+    RESULT_VARIABLE _install_result OUTPUT_VARIABLE _install_output ERROR_VARIABLE _install_error)
+if(NOT _install_result EQUAL 0)
+    message(FATAL_ERROR "ruvia_guard_package_consumer: install failed\n${_install_output}${_install_error}")
+endif()
+
+set(_prefix_path "${_prefix};@CMAKE_PREFIX_PATH@")
+
+function(ruvia_verify_component_consumer name component linked_target header source)
+    set(_source_dir "${_scratch_root}/${name}-source")
+    set(_consumer_build_dir "${_scratch_root}/${name}-build")
+    file(MAKE_DIRECTORY "${_source_dir}")
+
+    set(_unexpected_targets "")
+    if(component STREQUAL "core")
+        set(_unexpected_targets "ruvia::http;ruvia::web")
+    elseif(component STREQUAL "http")
+        set(_unexpected_targets "ruvia::core;ruvia::web")
+    elseif(component STREQUAL "web")
+        set(_required_targets "ruvia::core;ruvia::http")
+    else()
+        message(FATAL_ERROR "ruvia_guard_package_consumer: unknown component ${component}")
+    endif()
+
+    file(WRITE "${_source_dir}/CMakeLists.txt"
+        "cmake_minimum_required(VERSION 3.24)\n"
+        "project(ruvia_${name}_consumer LANGUAGES CXX)\n"
+        "find_package(ruvia CONFIG REQUIRED COMPONENTS ${component})\n"
+        "if(NOT TARGET ${linked_target})\n"
+        "  message(FATAL_ERROR \"missing requested target: ${linked_target}\")\n"
+        "endif()\n")
+    foreach(_required_target IN LISTS _required_targets)
+        file(APPEND "${_source_dir}/CMakeLists.txt"
+            "if(NOT TARGET ${_required_target})\n"
+            "  message(FATAL_ERROR \"missing web dependency target: ${_required_target}\")\n"
+            "endif()\n")
+    endforeach()
+    foreach(_unexpected_target IN LISTS _unexpected_targets)
+        file(APPEND "${_source_dir}/CMakeLists.txt"
+            "if(TARGET ${_unexpected_target})\n"
+            "  message(FATAL_ERROR \"unrequested target was imported: ${_unexpected_target}\")\n"
+            "endif()\n")
+    endforeach()
+    file(APPEND "${_source_dir}/CMakeLists.txt"
+        "add_executable(consumer main.cpp)\n"
+        "target_link_libraries(consumer PRIVATE ${linked_target})\n")
+    file(WRITE "${_source_dir}/main.cpp" "#include <${header}>\n\n${source}\n")
+
+    execute_process(
+        COMMAND "@CMAKE_COMMAND@" -S "${_source_dir}" -B "${_consumer_build_dir}"
+            -G "@CMAKE_GENERATOR@" "-DCMAKE_PREFIX_PATH=${_prefix_path}"
+            "-DCMAKE_BUILD_TYPE=@CMAKE_BUILD_TYPE@"
+            "-DCMAKE_CXX_FLAGS=@CMAKE_CXX_FLAGS@"
+            "-DCMAKE_EXE_LINKER_FLAGS=@CMAKE_EXE_LINKER_FLAGS@"
+        RESULT_VARIABLE _configure_result OUTPUT_VARIABLE _configure_output ERROR_VARIABLE _configure_error)
+    if(NOT _configure_result EQUAL 0)
+        message(FATAL_ERROR
+            "ruvia_guard_package_consumer: ${component} consumer configure failed\n${_configure_output}${_configure_error}")
+    endif()
+
+    set(_build_args --build "${_consumer_build_dir}")
+    if(DEFINED RUVIA_TEST_CONFIG AND NOT RUVIA_TEST_CONFIG STREQUAL "")
+        list(APPEND _build_args --config "${RUVIA_TEST_CONFIG}")
+    endif()
+    execute_process(
+        COMMAND "@CMAKE_COMMAND@" ${_build_args}
+        RESULT_VARIABLE _build_result OUTPUT_VARIABLE _build_output ERROR_VARIABLE _build_error)
+    if(NOT _build_result EQUAL 0)
+        message(FATAL_ERROR
+            "ruvia_guard_package_consumer: ${component} consumer build failed\n${_build_output}${_build_error}")
+    endif()
+endfunction()
+
+if(@RUVIA_BUILD_CORE@)
+    ruvia_verify_component_consumer(core core ruvia::core ruvia/core/Task.h
+        "int main() { return 0; }")
+endif()
+if(@RUVIA_BUILD_HTTP@)
+    ruvia_verify_component_consumer(http http ruvia::http ruvia/http/HttpRequest.h
+        "int main() { return 0; }")
+endif()
+if(@RUVIA_BUILD_WEB@)
+    ruvia_verify_component_consumer(web web ruvia::web ruvia/web/App.h
+        "int main() { return &ruvia::app() == nullptr; }")
+endif()

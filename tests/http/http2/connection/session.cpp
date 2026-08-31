@@ -160,6 +160,48 @@ RUVIA_TEST(http2_connection_feed_settings_emits_ack) {
     RUVIA_CHECK_EQ(ack.length, static_cast<std::uint32_t>(0));
 }
 
+RUVIA_TEST(http2_connection_feed_handles_deterministic_random_frames_after_settings) {
+    std::uint64_t state = 0x4832'4652'414D'4553ULL;
+    const auto next = [&state]() {
+        state ^= state << 7U;
+        state ^= state >> 9U;
+        return state;
+    };
+
+    for (std::size_t sample = 0; sample < 4096; ++sample) {
+        std::pmr::monotonic_buffer_resource resource;
+        std::array<char, ruvia::detail::kHttp2FrameHeaderBytes + 64> frame{};
+        Http2Connection connection(&resource);
+        beginPeerInput(connection);
+
+        ruvia::detail::http2EncodeFrameHeader(frame.data(), 0, Http2FrameType::kSettings, 0, 0);
+        RUVIA_CHECK(connection.feed(std::string_view(frame.data(), 9)) ==
+                    Http2FeedResult::kAccepted);
+        while (connection.nextEvent().has_value()) {
+        }
+        connection.consumeOutput(connection.pendingOutput().size());
+
+        const auto payloadSize = static_cast<std::uint32_t>(next() % 65U);
+        ruvia::detail::http2EncodeFrameHeader(frame.data(), payloadSize,
+            static_cast<Http2FrameType>(static_cast<std::uint8_t>(next())),
+            static_cast<std::uint8_t>(next()), static_cast<std::uint32_t>(next()));
+        for (std::size_t index = 0; index < payloadSize; ++index) {
+            frame[ruvia::detail::kHttp2FrameHeaderBytes + index] = static_cast<char>(next());
+        }
+
+        const auto result = connection.feed(
+            std::string_view(frame.data(), ruvia::detail::kHttp2FrameHeaderBytes + payloadSize));
+        RUVIA_CHECK(result == Http2FeedResult::kAccepted || result == Http2FeedResult::kNeedInput ||
+                    result == Http2FeedResult::kProtocolFailure);
+        if (result == Http2FeedResult::kProtocolFailure) {
+            RUVIA_CHECK(connection.connectionError().has_value());
+            RUVIA_CHECK(connection.pendingOutput().size() >= ruvia::detail::kHttp2FrameHeaderBytes);
+        } else {
+            RUVIA_CHECK(!connection.connectionError().has_value());
+        }
+    }
+}
+
 RUVIA_TEST(http2_connection_enable_push_validation_uses_peer_direction) {
     char frame[15];
     auto* out = ruvia::detail::http2WriteFrameHeader(frame, 6, Http2FrameType::kSettings, 0, 0);

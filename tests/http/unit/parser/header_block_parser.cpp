@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -121,6 +122,76 @@ RUVIA_TEST(header_block_parses_valid_request) {
     RUVIA_CHECK(result.hasHost);
     RUVIA_CHECK(result.hasContentLength);
     RUVIA_CHECK_EQ(result.contentLength, std::size_t{5});
+}
+
+RUVIA_TEST(header_block_parser_handles_deterministic_arbitrary_header_bytes) {
+    std::uint64_t state = 0x7a13f045c2d98e31ULL;
+    constexpr std::string_view fieldValueChars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 !#$%&'*+-.^_`|~";
+    const auto nextByte = [&]() noexcept {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return static_cast<char>(state >> 56U);
+    };
+
+    for (std::size_t sample = 0; sample < 4096; ++sample) {
+        std::string buffer = "GET / HTTP/1.1\r\n";
+        const auto randomBytes = static_cast<std::size_t>(static_cast<unsigned char>(nextByte())) +
+                                 (static_cast<std::size_t>(
+                                      static_cast<unsigned char>(nextByte()) & 1U)
+                                  << 8U);
+        for (std::size_t i = 0; i < randomBytes; ++i) {
+            buffer.push_back(nextByte());
+        }
+        buffer.append("\r\n\r\n");
+
+        const auto headerBytes = findHttpHeaderEnd(buffer, 0);
+        RUVIA_CHECK(headerBytes != std::string_view::npos);
+        ParsedRequestHeaderBlock block{};
+        const auto error = parseHttpHeaderBlock(buffer, headerBytes, block);
+        if (error.has_value()) {
+            continue;
+        }
+
+        RUVIA_CHECK_EQ(block.method.bind(buffer), std::string_view("GET"));
+        RUVIA_CHECK_EQ(block.target.bind(buffer), std::string_view("/"));
+        RUVIA_CHECK_EQ(block.version.bind(buffer), std::string_view("HTTP/1.1"));
+        RUVIA_CHECK(block.headerCount <= block.headers.size());
+        for (std::size_t i = 0; i < block.headerCount; ++i) {
+            const auto& header = block.headers[i];
+            RUVIA_CHECK(header.name.length > 0);
+            RUVIA_CHECK(static_cast<std::size_t>(header.name.offset) + header.name.length <=
+                        headerBytes);
+            RUVIA_CHECK(static_cast<std::size_t>(header.value.offset) + header.value.length <=
+                        headerBytes);
+        }
+
+        std::string accepted = "GET / HTTP/1.1\r\nHost: example.test\r\nX-Fuzz: ";
+        const auto valueBytes =
+            static_cast<std::size_t>(static_cast<unsigned char>(nextByte()) & 0x7FU);
+        for (std::size_t i = 0; i < valueBytes; ++i) {
+            const auto index =
+                static_cast<std::size_t>(static_cast<unsigned char>(nextByte())) %
+                fieldValueChars.size();
+            accepted.push_back(fieldValueChars[index]);
+        }
+        accepted.append("\r\n\r\n");
+
+        const auto acceptedHeaderBytes = findHttpHeaderEnd(accepted, 0);
+        RUVIA_CHECK(acceptedHeaderBytes != std::string_view::npos);
+        ParsedRequestHeaderBlock acceptedBlock{};
+        RUVIA_CHECK(!parseHttpHeaderBlock(accepted, acceptedHeaderBytes, acceptedBlock).has_value());
+        RUVIA_CHECK_EQ(acceptedBlock.method.bind(accepted), std::string_view("GET"));
+        RUVIA_CHECK_EQ(acceptedBlock.target.bind(accepted), std::string_view("/"));
+        RUVIA_CHECK_EQ(acceptedBlock.version.bind(accepted), std::string_view("HTTP/1.1"));
+        RUVIA_CHECK_EQ(acceptedBlock.headerCount, std::size_t{2});
+        RUVIA_CHECK_EQ(acceptedBlock.headers[0].name.bind(accepted), std::string_view("Host"));
+        RUVIA_CHECK_EQ(
+            acceptedBlock.headers[0].value.bind(accepted), std::string_view("example.test"));
+        RUVIA_CHECK_EQ(acceptedBlock.headers[1].name.bind(accepted), std::string_view("X-Fuzz"));
+        RUVIA_CHECK(static_cast<std::size_t>(acceptedBlock.headers[1].value.offset) +
+                        acceptedBlock.headers[1].value.length <=
+                    acceptedHeaderBytes);
+    }
 }
 
 RUVIA_TEST(header_block_rejects_conflicting_content_length) {

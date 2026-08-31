@@ -1,6 +1,41 @@
 #include "http_client_response_fixture.h"
 
+#include <cstdint>
+
 // HTTP/1 client responses: reading a response head off the wire.
+
+RUVIA_TEST(http_client_response_parser_handles_deterministic_arbitrary_bytes) {
+    std::uint64_t state = 0x4854'5450'5245'5350ULL;
+    const auto next = [&state]() {
+        state ^= state << 7U;
+        state ^= state >> 9U;
+        return state;
+    };
+
+    for (std::size_t sample = 0; sample < 4096; ++sample) {
+        std::string input(static_cast<std::size_t>(next() % 1025U), '\0');
+        for (auto& byte : input) {
+            byte = static_cast<char>(next());
+        }
+
+        const auto result = parseWire(sample % 3 == 0 ? "GET" : sample % 3 == 1 ? "HEAD" : "CONNECT",
+            input);
+        const auto alternatives = static_cast<unsigned int>(result.needMore() != nullptr) +
+                                  static_cast<unsigned int>(result.parsed() != nullptr) +
+                                  static_cast<unsigned int>(result.failure() != nullptr) +
+                                  static_cast<unsigned int>(result.terminal() != nullptr);
+        RUVIA_CHECK_EQ(alternatives, 1U);
+        if (const auto* parsed = result.parsed()) {
+            RUVIA_CHECK(parsed->consumedBytes() <= input.size());
+            RUVIA_CHECK(parsed->consumedBytes() >= 4U);
+            RUVIA_CHECK_EQ(activePlanAlternativeCount(parsed->plan()), std::size_t{1});
+        }
+        if (result.needMore() != nullptr) {
+            RUVIA_CHECK(input.size() < ruvia::kMaxHttpHeaderBytes);
+        }
+        RUVIA_CHECK(result.terminal() == nullptr);
+    }
+}
 
 RUVIA_TEST(http_client_response_head_commits_status_and_version_at_construction) {
     auto head = ruvia::detail::HttpClientResponseHeadAccess::make(ruvia::http_status::kMultiStatus,

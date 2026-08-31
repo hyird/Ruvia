@@ -42,7 +42,7 @@ concurrency:
 
 # The primary platform jobs exercise the complete feature set. Linux also runs
 # live database drivers, component-only configurations, sanitizers, and a
-# Release benchmark record so those contracts cannot silently become opt-in.
+# Release build so those contracts cannot silently become opt-in.
 jobs:
   linux_build:
     name: Linux
@@ -176,19 +176,16 @@ jobs:
           - name: asan-ubsan
             build_dir: sanitizers
             build_type: Debug
-            ctest_args: -E ^ruvia_guard_package_install_consumer$
             options: >-
               -DRUVIA_BUILD_TESTS=ON
               -DCMAKE_CXX_FLAGS=-fsanitize=address,undefined\ -fno-omit-frame-pointer
               -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined
               -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address,undefined
-          - name: release-benchmark
-            build_dir: benchmark
+          - name: release
+            build_dir: release
             build_type: Release
             options: >-
               -DRUVIA_BUILD_TESTS=ON
-              -DRUVIA_BUILD_BENCHMARKS=ON
-            benchmark: true
     env:
       CC: gcc-13
       CXX: g++-13
@@ -255,22 +252,6 @@ jobs:
         run: >-
           ctest --test-dir "build/${{ matrix.build_dir }}"
           --output-on-failure ${{ matrix.ctest_args }}
-
-      - name: Record Release benchmark
-        if: ${{ matrix.benchmark }}
-        run: |
-          "build/${{ matrix.build_dir }}/tests/http/benchmarks/ruvia_benchmark_http_hot_paths" \
-            --warmup-ms 20 \
-            --duration-ms 100 \
-            --output "build/${{ matrix.build_dir }}/http-hot-paths.json"
-
-      - name: Upload benchmark record
-        if: ${{ matrix.benchmark }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: http-hot-paths-linux-gcc13-release
-          path: build/${{ matrix.build_dir }}/http-hot-paths.json
-          if-no-files-found: error
 
   macos_build:
     name: macOS

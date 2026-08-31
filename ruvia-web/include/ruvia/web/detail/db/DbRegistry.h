@@ -95,7 +95,7 @@ public:
         std::pmr::memory_resource*, OperationOptions);
     template <typename Pool, typename Slot>
     friend Task<DbResolvedAddresses> resolveDbHost(
-        Pool&, Slot&, const OperationTimeout&, std::string_view);
+        Pool&, Slot&, OperationTimeout, std::string_view);
     template <typename Pool>
     friend Task<DbRows> queryOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
         std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
@@ -103,7 +103,7 @@ public:
     friend Task<DbExecResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
         std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
-    friend Task<std::size_t> acquireDbSlot(Pool&, const OperationTimeout&, StopToken);
+    friend Task<std::size_t> acquireDbSlot(Pool&, OperationTimeout, StopToken);
     template <typename Pool>
     friend void releaseDbSlot(Pool&, std::size_t) noexcept;
     template <typename Pool>
@@ -233,7 +233,7 @@ private:
         std::pmr::memory_resource*, OperationOptions);
     template <typename Pool, typename Slot>
     friend Task<DbResolvedAddresses> resolveDbHost(
-        Pool&, Slot&, const OperationTimeout&, std::string_view);
+        Pool&, Slot&, OperationTimeout, std::string_view);
     template <typename Pool>
     friend Task<DbRows> queryOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
         std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
@@ -241,7 +241,7 @@ private:
     friend Task<DbExecResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
         std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
-    friend Task<std::size_t> acquireDbSlot(Pool&, const OperationTimeout&, StopToken);
+    friend Task<std::size_t> acquireDbSlot(Pool&, OperationTimeout, StopToken);
     template <typename Pool>
     friend void releaseDbSlot(Pool&, std::size_t) noexcept;
     template <typename Pool>

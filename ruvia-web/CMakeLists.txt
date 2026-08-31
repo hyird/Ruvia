@@ -109,6 +109,23 @@ endif()
 if(RUVIA_ENABLE_POSTGRESQL)
     target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_POSTGRESQL)
     target_link_libraries(ruvia-web PUBLIC PostgreSQL::PostgreSQL)
+    # vcpkg's static libpq splits internal frontend symbols between pgcommon
+    # and pgport. GNU linkers need to rescan that cyclic pair when a consumer
+    # links ruvia::web.
+    if((MINGW OR (UNIX AND NOT APPLE)) AND PostgreSQL_pgcommon_LIBRARY_DEBUG AND
+       PostgreSQL_pgcommon_LIBRARY_RELEASE AND PostgreSQL_pgport_LIBRARY_DEBUG AND
+       PostgreSQL_pgport_LIBRARY_RELEASE)
+        string(CONCAT _ruvia_postgresql_link_group
+            "$<LINK_GROUP:RESCAN,"
+            "$<$<CONFIG:Debug>:${PostgreSQL_pgcommon_LIBRARY_DEBUG}>"
+            ","
+            "$<$<NOT:$<CONFIG:Debug>>:${PostgreSQL_pgcommon_LIBRARY_RELEASE}>"
+            ","
+            "$<$<CONFIG:Debug>:${PostgreSQL_pgport_LIBRARY_DEBUG}>"
+            ","
+            "$<$<NOT:$<CONFIG:Debug>>:${PostgreSQL_pgport_LIBRARY_RELEASE}>>")
+        target_link_libraries(ruvia-web PUBLIC "${_ruvia_postgresql_link_group}")
+    endif()
 endif()
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)

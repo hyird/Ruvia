@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -226,6 +227,57 @@ RUVIA_TEST(chunked_body_decoder_handles_single_byte_input_fragmentation) {
     RUVIA_CHECK(complete);
     RUVIA_CHECK_EQ(body, std::string("abcde"));
     RUVIA_CHECK(pending.empty());
+}
+
+RUVIA_TEST(chunked_body_decoder_handles_deterministic_arbitrary_fragmented_bytes) {
+    std::uint64_t state = 0x4348'554E'4B45'4455ULL;
+    const auto next = [&state]() {
+        state ^= state << 7U;
+        state ^= state >> 9U;
+        return state;
+    };
+
+    for (std::size_t sample = 0; sample < 2048; ++sample) {
+        std::string input(static_cast<std::size_t>(next() % 513U), '\0');
+        for (auto& byte : input) {
+            byte = static_cast<char>(next());
+        }
+
+        Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(1024));
+        std::string pending;
+        bool terminal = false;
+        for (const auto byte : input) {
+            pending.push_back(byte);
+            for (std::size_t step = 0; step <= pending.size(); ++step) {
+                const auto result = decoder.decode(pending);
+                const auto alternatives = static_cast<unsigned int>(result.needMore() != nullptr) +
+                                          static_cast<unsigned int>(result.bodyChunk() != nullptr) +
+                                          static_cast<unsigned int>(result.complete() != nullptr) +
+                                          static_cast<unsigned int>(result.failure() != nullptr);
+                RUVIA_CHECK_EQ(alternatives, 1U);
+                RUVIA_CHECK(result.consumedBytes() <= pending.size());
+
+                if (const auto* body = result.bodyChunk()) {
+                    RUVIA_CHECK(!body->bytes().empty());
+                    RUVIA_CHECK(pending.find(body->bytes()) != std::string::npos);
+                }
+                if (result.consumedBytes() != 0) {
+                    pending.erase(0, result.consumedBytes());
+                }
+                if (result.complete() != nullptr || result.failure() != nullptr) {
+                    terminal = true;
+                    break;
+                }
+                if (result.needMore() != nullptr) {
+                    break;
+                }
+                RUVIA_CHECK(result.consumedBytes() != 0);
+            }
+            if (terminal) {
+                break;
+            }
+        }
+    }
 }
 
 RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
