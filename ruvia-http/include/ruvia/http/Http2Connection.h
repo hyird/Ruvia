@@ -617,6 +617,12 @@ public:
         std::uint32_t streamId, const HttpInterimResponseHead& response);
     [[nodiscard]] Http2SubmitStatus submitBufferedResponse(
         std::uint32_t streamId, const HttpResponse& response);
+    // Submit a final generic response head without trailers and leave an eligible
+    // response body open for subsequent submitData() calls. Content-Length is
+    // not generated automatically; an explicit value, when present, constrains
+    // the total submitted DATA bytes.
+    [[nodiscard]] Http2SubmitStatus submitStreamingResponseHead(
+        std::uint32_t streamId, HttpResponse response);
     [[nodiscard]] Http2SubmitStatus submitReset(std::uint32_t streamId, Http2ErrorCode error);
     [[nodiscard]] Http2ReceivedDataAcknowledgeStatus acknowledge(Http2ReceivedDataCredit&& credit);
     [[nodiscard]] bool hasQueuedData(std::uint32_t streamId) const noexcept;

@@ -812,6 +812,24 @@ Http2SubmitStatus Http2Connection::submitBufferedResponse(
     return Http2SubmitStatus::kAccepted;
 }
 
+Http2SubmitStatus Http2Connection::submitStreamingResponseHead(
+    std::uint32_t streamId, HttpResponse response) {
+    const auto result = impl_->connection.submitStreamingResponseHead(streamId, std::move(response),
+        detail::ResponseStreamKind::kGeneric, detail::ResponseTrailerIntent::kNone);
+    if (const auto* failure = result.failure()) {
+        switch (failure->error()) {
+            case detail::Http2ResponseHeadSubmitError::kClosed:
+                return Http2SubmitStatus::kClosed;
+            case detail::Http2ResponseHeadSubmitError::kInvalidState:
+            case detail::Http2ResponseHeadSubmitError::kResponsePlanMismatch:
+                return Http2SubmitStatus::kInvalidState;
+            case detail::Http2ResponseHeadSubmitError::kInvalidMessage:
+                return Http2SubmitStatus::kInvalidMessage;
+        }
+    }
+    return Http2SubmitStatus::kAccepted;
+}
+
 Http2SubmitStatus Http2Connection::submitReset(std::uint32_t streamId, Http2ErrorCode error) {
     const auto status = impl_->connection.submitReset(streamId, toInternal(error));
     if (status == detail::Http2SubmitStatus::kAccepted && impl_->role == Http2Role::kClient) {
