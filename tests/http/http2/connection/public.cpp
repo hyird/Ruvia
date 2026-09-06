@@ -310,6 +310,81 @@ RUVIA_TEST(http2_public_server_release_preserves_outstanding_data_credit) {
                 ruvia::Http2ReceivedDataAcknowledgeStatus::kAcknowledged);
 }
 
+RUVIA_TEST(http2_public_server_submits_streaming_response_head_and_data) {
+    std::pmr::monotonic_buffer_resource resource;
+    auto server = ruvia::Http2Connection::server({.resource = &resource});
+    (void)server.consumeOutput(server.pendingOutput().size());
+    const auto wire = serverRequestWire(&resource, {});
+    RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);
+
+    auto request = server.nextEvent();
+    const auto end = server.nextEvent();
+    auto* requestHead = request ? request->requestHead() : nullptr;
+    RUVIA_CHECK(requestHead != nullptr);
+    RUVIA_CHECK(end && end->messageEnd() != nullptr);
+    (void)server.consumeOutput(server.pendingOutput().size());
+
+    ruvia::HttpResponse response({.resource = &resource});
+    response.status(ruvia::http_status::kOk);
+    RUVIA_CHECK(server.submitStreamingResponseHead(1, std::move(response)) ==
+                ruvia::Http2SubmitStatus::kAccepted);
+
+    const auto headOutput = server.pendingOutput();
+    const auto head = ruvia::parseHttp2FrameHeader(
+        std::span<const char>(headOutput.data(), headOutput.size()));
+    RUVIA_CHECK(head.has_value());
+    RUVIA_CHECK(head && head->type == static_cast<std::uint8_t>(ruvia::Http2FrameType::kHeaders));
+    RUVIA_CHECK(head && head->streamId == 1);
+    RUVIA_CHECK(head && (head->flags & 0x1U) == 0);
+    (void)server.consumeOutput(headOutput.size());
+
+    RUVIA_CHECK(server.submitData(1, "event: update\n\ndata: ok\n\n",
+                    ruvia::Http2EndStream::kEndStream) ==
+                ruvia::Http2DataSubmitStatus::kAccepted);
+    const auto dataOutput = server.pendingOutput();
+    const auto data = ruvia::parseHttp2FrameHeader(
+        std::span<const char>(dataOutput.data(), dataOutput.size()));
+    RUVIA_CHECK(data.has_value());
+    RUVIA_CHECK(data && data->type == static_cast<std::uint8_t>(ruvia::Http2FrameType::kData));
+    RUVIA_CHECK(data && (data->flags & 0x1U) != 0);
+
+    RUVIA_CHECK(server.release(std::move(*requestHead)) ==
+                ruvia::Http2ServerRequestReleaseStatus::kReleased);
+}
+
+RUVIA_TEST(http2_public_streaming_response_head_maps_submission_failures) {
+    std::pmr::monotonic_buffer_resource resource;
+
+    auto closed = ruvia::Http2Connection::server({.resource = &resource});
+    ruvia::HttpResponse closedResponse({.resource = &resource});
+    RUVIA_CHECK(closed.submitStreamingResponseHead(1, std::move(closedResponse)) ==
+                ruvia::Http2SubmitStatus::kClosed);
+
+    auto client = preparedClient(&resource);
+    ruvia::HttpResponse clientResponse({.resource = &resource});
+    RUVIA_CHECK(client.submitStreamingResponseHead(1, std::move(clientResponse)) ==
+                ruvia::Http2SubmitStatus::kInvalidState);
+
+    auto server = ruvia::Http2Connection::server({.resource = &resource});
+    (void)server.consumeOutput(server.pendingOutput().size());
+    const auto wire = serverRequestWire(&resource, {});
+    RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);
+    auto request = server.nextEvent();
+    const auto end = server.nextEvent();
+    auto* requestHead = request ? request->requestHead() : nullptr;
+    RUVIA_CHECK(requestHead != nullptr);
+    RUVIA_CHECK(end && end->messageEnd() != nullptr);
+    (void)server.consumeOutput(server.pendingOutput().size());
+
+    ruvia::HttpResponse invalidResponse({.resource = &resource});
+    invalidResponse.header("Content-Length", "invalid");
+    RUVIA_CHECK(server.submitStreamingResponseHead(1, std::move(invalidResponse)) ==
+                ruvia::Http2SubmitStatus::kInvalidMessage);
+    RUVIA_CHECK(server.pendingOutput().empty());
+    RUVIA_CHECK(server.release(std::move(*requestHead)) ==
+                ruvia::Http2ServerRequestReleaseStatus::kReleased);
+}
+
 RUVIA_TEST(http2_public_dropped_request_preserves_outstanding_data_credit) {
     std::pmr::monotonic_buffer_resource resource;
     auto server = ruvia::Http2Connection::server({.resource = &resource});
