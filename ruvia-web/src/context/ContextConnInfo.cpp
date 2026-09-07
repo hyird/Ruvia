@@ -12,7 +12,7 @@ ConnInfo ContextServices::resolveConnInfo(const HttpRequest& request) const noex
     if (trustedProxies_ == nullptr || !trustedProxies_->trusts(resolved.remote().address())) {
         return resolved;
     }
-    const auto forwarded = resolveForwardedClient(request);
+    const auto forwarded = resolveForwardedClient(request, *trustedProxies_);
     resolved.applyForwarded(forwarded.address, forwarded.scheme);
     return resolved;
 }

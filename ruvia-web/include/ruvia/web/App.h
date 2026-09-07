@@ -105,8 +105,9 @@ public:
     // Empty by default, and that default is the safe one: X-Forwarded-For is
     // client-controlled, so believing it from an arbitrary peer would let any
     // caller pick its own rate-limit key and claim a secure scheme. Configure
-    // this ONLY with the addresses of proxies you operate, and the request's
-    // ConnInfo::client()/scheme() then reflect the original caller.
+    // this ONLY with the addresses of proxies you operate. The client is the
+    // last untrusted hop in the forwarding list, not the leftmost value the
+    // caller can prepend.
     App& trustedProxies(TrustedProxyConfig config);
     App& trustedProxies(std::nullptr_t);
 
